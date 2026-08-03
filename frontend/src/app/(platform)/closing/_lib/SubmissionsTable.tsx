@@ -35,6 +35,7 @@ const GATE_LABEL: Record<string, string> = {
 
 export default function SubmissionsTable({
   filterValue, onFilterChange, storeOptions: storeOptionsProp, marketOptions: marketOptionsProp, repOptions: repOptionsProp,
+  onScopedRows, drill, onClearDrill, hidden,
 }: {
   /** When provided (by a parent that renders its OWN <StandardFilterBar>), this component skips
    *  rendering its own bar and uses the parent's filter state directly. Omit for standalone use. */
@@ -45,6 +46,18 @@ export default function SubmissionsTable({
   storeOptions?: string[] | EntityOption[]
   marketOptions?: string[] | EntityOption[]
   repOptions?: EntityOption[]
+  /** retail-ops-24 (PACKAGE B, dashboard tile drill-down): reports the FULL current-scope rows (after
+   *  the store/market/rep filter, BEFORE any `drill` narrowing below) back to a parent dashboard so it
+   *  can sum tile totals (e.g. cash-short/cash-over) from the SAME rows this table itself loaded —
+   *  never a second/different fetch or computation. Fires on every load, independent of `drill`. */
+  onScopedRows?: (rows: any[], meta: any) => void
+  /** Narrows the DISPLAYED (and exported) rows to exactly the rows behind one dashboard tile — the
+   *  drill-down itself. 'all' (default) shows every row in scope, unchanged from before this package. */
+  drill?: 'all' | 'cash_short' | 'cash_over'
+  onClearDrill?: () => void
+  /** When true, keeps this component mounted (so its fetch/onScopedRows effect keeps running to feed
+   *  the parent's always-visible tiles) but visually hidden — used when a non-detail tab is active. */
+  hidden?: boolean
 } = {}) {
   // Own date-range filter (independent of any parent) — string-only state throughout (no
   // `new Date(...)` round-trip), so there's no UTC off-by-one to introduce. Only used when the
@@ -98,7 +111,7 @@ export default function SubmissionsTable({
   // immediately below so it can (a) match the right value-space and (b) mirror the backend's own "an
   // unresolved store is never dropped by a store filter" rule in canonical mode — a bypass the generic
   // shared filter has no way to express selectively.
-  const rows = useMemo(() => {
+  const scopedRows = useMemo(() => {
     const afterMarketRep = filterRows(rawRows, filt, { market: acc.market, rep: acc.rep })
     if (!filt.stores.length) return afterMarketRep
     const wanted = new Set(filt.stores.map((s: string) => s.trim().toLowerCase()))
@@ -111,6 +124,21 @@ export default function SubmissionsTable({
       return wanted.has(String(r.store_address || '').trim().toLowerCase())
     })
   }, [rawRows, filt, acc, usingCanonicalStores])
+
+  // retail-ops-24 (PACKAGE B): report the FULL current-scope rows (pre-drill) up to the parent dashboard
+  // on every load — the SAME data the tiles above are summed from and the table below narrows FROM, so
+  // tiles/table/exports can never disagree about what "current scope" means. Fires even while a non-
+  // detail tab is showing (hidden=true) so the tiles stay live regardless of which tab is active.
+  useEffect(() => { onScopedRows?.(scopedRows, meta) }, [scopedRows, meta, onScopedRows])
+
+  // The drill-down itself: narrows the DISPLAYED/EXPORTED rows to exactly what one tile represents.
+  // 'all' (default, and every pre-existing caller since this prop is optional) is BYTE-IDENTICAL to the
+  // table's behavior before this package — `rows` == `scopedRows`, nothing narrowed.
+  const rows = useMemo(() => {
+    if (drill === 'cash_short') return scopedRows.filter((r: any) => (r.cash_short_amount || 0) > 0)
+    if (drill === 'cash_over') return scopedRows.filter((r: any) => (r.cash_over_amount || 0) > 0)
+    return scopedRows
+  }, [scopedRows, drill])
 
   const columns: ExportColumn[] = useMemo(() => [
     // ── Identity ──
@@ -145,6 +173,10 @@ export default function SubmissionsTable({
     // ── Status (over/short + block/flag, DM verification, 3-try bookkeeping) ──
     { header: 'Gate status', field: 'gate_status', get: r => GATE_LABEL[r.gate_status] || r.gate_status },
     { header: 'Gate reason(s)', field: 'gate_reasons', get: r => (r.gate_reasons || []).join('; ') },
+    // retail-ops-24 (PACKAGE B): structured $ amounts backing the dashboard's Cash Short/Cash Over
+    // tiles — same money-secrecy gate as b2b_cash/gate_reasons above (0 for a non-company-wide caller).
+    { header: 'Cash short $', field: 'cash_short_amount', money: true, get: r => r.cash_short_amount },
+    { header: 'Cash over $', field: 'cash_over_amount', money: true, get: r => r.cash_over_amount },
     { header: 'Attempts', field: 'attempts', type: 'number', align: 'right', get: r => r.attempts },
     { header: 'Sent to review', field: 'auto_accepted', get: r => r.auto_accepted ? 'Yes — 3rd try, still mismatched' : 'No' },
     { header: 'Released for correction', field: 'released_at', get: r => r.released_at ? `Yes — by ${r.released_by || '—'}` : 'No' },
@@ -161,8 +193,10 @@ export default function SubmissionsTable({
     { header: 'Submitted at', field: 'submitted_at', type: 'date', get: r => r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '' },
   ], [])
 
+  const DRILL_LABEL: Record<string, string> = { cash_short: 'Cash Short only', cash_over: 'Cash Over only' }
+
   return (
-    <div>
+    <div style={hidden ? { display: 'none' } : undefined}>
       {!filterValue && (
         <StandardFilterBar
           value={filt} onChange={setFilt}
@@ -170,6 +204,17 @@ export default function SubmissionsTable({
           storeOptions={storeOpts} marketOptions={marketOpts} repOptions={repOpts}
           storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
         />
+      )}
+
+      {/* retail-ops-24 (PACKAGE B): the tile→drill-down itself — arrives pre-filtered to exactly what
+          the clicked tile showed (the standard filter bar above is untouched and still visible/live, so
+          the user can widen from there per the owner's "get full picture" directive); a Clear affordance
+          returns to the unnarrowed view without disturbing the date/store/market/rep filters. */}
+      {drill && drill !== 'all' && (
+        <div className="card" style={{ padding: '8px 12px', marginBottom: 10, fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, background: 'var(--surface2)' }}>
+          🔎 Drilled down to: <b>{DRILL_LABEL[drill] || drill}</b>
+          <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 9px', marginLeft: 'auto' }} onClick={onClearDrill}>✕ Clear drill-down</button>
+        </div>
       )}
 
       {(meta?.status_capped || meta?.truncated) && (
@@ -190,9 +235,9 @@ export default function SubmissionsTable({
         <div className="card" style={{ padding: 16, color: '#b91c1c' }}>Error: {err}</div>
       ) : (
         <ReportShell
-          title="Daily Closing — All Submissions"
+          title={drill && drill !== 'all' ? `Daily Closing — ${DRILL_LABEL[drill] || drill}` : 'Daily Closing — All Submissions'}
           subtitle={`${filt.period || '—'} → ${filt.periodTo || '—'}`}
-          filename={`daily-closing-submissions_${filt.period || 'start'}_${filt.periodTo || 'end'}`}
+          filename={`daily-closing-submissions${drill && drill !== 'all' ? `_${drill}` : ''}_${filt.period || 'start'}_${filt.periodTo || 'end'}`}
           columns={columns} rows={rows} stickyHeader totals
         />
       )}

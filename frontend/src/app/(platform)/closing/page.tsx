@@ -27,6 +27,31 @@ export default function ClosingDashboard() {
   // a slower, stale response overwrite a newer one — the timeclock last-response-wins race class).
   const reqRef = useRef(0)
 
+  // retail-ops-24 (PACKAGE B, OWNER DIRECTIVE 2026-08-03 "one tile for cash short and one tile for cash
+  // over ... drill down behind every tile"): DESIGN CHOICE — reuse the module's OWN existing precedent
+  // (the shared `filt` state already driving all 3 tabs, retail-ops-14) rather than new per-tile pages
+  // (the asset-charges-dashboard style). Every top tile's underlying rows are literally the SAME
+  // row-level `daily_closing` submissions the "All submissions" tab (<SubmissionsTable>, RULE FIVE bar
+  // + RULE FOUR ReportShell exports already wired) already shows for the identical filt scope — so a
+  // tile click just (a) switches to that tab and (b) for the 2 new tiles, narrows it via `drill` to
+  // exactly the rows behind that tile (cash_short_amount/cash_over_amount > 0, the SAME structured
+  // fields `/closing/submissions` now returns from the canonical `_money_issues` call — never
+  // re-derived here). This is a true drill-down (aggregate tile -> the row-level detail composing it),
+  // arrives pre-filtered (same shared `filt`, no navigation/deep-link needed since it's the same page),
+  // and the filter bar stays visible so the user can widen — without building 12 near-duplicate pages.
+  // <SubmissionsTable> is ALWAYS mounted (visually hidden via its `hidden` prop when tab !== 'detail')
+  // so its fetch keeps the 2 new tiles' totals live no matter which tab is currently showing.
+  const [drill, setDrill] = useState<'all' | 'cash_short' | 'cash_over'>('all')
+  const [subRows, setSubRows] = useState<any[]>([])
+  const [subMeta, setSubMeta] = useState<any>(null)
+  const onScopedRows = useCallback((rows: any[], meta: any) => { setSubRows(rows); setSubMeta(meta) }, [])
+  const drillTo = (d: 'all' | 'cash_short' | 'cash_over') => { setTab('detail'); setDrill(d) }
+  const cashShortTotal = useMemo(() => Math.round(subRows.reduce((s, r) => s + (r.cash_short_amount || 0), 0) * 100) / 100, [subRows])
+  const cashOverTotal = useMemo(() => Math.round(subRows.reduce((s, r) => s + (r.cash_over_amount || 0), 0) * 100) / 100, [subRows])
+  // Same money-secrecy boundary the detail tab already shows a note for — undefined (meta not loaded
+  // yet) reads as "unknown", not a false negative; only an explicit `false` hides the real $ amounts.
+  const canReviewMoney = subMeta?.can_review !== false
+
   useEffect(() => {
     const mkt = user?.market
     if (mkt && permissions?.scope === 'market') setFilt(f => (f.markets.length ? f : { ...f, markets: [mkt] }))
@@ -160,33 +185,51 @@ export default function ClosingDashboard() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
         <>
-          {/* Summary tiles */}
+          {/* Summary tiles — retail-ops-24: EVERY tile drills down into the "All submissions" detail
+              tab (row-level, RULE FIVE bar + RULE FOUR exports already wired), pre-filtered to the
+              CURRENT dashboard scope (same shared `filt`); Cash Short/Cash Over additionally narrow to
+              exactly the rows behind that tile. See the design-choice comment above `drill` state. */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>
-            <Tile label="Cash collected" value={fmt(cashTotal(t))} />
-            <Tile label="Credit collected" value={fmt(cardTotal(t))} />
-            <Tile label="ePay cash" value={fmt(epayCash(t))} sub="already inside Cash collected" />
-            <Tile label="ePay credit" value={fmt(epayCard(t))} sub="already inside Credit collected" />
-            <Tile label="Accessory sales" value={fmt(t.acc_sale)} />
-            <Tile label="Other (Zelle/CashApp)" value={fmt(t.other_account)} />
-            <Tile label="Activations" value={`${(t.new_line_count || 0) + (t.postpaid_count || 0)}`} sub={`${t.new_line_count || 0} new · ${t.postpaid_count || 0} postpaid`} />
-            <Tile label="Upgrades" value={`${t.upgrade_count || 0}`} />
-            <Tile label="Rep submissions" value={`${t.rows || 0}`} sub={`${t.days || 0} day(s)`} />
-            <Tile label="DM verified" value={cov} sub="store-days verified" />
+            <Tile label="Cash collected" value={fmt(cashTotal(t))} onClick={() => drillTo('all')} />
+            <Tile label="Credit collected" value={fmt(cardTotal(t))} onClick={() => drillTo('all')} />
+            <Tile label="ePay cash" value={fmt(epayCash(t))} sub="already inside Cash collected" onClick={() => drillTo('all')} />
+            <Tile label="ePay credit" value={fmt(epayCard(t))} sub="already inside Credit collected" onClick={() => drillTo('all')} />
+            <Tile label="Accessory sales" value={fmt(t.acc_sale)} onClick={() => drillTo('all')} />
+            <Tile label="Other (Zelle/CashApp)" value={fmt(t.other_account)} onClick={() => drillTo('all')} />
+            <Tile label="Activations" value={`${(t.new_line_count || 0) + (t.postpaid_count || 0)}`} sub={`${t.new_line_count || 0} new · ${t.postpaid_count || 0} postpaid`} onClick={() => drillTo('all')} />
+            <Tile label="Upgrades" value={`${t.upgrade_count || 0}`} onClick={() => drillTo('all')} />
+            <Tile label="Rep submissions" value={`${t.rows || 0}`} sub={`${t.days || 0} day(s)`} onClick={() => drillTo('all')} />
+            <Tile label="DM verified" value={cov} sub="store-days verified" onClick={() => drillTo('all')} />
+            {/* retail-ops-24 — the 2 NEW tiles (OWNER DIRECTIVE 2026-08-03). Sourced from the SAME
+                canonical `_money_issues` figures the close gate itself computes (GET
+                /closing/submissions' cash_short_amount/cash_over_amount, never re-derived here) —
+                summed but never NETTED against each other (the whole point of two separate tiles). */}
+            <Tile label="Cash short" value={canReviewMoney ? fmt(cashShortTotal) : '—'}
+                  sub={canReviewMoney ? 'block — vs B2B sales' : 'company-wide roles only'}
+                  tone={cashShortTotal > 0 ? '#b42318' : undefined} onClick={() => drillTo('cash_short')} />
+            <Tile label="Cash over" value={canReviewMoney ? fmt(cashOverTotal) : '—'}
+                  sub={canReviewMoney ? 'flag — investigate' : 'company-wide roles only'}
+                  tone={cashOverTotal > 0 ? '#b45309' : undefined} onClick={() => drillTo('cash_over')} />
           </div>
 
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
             {(['detail', 'store', 'rep'] as const).map(x => (
-              <button key={x} className={`btn ${tab === x ? 'btn-primary' : 'btn-secondary'}`} style={{ fontSize: 13 }} onClick={() => setTab(x)}>
+              <button key={x} className={`btn ${tab === x ? 'btn-primary' : 'btn-secondary'}`} style={{ fontSize: 13 }} onClick={() => { setTab(x); if (x === 'detail') setDrill('all') }}>
                 {x === 'detail' ? '🧾 All submissions' : x === 'store' ? '🏬 By store' : '🧑 By rep'}
               </button>
             ))}
           </div>
 
-          {tab === 'detail' ? (
-            <SubmissionsTable filterValue={filt} onFilterChange={setFilt}
-              storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions} />
-          ) : tab === 'store' ? (
+          {/* retail-ops-24: <SubmissionsTable> stays ALWAYS mounted (visually hidden via its own
+              `hidden` prop, not unmounted) so its fetch keeps reporting scoped rows up via
+              `onScopedRows` for the 2 new tiles' totals no matter which tab is currently showing. */}
+          <SubmissionsTable filterValue={filt} onFilterChange={setFilt}
+            storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
+            onScopedRows={onScopedRows} drill={drill} onClearDrill={() => setDrill('all')}
+            hidden={tab !== 'detail'} />
+
+          {tab === 'detail' ? null : tab === 'store' ? (
             byStore.length === 0 ? (
               <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No closing rows for this range yet.</div>
             ) : (
@@ -209,10 +252,14 @@ export default function ClosingDashboard() {
   )
 }
 
-const Tile = ({ label, value, sub }: { label: string; value: string; sub?: string }) => (
-  <div className="card" style={{ padding: 14 }}>
+// retail-ops-24 (PACKAGE B): every tile is now clickable — a drill-down into the row-level detail
+// backing it (see the `drillTo` design-choice comment above). `onClick` is optional so this component
+// stays usable as a plain display tile elsewhere with no behavior change.
+const Tile = ({ label, value, sub, tone, onClick }: { label: string; value: string; sub?: string; tone?: string; onClick?: () => void }) => (
+  <div className="card" style={{ padding: 14, cursor: onClick ? 'pointer' : undefined }}
+       onClick={onClick} role={onClick ? 'button' : undefined} title={onClick ? 'Click to see the underlying rows' : undefined}>
     <div style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-    <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2 }}>{value}</div>
+    <div style={{ fontSize: 20, fontWeight: 700, marginTop: 2, color: tone }}>{value}</div>
     {sub && <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>{sub}</div>}
   </div>
 )
