@@ -27,7 +27,7 @@ export default function ClosingDashboard() {
   // a slower, stale response overwrite a newer one — the timeclock last-response-wins race class).
   const reqRef = useRef(0)
 
-  // retail-ops-24 (PACKAGE B, OWNER DIRECTIVE 2026-08-03 "one tile for cash short and one tile for cash
+  // retail-ops-25 (PACKAGE B, OWNER DIRECTIVE 2026-08-03 "one tile for cash short and one tile for cash
   // over ... drill down behind every tile"): DESIGN CHOICE — reuse the module's OWN existing precedent
   // (the shared `filt` state already driving all 3 tabs, retail-ops-14) rather than new per-tile pages
   // (the asset-charges-dashboard style). Every top tile's underlying rows are literally the SAME
@@ -185,7 +185,7 @@ export default function ClosingDashboard() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
         <>
-          {/* Summary tiles — retail-ops-24: EVERY tile drills down into the "All submissions" detail
+          {/* Summary tiles — retail-ops-25: EVERY tile drills down into the "All submissions" detail
               tab (row-level, RULE FIVE bar + RULE FOUR exports already wired), pre-filtered to the
               CURRENT dashboard scope (same shared `filt`); Cash Short/Cash Over additionally narrow to
               exactly the rows behind that tile. See the design-choice comment above `drill` state. */}
@@ -200,7 +200,7 @@ export default function ClosingDashboard() {
             <Tile label="Upgrades" value={`${t.upgrade_count || 0}`} onClick={() => drillTo('all')} />
             <Tile label="Rep submissions" value={`${t.rows || 0}`} sub={`${t.days || 0} day(s)`} onClick={() => drillTo('all')} />
             <Tile label="DM verified" value={cov} sub="store-days verified" onClick={() => drillTo('all')} />
-            {/* retail-ops-24 — the 2 NEW tiles (OWNER DIRECTIVE 2026-08-03). Sourced from the SAME
+            {/* retail-ops-25 — the 2 NEW tiles (OWNER DIRECTIVE 2026-08-03). Sourced from the SAME
                 canonical `_money_issues` figures the close gate itself computes (GET
                 /closing/submissions' cash_short_amount/cash_over_amount, never re-derived here) —
                 summed but never NETTED against each other (the whole point of two separate tiles). */}
@@ -221,7 +221,7 @@ export default function ClosingDashboard() {
             ))}
           </div>
 
-          {/* retail-ops-24: <SubmissionsTable> stays ALWAYS mounted (visually hidden via its own
+          {/* retail-ops-25: <SubmissionsTable> stays ALWAYS mounted (visually hidden via its own
               `hidden` prop, not unmounted) so its fetch keeps reporting scoped rows up via
               `onScopedRows` for the 2 new tiles' totals no matter which tab is currently showing. */}
           <SubmissionsTable filterValue={filt} onFilterChange={setFilt}
@@ -252,7 +252,7 @@ export default function ClosingDashboard() {
   )
 }
 
-// retail-ops-24 (PACKAGE B): every tile is now clickable — a drill-down into the row-level detail
+// retail-ops-25 (PACKAGE B): every tile is now clickable — a drill-down into the row-level detail
 // backing it (see the `drillTo` design-choice comment above). `onClick` is optional so this component
 // stays usable as a plain display tile elsewhere with no behavior change.
 const Tile = ({ label, value, sub, tone, onClick }: { label: string; value: string; sub?: string; tone?: string; onClick?: () => void }) => (

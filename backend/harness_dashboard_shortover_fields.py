@@ -1,4 +1,4 @@
-"""Offline proof harness for retail-ops-24 (PACKAGE B, OWNER DIRECTIVE 2026-08-03 "Make one tile for
+"""Offline proof harness for retail-ops-25 (PACKAGE B, OWNER DIRECTIVE 2026-08-03 "Make one tile for
 cash short and one tile for cash over"): `GET /closing/submissions` now surfaces two additive, structured
 per-row fields — `cash_short_amount` / `cash_over_amount` — captured from the SAME `_money_issues` call
 `closing_submissions` already makes to derive `gate_status`/`gate_reasons` (never a second/different

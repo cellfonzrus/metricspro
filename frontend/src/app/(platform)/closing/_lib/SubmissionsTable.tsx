@@ -46,7 +46,7 @@ export default function SubmissionsTable({
   storeOptions?: string[] | EntityOption[]
   marketOptions?: string[] | EntityOption[]
   repOptions?: EntityOption[]
-  /** retail-ops-24 (PACKAGE B, dashboard tile drill-down): reports the FULL current-scope rows (after
+  /** retail-ops-25 (PACKAGE B, dashboard tile drill-down): reports the FULL current-scope rows (after
    *  the store/market/rep filter, BEFORE any `drill` narrowing below) back to a parent dashboard so it
    *  can sum tile totals (e.g. cash-short/cash-over) from the SAME rows this table itself loaded —
    *  never a second/different fetch or computation. Fires on every load, independent of `drill`. */
@@ -125,7 +125,7 @@ export default function SubmissionsTable({
     })
   }, [rawRows, filt, acc, usingCanonicalStores])
 
-  // retail-ops-24 (PACKAGE B): report the FULL current-scope rows (pre-drill) up to the parent dashboard
+  // retail-ops-25 (PACKAGE B): report the FULL current-scope rows (pre-drill) up to the parent dashboard
   // on every load — the SAME data the tiles above are summed from and the table below narrows FROM, so
   // tiles/table/exports can never disagree about what "current scope" means. Fires even while a non-
   // detail tab is showing (hidden=true) so the tiles stay live regardless of which tab is active.
@@ -173,7 +173,7 @@ export default function SubmissionsTable({
     // ── Status (over/short + block/flag, DM verification, 3-try bookkeeping) ──
     { header: 'Gate status', field: 'gate_status', get: r => GATE_LABEL[r.gate_status] || r.gate_status },
     { header: 'Gate reason(s)', field: 'gate_reasons', get: r => (r.gate_reasons || []).join('; ') },
-    // retail-ops-24 (PACKAGE B): structured $ amounts backing the dashboard's Cash Short/Cash Over
+    // retail-ops-25 (PACKAGE B): structured $ amounts backing the dashboard's Cash Short/Cash Over
     // tiles — same money-secrecy gate as b2b_cash/gate_reasons above (0 for a non-company-wide caller).
     { header: 'Cash short $', field: 'cash_short_amount', money: true, get: r => r.cash_short_amount },
     { header: 'Cash over $', field: 'cash_over_amount', money: true, get: r => r.cash_over_amount },
@@ -206,7 +206,7 @@ export default function SubmissionsTable({
         />
       )}
 
-      {/* retail-ops-24 (PACKAGE B): the tile→drill-down itself — arrives pre-filtered to exactly what
+      {/* retail-ops-25 (PACKAGE B): the tile→drill-down itself — arrives pre-filtered to exactly what
           the clicked tile showed (the standard filter bar above is untouched and still visible/live, so
           the user can widen from there per the owner's "get full picture" directive); a Clear affordance
           returns to the unnarrowed view without disturbing the date/store/market/rep filters. */}

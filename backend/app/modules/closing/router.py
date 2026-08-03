@@ -448,7 +448,7 @@ def closing_submissions(date_from: str = None, date_to: str = None,
         declared_credit = round(tenders["credit"] + tenders["ext_cc"], 2)
 
         gate_status, reasons, b2b_cash, b2b_card = "not_computed", [], None, None
-        # retail-ops-24 (PACKAGE B, OWNER DIRECTIVE 2026-08-03 "one tile for cash short and one for
+        # retail-ops-25 (PACKAGE B, OWNER DIRECTIVE 2026-08-03 "one tile for cash short and one for
         # cash over"): structured $ amounts for the two new dashboard tiles — captured from the SAME
         # `_money_issues` call already made here (never a second/different computation). `cash_short`
         # is the "cash" issue's BLOCK amount (declared < B2B, i.e. short); `cash_over` is the "cash"
