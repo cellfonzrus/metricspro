@@ -2,7 +2,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID } from '@/lib/client'
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 type Cfg = {
   configured: boolean; has_credentials: boolean; portal_user: string | null
@@ -48,11 +47,11 @@ export default function VipSweepAdmin() {
         sweep_chargebacks: cfg.sweep_chargebacks,
       }
       if (pass.trim()) body.portal_pass = pass.trim()
-      const res = await fetch(`${API}/api/v1/commcalc/vip/sweep/config?org_id=${ORG_ID}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      // via api() so the bearer token rides along — a bare fetch is a guaranteed 401
+      // ("authentication required") now that tenant enforcement is on
+      const d = await api(`/api/v1/commcalc/vip/sweep/config?org_id=${ORG_ID}`, {
+        method: 'PUT', body: JSON.stringify(body),
       })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.detail || 'Save failed')
       setCfg(d); setPass('')
       setMsg('✅ Saved')
     } catch (e: any) { setMsg(`❌ ${e.message}`) }
@@ -62,9 +61,7 @@ export default function VipSweepAdmin() {
   async function runNow() {
     setRunning(true); setMsg('')
     try {
-      const res = await fetch(`${API}/api/v1/commcalc/vip/sweep/run-now?org_id=${ORG_ID}`, { method: 'POST' })
-      const d = await res.json()
-      if (!res.ok) throw new Error(d.detail || 'Run failed')
+      await api(`/api/v1/commcalc/vip/sweep/run-now?org_id=${ORG_ID}`, { method: 'POST' })
       setMsg('⏳ Sweep started — refreshing status…')
       // poll status a few times (the sweep runs in the background)
       for (let i = 0; i < 8; i++) {

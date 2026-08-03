@@ -1,10 +1,9 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
-import { api, fmt, ORG_ID } from '@/lib/client'
+import { api, apiUpload, fmt, ORG_ID } from '@/lib/client'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
 type Totals = {
   invoices: number; sub_total: number; grand_total: number; fees_total: number
@@ -253,9 +252,8 @@ export default function VipInvoicesPage() {
     setImporting(true); setImportMsg('')
     const form = new FormData(); form.append('file', file)
     try {
-      const res = await fetch(`${API}/api/v1/commcalc/vip/upload?org_id=${ORG_ID}`, { method: 'POST', body: form })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Import failed')
+      // apiUpload (not a bare fetch) so the bearer token rides along with the multipart body
+      const data = await apiUpload(`/api/v1/commcalc/vip/upload?org_id=${ORG_ID}`, form)
       setImportMsg(`✅ ${data.invoices.toLocaleString()} invoices · ${data.lines.toLocaleString()} lines · ${data.devices.toLocaleString()} devices`)
       api(`/api/v1/commcalc/vip/filter-options?org_id=${ORG_ID}`)
         .then((d: any) => { setPeriods(d.periods || []); setLocations(d.locations || []); setStatuses(d.statuses || []) })
