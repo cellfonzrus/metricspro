@@ -65,7 +65,17 @@ export default function XTenderReconPage() {
   const filtered = useMemo(() => filterRows(joinedRows, filt, acc), [joinedRows, filt, acc])
   const rows = filtered.filter(r => !onlyMismatch || !r.match)
 
-  const t = data?.totals || {}
+  // RULE FIVE: tiles must follow the filter selection too — recompute totals client-side over the
+  // filtered rows (identical to the server totals when no filter is active; server `data.totals` is
+  // intentionally no longer read so tiles, table and exports can never disagree).
+  const t = useMemo(() => {
+    const sum = (k: string) => filtered.reduce((a: number, r: any) => a + (Number(r[k]) || 0), 0)
+    return {
+      pos_cash: sum('pos_cash'), closing_cash: sum('closing_cash'), cash_variance: sum('cash_variance'),
+      pos_card: sum('pos_card'), closing_card: sum('closing_card'), card_variance: sum('card_variance'),
+      stores: filtered.length, mismatches: filtered.filter((r: any) => !r.match).length,
+    }
+  }, [filtered])
   const scope = mode === 'date' ? date : (period || 'period')
 
   function buildPayload(): ExportPayload {
