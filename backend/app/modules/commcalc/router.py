@@ -8,6 +8,8 @@ import re
 from app.core.database import get_supabase
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
+from app.modules.commcalc import whatif_gates
+from app.modules.commcalc import pay_simulator
 from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_VOID_TOKENS,
                                              is_voided as _gp_is_voided)
 from app.modules.commcalc.flags import calc_flags
@@ -1736,13 +1738,19 @@ async def _upload_file_impl(
 
 
 @router.get("/whatif/activation-baseline")
-def whatif_activation_baseline(period: str, carrier_id: str = "", org_id: str = ORG_ID):
+def whatif_activation_baseline(period: str, carrier_id: str = "",
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
     """What-If tool #1 — CARRIER-AGNOSTIC employee-payout template. Boost carriers keep the legacy 8
     components (byte-identical); non-Boost carriers' components auto-populate from their configured
     Commission Plans / rules / tiers + payout_schedule installments; a carrier with no pay source gets an
     explicit empty state pointing at /commcalc/commission-plans. Employee-payout perspective (no residual
-    money) → not gated behind the carrier-residual grant."""
+    money) → not gated behind the carrier-residual grant.
+
+    REPORT GATE (owner 2026-08-03): DEFAULT-CLOSED behind the 'whatif_employee_payout' DATA_GRANT —
+    before this, nav-hiding was the only thing standing between any authenticated caller and this
+    report's per-component payout template. Enforced BEFORE the first read."""
     require_org(org_id)
+    whatif_gates.require_whatif_report(authorization, whatif_gates.EMPLOYEE_PAYOUT, org_id)
     return whatif.activation_baseline(sb(), org_id, period, carrier_id=(carrier_id or None))
 
 
@@ -1753,15 +1761,23 @@ def whatif_byod_residual(months: int = 6, carrier_id: str = "", authorization: s
     rows (sign-normalized) joined with raw_ma_commission M1-M6 + rebate. Residual = carrier-income money →
     gated behind the carrier-residual visibility grant."""
     require_org(org_id)
+    # TWO INDEPENDENT GATES, both enforced, neither replacing the other:
+    #  1. the DEFAULT-CLOSED per-report grant (owner 2026-08-03) — may you open this report at all;
+    #  2. the tenant's carrier-residual visibility grant — may you see raw carrier residual money.
+    whatif_gates.require_whatif_report(authorization, whatif_gates.BYOD_RESIDUAL, org_id)
     _require_carrier_residual(authorization, org_id)   # carrier-residual visibility gate (mig 201)
     return whatif.byod_residual(sb(), org_id, max(1, min(months, 24)), carrier_id=(carrier_id or None))
 
 
 @router.get("/whatif/accessory-byod")
-def whatif_accessory_byod(months: int = 4, org_id: str = ORG_ID):
+def whatif_accessory_byod(months: int = 4, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """What-If tool #3 — per store/period BYOD activations vs accessory revenue vs total revenue,
-    with Pearson correlations."""
+    with Pearson correlations.
+
+    REPORT GATE (owner 2026-08-03): DEFAULT-CLOSED behind the 'whatif_accessory_corr' DATA_GRANT.
+    This report emits per-STORE revenue and accessory revenue — it had no gate of any kind."""
     require_org(org_id)
+    whatif_gates.require_whatif_report(authorization, whatif_gates.ACCESSORY_CORR, org_id)
     return whatif.accessory_byod_correlation(sb(), org_id, months)
 
 
@@ -1775,16 +1791,80 @@ def whatif_carrier_income(months: int = 6, carrier_id: str = "", authorization: 
     source is active. Company payout / carrier income = residual-class money → gated behind the
     carrier-residual visibility grant."""
     require_org(org_id)
+    # Same two independent gates as /whatif/byod-residual (report access, then residual-money visibility).
+    whatif_gates.require_whatif_report(authorization, whatif_gates.CARRIER_INCOME, org_id)
     _require_carrier_residual(authorization, org_id)
     return whatif.carrier_income(sb(), org_id, max(1, min(months, 24)), carrier_id=(carrier_id or None))
 
 
+@router.get("/whatif/access")
+def whatif_access(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Which of the FOUR What-If reports this caller may open — one caller resolution, four booleans.
+
+    The page renders only the granted tabs from this, so an ungranted caller never fires four requests
+    to collect four 403s, and a caller with zero grants sees ONE lock note instead of an empty page with
+    four red errors. The BACKEND endpoints remain the enforcement (each 403s on its own); this is the
+    frontend's honest tab list, never the gate itself.
+
+    Deliberately UNGATED (any authed caller may ask "what may I see?") and it leaks nothing: the reply
+    is four booleans about the CALLER, plus the static registry rows so the page can name the exact
+    permission an admin must grant."""
+    require_org(org_id)
+    return {"allowed": whatif_gates.allowed_map(authorization, org_id),
+            "reports": whatif_gates.GRANT_REGISTRY,
+            "labels": whatif_gates.REPORT_LABELS}
+
+
+# ══ EMPLOYEE PAY SIMULATOR (owner 2026-08-03) — self-service "what would I make if I sold X?" ══
+# READ-ONLY, NO PERSIST. Both endpoints resolve the caller from their BEARER TOKEN (pay_simulator
+# .require_self) and refuse any request aimed at another rep with a 403 — a `rep` param exists only so
+# that refusal is explicit, and only a super-admin / company-wide ('all') role (who already read every
+# rep's pay on the Rep Commission Report) may pass one.
+#
+# THE PAY MATH IS NOT HERE AND NOT IN THE BROWSER. The projection is produced by
+# `commission_engine.preview(..., sales_override=<synthetic lines>)` — the SAME function the live
+# plan-engine payout runs through — so a change to a matcher, a tier basis, the pay gate or the
+# set-up-fee item moves the simulator on the same deploy it moves real pay. See pay_simulator.py's
+# docstring for the exact list of engine functions reached.
+#
+# `org_id` is deliberately NOT trusted here: the acting tenant comes from the caller's own app_users
+# row (auth_id is globally unique), so a self-service simulation always lands in the employee's own
+# tenant. The query param stays on the signature only because tenant_middleware rewrites it.
+@router.get("/pay-simulator/context")
+def pay_simulator_context(period: str = "", rep: str = "",
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Who am I, which Commission Plan pays me, and what levers does that plan actually pay on.
+
+    401 when not signed in; 403 when the login isn't linked to an employee record, or when `rep`
+    names anybody but the caller. A rep with no plan assignment gets ok=false + a plain-language
+    reason (that is a CONFIG gap, not an error). Boost-mode tenants get an explicit unsupported
+    state — they are paid by the legacy component engine, so plan dollars would be a lie."""
+    return pay_simulator.context(sb(), authorization, period, requested_rep=rep)
+
+
+@router.post("/pay-simulator/simulate")
+def pay_simulator_simulate(body: dict = None, authorization: str = Header(default=""),
+                           org_id: str = ORG_ID):
+    """Projected pay for the caller's OWN levers. POST because the input is a lever map, NOT because
+    anything is written — this handler performs no insert/update/upsert/delete and triggers no
+    recalculation. body = {period, inputs:{<lever_key>:{units, amount}}, rep?}."""
+    b = body or {}
+    return pay_simulator.run(sb(), authorization, b.get("period") or "",
+                             b.get("inputs") or {}, requested_rep=(b.get("rep") or ""))
+
+
 @router.get("/whatif/source-config")
-def whatif_get_source_config(carrier_id: str = "", org_id: str = ORG_ID):
+def whatif_get_source_config(carrier_id: str = "", authorization: str = Header(default=""),
+                             org_id: str = ORG_ID):
     """The RESOLVED What-If source config (whatif_source_config, mig 209) for the selected carrier, plus
     the org's raw override rows. Drives the ⚙️ Sources admin panel. Read-only, degrades to code defaults
-    when mig 209 is absent."""
+    when mig 209 is absent.
+
+    GATE: requires ANY ONE of the four report grants (page chrome for reports you can't open is still
+    tenant source wiring). The WRITE below keeps its own, stricter `_require_commission_admin` — this
+    change narrows the read, it does not widen the write."""
     require_org(org_id)
+    whatif_gates.require_any_whatif(authorization, org_id)
     client = sb()
     carriers, picked, mode = whatif._carrier_ctx(client, org_id, (carrier_id or None))
     resolved = whatif._whatif_source_config(client, org_id, (picked or {}).get("id"), mode)

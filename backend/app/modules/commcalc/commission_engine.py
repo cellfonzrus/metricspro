@@ -1063,7 +1063,7 @@ def _unmatched_record(row, why, rep, store, market, plan_name=None):
 # ── preview ────────────────────────────────────────────────────────────────────────────────────
 def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
             rule_overrides=None, unmatched_detail=False, gate_override=None,
-            setup_fee_override=None):
+            setup_fee_override=None, sales_override=None, mrc_override=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -1076,6 +1076,18 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     imei / mdn / product / contract_type / ext_price / gp / per-line amount) — including rules that
     matched 0 lines, so "plan attached but nothing paid" is explainable. only_rep restricts the rep
     grouping (canon or token-subset match) so a single-rep drill is cheap.
+
+    sales_override / mrc_override (read-only; the EMPLOYEE PAY SIMULATOR, mod-commission 2026-08-03):
+    substitute the period's sale LINES (and the pct_mrc join) with caller-supplied rows instead of
+    reading raw_sales / raw_mi. This is the hook that lets the self-service pay simulator answer "what
+    would I make if I sold X" by running THIS function — the same matcher, the same _line_payout, the
+    same flat-once accumulation, the same pay gate, the same tier basis/multiplier and the same set-up
+    fee item that the real payout runs — instead of a second, drift-prone copy of the pay math in
+    pay_simulator.py or (worse) in the browser. Everything else is unchanged: plans, assignments, the
+    accessory classifier, the exclusion map and the tenant's config are still read from the database, so
+    a simulated line is priced by exactly the rules a real line would be. NOTHING IS WRITTEN — preview()
+    has never written and still doesn't. Both default to None → this whole feature is inert and the
+    result is BYTE-IDENTICAL for every existing caller.
 
     coverage=True (diagnostics only; mig 232) additionally returns a top-level "coverage" block: every
     seller with sales but NO plan attached (today they are silently skipped → a legit-looking $0), the
@@ -1116,7 +1128,10 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
             return {"ready": True, "period": period, "by_rep": [], "totals": {"payout": 0.0, "reps": 0},
                     "note": "plan_id not found."}
 
-    sales = _read_sales(client, org_id, period)
+    # SALES SOURCE. `sales_override` (pay simulator) replaces the raw_sales/feed read with synthetic
+    # lines; everything downstream — the voided/Return gate below included — is identical, so a
+    # simulated line goes through the same funnel a real one does. None → the historic read.
+    sales = list(sales_override) if sales_override is not None else _read_sales(client, org_id, period)
     # only un-voided, non-return lines qualify (same gate as the live calculator). VOIDED uses the
     # SHARED token set (owner 2026-07-25) so a 'true'/'1'/'void' line can never be paid while the Sales
     # Report excludes it.
@@ -1166,6 +1181,12 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                 r["_ct_resolved"] = b
 
     mrc_by_mdn, mrc_by_sub = _read_mi_mrc(client, org_id, period)
+    if mrc_override:
+        # pct_mrc join for simulated lines: the simulator supplies {normalized_mdn -> MRC} for the
+        # phone numbers it minted. MERGED (not replaced) and applied on top, so a real MDN's MRC is
+        # never silently changed for any other caller — with mrc_override=None this is a no-op.
+        _mo = {_norm_mdn(k): safe_float(v) for k, v in (mrc_override or {}).items() if _norm_mdn(k)}
+        mrc_by_mdn = {**mrc_by_mdn, **_mo}
     cost_by_pid = _read_catalog_cost(client, org_id)
     store_market = _read_store_market(client, org_id)
     role_by_rep = _read_employee_roles(client, org_id)   # {_canon_person(name) -> role} for scope='role'
