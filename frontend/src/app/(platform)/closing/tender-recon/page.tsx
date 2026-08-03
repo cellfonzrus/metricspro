@@ -124,11 +124,11 @@ export default function XTenderReconPage() {
           <>
             <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
               <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'date' ? 'var(--accent)' : 'transparent', color: mode === 'date' ? 'white' : 'var(--text2)' }} onClick={() => setMode('date')}>Day</button>
-              <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'white' : 'var(--text2)' }} onClick={() => setMode('period')}>Month</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'white' : 'var(--text2)' }} onClick={() => { setMode('period'); if (!period) setPeriod(localToday().slice(0, 7)) }}>Month</button>
             </div>
             {mode === 'date'
               ? <input className="select" type="date" value={date} onChange={e => setDate(e.target.value)} />
-              : <input className="select" placeholder="June 2026" value={period} onChange={e => setPeriod(e.target.value)} style={{ width: 130 }} />}
+              : <input className="select" type="month" value={period} onChange={e => setPeriod(e.target.value)} style={{ width: 150 }} />}
             <label style={{ fontSize: 12, color: 'var(--text2)' }}>± $
               <input className="select" type="number" value={tolerance} onChange={e => setTolerance(Number(e.target.value) || 0)} style={{ width: 64, marginLeft: 4 }} />
             </label>
