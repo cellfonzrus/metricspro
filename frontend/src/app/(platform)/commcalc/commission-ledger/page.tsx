@@ -17,7 +17,21 @@ type Summ = {
   other_total: number; other_count: number
   categories: Record<string, { total: number; count: number }>
   category_labels: Record<string, string>; by_month: Record<string, number>
+  // COMMISSION LEG (owner 2026-08-04) — the same payout money, additionally split into the leg of the
+  // activation's life it belongs to. `by_category_leg[category]` sums to that category's own total, and
+  // `legs` sums to payout_total; `leg_identity_ok` is the backend's own proof of both.
+  legs?: Record<string, number>
+  leg_labels?: Record<string, string>
+  leg_buckets?: string[]
+  by_category_leg?: Record<string, Record<string, number>>
+  leg_ladder?: Record<string, number>
+  leg_unmapped?: { label: string; amount: number; lines: number }[]
+  leg_unmapped_total?: number
+  leg_identity_ok?: boolean
+  leg_basis?: string
 }
+const LEG_ORDER = ['m1', 'trailing', 'unsplit']
+const LEG_FALLBACK: Record<string, string> = { m1: '1st Month', trailing: 'M2–M12', unsplit: 'Unsplit' }
 type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number; ma_syncable?: boolean; ma_sources?: string[] }
 // Provenance: which ingest populated a period, and when. `raw_available` counts the rows sitting in the
 // raw MA tables for that period — so a period whose feed has moved on while the ledger hasn't is visible.
@@ -435,6 +449,68 @@ export default function CommissionLedgerPage() {
               <div style={{ fontSize: 11, color: 'var(--text3)' }}>{summ.line_count} lines · {money(summ.charge_total)} bill/act. payments</div>
             </div>
           </div>
+
+          {/* ── COMMISSION LEG (owner 2026-08-04): 1st Month vs M2–M12, the SAME money as above ──
+              This is a decomposition, not a second total: each row of the table sums back to the
+              category total in the tiles. Rules come from the same Category → Bucket Map. */}
+          {summ.legs && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, marginBottom: 18 }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 8 }}>
+                <b style={{ fontSize: 13 }}>🧩 Commission legs — 1st Month vs M2–M12</b>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>{summ.leg_basis}</span>
+                <div style={{ flex: 1 }} />
+                <a href="/commcalc/commission-category-map" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>Set a label&apos;s leg →</a>
+              </div>
+              {summ.leg_identity_ok === false && (
+                <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>
+                  The legs below do not add back to the category totals — treat the split as unreliable and report it.
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+                {LEG_ORDER.filter(b => (summ.legs?.[b] || 0) !== 0 || b !== 'unsplit').map(b => (
+                  <div key={b} style={{ ...tile }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', marginBottom: 4 }}>{summ.leg_labels?.[b] || LEG_FALLBACK[b]}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700 }}>{money(summ.legs?.[b] || 0)}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                      {summ.payout_total ? `${Math.round((summ.legs?.[b] || 0) / summ.payout_total * 1000) / 10}% of payouts` : '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: 'right', color: 'var(--text3)', fontSize: 11 }}>
+                    <th style={{ textAlign: 'left', padding: '6px 8px' }}>Category</th>
+                    {LEG_ORDER.map(b => <th key={b} style={{ padding: '6px 8px' }}>{summ.leg_labels?.[b] || LEG_FALLBACK[b]}</th>)}
+                    <th style={{ padding: '6px 8px' }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...CATS, 'other'].map(c => {
+                    const row = summ.by_category_leg?.[c] || {}
+                    const tot = c === 'other' ? (summ.other_total || 0) : (summ.categories[c]?.total || 0)
+                    if (!tot && !LEG_ORDER.some(b => row[b])) return null
+                    return (
+                      <tr key={c} style={{ borderTop: '1px solid var(--border)' }}>
+                        <td style={{ padding: '6px 8px', fontWeight: 600 }}>{labels[c] || (c === 'other' ? 'Other (unmapped)' : c)}</td>
+                        {LEG_ORDER.map(b => <td key={b} style={{ padding: '6px 8px', textAlign: 'right', color: row[b] ? 'inherit' : 'var(--text3)' }}>{row[b] ? money(row[b]) : '·'}</td>)}
+                        <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>{money(tot)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {(summ.leg_unmapped_total || 0) > 0 && (
+                <div style={{ fontSize: 12, color: '#9a3412', marginTop: 8, lineHeight: 1.6 }}>
+                  <b>{money(summ.leg_unmapped_total || 0)}</b> could not be attributed to a leg — its source never
+                  states a month-of-life. Top labels:{' '}
+                  {(summ.leg_unmapped || []).slice(0, 6).map((u, i) => <span key={u.label}>{i ? ' · ' : ''}<b>{u.label}</b> {money(u.amount)}</span>)}
+                  {'. '}Give them a leg on{' '}
+                  <a href="/commcalc/commission-category-map" style={{ color: 'var(--accent,#2563eb)' }}>Category → Bucket Map</a>.
+                </div>
+              )}
+            </div>
+          )}
 
           {months.length > 0 && (
             <>

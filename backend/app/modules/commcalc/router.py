@@ -21,6 +21,7 @@ from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import installment_engine
+from app.modules.commcalc import commission_legs as _commission_legs
 from app.modules.commcalc import commission_engine
 from app.modules.commcalc import plan_options
 from app.modules.commcalc import sale_installment_engine
@@ -3813,8 +3814,17 @@ def commission_ledger_summary(source_report: str = "ma_daily_tx", period: str = 
         rows = q.execute().data or []
     except Exception:
         rows = []
+    # COMMISSION LEG dimension (owner 2026-08-04): the same payout money also split 1st-month vs
+    # M2–M12. Passing the ACTIVE rules lets a Category → Bucket Map rule override the leg for the lines
+    # it classifies; without them the leg still derives from each line's payment month / label.
+    _client = sb()
+    try:
+        _rules = commission_ledger.load_rules(_client, org_id, source_report)
+    except Exception:
+        _rules = None
     return {"source_report": source_report, "period": period, "origin": origin or None,
-            **commission_ledger.summarize(rows)}
+            **commission_ledger.summarize(rows, rules=_rules,
+                                          legcls=_org_leg_classifier(_client, org_id))}
 
 
 @router.get("/commission-ledger/rows")
@@ -3863,8 +3873,24 @@ def commission_ledger_observed_types(source_report: str = "ma_daily_tx", period:
                                  "payout_total": 0.0, "category": r.get("category"), "is_payout": r.get("is_payout")})
         a["count"] += 1
         a["payout_total"] = round(a["payout_total"] + safe_float(r.get("payout_total")), 2)
+    # Which LEG each observed label currently attributes to + why — the same surfacing the 'other'
+    # category gets, so an un-attributed label is visible instead of silently sitting in Unsplit.
+    try:
+        _rules = commission_ledger.load_rules(client, org_id, source_report)
+    except Exception:
+        _rules = None
+    _lc = _org_leg_classifier(client, org_id)
+    for a in agg.values():
+        b, lm, why = commission_ledger.leg_of(
+            {"order_type": a["order_type"], "product_name": a["product_name"],
+             "raw_amount": -1 if a.get("is_payout") else 1,
+             "payment_month": commission_ledger.parse_payment_month(a["product_name"])},
+            _rules, _lc)
+        a["leg_bucket"], a["leg_month"], a["leg_why"] = b, lm, why
     out = sorted(agg.values(), key=lambda x: (-x["payout_total"], x["product_name"]))
-    return {"types": out, "count": len(out)}
+    return {"types": out, "count": len(out),
+            "leg_labels": commission_ledger.LEG_LABELS,
+            "leg_buckets": list(commission_ledger.LEG_BUCKETS)}
 
 
 @router.get("/commission-ledger/by-rep")
@@ -4352,7 +4378,16 @@ def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str 
                                "sign_rule": sr, "priority": pr} for (mf, op, pat, cat, sr, pr) in commission_ledger.DEFAULT_RULES],
             "categories": commission_ledger.CATEGORIES, "category_labels": commission_ledger.CATEGORY_LABELS,
             "match_fields": commission_ledger.MATCH_FIELDS, "match_ops": commission_ledger.MATCH_OPS,
-            "sign_rules": commission_ledger.SIGN_RULES}
+            "sign_rules": commission_ledger.SIGN_RULES,
+            # COMMISSION LEG (owner 2026-08-04) — the second, orthogonal dimension on this map.
+            # A rule's leg_bucket is NULL on every pre-existing rule and NULL means "derive", so
+            # exposing it here re-buckets nothing.
+            "leg_buckets": list(commission_ledger.LEG_BUCKETS),
+            "leg_labels": commission_ledger.LEG_LABELS,
+            "leg_ready": any("leg_bucket" in (r or {}) for r in rows) if rows else None,
+            "leg_help": ("Leg is optional and orthogonal to the category: leave it on Derive and the "
+                         "line's own payment month (\"MONTH 4\", \"M1\") decides. Set it only for "
+                         "labels whose month-of-life the source never states.")}
 
 
 @router.post("/commission-category-map")
@@ -4374,6 +4409,15 @@ def upsert_commission_category_map(body: dict, org_id: str = ORG_ID):
            "category": category, "sign_rule": sign, "priority": int(body.get("priority") or 100),
            "is_seeded": False, "updated_at": column_mapping.now_iso()}
     client = sb()
+    # COMMISSION LEG override (mig 274). '' / absent = DERIVE (the default, and what every existing rule
+    # keeps). Only written when the column actually exists, so this endpoint still works pre-274.
+    if "leg_bucket" in body:
+        lb = str(body.get("leg_bucket") or "").strip().lower()
+        if lb and lb not in commission_ledger.LEG_BUCKETS:
+            raise HTTPException(400, f"leg_bucket must be blank (derive) or one of "
+                                     f"{', '.join(commission_ledger.LEG_BUCKETS)}")
+        if "leg_bucket" in _known_columns(client, "commission_category_map", ["leg_bucket"]):
+            row["leg_bucket"] = lb or None
     try:
         if body.get("id"):
             client.schema("commcalc").table("commission_category_map").update(row).eq("id", body["id"]).execute()
@@ -12849,7 +12893,25 @@ def _compute_gp(client, org_id, period, market=""):
             _ma_atu = 0.0
         if _ma_comm or _ma_atu:
             ma_income = {'comm': round(_ma_comm, 2), 'atu': round(_ma_atu, 2)}
-    mi_rows    = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
+            # Commission-LEG split (owner 2026-08-04): the leg is the COLUMN NAME on the MA feed
+            # (spiff_m1 = 1st month, spiff_m2..m6 = trailing). Hand the GP engine the PER-COMPONENT
+            # sums plus the exact component list `_ma_comm` was built from, so the split re-sums to
+            # `comm` by construction instead of being re-derived from a second query.
+            try:
+                ma_income['components'] = {c: sum(safe_float(x.get(c)) for x in _mrows)
+                                           for c in _MACOMP}
+                ma_income['component_list'] = list(_MACOMP)
+            except Exception:
+                pass
+    # `mi_activation_date` is selected ONLY so the commission-LEG split can tell 1st-month residual
+    # (subscriber activated THIS month) from M2–M12 residual. The mi/atu money columns do not read it
+    # and are byte-identical. Falls back to the pre-split select if the column is absent (pre-mig-021
+    # raw_mi), in which case every residual dollar is honestly reported as 'unsplit'.
+    try:
+        mi_rows = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout,mi_activation_date').eq('org_id', org_id).in_('period', pv).execute().data or []
+    except Exception as _mie:
+        print(f'WARN gp raw_mi select fell back (no mi_activation_date column?): {_mie}')
+        mi_rows = sc.table('raw_mi').select('salesforce_id,actual_mi_payout,actual_atu_payout').eq('org_id', org_id).in_('period', pv).execute().data or []
     rep_comms  = sc.table('rep_commissions').select('store,total_payout,epay_salesperson,storeops_name').eq('org_id', org_id).in_('period', pv).execute().data or []
     expenses   = sc.table('store_expenses').select('store_code,amount').eq('org_id', org_id).in_('period', pv).execute().data or []
     # Wide select so the cost map can key on the TOTAL variant's UPC/SKU/desc (migs 230/231); high limit so
@@ -12892,9 +12954,21 @@ def _compute_gp(client, org_id, period, market=""):
     # which are keyed by the org's storeops store_code. House byte-identical (store_mapping populated →
     # calc_gp_report's own street-number join yields the code and the fallback never fires).
     _resolve_code = _store_code_resolver(client, org_id)
+    # Commission-LEG attribution (owner 2026-08-04) — 1st month vs M2–M12. Config-resolved per (org,
+    # carrier mode) exactly like every other carrier-shaped rule here; NEVER raises, so a tenant whose
+    # mig-274 tables are absent simply gets the seeded code defaults and the report is unchanged apart
+    # from the new split columns.
+    try:
+        _legcls = _commission_legs.for_org(
+            client, org_id,
+            carrier_mode=_resolve_carrier_mode(
+                sc.table('carrier').select('*').eq('org_id', org_id).execute().data or []))
+    except Exception as _lge:
+        print(f'WARN gp commission-leg config fell back to code defaults: {_lge}')
+        _legcls = _commission_legs.default_classifier()
     result = calc_gp_report(sales, pay_detail, mi_rows, rep_comms, expenses, catalog, store_map, period,
                             comp_rows=comp_rows, gp_category_map=gp_cat_map, resolve_store_code=_resolve_code,
-                            config_classify=config_classify, ma_income=ma_income)
+                            config_classify=config_classify, ma_income=ma_income, leg_classify=_legcls)
     if market:
         result['store_rows'] = [r for r in result['store_rows'] if r.get('market', '').upper() == market.upper()]
     return result
@@ -13122,6 +13196,481 @@ async def get_gp_departments(period: str = "", org_id: str = ORG_ID):
     out = [{"department": d, "count": n, "category": classify(d), "mapped": d in mapped_keys}
            for d, n in sorted(cnt.items(), key=lambda kv: -kv[1])]
     return {"departments": out}
+
+
+# ═══ COMMISSION LEGS — 1st month vs M2–M12 (owner directive 2026-08-04) ══════════════════════════
+# READ-ONLY. These endpoints DECOMPOSE commission money already received; none of them writes a payout,
+# a rate, a tier or a calc input. `commcalc/commission_legs.py` holds the (pure) attribution rules and
+# `commcalc.commission_leg_config` / `commission_leg_label_map` (mig 274) hold the per-org config.
+
+def _ma_summary_legs(client, org_id, comps):
+    """1st-month / M2–M12 split of a master-agent commission roll-up, from the SAME component sums the
+    roll-up's own `total_payable` is built from — so the two can never disagree. Never raises."""
+    try:
+        res = _org_leg_classifier(client, org_id).ma(comps, _MA_LEG_COMPONENTS)
+        total = round(-sum(safe_float(comps.get(c)) for c in _MA_LEG_COMPONENTS), 2)
+        return {"m1": res["buckets"]["m1"], "m2_12": res["buckets"]["trailing"],
+                "unsplit": res["buckets"]["unsplit"], "total": total,
+                "ladder": res["leg_ladder"],
+                "identity_ok": abs(round(sum(res["buckets"].values()), 2) - total) < 0.01,
+                "basis": ("1st Month = the activation-order margins + spiff_m1; M2–M12 = spiff_m2…m6 — "
+                          "the leg is the column name on the MA Commission Details export.")}
+    except Exception as e:
+        return {"m1": 0.0, "m2_12": 0.0, "unsplit": 0.0, "total": 0.0, "ladder": {},
+                "identity_ok": False, "basis": f"leg split unavailable ({e})"}
+
+
+def _org_leg_classifier(client, org_id):
+    """The org's ONE commission-leg classifier (1st month vs M2–M12), resolved per carrier mode.
+    NEVER raises — a tenant without migration 274 gets the seeded code defaults."""
+    try:
+        return _commission_legs.for_org(
+            client, org_id,
+            carrier_mode=_resolve_carrier_mode(
+                client.schema('commcalc').table('carrier').select('*')
+                .eq('org_id', org_id).execute().data or []))
+    except Exception:
+        return _commission_legs.default_classifier()
+
+
+# The raw_ma_commission money components the org's MA commission total is built from. Imported from
+# the finance module's ONE definition so the leg split can never iterate a different column set than
+# the total it is decomposing (a mismatch there is exactly how a "split" stops adding up); the literal
+# is only a last-resort fallback if that import ever moves.
+try:
+    from app.modules.account.residual_subs import _MA_COMPONENTS as _MA_LEG_COMPONENTS
+except Exception:                                                          # pragma: no cover
+    _MA_LEG_COMPONENTS = ["device_margin", "consumer_margin", "consumer_financing", "rebate",
+                          "wallet_funding", "fees_margin",
+                          "spiff_m1", "spiff_m2", "spiff_m3", "spiff_m4", "spiff_m5", "spiff_m6"]
+
+
+def _leg_window(period, months):
+    """The last `months` month-labels ending at `period`, oldest first. The window is anchored on the
+    page's OWN period (RULE FIVE: the period filter drives everything) instead of on 'the latest row in
+    the table', so the trend is deterministic and needs no distinct-period scan of a 360k-row table."""
+    try:
+        months = max(1, min(int(months or 12), 36))
+    except (TypeError, ValueError):
+        months = 12
+    try:                       # parse_period raises on an empty/short string — never 500 the page
+        pm = parse_period(period or "")
+    except Exception:
+        pm = {}
+    y, m = pm.get("year") or 0, pm.get("month") or 0
+    if not (y and m):
+        n = _datetime.now(_timezone.utc)
+        y, m = n.year, n.month
+    idx = y * 12 + (m - 1)
+    out = []
+    for k in range(months - 1, -1, -1):
+        i = idx - k
+        out.append(f"{_calendar.month_name[i % 12 + 1]} {i // 12}")
+    return out
+
+
+def _leg_period_key(labels):
+    """{any spelling of a month in `labels`: its canonical 'Month YYYY' label}."""
+    key = {}
+    for lab in labels:
+        for v in _pvariants(lab):
+            key[v] = lab
+    return key
+
+
+def _leg_comp_is_commission(label):
+    """The Comprehensive Comp bucketing rule, IDENTICAL to gp_report's (reimbursement/rebate -> Re-imb,
+    mdf -> MDF, everything else -> Comm) so the trend explains the same money the GP column shows."""
+    ct = str(label or "").lower()
+    return not ("reimbursement" in ct or "rebate" in ct or "mdf" in ct)
+
+
+def _leg_store_index(client, org_id):
+    """{street number: {'store','store_code','market'}} for attributing carrier money to a store — the
+    SAME street-number join gp_report.calc_gp_report uses, so the trend's store/market filter selects
+    exactly the rows the GP table would."""
+    idx = {}
+    try:
+        rows = (client.schema('commcalc').table('store_mapping')
+                .select('store_address,store_code,market,salesforce_id')
+                .eq('org_id', org_id).execute().data) or []
+    except Exception:
+        rows = []
+    by_sfid = {}
+    for s in rows:
+        addr = str(s.get('store_address') or '').strip()
+        num = addr.split(' ')[0] if addr else ''
+        ent = {'store': addr, 'store_code': str(s.get('store_code') or '').strip(),
+               'market': str(s.get('market') or '').strip()}
+        if num:
+            idx.setdefault(num, ent)
+        sf = str(s.get('salesforce_id') or '').strip()
+        if sf:
+            by_sfid.setdefault(sf, ent)
+    return idx, by_sfid
+
+
+def _leg_passes(ent, markets, stores):
+    """RULE FIVE filter test. No filters = everything passes. An UNMAPPED carrier row (no store match)
+    passes only when no store/market filter is active — it cannot be claimed for a specific store."""
+    if not markets and not stores:
+        return True
+    if not ent:
+        return False
+    if markets and (ent.get('market') or '').upper() not in markets:
+        return False
+    if stores and not any(s and (s in (ent.get('store') or '') or s == ent.get('store_code'))
+                          for s in stores):
+        return False
+    return True
+
+
+def _leg_blank_period(label):
+    return {'period': label, 'm1': 0.0, 'm2_12': 0.0, 'unsplit': 0.0, 'total': 0.0,
+            'ladder': {}, 'sources': {}}
+
+
+@router.get("/commission-leg-trend")
+async def commission_leg_trend(period: str = "", months: int = 12, market: str = "", store: str = "",
+                               org_id: str = ORG_ID):
+    """Month-over-month decomposition of RECEIVED commission into the 1st-month leg vs the M2–M12
+    trailing legs, plus the per-month-of-life LADDER that makes the owner's 3MR/6MR question answerable.
+
+    WHAT THIS SHOWS (stated verbatim on the page so nobody has to guess):
+      • "1st Month" = commission received in the SAME month the number activated.
+      • "M2–M12"    = commission received for a number that activated in an EARLIER month.
+      • The ladder  = the same money split by the leg's month-of-life (M1, M2, M3 …). Boost's bounties
+        pay a Month-1..Month-6 ladder and a leg only lands if the subscriber survived that month, so
+        legs 2–3 ARE the money 3-month retention produced and legs 4–6 the 6-month tail. That is the
+        alignment the owner asked for; the DLAR 3MR KPI is overlaid when the org has it.
+
+    Money source = exactly the GP report's Commission column: raw_payment_detail rows whose payment
+    type maps to the 'Commission' payment category, plus (for ePay-less orgs, on the same emptiness
+    gate _compute_gp uses) the VidaPay/MA commission components. Comprehensive Comp is returned
+    alongside as its own series, never added in — the GP report keeps them as separate columns.
+    """
+    require_org(org_id)
+    client = sb(); sc = client.schema('commcalc')
+    labels = _leg_window(period, months)
+    pkey = _leg_period_key(labels)
+    variants = sorted(pkey.keys())
+    markets = {m.strip().upper() for m in (market or '').split(',') if m.strip()}
+    stores = [s.strip() for s in (store or '').split(',') if s.strip()]
+
+    try:
+        legcls = _commission_legs.for_org(
+            client, org_id,
+            carrier_mode=_resolve_carrier_mode(
+                sc.table('carrier').select('*').eq('org_id', org_id).execute().data or []))
+    except Exception:
+        legcls = _commission_legs.default_classifier()
+    store_idx, sfid_idx = _leg_store_index(client, org_id)
+
+    out = {lab: _leg_blank_period(lab) for lab in labels}
+    comp_series = {lab: _leg_blank_period(lab) for lab in labels}
+    notes, degraded = [], False
+
+    # ── 1. label rollup (payment detail + comp report) — one aggregate round trip ────────────────
+    rows, used_rpc = [], True
+    try:
+        rows = (client.schema('commcalc')
+                .rpc('commission_leg_label_rollup', {'p_org_id': org_id, 'p_periods': variants})
+                .execute().data) or []
+    except Exception as e:
+        used_rpc = False
+        degraded = True
+        print(f'WARN commission_leg_label_rollup RPC unavailable ({e}) — per-month fallback')
+        cap = min(len(labels), 3)
+        notes.append(f'Migration 274 not applied yet — the aggregate is being computed month by month, '
+                     f'so only the most recent {cap} month(s) are shown. Run 274 for the full window.')
+        try:
+            cat_map = {str(r['description']).strip(): r['category']
+                       for r in (sc.table('payment_categories').select('description,category')
+                                 .eq('org_id', org_id).execute().data or []) if r.get('description')}
+        except Exception:
+            cat_map = {}
+        for lab in labels[-cap:]:
+            try:
+                pd = (sc.table('raw_payment_detail').select('business_address,payment_type,amount')
+                      .eq('org_id', org_id).in_('period', _pvariants(lab)).limit(60000).execute().data) or []
+            except Exception:
+                pd = []
+            for r in pd:
+                rows.append({'source': 'payment_detail', 'period': lab,
+                             'store_num': str(r.get('business_address') or '').strip().split(' ')[0],
+                             'label': str(r.get('payment_type') or '').strip(),
+                             'category': cat_map.get(str(r.get('payment_type') or '').strip(), 'Unknown'),
+                             'amount': safe_float(r.get('amount')), 'n': 1})
+
+    for r in rows:
+        lab = pkey.get(str(r.get('period') or '').strip())
+        if not lab:
+            continue
+        src = str(r.get('source') or '').strip()
+        ent = store_idx.get(str(r.get('store_num') or '').strip())
+        if not _leg_passes(ent, markets, stores):
+            continue
+        amt = safe_float(r.get('amount'))
+        label = r.get('label')
+        if src == 'payment_detail':
+            if str(r.get('category') or '').strip() != 'Commission':
+                continue
+            target = out[lab]
+        elif src == 'comp_report':
+            if not _leg_comp_is_commission(label):
+                continue
+            target = comp_series[lab]
+        else:
+            continue
+        bucket, leg, _why = legcls.label(label)
+        k = {'m1': 'm1', 'trailing': 'm2_12', 'unsplit': 'unsplit'}[bucket]
+        target[k] = round(target[k] + amt, 2)
+        target['total'] = round(target['total'] + amt, 2)
+        lk = 'unknown' if leg is None else str(int(leg))
+        target['ladder'][lk] = round(target['ladder'].get(lk, 0.0) + amt, 2)
+        sname = 'ePay Payment Detail' if src == 'payment_detail' else 'Comprehensive Comp'
+        target['sources'][sname] = round(target['sources'].get(sname, 0.0) + amt, 2)
+
+    # ── 2. VidaPay / master-agent commission — only for months with NO payment detail, exactly the
+    #      emptiness gate _compute_gp uses, so the two surfaces can never double-count the same month.
+    ma_rows = []
+    try:
+        ma_rows = (client.schema('commcalc')
+                   .rpc('commission_leg_ma_rollup', {'p_org_id': org_id, 'p_periods': variants})
+                   .execute().data) or []
+    except Exception:
+        if used_rpc:
+            for lab in labels:
+                try:
+                    mr = (sc.table('raw_ma_commission').select('*').eq('org_id', org_id)
+                          .in_('period', _pvariants(lab)).limit(100000).execute().data) or []
+                except Exception:
+                    mr = []
+                if mr:
+                    agg = {'period': lab}
+                    for c in _MA_LEG_COMPONENTS:
+                        agg[c] = sum(safe_float(x.get(c)) for x in mr)
+                    ma_rows.append(agg)
+    if ma_rows and (markets or stores):
+        notes.append('VidaPay/master-agent commission carries no store address, so it is company-wide '
+                     'and is EXCLUDED while a store or market filter is active.')
+    for r in ma_rows:
+        lab = pkey.get(str(r.get('period') or '').strip())
+        if not lab or (markets or stores):
+            continue
+        if out[lab]['sources'].get('ePay Payment Detail'):
+            continue                      # this month is an ePay month — MA is the ePay-less fallback
+        res = legcls.ma(r, _MA_LEG_COMPONENTS)
+        b = res['buckets']
+        out[lab]['m1'] = round(out[lab]['m1'] + b['m1'], 2)
+        out[lab]['m2_12'] = round(out[lab]['m2_12'] + b['trailing'], 2)
+        out[lab]['unsplit'] = round(out[lab]['unsplit'] + b['unsplit'], 2)
+        out[lab]['total'] = round(out[lab]['total'] + res['total'], 2)
+        for lk, lv in (res.get('leg_ladder') or {}).items():
+            k = 'unknown' if lk == 'unknown' else str(int(lk))
+            out[lab]['ladder'][k] = round(out[lab]['ladder'].get(k, 0.0) + lv, 2)
+        out[lab]['sources']['VidaPay/MA'] = round(
+            out[lab]['sources'].get('VidaPay/MA', 0.0) + res['total'], 2)
+
+    # ── 3. DLAR 3MR overlay (optional) — the ONE retention KPI this codebase actually has ────────
+    tmr3 = {}
+    try:
+        dl = (sc.table('raw_dlar_rep').select('period,tmr3').eq('org_id', org_id)
+              .limit(200000).execute().data) or []
+        acc = {}
+        for r in dl:
+            lab = pkey.get(str(r.get('period') or '').strip())
+            v = safe_float(r.get('tmr3'))
+            if lab and v:
+                a = acc.setdefault(lab, [0.0, 0])
+                a[0] += v; a[1] += 1
+        tmr3 = {k: round(v[0] / v[1], 1) for k, v in acc.items() if v[1]}
+    except Exception:
+        tmr3 = {}
+
+    series = []
+    for lab in labels:
+        d = out[lab]
+        tot = d['total']
+        series.append({**d,
+                       'm2_12_pct': round(d['m2_12'] / tot * 100, 1) if tot else 0.0,
+                       'tmr3': tmr3.get(lab)})
+    ladder_months = sorted({int(k) for d in series for k in d['ladder'] if k != 'unknown'})
+
+    return {
+        'months': labels,
+        'company': series,
+        'comp_series': [comp_series[l] for l in labels],
+        'ladder_months': ladder_months,
+        'has_unknown_leg': any('unknown' in d['ladder'] for d in series),
+        'config': legcls.describe(),
+        'notes': notes,
+        'degraded': degraded,
+        'money': True,
+        'basis': ('Commission RECEIVED, same money as the Gross Profit report\'s Commission column. '
+                  '1st Month = received in the month the number activated; M2–M12 = received later for '
+                  'an already-activated number. The ladder splits the same money by the leg\'s '
+                  'month-of-life (M1, M2, M3 …) — legs 2–3 are what 3-month retention pays, legs 4–6 '
+                  'the 6-month tail.'),
+        'retention_note': ('3MR here is the DLAR rep-average 3-month-retention KPI (raw_dlar_rep.tmr3) — '
+                           'the only retention KPI this system stores. There is no stored 6MR KPI; the '
+                           'M4–M6 rungs of the ladder are the payout-side view of 6-month retention.'),
+    }
+
+
+@router.get("/commission-leg-labels")
+async def commission_leg_labels(period: str = "", months: int = 6, org_id: str = ORG_ID):
+    """Every carrier payment/compensation label the org's data actually contains, with the $ behind it,
+    how it is CURRENTLY attributed and why — the pick-don't-type source for the Commission Legs admin
+    page (§3b: you map a label that exists, you never type one)."""
+    require_org(org_id)
+    client = sb(); sc = client.schema('commcalc')
+    labels = _leg_window(period, months)
+    pkey = _leg_period_key(labels)
+    variants = sorted(pkey.keys())
+    try:
+        legcls = _commission_legs.for_org(
+            client, org_id,
+            carrier_mode=_resolve_carrier_mode(
+                sc.table('carrier').select('*').eq('org_id', org_id).execute().data or []))
+    except Exception:
+        legcls = _commission_legs.default_classifier()
+
+    agg, ready = {}, True
+    try:
+        rows = (client.schema('commcalc')
+                .rpc('commission_leg_label_rollup', {'p_org_id': org_id, 'p_periods': variants})
+                .execute().data) or []
+    except Exception:
+        ready = False
+        rows = []
+        for lab in labels[-1:]:
+            try:
+                for r in (sc.table('raw_payment_detail').select('payment_type,amount')
+                          .eq('org_id', org_id).in_('period', _pvariants(lab))
+                          .limit(60000).execute().data) or []:
+                    rows.append({'source': 'payment_detail', 'label': str(r.get('payment_type') or '').strip(),
+                                 'category': '', 'amount': safe_float(r.get('amount')), 'n': 1})
+            except Exception:
+                pass
+    for r in rows:
+        lbl = str(r.get('label') or '').strip()
+        if not lbl:
+            continue
+        e = agg.setdefault(lbl, {'label': lbl, 'amount': 0.0, 'lines': 0, 'sources': set(),
+                                 'categories': set()})
+        e['amount'] = round(e['amount'] + safe_float(r.get('amount')), 2)
+        e['lines'] += int(r.get('n') or 0)
+        e['sources'].add(str(r.get('source') or ''))
+        if r.get('category'):
+            e['categories'].add(str(r.get('category')))
+
+    try:
+        overrides = {str(r.get('label') or '').strip().lower(): r
+                     for r in (sc.table('commission_leg_label_map').select('*')
+                               .eq('org_id', org_id).execute().data or [])}
+        map_ready = True
+    except Exception:
+        overrides, map_ready = {}, False
+
+    out = []
+    for e in agg.values():
+        bucket, leg, why = legcls.label(e['label'])
+        ov = overrides.get(e['label'].lower())
+        out.append({'label': e['label'], 'amount': e['amount'], 'lines': e['lines'],
+                    'sources': sorted(x for x in e['sources'] if x),
+                    'categories': sorted(e['categories']),
+                    'bucket': bucket, 'leg_month': leg, 'why': why,
+                    'overridden': bool(ov),
+                    'override_note': (ov or {}).get('note') or ''})
+    out.sort(key=lambda x: (x['bucket'] != 'unsplit', -abs(x['amount']), x['label'].lower()))
+    return {'labels': out, 'months': labels, 'rollup_ready': ready, 'map_ready': map_ready,
+            'config': legcls.describe(),
+            'unsplit_total': round(sum(x['amount'] for x in out if x['bucket'] == 'unsplit'), 2)}
+
+
+@router.post("/commission-leg-labels")
+async def set_commission_leg_label(body: dict, org_id: str = ORG_ID):
+    """Map ONE exact carrier label to a leg bucket. bucket '' REMOVES the override (back to the regex).
+    Reporting only — this moves a dollar between two REPORT columns, never between two people."""
+    require_org(org_id)
+    label = str(body.get('label') or '').strip()
+    if not label:
+        raise HTTPException(400, 'label required')
+    bucket = str(body.get('bucket') or '').strip().lower()
+    sc = sb().schema('commcalc')
+    try:
+        if not bucket:
+            sc.table('commission_leg_label_map').delete()               .eq('org_id', org_id).eq('label', label).execute()
+            return {'ok': True, 'removed': label}
+        if bucket not in _commission_legs.BUCKETS:
+            raise HTTPException(400, f"bucket must be one of {', '.join(_commission_legs.BUCKETS)}")
+        lm = body.get('leg_month')
+        row = {'org_id': org_id, 'label': label, 'bucket': bucket,
+               'leg_month': int(lm) if str(lm or '').strip().isdigit() else None,
+               'note': str(body.get('note') or '').strip() or None,
+               'updated_at': _datetime.now(_timezone.utc).isoformat()}
+        sc.table('commission_leg_label_map').upsert(row, on_conflict='org_id,label').execute()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f'Could not save — run migration 274_commission_leg_split.sql first. [{e}]')
+    return {'ok': True, 'label': label, 'bucket': bucket}
+
+
+@router.get("/commission-leg-config")
+async def get_commission_leg_config(org_id: str = ORG_ID):
+    """The org's resolved leg-attribution rules + the raw config rows behind them."""
+    require_org(org_id)
+    client = sb(); sc = client.schema('commcalc')
+    try:
+        rows = (sc.table('commission_leg_config').select('*')
+                .in_('org_id', [org_id, _commission_legs.ORG_ID]).execute().data) or []
+        ready = True
+    except Exception:
+        rows, ready = [], False
+    try:
+        mode = _resolve_carrier_mode(sc.table('carrier').select('*').eq('org_id', org_id)
+                                     .execute().data or [])
+    except Exception:
+        mode = 'boost'
+    legcls = _commission_legs.for_org(client, org_id, carrier_mode=mode)
+    return {'ready': ready, 'rows': rows, 'carrier_mode': mode,
+            'resolved': legcls.describe(), 'buckets': list(_commission_legs.BUCKETS)}
+
+
+@router.post("/commission-leg-config")
+async def set_commission_leg_config(body: dict, org_id: str = ORG_ID):
+    """Upsert THIS org's mode-default leg-attribution row (carrier_id = nil). Reporting config only."""
+    require_org(org_id)
+    sc = sb().schema('commcalc')
+    mode = str(body.get('carrier_mode') or 'boost').strip().lower() or 'boost'
+    row = {'org_id': org_id, 'carrier_id': '00000000-0000-0000-0000-000000000000',
+           'carrier_mode': mode, 'is_active': True,
+           'updated_at': _datetime.now(_timezone.utc).isoformat()}
+    for k in ('label_month_regex', 'unlabeled_bucket', 'ma_month_field_prefix', 'notes'):
+        if k in body and str(body.get(k) or '').strip():
+            row[k] = str(body[k]).strip()
+    for k in ('m1_month', 'max_leg_month', 'ma_max_month'):
+        if k in body and str(body.get(k) or '').strip().isdigit():
+            row[k] = int(body[k])
+    if 'mi_split_by_activation' in body:
+        row['mi_split_by_activation'] = bool(body['mi_split_by_activation'])
+    if isinstance(body.get('ma_m1_fields'), list):
+        row['ma_m1_fields'] = [str(x).strip() for x in body['ma_m1_fields'] if str(x).strip()]
+    if row.get('unlabeled_bucket') and row['unlabeled_bucket'] not in _commission_legs.BUCKETS:
+        raise HTTPException(400, f"unlabeled_bucket must be one of {', '.join(_commission_legs.BUCKETS)}")
+    if row.get('label_month_regex'):
+        import re as _re_check
+        try:
+            _re_check.compile(row['label_month_regex'])
+        except _re_check.error as e:
+            raise HTTPException(400, f'label_month_regex is not a valid regular expression: {e}')
+    try:
+        sc.table('commission_leg_config').upsert(row, on_conflict='org_id,carrier_id,carrier_mode').execute()
+    except Exception as e:
+        raise HTTPException(400, f'Could not save — run migration 274_commission_leg_split.sql first. [{e}]')
+    return {'ok': True, 'carrier_mode': mode}
 
 
 @router.get("/chargebacks/{period}")
@@ -21840,6 +22389,11 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
                            "fees_margin": round(-comps["fees_margin"], 2),
                            "spiffs_total": round(-sum(comps[f"spiff_m{i}"] for i in range(1, 7)), 2)},
             "spiff_by_month": spiff_by_month,
+            # COMMISSION LEGS (owner 2026-08-04) — the SAME `total_payable`, additionally split into
+            # the 1st-month leg vs the M2–M12 trailing legs by the ONE shared classifier
+            # (commcalc/commission_legs.py), so this page and the Gross Profit report cannot disagree.
+            # `identity_ok` proves the parts add back to total_payable rather than asserting it.
+            "legs": _ma_summary_legs(client, org_id, comps),
             "airtime": rnd(airtime),
             "by_store": sorted((rnd(s) for s in by_store.values()),
                                key=lambda s: -(s["payable"] + s["airtime_margin"])),

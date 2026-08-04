@@ -128,6 +128,60 @@ def parse_payment_month(product_name):
         return None
 
 
+# ── COMMISSION LEG (1st month vs M2–M12) — owner directive 2026-08-04 ────────────────────────────
+# A SECOND, ORTHOGONAL dimension over the five canonical categories, not a re-categorisation: every
+# ledger line keeps the category it already has and additionally reports WHICH LEG of the activation's
+# life the money is. The rules live in `commcalc/commission_legs.py` (the ONE shared classifier, also
+# consumed by the Gross Profit report) so the ledger and the GP report can never drift apart.
+#
+# DERIVED AT READ TIME — nothing is stamped on a commission_ledger row, so there is no backfill and the
+# ingest path is untouched. Precedence, highest first:
+#   1. the matched map rule's explicit `leg_bucket` (mig 274; NULL on every pre-existing rule)
+#   2. the line's own `payment_month` — already parsed at build time by parse_payment_month()
+#   3. the org's label rules / per-label overrides in commission_legs
+#   4. the org's configured `unlabeled_bucket` (default: the honest 'unsplit')
+LEG_BUCKETS = ("m1", "trailing", "unsplit")
+LEG_LABELS = {"m1": "1st Month", "trailing": "M2–M12", "unsplit": "Unsplit"}
+
+
+def _first_matching_rule(row, rules):
+    """The rule that classified this line, re-derived with the SAME two-pass order `classify` uses, so a
+    rule-level leg override applies to exactly the lines that rule categorised. None if nothing matched."""
+    if not rules:
+        return None
+    ot, pn = row.get("order_type"), row.get("product_name")
+    is_payout = _sf(row.get("raw_amount")) < 0
+    for pass_class in (True, False):
+        for rule in rules:
+            if (rule.get("match_op") == CLASS_MATCH_OP) != pass_class:
+                continue
+            if rule.get("sign_rule") == "any" or is_payout:
+                if _match(rule, ot, pn):
+                    return rule
+    return None
+
+
+def leg_of(row, rules=None, legcls=None):
+    """(leg_bucket, leg_month, why) for ONE ledger row. PURE apart from the injected classifier.
+    `legcls` is a commission_legs.LegClassifier; None = its DB-free code defaults."""
+    from app.modules.commcalc import commission_legs as _legs
+    legcls = legcls or _legs.default_classifier()
+    rule = _first_matching_rule(row, rules)
+    if rule is not None:
+        rb = str(rule.get("leg_bucket") or "").strip().lower()
+        if rb in LEG_BUCKETS:
+            return rb, (1 if rb == "m1" else None), "rule_override"
+    mo = row.get("payment_month")
+    if mo not in (None, ""):
+        try:
+            n = int(mo)
+        except (TypeError, ValueError):
+            n = None
+        if n and n > 0:
+            return _legs.bucket_for_leg(n, legcls.cfg), n, "payment_month"
+    return legcls.label(row.get("product_name"))
+
+
 def _match(rule, order_type, product_name):
     op = rule.get("match_op") or "contains"
     pat = str(rule.get("pattern") or "").lower()
@@ -202,16 +256,27 @@ def build_row(src, base, rules):
     return row
 
 
-def summarize(rows):
+def summarize(rows, rules=None, legcls=None):
     """Roll a list of ledger rows into: per-category totals + counts, per-(category,payment_month) matrix,
-    payout grand total, charge total, and the 'other' (unmapped-payout) count for surfacing gaps."""
+    payout grand total, charge total, and the 'other' (unmapped-payout) count for surfacing gaps.
+
+    ALSO (owner 2026-08-04) the COMMISSION LEG dimension: the same payout money split into the 1st-month
+    leg vs the M2–M12 trailing legs, per category and in total. That is a DECOMPOSITION — for every
+    category, m1 + trailing + unsplit == that category's existing, unchanged total, and the same holds
+    for the grand payout total; `leg_identity_ok` proves it in the payload instead of asserting it.
+    `rules`/`legcls` are optional: without them the leg is derived from each line's own payment month and
+    label, which is exactly what pre-extension callers get plus the new (additive) keys."""
     cats = {c: {"total": 0.0, "count": 0} for c in CATEGORIES}
     by_month = {}
     payout_total = charge_total = other_total = 0.0
     other_count = 0
+    leg_cats = {c: {b: 0.0 for b in LEG_BUCKETS} for c in list(CATEGORIES) + ["other"]}
+    leg_tot = {b: 0.0 for b in LEG_BUCKETS}
+    leg_ladder, leg_unmapped = {}, {}
     for r in rows:
         cat = r.get("category")
         amt = _sf(r.get("payout_total"))
+        booked = None
         if cat in cats:
             cats[cat]["total"] += amt
             cats[cat]["count"] += 1
@@ -219,21 +284,57 @@ def summarize(rows):
             key = f"{cat}|{mo if mo is not None else 0}"
             by_month[key] = round(by_month.get(key, 0.0) + amt, 2)
             payout_total += amt
+            booked = cat
         elif cat == "other":
             other_total += amt
             other_count += 1
             payout_total += amt
+            booked = "other"
         elif cat == "charge":
             charge_total += _sf(r.get("raw_amount"))
+        if booked is None:                 # a charge is not a payout — it has no leg
+            continue
+        bucket, leg_month, _why = leg_of(r, rules, legcls)
+        if bucket not in LEG_BUCKETS:
+            bucket = "unsplit"
+        leg_cats[booked][bucket] += amt
+        leg_tot[bucket] += amt
+        lk = "unknown" if leg_month in (None, "") else str(int(leg_month))
+        leg_ladder[lk] = round(leg_ladder.get(lk, 0.0) + amt, 2)
+        if bucket == "unsplit":            # surface WHAT is unattributed, the way 'other' is surfaced
+            lbl = str(r.get("product_name") or "(blank)")
+            u = leg_unmapped.setdefault(lbl, {"label": lbl, "amount": 0.0, "lines": 0})
+            u["amount"] = round(u["amount"] + amt, 2)
+            u["lines"] += 1
     for c in cats:
         cats[c]["total"] = round(cats[c]["total"], 2)
+    for c in leg_cats:
+        for b in LEG_BUCKETS:
+            leg_cats[c][b] = round(leg_cats[c][b], 2)
+    for b in LEG_BUCKETS:
+        leg_tot[b] = round(leg_tot[b], 2)
+    payout_total = round(payout_total, 2)
+    identity_ok = abs(round(sum(leg_tot.values()), 2) - payout_total) < 0.01 and all(
+        abs(round(sum(leg_cats[c].values()), 2) - cats[c]["total"]) < 0.01 for c in CATEGORIES)
     return {
         "categories": cats,
         "category_labels": CATEGORY_LABELS,
         "by_month": by_month,
-        "payout_total": round(payout_total, 2),
+        "payout_total": payout_total,
         "charge_total": round(charge_total, 2),
         "other_total": round(other_total, 2),
         "other_count": other_count,
         "line_count": len(rows),
+        # ── commission LEG dimension (additive; categories above are byte-identical) ──
+        "legs": leg_tot,
+        "leg_labels": LEG_LABELS,
+        "leg_buckets": list(LEG_BUCKETS),
+        "by_category_leg": leg_cats,
+        "leg_ladder": leg_ladder,
+        "leg_unmapped": sorted(leg_unmapped.values(), key=lambda x: -abs(x["amount"]))[:50],
+        "leg_unmapped_total": round(leg_tot["unsplit"], 2),
+        "leg_identity_ok": identity_ok,
+        "leg_basis": ("1st Month = commission for a number in the month it activated; M2–M12 = commission "
+                      "received later for an already-activated number. Derived per line from the map "
+                      "rule's leg override, else the line's own payment month, else its label."),
     }
