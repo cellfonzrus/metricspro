@@ -148,8 +148,8 @@ COMMENT ON FUNCTION commcalc.commission_leg_label_rollup(uuid, text[]) IS
   'Received-commission rollup for the GP commission-leg split/trend: (source, period, store street number, raw label, mapped payment category) -> summed amount. The leg (Month N) lives in the label; the backend classifies it from commission_leg_config so the rule stays config, not SQL.';
 
 -- 3b. MI/ATU residual by (period, leg month) — leg = months between mi_activation_date and the report
---     month, +1 (activation month itself = leg 1). Handles the two real date spellings raw_mi holds
---     (ISO 'YYYY-MM-DD' and US 'MM/DD/YYYY'); anything else yields leg_month NULL = honestly unsplit.
+--     month, +1 (activation month itself = leg 1). The column is DATE in prod (::text casts make the
+--     regex work there AND on any env that stored raw text; a date casts to ISO so branch 1 matches); anything else yields leg_month NULL = honestly unsplit.
 --     Period is read from period_year/period_month (populated by every raw_mi writer) so the
 --     'June 2026' vs '2026-06' spelling duality cannot bite here.
 CREATE OR REPLACE FUNCTION commcalc.commission_leg_mi_rollup(p_org_id uuid, p_periods text[])
@@ -163,16 +163,16 @@ LANGUAGE sql STABLE AS $$
            m.period_year AS py,
            m.period_month AS pm,
            CASE
-             WHEN m.mi_activation_date ~ '^\d{4}-\d{1,2}-\d{1,2}'
-               THEN (substring(m.mi_activation_date from '^(\d{4})'))::int
-             WHEN m.mi_activation_date ~ '^\d{1,2}/\d{1,2}/\d{4}'
-               THEN (substring(m.mi_activation_date from '(\d{4})$'))::int
+             WHEN m.mi_activation_date::text ~ '^\d{4}-\d{1,2}-\d{1,2}'
+               THEN (substring(m.mi_activation_date::text from '^(\d{4})'))::int
+             WHEN m.mi_activation_date::text ~ '^\d{1,2}/\d{1,2}/\d{4}'
+               THEN (substring(m.mi_activation_date::text from '(\d{4})$'))::int
              ELSE NULL END AS ay,
            CASE
-             WHEN m.mi_activation_date ~ '^\d{4}-\d{1,2}-\d{1,2}'
-               THEN (substring(m.mi_activation_date from '^\d{4}-(\d{1,2})'))::int
-             WHEN m.mi_activation_date ~ '^\d{1,2}/\d{1,2}/\d{4}'
-               THEN (substring(m.mi_activation_date from '^(\d{1,2})/'))::int
+             WHEN m.mi_activation_date::text ~ '^\d{4}-\d{1,2}-\d{1,2}'
+               THEN (substring(m.mi_activation_date::text from '^\d{4}-(\d{1,2})'))::int
+             WHEN m.mi_activation_date::text ~ '^\d{1,2}/\d{1,2}/\d{4}'
+               THEN (substring(m.mi_activation_date::text from '^(\d{1,2})/'))::int
              ELSE NULL END AS am
       FROM commcalc.raw_mi m
      WHERE m.org_id = p_org_id
