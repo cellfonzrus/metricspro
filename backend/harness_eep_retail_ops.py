@@ -503,7 +503,11 @@ fake = wire(store)
 fr = FakeRequests()
 cr.requests = fr
 
-# H1: purpose='expense' marks the linked closing_expense row paid.
+# H1: purpose='expense' marks the linked closing_expense row paid. (The netting-stays-correct-
+# afterward half of this scenario — does the envelope get double-subtracted now that the SAME dollar
+# is both an approved expense line AND a withdrawal row? — is proven separately in section J, which
+# reproduces this exact shape across all three netting surfaces; kept split out so this section stays
+# focused on the write/sibling-call contract.)
 exp_row = fake.table("closing_expense").insert({
     "org_id": HOUSE, "store_code": "S1", "close_date": "2026-08-01", "closing_row_id": "row-1",
     "amount": 40.0, "status": "approved", "paid": False}).execute().data[0]
@@ -556,6 +560,88 @@ s1 = next(s for s in r["stores"] if s["store_code"] == "S1")
 rep = s1["reps"][0]
 check("rep row carries _expense_lines", len(rep.get("_expense_lines") or []) == 1)
 check("_expense_lines row matches the inserted expense", rep["_expense_lines"][0]["id"] == "exp-x")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# J. GATE-1 FIX (2026-08-04 coordinator finding): each expense dollar nets an envelope EXACTLY ONCE.
+#    Before the fix: an approved closing_expense line netted once as "approved", then AGAIN when the
+#    DM paid it out via POST /closing/envelope-withdrawal (purpose='expense', expense_id set) — a
+#    double-subtraction. Proven here across ALL THREE netting surfaces, plus the two related cases
+#    the coordinator called out (pending-but-paid nets once; payout-due drops a paid line).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+print("\n== J. GATE-1 FIX: expense-paid-via-withdrawal nets ONCE, not twice ==")
+
+store = fresh_store()
+fake = wire(store)
+store["daily_closing"].append({"id": "row-j1", "org_id": HOUSE, "store_code": "SJ", "close_date": "2026-08-01",
+                               "t_cash": 500.0, "store_cash": 500.0, "epay_on_cash": 0.0, "epay_cash": 0.0,
+                               "employee_name": "Jane Rep", "store_name": "J Store", "store_address": "J Store"})
+exp_row = fake.table("closing_expense").insert({
+    "org_id": HOUSE, "store_code": "SJ", "close_date": "2026-08-01", "closing_row_id": "row-j1",
+    "amount": 40.0, "status": "approved", "paid": False, "category_name": "Petty Expenses",
+    "category_kind": "expense", "description": "batteries"}).execute().data[0]
+
+# Sanity: approved-but-unpaid nets once (the pre-existing, already-proven path) — 500-40=460.
+amt, _ = cr._bank_deposit_declared(fake, HOUSE, "SJ", "2026-08-01", "total_cash")
+check("J1: approved-unpaid expense nets once (460, not less)", amt == 460.0, str(amt))
+
+# The DM pays that SAME line out via the withdrawal flow (H1's exact path) — this used to ALSO
+# subtract another 40 (net 420 = wrong; correct is still 460, since the same $40 is now represented
+# by amount=40+paid=True on ONE side and excluded on the withdrawal side).
+resp = cr.record_envelope_withdrawal({
+    "store_code": "SJ", "close_date": "2026-08-01", "closing_row_id": "row-j1", "amount": 40.0,
+    "purpose": "expense", "expense_id": exp_row["id"], "remaining_after": 460.0},
+    org_id=HOUSE, authorization="")
+check("J2: withdrawal recorded + linked expense marked paid", resp["ok"] is True)
+linked = fake.table("closing_expense").select("*").eq("id", exp_row["id"]).execute().data[0]
+check("J2: expense line is now paid=true", linked["paid"] is True)
+
+amt, _ = cr._bank_deposit_declared(fake, HOUSE, "SJ", "2026-08-01", "total_cash")
+check("J3: _bank_deposit_declared nets ONCE after payout (460, NOT 420 double-subtracted)",
+      amt == 460.0, str(amt))
+
+r = cr.closing_pickups(date="2026-08-01", org_id=HOUSE, authorization="")
+env = next(e for e in r["envelopes"] if e["store_code"] == "SJ")
+check("J4: GET /closing/pickups nets ONCE after payout (460)", env["cash"] == 460.0, str(env["cash"]))
+
+r = cr.cash_position(date="2026-08-01", org_id=HOUSE, authorization="")
+row = next(x for x in r["rows"] if x["store_code"] == "SJ")
+check("J5: GET /closing/cash-position nets ONCE after payout (460)", row["cash_on_hand"] == 460.0, str(row["cash_on_hand"]))
+
+# J6: a commission/salary/other withdrawal (no expense_id) is UNAFFECTED by the fix — still nets in
+# full, on top of the (unrelated) expense line above: 460 - 25 = 435.
+cr.record_envelope_withdrawal({
+    "store_code": "SJ", "close_date": "2026-08-01", "closing_row_id": "row-j1", "amount": 25.0,
+    "purpose": "other"}, org_id=HOUSE, authorization="")
+amt, _ = cr._bank_deposit_declared(fake, HOUSE, "SJ", "2026-08-01", "total_cash")
+check("J6: a non-expense-linked withdrawal (purpose='other') still nets normally (435)", amt == 435.0, str(amt))
+
+# J7: pending-but-paid line nets once (coordinator's explicit case — a line paid while still
+# 'pending', which POST /closing/envelope-withdrawal's expense path doesn't itself forbid).
+store2 = fresh_store()
+fake2 = wire(store2)
+store2["daily_closing"].append({"id": "row-j2", "org_id": HOUSE, "store_code": "SK", "close_date": "2026-08-01",
+                                "t_cash": 300.0, "store_cash": 300.0, "epay_on_cash": 0.0, "epay_cash": 0.0,
+                                "employee_name": "Sam Rep", "store_name": "K Store", "store_address": "K Store"})
+store2["closing_expense"].append({"org_id": HOUSE, "store_code": "SK", "close_date": "2026-08-01",
+                                  "closing_row_id": "row-j2", "amount": 30.0, "status": "pending", "paid": True})
+amt, _ = cr._bank_deposit_declared(fake2, HOUSE, "SK", "2026-08-01", "total_cash")
+check("J7: a pending-but-paid line nets ONCE (270), not zero and not double", amt == 270.0, str(amt))
+
+# J8: GET /closing/payout-due drops a paid line from expenses_due (approved-and-paid is no longer due).
+store3 = fresh_store()
+fake3 = wire(store3)
+cr.requests = FakeRequests()   # both siblings 404 -> isolates this check to the expenses leg
+store3["closing_expense"] += [
+    {"org_id": HOUSE, "store_code": "SL", "close_date": "2026-08-01", "amount": 50.0,
+     "status": "approved", "paid": False, "category_name": "Petty Expenses"},
+    {"org_id": HOUSE, "store_code": "SL", "close_date": "2026-08-01", "amount": 75.0,
+     "status": "approved", "paid": True, "category_name": "Office Expenses"},
+]
+r = cr.payout_due(store_code="SL", as_of="2026-08-01", org_id=HOUSE, authorization="")
+check("J8: payout-due expenses_due excludes the PAID line (only the 50 unpaid one)",
+      r["expenses_due"] == 50.0, str(r["expenses_due"]))
+check("J8: payout-due expense_lines list also excludes the paid line", len(r["expense_lines"]) == 1)
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

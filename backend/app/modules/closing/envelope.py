@@ -20,17 +20,30 @@ def _f(v) -> float:
 
 
 # ── Reading approved expense / withdrawal totals (org-scoped, degrade-to-empty) ────────────────────
+# GATE-1 FIX (2026-08-04, coordinator finding): each expense DOLLAR must net an envelope EXACTLY ONCE.
+# Before this fix, an approved closing_expense line netted the envelope once as an "approved expense"
+# AND AGAIN when the DM actually paid it out via POST /closing/envelope-withdrawal (purpose='expense',
+# expense_id set) — a double-subtraction. The rule now: closing_expense counts if it's approved OR
+# already paid (cash is spoken for either way — pending-but-somehow-paid still nets, since the cash
+# physically left); envelope_withdrawal counts EXCEPT rows that are themselves the payout of an
+# expense line (expense_id IS NOT NULL) — that dollar is already represented by the expense-line side.
+# commission_payout / salary_payout / other-purpose withdrawals (expense_id always NULL for those —
+# see POST /closing/envelope-withdrawal) are unaffected and still net exactly as before.
 def approved_expense_totals(client, org_id, date_from=None, date_to=None, store_codes=None):
-    """(by_row, by_store_day) sums of APPROVED commcalc.closing_expense amounts — ALL kinds
-    (payroll/commission/expense) count against envelope cash on hand; only 'expense'-kind rolls to
-    the P&L separately. by_row keys on closing_row_id (for per-envelope netting); by_store_day keys on
-    (store_code, close_date-as-str) and is the SUPERSET (includes null-closing_row_id lines too) — the
-    aggregate a store-level/day-level figure (bank-deposit basis, cash-position) must use."""
+    """(by_row, by_store_day) sums of commcalc.closing_expense amounts where status='approved' OR
+    paid=true — ALL kinds (payroll/commission/expense) count against envelope cash on hand; only
+    'expense'-kind rolls to the P&L separately. by_row keys on closing_row_id (for per-envelope
+    netting); by_store_day keys on (store_code, close_date-as-str) and is the SUPERSET (includes
+    null-closing_row_id lines too) — the aggregate a store-level/day-level figure (bank-deposit basis,
+    cash-position) must use. A 'paid' line is included even if its status is somehow still 'pending'
+    (POST /closing/envelope-withdrawal allows paying an approved-only line, but the DB doesn't forbid
+    a future caller marking one paid before approval — either way, once paid the cash is truly gone
+    from the envelope and must net)."""
     by_row, by_store_day = {}, {}
     try:
         q = (client.schema("commcalc").table("closing_expense")
-             .select("closing_row_id,store_code,close_date,amount,status")
-             .eq("org_id", org_id).eq("status", "approved"))
+             .select("closing_row_id,store_code,close_date,amount,status,paid")
+             .eq("org_id", org_id))
         if date_from:
             q = q.gte("close_date", date_from)
         if date_to:
@@ -41,6 +54,8 @@ def approved_expense_totals(client, org_id, date_from=None, date_to=None, store_
     except Exception:
         return by_row, by_store_day
     for r in rows:
+        if r.get("status") != "approved" and not r.get("paid"):
+            continue
         amt = _f(r.get("amount"))
         if not amt:
             continue
@@ -54,11 +69,15 @@ def approved_expense_totals(client, org_id, date_from=None, date_to=None, store_
 
 def withdrawal_totals(client, org_id, date_from=None, date_to=None, store_codes=None):
     """Same shape as approved_expense_totals but over commcalc.envelope_withdrawal (mig 507) — cash
-    already taken out for a commission/salary/expense/other payout."""
+    already taken out for a commission_payout / salary_payout / other purpose. EXCLUDES any withdrawal
+    row whose expense_id is set (purpose='expense' paying a specific closing_expense line) — that
+    dollar is already counted once by approved_expense_totals (status='approved' or paid=true); double-
+    counting it here on top would net the SAME cash twice out of the envelope. A purpose='expense'
+    withdrawal with no expense_id (a standalone cash-out not tied to any tracked line) still counts."""
     by_row, by_store_day = {}, {}
     try:
         q = (client.schema("commcalc").table("envelope_withdrawal")
-             .select("closing_row_id,store_code,close_date,amount")
+             .select("closing_row_id,store_code,close_date,amount,expense_id")
              .eq("org_id", org_id))
         if date_from:
             q = q.gte("close_date", date_from)
@@ -70,6 +89,8 @@ def withdrawal_totals(client, org_id, date_from=None, date_to=None, store_codes=
     except Exception:
         return by_row, by_store_day
     for r in rows:
+        if r.get("expense_id"):
+            continue   # already counted via approved_expense_totals — never net twice
         amt = _f(r.get("amount"))
         if not amt:
             continue
@@ -82,10 +103,16 @@ def withdrawal_totals(client, org_id, date_from=None, date_to=None, store_codes=
 
 
 # ── Pure netting (no DB) ─────────────────────────────────────────────────────────────────────────
+# Both functions below are safe to just SUM the two input dicts: approved_expense_totals and
+# withdrawal_totals are already mutually exclusive on any given dollar (an expense-linked withdrawal
+# is excluded from withdrawal_totals precisely because approved_expense_totals already counts it) —
+# see the GATE-1 fix note on those two functions. Each expense dollar nets an envelope exactly once.
 def net_row(gross_cash, row_id, exp_by_row, wd_by_row) -> float:
     """envelope_available for ONE daily_closing row (one rep's envelope): gross tender cash minus this
-    row's own approved closing_expense lines minus any envelope_withdrawal taken specifically against
-    THIS row. Never floored — a negative result is a real signal (over-withdrawn envelope)."""
+    row's own approved-or-paid closing_expense lines minus any non-expense-linked envelope_withdrawal
+    taken specifically against THIS row (commission_payout/salary_payout/other, or a standalone
+    purpose='expense' withdrawal with no expense_id). Never floored — a negative result is a real
+    signal (over-withdrawn envelope)."""
     out = _f(gross_cash) - exp_by_row.get(row_id, 0.0) - wd_by_row.get(row_id, 0.0)
     return round(out, 2)
 
