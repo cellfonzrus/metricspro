@@ -12,6 +12,23 @@ tools/vip_scraper/scrape.py (parser finalized 2026-06-13).
 import re
 from datetime import datetime, timedelta, timezone
 import requests
+
+
+def _bounded_session(_timeout=60):
+    """requests.Session with a DEFAULT per-request timeout (2026-08-04 outage class fix).
+    requests has NO default timeout — a blackholed portal (e.g. an IP-blocking host that
+    drops packets after SYN-ACK) hangs the calling THREAD forever. These sweeps run hourly
+    in the threadpool; each eternal thread is gone for good, and once enough accumulate the
+    pool exhausts and EVERY sync endpoint starves (app-wide zero-byte hangs). All Session
+    verbs funnel through Session.request, so wrapping it covers get/post/head/etc. An
+    explicit timeout= at a call site still wins."""
+    s = requests.Session()
+    _orig = s.request
+    def _req(method, url, **kw):
+        kw.setdefault("timeout", _timeout)
+        return _orig(method, url, **kw)
+    s.request = _req
+    return s
 from bs4 import BeautifulSoup
 
 BASE = "https://www.vipwireless.com"
@@ -87,7 +104,7 @@ def run_asset_ledger_sweep(client, org_id, user, pw):
     per-device PayGo ledger: Category/ESN/Owed to VIP/Reimbursement/Status/dates/SFID/…). Reuses
     the asset module's upload processing (parse + market/selling-price backfill + flag syncs).
     Never wipes the ledger on an empty/non-Excel download."""
-    session = requests.Session()
+    session = _bounded_session()
     session.headers.update({"User-Agent": UA})
     login(session, user, pw)
     r = session.get(f"{BASE}/paygodashboard/DownloadAssetLanding",
@@ -111,7 +128,7 @@ def run_chargeback_sweep(client, org_id, user, pw):
     import io
     import pandas as pd
     from dateutil import parser as _dp
-    session = requests.Session()
+    session = _bounded_session()
     session.headers.update({"User-Agent": UA})
     login(session, user, pw)
     r = session.get(f"{BASE}/paygodashboard/DownloadFile",
@@ -266,7 +283,7 @@ def run_invoice_sweep(client, org_id, user, pw, lookback_days, helpers):
     (_vip_money, _vip_int, _vip_ts, _vip_period) so storage exactly matches manual upload.
     Returns a small summary dict (counts + window). Raises on login / network errors."""
     _vip_money, _vip_int, _vip_ts, _vip_period = helpers
-    session = requests.Session()
+    session = _bounded_session()
     session.headers.update({"User-Agent": UA})
     login(session, user, pw)
 
@@ -420,7 +437,7 @@ def run_paygo_sweep(client, org_id, user, pw, lookback_days, session=None):
     calls); only recent batches' invoice details are (re)fetched so the run stays bounded.
     Returns a summary dict. Raises VipLoginError / network errors to the caller."""
     if session is None:
-        session = requests.Session()
+        session = _bounded_session()
         session.headers.update({"User-Agent": UA})
         login(session, user, pw)
 
@@ -568,7 +585,7 @@ def run_creditmemo_sweep(client, org_id, user, pw, helpers, session=None):
     `helpers` = (_vip_money, _vip_int, _vip_ts, _vip_period). Returns a summary dict."""
     _vip_money, _vip_int, _vip_ts, _vip_period = helpers
     if session is None:
-        session = requests.Session()
+        session = _bounded_session()
         session.headers.update({"User-Agent": UA})
         login(session, user, pw)
 
