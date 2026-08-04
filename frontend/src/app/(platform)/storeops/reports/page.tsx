@@ -201,7 +201,10 @@ export default function StoreOpsReportsPage() {
             )}
           </p>
         </div>
-        <a href="/storeops/payroll-change-log" className="btn" style={{ fontSize: 13 }}>📜 Payroll Change Log</a>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <a href="/storeops/salary-advances" className="btn" style={{ fontSize: 13 }}>💵 Salary Advances</a>
+          <a href="/storeops/payroll-change-log" className="btn" style={{ fontSize: 13 }}>📜 Payroll Change Log</a>
+        </div>
       </div>
 
       <StandardFilterBar
