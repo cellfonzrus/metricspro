@@ -817,7 +817,12 @@ check("G4c the seed is idempotent (never clobbers an owner-edited rate)",
 check("G4d the seed carries the owner-confirm warning (rates are a seed, not a source of truth)",
       "OWNER MUST CONFLICT" not in SQL and "OWNER MUST CONFIRM AT SHIP TIME" in SQL)
 ENT = open("app/modules/core/entitlements.py").read()
-check("G5a SEED_VERSION was bumped to 7", re.search(r"SEED_VERSION = 7\b", ENT) is not None)
+# Version-RELATIVE, not pinned: mig 718 required a bump to 7, and a LATER package may legitimately
+# bump further (mig 720 took it to 8). Pinning the literal made an unrelated bump look like a
+# regression here. What must hold is that the bump happened and never went backwards.
+check("G5a SEED_VERSION was bumped to >= 7 (mig 718's bump is still in place)",
+      int(re.search(r"SEED_VERSION = (\d+)\b", ENT).group(1)) >= 7,
+      re.search(r"SEED_VERSION = (\d+)\b", ENT).group(1))
 check("G5b the rate seed is called from the entitlement sync path (house org)",
       'rpc("seed_token_rates"' in ENT)
 check("G5c …best-effort, so an un-run mig 718 is a silent no-op",
@@ -834,8 +839,8 @@ check("G5e the middleware allowlist entry is the ONLY change to that file's beha
 print("\n══ H. LOGIN / SEED PATH SAFETY (the SEED_VERSION bump is a login-path change) ══")
 import app.modules.core.entitlements as ent      # noqa: E402
 
-check("H1 SEED_VERSION is 7 in code (so every tenant re-syncs once on its next login)",
-      ent.SEED_VERSION == 7, ent.SEED_VERSION)
+check("H1 SEED_VERSION is >= 7 in code (so every tenant re-syncs once on its next login)",
+      ent.SEED_VERSION >= 7, ent.SEED_VERSION)
 
 
 class RpcSpy:
@@ -872,12 +877,13 @@ check("H4 an un-run mig 718 (rpc raises) is a SILENT no-op — a login can never
       isinstance(res_boom, dict) and res_boom["org_id"] == HOUSE)
 check("H5 …and the entitlement result is unchanged by the new seed step",
       sorted(res_boom["enabled_modules"]) == sorted(res["enabled_modules"]))
-check("H6 needs_sync still reads the watermark (a tenant at 7 is up to date, at 6 is behind)",
-      ent.needs_sync(RpcSpy({"tenants": [{"org_id": HOUSE, "seed_version": 7}]}), HOUSE) is False
-      and ent.needs_sync(RpcSpy({"tenants": [{"org_id": HOUSE, "seed_version": 6}]}), HOUSE) is True)
-check("H7 NO new entitlement module was invented (the board is a platform surface, not billable)",
+check("H6 needs_sync still reads the watermark (a tenant AT the current version is up to date, one behind is not)",
+      ent.needs_sync(RpcSpy({"tenants": [{"org_id": HOUSE, "seed_version": ent.SEED_VERSION}]}), HOUSE) is False
+      and ent.needs_sync(RpcSpy({"tenants": [{"org_id": HOUSE, "seed_version": ent.SEED_VERSION - 1}]}), HOUSE) is True)
+check("H7 NO new entitlement module was invented for the BOARD (it is a platform surface, not billable)",
       "fix_pipeline" not in ent.MODULE_CATALOG and "fix_requests" not in ent.MODULE_CATALOG
-      and len(ent.ALL_MODULES) == 12, ent.ALL_MODULES)
+      and not any("fix" in k for k in ent.ALL_MODULES) and len(ent.ALL_MODULES) >= 12,
+      ent.ALL_MODULES)
 
 print("\n══ I. USER ACTIONS — FIXED + what YOU must do (mig 719) ══")
 
