@@ -9,6 +9,7 @@ import { useAuth } from '@/lib/auth-context'
 import { carrierMode } from '@/lib/rbac'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
+import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
 
 interface Rep {
   epay_salesperson: string
@@ -226,7 +227,11 @@ export default function ReportsPage() {
     for (const r of (explainPc?.rules || [])) for (const l of (r.lines || []))
       out.push({ rule: r.label, basis: PLAN_BASIS[r.payout_kind] || r.payout_kind, date: l.date,
         trans_id: l.trans_id, product: l.product, contract_type: l.contract_type,
-        ext_price: l.ext_price, gp: l.gp, amount: l.flat_once ? null : l.amount })
+        ext_price: l.ext_price, gp: l.gp, amount: l.flat_once ? null : l.amount,
+        // carried for the per-category UNIT count and the "matched but not paid" marker in the
+        // grouped drill-down — same fields commission-explain already reads. Display only.
+        qualifies: l.qualifies !== false, suppressed: !!l.suppressed,
+        suppressed_reason: l.suppressed_reason || '', would_have_paid: l.would_have_paid ?? 0 })
     return out
   }, [explainPc])
   // rules that matched NOTHING — the honest "why is this $0" answer for a plan-mode rep
@@ -816,32 +821,12 @@ export default function ReportsPage() {
                         </ul>
                       )}
 
+                      {/* OWNER 2026-08-04: date → numeric trans-id order, every line of a transaction
+                          together with its own subtotal, and a category (plan-rule) breakdown/filter.
+                          Shared with commission-explain so both drill-downs read identically. The
+                          amounts are the engine's own line amounts — display only. */}
                       {planLineRows.length > 0 ? (
-                        <div style={{ overflowX: 'auto' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                            <thead><tr style={{ background: 'var(--surface2)' }}>
-                              {['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $'].map(h =>
-                                <th key={h} style={{ textAlign: ['Price', 'GP', 'Line $'].includes(h) ? 'right' : 'left', padding: '5px 8px', fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
-                            </tr></thead>
-                            <tbody>
-                              {planLineRows.map((l: any, i: number) => (
-                                <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                                  <td style={{ padding: '5px 8px' }}>{l.rule || '—'}</td>
-                                  <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>{l.date || '—'}</td>
-                                  <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{l.trans_id || '—'}</td>
-                                  <td style={{ padding: '5px 8px' }}>{l.product || '—'}</td>
-                                  <td style={{ padding: '5px 8px' }}>{l.contract_type || '—'}</td>
-                                  <td style={{ padding: '5px 8px', color: 'var(--text3)' }}>{l.basis || '—'}</td>
-                                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(l.ext_price)}</td>
-                                  <td style={{ padding: '5px 8px', textAlign: 'right' }}>{fmt(l.gp)}</td>
-                                  <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 600 }}>
-                                    {l.amount == null ? 'flat (once)' : fmt(l.amount)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                        <PlanLineBreakdown rows={planLineRows} compact />
                       ) : (
                         <div style={{ fontSize: 13, color: 'var(--text3)' }}>
                           {explainPc?.plan_name
