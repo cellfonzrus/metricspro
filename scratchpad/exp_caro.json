@@ -1,0 +1,4809 @@
+{
+ "period": "July 2026",
+ "rep": "Espinoza, Carolina",
+ "carrier_mode": "plan",
+ "plan_component": {
+  "plan_name": "Total Employee Comp Chicago",
+  "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+  "assignment": {
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "scope": "employee",
+   "scope_value": "Carolina Espinoza",
+   "priority": 0,
+   "rank": 4
+  },
+  "considered": [
+   {
+    "plan_id": "84320fea-252f-4a10-95cb-a46390490834",
+    "plan_name": "Total Comp DM",
+    "scope": "employee",
+    "scope_value": "Brenda Romero",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Brenda Romero' (canonical 'brenda romero') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "84320fea-252f-4a10-95cb-a46390490834",
+    "plan_name": "Total Comp DM",
+    "scope": "employee",
+    "scope_value": "Eduardo Brito",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Eduardo Brito' (canonical 'eduardo brito') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "7b19d5a2-ec85-4d2d-a7b7-582c44d81315",
+    "plan_name": "Total Comp Sales manager",
+    "scope": "employee",
+    "scope_value": "Jose Utrera",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Jose Utrera' (canonical 'jose utrera') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "market",
+    "scope_value": "Chicago",
+    "priority": 0,
+    "rank": 1,
+    "matched": false,
+    "reason": "market scope 'chicago' != rep market '(none)'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Alejandro Galarza",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Alejandro Galarza' (canonical 'alejandro galarza') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Alondra Navarro",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Alondra Navarro' (canonical 'alondra navarro') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Angelica Chacon",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Angelica Chacon' (canonical 'angelica chacon') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Antonio Chavez",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Antonio Chavez' (canonical 'antonio chavez') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Brendaliz Aviles",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Brendaliz Aviles' (canonical 'brendaliz aviles') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Carolina Espinoza",
+    "priority": 0,
+    "rank": 4,
+    "matched": true,
+    "reason": null
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Christopher Romero",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Christopher Romero' (canonical 'christopher romero') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Daisy Brito",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Daisy Brito' (canonical 'daisy brito') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Diana Antunez",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Diana Antunez' (canonical 'diana antunez') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Emily Olvera",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Emily Olvera' (canonical 'emily olvera') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Genevieve Montijo",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Genevieve Montijo' (canonical 'genevieve montijo') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Janet Garibay",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Janet Garibay' (canonical 'janet garibay') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Jocelyn Hernandez",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Jocelyn Hernandez' (canonical 'jocelyn hernandez') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Liset Jacobo",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Liset Jacobo' (canonical 'liset jacobo') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Luis Martinez",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Luis Martinez' (canonical 'luis martinez') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Maria Gutierrez",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Maria Gutierrez' (canonical 'maria gutierrez') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Mea Collins",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Mea Collins' (canonical 'mea collins') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Melennie Perez",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Melennie Perez' (canonical 'melennie perez') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Nallely Espinoza",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Nallely Espinoza' (canonical 'nallely espinoza') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Espinoza, Nancy",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Espinoza, Nancy' (canonical 'nancy espinoza') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Nancy Espinoza",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Nancy Espinoza' (canonical 'nancy espinoza') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Natalie Chico",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Natalie Chico' (canonical 'natalie chico') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Natasha Nicole Cabrera",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Natasha Nicole Cabrera' (canonical 'natasha nicole cabrera') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Nathalie Mendoza",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Nathalie Mendoza' (canonical 'nathalie mendoza') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Nicolas Navarrete",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Nicolas Navarrete' (canonical 'nicolas navarrete') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Ruby Ortiz",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Ruby Ortiz' (canonical 'ruby ortiz') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Tatiana Vergara",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Tatiana Vergara' (canonical 'tatiana vergara') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Terry Pitre",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Terry Pitre' (canonical 'terry pitre') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Vanessa Jacobo",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Vanessa Jacobo' (canonical 'vanessa jacobo') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Yesica Perez",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Yesica Perez' (canonical 'yesica perez') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Yuvia Esparza",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Yuvia Esparza' (canonical 'yuvia esparza') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope": "employee",
+    "scope_value": "Zuliecka Lopez",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Zuliecka Lopez' (canonical 'zuliecka lopez') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope": "employee",
+    "scope_value": "Marukh",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Marukh' (canonical 'marukh') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope": "employee",
+    "scope_value": "Yasir",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Yasir' (canonical 'yasir') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope": "employee",
+    "scope_value": "Mea Collins",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Mea Collins' (canonical 'mea collins') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope": "employee",
+    "scope_value": "Silvia Nava",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Silvia Nava' (canonical 'silvia nava') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope": "employee",
+    "scope_value": "arif",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'arif' (canonical 'arif') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope": "employee",
+    "scope_value": "Syed",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Syed' (canonical 'syed') != rep 'carolina espinoza'"
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope": "employee",
+    "scope_value": "Nivas",
+    "priority": 0,
+    "rank": 4,
+    "matched": false,
+    "reason": "employee 'Nivas' (canonical 'nivas') != rep 'carolina espinoza'"
+   }
+  ],
+  "rules": [
+   {
+    "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+    "label": "twp",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 18,
+    "qualifying_units": 15,
+    "payout": 30.0,
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "Total Wireless Protect+",
+    "amount": 2.0,
+    "pct": 0.0,
+    "scope_reason": "unscoped",
+    "unit_basis": "per_line",
+    "unit_basis_source": "default",
+    "lines": [
+     {
+      "date": "2026-07-06",
+      "trans_id": "2417",
+      "imei": "",
+      "mdn": "",
+      "product": "Total Wireless Protect+ RTR. Phone#: (773) 848-3704.",
+      "contract_type": "",
+      "ext_price": 12.0,
+      "gp": 0.68,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "excluded",
+      "suppressed_reason": "RTR (real-time refill / bill payment) lines are not commissionable \u2014 owner directive 2026-08-01.",
+      "would_have_paid": 2.0,
+      "excluded_by": "rtr",
+      "implied_cost": 11.32
+     },
+     {
+      "date": "2026-07-06",
+      "trans_id": "2374",
+      "imei": "",
+      "mdn": "",
+      "product": "Total Wireless Protect+ RTR. Phone#: (312) 856-7350.",
+      "contract_type": "",
+      "ext_price": 8.53,
+      "gp": 0.68,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "excluded",
+      "suppressed_reason": "RTR (real-time refill / bill payment) lines are not commissionable \u2014 owner directive 2026-08-01.",
+      "would_have_paid": 2.0,
+      "excluded_by": "rtr",
+      "implied_cost": 7.85
+     },
+     {
+      "date": "2026-07-19",
+      "trans_id": "4137",
+      "imei": "",
+      "mdn": "2244748350",
+      "product": "Total Wireless Protect+",
+      "contract_type": "Port with IDV",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-07",
+      "trans_id": "2455",
+      "imei": "",
+      "mdn": "7739792514",
+      "product": "Total Wireless Protect+",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-05",
+      "trans_id": "2278",
+      "imei": "",
+      "mdn": "3128900177",
+      "product": "Total Wireless Protect+",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3215",
+      "imei": "",
+      "mdn": "",
+      "product": "Total Wireless Protect+ RTR. Phone#: (773) 648-1456.",
+      "contract_type": "",
+      "ext_price": 8.0,
+      "gp": 0.68,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "excluded",
+      "suppressed_reason": "RTR (real-time refill / bill payment) lines are not commissionable \u2014 owner directive 2026-08-01.",
+      "would_have_paid": 2.0,
+      "excluded_by": "rtr",
+      "implied_cost": 7.32
+     },
+     {
+      "date": "2026-07-30",
+      "trans_id": "5297",
+      "imei": "",
+      "mdn": "7732424844",
+      "product": "Total Wireless Protect+",
+      "contract_type": "Port with IDV",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-03",
+      "trans_id": "2096",
+      "imei": "",
+      "mdn": "9496199524",
+      "product": "Total Wireless Protect+",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-31",
+      "trans_id": "5452",
+      "imei": "",
+      "mdn": "8723736917",
+      "product": "Total Wireless Protect+",
+      "contract_type": "Port with IDV",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-16",
+      "trans_id": "3685",
+      "imei": "",
+      "mdn": "",
+      "product": "Total Wireless Protect+",
+      "contract_type": "Activation With IDV",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-03",
+      "trans_id": "2093",
+      "imei": "",
+      "mdn": "9496193763",
+      "product": "Total Wireless Protect+",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-03",
+      "trans_id": "2093",
+      "imei": "",
+      "mdn": "9499292912",
+      "product": "Total Wireless Protect+",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-03",
+      "trans_id": "2093",
+      "imei": "",
+      "mdn": "9496193514",
+      "product": "Total Wireless Protect+",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "7737983972",
+      "product": "Total Wireless Protect+",
+      "contract_type": "Internal Port with IDV",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-18",
+      "trans_id": "3925",
+      "imei": "",
+      "mdn": "",
+      "product": "Total Wireless Protect+",
+      "contract_type": "Activation With IDV",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-03",
+      "trans_id": "2041",
+      "imei": "",
+      "mdn": "",
+      "product": "Total Wireless Protect+",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-03",
+      "trans_id": "2059",
+      "imei": "",
+      "mdn": "3125933097",
+      "product": "Total Wireless Protect+",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-09",
+      "trans_id": "2818",
+      "imei": "",
+      "mdn": "3129662248",
+      "product": "Total Wireless Protect+",
+      "contract_type": "Port with IDV",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 2.0,
+      "implied_cost": 0.0
+     }
+    ]
+   },
+   {
+    "rule_id": "e34fe410-5600-46bb-b24b-82bb68091e8d",
+    "label": "edge",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 8,
+    "qualifying_units": 1,
+    "payout": 25.0,
+    "match_field": "tender_type",
+    "match_op": "contains",
+    "match_value": "Credit Card; TW Financing Prepaid",
+    "amount": 25.0,
+    "pct": 0.0,
+    "scope_reason": "unscoped",
+    "unit_basis": "per_device",
+    "unit_basis_source": "auto_txn_field",
+    "lines": [
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "355354216175234",
+      "mdn": "7737983972",
+      "product": "Total ALL ACCESS Plan $65",
+      "contract_type": "Internal Port with IDV",
+      "ext_price": 0.0,
+      "gp": 32.5,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "unit_not_device_line",
+      "suppressed_reason": "Not the financed device line \u2014 this sale's payment is made once per device, on the line that carries the device serial.",
+      "would_have_paid": 25.0,
+      "implied_cost": -32.5
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "",
+      "product": "Activation payment",
+      "contract_type": "Activation",
+      "ext_price": 0.0,
+      "gp": -66.8,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "unit_not_device_line",
+      "suppressed_reason": "Not the financed device line \u2014 this sale's payment is made once per device, on the line that carries the device serial.",
+      "would_have_paid": 25.0,
+      "implied_cost": 66.8
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "355354216175234",
+      "mdn": "7737983972",
+      "product": "Apple iPhone 16e 128GB Black TO - Total Wireless Edge Promotional Credit by Glow Financial Services Activation; Monthly Credit Amount: $25; Total Subsidy Amount: $599.99; Term Length: 24. **Final sale - All devices financed through Glow Financial Services are a final sale and cannot be returned.",
+      "contract_type": "Internal Port with IDV",
+      "ext_price": 599.99,
+      "gp": 20.0,
+      "qualifies": true,
+      "amount": 25.0,
+      "implied_cost": 579.99
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "unit_not_device_line",
+      "suppressed_reason": "Not the financed device line \u2014 this sale's payment is made once per device, on the line that carries the device serial.",
+      "would_have_paid": 25.0,
+      "implied_cost": 29.99
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "7737983972",
+      "product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "contract_type": "",
+      "ext_price": 25.0,
+      "gp": 12.5,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "unit_not_device_line",
+      "suppressed_reason": "Not the financed device line \u2014 this sale's payment is made once per device, on the line that carries the device serial.",
+      "would_have_paid": 25.0,
+      "implied_cost": 12.5
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "7737983972",
+      "product": "Total Wireless Protect+",
+      "contract_type": "Internal Port with IDV",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "unit_not_device_line",
+      "suppressed_reason": "Not the financed device line \u2014 this sale's payment is made once per device, on the line that carries the device serial.",
+      "would_have_paid": 25.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "unit_not_device_line",
+      "suppressed_reason": "Not the financed device line \u2014 this sale's payment is made once per device, on the line that carries the device serial.",
+      "would_have_paid": 25.0,
+      "implied_cost": 24.99
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "",
+      "product": "Wallet Funding",
+      "contract_type": "",
+      "ext_price": 73.0,
+      "gp": 73.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "suppressed": true,
+      "suppressed_by": "unit_not_device_line",
+      "suppressed_reason": "Not the financed device line \u2014 this sale's payment is made once per device, on the line that carries the device serial.",
+      "would_have_paid": 25.0,
+      "implied_cost": 0.0
+     }
+    ]
+   },
+   {
+    "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+    "label": "vhi1",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 4,
+    "qualifying_units": 4,
+    "payout": 20.0,
+    "match_field": "product_desc",
+    "match_op": "equals",
+    "match_value": "Total Wireless Home Internet",
+    "amount": 5.0,
+    "pct": 0.0,
+    "scope_reason": "unscoped",
+    "unit_basis": "per_line",
+    "unit_basis_source": "default",
+    "lines": [
+     {
+      "date": "2026-07-25",
+      "trans_id": "4879",
+      "imei": "358835493328097",
+      "mdn": "",
+      "product": "Total Wireless Home Internet",
+      "contract_type": "Activation",
+      "ext_price": 0.0,
+      "gp": 5.08,
+      "qualifies": true,
+      "amount": 5.0,
+      "implied_cost": -5.08
+     },
+     {
+      "date": "2026-07-02",
+      "trans_id": "1792",
+      "imei": "358835493197484",
+      "mdn": "",
+      "product": "Total Wireless Home Internet",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 17.5,
+      "qualifies": true,
+      "amount": 5.0,
+      "implied_cost": -17.5
+     },
+     {
+      "date": "2026-07-03",
+      "trans_id": "2013",
+      "imei": "358835492457343",
+      "mdn": "",
+      "product": "Total Wireless Home Internet",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 16.66,
+      "qualifies": true,
+      "amount": 5.0,
+      "implied_cost": -16.66
+     },
+     {
+      "date": "2026-07-02",
+      "trans_id": "1778",
+      "imei": "358835493198763",
+      "mdn": "",
+      "product": "Total Wireless Home Internet",
+      "contract_type": "",
+      "ext_price": 0.0,
+      "gp": 2.5,
+      "qualifies": true,
+      "amount": 5.0,
+      "implied_cost": -2.5
+     }
+    ]
+   },
+   {
+    "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+    "label": "vhi2",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 3,
+    "qualifying_units": 3,
+    "payout": 15.0,
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+    "amount": 5.0,
+    "pct": 0.0,
+    "scope_reason": "unscoped",
+    "unit_basis": "per_line",
+    "unit_basis_source": "default",
+    "lines": [
+     {
+      "date": "2026-07-02",
+      "trans_id": "1778",
+      "imei": "358835493198763",
+      "mdn": "",
+      "product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+      "contract_type": "",
+      "ext_price": 14.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 5.0,
+      "implied_cost": 14.99
+     },
+     {
+      "date": "2026-07-03",
+      "trans_id": "2013",
+      "imei": "358835492457343",
+      "mdn": "",
+      "product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+      "contract_type": "",
+      "ext_price": 14.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 5.0,
+      "implied_cost": 14.99
+     },
+     {
+      "date": "2026-07-02",
+      "trans_id": "1792",
+      "imei": "358835493197484",
+      "mdn": "",
+      "product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+      "contract_type": "",
+      "ext_price": 14.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 5.0,
+      "implied_cost": 14.99
+     }
+    ]
+   },
+   {
+    "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+    "label": "vhi3",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 1,
+    "qualifying_units": 1,
+    "payout": 5.0,
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "Home Internet Router TO - Promo $85, HOME_INTERNET_MULTI_MM",
+    "amount": 5.0,
+    "pct": 0.0,
+    "scope_reason": "unscoped",
+    "unit_basis": "per_line",
+    "unit_basis_source": "default",
+    "lines": [
+     {
+      "date": "2026-07-25",
+      "trans_id": "4879",
+      "imei": "358835493328097",
+      "mdn": "",
+      "product": "Home Internet Router TO - Promo $85, HOME_INTERNET_MULTI_MM",
+      "contract_type": "Activation",
+      "ext_price": 14.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 5.0,
+      "implied_cost": 14.99
+     }
+    ]
+   },
+   {
+    "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+    "label": "accessory",
+    "payout_kind": "pct_gp",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 33,
+    "qualifying_units": 33,
+    "payout": 0.09,
+    "match_field": "category",
+    "match_op": "contains",
+    "match_value": "Accessories",
+    "amount": 0.0,
+    "pct": 0.175,
+    "scope_reason": "unscoped",
+    "unit_basis": "per_line",
+    "unit_basis_source": "default",
+    "lines": [
+     {
+      "date": "2026-07-26",
+      "trans_id": "4947",
+      "imei": "",
+      "mdn": "",
+      "product": "Car Mount BYOD",
+      "contract_type": "",
+      "ext_price": 23.99,
+      "gp": -1.0,
+      "qualifies": true,
+      "amount": -0.17,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "gp_negative"
+      ],
+      "cost_flag_labels": [
+       "GP is negative \u2014 this line sold below its recorded cost."
+      ]
+     },
+     {
+      "date": "2026-07-25",
+      "trans_id": "4841",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-31",
+      "trans_id": "5384",
+      "imei": "",
+      "mdn": "",
+      "product": "Charging block BYOD",
+      "contract_type": "",
+      "ext_price": 19.99,
+      "gp": 18.0,
+      "qualifies": true,
+      "amount": 3.15,
+      "implied_cost": 1.99
+     },
+     {
+      "date": "2026-07-11",
+      "trans_id": "3107",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-18",
+      "trans_id": "3925",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-09",
+      "trans_id": "2748",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-16",
+      "trans_id": "3685",
+      "imei": "",
+      "mdn": "",
+      "product": "Speakers BYOD",
+      "contract_type": "",
+      "ext_price": 34.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 34.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-16",
+      "trans_id": "3685",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-19",
+      "trans_id": "4095",
+      "imei": "",
+      "mdn": "",
+      "product": "Car Mount BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-19",
+      "trans_id": "4137",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-19",
+      "trans_id": "4137",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-09",
+      "trans_id": "2818",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-09",
+      "trans_id": "2748",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 14.99,
+      "gp": -10.0,
+      "qualifies": true,
+      "amount": -1.75,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "gp_negative"
+      ],
+      "cost_flag_labels": [
+       "GP is negative \u2014 this line sold below its recorded cost."
+      ]
+     },
+     {
+      "date": "2026-07-26",
+      "trans_id": "4946",
+      "imei": "",
+      "mdn": "",
+      "product": "Pop Sockets BYOD",
+      "contract_type": "",
+      "ext_price": 8.49,
+      "gp": -6.5,
+      "qualifies": true,
+      "amount": -1.14,
+      "implied_cost": 14.99,
+      "cost_flags": [
+       "gp_negative"
+      ],
+      "cost_flag_labels": [
+       "GP is negative \u2014 this line sold below its recorded cost."
+      ]
+     },
+     {
+      "date": "2026-07-30",
+      "trans_id": "5330",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-18",
+      "trans_id": "3925",
+      "imei": "",
+      "mdn": "",
+      "product": "Pop Sockets BYOD",
+      "contract_type": "",
+      "ext_price": 14.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 14.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-30",
+      "trans_id": "5330",
+      "imei": "",
+      "mdn": "",
+      "product": "Pop Sockets BYOD",
+      "contract_type": "",
+      "ext_price": 14.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 14.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-16",
+      "trans_id": "3685",
+      "imei": "",
+      "mdn": "",
+      "product": "Pop Sockets BYOD",
+      "contract_type": "",
+      "ext_price": 14.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 14.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-18",
+      "trans_id": "3996",
+      "imei": "",
+      "mdn": "",
+      "product": "Car Mount BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-17",
+      "trans_id": "3905",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-17",
+      "trans_id": "3912",
+      "imei": "",
+      "mdn": "",
+      "product": "Pop Sockets BYOD",
+      "contract_type": "",
+      "ext_price": 14.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 14.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-19",
+      "trans_id": "4111",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-18",
+      "trans_id": "3956",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-29",
+      "trans_id": "5214",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 59.98,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 59.98,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-25",
+      "trans_id": "4841",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-18",
+      "trans_id": "4038",
+      "imei": "",
+      "mdn": "",
+      "product": "Audio Adapters BYOD",
+      "contract_type": "",
+      "ext_price": 9.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 9.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3207",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-12",
+      "trans_id": "3259",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-18",
+      "trans_id": "3956",
+      "imei": "",
+      "mdn": "",
+      "product": "Case BYOD",
+      "contract_type": "",
+      "ext_price": 29.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 29.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-31",
+      "trans_id": "5384",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-30",
+      "trans_id": "5297",
+      "imei": "",
+      "mdn": "",
+      "product": "Car Mount BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     },
+     {
+      "date": "2026-07-17",
+      "trans_id": "3905",
+      "imei": "",
+      "mdn": "",
+      "product": "Screen Protectors BYOD",
+      "contract_type": "",
+      "ext_price": 24.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 24.99,
+      "cost_flags": [
+       "cost_equals_price"
+      ],
+      "cost_flag_labels": [
+       "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic."
+      ]
+     }
+    ]
+   },
+   {
+    "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+    "label": "tablet",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 0,
+    "qualifying_units": 0,
+    "payout": 0.0,
+    "match_field": "product_desc",
+    "match_op": "contains",
+    "match_value": "Total Wireless Base Unlimited Tablet Plan $50",
+    "amount": 3.0,
+    "pct": 0.0
+   },
+   {
+    "rule_id": "2532da2d-20f5-4fe2-85bd-5b17a9d9ecd8",
+    "label": "vhi4",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 0,
+    "qualifying_units": 0,
+    "payout": 0.0,
+    "match_field": "product_desc",
+    "match_op": "equals",
+    "match_value": "Home Internet Router TO - Promo $75, HOME_INTERNET_MULTI_MM",
+    "amount": 5.0,
+    "pct": 0.0
+   },
+   {
+    "rule_id": "2ec7b18a-807e-4498-a276-439678d75541",
+    "label": "edge2",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 0,
+    "qualifying_units": 0,
+    "payout": 0.0,
+    "match_field": "tender_type",
+    "match_op": "equals",
+    "match_value": "Cash; TW Financing Prepaid",
+    "amount": 25.0,
+    "pct": 0.0
+   },
+   {
+    "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+    "label": "upgrade",
+    "payout_kind": "flat_per_unit",
+    "tiered": false,
+    "qualifies": true,
+    "matched_lines": 11,
+    "qualifying_units": 11,
+    "payout": 0.0,
+    "match_field": "contract_type",
+    "match_op": "equals",
+    "match_value": "Upgrade",
+    "amount": 0.0,
+    "pct": 0.0,
+    "scope_reason": "unscoped",
+    "unit_basis": "per_line",
+    "unit_basis_source": "default",
+    "lines": [
+     {
+      "date": "2026-07-10",
+      "trans_id": "3012",
+      "imei": "359410893002434",
+      "mdn": "3124159791",
+      "product": "Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 25.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": -25.0
+     },
+     {
+      "date": "2026-07-05",
+      "trans_id": "2264",
+      "imei": "359057865565383",
+      "mdn": "3128430956",
+      "product": "Apple iPhone 16 128GB Black TO - Promo $200, Total Wireless Device Upgrade Promo",
+      "contract_type": "Upgrade",
+      "ext_price": 529.99,
+      "gp": -99.01,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 629.0
+     },
+     {
+      "date": "2026-07-05",
+      "trans_id": "2264",
+      "imei": "359057865565383",
+      "mdn": "3128430956",
+      "product": "Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 25.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": -25.0
+     },
+     {
+      "date": "2026-07-10",
+      "trans_id": "3012",
+      "imei": "359410893002434",
+      "mdn": "3124159791",
+      "product": "Apple iPhone 16 Plus 128GB Teal TO - Promo $200, Total Wireless Device Upgrade Promo",
+      "contract_type": "Upgrade",
+      "ext_price": 629.99,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 629.99
+     },
+     {
+      "date": "2026-07-05",
+      "trans_id": "2299",
+      "imei": "357612117486085",
+      "mdn": "7082271377",
+      "product": "Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-10",
+      "trans_id": "3012",
+      "imei": "",
+      "mdn": "3124159791",
+      "product": "Activation payment - Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-05",
+      "trans_id": "2301",
+      "imei": "356321748363736",
+      "mdn": "3128900177",
+      "product": "Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-26",
+      "trans_id": "4972",
+      "imei": "",
+      "mdn": "7739792098",
+      "product": "Activation payment - Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-05",
+      "trans_id": "2264",
+      "imei": "",
+      "mdn": "3128430956",
+      "product": "Activation payment - Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-05",
+      "trans_id": "2299",
+      "imei": "",
+      "mdn": "7082271377",
+      "product": "Activation payment - Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 0.0
+     },
+     {
+      "date": "2026-07-05",
+      "trans_id": "2301",
+      "imei": "",
+      "mdn": "3128900177",
+      "product": "Activation payment - Total Wireless Device Upgrade",
+      "contract_type": "Upgrade",
+      "ext_price": 0.0,
+      "gp": 0.0,
+      "qualifies": true,
+      "amount": 0.0,
+      "implied_cost": 0.0
+     }
+    ]
+   }
+  ],
+  "base_payout": 95.09,
+  "tiered_payout": 0.0,
+  "tier_multiplier": 1.0,
+  "base_tier_metric": "none",
+  "tiers": [],
+  "qualifying_units": 68,
+  "total_payout": 95.09,
+  "store": "4640-A W Diversey Ave",
+  "market": "",
+  "has_sale_lines": true,
+  "data_quality": {
+   "enabled": true,
+   "checked_lines": 33,
+   "suspect_lines": 32,
+   "by_flag": [
+    {
+     "code": "cost_equals_price",
+     "label": "GP is $0 \u2014 the POS catalog cost equals the retail price on this item, so a %-of-GP payout is $0 by arithmetic.",
+     "lines": 29,
+     "ext_price": 764.7,
+     "gp": 0.0,
+     "paid": 0.0
+    },
+    {
+     "code": "gp_negative",
+     "label": "GP is negative \u2014 this line sold below its recorded cost.",
+     "lines": 3,
+     "ext_price": 47.47,
+     "gp": -17.5,
+     "paid": -3.06
+    }
+   ],
+   "rate_issues": [],
+   "note": "raw_sales carries no cost column \u2014 a line's cost is implied as ext_price - gp. Flagged lines are a SOURCE-DATA finding, not a calculation change: nothing here alters what was paid."
+  }
+ },
+ "multimonth_component": {
+  "devices": [
+   {
+    "imei": "352550483790570",
+    "mdn": "7088507857",
+    "trans_id": "3956",
+    "sale_period": "July 2026",
+    "product": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port",
+    "contract_type": "Port with IDV",
+    "installments": [
+     {
+      "label": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+      "device_product": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 3.25,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 65.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 3.25,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 24.99,
+    "gp": 20.0,
+    "device_product": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+    "ma_matches": [
+     {
+      "id": "0fde3bdb-2872-458d-9f3a-54d4cac82a19",
+      "period": "July 2026",
+      "tx_date": "2026-07-18",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "348885154",
+      "merchant_account_id": "170084",
+      "imei": "352550483790570",
+      "sim": "e8901352550483790570",
+      "ban": "232142433693",
+      "line_status": null,
+      "activation_type": "New",
+      "activation_type2": "branded",
+      "mrc_net_discount": 59.48,
+      "rebate": -575.0,
+      "rebate_paid": 575.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -32.5,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 32.5,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -32.5,
+      "spiff_total_paid": 32.5
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "355354217238585",
+    "mdn": "7734314929",
+    "trans_id": "3956",
+    "sale_period": "July 2026",
+    "product": "Total ALL ACCESS Plan $65",
+    "contract_type": "Port with IDV AAL",
+    "installments": [
+     {
+      "label": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+      "device_product": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 3.25,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 65.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 3.25,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 15.0,
+    "device_product": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+    "ma_matches": [
+     {
+      "id": "a157e722-03da-4875-ae28-56a5bf5eeb09",
+      "period": "July 2026",
+      "tx_date": "2026-07-18",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "348885155",
+      "merchant_account_id": "170084",
+      "imei": "355354217238585",
+      "sim": "e8901355354217238585",
+      "ban": "232142433693",
+      "line_status": null,
+      "activation_type": "New",
+      "activation_type2": "branded",
+      "mrc_net_discount": 27.45,
+      "rebate": -575.0,
+      "rebate_paid": 575.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -15.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 15.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -15.0,
+      "spiff_total_paid": 15.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "355354216175234",
+    "mdn": "7737983972",
+    "trans_id": "3207",
+    "sale_period": "July 2026",
+    "product": "Total ALL ACCESS Plan $65",
+    "contract_type": "Internal Port with IDV",
+    "installments": [
+     {
+      "label": "Apple iPhone 16e 128GB Black TO - Total Wireless Edge Promotional Credit by Glow Financial Services Activation; Monthly Credit Amount: $25; Total Subsidy Amount: $599.99; Term Length: 24. **Final sale \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+      "device_product": "Apple iPhone 16e 128GB Black TO - Total Wireless Edge Promotional Credit by Glow Financial Services Activation; Monthly Credit Amount: $25; Total Subsidy Amount: $599.99; Term Length: 24. **Final sale",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 3.25,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 65.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 3.25,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 32.5,
+    "device_product": "Apple iPhone 16e 128GB Black TO - Total Wireless Edge Promotional Credit by Glow Financial Services Activation; Monthly Credit Amount: $25; Total Subsidy Amount: $599.99; Term Length: 24. **Final sale",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Apple iPhone 16e 128GB Black TO - Total Wireless Edge Promotional Credit by Glow Financial Services Activation; Monthly Credit Amount: $25; Total Subsidy Amount: $599.99; Term Length: 24. **Final sale \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+    "ma_matches": [
+     {
+      "id": "89b82f71-afe7-4e58-bab5-240359631eda",
+      "period": "July 2026",
+      "tx_date": "2026-07-12",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "347777393",
+      "merchant_account_id": "170084",
+      "imei": "355354216175234",
+      "sim": "e8901355354216175234",
+      "ban": "358142954015739",
+      "line_status": null,
+      "activation_type": "New",
+      "activation_type2": "branded",
+      "mrc_net_discount": 59.48,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": 0.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": -0.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": 0.0,
+      "spiff_total_paid": 0.0
+     }
+    ],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "356842897803974",
+    "mdn": "3125933097",
+    "trans_id": "2059",
+    "sale_period": "July 2026",
+    "product": "Total ALL ACCESS Plan $65",
+    "contract_type": "",
+    "installments": [
+     {
+      "label": "Apple iPhone 16e 128GB Black TO - Promo $520, Total Wireless Discount Promotion - $65 Plan + Veriff + Port \u2014 MRC $65.00",
+      "device_product": "Apple iPhone 16e 128GB Black TO - Promo $520, Total Wireless Discount Promotion - $65 Plan + Veriff + Port",
+      "plan_product": "",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 3.25,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 65.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 3.25,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 0.0,
+    "device_product": "Apple iPhone 16e 128GB Black TO - Promo $520, Total Wireless Discount Promotion - $65 Plan + Veriff + Port",
+    "plan_product": null,
+    "device_category": "phone",
+    "label": "Apple iPhone 16e 128GB Black TO - Promo $520, Total Wireless Discount Promotion - $65 Plan + Veriff + Port \u2014 MRC $65.00",
+    "ma_matches": [
+     {
+      "id": "ab23a0d8-3296-4d17-b500-636ccff06fff",
+      "period": "July 2026",
+      "tx_date": "2026-07-03",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "346278958",
+      "merchant_account_id": "170084",
+      "imei": "356842897803974",
+      "sim": "e8901356842897803974",
+      "ban": "996088806",
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 18.3,
+      "rebate": -520.0,
+      "rebate_paid": 520.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -10.0,
+       "m2": -48.75,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 10.0,
+       "m2": 48.75,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -58.75,
+      "spiff_total_paid": 58.75
+     },
+     {
+      "id": "60bf9eda-0654-48ad-a626-df1c672849ee",
+      "period": "July 2026",
+      "tx_date": "2026-07-03",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "346278959",
+      "merchant_account_id": "170084",
+      "imei": "356842897803974",
+      "sim": "e8901356842897803974",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 4.65,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": 0.0,
+       "m2": -7.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": -0.0,
+       "m2": 7.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -7.0,
+      "spiff_total_paid": 7.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "89148000008588447023",
+    "mdn": "3124771436",
+    "trans_id": "3956",
+    "sale_period": "July 2026",
+    "product": "Total by Verizon SIM Kit",
+    "contract_type": "BYOD Port AAL",
+    "installments": [
+     {
+      "label": "Total ALL ACCESS Plan $65 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+      "device_product": "Total ALL ACCESS Plan $65",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 3.25,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 65.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 3.25,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 3.0,
+    "gp": 0.0,
+    "device_product": "Total ALL ACCESS Plan $65",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Total ALL ACCESS Plan $65 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+    "ma_matches": [],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "358142954115190",
+    "mdn": "",
+    "trans_id": "2748",
+    "sale_period": "July 2026",
+    "product": "Samsung Galaxy A17 5G TO - Promo $80, SAMSUNG_GALAXY_A17_5G_VERIFF_MIN50_E",
+    "contract_type": "Activation With IDV",
+    "installments": [
+     {
+      "label": "Samsung Galaxy A17 5G TO - Promo $80, SAMSUNG_GALAXY_A17_5G_VERIFF_MIN50_E \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+      "device_product": "Samsung Galaxy A17 5G TO - Promo $80, SAMSUNG_GALAXY_A17_5G_VERIFF_MIN50_E",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 3.25,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 65.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 3.25,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 19.99,
+    "gp": 0.0,
+    "device_product": "Samsung Galaxy A17 5G TO - Promo $80, SAMSUNG_GALAXY_A17_5G_VERIFF_MIN50_E",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Samsung Galaxy A17 5G TO - Promo $80, SAMSUNG_GALAXY_A17_5G_VERIFF_MIN50_E \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+    "ma_matches": [
+     {
+      "id": "f000e8f9-50d0-470c-9a25-18f197666d34",
+      "period": "July 2026",
+      "tx_date": "2026-07-09",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "347299834",
+      "merchant_account_id": "170084",
+      "imei": "358142954115190",
+      "sim": "89148000013111754846",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 59.47,
+      "rebate": -80.0,
+      "rebate_paid": 80.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -32.5,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 32.5,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -32.5,
+      "spiff_total_paid": 32.5
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "357773240254079",
+    "mdn": "3124771267",
+    "trans_id": "3956",
+    "sale_period": "July 2026",
+    "product": "Total ALL ACCESS Plan $65",
+    "contract_type": "BYOD Port AAL",
+    "installments": [
+     {
+      "label": "Total ALL ACCESS Plan $65 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+      "device_product": "Total ALL ACCESS Plan $65",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 3.25,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 65.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 3.25,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 7.5,
+    "device_product": "Total ALL ACCESS Plan $65",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Total ALL ACCESS Plan $65 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $65.00",
+    "ma_matches": [
+     {
+      "id": "1171ca8d-c465-40db-98c8-52623a8fee74",
+      "period": "July 2026",
+      "tx_date": "2026-07-18",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "348885156",
+      "merchant_account_id": "170084",
+      "imei": "357773240254079",
+      "sim": "e8901357773240254079",
+      "ban": "232142433693",
+      "line_status": null,
+      "activation_type": "New",
+      "activation_type2": "byop",
+      "mrc_net_discount": 13.72,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -7.5,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 7.5,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -7.5,
+      "spiff_total_paid": 7.5
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "",
+    "mdn": "",
+    "trans_id": "2093",
+    "sale_period": "July 2026",
+    "product": null,
+    "contract_type": null,
+    "installments": [
+     {
+      "label": "Apple iPhone 16e 128GB Black TO - Promo $520, Total Wireless Discount Promotion - $65 Plan + Veriff + Port \u2014 MRC $65.00",
+      "device_product": "Apple iPhone 16e 128GB Black TO - Promo $520, Total Wireless Discount Promotion - $65 Plan + Veriff + Port",
+      "plan_product": "",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 3.25,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 65.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 3.25,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "device_product": "Apple iPhone 16e 128GB Black TO - Promo $520, Total Wireless Discount Promotion - $65 Plan + Veriff + Port",
+    "plan_product": null,
+    "device_category": "phone",
+    "label": "Apple iPhone 16e 128GB Black TO - Promo $520, Total Wireless Discount Promotion - $65 Plan + Veriff + Port \u2014 MRC $65.00",
+    "ma_matches": [],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "358142954109060",
+    "mdn": "",
+    "trans_id": "4129",
+    "sale_period": "July 2026",
+    "product": "Total MAX 5G Plan $55",
+    "contract_type": "Port with IDV",
+    "installments": [
+     {
+      "label": "Samsung Galaxy A17 5G TO - Promo $99.99, TW_PORT_ONLY_VERIFF_Samsung_Galaxy_A17_5G_07092026_Aura only \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+      "device_product": "Samsung Galaxy A17 5G TO - Promo $99.99, TW_PORT_ONLY_VERIFF_Samsung_Galaxy_A17_5G_07092026_Aura only",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 2.75,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 55.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 2.75,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 15.0,
+    "device_product": "Samsung Galaxy A17 5G TO - Promo $99.99, TW_PORT_ONLY_VERIFF_Samsung_Galaxy_A17_5G_07092026_Aura only",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Samsung Galaxy A17 5G TO - Promo $99.99, TW_PORT_ONLY_VERIFF_Samsung_Galaxy_A17_5G_07092026_Aura only \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+    "ma_matches": [
+     {
+      "id": "55dfc1bc-1ab1-45f8-8260-5a71e062fdcd",
+      "period": "July 2026",
+      "tx_date": "2026-07-19",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "349051673",
+      "merchant_account_id": "170084",
+      "imei": "358142954109060",
+      "sim": "89148000013111763946",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 27.45,
+      "rebate": -99.99,
+      "rebate_paid": 99.99,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -15.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 15.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -15.0,
+      "spiff_total_paid": 15.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "351194962622706",
+    "mdn": "2244748350",
+    "trans_id": "4137",
+    "sale_period": "July 2026",
+    "product": "Apple iPhone 12 Pro 128GB Graphite CPO TO - Promo $303.01, Total Wireless Add to Existing Promotion - Port + Veriff",
+    "contract_type": "Port with IDV",
+    "installments": [
+     {
+      "label": "Apple iPhone 12 Pro 128GB Graphite CPO TO - Promo $303.01, Total Wireless Add to Existing Promotion - Port + Veriff \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+      "device_product": "Apple iPhone 12 Pro 128GB Graphite CPO TO - Promo $303.01, Total Wireless Add to Existing Promotion - Port + Veriff",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 2.75,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 55.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 2.75,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 49.99,
+    "gp": 10.0,
+    "device_product": "Apple iPhone 12 Pro 128GB Graphite CPO TO - Promo $303.01, Total Wireless Add to Existing Promotion - Port + Veriff",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Apple iPhone 12 Pro 128GB Graphite CPO TO - Promo $303.01, Total Wireless Add to Existing Promotion - Port + Veriff \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+    "ma_matches": [
+     {
+      "id": "7e8624cf-0a5f-42b3-8cba-13c13e8a9420",
+      "period": "July 2026",
+      "tx_date": "2026-07-19",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "349053151",
+      "merchant_account_id": "170084",
+      "imei": "351194962622706",
+      "sim": "89148000010576763510",
+      "ban": "557483622",
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 13.72,
+      "rebate": -303.01,
+      "rebate_paid": 303.01,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -7.5,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 7.5,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -7.5,
+      "spiff_total_paid": 7.5
+     },
+     {
+      "id": "05afc494-87b8-44e9-bd96-9b1dac434dc0",
+      "period": "July 2026",
+      "tx_date": "2026-07-19",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "349053152",
+      "merchant_account_id": "170084",
+      "imei": "351194962622706",
+      "sim": "89148000010576763510",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 7.32,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": 0.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": -0.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": 0.0,
+      "spiff_total_paid": 0.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "356739220889698",
+    "mdn": "",
+    "trans_id": "5330",
+    "sale_period": "July 2026",
+    "product": "Total MAX 5G Plan $55",
+    "contract_type": "Activation With IDV",
+    "installments": [
+     {
+      "label": "Motorola Moto G 5G 2026 TO - Promo $79.99, MOTO_G_2026_VERIFF_MIN40_B \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+      "device_product": "Motorola Moto G 5G 2026 TO - Promo $79.99, MOTO_G_2026_VERIFF_MIN40_B",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 2.75,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 55.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 2.75,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 27.5,
+    "device_product": "Motorola Moto G 5G 2026 TO - Promo $79.99, MOTO_G_2026_VERIFF_MIN40_B",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Motorola Moto G 5G 2026 TO - Promo $79.99, MOTO_G_2026_VERIFF_MIN40_B \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+    "ma_matches": [],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "352693201980113",
+    "mdn": "",
+    "trans_id": "4371",
+    "sale_period": "July 2026",
+    "product": "Total MAX 5G Plan $55",
+    "contract_type": "Activation With IDV",
+    "installments": [
+     {
+      "label": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+      "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 2.75,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 55.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 2.75,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 27.5,
+    "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+    "ma_matches": [
+     {
+      "id": "40ba9e94-bbab-4258-b7da-f1fefdc4aeca",
+      "period": "July 2026",
+      "tx_date": "2026-07-21",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "349395595",
+      "merchant_account_id": "170084",
+      "imei": "352693201980113",
+      "sim": "89148000013115218178",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 50.32,
+      "rebate": -129.99,
+      "rebate_paid": 129.99,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -27.5,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 27.5,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -27.5,
+      "spiff_total_paid": 27.5
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "352693202313587",
+    "mdn": "",
+    "trans_id": "5214",
+    "sale_period": "July 2026",
+    "product": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B",
+    "contract_type": "Activation With IDV",
+    "installments": [
+     {
+      "label": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+      "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 2.75,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 55.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 2.75,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 0.0,
+    "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $55.00",
+    "ma_matches": [],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "352693200828776",
+    "mdn": "",
+    "trans_id": "3685",
+    "sale_period": "July 2026",
+    "product": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff",
+    "contract_type": "Activation With IDV",
+    "installments": [
+     {
+      "label": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $40.00",
+      "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 2.0,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 40.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 2.0,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 0.0,
+    "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $40.00",
+    "ma_matches": [
+     {
+      "id": "a808ce0b-2a38-4230-99c6-aebcbde5af9d",
+      "period": "July 2026",
+      "tx_date": "2026-07-16",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "348427223",
+      "merchant_account_id": "170084",
+      "imei": "352693200828776",
+      "sim": "89148000013114133014",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "New",
+      "activation_type2": "branded",
+      "mrc_net_discount": 36.6,
+      "rebate": -129.99,
+      "rebate_paid": 129.99,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -20.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 20.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -20.0,
+      "spiff_total_paid": 20.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "352693202133241",
+    "mdn": "",
+    "trans_id": "5384",
+    "sale_period": "July 2026",
+    "product": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B",
+    "contract_type": "Activation With IDV",
+    "installments": [
+     {
+      "label": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $40.00",
+      "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 2.0,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 40.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 2.0,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 0.0,
+    "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Samsung Galaxy A16 5G TO - Promo $129.99, SAMSUNG_GALAXY_A16_VERIFF_MIN40_B \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $40.00",
+    "ma_matches": [],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "352693202138828",
+    "mdn": "",
+    "trans_id": "3925",
+    "sale_period": "July 2026",
+    "product": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff",
+    "contract_type": "Activation With IDV",
+    "installments": [
+     {
+      "label": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $40.00",
+      "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 2.0,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 40.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 2.0,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 0.0,
+    "device_product": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $40.00",
+    "ma_matches": [
+     {
+      "id": "ea41744b-47de-472c-ba02-d6e7264ad2f3",
+      "period": "July 2026",
+      "tx_date": "2026-07-18",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "348872788",
+      "merchant_account_id": "170084",
+      "imei": "352693202138828",
+      "sim": "89148000013113196962",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 27.16,
+      "rebate": -129.99,
+      "rebate_paid": 129.99,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -14.84,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 14.84,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -14.84,
+      "spiff_total_paid": 14.84
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "89148000008588447064",
+    "mdn": "9496199524",
+    "trans_id": "2096",
+    "sale_period": "July 2026",
+    "product": "Total by Verizon SIM Kit",
+    "contract_type": "",
+    "installments": [
+     {
+      "label": "Total MAX 5G BYO Plan $30 \u2014 MRC $30.00",
+      "device_product": "Total MAX 5G BYO Plan $30",
+      "plan_product": "",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 1.5,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 30.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 1.5,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 3.0,
+    "gp": 0.0,
+    "device_product": "Total MAX 5G BYO Plan $30",
+    "plan_product": null,
+    "device_category": "phone",
+    "label": "Total MAX 5G BYO Plan $30 \u2014 MRC $30.00",
+    "ma_matches": [],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "353970107860188",
+    "mdn": "",
+    "trans_id": "2776",
+    "sale_period": "July 2026",
+    "product": "Total MAX 5G BYO Plan $30",
+    "contract_type": "BYOD Activation",
+    "installments": [
+     {
+      "label": "Total MAX 5G BYO Plan $30 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $30.00",
+      "device_product": "Total MAX 5G BYO Plan $30",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 1.5,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 30.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 1.5,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 15.0,
+    "device_product": "Total MAX 5G BYO Plan $30",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Total MAX 5G BYO Plan $30 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $30.00",
+    "ma_matches": [
+     {
+      "id": "11d76535-414d-4f49-9f98-7027da551a1b",
+      "period": "July 2026",
+      "tx_date": "2026-07-09",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "347312060",
+      "merchant_account_id": "170084",
+      "imei": "353970107860188",
+      "sim": "89148000013403747722",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "byop",
+      "mrc_net_discount": 27.45,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -25.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 25.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -25.0,
+      "spiff_total_paid": 25.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "351544457997254",
+    "mdn": "7739792514",
+    "trans_id": "2455",
+    "sale_period": "July 2026",
+    "product": "Total MAX 5G BYO Plan $30",
+    "contract_type": "",
+    "installments": [
+     {
+      "label": "Total MAX 5G BYO Plan $30 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $30.00",
+      "device_product": "Total MAX 5G BYO Plan $30",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 1.5,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 30.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 1.5,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 15.0,
+    "device_product": "Total MAX 5G BYO Plan $30",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Total MAX 5G BYO Plan $30 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $30.00",
+    "ma_matches": [
+     {
+      "id": "e2eb961c-bed1-4fb2-818b-f89958b00885",
+      "period": "July 2026",
+      "tx_date": "2026-07-06",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "346822273",
+      "merchant_account_id": "170084",
+      "imei": "351544457997254",
+      "sim": "e8901351544457997254",
+      "ban": "809594568",
+      "line_status": null,
+      "activation_type": "New",
+      "activation_type2": "byop",
+      "mrc_net_discount": 27.45,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -20.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 20.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -20.0,
+      "spiff_total_paid": 20.0
+     },
+     {
+      "id": "ae746187-5240-4636-852a-52f8033ab573",
+      "period": "July 2026",
+      "tx_date": "2026-07-06",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "346822275",
+      "merchant_account_id": "170084",
+      "imei": "351544457997254",
+      "sim": "e8901351544457997254",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "New",
+      "activation_type2": "byop",
+      "mrc_net_discount": 7.32,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": 0.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": -0.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": 0.0,
+      "spiff_total_paid": 0.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "353887192969056",
+    "mdn": "",
+    "trans_id": "3260",
+    "sale_period": "July 2026",
+    "product": "Total MAX 5G BYO Plan $30",
+    "contract_type": "BYOD Port",
+    "installments": [
+     {
+      "label": "Total MAX 5G BYO Plan $30 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $30.00",
+      "device_product": "Total MAX 5G BYO Plan $30",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 1.5,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 30.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 1.5,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 15.0,
+    "device_product": "Total MAX 5G BYO Plan $30",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Total MAX 5G BYO Plan $30 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $30.00",
+    "ma_matches": [
+     {
+      "id": "acfa73ee-1208-4174-b2a5-e2c3e5c3a260",
+      "period": "July 2026",
+      "tx_date": "2026-07-12",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "347803316",
+      "merchant_account_id": "170084",
+      "imei": "353887192969056",
+      "sim": null,
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "byop",
+      "mrc_net_discount": 27.45,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -25.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 25.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -25.0,
+      "spiff_total_paid": 25.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "353981380525737",
+    "mdn": "",
+    "trans_id": "3400",
+    "sale_period": "July 2026",
+    "product": "Total MAX 5G BYO Plan $30",
+    "contract_type": "BYOD Port",
+    "installments": [
+     {
+      "label": "Total MAX 5G BYO Plan $30 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $30.00",
+      "device_product": "Total MAX 5G BYO Plan $30",
+      "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 1.5,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 30.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 1.5,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 15.0,
+    "device_product": "Total MAX 5G BYO Plan $30",
+    "plan_product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+    "device_category": "phone",
+    "label": "Total MAX 5G BYO Plan $30 \u2014 Access Charge - $25 for single line, max $50 for multiple lines. \u2014 MRC $30.00",
+    "ma_matches": [
+     {
+      "id": "2fca5c2c-a7f6-4651-91be-2a5bbba9afbf",
+      "period": "July 2026",
+      "tx_date": "2026-07-13",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "347917673",
+      "merchant_account_id": "170084",
+      "imei": "353981380525737",
+      "sim": "89148000008588447056",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "byop",
+      "mrc_net_discount": 27.45,
+      "rebate": 0.0,
+      "rebate_paid": -0.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -25.0,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 25.0,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -25.0,
+      "spiff_total_paid": 25.0
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "89148000008588447098",
+    "mdn": "",
+    "trans_id": "2041",
+    "sale_period": "July 2026",
+    "product": "Total by Verizon SIM Kit",
+    "contract_type": "",
+    "installments": [
+     {
+      "label": "Total MAX 5G BYO Plan $30 \u2014 MRC $30.00",
+      "device_product": "Total MAX 5G BYO Plan $30",
+      "plan_product": "",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 1.5,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 30.0,
+      "mrc_source": "product_catalog",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": null,
+      "expected_amount": 1.5,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 3.0,
+    "gp": 0.0,
+    "device_product": "Total MAX 5G BYO Plan $30",
+    "plan_product": null,
+    "device_category": "phone",
+    "label": "Total MAX 5G BYO Plan $30 \u2014 MRC $30.00",
+    "ma_matches": [],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "",
+    "mdn": "",
+    "trans_id": "3107",
+    "sale_period": "July 2026",
+    "product": null,
+    "contract_type": null,
+    "installments": [
+     {
+      "label": "Activation payment",
+      "device_product": "",
+      "plan_product": "Activation payment",
+      "device_category": "phone",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 0.0,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 0.0,
+      "mrc_source": "none",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": "Paid, but $0: this month pays a PERCENTAGE OF THE MONTHLY RATE PLAN and no rate-plan line could be identified on this activation, so the MRC resolved to $0.00. Fixed-wireless / home-internet and similar activations often carry the plan inside the device line's own description, with no separate airtime line. Map the plan's wording under Plan Installments -> MRC mapping (or add it to the rate-plan line matcher) and the percentage will have something to pay on.",
+      "expected_amount": 0.0,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "device_product": null,
+    "plan_product": "Activation payment",
+    "device_category": "phone",
+    "label": "Activation payment",
+    "ma_matches": [],
+    "ma_says_paid": false,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "358835493328097",
+    "mdn": "",
+    "trans_id": "4879",
+    "sale_period": "July 2026",
+    "product": "Home Internet Router TO - Promo $85, HOME_INTERNET_MULTI_MM",
+    "contract_type": "Activation",
+    "installments": [
+     {
+      "label": "Home Internet Router TO - Promo $85, HOME_INTERNET_MULTI_MM",
+      "device_product": "Home Internet Router TO - Promo $85, HOME_INTERNET_MULTI_MM",
+      "plan_product": "",
+      "device_category": "home_internet",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 0.0,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 0.0,
+      "mrc_source": "none",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": "Paid, but $0: this month pays a PERCENTAGE OF THE MONTHLY RATE PLAN and no rate-plan line could be identified on this activation, so the MRC resolved to $0.00. Fixed-wireless / home-internet and similar activations often carry the plan inside the device line's own description, with no separate airtime line. Map the plan's wording under Plan Installments -> MRC mapping (or add it to the rate-plan line matcher) and the percentage will have something to pay on.",
+      "expected_amount": 0.0,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 14.99,
+    "gp": 0.0,
+    "device_product": "Home Internet Router TO - Promo $85, HOME_INTERNET_MULTI_MM",
+    "plan_product": null,
+    "device_category": "home_internet",
+    "label": "Home Internet Router TO - Promo $85, HOME_INTERNET_MULTI_MM",
+    "ma_matches": [
+     {
+      "id": "2a15c304-4eaf-482b-8605-fe78451da53c",
+      "period": "July 2026",
+      "tx_date": "2026-07-25",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "350075678",
+      "merchant_account_id": "170084",
+      "imei": "358835493328097",
+      "sim": "89148000013126799349",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 9.29,
+      "rebate": -85.0,
+      "rebate_paid": 85.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -5.08,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 5.08,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -5.08,
+      "spiff_total_paid": 5.08
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "358835492457343",
+    "mdn": "",
+    "trans_id": "2013",
+    "sale_period": "July 2026",
+    "product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+    "contract_type": "",
+    "installments": [
+     {
+      "label": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing \u2014 Activation payment",
+      "device_product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+      "plan_product": "Activation payment",
+      "device_category": "home_internet",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 0.0,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 0.0,
+      "mrc_source": "none",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": "Paid, but $0: this month pays a PERCENTAGE OF THE MONTHLY RATE PLAN and no rate-plan line could be identified on this activation, so the MRC resolved to $0.00. Fixed-wireless / home-internet and similar activations often carry the plan inside the device line's own description, with no separate airtime line. Map the plan's wording under Plan Installments -> MRC mapping (or add it to the rate-plan line matcher) and the percentage will have something to pay on.",
+      "expected_amount": 0.0,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 14.99,
+    "gp": 0.0,
+    "device_product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+    "plan_product": "Activation payment",
+    "device_category": "home_internet",
+    "label": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing \u2014 Activation payment",
+    "ma_matches": [
+     {
+      "id": "d463d653-2a94-44a8-ae99-445818faa42e",
+      "period": "July 2026",
+      "tx_date": "2026-07-03",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "346257413",
+      "merchant_account_id": "170084",
+      "imei": "358835492457343",
+      "sim": "89148000012693437176",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 30.5,
+      "rebate": -85.0,
+      "rebate_paid": 85.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -16.67,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 16.67,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -16.67,
+      "spiff_total_paid": 16.67
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "358835493197484",
+    "mdn": "",
+    "trans_id": "1792",
+    "sale_period": "July 2026",
+    "product": "Total Wireless Home Internet",
+    "contract_type": "",
+    "installments": [
+     {
+      "label": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing \u2014 Activation payment",
+      "device_product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+      "plan_product": "Activation payment",
+      "device_category": "home_internet",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 0.0,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 0.0,
+      "mrc_source": "none",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": "Paid, but $0: this month pays a PERCENTAGE OF THE MONTHLY RATE PLAN and no rate-plan line could be identified on this activation, so the MRC resolved to $0.00. Fixed-wireless / home-internet and similar activations often carry the plan inside the device line's own description, with no separate airtime line. Map the plan's wording under Plan Installments -> MRC mapping (or add it to the rate-plan line matcher) and the percentage will have something to pay on.",
+      "expected_amount": 0.0,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 0.0,
+    "gp": 17.5,
+    "device_product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+    "plan_product": "Activation payment",
+    "device_category": "home_internet",
+    "label": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing \u2014 Activation payment",
+    "ma_matches": [
+     {
+      "id": "0bf35c7d-cc8c-4295-874e-9d6f07cab9a3",
+      "period": "July 2026",
+      "tx_date": "2026-07-02",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "345957378",
+      "merchant_account_id": "170084",
+      "imei": "358835493197484",
+      "sim": "89148000012933241438",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 32.02,
+      "rebate": -85.0,
+      "rebate_paid": 85.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -17.5,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 17.5,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -17.5,
+      "spiff_total_paid": 17.5
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   },
+   {
+    "imei": "358835493198763",
+    "mdn": "",
+    "trans_id": "1778",
+    "sale_period": "July 2026",
+    "product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+    "contract_type": "",
+    "installments": [
+     {
+      "label": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing \u2014 Activation payment",
+      "device_product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+      "plan_product": "Activation payment",
+      "device_category": "home_internet",
+      "month_index": 1,
+      "pay_period": "July 2026",
+      "sale_period": "July 2026",
+      "amount": 0.0,
+      "withheld_amount": 0.0,
+      "status": "paid",
+      "paid": true,
+      "gate_mode": "paid_residual",
+      "hold_reason": "paid",
+      "hold_detail": "Paid (ungated month).",
+      "mrc_at_pay": 0.0,
+      "mrc_source": "none",
+      "payout_kind": "pct_mrc",
+      "mi_ref": null,
+      "zero_note": "Paid, but $0: this month pays a PERCENTAGE OF THE MONTHLY RATE PLAN and no rate-plan line could be identified on this activation, so the MRC resolved to $0.00. Fixed-wireless / home-internet and similar activations often carry the plan inside the device line's own description, with no separate airtime line. Map the plan's wording under Plan Installments -> MRC mapping (or add it to the rate-plan line matcher) and the percentage will have something to pay on.",
+      "expected_amount": 0.0,
+      "expected_in_window": false,
+      "promoted": false,
+      "promoted_by": null,
+      "promoted_at": null,
+      "promote_reason": null,
+      "promote_stale": false
+     }
+    ],
+    "ext_price": 14.99,
+    "gp": 0.0,
+    "device_product": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing",
+    "plan_product": "Activation payment",
+    "device_category": "home_internet",
+    "label": "Home Internet Router TO - Promo $85, Total Wireless FWA Promotion - Add to Existing \u2014 Activation payment",
+    "ma_matches": [
+     {
+      "id": "f7aa6d5d-d7f6-41bc-a1cb-b9fd3567a472",
+      "period": "July 2026",
+      "tx_date": "2026-07-02",
+      "carrier_name": "Total by Verizon",
+      "activation_order": "345948219",
+      "merchant_account_id": "170084",
+      "imei": "358835493198763",
+      "sim": "89148000012933250926",
+      "ban": null,
+      "line_status": null,
+      "activation_type": "Add",
+      "activation_type2": "branded",
+      "mrc_net_discount": 0.0,
+      "rebate": -85.0,
+      "rebate_paid": 85.0,
+      "user_name": "Cespinoza",
+      "spiffs": {
+       "m1": -2.5,
+       "m2": 0.0,
+       "m3": 0.0,
+       "m4": 0.0,
+       "m5": 0.0,
+       "m6": 0.0
+      },
+      "spiffs_paid": {
+       "m1": 2.5,
+       "m2": -0.0,
+       "m3": -0.0,
+       "m4": -0.0,
+       "m5": -0.0,
+       "m6": -0.0
+      },
+      "spiff_total": -2.5,
+      "spiff_total_paid": 2.5
+     }
+    ],
+    "ma_says_paid": true,
+    "held_but_ma_paid": false
+   }
+  ],
+  "totals": {
+   "paid": 27,
+   "withheld": 0,
+   "amount": 54.75
+  },
+  "schedules": 1,
+  "note": null,
+  "warnings": [
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "4111",
+    "imeis": [
+     "354709282645058",
+     "358142954108997"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "4111",
+    "imei": "354709282645058",
+    "chosen_mrc": 55.0,
+    "candidates": [
+     {
+      "product": "Total MAX 5G Plan $55",
+      "mrc": 55.0
+     },
+     {
+      "product": "Total Wireless Base Unlimited Tablet 3-Month Plan $30",
+      "mrc": 30.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3685",
+    "imei": "352693200828776",
+    "chosen_mrc": 40.0,
+    "candidates": [
+     {
+      "product": "Total STARTER Plan $40",
+      "mrc": 40.0
+     },
+     {
+      "product": "Total Wireless Protect+",
+      "mrc": 8.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3207",
+    "imei": "355354216175234",
+    "chosen_mrc": 65.0,
+    "candidates": [
+     {
+      "product": "Total ALL ACCESS Plan $65",
+      "mrc": 65.0
+     },
+     {
+      "product": "Total Wireless Protect+",
+      "mrc": 8.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "2096",
+    "imei": "",
+    "chosen_mrc": 30.0,
+    "candidates": [
+     {
+      "product": "Total MAX 5G BYO Plan $30",
+      "mrc": 30.0
+     },
+     {
+      "product": "Total Wireless Protect+",
+      "mrc": 8.0
+     },
+     {
+      "product": "Total by Verizon SIM Kit",
+      "mrc": 3.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "4129",
+    "imeis": [
+     "358142954109060",
+     "358142954904833"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "2059",
+    "imei": "",
+    "chosen_mrc": 65.0,
+    "candidates": [
+     {
+      "product": "Total ALL ACCESS Plan $65",
+      "mrc": 65.0
+     },
+     {
+      "product": "Total Wireless Protect+",
+      "mrc": 8.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "4841",
+    "imeis": [
+     "356426560541366",
+     "357684210637021"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "4841",
+    "imei": "356426560541366",
+    "chosen_mrc": 55.0,
+    "candidates": [
+     {
+      "product": "Total MAX 5G Plan $55",
+      "mrc": 55.0
+     },
+     {
+      "product": "Total Wireless Base Unlimited Tablet 3-Month Plan $30",
+      "mrc": 30.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "5384",
+    "imeis": [
+     "352693202133241",
+     "352693202329922"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "5452",
+    "imeis": [
+     "351399081276058",
+     "354709280271162"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "5452",
+    "imei": "351399081276058",
+    "chosen_mrc": 65.0,
+    "candidates": [
+     {
+      "product": "Total ALL ACCESS Plan $65",
+      "mrc": 65.0
+     },
+     {
+      "product": "Total Wireless Base Unlimited Tablet 3-Month Plan $30",
+      "mrc": 30.0
+     },
+     {
+      "product": "Total Wireless Protect+",
+      "mrc": 8.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3942",
+    "imeis": [
+     "351303015957809",
+     "352550483790570",
+     "354709282645041",
+     "355354217238585",
+     "357773240275199",
+     "89148000008588447031"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3942",
+    "imei": "354709282645041",
+    "chosen_mrc": 55.0,
+    "candidates": [
+     {
+      "product": "Total MAX 5G Plan $55",
+      "mrc": 55.0
+     },
+     {
+      "product": "Total MAX 5G Plan $55",
+      "mrc": 55.0
+     },
+     {
+      "product": "Total MAX 5G Plan $55",
+      "mrc": 55.0
+     },
+     {
+      "product": "Total MAX 5G Plan $55",
+      "mrc": 55.0
+     },
+     {
+      "product": "Total Wireless Base Unlimited Tablet 3-Month Plan $30",
+      "mrc": 30.0
+     },
+     {
+      "product": "Total by Verizon SIM Kit",
+      "mrc": 3.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "4137",
+    "imei": "351194962622706",
+    "chosen_mrc": 55.0,
+    "candidates": [
+     {
+      "product": "Total MAX 5G Plan $55",
+      "mrc": 55.0
+     },
+     {
+      "product": "Total Wireless Protect+",
+      "mrc": 8.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "4947",
+    "imei": "357845420395193",
+    "chosen_mrc": 50.0,
+    "candidates": [
+     {
+      "product": "Samsung Galaxy Tab A11+ 5G TO - Promo $279.99, SAMSUNG_GALAXY_TAB_A11_Min $50 tablet plan w/6 months of service_UU",
+      "mrc": 50.0
+     },
+     {
+      "product": "Total Wireless Base Unlimited Tablet 6-Month Plan $60",
+      "mrc": 60.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3956",
+    "imei": "350932555957802",
+    "chosen_mrc": 65.0,
+    "candidates": [
+     {
+      "product": "Total ALL ACCESS Plan $65",
+      "mrc": 65.0
+     },
+     {
+      "product": "Total by Verizon SIM Kit",
+      "mrc": 3.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "5297",
+    "imeis": [
+     "351399080512651",
+     "357845420490192"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "5297",
+    "imei": "351399080512651",
+    "chosen_mrc": 65.0,
+    "candidates": [
+     {
+      "product": "Total ALL ACCESS Plan $65",
+      "mrc": 65.0
+     },
+     {
+      "product": "Total Wireless Protect+",
+      "mrc": 8.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3905",
+    "imeis": [
+     "350987122121175",
+     "357845420457597"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "2455",
+    "imei": "",
+    "chosen_mrc": 30.0,
+    "candidates": [
+     {
+      "product": "Total MAX 5G BYO Plan $30",
+      "mrc": 30.0
+     },
+     {
+      "product": "Total Wireless Protect+",
+      "mrc": 8.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "multi_device_single_chain",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3259",
+    "imeis": [
+     "352700328396501",
+     "354709282768827"
+    ],
+    "paid_chains": 1,
+    "detail": "This transaction has several device serials but no per-line mobile number to tell the subscribers apart, so it paid ONE installment. If these were separate activations, the POS export must carry the Activated Mobile Number on each line."
+   },
+   {
+    "type": "mrc_ambiguous",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3259",
+    "imei": "354709282768827",
+    "chosen_mrc": 65.0,
+    "candidates": [
+     {
+      "product": "Total ALL ACCESS Plan $65",
+      "mrc": 65.0
+     },
+     {
+      "product": "Total Wireless Base Unlimited Tablet 3-Month Plan $30",
+      "mrc": 30.0
+     }
+    ],
+    "detail": "Two lines of this activation look equally like the rate plan but imply different MRCs \u2014 the highest-confidence one was used. Confirm the correct plan under Plan Installments \u2192 MRC mapping."
+   },
+   {
+    "type": "mrc_unresolved",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "3107",
+    "mdn": "",
+    "imei": "",
+    "products": [
+     "Activation payment",
+     "Screen Protectors BYOD"
+    ],
+    "detail": "No rate-plan line could be identified on this activation, so the %-of-MRC installment resolved to $0 instead of paying a percentage of a device price. Confirm the plan under Plan Installments \u2192 MRC mapping, or add its wording to the rate-plan line matcher. If this category is not meant to be paid monthly at all, set it to a one-time FLAT amount under Plan Installments \u2192 Flat payout by category.",
+    "fix_routes": [
+     "mrc_mapping",
+     "plan_line_matcher",
+     "category_flat_payout"
+    ]
+   },
+   {
+    "type": "mrc_unresolved",
+    "sale_period": "July 2026",
+    "month_index": 1,
+    "rep": "Espinoza, Carolina",
+    "store": "4640-A W Diversey Ave",
+    "trans_id": "4879",
+    "mdn": "",
+    "imei": "358835493328097",
+    "products": [
+     "Home Internet Router TO - Promo $85, HOME_INTERNET_MULTI_MM",
+     "Total Wireless Home Internet",
+     "Wallet Funding"
+    ],
+    "detail": "No rate-plan line could be identified on this activation, so the %-of-MRC installment resolved to $0 instead of paying a percentage of a device price. Confirm the plan under Plan Installments \u2192 MRC mapping, or add its wording to the rate-plan line matcher. If this category is not meant to be paid monthly at all, set it to a one-time FLAT amount under Plan Installments \u2192 Flat payout by category.",
+    "fix_routes": [
+     "mrc_mapping",
+     "plan_line_matcher",
+     "category_flat_payout"
+    ]
+   },
+   {
+    "type": "category_excluded",
+    "category": "tablet",
+    "category_label": "Tablets",
+    "chains": 174,
+    "amount": 763.5,
+    "by_rep": {
+     "ESPINOZA, CAROLINA": 96.75,
+     "PITRE, TERRY": 70.75,
+     "ANTUNEZ, DIANA": 37.0,
+     "NAVARRETE, NICOLAS": 48.25,
+     "ESPARZA, YUVIA": 24.5,
+     "COLLINS, MEA": 27.75,
+     "AVILES, BRENDALIZ": 31.0,
+     "JACOBO, LISET": 28.25,
+     "ESPINOZA, NALLELY": 28.5,
+     "ORTIZ, RUBY": 35.25,
+     "CHACON, ANGELICA": 27.75,
+     "JACOBO, VANESSA": 36.0,
+     "CHICO, NATALIE": 32.75,
+     "MARTINEZ, LUIS": 49.5,
+     "ESPINOZA, NANCY": 42.75,
+     "ROMERO, CHRISTOPHER": 51.25,
+     "HERNANDEZ, JOCELYN": 15.0,
+     "VERGARA, TATIANA": 26.5,
+     "GARIBAY, JANET": 10.25,
+     "NAVARRO, ALONDRA": 13.25,
+     "GALARZA, ALEJANDRO": 14.0,
+     "CHAVEZ, ANTONIO": 16.5
+    },
+    "examples": [
+     {
+      "trans_id": "4111",
+      "imei": "354709282645058",
+      "mdn": "",
+      "rep": "Espinoza, Carolina",
+      "month_index": 1,
+      "amount": 2.75,
+      "mrc": 55.0,
+      "product": "TCL Tab 10 NXTPAPER 5G TO - Promo $200, TCL_TAB10_NXT_PEPER_5G_MIN50_tablet plan w/ 3 months of service _SS",
+      "matched_field": "product_desc",
+      "matched_value": "tablet"
+     },
+     {
+      "trans_id": "4090",
+      "imei": "357845420410950",
+      "mdn": "",
+      "rep": "Pitre, Terry",
+      "month_index": 1,
+      "amount": 14.0,
+      "mrc": 279.99,
+      "product": "Total Wireless Base Unlimited Tablet 6-Month Plan $60",
+      "matched_field": "product_desc",
+      "matched_value": "tablet"
+     },
+     {
+      "trans_id": "4325",
+      "imei": "352550482565213",
+      "mdn": "",
+      "rep": "Antunez, Diana",
+      "month_index": 1,
+      "amount": 2.75,
+      "mrc": 55.0,
+      "product": "Total Wireless Base Unlimited Tablet 3-Month Plan $30",
+      "matched_field": "product_desc",
+      "matched_value": "tablet"
+     },
+     {
+      "trans_id": "2795",
+      "imei": "357845420454743",
+      "mdn": "",
+      "rep": "Navarrete, Nicolas",
+      "month_index": 1,
+      "amount": 14.0,
+      "mrc": 279.99,
+      "product": "Total Wireless Base Unlimited Tablet 6-Month Plan $60",
+      "matched_field": "product_desc",
+      "matched_value": "tablet"
+     },
+     {
+      "trans_id": "1702",
+      "imei": "",
+      "mdn": "",
+      "rep": "Esparza, Yuvia",
+      "month_index": 1,
+      "amount": 1.5,
+      "mrc": 30.0,
+      "product": "Samsung Galaxy Tab A11+ 5G TO - Promo $230, Total Wireless Base Unlimited Tablet Promotion 3-Months - Add to Existing",
+      "matched_field": "product_desc",
+      "matched_value": "tablet"
+     },
+     {
+      "trans_id": "3343",
+      "imei": "357684210586491",
+      "mdn": "",
+      "rep": "Collins, Mea",
+      "month_index": 1,
+      "amount": 2.5,
+      "mrc": 50.0,
+      "product": "Total Wireless Base Unlimited Tablet Plan $50",
+      "matched_field": "product_desc",
+      "matched_value": "tablet"
+     },
+     {
+      "trans_id": "4978",
+      "imei": "352779841490199",
+      "mdn": "8723692880",
+      "rep": "Aviles, Brendaliz",
+      "month_index": 1,
+      "amount": 2.75,
+      "mrc": 55.0,
+      "product": "TCL Tab 8 NXTPAPER 5G TO - Promo $179.99, Total Wireless Multi-Line Promotion - Tablet",
+      "matched_field": "product_desc",
+      "matched_value": "tablet"
+     },
+     {
+      "trans_id": "5217",
+      "imei": "357845420503192",
+      "mdn": "",
+      "rep": "Jacobo, Liset",
+      "month_index": 1,
+      "amount": 2.5,
+      "mrc": 50.0,
+      "product": "Samsung Galaxy Tab A11+ 5G TO - Promo $279.99, SAMSUNG_GALAXY_TAB_A11_Min $50 tablet plan w/6 months of service_UU",
+      "matched_field": "product_desc",
+      "matched_value": "tablet"
+     }
+    ],
+    "detail": "174 tablets activation(s) did NOT pay a multi-month installment ($763.50 not paid) because 'Tablets' is unchecked under Plan Installments \u2192 Qualifying categories. Tick it to include them again."
+   },
+   {
+    "type": "category_unknown_summary",
+    "chains": 2,
+    "paid": true,
+    "detail": "2 activation(s) could not be classified into a device category. They were treated per the 'Could not be classified' switch. Add a rule under Plan Installments \u2192 Qualifying categories so they stop being guesses."
+   }
+  ],
+  "category_guard": {
+   "excluded_chains": 174,
+   "excluded_amount": 763.5,
+   "unknown_chains": 2,
+   "by_category": {
+    "tablet": {
+     "chains": 174,
+     "amount": 763.5,
+     "qualifies": false
+    },
+    "phone": {
+     "chains": 243,
+     "amount": 582.9,
+     "qualifies": true
+    },
+    "home_internet": {
+     "chains": 77,
+     "amount": 8.0,
+     "qualifies": true
+    },
+    "unknown": {
+     "chains": 2,
+     "amount": 0.0,
+     "qualifies": true
+    }
+   },
+   "excluded": {
+    "tablet": {
+     "chains": 174,
+     "amount": 763.5,
+     "reps": {
+      "ESPINOZA, CAROLINA": 96.75,
+      "PITRE, TERRY": 70.75,
+      "ANTUNEZ, DIANA": 37.0,
+      "NAVARRETE, NICOLAS": 48.25,
+      "ESPARZA, YUVIA": 24.5,
+      "COLLINS, MEA": 27.75,
+      "AVILES, BRENDALIZ": 31.0,
+      "JACOBO, LISET": 28.25,
+      "ESPINOZA, NALLELY": 28.5,
+      "ORTIZ, RUBY": 35.25,
+      "CHACON, ANGELICA": 27.75,
+      "JACOBO, VANESSA": 36.0,
+      "CHICO, NATALIE": 32.75,
+      "MARTINEZ, LUIS": 49.5,
+      "ESPINOZA, NANCY": 42.75,
+      "ROMERO, CHRISTOPHER": 51.25,
+      "HERNANDEZ, JOCELYN": 15.0,
+      "VERGARA, TATIANA": 26.5,
+      "GARIBAY, JANET": 10.25,
+      "NAVARRO, ALONDRA": 13.25,
+      "GALARZA, ALEJANDRO": 14.0,
+      "CHAVEZ, ANTONIO": 16.5
+     },
+     "examples": [
+      {
+       "trans_id": "4111",
+       "imei": "354709282645058",
+       "mdn": "",
+       "rep": "Espinoza, Carolina",
+       "month_index": 1,
+       "amount": 2.75,
+       "mrc": 55.0,
+       "product": "TCL Tab 10 NXTPAPER 5G TO - Promo $200, TCL_TAB10_NXT_PEPER_5G_MIN50_tablet plan w/ 3 months of service _SS",
+       "matched_field": "product_desc",
+       "matched_value": "tablet"
+      },
+      {
+       "trans_id": "4090",
+       "imei": "357845420410950",
+       "mdn": "",
+       "rep": "Pitre, Terry",
+       "month_index": 1,
+       "amount": 14.0,
+       "mrc": 279.99,
+       "product": "Total Wireless Base Unlimited Tablet 6-Month Plan $60",
+       "matched_field": "product_desc",
+       "matched_value": "tablet"
+      },
+      {
+       "trans_id": "4325",
+       "imei": "352550482565213",
+       "mdn": "",
+       "rep": "Antunez, Diana",
+       "month_index": 1,
+       "amount": 2.75,
+       "mrc": 55.0,
+       "product": "Total Wireless Base Unlimited Tablet 3-Month Plan $30",
+       "matched_field": "product_desc",
+       "matched_value": "tablet"
+      },
+      {
+       "trans_id": "2795",
+       "imei": "357845420454743",
+       "mdn": "",
+       "rep": "Navarrete, Nicolas",
+       "month_index": 1,
+       "amount": 14.0,
+       "mrc": 279.99,
+       "product": "Total Wireless Base Unlimited Tablet 6-Month Plan $60",
+       "matched_field": "product_desc",
+       "matched_value": "tablet"
+      },
+      {
+       "trans_id": "1702",
+       "imei": "",
+       "mdn": "",
+       "rep": "Esparza, Yuvia",
+       "month_index": 1,
+       "amount": 1.5,
+       "mrc": 30.0,
+       "product": "Samsung Galaxy Tab A11+ 5G TO - Promo $230, Total Wireless Base Unlimited Tablet Promotion 3-Months - Add to Existing",
+       "matched_field": "product_desc",
+       "matched_value": "tablet"
+      },
+      {
+       "trans_id": "3343",
+       "imei": "357684210586491",
+       "mdn": "",
+       "rep": "Collins, Mea",
+       "month_index": 1,
+       "amount": 2.5,
+       "mrc": 50.0,
+       "product": "Total Wireless Base Unlimited Tablet Plan $50",
+       "matched_field": "product_desc",
+       "matched_value": "tablet"
+      },
+      {
+       "trans_id": "4978",
+       "imei": "352779841490199",
+       "mdn": "8723692880",
+       "rep": "Aviles, Brendaliz",
+       "month_index": 1,
+       "amount": 2.75,
+       "mrc": 55.0,
+       "product": "TCL Tab 8 NXTPAPER 5G TO - Promo $179.99, Total Wireless Multi-Line Promotion - Tablet",
+       "matched_field": "product_desc",
+       "matched_value": "tablet"
+      },
+      {
+       "trans_id": "5217",
+       "imei": "357845420503192",
+       "mdn": "",
+       "rep": "Jacobo, Liset",
+       "month_index": 1,
+       "amount": 2.5,
+       "mrc": 50.0,
+       "product": "Samsung Galaxy Tab A11+ 5G TO - Promo $279.99, SAMSUNG_GALAXY_TAB_A11_Min $50 tablet plan w/6 months of service_UU",
+       "matched_field": "product_desc",
+       "matched_value": "tablet"
+      }
+     ]
+    }
+   },
+   "config_source": [
+    "default"
+   ],
+   "qualification": {
+    "phone": true,
+    "tablet": false,
+    "home_internet": true,
+    "sim": false,
+    "accessory": true,
+    "unknown": true
+   }
+  }
+ },
+ "reconciliation": {
+  "plan_comm": 274.09,
+  "installment_comm_sale": 54.75,
+  "residual_installment_comm": 0.0,
+  "total_payout": 328.84,
+  "source": "rep_commissions (last Run Calculation)"
+ },
+ "zero_explanation": [],
+ "note": null
+}

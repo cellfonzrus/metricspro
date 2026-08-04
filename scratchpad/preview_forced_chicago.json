@@ -1,0 +1,4687 @@
+{
+ "ready": true,
+ "period": "July 2026",
+ "by_rep": [
+  {
+   "rep": "Antunez, Diana",
+   "store": "4640-A W Diversey Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 64,
+   "tier_multiplier": 1.0,
+   "base_payout": 139.0,
+   "tiered_payout": 0.0,
+   "total_payout": 139.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 10,
+     "qualifying_units": 10,
+     "payout": 50.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 34,
+     "qualifying_units": 19,
+     "payout": 38.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 7,
+     "qualifying_units": 7,
+     "payout": 35.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 16,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 8,
+     "qualifying_units": 8,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Espinoza, Carolina",
+   "store": "4640-A W Diversey Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 68,
+   "tier_multiplier": 1.0,
+   "base_payout": 95.09,
+   "tiered_payout": 0.0,
+   "total_payout": 95.09,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 18,
+     "qualifying_units": 15,
+     "payout": 30.0
+    },
+    {
+     "rule_id": "e34fe410-5600-46bb-b24b-82bb68091e8d",
+     "label": "edge",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 8,
+     "qualifying_units": 1,
+     "payout": 25.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 33,
+     "qualifying_units": 33,
+     "payout": 0.09
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 11,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Ortiz, Ruby",
+   "store": "3966 W Grand Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 67,
+   "tier_multiplier": 1.0,
+   "base_payout": 90.0,
+   "tiered_payout": 0.0,
+   "total_payout": 90.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 7,
+     "qualifying_units": 7,
+     "payout": 35.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 6,
+     "qualifying_units": 6,
+     "payout": 30.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 18,
+     "qualifying_units": 10,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 39,
+     "qualifying_units": 39,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Nava, Silvia",
+   "store": "4801 W Armitage Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 67,
+   "tier_multiplier": 1.0,
+   "base_payout": 83.15,
+   "tiered_payout": 0.0,
+   "total_payout": 83.15,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 18,
+     "qualifying_units": 15,
+     "payout": 30.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 25.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 25.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 30,
+     "qualifying_units": 30,
+     "payout": 3.15
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 12,
+     "qualifying_units": 12,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Martinez, Luis",
+   "store": "2317 S Cicero Ave STE A",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 37,
+   "tier_multiplier": 1.0,
+   "base_payout": 75.56,
+   "tiered_payout": 0.0,
+   "total_payout": 75.56,
+   "rules": [
+    {
+     "rule_id": "e34fe410-5600-46bb-b24b-82bb68091e8d",
+     "label": "edge",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 8,
+     "qualifying_units": 1,
+     "payout": 25.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 8,
+     "payout": 16.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 11,
+     "payout": 4.56
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 11,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Vergara, Tatiana",
+   "store": "3966 W Grand Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 54,
+   "tier_multiplier": 1.0,
+   "base_payout": 64.0,
+   "tiered_payout": 0.0,
+   "total_payout": 64.0,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 33,
+     "qualifying_units": 12,
+     "payout": 24.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 22,
+     "qualifying_units": 22,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 12,
+     "qualifying_units": 12,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Garibay, Janet",
+   "store": "3352 W 26th St",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 40,
+   "tier_multiplier": 1.0,
+   "base_payout": 63.15,
+   "tiered_payout": 0.0,
+   "total_payout": 63.15,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 25.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 5,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 9,
+     "payout": 3.15
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 16,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Pitre, Terry",
+   "store": "2317 S Cicero Ave STE A",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 32,
+   "tier_multiplier": 1.0,
+   "base_payout": 62.0,
+   "tiered_payout": 0.0,
+   "total_payout": 62.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 6,
+     "qualifying_units": 6,
+     "payout": 30.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 25.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 1,
+     "payout": 2.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 11,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 8,
+     "qualifying_units": 8,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Chacon, Angelica",
+   "store": "3248 W Lawrence Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 39,
+   "tier_multiplier": 1.0,
+   "base_payout": 62.0,
+   "tiered_payout": 0.0,
+   "total_payout": 62.0,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 31,
+     "qualifying_units": 15,
+     "payout": 30.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 12.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 13,
+     "qualifying_units": 13,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Kellie, Mark",
+   "store": "957 Pennsylvania Avenue",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 28,
+   "tier_multiplier": 1.0,
+   "base_payout": 57.0,
+   "tiered_payout": 0.0,
+   "total_payout": 57.0,
+   "rules": [
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 9,
+     "payout": 27.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "2532da2d-20f5-4fe2-85bd-5b17a9d9ecd8",
+     "label": "vhi4",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 13,
+     "qualifying_units": 13,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Espinoza, Nallely",
+   "store": "2414 W Cermak Rd",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 23,
+   "tier_multiplier": 1.0,
+   "base_payout": 57.0,
+   "tiered_payout": 0.0,
+   "total_payout": 57.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 12.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 14,
+     "qualifying_units": 5,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 7,
+     "qualifying_units": 7,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Hernandez, Jocelyn",
+   "store": "5601 W Belmont Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 54,
+   "tier_multiplier": 1.0,
+   "base_payout": 56.0,
+   "tiered_payout": 0.0,
+   "total_payout": 56.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 8,
+     "payout": 16.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 28,
+     "qualifying_units": 28,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 10,
+     "qualifying_units": 10,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Espinoza, Nancy",
+   "store": "2414 W Cermak Rd",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 35,
+   "tier_multiplier": 1.0,
+   "base_payout": 51.15,
+   "tiered_payout": 0.0,
+   "total_payout": 51.15,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 20,
+     "qualifying_units": 6,
+     "payout": 12.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 16,
+     "payout": 3.15
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Chavez, Antonio",
+   "store": "639 W Lincoln Hwy",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 11,
+   "tier_multiplier": 1.0,
+   "base_payout": 50.0,
+   "tiered_payout": 0.0,
+   "total_payout": 50.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 25.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 3.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 2.0
+    }
+   ]
+  },
+  {
+   "rep": "Islam Khan, Ariful",
+   "store": "218-80 Hempstead Avenue",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 15,
+   "tier_multiplier": 1.0,
+   "base_payout": 49.0,
+   "tiered_payout": 0.0,
+   "total_payout": 49.0,
+   "rules": [
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 13,
+     "qualifying_units": 13,
+     "payout": 39.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    }
+   ]
+  },
+  {
+   "rep": "Jacobo, Vanessa",
+   "store": "4801 W Armitage Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 36,
+   "tier_multiplier": 1.0,
+   "base_payout": 47.1,
+   "tiered_payout": 0.0,
+   "total_payout": 47.1,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 6,
+     "payout": 12.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 3.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 16,
+     "payout": 2.1
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 7,
+     "qualifying_units": 7,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Chico, Natalie",
+   "store": "6500 W Irving Park Rd",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 26,
+   "tier_multiplier": 1.0,
+   "base_payout": 43.93,
+   "tiered_payout": 0.0,
+   "total_payout": 43.93,
+   "rules": [
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 7,
+     "payout": 14.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 9,
+     "payout": 4.93
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Esparza, Yuvia",
+   "store": "3966 W Grand Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 40,
+   "tier_multiplier": 1.0,
+   "base_payout": 43.84,
+   "tiered_payout": 0.0,
+   "total_payout": 43.84,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 10,
+     "qualifying_units": 5,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 24,
+     "qualifying_units": 24,
+     "payout": 3.84
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Aviles, Brendaliz",
+   "store": "2640 Narragansett",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 37,
+   "tier_multiplier": 1.0,
+   "base_payout": 43.35,
+   "tiered_payout": 0.0,
+   "total_payout": 43.35,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 8,
+     "payout": 16.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 16,
+     "payout": 7.35
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 9,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Collins, Mea",
+   "store": "18226 Kedzie Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 27,
+   "tier_multiplier": 1.0,
+   "base_payout": 37.15,
+   "tiered_payout": 0.0,
+   "total_payout": 37.15,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 9,
+     "payout": 18.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 3.15
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 11,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Sri ram, Nivas",
+   "store": "3560 Nostrand Avenue",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 8,
+   "tier_multiplier": 1.0,
+   "base_payout": 36.0,
+   "tiered_payout": 0.0,
+   "total_payout": 36.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    }
+   ]
+  },
+  {
+   "rep": "Navarro, Alondra",
+   "store": "3735 W 26th St",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 16,
+   "tier_multiplier": 1.0,
+   "base_payout": 32.0,
+   "tiered_payout": 0.0,
+   "total_payout": 32.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 3,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 7,
+     "qualifying_units": 7,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Mendoza, Natalie",
+   "store": "639 W Lincoln Hwy",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 11,
+   "tier_multiplier": 1.0,
+   "base_payout": 32.0,
+   "tiered_payout": 0.0,
+   "total_payout": 32.0,
+   "rules": [
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 12.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 0,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Romero, Christopher",
+   "store": "5601 W Belmont Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 68,
+   "tier_multiplier": 1.0,
+   "base_payout": 31.0,
+   "tiered_payout": 0.0,
+   "total_payout": 31.0,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 12,
+     "qualifying_units": 6,
+     "payout": 12.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 9.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 40,
+     "qualifying_units": 40,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 17,
+     "qualifying_units": 17,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Fozilova, Shakhnozakhon",
+   "store": "902 Avenue U",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 6,
+   "tier_multiplier": 1.0,
+   "base_payout": 30.0,
+   "tiered_payout": 0.0,
+   "total_payout": 30.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    }
+   ]
+  },
+  {
+   "rep": "Navarrete, Nicolas",
+   "store": "3735 W 26th St",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 21,
+   "tier_multiplier": 1.0,
+   "base_payout": 30.0,
+   "tiered_payout": 0.0,
+   "total_payout": 30.0,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 13,
+     "qualifying_units": 7,
+     "payout": 14.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 8,
+     "qualifying_units": 8,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Nooren, Naima",
+   "store": "7812 Bergenline Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 6,
+   "tier_multiplier": 1.0,
+   "base_payout": 30.0,
+   "tiered_payout": 0.0,
+   "total_payout": 30.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 15.0
+    }
+   ]
+  },
+  {
+   "rep": "Montijo, Genvieve",
+   "store": "3248 W Lawrence Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 34,
+   "tier_multiplier": 1.0,
+   "base_payout": 30.0,
+   "tiered_payout": 0.0,
+   "total_payout": 30.0,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 32,
+     "qualifying_units": 10,
+     "payout": 20.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 13,
+     "qualifying_units": 13,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 9,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Jacobo, Liset",
+   "store": "3735 W 26th St",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 33,
+   "tier_multiplier": 1.0,
+   "base_payout": 29.0,
+   "tiered_payout": 0.0,
+   "total_payout": 29.0,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 5,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 9.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 20,
+     "qualifying_units": 20,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Galarza, Alejandro",
+   "store": "6500 W Irving Park Rd",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 7,
+   "tier_multiplier": 1.0,
+   "base_payout": 26.0,
+   "tiered_payout": 0.0,
+   "total_payout": 26.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 6,
+     "qualifying_units": 3,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    }
+   ]
+  },
+  {
+   "rep": "Cabrera, Natasha",
+   "store": "2640 Narragansett",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 14,
+   "tier_multiplier": 1.0,
+   "base_payout": 26.0,
+   "tiered_payout": 0.0,
+   "total_payout": 26.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 6,
+     "qualifying_units": 3,
+     "payout": 6.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Perez, Yesica",
+   "store": "3352 W 26th St",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 10,
+   "tier_multiplier": 1.0,
+   "base_payout": 24.0,
+   "tiered_payout": 0.0,
+   "total_payout": 24.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 10.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 8,
+     "qualifying_units": 2,
+     "payout": 4.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Lopez, Zuleicka",
+   "store": "3352 W 26th St",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 15,
+   "tier_multiplier": 1.0,
+   "base_payout": 18.0,
+   "tiered_payout": 0.0,
+   "total_payout": 18.0,
+   "rules": [
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 9.0
+    },
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 2,
+     "payout": 4.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Perez, Melennie",
+   "store": "18226 Kedzie Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 8,
+   "tier_multiplier": 1.0,
+   "base_payout": 17.15,
+   "tiered_payout": 0.0,
+   "total_payout": 17.15,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 2,
+     "payout": 4.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 3.15
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Fatima, Syeda Zainab",
+   "store": "531 Utica Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 7,
+   "tier_multiplier": 1.0,
+   "base_payout": 10.0,
+   "tiered_payout": 0.0,
+   "total_payout": 10.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "540f57ff-4131-468f-b2d2-56c1b407779e",
+     "label": "vhi3",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 5,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Romero, Brenda",
+   "store": "3966 W Grand Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 3,
+   "tier_multiplier": 1.0,
+   "base_payout": 10.0,
+   "tiered_payout": 0.0,
+   "total_payout": 10.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Penumatcha, Venkata",
+   "store": "218-80 Hempstead Avenue",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 2,
+   "tier_multiplier": 1.0,
+   "base_payout": 10.0,
+   "tiered_payout": 0.0,
+   "total_payout": 10.0,
+   "rules": [
+    {
+     "rule_id": "478624c7-f37e-4e78-80bc-9b35007d4fac",
+     "label": "vhi1",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    },
+    {
+     "rule_id": "a8424386-adc6-4deb-99fa-618913bcde72",
+     "label": "vhi2",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 5.0
+    }
+   ]
+  },
+  {
+   "rep": "Asghar, Mariem",
+   "store": "3560 Nostrand Avenue",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 2,
+   "tier_multiplier": 1.0,
+   "base_payout": 3.0,
+   "tiered_payout": 0.0,
+   "total_payout": 3.0,
+   "rules": [
+    {
+     "rule_id": "04c48e4b-e548-44b9-8bbb-f29dee3fa0a3",
+     "label": "tablet",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 3.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "olvera, Emily",
+   "store": "5601 W Belmont Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 3,
+   "tier_multiplier": 1.0,
+   "base_payout": 2.0,
+   "tiered_payout": 0.0,
+   "total_payout": 2.0,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 5,
+     "qualifying_units": 1,
+     "payout": 2.0
+    },
+    {
+     "rule_id": "c34bde60-cb10-48e7-be6b-2af518814734",
+     "label": "upgrade",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Chauhan, Dixit",
+   "store": "902 Avenue U",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 0,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": []
+  },
+  {
+   "rep": "ar, Rush",
+   "store": "218-80 Hempstead Avenue",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 0,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": []
+  },
+  {
+   "rep": "ramos, Paola",
+   "store": "7812 Bergenline Ave",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 3,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": [
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 0.0
+    }
+   ]
+  },
+  {
+   "rep": "Bhuvan, Alladi,",
+   "store": "902 Avenue U",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 0,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": []
+  },
+  {
+   "rep": "Office, Back",
+   "store": "639 W Lincoln Hwy",
+   "market": "",
+   "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 2,
+   "tier_multiplier": 1.0,
+   "base_payout": -0.66,
+   "tiered_payout": 0.0,
+   "total_payout": -0.66,
+   "rules": [
+    {
+     "rule_id": "7ea669eb-1de9-454e-86cf-039654f7ebe0",
+     "label": "twp",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 0,
+     "payout": 0.0
+    },
+    {
+     "rule_id": "69157a47-1e04-413e-8156-838c5046498e",
+     "label": "accessory",
+     "payout_kind": "pct_gp",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": -0.66
+    }
+   ]
+  }
+ ],
+ "totals": {
+  "payout": 1694.96,
+  "reps": 44,
+  "sale_lines": 9391,
+  "plans": 4
+ },
+ "note": null,
+ "pay_gate": {
+  "unit": {
+   "transactions": 2,
+   "lines_suppressed": 14,
+   "amount_suppressed": 350.0,
+   "units_paid": 2,
+   "by_rule": {
+    "e34fe410-5600-46bb-b24b-82bb68091e8d": {
+     "label": "edge",
+     "basis": "per_device",
+     "source": "auto_txn_field",
+     "matched_lines": 16,
+     "units_paid": 2
+    }
+   },
+   "by_rep": {
+    "Espinoza, Carolina": 175.0,
+    "Martinez, Luis": 175.0
+   },
+   "notes": [
+    {
+     "code": "unit_collapsed",
+     "trans_id": "3207",
+     "matched_lines": 8,
+     "units_paid": 1,
+     "detail": "transaction 3207: 8 matched line(s) collapsed to 1 device unit(s).",
+     "rep": "Espinoza, Carolina"
+    },
+    {
+     "code": "unit_collapsed",
+     "trans_id": "4748",
+     "matched_lines": 8,
+     "units_paid": 1,
+     "detail": "transaction 4748: 8 matched line(s) collapsed to 1 device unit(s).",
+     "rep": "Martinez, Luis"
+    }
+   ]
+  },
+  "excluded": {
+   "lines": 220,
+   "amount_suppressed": 440.0,
+   "by_rule": {
+    "7ea669eb-1de9-454e-86cf-039654f7ebe0": {
+     "label": "twp",
+     "lines": 220,
+     "amount": 440.0
+    }
+   },
+   "by_rep": {
+    "Ortiz, Ruby": 16.0,
+    "Vergara, Tatiana": 42.0,
+    "Garibay, Janet": 12.0,
+    "Pitre, Terry": 8.0,
+    "Espinoza, Nancy": 28.0,
+    "Romero, Christopher": 12.0,
+    "Nava, Silvia": 6.0,
+    "Espinoza, Carolina": 6.0,
+    "Hernandez, Jocelyn": 16.0,
+    "Antunez, Diana": 30.0,
+    "Navarro, Alondra": 16.0,
+    "Aviles, Brendaliz": 2.0,
+    "Galarza, Alejandro": 6.0,
+    "Lopez, Zuleicka": 14.0,
+    "Martinez, Luis": 16.0,
+    "Esparza, Yuvia": 10.0,
+    "Cabrera, Natasha": 6.0,
+    "Navarrete, Nicolas": 12.0,
+    "Montijo, Genvieve": 44.0,
+    "Jacobo, Liset": 12.0,
+    "Collins, Mea": 14.0,
+    "Chico, Natalie": 8.0,
+    "Mendoza, Natalie": 6.0,
+    "Espinoza, Nallely": 18.0,
+    "Chacon, Angelica": 32.0,
+    "Jacobo, Vanessa": 20.0,
+    "Perez, Melennie": 2.0,
+    "olvera, Emily": 8.0,
+    "Office, Back": 6.0,
+    "Perez, Yesica": 12.0
+   },
+   "samples": [
+    {
+     "rep": "Ortiz, Ruby",
+     "trans_id": "4293",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 415-2975.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Ortiz, Ruby",
+     "trans_id": "4910",
+     "date": "2026-07-26",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 299-2854.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Ortiz, Ruby",
+     "trans_id": "4987",
+     "date": "2026-07-26",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 520-7309.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Ortiz, Ruby",
+     "trans_id": "3045",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 848-5365.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Ortiz, Ruby",
+     "trans_id": "3045",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 848-6688.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Ortiz, Ruby",
+     "trans_id": "4285",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 584-5525.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Ortiz, Ruby",
+     "trans_id": "5256",
+     "date": "2026-07-29",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 628-0449.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Ortiz, Ruby",
+     "trans_id": "4781",
+     "date": "2026-07-25",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 316-2583.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "4471",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 632-7121.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "1936",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 824-7696.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "4471",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 200-8761.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "1869",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 391-8217.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "2968",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 363-7195.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "5026",
+     "date": "2026-07-27",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 778-4757.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "5113",
+     "date": "2026-07-28",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 384-0929.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "2927",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 485-8528.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "1869",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 300-3365.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "3140",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (847) 921-6223.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "4471",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 932-3416.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "1936",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 414-8762.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "2968",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 296-1211.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "3132",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 237-9452.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "1901",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 599-0943.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "2618",
+     "date": "2026-07-08",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 217-2147.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "2968",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 434-8970.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "1733",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 452-5480.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "4471",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 632-4870.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "1936",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 312-0819.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "trans_id": "4567",
+     "date": "2026-07-23",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 800-7618.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Garibay, Janet",
+     "trans_id": "2110",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 738-8463.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Garibay, Janet",
+     "trans_id": "1931",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Garibay, Janet",
+     "trans_id": "3536",
+     "date": "2026-07-15",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 206-9156.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Garibay, Janet",
+     "trans_id": "3566",
+     "date": "2026-07-15",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 927-1177.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Garibay, Janet",
+     "trans_id": "5313",
+     "date": "2026-07-30",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 577-1129.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Garibay, Janet",
+     "trans_id": "2110",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 632-7945.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Pitre, Terry",
+     "trans_id": "2279",
+     "date": "2026-07-05",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 316-2405.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Pitre, Terry",
+     "trans_id": "5075",
+     "date": "2026-07-27",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 206-9620.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Pitre, Terry",
+     "trans_id": "3373",
+     "date": "2026-07-13",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 332-9373.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Pitre, Terry",
+     "trans_id": "2523",
+     "date": "2026-07-07",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 463-8824.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "3074",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 593-7723.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "3177",
+     "date": "2026-07-12",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 277-1550.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "4576",
+     "date": "2026-07-23",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 404-7218.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "3582",
+     "date": "2026-07-15",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 771-7601.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "3582",
+     "date": "2026-07-15",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 758-1565.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "4688",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 300-4138.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "1944",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "4921",
+     "date": "2026-07-26",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 204-0504.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "2625",
+     "date": "2026-07-08",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 341-6110.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "4653",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 305-2368.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "3074",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 603-6960.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "2057",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 452-5212.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "2881",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 824-5210.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "trans_id": "4663",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 341-2081.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Romero, Christopher",
+     "trans_id": "2075",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 448-2451.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Romero, Christopher",
+     "trans_id": "4892",
+     "date": "2026-07-26",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 965-1753.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Romero, Christopher",
+     "trans_id": "3120",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (224) 245-6138.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Romero, Christopher",
+     "trans_id": "4829",
+     "date": "2026-07-25",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 875-5875.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Romero, Christopher",
+     "trans_id": "4311",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 647-8611.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Romero, Christopher",
+     "trans_id": "2923",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (224) 262-7898.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Nava, Silvia",
+     "trans_id": "4617",
+     "date": "2026-07-23",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 396-9133.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Nava, Silvia",
+     "trans_id": "2905",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 859-5335.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Nava, Silvia",
+     "trans_id": "2112",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 217-2969.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Carolina",
+     "trans_id": "2417",
+     "date": "2026-07-06",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 848-3704.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Carolina",
+     "trans_id": "2374",
+     "date": "2026-07-06",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 856-7350.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Carolina",
+     "trans_id": "3215",
+     "date": "2026-07-12",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 648-1456.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "trans_id": "3823",
+     "date": "2026-07-17",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 859-2873.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "trans_id": "4185",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 921-6271.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "trans_id": "2359",
+     "date": "2026-07-06",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 577-1984.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "trans_id": "3957",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 962-7221.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "trans_id": "3581",
+     "date": "2026-07-15",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 706-2141.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "trans_id": "5097",
+     "date": "2026-07-27",
+     "product": "Total Wireless Protect+ RTR. Phone#: (630) 269-1084.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "trans_id": "3778",
+     "date": "2026-07-16",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 628-0368.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "trans_id": "2332",
+     "date": "2026-07-06",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 520-3990.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "4310",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 714-5512.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "1723",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 927-3323.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "2935",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 519-5724.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "1655",
+     "date": "2026-07-01",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 664-7305.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "1655",
+     "date": "2026-07-01",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 793-6621.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "4511",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 593-3097.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "4635",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 558-0530.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "3728",
+     "date": "2026-07-16",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 277-7542.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "1750",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (425) 325-4057.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "3766",
+     "date": "2026-07-16",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 923-8045.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "4355",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 312-6399.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "1655",
+     "date": "2026-07-01",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 435-4339.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "3070",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 289-6345.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "2494",
+     "date": "2026-07-07",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 548-2684.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Antunez, Diana",
+     "trans_id": "4511",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 234-4226.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "trans_id": "2176",
+     "date": "2026-07-04",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 859-9735.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "trans_id": "1841",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "trans_id": "3380",
+     "date": "2026-07-13",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 300-2190.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "trans_id": "4896",
+     "date": "2026-07-26",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 219-4179.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "trans_id": "3317",
+     "date": "2026-07-13",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 758-0915.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "trans_id": "4980",
+     "date": "2026-07-26",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 277-6079.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "trans_id": "2612",
+     "date": "2026-07-08",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 489-3404.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "trans_id": "3389",
+     "date": "2026-07-13",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 326-7513.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Aviles, Brendaliz",
+     "trans_id": "4785",
+     "date": "2026-07-25",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 679-0498.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Galarza, Alejandro",
+     "trans_id": "2270",
+     "date": "2026-07-05",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 277-5298.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Galarza, Alejandro",
+     "trans_id": "4428",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 697-0493.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Galarza, Alejandro",
+     "trans_id": "2180",
+     "date": "2026-07-04",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 953-9271.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Lopez, Zuleicka",
+     "trans_id": "3330",
+     "date": "2026-07-13",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 877-0736.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Lopez, Zuleicka",
+     "trans_id": "5295",
+     "date": "2026-07-30",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 204-6584.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Lopez, Zuleicka",
+     "trans_id": "3000",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 794-6690.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Lopez, Zuleicka",
+     "trans_id": "2410",
+     "date": "2026-07-06",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 452-6796.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Lopez, Zuleicka",
+     "trans_id": "4168",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 554-0130.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Lopez, Zuleicka",
+     "trans_id": "5295",
+     "date": "2026-07-30",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 305-9631.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Lopez, Zuleicka",
+     "trans_id": "4939",
+     "date": "2026-07-26",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 204-6402.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Martinez, Luis",
+     "trans_id": "1781",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 771-5120.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Martinez, Luis",
+     "trans_id": "1781",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 764-9557.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Martinez, Luis",
+     "trans_id": "5171",
+     "date": "2026-07-28",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 938-2590.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Martinez, Luis",
+     "trans_id": "3969",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 597-1226.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Martinez, Luis",
+     "trans_id": "1720",
+     "date": "2026-07-01",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 206-1189.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Martinez, Luis",
+     "trans_id": "3939",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 415-0857.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Martinez, Luis",
+     "trans_id": "1658",
+     "date": "2026-07-01",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 498-2497.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Martinez, Luis",
+     "trans_id": "2160",
+     "date": "2026-07-04",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 329-2303.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Esparza, Yuvia",
+     "trans_id": "3890",
+     "date": "2026-07-17",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 415-9429.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Esparza, Yuvia",
+     "trans_id": "4538",
+     "date": "2026-07-23",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 277-1099.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Esparza, Yuvia",
+     "trans_id": "2742",
+     "date": "2026-07-09",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 705-0472.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Esparza, Yuvia",
+     "trans_id": "2767",
+     "date": "2026-07-09",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 519-0325.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Esparza, Yuvia",
+     "trans_id": "4186",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (864) 954-8429.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Cabrera, Natasha",
+     "trans_id": "2321",
+     "date": "2026-07-05",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 217-9529.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Cabrera, Natasha",
+     "trans_id": "2039",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 683-6106.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Cabrera, Natasha",
+     "trans_id": "5342",
+     "date": "2026-07-30",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 668-3102.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarrete, Nicolas",
+     "trans_id": "2891",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 553-0310.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarrete, Nicolas",
+     "trans_id": "4267",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 581-0618.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarrete, Nicolas",
+     "trans_id": "4016",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 233-9195.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarrete, Nicolas",
+     "trans_id": "2243",
+     "date": "2026-07-05",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 414-7565.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarrete, Nicolas",
+     "trans_id": "3747",
+     "date": "2026-07-16",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 209-1401.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Navarrete, Nicolas",
+     "trans_id": "4494",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (630) 222-4562.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "3171",
+     "date": "2026-07-12",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 617-9175.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "2157",
+     "date": "2026-07-04",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 885-5335.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "4863",
+     "date": "2026-07-25",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 714-5184.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "3194",
+     "date": "2026-07-12",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 391-8505.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "4041",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 253-2115.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "1954",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 617-7438.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "2198",
+     "date": "2026-07-04",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 448-0848.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "3173",
+     "date": "2026-07-12",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 617-9175.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "3194",
+     "date": "2026-07-12",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 914-1664.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "4147",
+     "date": "2026-07-19",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 325-5858.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "4147",
+     "date": "2026-07-19",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 227-0284.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "3951",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 828-2091.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "3842",
+     "date": "2026-07-17",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 285-4298.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "5083",
+     "date": "2026-07-27",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 738-7816.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "2116",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "2021",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 554-0079.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "2053",
+     "date": "2026-07-03",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 294-0810.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "4468",
+     "date": "2026-07-22",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 597-8348.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "4044",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 514-9123.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "4863",
+     "date": "2026-07-25",
+     "product": "Total Wireless Protect+ RTR. Phone#: (224) 519-3355.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "4041",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 579-5886.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Montijo, Genvieve",
+     "trans_id": "1842",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 788-8156.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Liset",
+     "trans_id": "4357",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 219-4169.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Liset",
+     "trans_id": "2425",
+     "date": "2026-07-06",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 415-4339.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Liset",
+     "trans_id": "4737",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 758-9519.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Liset",
+     "trans_id": "4379",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 720-3025.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Liset",
+     "trans_id": "2449",
+     "date": "2026-07-06",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 326-7513.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Liset",
+     "trans_id": "1769",
+     "date": "2026-07-02",
+     "product": "Total Wireless Protect+ RTR. Phone#: (815) 488-5586.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Collins, Mea",
+     "trans_id": "2485",
+     "date": "2026-07-07",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 738-6953.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Collins, Mea",
+     "trans_id": "4755",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Collins, Mea",
+     "trans_id": "4636",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 886-7101.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Collins, Mea",
+     "trans_id": "4755",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Collins, Mea",
+     "trans_id": "4636",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 371-6830.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Collins, Mea",
+     "trans_id": "4755",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Collins, Mea",
+     "trans_id": "3344",
+     "date": "2026-07-13",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 438-5560.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chico, Natalie",
+     "trans_id": "4194",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 606-5029.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chico, Natalie",
+     "trans_id": "2149",
+     "date": "2026-07-04",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 697-0493.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chico, Natalie",
+     "trans_id": "2992",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (847) 921-4852.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chico, Natalie",
+     "trans_id": "2185",
+     "date": "2026-07-04",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 835-5180.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Mendoza, Natalie",
+     "trans_id": "4782",
+     "date": "2026-07-25",
+     "product": "Total Wireless Protect+ RTR. Phone#: (219) 343-8392.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Mendoza, Natalie",
+     "trans_id": "2518",
+     "date": "2026-07-07",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 288-9950.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Mendoza, Natalie",
+     "trans_id": "2237",
+     "date": "2026-07-05",
+     "product": "Total Wireless Protect+ RTR. Phone#: (779) 434-1050.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "4375",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 437-9243.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "4384",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 634-9530.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "4375",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 456-3997.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "4375",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 536-6659.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "4799",
+     "date": "2026-07-25",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 277-7144.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "3872",
+     "date": "2026-07-17",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 308-9478.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "4033",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 606-0334.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "4033",
+     "date": "2026-07-18",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 730-0463.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "trans_id": "3850",
+     "date": "2026-07-17",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 237-9375.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "4294",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 919-7893.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "2573",
+     "date": "2026-07-07",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 434-8388.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "2813",
+     "date": "2026-07-09",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 656-9947.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "4294",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 919-7194.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "3041",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (224) 495-3459.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "4395",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 519-2175.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "2770",
+     "date": "2026-07-09",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 277-6126.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "3041",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 458-3253.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "3041",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (630) 641-8601.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "4237",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 572-0561.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "2774",
+     "date": "2026-07-09",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 794-1612.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "2542",
+     "date": "2026-07-07",
+     "product": "Total Wireless Protect+ RTR. Phone#: (464) 277-6323.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "3041",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 256-8487.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "4953",
+     "date": "2026-07-26",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 218-4853.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "2960",
+     "date": "2026-07-10",
+     "product": "Total Wireless Protect+ RTR. Phone#: (630) 921-2465.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "trans_id": "4262",
+     "date": "2026-07-20",
+     "product": "Total Wireless Protect+ RTR. Phone#: (773) 329-9766.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Vanessa",
+     "trans_id": "4391",
+     "date": "2026-07-21",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 638-2844.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Vanessa",
+     "trans_id": "4667",
+     "date": "2026-07-24",
+     "product": "Total Wireless Protect+ RTR. Phone#: (872) 316-2583.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Vanessa",
+     "trans_id": "3084",
+     "date": "2026-07-11",
+     "product": "Total Wireless Protect+ RTR. Phone#: (312) 473-6972.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    },
+    {
+     "rep": "Jacobo, Vanessa",
+     "trans_id": "2490",
+     "date": "2026-07-07",
+     "product": "Total Wireless Protect+ RTR. Phone#: (708) 219-8219.",
+     "matched_field": "product_desc",
+     "matched_value": "RTR",
+     "code": "rtr",
+     "would_have_paid": 2.0
+    }
+   ]
+  },
+  "scope": {
+   "lines": 0,
+   "amount_suppressed": 0.0,
+   "by_rule": {},
+   "by_rep": {}
+  },
+  "accessory_basis": {
+   "lines": 0,
+   "amount_before": 0.0,
+   "amount_after": 0.0,
+   "by_rep": {},
+   "by_flag": {},
+   "samples": []
+  },
+  "config_source": "code_default",
+  "exclusion_map_ready": true,
+  "exclusions_active": [
+   {
+    "code": "rtr",
+    "label": "RTR (real-time refill / bill payment) transactions",
+    "match_field": "product_desc",
+    "match_op": "word",
+    "match_value": "RTR",
+    "source": "seed"
+   }
+  ],
+  "accessory_definition_loaded": true
+ }
+}
