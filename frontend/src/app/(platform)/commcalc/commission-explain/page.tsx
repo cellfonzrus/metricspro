@@ -6,6 +6,7 @@ import { ReportShell } from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
 
 // "How was this commission calculated" — READ-ONLY per-rep drill-down. Shows the two engines that can
 // pay a non-Boost (Total/Luxelink) rep: the Commission PLAN component (which plan attached, via which
@@ -120,7 +121,10 @@ export default function CommissionExplainPage() {
         cost_flag_labels: (l.cost_flag_labels || []).join(' '),
         suppressed: !!l.suppressed, suppressed_by: l.suppressed_by || '',
         suppressed_reason: l.suppressed_reason || '', would_have_paid: l.would_have_paid ?? 0,
-        basis_note: l.basis_note || '', amount_before_guard: l.amount_before_guard ?? null })
+        basis_note: l.basis_note || '', amount_before_guard: l.amount_before_guard ?? null,
+        // engine's own qualifying flag — drives the per-category UNIT count in the grouped
+        // breakdown below. Display only; it changes no amount.
+        qualifies: l.qualifies !== false })
     return out
   }, [pc])
   const instRows = useMemo(() => {
@@ -217,9 +221,19 @@ export default function CommissionExplainPage() {
               <AssignmentTrace considered={pc?.considered} />
               <DataQualityBanner dq={pc?.data_quality} />
               <PayGateBanner rows={planRows} />
+              {/* OWNER 2026-08-04: transaction-grouped, date→numeric-trans-id ordered, with a
+                  per-category (plan-rule) breakdown + filter. Identical component to the 🔍 Plan
+                  commission drill-down on /commcalc/reports so both surfaces read the same.
+                  The flat ReportShell (full columns + Excel/PDF/email/WhatsApp, RULE FOUR) is kept
+                  underneath and is fed the SAME rows in the SAME order with the SAME category
+                  filter applied — what you see is what exports. */}
               {planRows.length > 0 ? (
-                <ReportShell title={`Plan line detail — ${data.rep}`} subtitle={`${period} · ${pc?.plan_name || ''}`}
-                  filename={`plan-detail-${data.rep}-${period}`.replace(/\s+/g, '-')} columns={PLAN_COLS} rows={planRows} totals compact />
+                <PlanLineBreakdown rows={planRows}>
+                  {(visible) => (
+                    <ReportShell title={`Plan line detail — ${data.rep}`} subtitle={`${period} · ${pc?.plan_name || ''}`}
+                      filename={`plan-detail-${data.rep}-${period}`.replace(/\s+/g, '-')} columns={PLAN_COLS} rows={visible} totals compact />
+                  )}
+                </PlanLineBreakdown>
               ) : pc?.plan_name ? (
                 <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 8 }}>Plan attached but no rule matched a sale line (see explanation above).</div>
               ) : null}
