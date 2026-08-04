@@ -29,9 +29,31 @@ migration has not been run, `load_cube` falls back to the paged scan and the pag
 
 PERIOD SPELLING: every period filter goes through the caller-supplied `_pvariants` list so 'June 2026' and
 '2026-06' both match. A `.eq('period', period)` here would silently return zero rows.
+
+OWNER-DECIDED DEFINITIONS (in chat 2026-08-04 — settled, do NOT re-ask, do NOT re-derive):
+  • RESIDUAL is the SAME basis we already compute (the What-If / finance residual-per-sub definition).
+  • COMMISSIONS PAID is the CURRENT MONTH's commission on this month's activations = the **M1** leg,
+    which is an MRC-BASED percentage, NOT `consumer_margin + device_margin`. Owner verbatim: "commission
+    is only the current months commission paid out on the activations which would be M1, these are not
+    margins but paid commission based on MRC. the current commission plan for total is M1 = 50%,
+    M2-M6 = 75% each plus any applicable spiff which change from time to time; M3-M6 is also a temporary
+    spiff which can change over a period of time." The M-rates and per-month flat spiffs are therefore
+    PER-ORG, EFFECTIVE-DATED CONFIG (`commcalc.ma_commission_month_rate`) — never constants — and the
+    page carries an EXPECTED column (rate% x MRC + flat spiff) beside the stated and computed figures.
+  • ACTIVATION COUNT is "total of new activations + port + byod, this does not include any swap or
+    upgrades" — i.e. every FRESH line, however it arrived (a new line can be a port AND byod at once;
+    those are attributes of one activation, not three separate types), with swap/upgrade rows EXCLUDED.
+    Implemented as an exclusion list over the real `activation_type` vocabulary, which the page prints
+    so the operator can confirm the spellings in one look.
+  • APPEAL COUNT has no column in the source feed. The owner wants the tile to BE the follow-up
+    worklist: "that would be the lines which don't get paid and have to be followed up like we did in
+    Boost." So it counts QUALIFYING ACTIVATION LINES THAT WERE PAID NOTHING, and drills down to the
+    exact lines (account, order, IMEI, MRC, months elapsed) so someone can chase them. Derived and
+    read-only — it writes nothing and creates no appeal record.
 """
 from datetime import date as _date
 import calendar as _calendar
+import json as _json
 import re as _re
 
 HOUSE_ORG = "00000000-0000-0000-0000-000000000001"
@@ -44,12 +66,23 @@ DEFAULT_TILES = [
      "value_format": "count", "source_table": "raw_ma_commission", "agg": "count",
      "value_fields": None, "sign": "as_is",
      "filter_field": "activation_type", "filter_op": "nonblank", "filter_value": None,
+     "filters": [{"field": "activation_type", "op": "nonblank"},
+                 {"field": "activation_type", "op": "not_in",
+                  "value": "Upgrade,Upgrades,Swap,Swaps,SIM Swap,Sim Swap,Device Swap,Exchange,"
+                           "Handset Upgrade,Equipment Upgrade"}],
      "uploaded_field": "activation_count",
      "uploaded_aliases": "Activation Count,Activations,ActivationCount,Total Activations",
      "tolerance_abs": 0, "tolerance_pct": 0,
-     "note": "Rows of the MA Commission Details export carrying an Activation Type (New/Add). The page "
-             "also reports DISTINCT activation orders next to it — an order with several lines counts "
-             "once there."},
+     "note": "OWNER DEFINITION (2026-08-04): new activations + ports + BYOD, EXCLUDING swaps and "
+             "upgrades. Port and BYOD are ATTRIBUTES of a fresh line (port_status / activation_type2), "
+             "not separate activation types, so this is implemented as an EXCLUSION of the swap/upgrade "
+             "vocabulary rather than an include-list that would double-count. VERIFIED LIVE 2026-08-04 "
+             "against luxelink's 998 MA rows: the real Activation Type vocabulary is ONLY 'New' (393) "
+             "and 'Add' (605) — no swap/upgrade spelling occurs in this export at all, so the exclusion "
+             "list currently removes ZERO rows and the count is every row carrying an activation type. "
+             "The list is kept as a guard for tenants/exports that DO carry them; the page prints the "
+             "live vocabulary with each value marked counted/excluded so this stays honest. The page "
+             "also reports DISTINCT activation orders beside the row count."},
     {"tile_key": "twp_count", "label": "TWP Count", "sort_order": 20,
      "value_format": "count", "source_table": "raw_ma_commission", "agg": "count",
      "value_fields": None, "sign": "as_is",
@@ -82,16 +115,29 @@ DEFAULT_TILES = [
      "uploaded_field": "fees_margin_paid", "uploaded_aliases": "Fees Margin Paid,Fees Margin,Fee Margin",
      "tolerance_abs": 0, "tolerance_pct": 0,
      "note": "Sum of fees_margin, sign-flipped to money received."},
-    {"tile_key": "commissions_paid", "label": "Commissions Paid", "sort_order": 60,
+    {"tile_key": "commissions_paid", "label": "Commissions Paid (M1)", "sort_order": 60,
      "value_format": "money", "source_table": "raw_ma_commission", "agg": "sum",
-     "value_fields": "consumer_margin,device_margin", "sign": "negate",
+     "value_fields": "spiff_m1", "sign": "negate",
      "filter_field": None, "filter_op": None, "filter_value": None,
+     "filters": [{"field": "activation_type", "op": "nonblank"},
+                 {"field": "activation_type", "op": "not_in",
+                  "value": "Upgrade,Upgrades,Swap,Swaps,SIM Swap,Sim Swap,Device Swap,Exchange,"
+                           "Handset Upgrade,Equipment Upgrade"}],
      "uploaded_field": "commissions_paid",
      "uploaded_aliases": "Commissions Paid,Commission Paid,Commissions",
      "tolerance_abs": 0, "tolerance_pct": 0,
-     "note": "consumer_margin + device_margin, sign-flipped. ASSUMPTION: the portal's 'Commissions Paid' "
-             "is the margin pair and does NOT include the M1-M6 spiffs or the rebate (stated separately). "
-             "The spiff total is shown beside it so an alternative basis is one config edit away."},
+     "note": "OWNER DEFINITION (2026-08-04): the CURRENT month's commission on this month's activations "
+             "= the M1 leg (`spiff_m1` on the MA Commission Details export — the 1st-month column), "
+             "sign-flipped to money received. It is an MRC-BASED percentage, NOT consumer_margin + "
+             "device_margin (that was the pre-answer assumption and it was WRONG). The EXPECTED figure "
+             "beside it is rate% x MRC + flat spiff at the tenant's configured M1 rate (Total today: "
+             "M1 50%, M2-M6 75%), so a stated figure can be checked against both what we hold and what "
+             "the plan says it should be. VERIFIED LIVE 2026-08-04 (luxelink, 998 rows, Feb-Jul 2026): "
+             "M1 total $17,140.91 over an MRC base of $32,366.51 = 53.0% — the owner's 50% plan rate "
+             "plus the occasional flat spiff, exactly as described. The SAME check also proves the "
+             "pre-answer assumption was wrong: `consumer_margin` is EMPTY in this feed (-0.00) and "
+             "`device_margin` is only $4,700, so margins would have reported $4.7K where the real "
+             "commission is $17.1K."},
     {"tile_key": "commissions_not_eligible", "label": "Commissions Not Eligible", "sort_order": 70,
      "value_format": "count", "source_table": "raw_ma_commission", "agg": "none",
      "value_fields": None, "sign": "as_is",
@@ -111,18 +157,29 @@ DEFAULT_TILES = [
      "tolerance_abs": 0, "tolerance_pct": 0,
      "note": "Rows whose Is Financed flag is truthy (Y/Yes/True/1). 'Edge' here is the TW FINANCING "
              "TENDER, not a Motorola Edge handset — never match this on a device model name."},
-    {"tile_key": "appeal_count", "label": "Appeal Count", "sort_order": 90,
-     "value_format": "count", "source_table": "", "agg": "none",
-     "value_fields": None, "sign": "as_is",
+    {"tile_key": "appeal_count", "label": "Appeal / follow-up lines", "sort_order": 90,
+     "value_format": "count", "source_table": "raw_ma_commission", "agg": "unpaid_count",
+     "value_fields": "spiff_m1,spiff_m2,spiff_m3,spiff_m4,spiff_m5,spiff_m6,rebate,consumer_margin,"
+                     "device_margin,consumer_financing,fees_margin",
+     "sign": "as_is",
      "filter_field": None, "filter_op": None, "filter_value": None,
+     "filters": [{"field": "activation_type", "op": "nonblank"},
+                 {"field": "activation_type", "op": "not_in",
+                  "value": "Upgrade,Upgrades,Swap,Swaps,SIM Swap,Sim Swap,Device Swap,Exchange,"
+                           "Handset Upgrade,Equipment Upgrade"}],
      "uploaded_field": "appeal_count", "uploaded_aliases": "Appeal Count,Appeals",
      "tolerance_abs": 0, "tolerance_pct": 0,
-     "note": "NO SOURCE MAPPED — the MA feed we ingest carries no appeal/dispute column. The tile renders "
-             "the stated value with an honest 'no source mapped' system side rather than a fake 0."},
+     "note": "OWNER DEFINITION (2026-08-04): the source report has no appeal column, so this tile IS the "
+             "follow-up worklist — \"the lines which don't get paid and have to be followed up like we "
+             "did in Boost\". It counts QUALIFYING ACTIVATION lines on which EVERY configured pay column "
+             "is zero (nothing was paid, in any leg), and drills down to those exact lines with the "
+             "account, order, IMEI, MRC and how many months have elapsed, so someone can chase them. "
+             "Derived and READ-ONLY: it writes nothing and creates no appeal record. Which columns count "
+             "as 'paid' is the tile's own config (value_fields)."},
 ]
 
 TILE_FIELDS = ("tile_key", "label", "sort_order", "value_format", "source_table", "agg", "value_fields",
-               "sign", "filter_field", "filter_op", "filter_value", "uploaded_field",
+               "sign", "filter_field", "filter_op", "filter_value", "filters", "uploaded_field",
                "uploaded_aliases", "tolerance_abs", "tolerance_pct", "note")
 
 # Metric columns on commcalc.ma_overview_upload — the STATED side of every tile.
@@ -231,6 +288,45 @@ def match_filter(group: dict, field, op, value) -> bool:
     return True
 
 
+def tile_conditions(tile) -> list:
+    """The tile's row conditions, ANDed. Prefers the `filters` list (JSONB: [{field,op,value}, …]) and
+    falls back to the legacy single filter_field/op/value triplet, so a tile saved before the multi-
+    condition column existed keeps behaving byte-identically. Returns [] for "match every row"."""
+    raw = tile.get("filters")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = _json.loads(raw)
+        except Exception:
+            raw = None
+    if isinstance(raw, list) and raw:
+        out = []
+        for c in raw:
+            if isinstance(c, dict) and _s(c.get("field")):
+                out.append({"field": _s(c.get("field")), "op": (_s(c.get("op")) or "eq").lower(),
+                            "value": c.get("value")})
+        if out:
+            return out
+    if _s(tile.get("filter_field")):
+        return [{"field": _s(tile.get("filter_field")),
+                 "op": (_s(tile.get("filter_op")) or "eq").lower(),
+                 "value": tile.get("filter_value")}]
+    return []
+
+
+def match_all(row, tile) -> bool:
+    """Every condition must hold (AND). An empty condition list matches everything."""
+    return all(match_filter(row, c["field"], c["op"], c.get("value")) for c in tile_conditions(tile))
+
+
+def condition_text(tile) -> str:
+    """One human-readable line for the page / the export ('activation_type nonblank AND …')."""
+    parts = []
+    for c in tile_conditions(tile):
+        v = _s(c.get("value"))
+        parts.append(f"{c['field']} {c['op']}{(' ' + v) if v else ''}")
+    return " AND ".join(parts)
+
+
 def tile_problems(tile) -> list:
     """Config validation for ONE tile. Returns a list of human-readable problems; empty = usable. A tile
     with problems is rendered with its system side blank and the reason shown — never a silent 0."""
@@ -243,22 +339,24 @@ def tile_problems(tile) -> list:
     if not spec:
         out.append(f"source table '{src or '(blank)'}' is not one of {', '.join(sorted(SOURCES))}")
         return out
-    if agg not in ("count", "sum"):
-        out.append(f"aggregate '{agg}' is not one of count | sum | none")
-    if agg == "sum":
+    if agg not in ("count", "sum", "unpaid_count"):
+        out.append(f"aggregate '{agg}' is not one of count | sum | unpaid_count | none")
+    if agg in ("sum", "unpaid_count"):
         fields = [x.strip() for x in _s(tile.get("value_fields")).split(",") if x.strip()]
         if not fields:
-            out.append("aggregate is 'sum' but no value column is named")
+            out.append("aggregate is '%s' but no value column is named" % agg)
         for f in fields:
             if f not in spec["money"]:
                 out.append(f"'{f}' is not a money column of {src}")
-    ff = _s(tile.get("filter_field"))
-    if ff and ff not in spec["dims"]:
-        out.append(f"filter column '{ff}' is not a filterable dimension of {src} "
-                   f"({', '.join(spec['dims'])})")
-    fo = _s(tile.get("filter_op"))
-    if fo and fo.lower() not in FILTER_OPS:
-        out.append(f"filter operator '{fo}' is not one of {', '.join(FILTER_OPS)}")
+    if agg == "unpaid_count" and src != "raw_ma_commission":
+        out.append("'unpaid_count' only applies to raw_ma_commission (it counts activation lines "
+                   "that were paid nothing)")
+    for c in tile_conditions(tile):
+        if c["field"] not in spec["dims"]:
+            out.append(f"filter column '{c['field']}' is not a filterable dimension of {src} "
+                       f"({', '.join(spec['dims'])})")
+        if c["op"] not in FILTER_OPS:
+            out.append(f"filter operator '{c['op']}' is not one of {', '.join(FILTER_OPS)}")
     return out
 
 
@@ -266,18 +364,24 @@ def tile_value(tile, groups) -> float:
     """The SYSTEM value of one tile over a list of cube groups (already narrowed to the accounts in play).
     count => Σ rows_n of matching groups; sum => Σ (Σ value_fields) sign-normalized."""
     agg = (_s(tile.get("agg")) or "none").lower()
-    if agg == "none":
+    if agg in ("none", "unpaid_count"):
+        # 'unpaid_count' is ROW-level (a group that sums non-zero can still contain unpaid lines), so it
+        # is computed from the unpaid-lines aggregate, not from the cube. See unpaid_tile_value().
         return 0.0
-    ff, fo, fv = tile.get("filter_field"), tile.get("filter_op"), tile.get("filter_value")
     if agg == "count":
-        return float(sum(int(g.get("rows_n") or 0) for g in groups if match_filter(g, ff, fo, fv)))
+        return float(sum(int(g.get("rows_n") or 0) for g in groups if match_all(g, tile)))
     fields = [x.strip() for x in _s(tile.get("value_fields")).split(",") if x.strip()]
     total = 0.0
     for g in groups:
-        if not match_filter(g, ff, fo, fv):
+        if not match_all(g, tile):
             continue
         total += sign_apply(sum(safe_float(g.get(f)) for f in fields), tile.get("sign"))
     return total
+
+
+def unpaid_tile_value(tile, unpaid_rows) -> float:
+    """'unpaid_count': how many of the tenant's UNPAID lines also satisfy this tile's conditions."""
+    return float(sum(1 for r in (unpaid_rows or []) if match_all(r, tile)))
 
 
 def delta_status(tile, uploaded, system) -> str:
@@ -475,6 +579,157 @@ def resolve_tiles(client, org_id):
     tiles = [t for t in by_key.values() if t.get("is_active", True) is not False]
     tiles.sort(key=lambda t: (int(t.get("sort_order") or 500), _s(t.get("label"))))
     return tiles, src
+
+
+# ── the M1-M6 commission-rate plan (RULE TWO — rates change, spiffs are temporary) ───────────────
+# OWNER (2026-08-04): "the current commission plan for total is M1 = 50%, M2-M6 = 75% each plus any
+# applicable spiff which change from time to time; M3-M6 is also a temporary spiff which can change over
+# a period of time." So the rates are EFFECTIVE-DATED per-tenant config, never constants: a row carries
+# the percentage OF MRC plus a flat per-activation spiff, and the row that applies to a period is the
+# newest one whose effective_from is on or before that period's first day.
+DEFAULT_M_RATES = [
+    {"month_index": 1, "rate_pct": 50.0, "spiff_flat": 0.0, "effective_from": None,
+     "note": "Total plan as of 2026-08-04: M1 pays 50% of the line's MRC."},
+    {"month_index": 2, "rate_pct": 75.0, "spiff_flat": 0.0, "effective_from": None,
+     "note": "Total plan as of 2026-08-04: M2 pays 75% of MRC."},
+    {"month_index": 3, "rate_pct": 75.0, "spiff_flat": 0.0, "effective_from": None,
+     "note": "Total plan as of 2026-08-04: M3 pays 75% of MRC. TEMPORARY spiff component — expect this "
+             "to change; edit the rate plan rather than the code."},
+    {"month_index": 4, "rate_pct": 75.0, "spiff_flat": 0.0, "effective_from": None,
+     "note": "Total plan as of 2026-08-04: M4 pays 75% of MRC (temporary spiff component)."},
+    {"month_index": 5, "rate_pct": 75.0, "spiff_flat": 0.0, "effective_from": None,
+     "note": "Total plan as of 2026-08-04: M5 pays 75% of MRC (temporary spiff component)."},
+    {"month_index": 6, "rate_pct": 75.0, "spiff_flat": 0.0, "effective_from": None,
+     "note": "Total plan as of 2026-08-04: M6 pays 75% of MRC (temporary spiff component)."},
+]
+M_RATE_FIELDS = ("month_index", "rate_pct", "spiff_flat", "effective_from", "note")
+
+
+def resolve_m_rates(client, org_id, period="", month_year=None):
+    """{month_index: rate row} for a period. Effective-dated: the newest row whose effective_from is on
+    or before the period's first day wins; rows with no effective_from always apply. Absent table or
+    zero rows => the code defaults, so a tenant that never ran the migration still gets the Total plan.
+    Returns (rates, source)."""
+    rates = {int(r["month_index"]): dict(r) for r in DEFAULT_M_RATES}
+    src = "code_default"
+    try:
+        rows = (client.schema("commcalc").table("ma_commission_month_rate").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    if not rows:
+        return rates, src
+    src = "org_config"
+    start = None
+    if month_year and period:
+        mo, yr = month_year(period)
+        if 1 <= int(mo or 0) <= 12 and yr:
+            start = _date(int(yr), int(mo), 1).isoformat()
+    best = {}
+    for r in rows:
+        try:
+            mi = int(r.get("month_index"))
+        except (TypeError, ValueError):
+            continue
+        eff = _s(r.get("effective_from"))[:10]
+        if eff and start and eff > start:
+            continue                                  # not in force yet for this period
+        prev = best.get(mi)
+        if prev is None or _s(prev.get("effective_from"))[:10] <= eff:
+            best[mi] = r
+    for mi, r in best.items():
+        base = rates.get(mi, {"month_index": mi, "rate_pct": 0.0, "spiff_flat": 0.0})
+        for f in M_RATE_FIELDS:
+            if r.get(f) is not None:
+                base[f] = r.get(f)
+        rates[mi] = base
+    return rates, src
+
+
+def expected_from_plan(groups, tile, rates, month_index=1):
+    """The EXPECTED commission for one month leg: rate% x Σ MRC of the QUALIFYING activations + a flat
+    per-activation spiff. `tile` supplies the qualification (the same conditions the activation tile
+    uses), so "expected" and "counted" can never drift apart.
+
+    MRC SIGN: `mrc_net_discount` is the subscriber's plan price, not a payment, and the MA exports are
+    not consistent about its sign across tenants. The magnitude is used and BOTH the signed and absolute
+    totals are returned, so the page can show which one it took instead of hiding a sign flip."""
+    r = rates.get(int(month_index)) or {}
+    n, mrc_signed = 0, 0.0
+    for g in groups:
+        if not match_all(g, tile):
+            continue
+        n += int(g.get("rows_n") or 0)
+        mrc_signed += safe_float(g.get("mrc_net_discount"))
+    pct = safe_float(r.get("rate_pct"))
+    flat = safe_float(r.get("spiff_flat"))
+    mrc = abs(mrc_signed)
+    return {"month_index": int(month_index), "rate_pct": pct, "spiff_flat": flat,
+            "qualifying_activations": n, "mrc_total": round(mrc, 2),
+            "mrc_total_signed": round(mrc_signed, 2),
+            "avg_mrc": round(mrc / n, 2) if n else 0.0,
+            "expected": round(mrc * pct / 100.0 + flat * n, 2),
+            "note": r.get("note")}
+
+
+# ── the follow-up worklist: activation lines that were PAID NOTHING ──────────────────────────────
+def load_unpaid_lines(client, org_id, periods, pay_cols, accounts=None, limit=20000):
+    """Activation lines on which EVERY configured pay column is zero — the owner's "lines which don't
+    get paid and have to be followed up". Aggregated in Postgres (mig 268 RPC) with a paged fallback.
+    Each row carries the dimension columns, so the CALLER applies the tile's own qualification filter.
+    Returns (rows, via). READ-ONLY: this creates no appeal record and writes nothing."""
+    cols = [c for c in (pay_cols or []) if c in SOURCES["raw_ma_commission"]["money"]]
+    if not cols:
+        return [], "no_pay_columns"
+    args = {"p_org": org_id, "p_periods": list(periods or []),
+            "p_accounts": list(accounts) if accounts else None,
+            "p_pay_cols": cols, "p_limit": int(limit)}
+    try:
+        data = client.schema("commcalc").rpc("ma_overview_unpaid_lines", args).execute().data
+        if data is not None:
+            return list(data), "rpc"
+    except Exception as e:
+        print(f"WARN ma_overview_unpaid_lines unavailable, falling back to scan: {e}")
+    sel = ("merchant_account_id,activation_order,imei,sim,tx_date,period,user_name,line_status,"
+           "suspension_reason,port_status,activation_type,activation_type2,sub_type,perfect_sale,"
+           "is_financed,mrc_net_discount," + ",".join(cols))
+    acc_set = {str(a) for a in accounts} if accounts else None
+    out, start, page = [], 0, 1000
+    while len(out) < limit:
+        try:
+            q = (client.schema("commcalc").table("raw_ma_commission").select(sel).eq("org_id", org_id))
+            if periods:
+                q = q.in_("period", list(periods))
+            chunk = q.range(start, start + page - 1).execute().data or []
+        except Exception as e:
+            print(f"WARN ma_overview unpaid-lines scan failed: {e}")
+            break
+        for r in chunk:
+            if acc_set and _s(r.get("merchant_account_id")) not in acc_set:
+                continue
+            if not _s(r.get("activation_type")):
+                continue
+            paid = sum(abs(safe_float(r.get(c))) for c in cols)
+            if paid:
+                continue
+            out.append(dict(r, paid_total=0.0))
+        if len(chunk) < page:
+            break
+        start += page
+    return out[:limit], "python_fallback"
+
+
+def months_elapsed(tx_date, today=None):
+    """Whole months between an activation date and today — 'how long has this line gone unpaid'."""
+    d = _s(tx_date)[:10]
+    if len(d) < 7:
+        return None
+    try:
+        y, m = int(d[:4]), int(d[5:7])
+    except ValueError:
+        return None
+    t = today or _date.today()
+    return max(0, (t.year - y) * 12 + (t.month - m))
 
 
 # ── cube loading (Postgres first, paged scan as the graceful fallback) ───────────────────────────
@@ -761,6 +1016,19 @@ def compute(client, org_id, period, pvariants, canon_period, month_year,
         cubes["raw_ma_commission"], vias["raw_ma_commission"] = load_cube(
             client, org_id, "raw_ma_commission", variants, accounts)
 
+    # The follow-up worklist is ROW-level (a cube group that sums non-zero can still hold unpaid lines),
+    # so it is loaded once here and every 'unpaid_count' tile counts against it.
+    unpaid_rows, unpaid_via = [], None
+    _unpaid_tiles = [t for t in tiles if (_s(t.get("agg")) or "none").lower() == "unpaid_count"]
+    if _unpaid_tiles:
+        _pay_cols = []
+        for t in _unpaid_tiles:
+            for f in _s(t.get("value_fields")).split(","):
+                if f.strip() and f.strip() not in _pay_cols:
+                    _pay_cols.append(f.strip())
+        unpaid_rows, unpaid_via = load_unpaid_lines(client, org_id, variants, _pay_cols, accounts)
+    m_rates, m_rate_source = resolve_m_rates(client, org_id, period, month_year)
+
     up_rows = load_uploaded(client, org_id, variants) if variants else []
     # RULE FIVE / WYSIWYG: an account filter narrows BOTH sides. Narrowing only our cube would compare a
     # filtered system total against the report's FULL total and invent a delta out of nothing. The
@@ -775,8 +1043,14 @@ def compute(client, org_id, period, pvariants, canon_period, month_year,
         probs = tile_problems(t)
         src = _s(t.get("source_table"))
         groups = cubes.get(src, [])
-        mapped = (_s(t.get("agg")) or "none").lower() != "none" and not probs
-        system = tile_value(t, groups) if mapped else None
+        _agg = (_s(t.get("agg")) or "none").lower()
+        mapped = _agg != "none" and not probs
+        if not mapped:
+            system = None
+        elif _agg == "unpaid_count":
+            system = unpaid_tile_value(t, unpaid_rows)
+        else:
+            system = tile_value(t, groups)
         stated = up_totals.get(_s(t.get("uploaded_field"))) if _s(t.get("uploaded_field")) else None
         delta = (system - stated) if (mapped and stated is not None) else None
         out_tiles.append({
@@ -786,10 +1060,8 @@ def compute(client, org_id, period, pvariants, canon_period, month_year,
             "delta_pct": (round((delta / stated) * 100.0, 2) if (delta is not None and stated) else None),
             "status": ("config_error" if probs else delta_status(t, stated, system)),
             "mapped": mapped, "config_problems": probs,
-            "source": ({"table": src, "agg": t.get("agg"), "fields": t.get("value_fields"),
-                        "sign": t.get("sign"), "filter": (
-                            f"{t.get('filter_field')} {t.get('filter_op')} {t.get('filter_value') or ''}".strip()
-                            if _s(t.get("filter_field")) else None)}),
+            "source": {"table": src, "agg": t.get("agg"), "fields": t.get("value_fields"),
+                       "sign": t.get("sign"), "filter": (condition_text(t) or None)},
             "uploaded_field": t.get("uploaded_field"),
             "stated_from_total_row": _s(t.get("uploaded_field")) in used_star,
             "note": t.get("note"),
@@ -821,13 +1093,18 @@ def compute(client, org_id, period, pvariants, canon_period, month_year,
                "distinct_orders": (profile.get(a) or {}).get("orders", 0),
                "missing_imei_rows": (profile.get(a) or {}).get("imei_blank", 0)}
         worst = 0.0
+        _acct_unpaid = [r for r in unpaid_rows if _s(r.get("merchant_account_id")) == a]
+        row["unpaid_lines"] = len(_acct_unpaid)
         for t in tiles:
-            if (_s(t.get("agg")) or "none").lower() == "none" or tile_problems(t):
+            _ta = (_s(t.get("agg")) or "none").lower()
+            if _ta == "none" or tile_problems(t):
                 continue
             k = t.get("tile_key")
             src = _s(t.get("source_table"))
             g = comm_by_acct.get(a, []) if src == "raw_ma_commission" else tx_by_acct.get(a, [])
-            sysv = tile_value(t, g)
+            sysv = (unpaid_tile_value(t, _acct_unpaid) if _ta == "unpaid_count" else tile_value(t, g))
+            if k == "commissions_paid":
+                row["exp_commissions_paid"] = expected_from_plan(g, t, m_rates, 1)["expected"]
             upv = (up_by_account.get(a) or {}).get(_s(t.get("uploaded_field")))
             row[f"sys_{k}"] = sysv
             row[f"up_{k}"] = upv
@@ -858,6 +1135,39 @@ def compute(client, org_id, period, pvariants, canon_period, month_year,
         "account_options": [{"id": a, "label": (acct_names.get(a) or a)} for a in all_accts],
         "assumptions": _assumptions(tiles, up_rows),
     }
+
+    # ── the OWNER'S CROSS-CHECK: what the plan SAYS the M1 commission should be ──
+    comm_tile = next((t for t in tiles if t.get("tile_key") == "commissions_paid"), None)
+    if comm_tile is not None:
+        exp = expected_from_plan(comm_groups, comm_tile, m_rates, 1)
+        stated = up_totals.get(_s(comm_tile.get("uploaded_field")))
+        held = next((t["system"] for t in out_tiles if t["tile_key"] == "commissions_paid"), None)
+        exp.update({
+            "stated": stated, "system": held,
+            "expected_vs_stated": (round(exp["expected"] - safe_float(stated), 2)
+                                   if stated is not None else None),
+            "expected_vs_system": (round(exp["expected"] - safe_float(held), 2)
+                                   if held is not None else None),
+            "formula": (f"{exp['rate_pct']}% x MRC {exp['mrc_total']:,.2f}"
+                        + (f" + {exp['spiff_flat']:,.2f} flat x {exp['qualifying_activations']}"
+                           if exp["spiff_flat"] else "")
+                        + f" = {exp['expected']:,.2f}"),
+            "basis": ("M1 = the current month's commission on this month's activations, paid as a "
+                      "percentage of each line's MRC (owner, 2026-08-04). Qualifying activations are "
+                      "the SAME rows the Activation Count tile counts, so the two can never drift."),
+        })
+        payload["expected_commission"] = exp
+    payload["rate_plan"] = {"source": m_rate_source,
+                            "rates": [m_rates[i] for i in sorted(m_rates)],
+                            "note": ("M1-M6 percentages of MRC + any flat spiff, per tenant and "
+                                     "effective-dated. The owner's standing Total plan is M1 50%, "
+                                     "M2-M6 75%; M3-M6 are TEMPORARY spiffs, so edit the plan here "
+                                     "when they change — never in code.")}
+    payload["worklist"] = {
+        "source": unpaid_via, "total_unpaid_lines": len(unpaid_rows),
+        "note": ("Activation lines on which every configured pay column is zero — the follow-up list. "
+                 "Open the Appeal / follow-up tile for the line detail."),
+    }
     if include_explain:
         payload["explain"] = _explain(client, org_id, variants, period, month_year, accounts,
                                       comm_groups, tx_groups, comm_by_acct, tx_by_acct, up_by_account,
@@ -867,9 +1177,42 @@ def compute(client, org_id, period, pvariants, canon_period, month_year,
             "suspension_reason": candidate_distribution(comm_groups, "suspension_reason"),
             "sub_type": candidate_distribution(comm_groups, "sub_type"),
             "activation_type": candidate_distribution(comm_groups, "activation_type"),
+            "activation_type2": candidate_distribution(comm_groups, "activation_type2"),
+            "port_status": candidate_distribution(comm_groups, "port_status"),
             "order_type": candidate_distribution(tx_groups, "order_type"),
         }
+        # The exact vocabulary the ACTIVATION definition turns on — printed so the operator confirms the
+        # swap/upgrade spellings against real data instead of trusting a guessed exclusion list.
+        act_tile = next((t for t in tiles if t.get("tile_key") == "activation_count"), None)
+        payload["activation_vocabulary"] = _activation_vocabulary(comm_groups, act_tile)
     return payload
+
+
+def _activation_vocabulary(comm_groups, act_tile):
+    """Every real Activation Type value with its row count, marked INCLUDED or EXCLUDED by the tile's
+    current definition. The owner's rule is "new + port + byod, NOT swap or upgrade", and the excluded
+    spellings are config — this panel is how a human confirms the config matches the data's real
+    vocabulary instead of trusting a guessed list."""
+    vals = {}
+    for g in comm_groups:
+        v = _s(g.get("activation_type"))
+        d = vals.setdefault(v or "(blank)", {"value": v or "(blank)", "rows": 0, "raw": v})
+        d["rows"] += int(g.get("rows_n") or 0)
+    out = []
+    for d in vals.values():
+        probe = {"activation_type": d["raw"], "activation_type2": "", "sub_type": "",
+                 "line_status": "", "suspension_reason": "", "is_financed": "", "port_status": "",
+                 "perfect_sale": ""}
+        d["counted"] = bool(act_tile) and match_all(probe, act_tile)
+        out.append({k: v for k, v in d.items() if k != "raw"})
+    out.sort(key=lambda x: -x["rows"])
+    return {"field": "activation_type", "values": out,
+            "definition": (condition_text(act_tile) if act_tile else ""),
+            "note": ("OWNER RULE: new activations + ports + BYOD, EXCLUDING swaps and upgrades. Port and "
+                     "BYOD are attributes of a fresh line (port_status / activation_type2), not separate "
+                     "activation types — so the rule is implemented as an EXCLUSION list. ⚠ Confirm the "
+                     "excluded spellings below against your real data and edit them in ⚙ Tile mapping; "
+                     "a swap/upgrade spelling that is not on the list is being COUNTED.")}
 
 
 def _assumptions(tiles, up_rows):
@@ -882,19 +1225,33 @@ def _assumptions(tiles, up_rows):
                                 f"shown alone. {_s(t.get('note'))}"})
     res = next((t for t in tiles if t.get("tile_key") == "residual"), None)
     if res and (_s(res.get("agg")) or "none").lower() != "none":
-        out.append({"tile": "Residual", "kind": "basis",
-                    "text": "Residual is computed on the SAME basis the What-If / finance residual-per-sub "
-                            "path uses — raw_ma_daily_tx rows whose Order Type contains "
-                            f"“{_s(res.get('filter_value'))}”, summing {_s(res.get('value_fields'))}, "
-                            "sign-normalized to income. Whether the portal's Residual tile means the same "
-                            "thing (vs. MI+ATU, or every residual order type) is an OPEN QUESTION."})
+        out.append({"tile": "Residual", "kind": "owner_decided",
+                    "text": "OWNER-CONFIRMED 2026-08-04: the portal's Residual means the SAME thing we "
+                            "compute — the What-If / finance residual-per-sub basis (raw_ma_daily_tx "
+                            f"rows whose Order Type contains “{_s(res.get('filter_value'))}”, summing "
+                            f"{_s(res.get('value_fields'))}, sign-normalized to income). No open "
+                            "question here."})
     comm = next((t for t in tiles if t.get("tile_key") == "commissions_paid"), None)
     if comm and (_s(comm.get("agg")) or "none").lower() != "none":
-        out.append({"tile": "Commissions Paid", "kind": "basis",
-                    "text": f"Commissions Paid = {_s(comm.get('value_fields'))} only — the M1–M6 spiffs and "
-                            "the rebate are NOT included (the portal states the rebate separately). The "
-                            "spiff total is shown under “Basis alternatives” if the portal's figure is "
-                            "closer to that."})
+        out.append({"tile": "Commissions Paid (M1)", "kind": "owner_decided",
+                    "text": "OWNER-DECIDED 2026-08-04: this is the CURRENT month's commission on this "
+                            f"month's activations — the M1 leg ({_s(comm.get('value_fields'))}), an "
+                            "MRC-BASED percentage. It is NOT consumer_margin + device_margin (that was "
+                            "an earlier assumption and it was wrong). The EXPECTED figure beside it is "
+                            "the tenant's configured M1 rate x the qualifying activations' MRC."})
+    act = next((t for t in tiles if t.get("tile_key") == "activation_count"), None)
+    if act:
+        out.append({"tile": "Activation Count", "kind": "owner_decided",
+                    "text": "OWNER-DECIDED 2026-08-04: new activations + ports + BYOD, EXCLUDING swaps "
+                            "and upgrades. Implemented as an exclusion list over the real Activation "
+                            "Type vocabulary (see “Value vocabulary”) — confirm the spellings there."})
+    app = next((t for t in tiles if t.get("tile_key") == "appeal_count"), None)
+    if app and (_s(app.get("agg")) or "none").lower() == "unpaid_count":
+        out.append({"tile": "Appeal / follow-up lines", "kind": "owner_decided",
+                    "text": "OWNER-DECIDED 2026-08-04: the source report has no appeal column, so this "
+                            "counts the qualifying activation lines that were PAID NOTHING — the "
+                            "follow-up worklist. It is derived and read-only: opening it creates no "
+                            "appeal record and changes no payout."})
     if any(bool((r.get("extra") or {}).get("stated_abbreviated")) for r in up_rows
            if isinstance(r.get("extra"), dict)):
         out.append({"tile": "(all)", "kind": "precision",

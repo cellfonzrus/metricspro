@@ -62,6 +62,8 @@ export default function MaOverviewReconPage() {
   const [drill, setDrill] = useState<any>(null)
   const [showMap, setShowMap] = useState(false)
   const [mapping, setMapping] = useState<any>(null)
+  const [showRates, setShowRates] = useState(false)
+  const [rates, setRates] = useState<any>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   async function load(f: StandardFilterValue = filt) {
@@ -102,6 +104,28 @@ export default function MaOverviewReconPage() {
       if (filt.stores.length) qs.set('accounts', filt.stores.join(','))
       setDrill(await api(`/api/v1/commcalc/ma-overview-recon/drill?${qs.toString()}`))
     } catch (e: any) { setDrill({ error: e?.message || String(e), tile: tileKey }) }
+  }
+
+  async function openRates() {
+    setShowRates(true)
+    if (!rates) {
+      try { setRates(await api(`/api/v1/commcalc/ma-overview-recon/rate-plan?period=${encodeURIComponent(filt.period || currentPeriod())}`)) }
+      catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    }
+  }
+
+  async function saveRate(r: any) {
+    setBusy(true); setMsg('')
+    try {
+      await api(`/api/v1/commcalc/ma-overview-recon/rate-plan/${r.month_index}`, {
+        method: 'PUT',
+        body: JSON.stringify({ rate_pct: Number(r.rate_pct) || 0, spiff_flat: Number(r.spiff_flat) || 0, effective_from: r.effective_from || null, note: r.note || null }),
+      })
+      setMsg(`✅ saved M${r.month_index}`)
+      setRates(await api(`/api/v1/commcalc/ma-overview-recon/rate-plan?period=${encodeURIComponent(filt.period || currentPeriod())}`))
+      await load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setBusy(false)
   }
 
   async function openMapping() {
@@ -150,6 +174,8 @@ export default function MaOverviewReconPage() {
     col('Rows', 'rows', { type: 'number' }),
     col('Distinct orders', 'distinct_orders', { type: 'number' }),
     col('Rows w/o IMEI', 'missing_imei_rows', { type: 'number' }),
+    col('Unpaid lines', 'unpaid_lines', { type: 'number' }),
+    col('M1 expected', 'exp_commissions_paid', { type: 'money', money: true }),
     ...tiles.filter(t => t.mapped).flatMap(t => {
       const kind = (t.value_format === 'money' ? 'money' : 'number') as ExportColumn['type']
       return [
@@ -296,6 +322,67 @@ export default function MaOverviewReconPage() {
         rowStyle={(r: any) => (!r.in_report || !r.in_system ? { background: 'rgba(245,158,11,.10)' } : undefined)}
       />
 
+      {/* ── the owner's cross-check: what the carrier's PLAN says the M1 commission should be ── */}
+      {d?.expected_commission && (
+        <div style={{ ...card }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ fontWeight: 600 }}>Commission check — what the plan says it should be</div>
+            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openRates}>⚙ Carrier rate plan</button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text2)', margin: '4px 0 10px' }}>
+            {d.expected_commission.basis}
+          </div>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            <Explain title={`EXPECTED (M1 @ ${d.expected_commission.rate_pct}% of MRC)`}
+              money value={d.expected_commission.expected} detail={d.expected_commission.formula} />
+            <Explain title="OURS (what we hold)" money value={d.expected_commission.system}
+              detail={`${d.expected_commission.qualifying_activations?.toLocaleString()} qualifying activations`} />
+            <Explain title="STATED (carrier report)" money value={d.expected_commission.stated}
+              detail={d.expected_commission.stated == null ? 'no report uploaded' : ''} />
+            <Explain title="Expected − ours" money bad value={d.expected_commission.expected_vs_system}
+              detail="If this is large, either the plan rate is out of date or lines were underpaid." />
+            <Explain title="Expected − stated" money bad value={d.expected_commission.expected_vs_stated}
+              detail="What the plan says, versus what the carrier says it paid." />
+            <Explain title="MRC base" money value={d.expected_commission.mrc_total}
+              detail={`avg ${fmt(d.expected_commission.avg_mrc || 0)} per activation`} />
+          </div>
+          {d.rate_plan && (
+            <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 8 }}>
+              rate plan: <b>{d.rate_plan.source === 'org_config' ? 'this tenant’s saved plan' : 'built-in default'}</b>
+              {' — '}{(d.rate_plan.rates || []).map((r: any) => `M${r.month_index} ${r.rate_pct}%`).join(' · ')}
+              {'. '}{d.rate_plan.note}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── the activation vocabulary the owner's rule turns on ── */}
+      {d?.activation_vocabulary && (
+        <div style={card}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Value vocabulary — what counts as an activation</div>
+          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
+            {d.activation_vocabulary.note}
+          </div>
+          <div style={{ fontSize: 12, marginBottom: 6 }}>
+            Current rule: <code>{d.activation_vocabulary.definition || '(none)'}</code>
+          </div>
+          <table style={{ borderCollapse: 'collapse' }}>
+            <thead><tr>{['Activation Type', 'Rows', 'Counted?'].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {(d.activation_vocabulary.values || []).map((v: any) => (
+                <tr key={v.value} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={td}>{v.value}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>{v.rows.toLocaleString()}</td>
+                  <td style={{ ...td, color: v.counted ? '#16a34a' : 'var(--text2)' }}>
+                    {v.counted ? 'counted' : 'excluded'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* ── delta explainers ── */}
       {d && (
         <div style={{ ...card, marginTop: 16 }}>
@@ -400,7 +487,9 @@ export default function MaOverviewReconPage() {
           {!!(drill.rows || []).length && (
             <>
               <div style={{ fontSize: 12, color: 'var(--text2)', margin: '6px 0' }}>
-                {drill.matched?.toLocaleString()} matching row(s) in {drill.source_table}
+                {drill.worklist
+                  ? `${drill.matched?.toLocaleString()} activation line(s) paid NOTHING — the follow-up worklist, oldest first. Chasing these is manual; this page records nothing.`
+                  : `${drill.matched?.toLocaleString()} matching row(s) in ${drill.source_table}`}
                 {drill.capped ? ` — showing the first ${drill.returned}` : ''}
               </div>
               <ReportShell
@@ -415,6 +504,37 @@ export default function MaOverviewReconPage() {
               />
             </>
           )}
+        </div>
+      )}
+
+      {/* ── carrier rate plan editor (RULE TWO — rates change, spiffs are temporary) ── */}
+      {showRates && (
+        <div style={{ ...card, marginTop: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontWeight: 600 }}>⚙ Carrier rate plan — M1–M6</div>
+            <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setShowRates(false)}>Close</button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10 }}>
+            What the carrier pays per month leg, as a percentage of the line's MRC plus any flat spiff.
+            The owner's standing Total plan is <b>M1 50%, M2–M6 75%</b>; M3–M6 are temporary spiffs, so
+            expect to change them here rather than in code. Leave "in force from" blank for "always".
+            <b> This changes the EXPECTED column only — it pays nobody.</b>
+          </div>
+          <table style={{ borderCollapse: 'collapse' }}>
+            <thead><tr>{['Month', '% of MRC', 'Flat spiff $', 'In force from', 'Note', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {(rates?.rates || []).map((r: any, i: number) => (
+                <tr key={r.month_index} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={td}>M{r.month_index}</td>
+                  <td style={td}><input style={{ ...sel, width: 80 }} value={r.rate_pct ?? ''} onChange={e => patchRate(i, { rate_pct: e.target.value })} /></td>
+                  <td style={td}><input style={{ ...sel, width: 80 }} value={r.spiff_flat ?? ''} onChange={e => patchRate(i, { spiff_flat: e.target.value })} /></td>
+                  <td style={td}><input type="date" style={sel} value={String(r.effective_from || '').slice(0, 10)} onChange={e => patchRate(i, { effective_from: e.target.value })} /></td>
+                  <td style={td}><input style={{ ...sel, width: 300 }} value={r.note || ''} onChange={e => patchRate(i, { note: e.target.value })} /></td>
+                  <td style={td}><button className="btn" style={{ fontSize: 11 }} disabled={busy} onClick={() => saveRate(r)}>Save</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -500,6 +620,14 @@ export default function MaOverviewReconPage() {
     </div>
   )
 
+  function patchRate(i: number, patch: any) {
+    setRates((m: any) => {
+      const rs = [...(m?.rates || [])]
+      rs[i] = { ...rs[i], ...patch }
+      return { ...m, rates: rs }
+    })
+  }
+
   function patchTile(i: number, patch: any) {
     setMapping((m: any) => {
       const tiles = [...(m?.tiles || [])]
@@ -516,14 +644,17 @@ function srcText(t: any): string {
   return base + (s.filter ? ` where ${s.filter}` : '') + (s.agg === 'sum' && s.sign !== 'as_is' ? ` (${s.sign})` : '')
 }
 
-function Explain({ title, value, detail, note, bad }: {
-  title: string; value: any; detail?: string; note?: string; bad?: boolean
+function Explain({ title, value, detail, note, bad, money }: {
+  title: string; value: any; detail?: string; note?: string; bad?: boolean; money?: boolean
 }) {
   const n = Number(value || 0)
+  const blank = value === null || value === undefined
   return (
     <div style={{ flex: '1 1 240px', minWidth: 230, border: '1px solid var(--border)', borderRadius: 8, padding: '9px 11px' }} title={note || ''}>
       <div style={{ fontSize: 12, color: 'var(--text2)' }}>{title}</div>
-      <div style={{ fontSize: 18, fontWeight: 600, color: bad && n > 0 ? '#dc2626' : undefined }}>{n.toLocaleString()}</div>
+      <div style={{ fontSize: 18, fontWeight: 600, color: bad && Math.abs(n) > 0.005 ? '#dc2626' : undefined }}>
+        {blank ? '—' : money ? fmt(n) : n.toLocaleString()}
+      </div>
       {detail && <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 3, wordBreak: 'break-word' }}>{detail}</div>}
     </div>
   )

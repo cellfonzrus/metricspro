@@ -93,6 +93,9 @@ CREATE TABLE IF NOT EXISTS commcalc.ma_overview_tile_config (
   filter_field   TEXT,                                 -- a DIMENSION column (whitelisted in code)
   filter_op      TEXT,                                 -- eq|neq|in|not_in|contains|nonblank|blank|truthy
   filter_value   TEXT,                                 -- comma list (in/not_in/eq) or substring (contains)
+  filters        JSONB,                                -- [{field,op,value}, ...] ANDed; wins over the
+                                                       -- single triplet above (which stays for the
+                                                       -- simple one-condition case + back-compat)
   -- UPLOADED side (where the stated number comes from)
   uploaded_field TEXT,                                 -- a metric column on ma_overview_upload
   uploaded_aliases TEXT,                               -- comma list of source-file header spellings
@@ -109,14 +112,51 @@ CREATE TABLE IF NOT EXISTS commcalc.ma_overview_tile_config (
 CREATE INDEX IF NOT EXISTS ma_overview_tile_config_org
   ON commcalc.ma_overview_tile_config (org_id, sort_order);
 
+-- Idempotent UPGRADE path: CREATE TABLE IF NOT EXISTS will not add a column to a table that already
+-- exists, so every column added after the first release is also stated as an ALTER. Re-running this file
+-- on an older 268 install therefore brings it fully up to date.
+ALTER TABLE commcalc.ma_overview_tile_config ADD COLUMN IF NOT EXISTS filters JSONB;
+
 COMMENT ON TABLE commcalc.ma_overview_tile_config IS
   'Per-tenant mapping of each MA "Overview of Accounts" tile to (a) the column of the uploaded report '
   'that STATES it and (b) the raw_ma_* aggregate that COMPUTES it. Absent rows => the code defaults in '
   'ma_overview.DEFAULT_TILES. Read-only with respect to money: nothing here decides a payout.';
 
+-- ── 2b) the M1–M6 COMMISSION RATE PLAN (owner answer 2026-08-04) ───────────────────────────────────
+-- Owner verbatim: "the current commission plan for total is M1 = 50%, M2-M6 = 75% each plus any
+-- applicable spiff which change from time to time; M3-M6 is also a temporary spiff which can change over
+-- a period of time." Rates that change over time are CONFIG, never constants (RULE TWO) — and because
+-- they change, they are EFFECTIVE-DATED: the row that applies to a period is the newest one whose
+-- effective_from is on or before that period's first day (NULL = always in force).
+--
+-- THIS TABLE PAYS NOBODY. It drives the EXPECTED column on the recon page (rate% x MRC + flat spiff),
+-- which is a cross-check against the carrier's stated figure. No payout path reads it: rep pay is
+-- POS sales x Commission Plans, and this is the CARRIER's plan, not a rep's.
+CREATE TABLE IF NOT EXISTS commcalc.ma_commission_month_rate (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id         UUID NOT NULL,
+  month_index    INT  NOT NULL CHECK (month_index BETWEEN 1 AND 6),
+  rate_pct       NUMERIC NOT NULL DEFAULT 0,     -- percent OF the line's MRC
+  spiff_flat     NUMERIC NOT NULL DEFAULT 0,     -- flat $ per activation ON TOP of the percentage
+  effective_from DATE,                           -- NULL = always in force
+  note           TEXT,
+  updated_by     TEXT,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (org_id, month_index, effective_from)
+);
+CREATE INDEX IF NOT EXISTS ma_commission_month_rate_org
+  ON commcalc.ma_commission_month_rate (org_id, month_index);
+
+COMMENT ON TABLE commcalc.ma_commission_month_rate IS
+  'The CARRIER''s M1-M6 commission plan (percent of MRC + any flat spiff), per tenant and effective-'
+  'dated. Drives the EXPECTED column of the MA Overview cross-check ONLY. Pays nobody: rep pay is POS '
+  'sales x Commission Plans and never reads this table.';
+
 -- ── 3) RLS: enabled, ZERO policies, ZERO anon/authenticated grants (contract §5) ────────────────────
-ALTER TABLE commcalc.ma_overview_upload      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE commcalc.ma_overview_tile_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE commcalc.ma_overview_upload         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE commcalc.ma_overview_tile_config    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE commcalc.ma_commission_month_rate   ENABLE ROW LEVEL SECURITY;
 
 -- ── 4) AGGREGATE IN POSTGRES — the two recon cubes ──────────────────────────────────────────────────
 -- The tile mapping is config, so we cannot pre-compute one number per tile in SQL. Instead each RPC
@@ -332,6 +372,49 @@ AS $$
   GROUP BY period
 $$;
 
+-- The FOLLOW-UP WORKLIST (owner answer 2026-08-04: the Appeal tile "would be the lines which don't get
+-- paid and have to be followed up like we did in Boost"). Returns the ACTIVATION lines on which every
+-- caller-supplied pay column is zero — i.e. nothing was paid in ANY leg. Which columns count as "paid"
+-- is the tile's config, so they arrive as p_pay_cols and are read positionally out of the row's own
+-- jsonb; a column name that does not exist contributes 0 rather than erroring. READ-ONLY: it creates no
+-- appeal record and writes nothing.
+DROP FUNCTION IF EXISTS commcalc.ma_overview_unpaid_lines(uuid, text[], text[], text[], int);
+CREATE OR REPLACE FUNCTION commcalc.ma_overview_unpaid_lines(
+  p_org uuid, p_periods text[], p_accounts text[], p_pay_cols text[], p_limit int DEFAULT 20000)
+RETURNS TABLE (
+  merchant_account_id text, activation_order text, imei text, sim text, sku text,
+  tx_date date, period text, user_name text, line_status text, suspension_reason text,
+  port_status text, activation_type text, activation_type2 text, sub_type text,
+  perfect_sale text, is_financed text, mrc_net_discount numeric, paid_total numeric
+)
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT
+    coalesce(nullif(btrim(c.merchant_account_id), ''), '?'),
+    coalesce(btrim(c.activation_order), ''), coalesce(btrim(c.imei), ''),
+    coalesce(btrim(c.sim), ''), coalesce(btrim(c.sku), ''),
+    c.tx_date, coalesce(btrim(c.period), ''), coalesce(btrim(c.user_name), ''),
+    coalesce(btrim(c.line_status), ''), coalesce(btrim(c.suspension_reason), ''),
+    coalesce(btrim(c.port_status), ''), coalesce(btrim(c.activation_type), ''),
+    coalesce(btrim(c.activation_type2), ''), coalesce(btrim(c.sub_type), ''),
+    coalesce(btrim(c.perfect_sale), ''), coalesce(btrim(c.is_financed), ''),
+    coalesce(c.mrc_net_discount, 0), 0::numeric
+  FROM commcalc.raw_ma_commission c
+  WHERE c.org_id = p_org
+    AND (p_periods IS NULL OR array_length(p_periods, 1) IS NULL OR c.period = ANY (p_periods))
+    AND (p_accounts IS NULL OR array_length(p_accounts, 1) IS NULL
+         OR coalesce(nullif(btrim(c.merchant_account_id), ''), '?') = ANY (p_accounts))
+    -- only ACTIVATION lines can be chased; a blank Activation Type is not a line anyone follows up
+    AND coalesce(btrim(c.activation_type), '') <> ''
+    -- nothing was paid, in any configured leg
+    AND coalesce((SELECT sum(abs(coalesce((to_jsonb(c) ->> col)::numeric, 0)))
+                  FROM unnest(coalesce(p_pay_cols, ARRAY[]::text[])) AS col), 0) = 0
+  ORDER BY c.tx_date NULLS LAST, c.merchant_account_id
+  LIMIT greatest(1, coalesce(p_limit, 20000))
+$$;
+
+GRANT EXECUTE ON FUNCTION commcalc.ma_overview_unpaid_lines(uuid, text[], text[], text[], int) TO service_role;
 GRANT EXECUTE ON FUNCTION commcalc.ma_overview_periods(uuid)                          TO service_role;
 GRANT EXECUTE ON FUNCTION commcalc.ma_overview_commission_cube(uuid, text[], text[])  TO service_role;
 GRANT EXECUTE ON FUNCTION commcalc.ma_overview_dailytx_cube(uuid, text[], text[])     TO service_role;
@@ -339,56 +422,78 @@ GRANT EXECUTE ON FUNCTION commcalc.ma_overview_commission_accounts(uuid, text[],
 GRANT EXECUTE ON FUNCTION commcalc.ma_overview_commission_dates(uuid, text[], text[]) TO service_role;
 GRANT EXECUTE ON FUNCTION commcalc.ma_overview_dailytx_dates(uuid, text[], text[])    TO service_role;
 
+-- ── 4b) seed the HOUSE org's carrier rate plan (owner: Total = M1 50%, M2–M6 75%) ──────────────────
+INSERT INTO commcalc.ma_commission_month_rate (org_id, month_index, rate_pct, spiff_flat, note)
+VALUES
+  ('00000000-0000-0000-0000-000000000001', 1, 50, 0, 'Total plan 2026-08-04 (owner): M1 = 50% of MRC.'),
+  ('00000000-0000-0000-0000-000000000001', 2, 75, 0, 'Total plan 2026-08-04 (owner): M2 = 75% of MRC.'),
+  ('00000000-0000-0000-0000-000000000001', 3, 75, 0, 'Total plan 2026-08-04 (owner): M3 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+  ('00000000-0000-0000-0000-000000000001', 4, 75, 0, 'Total plan 2026-08-04 (owner): M4 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+  ('00000000-0000-0000-0000-000000000001', 5, 75, 0, 'Total plan 2026-08-04 (owner): M5 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+  ('00000000-0000-0000-0000-000000000001', 6, 75, 0, 'Total plan 2026-08-04 (owner): M6 = 75% of MRC — TEMPORARY spiff, expect changes.')
+ON CONFLICT DO NOTHING;
+
 -- ── 5) seed the HOUSE org with the Total-Wireless tile defaults ─────────────────────────────────────
 -- Identical to ma_overview.DEFAULT_TILES. Every other tenant inherits those code defaults until it saves
 -- its own rows, so this seed is convenience (something to edit in the UI), never the resolution rule.
+-- The swap/upgrade exclusion list, shared by the three activation-qualified tiles. VERIFIED LIVE
+-- 2026-08-04 against luxelink's 998 MA rows: the real Activation Type vocabulary is ONLY 'New' (393)
+-- and 'Add' (605) — no swap/upgrade spelling occurs in this export, so today this list removes ZERO
+-- rows. It is kept as a guard for tenants/exports that DO carry them, and the page prints the live
+-- vocabulary with each value marked counted/excluded so the config can never quietly drift.
 INSERT INTO commcalc.ma_overview_tile_config
   (org_id, tile_key, label, sort_order, value_format, source_table, agg, value_fields, sign,
-   filter_field, filter_op, filter_value, uploaded_field, uploaded_aliases,
+   filter_field, filter_op, filter_value, filters, uploaded_field, uploaded_aliases,
    tolerance_abs, tolerance_pct, note)
 VALUES
   ('00000000-0000-0000-0000-000000000001', 'activation_count', 'Activation Count', 10, 'count',
    'raw_ma_commission', 'count', NULL, 'as_is',
-   'activation_type', 'nonblank', NULL, 'activation_count',
+   'activation_type', 'nonblank', NULL,
+   '[{"field":"activation_type","op":"nonblank"},{"field":"activation_type","op":"not_in","value":"Upgrade,Upgrades,Swap,Swaps,SIM Swap,Sim Swap,Device Swap,Exchange,Handset Upgrade,Equipment Upgrade"}]'::jsonb,
+   'activation_count',
    'Activation Count,Activations,ActivationCount,Total Activations', 0, 0,
-   'Rows of the MA Commission Details export carrying an Activation Type (New/Add). The page also '
-   'reports DISTINCT activation orders next to it — an order with several lines counts once there.'),
+   'OWNER DEFINITION 2026-08-04: new activations + ports + BYOD, EXCLUDING swaps and upgrades. Port and '
+   'BYOD are ATTRIBUTES of a fresh line (port_status / activation_type2), not separate activation types, '
+   'so the rule is an EXCLUSION list rather than an include-list that would double-count.'),
 
   ('00000000-0000-0000-0000-000000000001', 'twp_count', 'TWP Count', 20, 'count',
    'raw_ma_commission', 'count', NULL, 'as_is',
-   'sub_type', 'eq', 'TWP', 'twp_count', 'TWP Count,TWP,TWPCount', 0, 0,
+   'sub_type', 'eq', 'TWP', NULL, 'twp_count', 'TWP Count,TWP,TWPCount', 0, 0,
    'Sub Type = TWP.'),
 
   ('00000000-0000-0000-0000-000000000001', 'residual', 'Residual', 30, 'money',
    'raw_ma_daily_tx', 'sum', 'retail_cost', 'negate',
-   'order_type', 'contains', 'Postpaid Residual Order', 'residual',
+   'order_type', 'contains', 'Postpaid Residual Order', NULL, 'residual',
    'Residual,Residuals,Residual Paid', 0, 0,
-   'The SAME residual definition the What-If / finance residual-per-sub path uses: raw_ma_daily_tx rows '
-   'whose Order Type contains "Postpaid Residual Order", summing retail_cost, sign-negated to income '
-   '(whatif._CFG_DEFAULTS["plan"], mig 209 + the mig 252 amount-field correction). If the portal''s '
-   'Residual tile is a different basis (e.g. MI+ATU, or all residual order types), change it here.'),
+   'OWNER-CONFIRMED 2026-08-04: the portal''s Residual means the SAME thing we compute — the What-If / '
+   'finance residual-per-sub basis (raw_ma_daily_tx rows whose Order Type contains "Postpaid Residual '
+   'Order", summing retail_cost, sign-negated to income; whatif._CFG_DEFAULTS[''plan''] + the mig 252 '
+   'amount-field correction).'),
 
   ('00000000-0000-0000-0000-000000000001', 'rebates_paid', 'Rebates Paid', 40, 'money',
    'raw_ma_commission', 'sum', 'rebate', 'negate',
-   NULL, NULL, NULL, 'rebates_paid', 'Rebates Paid,Rebate,Rebates', 0, 0,
+   NULL, NULL, NULL, NULL, 'rebates_paid', 'Rebates Paid,Rebate,Rebates', 0, 0,
    'Sum of the rebate column, sign-flipped (the export posts money paid TO the dealer as negative — the '
    'same convention /ma-commission/summary, account.residual_subs and coa.build_inputs use).'),
 
   ('00000000-0000-0000-0000-000000000001', 'fees_margin_paid', 'Fees Margin Paid', 50, 'money',
    'raw_ma_commission', 'sum', 'fees_margin', 'negate',
-   NULL, NULL, NULL, 'fees_margin_paid', 'Fees Margin Paid,Fees Margin,Fee Margin', 0, 0,
+   NULL, NULL, NULL, NULL, 'fees_margin_paid', 'Fees Margin Paid,Fees Margin,Fee Margin', 0, 0,
    'Sum of fees_margin, sign-flipped to money received.'),
 
-  ('00000000-0000-0000-0000-000000000001', 'commissions_paid', 'Commissions Paid', 60, 'money',
-   'raw_ma_commission', 'sum', 'consumer_margin,device_margin', 'negate',
-   NULL, NULL, NULL, 'commissions_paid', 'Commissions Paid,Commission Paid,Commissions', 0, 0,
-   'consumer_margin + device_margin, sign-flipped. ASSUMPTION: the portal''s "Commissions Paid" is the '
-   'margin pair and does NOT include the M1-M6 spiffs or the rebate (which the portal states separately). '
-   'The page shows the spiff total beside it so an alternative basis is one config edit away.'),
+  ('00000000-0000-0000-0000-000000000001', 'commissions_paid', 'Commissions Paid (M1)', 60, 'money',
+   'raw_ma_commission', 'sum', 'spiff_m1', 'negate',
+   NULL, NULL, NULL,
+   '[{"field":"activation_type","op":"nonblank"},{"field":"activation_type","op":"not_in","value":"Upgrade,Upgrades,Swap,Swaps,SIM Swap,Sim Swap,Device Swap,Exchange,Handset Upgrade,Equipment Upgrade"}]'::jsonb,
+   'commissions_paid', 'Commissions Paid,Commission Paid,Commissions', 0, 0,
+   'OWNER DEFINITION 2026-08-04: the CURRENT month''s commission on this month''s activations = the M1 '
+   'leg (spiff_m1 — the 1st-month column), an MRC-BASED percentage. NOT consumer_margin + device_margin '
+   '(the pre-answer assumption, proven wrong live: consumer_margin is EMPTY in this feed). The EXPECTED '
+   'column beside it is the tenant''s configured M1 rate x the qualifying activations'' MRC.'),
 
   ('00000000-0000-0000-0000-000000000001', 'commissions_not_eligible', 'Commissions Not Eligible', 70,
    'count', 'raw_ma_commission', 'none', NULL, 'as_is',
-   NULL, NULL, NULL, 'commissions_not_eligible',
+   NULL, NULL, NULL, NULL, 'commissions_not_eligible',
    'Commissions Not Eligible,Not Eligible,Ineligible Commissions', 0, 0,
    'NO SOURCE MAPPED ON PURPOSE — the source report''s definition is not known. Candidates on '
    'raw_ma_commission are line_status and suspension_reason; the recon page lists their real value '
@@ -396,16 +501,22 @@ VALUES
 
   ('00000000-0000-0000-0000-000000000001', 'edge_count', 'Edge (Device Finance)', 80, 'count',
    'raw_ma_commission', 'count', NULL, 'as_is',
-   'is_financed', 'truthy', NULL, 'edge_count',
+   'is_financed', 'truthy', NULL, NULL, 'edge_count',
    'Edge,Edge Count,Device Finance,Device Financing', 0, 0,
    'Rows whose Is Financed flag is truthy (Y/Yes/True/1). "Edge" here is the TW FINANCING TENDER, not a '
    'Motorola Edge handset — never match this on a device model name.'),
 
-  ('00000000-0000-0000-0000-000000000001', 'appeal_count', 'Appeal Count', 90, 'count',
-   '', 'none', NULL, 'as_is',
-   NULL, NULL, NULL, 'appeal_count', 'Appeal Count,Appeals', 0, 0,
-   'NO SOURCE MAPPED — the MA feed we ingest carries no appeal/dispute column. The tile renders the '
-   'stated value with an honest "no source mapped" system side rather than a fake 0.')
+  ('00000000-0000-0000-0000-000000000001', 'appeal_count', 'Appeal / follow-up lines', 90, 'count',
+   'raw_ma_commission', 'unpaid_count',
+   'spiff_m1,spiff_m2,spiff_m3,spiff_m4,spiff_m5,spiff_m6,rebate,consumer_margin,device_margin,consumer_financing,fees_margin',
+   'as_is', NULL, NULL, NULL,
+   '[{"field":"activation_type","op":"nonblank"},{"field":"activation_type","op":"not_in","value":"Upgrade,Upgrades,Swap,Swaps,SIM Swap,Sim Swap,Device Swap,Exchange,Handset Upgrade,Equipment Upgrade"}]'::jsonb,
+   'appeal_count', 'Appeal Count,Appeals', 0, 0,
+   'OWNER DEFINITION 2026-08-04: the source report has no appeal column, so this tile IS the follow-up '
+   'worklist — "the lines which don''t get paid and have to be followed up like we did in Boost". It '
+   'counts QUALIFYING ACTIVATION lines on which EVERY configured pay column is zero, and drills down to '
+   'those exact lines (account, order, IMEI, MRC, months elapsed). Derived and READ-ONLY: it writes '
+   'nothing and creates no appeal record.')
 ON CONFLICT (org_id, tile_key) DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';

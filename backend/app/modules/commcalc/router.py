@@ -21992,9 +21992,13 @@ def ma_overview_tiles(org_id: str = ORG_ID):
             "sources": {k: {"dims": list(v["dims"]), "money": list(v["money"])}
                         for k, v in mo.SOURCES.items()},
             "filter_ops": list(mo.FILTER_OPS),
-            "aggs": ["count", "sum", "none"], "signs": ["as_is", "negate", "abs"],
+            "aggs": ["count", "sum", "unpaid_count", "none"],
+            "signs": ["as_is", "negate", "abs"],
             "note": ("A tile with aggregate 'none' has NO system source and renders an honest "
-                     "\"no source mapped\" state — never a fake 0.")}
+                     "\"no source mapped\" state — never a fake 0. 'unpaid_count' counts the qualifying "
+                     "ACTIVATION lines on which every column named in `value_fields` is zero — the "
+                     "follow-up worklist. `filters` ANDs several conditions; the single "
+                     "filter_field/op/value triplet is the simple one-condition form.")}
 
 
 @router.put("/ma-overview-recon/tiles/{tile_key}")
@@ -22053,6 +22057,51 @@ def ma_overview_seed_tiles(org_id: str = ORG_ID, authorization: str = Header(def
     return {"ok": True, "seeded": len(rows), "already_present": sorted(have)}
 
 
+@router.get("/ma-overview-recon/rate-plan")
+def ma_overview_rate_plan(period: str = "", org_id: str = ORG_ID):
+    """The CARRIER's M1–M6 commission plan for this tenant — percent of MRC + any flat spiff, effective-
+    dated (owner 2026-08-04: "M1 = 50%, M2-M6 = 75% each plus any applicable spiff which change from
+    time to time"). Drives the EXPECTED column of the cross-check ONLY. **Pays nobody**: rep pay is POS
+    sales x Commission Plans and never reads this. Absent table => the code defaults."""
+    require_org(org_id)
+    mo = _ma_ov()
+    rates, src = mo.resolve_m_rates(sb(), org_id, period, _month_year)
+    return {"ok": True, "org_id": org_id, "source": src, "period": period,
+            "rates": [rates[i] for i in sorted(rates)],
+            "note": ("Percent of the line's MRC, plus any flat per-activation spiff. Effective-dated: "
+                     "the newest row on or before the period's first day wins, so a rate change is "
+                     "history, not a silent overwrite. Changing these changes the EXPECTED column of "
+                     "the cross-check and nothing else.")}
+
+
+@router.put("/ma-overview-recon/rate-plan/{month_index}")
+def ma_overview_put_rate(month_index: int, body: dict, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    """Set the carrier's rate for one month leg. body: {rate_pct, spiff_flat?, effective_from?, note?}.
+    Config only — it moves no money and triggers no recalculation; it changes what the recon EXPECTS."""
+    require_org(org_id)
+    if not _can_edit_classification(authorization, org_id):
+        raise HTTPException(403, "You don't have permission to edit the carrier rate plan.")
+    if not 1 <= int(month_index) <= 6:
+        raise HTTPException(400, "month_index must be 1..6")
+    body = body or {}
+    row = {"org_id": org_id, "month_index": int(month_index),
+           "rate_pct": safe_float(body.get("rate_pct")),
+           "spiff_flat": safe_float(body.get("spiff_flat")),
+           "effective_from": (str(body.get("effective_from"))[:10] or None)
+                             if body.get("effective_from") else None,
+           "note": (body.get("note") or None),
+           "updated_by": "api_v1",
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        res = (sb().schema("commcalc").table("ma_commission_month_rate")
+               .upsert(row, on_conflict="org_id,month_index,effective_from").execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not save the rate — run migration "
+                                 f"268b_commission_ma_overview_owner_answers.sql first ({e}).")
+    return {"ok": True, "rate": (res.data[0] if res.data else row)}
+
+
 @router.delete("/ma-overview-recon/report/{period}")
 def ma_overview_delete_report(period: str, org_id: str = ORG_ID,
                               authorization: str = Header(default="")):
@@ -22090,6 +22139,24 @@ def ma_overview_drill(tile: str, period: str = "", accounts: str = "", limit: in
     if (str(t.get("agg") or "none").lower()) == "none":
         return {"ok": True, "tile": tile, "unmapped": True, "rows": [], "matched": 0,
                 "note": t.get("note")}
+    # THE FOLLOW-UP WORKLIST (owner 2026-08-04): the activation lines that were paid nothing, with how
+    # many months have elapsed so the oldest can be chased first. Read-only — opening this creates no
+    # appeal record and changes no payout.
+    if (str(t.get("agg") or "").lower()) == "unpaid_count":
+        pay_cols = [x.strip() for x in str(t.get("value_fields") or "").split(",") if x.strip()]
+        rows, via = mo.load_unpaid_lines(client, org_id, _pvariants(p), pay_cols,
+                                         sorted(acct) if acct else None)
+        rows = [r for r in rows if mo.match_all(r, t)]
+        for r in rows:
+            r["months_elapsed"] = mo.months_elapsed(r.get("tx_date"))
+        rows.sort(key=lambda r: (-(r.get("months_elapsed") or 0), str(r.get("tx_date") or "")))
+        cap = max(1, min(limit, 2000))
+        return {"ok": True, "tile": tile, "label": t.get("label"), "period": p,
+                "source_table": "raw_ma_commission", "worklist": True, "via": via,
+                "matched": len(rows), "returned": min(len(rows), cap),
+                "capped": len(rows) > cap, "rows": rows[:cap],
+                "pay_columns": pay_cols, "filter": mo.condition_text(t) or None,
+                "note": t.get("note")}
     src = str(t.get("source_table") or "")
     spec = mo.SOURCES[src]
     akey = spec["account_key"]
@@ -22113,7 +22180,7 @@ def ma_overview_drill(tile: str, period: str = "", accounts: str = "", limit: in
                     "problems": [f"could not read {src}: {e}"]}
         scanned += len(chunk)
         for r in chunk:
-            if not mo.match_filter(r, t.get("filter_field"), t.get("filter_op"), t.get("filter_value")):
+            if not mo.match_all(r, t):
                 continue
             matched += 1
             if len(out) < max(1, min(limit, 2000)):
@@ -22128,8 +22195,7 @@ def ma_overview_drill(tile: str, period: str = "", accounts: str = "", limit: in
     return {"ok": True, "tile": tile, "label": t.get("label"), "period": p,
             "source_table": src, "matched": matched, "returned": len(out),
             "capped": matched > len(out), "rows": out,
-            "filter": (f"{t.get('filter_field')} {t.get('filter_op')} {t.get('filter_value') or ''}".strip()
-                       if str(t.get("filter_field") or "") else None),
+            "filter": mo.condition_text(t) or None,
             "note": t.get("note")}
 
 

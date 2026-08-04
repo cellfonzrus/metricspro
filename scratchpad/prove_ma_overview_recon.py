@@ -21,6 +21,7 @@ What it proves:
 Run:  python3 scratchpad/prove_ma_overview_recon.py
 """
 import sys, os, calendar
+import datetime as _dt
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend"))
 from app.modules.commcalc import ma_overview as mo   # noqa: E402
@@ -28,6 +29,7 @@ from app.modules.commcalc import ma_overview as mo   # noqa: E402
 ORG = "854f6d7b-6590-4e4d-88ab-646f560d4f4c"          # a NON-house tenant on purpose (luxelink)
 PERIOD = "July 2026"
 FAILURES = []
+_s_ = lambda v: ('' if v is None else str(v).strip())
 
 
 def check(name, got, want):
@@ -83,21 +85,35 @@ def C(acct, order, imei, at="New", at2="branded", sub="", fin="", status="Active
             "spiff_m4": 0.0, "spiff_m5": 0.0, "spiff_m6": 0.0, "tx_date": date, "period": period}
 
 
+# OWNER ANSWERS 2026-08-04 are baked into the truths below:
+#   • Commissions Paid = the M1 leg (spiff_m1), MRC-based — NOT consumer_margin + device_margin.
+#   • Activation Count = new + port + BYOD, EXCLUDING swap/upgrade.
+#   • Appeal Count     = qualifying activation lines that were PAID NOTHING (the follow-up worklist).
+#   • Residual         = unchanged (owner-confirmed).
 COMMISSION_ROWS = [
     # ── account A100: 4 activation rows (one is a 2nd line of the SAME order → multi-line), 1 TWP,
     #    1 financed (Edge), 1 with a BLANK imei, 1 dated in JUNE though filed under July.
-    C("A100", "ORD-1", "IMEI-1", cm=-20.0, dm=-5.0, reb=-30.0, fm=-1.0, sp1=-4.0),
-    C("A100", "ORD-1", "IMEI-2", sub="TWP", cm=-10.0, reb=-5.0),          # same order, 2nd line
-    C("A100", "ORD-2", "", fin="Y", cm=-15.0, dm=-2.5, reb=-20.0, fm=-0.5),  # blank IMEI + Edge
-    C("A100", "ORD-3", "IMEI-4", cm=-12.0, reb=-10.0, date="2026-06-30"),  # dated OUTSIDE the period
+    C("A100", "ORD-1", "IMEI-1", cm=-20.0, dm=-5.0, reb=-30.0, fm=-1.0, sp1=-22.50),
+    C("A100", "ORD-1", "IMEI-2", sub="TWP", cm=-10.0, reb=-5.0, sp1=-22.50),   # same order, 2nd line
+    C("A100", "ORD-2", "", fin="Y", cm=-15.0, dm=-2.5, reb=-20.0, fm=-0.5, sp1=-22.50),  # blank IMEI + Edge
+    C("A100", "ORD-3", "IMEI-4", cm=-12.0, reb=-10.0, sp1=-22.50, date="2026-06-30"),  # dated OUTSIDE
     # ── account B200: 2 activation rows, 1 on the last day of the month, 1 suspended/not-eligible.
-    C("B200", "ORD-4", "IMEI-5", cm=-25.0, dm=-7.5, reb=-40.0, fm=-2.0, date="2026-07-31"),
-    C("B200", "ORD-5", "IMEI-6", status="Suspended", susp="Non-Pay", cm=-8.0, reb=0.0),
+    C("B200", "ORD-4", "IMEI-5", cm=-25.0, dm=-7.5, reb=-40.0, fm=-2.0, sp1=-22.50, date="2026-07-31"),
+    C("B200", "ORD-5", "IMEI-6", status="Suspended", susp="Non-Pay", cm=-8.0, reb=0.0, sp1=-22.50),
     # ── a NON-activation row (blank Activation Type): must NOT count as an activation.
     C("B200", "ORD-6", "IMEI-7", at="", cm=-1.0),
     # ── a row in ANOTHER period: must never appear in a July total.
     C("A100", "ORD-9", "IMEI-9", cm=-999.0, reb=-999.0, date="2026-06-05", period="June 2026"),
+    # ── OWNER RULE: a SWAP and an UPGRADE. Both are activation-typed, both carry money, and BOTH must
+    #    be excluded from Activation Count and from the M1 commission tile.
+    C("A100", "ORD-7", "IMEI-8", at="Upgrade", cm=-6.0, sp1=-11.0, reb=-7.0),
+    C("B200", "ORD-8", "IMEI-10", at="SIM Swap", cm=-3.0, sp1=-9.0),
+    # ── OWNER RULE: an UNPAID qualifying activation — every pay leg is zero. This is the follow-up line.
+    C("B200", "ORD-10", "IMEI-11", at="New", date="2026-07-02"),
 ]
+
+# MRC is stamped by C() at 45.00 on every row. The M1 EXPECTED cross-check is rate% x MRC of the
+# QUALIFYING activations only, so the swap/upgrade rows must not contribute to it either.
 
 DAILYTX_ROWS = [
     {"account_id": "A100", "account_name": "Lux Downtown", "order_type": "Postpaid Residual Order",
@@ -118,22 +134,39 @@ DAILYTX_ROWS = [
 ]
 
 # ── the HAND-COMPUTED truth for July (what a human gets with a calculator) ───────────────────────
+# July rows in the fixture (the June-PERIOD row is excluded throughout):
+#   1 A100 ORD-1 IMEI-1  New            cm-20 dm-5   reb-30 fm-1   m1-22.50
+#   2 A100 ORD-1 IMEI-2  New   TWP      cm-10        reb-5         m1-22.50   (2nd line of ORD-1)
+#   3 A100 ORD-2 (no imei) New  Edge    cm-15 dm-2.5 reb-20 fm-0.5 m1-22.50
+#   4 A100 ORD-3 IMEI-4  New            cm-12        reb-10        m1-22.50   (dated 2026-06-30)
+#   5 B200 ORD-4 IMEI-5  New            cm-25 dm-7.5 reb-40 fm-2   m1-22.50   (dated 2026-07-31)
+#   6 B200 ORD-5 IMEI-6  New/Suspended  cm-8                       m1-22.50
+#   7 B200 ORD-6 IMEI-7  (blank type)   cm-1
+#   9 A100 ORD-7 IMEI-8  UPGRADE        cm-6         reb-7         m1-11      <- excluded by the rule
+#  10 B200 ORD-8 IMEI-10 SIM SWAP       cm-3                       m1-9       <- excluded by the rule
+#  11 B200 ORD-10 IMEI-11 New           (every pay leg ZERO)                  <- the follow-up line
+# Every row carries mrc_net_discount = 45.00.
 TRUTH = {
-    # rows with a non-blank Activation Type, July only: A100 x4 + B200 x2 = 6  (ORD-6 blank AT excluded,
-    # the June-period row excluded)
-    "activation_count": 6,
+    # OWNER RULE: new + port + BYOD, EXCLUDING swap/upgrade. Rows 1-6 + 11 = 7. Row 7 has no activation
+    # type; rows 9 and 10 are an Upgrade and a SIM Swap.
+    "activation_count": 7,
     "twp_count": 1,
     # residual = -(sum retail_cost of July 'Postpaid Residual Order' rows) = -(-120-80-40) = 240
     "residual": 240.00,
-    # rebates = -(sum rebate July) = -(-30-5-20-10-40) = 105
-    "rebates_paid": 105.00,
+    # rebates has NO activation filter (it is a money total, not a count): -( -30-5-20-10-40-7 ) = 112
+    "rebates_paid": 112.00,
     "fees_margin_paid": 3.50,          # -(-1.0 -0.5 -2.0)
-    # commissions = -(Σ consumer_margin + Σ device_margin) over ALL July rows (no filter — includes the
-    # blank-activation-type row ORD-6 and the suspended row, by design: it is a money total, not a count)
-    "commissions_paid": 106.00,        # -( -20-10-15-12-25-8-1 ) + -( -5 -2.5 -7.5 ) = 91 + 15 = 106
+    # OWNER RULE: Commissions Paid = the M1 leg over QUALIFYING activations only.
+    # rows 1-6 pay 22.50 each = 135.00; row 11 pays 0; the Upgrade's 11 and the Swap's 9 are EXCLUDED.
+    "commissions_paid": 135.00,
     "edge_count": 1,
+    # OWNER RULE: qualifying activation lines with every pay leg zero -> row 11 only.
+    "appeal_count": 1,
 }
-
+# The plan cross-check: M1 = 50% of MRC over the 7 qualifying activations (7 x 45.00 = 315.00).
+EXPECTED_M1 = 157.50
+# ...and the gap to what was actually paid is EXACTLY the one unpaid line's entitlement.
+EXPECTED_MINUS_SYSTEM = 22.50
 
 # ── fake Supabase client ─────────────────────────────────────────────────────────────────────────
 class _Res:
@@ -347,7 +380,7 @@ for k, want in TRUTH.items():
     close(f"tile {k} = {want}", tm[k]["system"], want)
 check("commissions_not_eligible stays UNMAPPED (no fake 0)", tm["commissions_not_eligible"]["mapped"], False)
 check("commissions_not_eligible system is None", tm["commissions_not_eligible"]["system"], None)
-check("appeal_count stays UNMAPPED", tm["appeal_count"]["mapped"], False)
+check("appeal_count is now the DERIVED follow-up worklist, not a blank", tm["appeal_count"]["mapped"], True)
 check("money tiles are POSITIVE after the sign convention", all(
     tm[k]["system"] > 0 for k in ("residual", "rebates_paid", "fees_margin_paid", "commissions_paid")), True)
 check("no report uploaded -> status 'no_report'", tm["activation_count"]["status"], "no_report")
@@ -363,14 +396,16 @@ for k in TRUTH:
 
 print("\n③ POSITIVE CONTROL — an uploaded report that MATCHES gives delta 0 / status ok")
 matching = [
+    # A100: qualifying activations 1-4; rebates include the Upgrade row's 7.00 (that tile has no filter)
     {"org_id": ORG, "period": PERIOD, "merchant_account_id": "A100", "account_name": "Lux Downtown",
-     "activation_count": 4, "twp_count": 1, "residual": 200.00, "rebates_paid": 65.00,
-     "fees_margin_paid": 1.50, "commissions_paid": 64.50, "edge_count": 1,
+     "activation_count": 4, "twp_count": 1, "residual": 200.00, "rebates_paid": 72.00,
+     "fees_margin_paid": 1.50, "commissions_paid": 90.00, "edge_count": 1,
      "commissions_not_eligible": 0, "appeal_count": 0, "extra": {}},
+    # B200: qualifying activations 5, 6 and 11; only 11 was paid nothing
     {"org_id": ORG, "period": PERIOD, "merchant_account_id": "B200", "account_name": "Lux Uptown",
-     "activation_count": 2, "twp_count": 0, "residual": 0.00, "rebates_paid": 40.00,
-     "fees_margin_paid": 2.00, "commissions_paid": 41.50, "edge_count": 0,
-     "commissions_not_eligible": 1, "appeal_count": 0, "extra": {}},
+     "activation_count": 3, "twp_count": 0, "residual": 0.00, "rebates_paid": 40.00,
+     "fees_margin_paid": 2.00, "commissions_paid": 45.00, "edge_count": 0,
+     "commissions_not_eligible": 1, "appeal_count": 1, "extra": {}},
     {"org_id": ORG, "period": PERIOD, "merchant_account_id": "C300", "account_name": "Lux Airport",
      "activation_count": 0, "twp_count": 0, "residual": 40.00, "rebates_paid": 0.00,
      "fees_margin_paid": 0.00, "commissions_paid": 0.00, "edge_count": 0,
@@ -382,7 +417,8 @@ for k in TRUTH:
     close(f"delta {k} == 0", tm2[k]["delta"], 0.0)
     check(f"status {k} == ok", tm2[k]["status"], "ok")
 check("every mapped tile reconciles", all(t["status"] == "ok" for t in p2["tiles"] if t["mapped"]), True)
-check("unmapped tiles report 'unmapped', not a delta", tm2["appeal_count"]["status"], "unmapped")
+check("the still-unmapped tile reports 'unmapped', not a delta",
+      tm2["commissions_not_eligible"]["status"], "unmapped")
 check("report provenance recorded", p2["report"]["present"], True)
 
 print("\n④ NEGATIVE CONTROL — a deliberately WRONG report produces the exact expected deltas")
@@ -397,8 +433,8 @@ close("rebates_paid delta = -100", tm3["rebates_paid"]["delta"], -100.0)
 check("rebates_paid status flips to 'off'", tm3["rebates_paid"]["status"], "off")
 check("the UNPERTURBED tiles stay ok", [tm3[k]["status"] for k in
                                         ("twp_count", "residual", "fees_margin_paid",
-                                         "commissions_paid", "edge_count")],
-      ["ok"] * 5)
+                                         "commissions_paid", "edge_count", "appeal_count")],
+      ["ok"] * 6)
 # The two perturbed accounts must occupy the top two slots, worst RELATIVE delta first: B200's rebate is
 # off by 100 on a stated 140 (0.71) vs A100's activation off by 5 on a stated 9 (0.56) — so B200 leads.
 check("both perturbed accounts rank above the clean one",
@@ -426,7 +462,10 @@ check("...and it is the 2026-06-30 row", ex["date_boundary"]["outside_dates"][0]
 check("rows on the month's last day counted", ex["date_boundary"]["rows_on_last_day"], 1)
 check("residual feed's out-of-period rows counted separately",
       ex["residual_date_boundary"]["rows_dated_outside_period"], 0)
-close("basis alternative: M1-M6 spiff total", ex["basis_alternatives"]["spiff_m1_m6_total"], 4.00)
+# ALL July M1 dollars, including the Upgrade/Swap rows the tile excludes — that is the point of the
+# panel: it shows the other bases so a mapping difference is recognisable as one.
+close("basis alternative: M1-M6 spiff total (all rows, incl. the excluded ones)",
+      ex["basis_alternatives"]["spiff_m1_m6_total"], 155.00)
 check("account only in OUR data is found (C300 has residual but the report of ③ lists it, so none here)",
       [a["account_id"] for a in ex["accounts_only_in_system"]], [])
 check("unmapped-tile candidates expose the real line_status values",
@@ -502,8 +541,16 @@ check("re-upload still leaves exactly 1 July row (no duplicate)", len(july), 1)
 check("the OTHER period is untouched", (len(june), june[0]["activation_count"]), (1, 999))
 
 print("\n⑨ CONFIG VALIDATION — a typo'd mapping is REJECTED, never a silent zero")
-bad = dict(mo.DEFAULT_TILES[0]); bad["filter_field"] = "activaton_type"     # typo
-check("typo'd filter column rejected", bool(mo.tile_problems(bad)), True)
+bad = dict(mo.DEFAULT_TILES[0])                                             # multi-condition tile
+bad["filters"] = [{"field": "activaton_type", "op": "nonblank"}]            # typo in the `filters` list
+check("typo'd filter column rejected (filters list)", bool(mo.tile_problems(bad)), True)
+badlegacy = {k: v for k, v in mo.DEFAULT_TILES[0].items() if k != "filters"}
+badlegacy["filter_field"] = "activaton_type"                               # typo in the legacy triplet
+check("typo'd filter column rejected (legacy triplet)", bool(mo.tile_problems(badlegacy)), True)
+badop = dict(mo.DEFAULT_TILES[0]); badop["filters"] = [{"field": "activation_type", "op": "starts_with"}]
+check("unknown filter operator rejected", bool(mo.tile_problems(badop)), True)
+badagg = dict(mo.DEFAULT_TILES[8]); badagg["source_table"] = "raw_ma_daily_tx"
+check("unpaid_count outside raw_ma_commission rejected", bool(mo.tile_problems(badagg)), True)
 bad2 = dict(mo.DEFAULT_TILES[3]); bad2["value_fields"] = "rebbate"
 check("typo'd money column rejected", bool(mo.tile_problems(bad2)), True)
 bad3 = dict(mo.DEFAULT_TILES[3]); bad3["source_table"] = "raw_sales"
@@ -519,7 +566,7 @@ p6 = mo.compute(cl3, ORG, PERIOD, pvariants, canon_period, month_year)
 tm6 = tile_map(p6)
 check("a broken saved mapping renders 'config_error', not a number", tm6["rebates_paid"]["status"], "config_error")
 check("...and its system value is blank, not 0", tm6["rebates_paid"]["system"], None)
-check("...while the other tiles still compute", tm6["activation_count"]["system"], 6.0)
+check("...while the other tiles still compute", tm6["activation_count"]["system"], 7.0)
 
 print("\n⑩ TENANT OVERRIDE — a saved tile row wins, and the money follows the config")
 cl4 = new_client(matching)
@@ -530,7 +577,9 @@ cl4.tables["ma_overview_tile_config"] = [
 ]
 p7 = mo.compute(cl4, ORG, PERIOD, pvariants, canon_period, month_year)
 check("tile config source flips to the org's rows", p7["config_source"], "org_config")
-close("commissions_paid now includes the spiff (106 + 4)", tile_map(p7)["commissions_paid"]["system"], 110.0)
+# margins + M1 over the SAME qualifying rows: cm 90 + dm 15 + M1 135 = 240
+close("commissions_paid now adds the margins to M1 (90 + 15 + 135)",
+      tile_map(p7)["commissions_paid"]["system"], 240.0)
 check("...and the delta against the unchanged report is exposed",
       tile_map(p7)["commissions_paid"]["status"], "off")
 
@@ -549,8 +598,116 @@ check("no filter field = match all", mo.match_filter(g, None, None, None), True)
 
 print("\n⑫ PERIOD SPELLING — '2026-07' reads the same rows as 'July 2026'")
 p8 = mo.compute(new_client(matching), ORG, "2026-07", pvariants, canon_period, month_year)
-close("activation_count identical under the other spelling", tile_map(p8)["activation_count"]["system"], 6)
+close("activation_count identical under the other spelling", tile_map(p8)["activation_count"]["system"], 7)
 check("period canonicalized for display", p8["period"], "July 2026")
+
+print("\n⑬ OWNER ANSWER 2 — COMMISSIONS PAID is the M1 leg, not the margins")
+cl_m = new_client(matching)
+p9 = mo.compute(cl_m, ORG, PERIOD, pvariants, canon_period, month_year)
+tm9 = tile_map(p9)
+check("the tile reads spiff_m1", tm9["commissions_paid"]["source"]["fields"], "spiff_m1")
+check("the tile is labelled as the M1 leg", "M1" in tm9["commissions_paid"]["label"], True)
+close("M1 over QUALIFYING activations = 135.00", tm9["commissions_paid"]["system"], 135.00)
+# The margins basis would have been cm 90 + dm 15 = 105 over the qualifying rows — a DIFFERENT number,
+# so this is a real behaviour change and not a relabelling.
+_margin_tile = dict(tm9["commissions_paid"])
+_mt = dict(next(t for t in mo.DEFAULT_TILES if t["tile_key"] == "commissions_paid"))
+_mt["value_fields"] = "consumer_margin,device_margin"
+close("the OLD margins basis would have said 105.00 — a different number",
+      mo.tile_value(_mt, cl_m._cube("raw_ma_commission", ORG, set(pvariants(PERIOD)), None)), 105.00)
+check("the Upgrade/Swap rows' M1 dollars are NOT in the tile (155 all-rows vs 135 qualifying)",
+      round(p9["explain"]["basis_alternatives"]["spiff_m1_m6_total"], 2) != round(tm9["commissions_paid"]["system"], 2),
+      True)
+
+print("\n⑭ OWNER ANSWER 2b — the EXPECTED cross-check (rate% x MRC), rates as CONFIG")
+exp = p9["expected_commission"]
+close("M1 rate resolves to the owner's 50%", exp["rate_pct"], 50.0)
+check("qualifying activations = 7", exp["qualifying_activations"], 7)
+close("MRC base = 7 x 45.00", exp["mrc_total"], 315.00)
+close("EXPECTED = 50% x 315.00 = 157.50", exp["expected"], EXPECTED_M1)
+close("expected - ours = 22.50, i.e. EXACTLY the one unpaid line's entitlement",
+      exp["expected_vs_system"], EXPECTED_MINUS_SYSTEM)
+close("expected - stated = 22.50 too (the report agrees with what was paid)",
+      exp["expected_vs_stated"], EXPECTED_MINUS_SYSTEM)
+check("rate plan source is the code default until a tenant saves one", p9["rate_plan"]["source"], "code_default")
+check("the M2-M6 defaults are the owner's 75%",
+      [r["rate_pct"] for r in p9["rate_plan"]["rates"][1:]], [75.0] * 5)
+# RATES ARE CONFIG: a tenant that renegotiates to 60% + a $5 spiff gets a different expectation, with
+# NO code change. (7 x 45 x 0.60) + (5 x 7) = 189.00 + 35.00 = 224.00
+cl_r = new_client(matching)
+cl_r.tables["ma_commission_month_rate"] = [
+    {"org_id": ORG, "month_index": 1, "rate_pct": 60, "spiff_flat": 5, "effective_from": None},
+]
+p10 = mo.compute(cl_r, ORG, PERIOD, pvariants, canon_period, month_year)
+check("a saved rate plan wins", p10["rate_plan"]["source"], "org_config")
+close("EXPECTED follows the config: 60% x 315 + 5 x 7 = 224.00",
+      p10["expected_commission"]["expected"], 224.00)
+# EFFECTIVE DATING: a rate that only starts in September must NOT apply to July.
+cl_e = new_client(matching)
+cl_e.tables["ma_commission_month_rate"] = [
+    {"org_id": ORG, "month_index": 1, "rate_pct": 50, "spiff_flat": 0, "effective_from": "2026-01-01"},
+    {"org_id": ORG, "month_index": 1, "rate_pct": 90, "spiff_flat": 0, "effective_from": "2026-09-01"},
+]
+p11 = mo.compute(cl_e, ORG, PERIOD, pvariants, canon_period, month_year)
+close("a September rate does NOT apply to July", p11["expected_commission"]["rate_pct"], 50.0)
+p12 = mo.compute(cl_e, ORG, "October 2026", pvariants, canon_period, month_year)
+close("...and DOES apply from October", p12["expected_commission"]["rate_pct"], 90.0)
+
+print("\n⑮ OWNER ANSWER 3 — ACTIVATION COUNT excludes swaps and upgrades")
+close("the Upgrade and the SIM Swap are NOT counted (7, not 9)", tm9["activation_count"]["system"], 7)
+voc = p9["activation_vocabulary"]
+_by = {v["value"]: v for v in voc["values"]}
+check("'New' is counted", _by["New"]["counted"], True)
+check("'Upgrade' is EXCLUDED", _by["Upgrade"]["counted"], False)
+check("'SIM Swap' is EXCLUDED", _by["SIM Swap"]["counted"], False)
+check("a blank activation type is excluded", _by["(blank)"]["counted"], False)
+check("the live vocabulary is printed for the operator to confirm",
+      sorted(_by), ["(blank)", "New", "SIM Swap", "Upgrade"])
+# NEGATIVE CONTROL: an export whose swap spelling is NOT on the exclusion list is COUNTED — and the
+# vocabulary panel is what makes that visible instead of silent.
+cl_v = new_client(matching)
+cl_v.tables["raw_ma_commission"].append(
+    C("A100", "ORD-77", "IMEI-77", at="Handset Exchange Program", cm=-4.0, sp1=-4.0))
+p13 = mo.compute(cl_v, ORG, PERIOD, pvariants, canon_period, month_year)
+close("an UNLISTED swap spelling IS counted (8, not 7) — a real risk, not hidden",
+      tile_map(p13)["activation_count"]["system"], 8)
+check("...and the panel shows it as counted so a human can add it",
+      next(v["counted"] for v in p13["activation_vocabulary"]["values"]
+           if v["value"] == "Handset Exchange Program"), True)
+
+print("\n⑯ OWNER ANSWER 4 — APPEAL COUNT is the unpaid follow-up worklist")
+close("one qualifying activation was paid nothing", tm9["appeal_count"]["system"], 1)
+check("the tile is a derived worklist, not a blank", tm9["appeal_count"]["mapped"], True)
+check("the worklist total is reported", p9["worklist"]["total_unpaid_lines"] >= 1, True)
+_b200 = next(r for r in p9["per_account"] if r["account_id"] == "B200")
+check("the unpaid line is attributed to the right account", _b200["unpaid_lines"], 1)
+_a100 = next(r for r in p9["per_account"] if r["account_id"] == "A100")
+check("...and the fully-paid account has none", _a100["unpaid_lines"], 0)
+# A row that WAS paid, even in one leg only, must NOT appear on the worklist.
+cl_p = new_client(matching)
+for r in cl_p.tables["raw_ma_commission"]:
+    if r.get("activation_order") == "ORD-10":
+        r["rebate"] = -0.01           # paid one cent, in one leg
+p14 = mo.compute(cl_p, ORG, PERIOD, pvariants, canon_period, month_year)
+close("a line paid ANY amount in ANY leg leaves the worklist",
+      tile_map(p14)["appeal_count"]["system"], 0)
+check("months elapsed is computed for chasing", mo.months_elapsed("2026-05-02", _dt.date(2026, 8, 4)), 3)
+check("an undated line reports no age rather than a fake 0", mo.months_elapsed(""), None)
+# The worklist must never include a non-activation row (nothing to appeal).
+check("the blank-activation-type row is never on the worklist",
+      all(_s_(r.get("activation_type")) for r in mo.load_unpaid_lines(
+          new_client(), ORG, pvariants(PERIOD),
+          ["spiff_m1", "rebate", "consumer_margin", "device_margin", "fees_margin"])[0]), True)
+
+print("\n⑰ OWNER ANSWER 1 — RESIDUAL basis CONFIRMED unchanged")
+res_tile = next(t for t in mo.DEFAULT_TILES if t["tile_key"] == "residual")
+check("still raw_ma_daily_tx", res_tile["source_table"], "raw_ma_daily_tx")
+check("still the Postpaid Residual Order filter", res_tile["filter_value"], "Postpaid Residual Order")
+check("still retail_cost, sign-negated", (res_tile["value_fields"], res_tile["sign"]),
+      ("retail_cost", "negate"))
+close("and the number is unchanged at 240.00", tm9["residual"]["system"], 240.00)
+check("the page states it as OWNER-CONFIRMED, not an assumption",
+      any(a["kind"] == "owner_decided" and a["tile"] == "Residual" for a in p9["assumptions"]), True)
 
 print("\n" + ("=" * 78))
 if FAILURES:
