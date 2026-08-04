@@ -79,7 +79,7 @@ _TRACE_TARGET_TABLE = {
     "catalog": "raw_catalog", "master_cats": "raw_categories", "comp_report": "raw_comp_report",
     "ma_commission": "raw_ma_commission", "ma_daily_tx": "raw_ma_daily_tx",
     "ma_fulfillment": "raw_ma_fulfillment", "x_report": "pos_tender_summary",
-    "inventory_aging": "inventory_aging",
+    "inventory_aging": "inventory_aging", "ma_overview": "ma_overview_upload",
 }
 
 
@@ -737,7 +737,8 @@ _SHRINK_RATIO = 0.5       # alert when the incoming count is < 50% of what it re
 # JSONB, no code. Kept as a module constant so upload_file and the custom-type endpoints agree.
 BUILTIN_UPLOAD_TYPES = ["sales", "daily_sales", "payment_detail", "mi_report", "dlar_rep", "dlar_store",
                         "catalog", "master_cats", "comp_report", "inventory_aging", "x_report",
-                        "ma_commission", "ma_daily_tx", "ma_fulfillment"]  # Total/VidaPay MA reports (mig 083)
+                        "ma_commission", "ma_daily_tx", "ma_fulfillment",  # Total/VidaPay MA reports (mig 083)
+                        "ma_overview"]  # MA "Overview of Accounts" — the recon report (mig 268)
 # Derived / summary b2b reports that have NO importer — a filename sweep may match them but we skip them
 # cleanly (not a hard error) so one un-ingestable attachment doesn't show as a failed sweep. A tenant that
 # wants one captured can register it under Data Imports → Custom Reports (report_definitions).
@@ -872,6 +873,14 @@ async def _upload_file_impl(
     belong to (their Begin Date); a mismatch is rejected (pass force=true to override) so a file
     can't be mislabeled into the wrong month — the bug that wiped a month's residual trend."""
     require_org(org_id)
+
+    # MA "Overview of Accounts" (mig 268) — the master-agent portal's stated tiles. Its own
+    # parse + idempotent replace-by-(org,period,account); it shares nothing with the raw_ma_*
+    # column-mapping pipeline below, so it returns here. READ-ONLY with respect to pay: the rows
+    # land in commcalc.ma_overview_upload and are only ever COMPARED against our own data on
+    # /commcalc/ma-overview-recon. The traced wrapper above still records the upload_trace row.
+    if file_type == "ma_overview":
+        return await _ingest_ma_overview(file, period, org_id)
 
     SUPPORTED = BUILTIN_UPLOAD_TYPES
     if file_type not in SUPPORTED:
@@ -21833,6 +21842,295 @@ def ma_commission_summary(period: str = "", stores: str = "", reps: str = "", or
             "note": None if comm or tx else
             "No MA rows for this period yet — upload the MA reports on Data Imports (no period needed) "
             "or add mailbox rules (*Commission*Details* → MA Commission Details)."}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# MA "OVERVIEW OF ACCOUNTS" RECONCILIATION (mig 268) — the portal's STATED tiles vs. OUR data.
+#
+# Owner directive 2026-08-04: the Total/VidaPay master-agent portal publishes an "Overview of Accounts"
+# report whose tiles state Activation Count, TWP Count, Residual, Rebates Paid, Fees Margin Paid,
+# Commissions Paid, Commissions Not Eligible, Edge (Device Finance) and Appeal Count for a period —
+# "create a similar report in the system and all activations and commission paid can be cross checked
+# with this report to check the validity of the data in our system".
+#
+# READ-ONLY WITH RESPECT TO PAY. Every endpoint below reads commcalc.raw_ma_commission /
+# raw_ma_daily_tx (mig 083) and the uploaded report, and COMPARES them. None of them writes
+# rep_commissions, a commission plan, a payout schedule or the commission ledger, and none of them
+# triggers a recalculation. The only writes are the uploaded report's own stated numbers
+# (ma_overview_upload) and the tenant's tile mapping (ma_overview_tile_config).
+#
+# All tile definitions are CONFIG (ma_overview.resolve_tiles → commcalc.ma_overview_tile_config, code
+# defaults when absent). Nothing here branches on a carrier or tenant name. Every read and write is
+# org-scoped from the query param.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+def _ma_ov():
+    from app.modules.commcalc import ma_overview
+    return ma_overview
+
+
+async def _ingest_ma_overview(file, period, org_id):
+    """Parse + persist an uploaded "Overview of Accounts" export. Accepts BOTH shapes the portal produces
+    (one row per merchant account, or a two-column tile list). Idempotent: REPLACE by
+    (org, period, account) — re-uploading July can never touch June. Returns the upload_file-shaped dict
+    the traced wrapper + the sweeps read."""
+    mo = _ma_ov()
+    contents = await file.read()
+    fname = (getattr(file, "filename", "") or "")
+    low = fname.lower()
+    try:
+        if low.endswith((".csv", ".txt")):
+            df = None
+            for enc in ("utf-8-sig", "cp1252", "latin-1"):
+                try:
+                    df = pd.read_csv(io.BytesIO(contents), dtype=str, encoding=enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+        else:
+            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
+    if df is None:
+        raise HTTPException(400, f"Could not decode {fname or 'the upload'} as CSV/Excel.")
+    df = df.fillna('')
+    client = sb()
+    tiles, _src = mo.resolve_tiles(client, org_id)
+    eff_period = _canon_period(period) if period else _canon_period(_ftp_current_period())
+    rows, warnings = mo.parse_overview_rows(tiles, df.to_dict('records'), eff_period, _canon_period)
+    if not rows:
+        raise HTTPException(400, "Nothing in this file matched the Overview tiles. "
+                                 + (" ".join(warnings) if warnings else
+                                    "Expected columns like 'Activation Count', 'Rebates Paid', "
+                                    "'Commissions Paid' (or a two-column tile list)."))
+    records = mo.upload_rows_to_records(rows, org_id, fname, None, _month_year)
+    try:
+        res = mo.persist_upload(client, org_id, records)
+    except Exception as e:
+        raise HTTPException(400, f"Could not save the overview report — run migration "
+                                 f"268_commission_ma_overview_recon.sql first ({e}).")
+    periods = res.get("periods") or {}
+    return {"status": "ok", "file_type": "ma_overview", "saved": res.get("saved", 0),
+            "rows": len(records), "periods": periods, "warnings": warnings,
+            "accounts": sorted({r.get("merchant_account_id") for r in records}),
+            "_trace": {"rows_in": len(df), "target_table": "ma_overview_upload", "periods": periods}}
+
+
+@router.post("/ma-overview-recon/upload")
+async def ma_overview_upload_report(file: UploadFile = File(...), period: str = "",
+                                    org_id: str = ORG_ID):
+    """Upload the master-agent "Overview of Accounts" export for a period (drag-drop on the recon page).
+    Equivalent to POST /upload/ma_overview; kept as its own route so the recon page is self-contained.
+    Idempotent replace by (org, period, account). Writes NOTHING that decides a payout."""
+    require_org(org_id)
+    return await upload_file("ma_overview", file, period, False, "", org_id)
+
+
+@router.get("/ma-overview-recon")
+def ma_overview_recon(period: str = "", accounts: str = "", org_id: str = ORG_ID):
+    """THE CROSS-CHECK. For `period`: each tile's STATED value (from the uploaded overview report), the
+    SAME tile computed from our ingested MA data, the delta, and — where the delta is non-zero — which
+    rows plausibly explain it (accounts present on one side only, rows with no IMEI, multi-line
+    activations, month-boundary rows, alternative money bases). Plus a per-merchant-account table sorted
+    by |delta|, which is how a bad account is actually found.
+
+    RULE FIVE: `period` + optional `accounts` (comma-separated merchant-account ids) narrow BOTH sides
+    server-side, so the tiles, the table, the explainers AND the exports stay consistent (WYSIWYG).
+    Read-only; org-scoped; degrades to a paged scan (and an empty stated side) when mig 268 is unrun."""
+    require_org(org_id)
+    mo = _ma_ov()
+    client = sb()
+    acct = [a.strip() for a in (accounts or "").split(",") if a.strip()]
+    p = (period or "").strip() or _canon_period(_ftp_current_period())
+    out = mo.compute(client, org_id, p, _pvariants, _canon_period, _month_year,
+                     accounts=acct or None)
+    out["periods"] = _ma_overview_period_options(client, org_id)
+    out["filters"] = {"period": p, "accounts": acct}
+    return out
+
+
+def _ma_overview_period_options(client, org_id):
+    """Pick-don't-type period list (RULE THREE): every period this org HAS MA data or a stored overview
+    report for, newest first. Aggregated in Postgres (mig 268 RPC); falls back to a capped column scan
+    when the migration is unrun. Never raises — a missing table just contributes nothing."""
+    periods = set()
+    try:
+        for r in (client.schema("commcalc").rpc("ma_overview_periods", {"p_org": org_id})
+                  .execute().data or []):
+            v = str(r.get("period") or "").strip()
+            if v:
+                periods.add(_canon_period(v))
+    except Exception as e:
+        print(f"WARN ma_overview_periods RPC unavailable, falling back to a column scan: {e}")
+        for table, col in (("raw_ma_commission", "period"), ("raw_ma_daily_tx", "period"),
+                           ("ma_overview_upload", "period")):
+            try:
+                rows = (client.schema("commcalc").table(table).select(col)
+                        .eq("org_id", org_id).limit(50000).execute().data) or []
+            except Exception:
+                rows = []
+            for r in rows:
+                v = str(r.get(col) or "").strip()
+                if v:
+                    periods.add(_canon_period(v))
+    def _k(p):
+        mo_, yr = _month_year(p)
+        return (yr or 0, mo_ or 0, p)
+    return sorted(periods, key=_k, reverse=True)
+
+
+@router.get("/ma-overview-recon/tiles")
+def ma_overview_tiles(org_id: str = ORG_ID):
+    """The tenant's tile→source mapping (RULE TWO) + the editor's vocabulary: which source tables exist,
+    which dimensions each may filter on, which money columns each may sum, and the operator list. The
+    `source` field says whether these are the org's own rows or the code defaults."""
+    require_org(org_id)
+    mo = _ma_ov()
+    tiles, src = mo.resolve_tiles(sb(), org_id)
+    return {"ok": True, "org_id": org_id, "source": src, "tiles": tiles,
+            "upload_metrics": list(mo.UPLOAD_METRICS),
+            "sources": {k: {"dims": list(v["dims"]), "money": list(v["money"])}
+                        for k, v in mo.SOURCES.items()},
+            "filter_ops": list(mo.FILTER_OPS),
+            "aggs": ["count", "sum", "none"], "signs": ["as_is", "negate", "abs"],
+            "note": ("A tile with aggregate 'none' has NO system source and renders an honest "
+                     "\"no source mapped\" state — never a fake 0.")}
+
+
+@router.put("/ma-overview-recon/tiles/{tile_key}")
+def ma_overview_put_tile(tile_key: str, body: dict, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    """Save ONE tile's mapping for this tenant (upsert on org+tile_key). Validated against the source
+    vocabulary before it is stored, so a typo'd column can never silently read as "no rows matched".
+    Changes what the RECON compares — it changes no payout: nothing reads this table except this page."""
+    require_org(org_id)
+    if not _can_edit_classification(authorization, org_id):
+        raise HTTPException(403, "You don't have permission to edit the tile mapping.")
+    mo = _ma_ov()
+    row = {"org_id": org_id, "tile_key": tile_key.strip()}
+    for f in mo.TILE_FIELDS:
+        if f == "tile_key":
+            continue
+        if f in (body or {}):
+            row[f] = body.get(f)
+    if "is_active" in (body or {}):
+        row["is_active"] = bool(body.get("is_active"))
+    base = next((dict(t) for t in mo.DEFAULT_TILES if t["tile_key"] == row["tile_key"]), {})
+    base.update({k: v for k, v in row.items() if v is not None})
+    problems = mo.tile_problems(base)
+    if problems:
+        raise HTTPException(400, "Tile mapping rejected: " + "; ".join(problems))
+    row.setdefault("label", base.get("label") or row["tile_key"])
+    row["updated_at"] = _datetime.now(_timezone.utc).isoformat()
+    try:
+        res = (sb().schema("commcalc").table("ma_overview_tile_config")
+               .upsert(row, on_conflict="org_id,tile_key").execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not save the tile mapping — run migration "
+                                 f"268_commission_ma_overview_recon.sql first ({e}).")
+    return {"ok": True, "tile": (res.data[0] if res.data else row)}
+
+
+@router.post("/ma-overview-recon/tiles/seed")
+def ma_overview_seed_tiles(org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Materialize the code-default tiles as THIS tenant's own editable rows. Safe to re-run (existing
+    tile_keys are left alone). Config only — moves no money."""
+    require_org(org_id)
+    if not _can_edit_classification(authorization, org_id):
+        raise HTTPException(403, "You don't have permission to edit the tile mapping.")
+    mo = _ma_ov()
+    client = sb()
+    try:
+        have = {str(r.get("tile_key")) for r in
+                ((client.schema("commcalc").table("ma_overview_tile_config").select("tile_key")
+                  .eq("org_id", org_id).execute().data) or [])}
+    except Exception as e:
+        raise HTTPException(400, f"Run migration 268_commission_ma_overview_recon.sql first ({e}).")
+    rows = [{**{f: t.get(f) for f in mo.TILE_FIELDS}, "org_id": org_id}
+            for t in mo.DEFAULT_TILES if t["tile_key"] not in have]
+    if rows:
+        client.schema("commcalc").table("ma_overview_tile_config").insert(rows).execute()
+    return {"ok": True, "seeded": len(rows), "already_present": sorted(have)}
+
+
+@router.delete("/ma-overview-recon/report/{period}")
+def ma_overview_delete_report(period: str, org_id: str = ORG_ID,
+                              authorization: str = Header(default="")):
+    """Remove the stored overview report for ONE period (to correct a bad upload). Touches only
+    commcalc.ma_overview_upload for THIS org and THIS period — no other period, no other table."""
+    require_org(org_id)
+    if not _can_edit_classification(authorization, org_id):
+        raise HTTPException(403, "You don't have permission to delete the stored report.")
+    try:
+        res = (sb().schema("commcalc").table("ma_overview_upload").delete()
+               .eq("org_id", org_id).in_("period", _pvariants(period)).execute())
+    except Exception as e:
+        raise HTTPException(400, f"Could not delete ({e}).")
+    return {"ok": True, "period": period, "deleted": len(res.data or [])}
+
+
+@router.get("/ma-overview-recon/drill")
+def ma_overview_drill(tile: str, period: str = "", accounts: str = "", limit: int = 300,
+                      org_id: str = ORG_ID):
+    """The UNDERLYING ROWS behind one tile — the same rows the tile counted/summed, with the tile's own
+    per-row contribution. Capped (`limit`, default 300) with the full matched count reported, so a
+    100k-row month never becomes a 30-second response. Read-only."""
+    require_org(org_id)
+    mo = _ma_ov()
+    client = sb()
+    p = (period or "").strip() or _canon_period(_ftp_current_period())
+    acct = {a.strip() for a in (accounts or "").split(",") if a.strip()}
+    tiles, _src = mo.resolve_tiles(client, org_id)
+    t = next((x for x in tiles if str(x.get("tile_key")) == tile), None)
+    if not t:
+        raise HTTPException(404, f"no tile '{tile}'")
+    probs = mo.tile_problems(t)
+    if probs:
+        return {"ok": False, "tile": tile, "rows": [], "matched": 0, "problems": probs}
+    if (str(t.get("agg") or "none").lower()) == "none":
+        return {"ok": True, "tile": tile, "unmapped": True, "rows": [], "matched": 0,
+                "note": t.get("note")}
+    src = str(t.get("source_table") or "")
+    spec = mo.SOURCES[src]
+    akey = spec["account_key"]
+    if src == "raw_ma_commission":
+        cols = (akey, "tx_date", "period", "activation_order", "imei", "sim", "sku", "user_name",
+                "platform", "pos_invoice") + spec["dims"] + spec["money"]
+    else:
+        cols = (akey, "tx_date", "period", "order_number", "account_name", "product_name",
+                "user_name") + spec["dims"] + spec["money"]
+    fields = [x.strip() for x in str(t.get("value_fields") or "").split(",") if x.strip()]
+    out, matched, scanned, start, page = [], 0, 0, 0, 1000
+    while scanned < 100000:
+        try:
+            q = (client.schema("commcalc").table(src).select(",".join(cols)).eq("org_id", org_id)
+                 .in_("period", _pvariants(p)))
+            if acct:
+                q = q.in_(akey, sorted(acct))
+            chunk = q.range(start, start + page - 1).execute().data or []
+        except Exception as e:
+            return {"ok": False, "tile": tile, "rows": [], "matched": 0,
+                    "problems": [f"could not read {src}: {e}"]}
+        scanned += len(chunk)
+        for r in chunk:
+            if not mo.match_filter(r, t.get("filter_field"), t.get("filter_op"), t.get("filter_value")):
+                continue
+            matched += 1
+            if len(out) < max(1, min(limit, 2000)):
+                r = dict(r)
+                r["_contribution"] = (1 if str(t.get("agg")).lower() == "count" else
+                                      round(mo.sign_apply(sum(mo.safe_float(r.get(f)) for f in fields),
+                                                          t.get("sign")), 2))
+                out.append(r)
+        if len(chunk) < page:
+            break
+        start += page
+    return {"ok": True, "tile": tile, "label": t.get("label"), "period": p,
+            "source_table": src, "matched": matched, "returned": len(out),
+            "capped": matched > len(out), "rows": out,
+            "filter": (f"{t.get('filter_field')} {t.get('filter_op')} {t.get('filter_value') or ''}".strip()
+                       if str(t.get("filter_field") or "") else None),
+            "note": t.get("note")}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
