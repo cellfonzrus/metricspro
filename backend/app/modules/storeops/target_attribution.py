@@ -23,11 +23,43 @@ THE RULE, decomposed
 Everything here is pure (no Supabase, no HTTP) so it is unit-testable without a database or a live
 commcalc endpoint — see harness_dm_target_attribution.py. The router (router.py) is the only place
 that talks to Postgres or makes the internal HTTP call to mod-commission's Daily Targets endpoints.
+
+BULK-FETCH PERFORMANCE PATH (owner directive 2026-08-04, "plan for a bigger tenant")
+-------------------------------------------------------------------------------------
+The FIRST cut of this package called mod-commission's per-(store,rep) `/calendar?scope=rep` endpoint
+once per worked pair — O(employees × stores) internal HTTP round-trips. That endpoint has no bulk/
+paged shape (it is inherently single-store, optionally single-rep), so there is no way to "page
+through" it for a bulk pull. Instead, the router now makes exactly ONE internal HTTP call —
+`GET /commcalc/targets/{period}/summary` (already the org's bulk/all-stores shape; already used
+elsewhere in the platform, e.g. My Team) — which returns, per store, the store's MONTHLY accessory
+target dollars AND each rep's own ACHIEVED accessory $ there (`reps_in_scope` + `scope_achieved_mtd`,
+computed by mod-commission). The ONE piece that call does NOT give per rep is the monthly-target
+SHARE (mod-commission only prorates that inside `/calendar?scope=rep`) — so `rep_share_from_shifts`
+below LOCALLY reproduces that one small, pure, money-FREE ratio (rep's schedule hours ÷ the store's
+schedule hours, both projected to month-end the same way) off `storeops.shifts`, which this module
+already owns and reads for its own "worked pairs" list — no additional HTTP calls, no proration
+formula change, same final `target = store_monthly × rep_share` computation `/calendar?scope=rep`
+would return. `hours_by_day_for_scope` / `project_future_hours` deliberately MIRROR
+`commcalc/targets_engine.py`'s same-named functions bit-for-bit (never imported — that file is
+mod-commission's — but the algorithm is small, pure, and documented here so a drift is visible on
+sight, not silent). If exact byte-parity with a live `/calendar?scope=rep` call ever matters for an
+audit, that endpoint still exists and answers the same question for one pair at a time.
+
+SPAN-SCOPING (Gate-1 rework 2026-08-04)
+-----------------------------------------
+A market-scope caller (a District Manager) must see ONLY the DM card(s) for markets granted to them —
+never another DM's per-employee target slice or roster. `visible_dm_keys_for_markets` /
+`visible_unassigned` / `visible_ambiguous_markets` / `redact_cross_dm_employees` implement that
+narrowing PURELY (no DB) over `attribute_rows_to_dms`'s own output, so the router computes the FULL
+org-wide attribution once (needed to even DETECT a cross-DM employee — you cannot know a rep also
+works another DM's market without seeing that other row) and then redacts the response for a
+market-scope caller at the presentation layer: full detail for their own market(s), a bare
+identity label (never totals, never a roster) for any OTHER DM referenced only to explain a split.
 """
 from __future__ import annotations
 
 from calendar import month_name
-from datetime import date
+from datetime import date, timedelta
 from typing import Dict, List, Optional
 
 
@@ -86,6 +118,82 @@ def worked_pairs_from_shifts(shifts: List[dict]) -> List[dict]:
             seen[key] = {"employee_name": name, "store_code": store,
                         "employee_id": s.get("employee_id")}
     return list(seen.values())
+
+
+def _parse_shift_date(v) -> Optional[date]:
+    if isinstance(v, date):
+        return v
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def hours_by_day_for_scope(shifts: List[dict], store_code: str, rep_name: Optional[str]) -> Dict[date, float]:
+    """Scheduled hours per day for a (store) or (store, rep) scope. MIRRORS
+    `commcalc/targets_engine.py`'s `scope_hours_by_day` exactly (same filters: non-deleted, positive
+    hours, exact case-insensitive store/rep match) — see the module docstring for why this is
+    duplicated rather than imported. rep_name=None -> whole-store hours."""
+    out: Dict[date, float] = {}
+    sc = _norm(store_code).upper()
+    rn = _norm(rep_name).upper()
+    for s in shifts or []:
+        if s.get("is_deleted"):
+            continue
+        if _norm(s.get("store_code")).upper() != sc:
+            continue
+        if rn and _norm(s.get("employee_name")).upper() != rn:
+            continue
+        d = _parse_shift_date(s.get("shift_date"))
+        if not d:
+            continue
+        try:
+            h = float(s.get("scheduled_hours") or 0)
+        except (TypeError, ValueError):
+            h = 0.0
+        if h <= 0:
+            continue
+        out[d] = out.get(d, 0.0) + h
+    return out
+
+
+def project_future_hours(hours_by_day: Dict[date, float], today: date, month_end: date) -> Dict[date, float]:
+    """Fill not-yet-scheduled future days from the scope's own weekly pattern. MIRRORS
+    `commcalc/targets_engine.py`'s `project_future_hours` exactly (average hours per weekday seen so
+    far, applied forward to every matching weekday with no concrete shift yet; never touches a
+    concrete day; no shifts at all -> projects nothing)."""
+    if not hours_by_day or not month_end:
+        return {}
+    by_wd: Dict[int, list] = {}
+    for d, h in hours_by_day.items():
+        if h > 0:
+            by_wd.setdefault(d.weekday(), []).append(h)
+    if not by_wd:
+        return {}
+    avg_by_wd = {wd: sum(v) / len(v) for wd, v in by_wd.items()}
+    out: Dict[date, float] = {}
+    d = today
+    while d <= month_end:
+        if d not in hours_by_day and d.weekday() in avg_by_wd:
+            out[d] = avg_by_wd[d.weekday()]
+        d += timedelta(days=1)
+    return out
+
+
+def rep_share_from_shifts(shifts: List[dict], store_code: str, rep_name: str, today: date, month_end: date) -> float:
+    """The rep's share of a store's scheduled hours (today→month_end projected) — MIRRORS the exact
+    proration ratio `GET /commcalc/targets/{period}/calendar?scope=rep` computes inline (router.py's
+    own "Employee target PRORATION" block): projected rep-hours ÷ projected store-hours, 0.0 when the
+    store has no hours at all this period (never divides by zero). This is the ONE piece of the
+    per-rep target `GET /commcalc/targets/{period}/summary`'s bulk response doesn't already carry —
+    everything else (the store's monthly target dollars, the rep's own achieved $) comes straight off
+    that ONE bulk call; see the module docstring."""
+    store_hours = hours_by_day_for_scope(shifts, store_code, None)
+    rep_hours = hours_by_day_for_scope(shifts, store_code, rep_name)
+    store_eff = {**store_hours, **project_future_hours(store_hours, today, month_end)}
+    rep_eff = {**rep_hours, **project_future_hours(rep_hours, today, month_end)}
+    sh, rh = sum(store_eff.values()), sum(rep_eff.values())
+    return (rh / sh) if sh > 0 else 0.0
 
 
 def dm_roster_from_app_users(app_user_rows: List[dict], role_scope_by_name: Dict[str, str],
@@ -193,9 +301,13 @@ def attribute_rows_to_dms(rows: List[dict], dm_markets: Dict[str, dict]) -> dict
 def cross_dm_employees(attributed: dict) -> List[dict]:
     """Convenience view for the "2-DM employee, verify at a glance" ask: every employee name that
     appears in MORE THAN ONE dm's row set, with the per-DM store(s)/target(s) that landed there.
-    Pure post-processing over `attribute_rows_to_dms`'s own output — no new inputs."""
+    Pure post-processing over `attribute_rows_to_dms`'s own output — no new inputs. Each `dms` entry
+    carries `label` (not just `dm_key`) so `redact_cross_dm_employees` can show a bare identity for a
+    DM being redacted, without the caller needing a separate by_dm lookup."""
     by_emp: Dict[str, Dict[str, list]] = {}
+    labels: Dict[str, str] = {}
     for dm_key, d in (attributed.get("by_dm") or {}).items():
+        labels[dm_key] = d.get("label", dm_key)
         for row in d.get("rows") or []:
             emp = _norm(row.get("employee_name") or row.get("employee"))
             if not emp:
@@ -208,9 +320,70 @@ def cross_dm_employees(attributed: dict) -> List[dict]:
         out.append({
             "employee_name": emp,
             "dms": [
-                {"dm_key": dm_key, "rows": rows,
+                {"dm_key": dm_key, "label": labels.get(dm_key, dm_key), "rows": rows,
                  "total_target": round(sum(float(r.get("target") or 0) for r in rows), 2)}
                 for dm_key, rows in per_dm.items()
             ],
         })
+    return out
+
+
+# ── SPAN-SCOPING (Gate-1 rework 2026-08-04) — pure narrowing/redaction over attribute_rows_to_dms's
+# own output, so a market-scope caller sees only their own market(s)' slice. ────────────────────────
+def visible_dm_keys_for_markets(dm_markets: Dict[str, dict], caller_markets) -> set:
+    """DM keys whose granted markets INTERSECT `caller_markets` (case-insensitive). This is deliberately
+    market-based, not identity-based: in the (flagged) `ambiguous_markets` case where 2 DMs are BOTH
+    granted the same market, a caller holding that market grant sees BOTH cards for it — their
+    visibility is defined by the market they were granted, not by which internal dm_key happens to
+    hold it. Empty `caller_markets` -> empty set (no visible DMs — a market-scope role with no market
+    of its own has no reporting span here, same "empty span" convention every other storeops read
+    uses under RBAC)."""
+    if not caller_markets:
+        return set()
+    folded = {_fold(m) for m in caller_markets}
+    out = set()
+    for dm_key, meta in (dm_markets or {}).items():
+        if any(_fold(m) in folded for m in (meta.get("markets") or ())):
+            out.add(dm_key)
+    return out
+
+
+def visible_unassigned(unassigned: dict, caller_markets) -> dict:
+    """`unassigned` narrowed to rows whose market is one of `caller_markets` — a market-scope DM may
+    see "my market has a store nobody's been granted" (useful config guidance) but not another
+    market's unassigned rows."""
+    if not caller_markets:
+        return {"rows": [], "total_target": 0.0}
+    folded = {_fold(m) for m in caller_markets}
+    rows = [r for r in (unassigned or {}).get("rows") or [] if _fold(r.get("market")) in folded]
+    return {"rows": rows, "total_target": round(sum(float(r.get("target") or 0) for r in rows), 2)}
+
+
+def visible_ambiguous_markets(ambiguous: Dict[str, list], caller_markets) -> Dict[str, list]:
+    """`ambiguous_markets` narrowed to markets the caller themselves is granted — they may see that
+    THEIR market has a DM-grant collision, not that some other market they can't see does too."""
+    if not caller_markets:
+        return {}
+    folded = {_fold(m) for m in caller_markets}
+    return {m: dms for m, dms in (ambiguous or {}).items() if _fold(m) in folded}
+
+
+def redact_cross_dm_employees(cross_dm: List[dict], visible_keys: set) -> List[dict]:
+    """For a market-scope caller: keep FULL detail (rows + total_target) only for the dm entries the
+    caller may see; any OTHER dm referenced on the same split row is reduced to a bare identity stub
+    (`dm_key` + `label` + `redacted: True`, no rows, no total_target) — enough to explain "this
+    employee also works elsewhere" (the split is real and shouldn't look silently wrong) without
+    exposing that other DM's totals or roster. An employee with NO row under a visible dm at all is
+    dropped entirely (nothing of theirs to show this caller)."""
+    out = []
+    for e in cross_dm or []:
+        dms = e.get("dms") or []
+        if not any(d.get("dm_key") in visible_keys for d in dms):
+            continue
+        redacted = [
+            d if d.get("dm_key") in visible_keys
+            else {"dm_key": d.get("dm_key"), "label": d.get("label", d.get("dm_key")), "redacted": True}
+            for d in dms
+        ]
+        out.append({**e, "dms": redacted})
     return out

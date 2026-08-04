@@ -90,7 +90,7 @@ export default function DmAccessoryAttributionPage() {
         { header: 'DM', get: (r: any) => r._dmLabel },
         { header: 'Target', money: true, get: (r: any) => r.total_target },
       ] as ExportColumn[],
-      rows: crossDm.flatMap((e: any) => e.dms.map((d: any) => ({ employee_name: e.employee_name, _dmLabel: byDm[d.dm_key]?.label || d.dm_key, total_target: d.total_target }))),
+      rows: crossDm.flatMap((e: any) => e.dms.map((d: any) => ({ employee_name: e.employee_name, _dmLabel: (d.label || byDm[d.dm_key]?.label || d.dm_key) + (d.redacted ? ' (not visible to you)' : ''), total_target: d.redacted ? null : d.total_target }))),
     }] : []),
   ]
 
@@ -106,6 +106,13 @@ export default function DmAccessoryAttributionPage() {
         the sum of every employee-store row whose store's market is granted to them — a rep who worked stores
         in two DMs' markets is split per store, never merged, never double-counted.
       </p>
+
+      {data.caller_scope === 'market' && (
+        <div className="card" style={{ padding: 10, marginBottom: 12, fontSize: 12, color: 'var(--text3)' }}>
+          🔒 Showing your own granted market(s) only. A rep who also works under another DM still appears
+          below (to explain the split) but that other DM's numbers and roster are not shown here.
+        </div>
+      )}
 
       {Object.keys(ambiguous).length > 0 && (
         <div className="card" style={{ padding: 12, marginBottom: 12, background: '#fdeaea', borderColor: '#c0392b', fontSize: 13 }}>
@@ -156,9 +163,9 @@ export default function DmAccessoryAttributionPage() {
               {crossDm.map((e: any) => e.dms.map((d: any, i: number) => (
                 <tr key={`${e.employee_name}-${d.dm_key}`}>
                   {i === 0 && <td style={{ ...td, fontWeight: 600 }} rowSpan={e.dms.length}>{e.employee_name}</td>}
-                  <td style={td}>{byDm[d.dm_key]?.label || d.dm_key}</td>
-                  <td style={td}>{d.rows.map((r: Row) => r.address || r.store_code).join(', ')}</td>
-                  <td style={td}>{$(d.total_target)}</td>
+                  <td style={td}>{d.label || byDm[d.dm_key]?.label || d.dm_key}{d.redacted && <span title="Another DM's numbers — not visible to you" style={{ color: 'var(--text3)' }}> 🔒</span>}</td>
+                  <td style={td}>{d.redacted ? '—' : (d.rows || []).map((r: Row) => r.address || r.store_code).join(', ')}</td>
+                  <td style={td}>{d.redacted ? '—' : $(d.total_target)}</td>
                 </tr>
               )))}
             </tbody>

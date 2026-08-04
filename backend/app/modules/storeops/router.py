@@ -4541,62 +4541,35 @@ def run_pto_accrual(period: str, authorization: str = Header(default=""), org_id
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
 # DM ACCESSORY-TARGET ATTRIBUTION — migration band 400-499 (no new table; read + rollup only), owner
 # directive 2026-08-04 (ledger Q7 answer): "my team accessory numbers are the accessory target for the
 # [stores] calculated by the schedule and for the dm it is the total of employees which run under him
 # for the stores they worked in, if an employee works under 2 dms then their target for that store
 # goes under the dm for that market."
 #
-# The SCHEDULE-DRIVEN per-rep target itself is mod-commission's Daily Targets engine
-# (`commcalc/targets_engine.py`) — NOT reimplemented here (money-adjacent, cross-file-owned, and the
-# proration formula depends on commcalc's own rep-name canonicalization, see docs/handoffs/people.md).
-# This section CONSUMES that engine's already-shipped endpoints over the internal loopback HTTP path
-# (same `INTERNAL_API_BASE_URL` convention the PTO/payroll-tax packages established above — reused
-# here, not duplicated) and does the ATTRIBUTION/ROLLUP — a pure, DB-free function in
-# `target_attribution.py` (unit-tested in harness_dm_target_attribution.py) — over the results.
+# The SCHEDULE-DRIVEN per-rep target is mod-commission's Daily Targets engine
+# (`commcalc/targets_engine.py`) — NOT reimplemented here (money-adjacent, cross-file-owned). Per the
+# 2026-08-04 "plan for a bigger tenant" directive this section makes exactly ONE internal HTTP call —
+# `GET /commcalc/targets/{period}/summary` (the org's existing BULK/all-stores shape) — per rollup,
+# instead of one call per (employee, store) pair; the one number that call doesn't carry (a rep's
+# SHARE of a store's target) is computed locally, off this module's OWN `storeops.shifts` schedule
+# data, by a small pure function that mirrors mod-commission's own proration ratio (see
+# `target_attribution.py`'s module docstring for the full "why one call, why local" reasoning).
 #
 # READ-ONLY / NOT MONEY: nothing here writes a payout, a target, or a schedule row. It only re-groups
-# numbers mod-commission already computed and this module's own `storeops.shifts` schedule already
-# describes, by market → DM. The achieved-$ side is read VERBATIM off the same `/calendar?scope=rep`
-# payload `EmployeeWidgets`' own rep-target drill-down already uses — never recomputed here — so it is
-# byte-identical to what the employee's own dashboard already shows.
+# numbers mod-commission already computed (the store's target $ + each rep's achieved $) and this
+# module's own schedule already describes, by market → DM. Achieved-$ is read VERBATIM off that ONE
+# bulk payload — never recomputed here.
+#
+# SPAN-SCOPING (Gate-1 rework 2026-08-04): a market-scope caller (District Manager) sees ONLY the DM
+# card(s) for market(s) granted to them — see `target_attribution.py`'s span-scoping section for the
+# full reasoning (why the FULL org-wide attribution is still computed once, then redacted for
+# presentation, rather than narrowing the underlying data fetch).
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 _DM_TARGET_CACHE_TTL_S = 120.0
-_dm_target_cache: dict = {}   # (org_id, period, STORE, REP) -> (fetched_at, {'target':..,'achieved':..})
-
-
-def _dm_calendar_target(org_id: str, period: str, store_code: str, rep_name: str) -> dict:
-    """ONE (store, rep) schedule-derived accessory target, off mod-commission's OWN endpoint
-    (`GET /commcalc/targets/{period}/calendar?scope=rep`) — never recomputed locally. Cached in-process
-    (short TTL — this endpoint is hit up to once per (store,rep) pair per rollup call, and the same
-    pair is very likely to recur across nearby requests/DMs within a session).
-
-    Degrades to a ZERO row (never raises) on any failure — a transient internal-HTTP hiccup must show
-    as "$0 for this one row, flagged" rather than 500 the entire DM rollup; the caller surfaces
-    `ok: False` rows in a `warnings` list so a $0 is never silently indistinguishable from a real $0."""
-    key = (str(org_id), str(period), _norm_upper(store_code), _norm_upper(rep_name))
-    now = time.time()
-    hit = _dm_target_cache.get(key)
-    if hit and (now - hit[0]) < _DM_TARGET_CACHE_TTL_S:
-        return hit[1]
-    url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/targets/{_requote(period)}/calendar"
-    out = {"ok": False, "target": 0.0, "achieved": 0.0, "rep_share": 0.0, "note": ""}
-    try:
-        resp = requests.get(url, params={"org_id": org_id, "scope": "rep", "store_code": store_code,
-                                         "rep": rep_name}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json() or {}
-        mt = data.get("monthly_targets") or {}
-        cats = data.get("categories") or {}
-        acc = cats.get("accessories") or {}
-        out = {"ok": True, "target": _safe_float(mt.get("accessories")),
-              "achieved": _safe_float(acc.get("achieved_mtd")),
-              "rep_share": _safe_float(data.get("rep_share")), "note": ""}
-    except Exception as e:
-        out["note"] = f"calendar fetch failed ({type(e).__name__}: {e})"
-    _dm_target_cache[key] = (now, out)
-    return out
+_dm_target_cache: dict = {}   # (org_id, period) -> (fetched_at, summary_json | None)
 
 
 def _norm_upper(v) -> str:
@@ -4616,15 +4589,43 @@ def _requote(period: str) -> str:
     return quote(str(period), safe="")
 
 
-def _dm_target_rows(org_id: str, period: str, *, max_pairs: int = 400) -> tuple:
-    """Build the (employee, store) attribution rows for the whole org this period: every distinct
-    pair with at least one positive-hour, non-deleted shift ("the stores they worked in"), each priced
-    via `_dm_calendar_target` and labeled with the store's CANONICAL market (app.core.scope's unioned
-    market index — the same source the scope-wiring package used, so a store known only to
-    `commcalc.store_mapping` still resolves instead of landing in `unassigned` for the wrong reason).
+def _dm_targets_summary_bulk(org_id: str, period: str) -> dict:
+    """THE one bulk internal-HTTP call this whole package makes: mod-commission's OWN all-stores
+    endpoint (`GET /commcalc/targets/{period}/summary?include_untargeted=true`), same
+    `INTERNAL_API_BASE_URL` convention the PTO/payroll-tax packages established. TTL-cached per
+    (org_id, period) — belt-and-braces on top of already being a single call. Degrades to `{}` on any
+    failure (never raises) — the caller turns an empty summary into an honest `warnings` entry, not a
+    500 for the whole rollup."""
+    key = (str(org_id), str(period))
+    now = time.time()
+    hit = _dm_target_cache.get(key)
+    if hit and (now - hit[0]) < _DM_TARGET_CACHE_TTL_S:
+        return hit[1] or {}
+    url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/targets/{_requote(period)}/summary"
+    data = {}
+    try:
+        resp = requests.get(url, params={"org_id": org_id, "include_untargeted": "true"}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json() or {}
+    except Exception as e:
+        print(f"WARN _dm_targets_summary_bulk failed ({org_id}/{period}): {e}")
+        data = None
+    _dm_target_cache[key] = (now, data)
+    return data or {}
 
-    Returns (rows, warnings, truncated). `max_pairs` bounds the internal-HTTP fan-out on a very large
-    org (never an unbounded fetch-all per contract §6) — truncation is reported, not silent."""
+
+def _dm_target_rows(org_id: str, period: str, *, max_pairs: int = 20000) -> tuple:
+    """Build the (employee, store) attribution rows for the whole org this period: every distinct
+    pair with at least one positive-hour, non-deleted shift ("the stores they worked in") this
+    module's OWN `storeops.shifts` describes, priced off the ONE bulk `/targets/.../summary` call
+    (store monthly $ + each rep's own achieved $) plus a LOCAL hours-share computation (no HTTP per
+    pair — see the section banner). Labeled with the store's CANONICAL market (app.core.scope's
+    unioned market index — the same source the scope-wiring package used, so a store known only to
+    `commcalc.store_mapping` still resolves).
+
+    Returns (rows, warnings, truncated). `max_pairs` is a safety backstop only (not a performance
+    cap — the bulk call is O(1) regardless of pair count); it is generous enough that no real tenant
+    should ever hit it, and a hit is reported via `truncated`, never silent."""
     client = sb()
     ym = _dmta.parse_period_to_ym(period)
     start, end = pto_month_bounds(ym)
@@ -4640,6 +4641,7 @@ def _dm_target_rows(org_id: str, period: str, *, max_pairs: int = 400) -> tuple:
     truncated = len(pairs) > max_pairs
     if truncated:
         pairs = pairs[:max_pairs]
+
     idx = _cscope.market_index(get_supabase(), org_id)
     market_by_code, address_by_code = {}, {}
     for s in idx.get("stores") or []:
@@ -4647,17 +4649,37 @@ def _dm_target_rows(org_id: str, period: str, *, max_pairs: int = 400) -> tuple:
         if code:
             market_by_code[code] = s.get("market") or ""
             address_by_code[code] = s.get("address") or ""
-    rows, warnings = [], []
+
+    summary = _dm_targets_summary_bulk(org_id, period)
+    warnings = []
+    if not summary:
+        warnings.append({"employee_name": "", "store_code": "",
+                         "note": "bulk targets summary unavailable this load — every row shows $0 "
+                                 "until it can be reached again"})
+    store_target_by_code, achieved_by_pair = {}, {}
+    for s in (summary.get("stores") or []):
+        code = _norm_upper(s.get("store_code"))
+        if not code:
+            continue
+        store_target_by_code[code] = _safe_float((s.get("categories") or {}).get("accessories", {}).get("monthly"))
+        for r in (s.get("reps") or []):
+            rn = _norm_upper(r.get("rep"))
+            if rn:
+                achieved_by_pair[(code, rn)] = _safe_float(r.get("accessories"))
+
+    today = _date.today()
+    rows = []
     for pr in pairs:
         code = pr["store_code"]
-        got = _dm_calendar_target(org_id, period, code, pr["employee_name"])
-        if not got["ok"]:
-            warnings.append({"employee_name": pr["employee_name"], "store_code": code, "note": got["note"]})
+        rep_up = _norm_upper(pr["employee_name"])
+        share = _dmta.rep_share_from_shifts(shifts, code, pr["employee_name"], today, end)
+        target = round(store_target_by_code.get(code, 0.0) * share, 2)
+        achieved = achieved_by_pair.get((code, rep_up), 0.0)
         rows.append({
             "employee_name": pr["employee_name"], "employee_id": pr.get("employee_id"),
             "store_code": code, "address": address_by_code.get(code, ""),
-            "market": market_by_code.get(code, ""), "target": got["target"], "achieved": got["achieved"],
-            "rep_share": got["rep_share"], "ok": got["ok"],
+            "market": market_by_code.get(code, ""), "target": target, "achieved": achieved,
+            "rep_share": round(share, 4), "ok": bool(summary),
         })
     return rows, warnings, truncated
 
@@ -4689,44 +4711,79 @@ def _dm_roster(org_id: str) -> dict:
 def dm_accessory_attribution(period: str, authorization: str = Header(default=""),
                              dm_id: str = "", org_id: str = ORG_ID):
     """DM accessory-target ATTRIBUTION rollup (owner directive 2026-08-04, ledger Q7) — see the
-    section banner above for the rule. Returns EVERY DM (by_dm, one entry per DM even at $0),
-    `unassigned` (rows whose store has no market or no DM grant — never silently dropped),
-    `ambiguous_markets` (a market granted to >1 DM — a config collision, flagged not guessed at),
-    and `cross_dm_employees` (the "verify a 2-DM split at a glance" view: every employee whose rows
-    landed under more than one DM, with the per-DM stores/targets that routed there).
+    section banner above for the rule. Returns `by_dm` (one entry per DM the caller may see, even at
+    $0), `unassigned` (rows whose store has no market or no DM grant — never silently dropped),
+    `ambiguous_markets` (a market granted to >1 DM — a config collision, flagged not guessed at), and
+    `cross_dm_employees` (the "verify a 2-DM split at a glance" view).
 
-    `dm_id` optionally narrows the response's `by_dm` to just that one DM (still returns the shared
-    `unassigned` / `ambiguous_markets` / `cross_dm_employees` / grand totals for context) — for
-    embedding a single DM's own card without the caller needing to pick their key out of the full org
-    payload.
+    SPAN-SCOPING (Gate-1 rework 2026-08-04): under RBAC, this endpoint reads the CALLER's own role
+    scope via the same `_role_scope`/`_caller_app_user` machinery every other storeops read uses:
+      - scope 'all' (admin / RBAC off / unresolvable caller — same "unrestricted" default the rest of
+        this module uses)  -> every DM card, org-wide totals, full cross_dm_employees detail.
+      - scope 'market' (a District Manager) -> `by_dm` narrowed to DM(s) whose granted market(s)
+        intersect the caller's OWN granted market(s) (`app.core.scope`'s market-grant machinery,
+        resolved via this endpoint's OWN `_dm_roster` — the same resolver every DM card already comes
+        from, not a new one). `unassigned` / `ambiguous_markets` narrowed the same way. Grand totals
+        recomputed over ONLY the caller's visible DM(s) (never the whole org's). `cross_dm_employees`
+        keeps full detail for the caller's own DM(s) on a split row but reduces any OTHER dm on that
+        row to a bare identity label (`redacted: true`, no rows, no total) — enough to explain the
+        split exists without exposing that other DM's numbers or roster.
+      - scope 'self' / 'store' -> 403 (not a manager-level report).
 
-    This is an ORG-WIDE aggregate BY DESIGN (it exists to show every DM's slice at once, including
-    the cross-DM split) — it does NOT apply the per-caller RBAC store span the way most storeops reads
-    do (there is no single "span" to filter to: the whole point is seeing every span at once). A
-    plain individual-contributor ('self' scope) caller is refused; any manager/admin role may view
-    it — same posture as `GET /commcalc/exec-overview` (no per-manager restriction on an aggregate
-    report already broken out by manager)."""
+    `dm_id` optionally narrows `by_dm` further to one key — for a market-scope caller it can only ever
+    select a key already inside their own visible set (never a way to reach another DM's card)."""
+    au = None
+    caller_scope_kind = "all"
     if _rbac_enabled(org_id):
         au = _caller_app_user(authorization, org_id)
-        if au and _role_scope(org_id, (au.get("role") or "").strip()) == "self":
-            raise HTTPException(403, "This report is not available to your role.")
+        if au:
+            caller_scope_kind = _role_scope(org_id, (au.get("role") or "").strip())
+    if caller_scope_kind in ("self", "store"):
+        raise HTTPException(403, "This report is not available to your role.")
     try:
         ym = _dmta.parse_period_to_ym(period)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
     rows, warnings, truncated = _dm_target_rows(org_id, period)
     dm_markets = _dm_roster(org_id)
     attributed = _dmta.attribute_rows_to_dms(rows, dm_markets)
     cross_dm = _dmta.cross_dm_employees(attributed)
+
     by_dm = attributed["by_dm"]
+    unassigned = attributed["unassigned"]
+    ambiguous = attributed["ambiguous_markets"]
+    total_target = attributed["total_target_all_rows"]
+    total_achieved = attributed["total_achieved_all_rows"]
+    pairs_considered = len(rows)
+
+    if caller_scope_kind == "market":
+        caller_key = str((au or {}).get("id") or "")
+        caller_markets = set((dm_markets.get(caller_key) or {}).get("markets") or ())
+        visible_keys = _dmta.visible_dm_keys_for_markets(dm_markets, caller_markets)
+        by_dm = {k: v for k, v in by_dm.items() if k in visible_keys}
+        unassigned = _dmta.visible_unassigned(unassigned, caller_markets)
+        ambiguous = _dmta.visible_ambiguous_markets(ambiguous, caller_markets)
+        cross_dm = _dmta.redact_cross_dm_employees(cross_dm, visible_keys)
+        total_target = round(sum(d["total_target"] for d in by_dm.values()), 2)
+        total_achieved = round(sum(d["total_achieved"] for d in by_dm.values()), 2)
+        pairs_considered = sum(len(d["rows"]) for d in by_dm.values())
+        folded_markets = {m.strip().lower() for m in caller_markets}
+        market_by_store = {r["store_code"]: r["market"] for r in rows}
+        warnings = [w for w in warnings
+                   if not w.get("store_code")
+                   or str(market_by_store.get(w["store_code"]) or "").strip().lower() in folded_markets]
+
     if dm_id:
         by_dm = {dm_id: by_dm[dm_id]} if dm_id in by_dm else {}
+
     return {"period": period, "period_ym": ym, "by_dm": by_dm,
-            "unassigned": attributed["unassigned"], "ambiguous_markets": attributed["ambiguous_markets"],
+            "unassigned": unassigned, "ambiguous_markets": ambiguous,
             "cross_dm_employees": cross_dm,
-            "total_target_all_rows": attributed["total_target_all_rows"],
-            "total_achieved_all_rows": attributed["total_achieved_all_rows"],
-            "pairs_considered": len(rows), "truncated": truncated, "warnings": warnings}
+            "total_target_all_rows": total_target,
+            "total_achieved_all_rows": total_achieved,
+            "pairs_considered": pairs_considered, "truncated": truncated, "warnings": warnings,
+            "caller_scope": caller_scope_kind}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
