@@ -45,6 +45,7 @@ from app.modules.commcalc import device_history
 from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
 from app.modules.commcalc import productivity as _prod
+from app.modules.commcalc import payout_accrual
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 # Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
@@ -19645,10 +19646,24 @@ def _promote_all_due(client, period=None):
                                 "skipped": (gr or {}).get('skipped')})
         except Exception as e:
             out.append({"org_id": oid, "error": str(e)[:200]})
+    # DAILY COMMISSION ACCRUAL (mig 267) rides the SAME scheduled sweep, deliberately at the TAIL:
+    # this is the moment the day's sales are actually complete for every tenant (the feed has just been
+    # derived into raw_sales), which is exactly when "what has this rep earned today" becomes a number
+    # worth writing down. No new cron infrastructure — see payout_accrual.run_all_due.
+    # It re-accrues yesterday + today per tenant (per-tenant auto_run.days_back), is IDEMPOTENT, writes
+    # ONLY commcalc.daily_commission_accrual, and can never raise into the promotion it rides on: an
+    # accrual failure must not be able to stop sales from being derived.
+    accrual = None
+    if not explicit:
+        try:
+            accrual = payout_accrual.run_all_due(client)
+        except Exception as e:
+            accrual = {"ok": False, "error": str(e)[:200]}
     return {"ok": True, "period": period, "orgs": len(orgs),
             "grace_period": None if explicit else prior,
             "grace_orgs": sum(1 for r in out if r.get('grace')),
-            "written_orgs": sum(1 for r in out if r.get('written')), "detail": out}
+            "written_orgs": sum(1 for r in out if r.get('written')), "detail": out,
+            "accrual": accrual}
 
 
 @router.post("/sales/promote-due")
@@ -23902,3 +23917,231 @@ def _dcr_empty(per, win, gb, basis, ma_date, prec, why):
         "no_device_label": _dcr.NO_DEVICE_KEY,
         "truncated_reads": {}, "degraded": None, "note": why,
     }
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# DAILY COMMISSION ACCRUAL + ENVELOPE PAYOUT LEDGER (migration 267; engine: payout_accrual.py)
+# Spec: docs/specs/envelope-expense-payout.md — Feature 2, commission side.
+#
+# READ THE MODULE DOCSTRING OF payout_accrual.py BEFORE CHANGING ANYTHING HERE. The one rule:
+#   the ACCRUAL is a PROBABLE (expected) number and is NEVER pay. Nothing in this section writes
+#   rep_commissions, plans, schedules, tiers or any payout figure; a recorded payout is a CASH
+#   ADVANCE (a cash movement), it does not reduce what a rep is owed and nothing is ever netted or
+#   clawed back — an over-advance is FLAGGED for a human (ledger Q14 default).
+#
+# Every endpoint is org_id-query-param scoped (RULE ONE), every insert stamps org_id, and every one
+# of them degrades to `ready:false` + a plain-language note until migration 267 has been run.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _accrual_keyset(authorization, org_id):
+    """The caller's store span (None = unrestricted). Same resolver the rest of the module uses, so a
+    DM sees their own stores' accruals and advances and nobody else's. Never 500s a report."""
+    try:
+        from app.modules.storeops.router import scope_keyset
+        return scope_keyset(authorization, org_id)
+    except Exception:
+        return None
+
+
+def _accrual_market_map(client, org_id):
+    """{UPPER store_code -> market} for this org. RULE FIVE: the standard filter bar's MARKET control
+    has to filter on something real, and an accrual row only carries a store_code. Resolved here (not
+    guessed in the browser) off the same store_mapping every other commcalc surface uses. Degrades to
+    an empty map — a missing mapping means "(no market)", never a hidden row."""
+    out = {}
+    try:
+        rows = (client.schema('commcalc').table('store_mapping').select('store_code,market')
+                .eq('org_id', org_id).limit(5000).execute().data) or []
+    except Exception:
+        return out
+    for r in rows:
+        code = str(r.get('store_code') or '').strip()
+        if code:
+            out[code.upper()] = (r.get('market') or '').strip()
+    return out
+
+
+def _accrual_day_param(v, label="date"):
+    d = payout_accrual.parse_day(v, None) if v else _date.today()
+    if d is None:
+        raise HTTPException(400, f"{label} must be YYYY-MM-DD")
+    return d
+
+
+@router.get("/payout/accrued")
+async def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: str = None,
+                         store_code: str = None, authorization: str = Header(default="")):
+    """Per-employee ACCRUED (expected) commission, cash ADVANCED against it, and the unpaid balance.
+
+    This is the cross-module contract the retail-ops envelope payout-due endpoint consumes; the shape
+    is fixed in the EEP spec. `accrued_total` is expected commission — it is NOT what the rep is owed
+    on a payslip, and nothing here has changed anyone's pay."""
+    require_org(org_id)
+    d = _accrual_day_param(as_of, "as_of")
+    client = sb()
+    res = payout_accrual.accrued(client, org_id, d,
+                                 employee_key=(employee_key or None) and employee_key.strip(),
+                                 store_code=(store_code or None) and store_code.strip(),
+                                 keyset=_accrual_keyset(authorization, org_id))
+    # ADDITIVE `markets` (RULE FIVE: the market filter needs a real value to filter on). The spec's
+    # keys are untouched, so the cross-module consumer is unaffected.
+    if res.get("ready"):
+        mkt = _accrual_market_map(client, org_id)
+        for e in res.get("employees") or []:
+            e["markets"] = sorted({mkt.get(str(c).upper(), "") for c in (e.get("store_codes") or [])
+                                   if mkt.get(str(c).upper())})
+    return res
+
+
+@router.get("/payout/accrual")
+async def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str = None,
+                              employee_key: str = None, store_code: str = None,
+                              authorization: str = Header(default="")):
+    """The per-DAY accrual rows behind /payout/accrued — one row per rep per store per day, each with
+    its `components` breakdown. Drives the Daily Commission report surface. READ-ONLY."""
+    require_org(org_id)
+    e = _accrual_day_param(end, "end")
+    # default window = the month `end` falls in, to date (what the Daily Commission page opens on)
+    s = (payout_accrual.parse_day(start, None) if start else None) or _date(e.year, e.month, 1)
+    ks = _accrual_keyset(authorization, org_id)
+    try:
+        rows = payout_accrual._page_accruals(sb(), org_id, e,
+                                            (employee_key or None) and employee_key.strip(),
+                                            (store_code or None) and store_code.strip(), s)
+    except Exception as ex:
+        if payout_accrual._table_missing(ex):
+            return {"ready": False, "rows": [], "note": payout_accrual._MISSING_NOTE}
+        raise
+    mkt = _accrual_market_map(sb(), org_id)
+    out = []
+    for r in rows:
+        code = str(r.get("store_code") or "").strip()
+        if ks is not None and code and not payout_accrual._in_keys(ks, code):
+            continue
+        out.append({"work_date": str(r.get("work_date") or "")[:10],
+                    "employee_key": r.get("employee_key"),
+                    "name": r.get("employee_name") or r.get("employee_key"),
+                    "store_code": code,
+                    "market": mkt.get(code.upper(), ""),
+                    "base_amount": safe_float(r.get("base_amount")),
+                    "tier_amount": safe_float(r.get("tier_amount")),
+                    "total_amount": safe_float(r.get("total_amount")),
+                    "components": r.get("components") or {},
+                    "computed_at": r.get("computed_at")})
+    out.sort(key=lambda x: (x["work_date"], x["name"]), reverse=True)
+    return {"ready": True, "start": s.isoformat(), "end": e.isoformat(), "rows": out,
+            "totals": {"base": round(sum(r["base_amount"] for r in out), 2),
+                       "tier": round(sum(r["tier_amount"] for r in out), 2),
+                       "total": round(sum(r["total_amount"] for r in out), 2), "rows": len(out)}}
+
+
+@router.post("/payout/accrual/run")
+async def payout_accrual_run(org_id: str = ORG_ID, date: str = None,
+                             authorization: str = Header(default="")):
+    """Recompute ONE date's accrual for this tenant. IDEMPOTENT — a re-run restates that date.
+
+    LIGHT: it reads that ONE day's sale lines and runs them through the tenant's real pay logic
+    (commission_engine.preview for plan-mode tenants, the Boost calculator for Boost). It NEVER calls
+    _run_calculation / the monthly recompute path — that path takes minutes, 502s at 300s, and
+    delete-then-inserts the numbers people are actually paid from. Nothing here can change a payout."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    d = _accrual_day_param(date, "date")
+    return payout_accrual.run_day(sb(), org_id, d)
+
+
+@router.get("/payout/accrual/preview")
+async def payout_accrual_preview(org_id: str = ORG_ID, date: str = None):
+    """What a run for this date WOULD write, without writing it. Pure read — for diagnosing a $0 day
+    (usually a missing Commission Plan assignment on a plan-mode tenant, which is correct behaviour,
+    or a day whose sales haven't landed yet)."""
+    require_org(org_id)
+    d = _accrual_day_param(date, "date")
+    return payout_accrual.compute_day(sb(), org_id, d)
+
+
+@router.post("/payout/record")
+async def payout_record(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Record a CASH ADVANCE paid to an employee against accrued commission (normally out of a daily
+    closing envelope). org_id is a QUERY param and is what gets stamped — a body-supplied org would
+    land the row in the wrong tenant (contract §2).
+
+    Recording is not paying: this changes `paid_total` / `unpaid_balance` and nothing else. It does
+    not touch rep_commissions, does not reduce what the rep is owed at month end, and is never netted
+    against a later shortfall."""
+    require_org(org_id)
+    ks = _accrual_keyset(authorization, org_id)
+    code = str((body or {}).get("store_code") or "").strip()
+    if ks is not None and code and not payout_accrual._in_keys(ks, code):
+        raise HTTPException(403, f"{code} is outside your assigned stores.")
+    try:
+        return payout_accrual.record_payout(sb(), org_id, body or {},
+                                            recorded_by=_caller_uid(authorization))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/payout/ledger")
+async def payout_ledger(org_id: str = ORG_ID, start: str = None, end: str = None,
+                        employee_key: str = None, store_code: str = None,
+                        authorization: str = Header(default="")):
+    """Org-scoped list of recorded cash advances (the report surface + the audit trail)."""
+    require_org(org_id)
+    e = _accrual_day_param(end, "end")
+    s = payout_accrual.parse_day(start, None) if start else None
+    return payout_accrual.ledger_rows(sb(), org_id, start=s, end=e,
+                                      employee_key=(employee_key or None) and employee_key.strip(),
+                                      store_code=(store_code or None) and store_code.strip(),
+                                      keyset=_accrual_keyset(authorization, org_id))
+
+
+@router.get("/payout/over-advance")
+async def payout_over_advance(org_id: str = ORG_ID, as_of: str = None, lookback_months: int = 3,
+                              authorization: str = Header(default="")):
+    """Review list: where cash advanced has outrun the accrual. FLAG ONLY — no clawback, no netting.
+
+    Two independent questions: `running` (lifetime advances > lifetime accrual) and `monthly` (cash
+    advanced inside a month whose commission run has FINISHED exceeds what that month actually paid)."""
+    require_org(org_id)
+    d = _accrual_day_param(as_of, "as_of")
+    return payout_accrual.over_advance_review(sb(), org_id, d,
+                                              keyset=_accrual_keyset(authorization, org_id),
+                                              lookback_months=max(1, min(12, int(lookback_months or 3))))
+
+
+@router.get("/payout/accrual/config")
+async def get_payout_accrual_config(org_id: str = ORG_ID):
+    """This tenant's accrual settings (mig 267 `commission_org_config.accrual_config`). RULE TWO: the
+    tier-recognition day, the tier basis and the auto-run window are all per-tenant config, never
+    constants. Code default before the migration runs."""
+    require_org(org_id)
+    return {"config": payout_accrual.load_config(sb(), org_id),
+            "code_default": payout_accrual.CODE_DEFAULT,
+            "tier_basis_options": list(payout_accrual.TIER_BASES),
+            "recognition_modes": list(payout_accrual.RECOGNITION_MODES)}
+
+
+@router.put("/payout/accrual/config")
+async def put_payout_accrual_config(body: dict, org_id: str = ORG_ID,
+                                    authorization: str = Header(default="")):
+    """Save this tenant's accrual settings. Admin-only, same gate as the rest of commission posture.
+    Changing these NEVER changes what anyone is paid — accruals are expected numbers."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    try:
+        return {"config": payout_accrual.save_config(sb(), org_id, body or {})}
+    except Exception as e:
+        raise HTTPException(500, f"could not save accrual settings (is migration 267 applied?): {e}")
+
+
+@router.post("/payout/accrual/run-due")
+async def payout_accrual_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint for the daily accrual — the SAME NOTIFY_RUN_SECRET pattern as every other
+    commcalc sweep (/sales/promote-due, /dlar/sweep/run-due, /email-sweep/run-due …), so no new env
+    var and no new cron infrastructure.
+
+    The accrual ALSO runs at the tail of /sales/promote-due (right after the feed lands), so this
+    endpoint is the belt to that braces: schedule it once a day if you want a fixed-time run, or rely
+    on the promote sweep alone. Both paths are idempotent, so running both is harmless."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    return payout_accrual.run_all_due(sb())
