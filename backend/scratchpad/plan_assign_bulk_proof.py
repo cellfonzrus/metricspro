@@ -12,6 +12,19 @@ FakeClient mirroring the supabase query chain. Covers:
   • case-insensitive de-dupe of the selection
   • roster: role + market + value(epay||name) + current_plans; role/market facets; org isolation
 """
+
+
+def run_route(x):
+    """Call a commcalc route handler in EITHER shape.
+
+    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
+    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
+    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
+    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
+    ever legitimately becomes a coroutine again."""
+    import asyncio as _a
+    return _a.run(x) if _a.iscoroutine(x) else x
 import sys, os, asyncio, uuid, copy
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from fastapi import HTTPException
@@ -100,11 +113,11 @@ def assigns(org):
 
 
 def call_bulk(body, org=ORG_A):
-    return asyncio.get_event_loop().run_until_complete(r.bulk_assign_commission_plan(body, org_id=org))
+    return run_route(r.bulk_assign_commission_plan(body, org_id=org))
 
 
 def call_roster(org=ORG_A, include_inactive=True):
-    return asyncio.get_event_loop().run_until_complete(
+    return run_route(
         r.commission_plan_roster(org_id=org, include_inactive=include_inactive))
 
 

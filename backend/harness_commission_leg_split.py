@@ -46,6 +46,19 @@ WHAT THIS PROVES (no DB, no network, no recompute — the change is read-side on
 
 Run: `python3 harness_commission_leg_split.py` from the backend dir.
 """
+
+
+def run_route(x):
+    """Call a commcalc route handler in EITHER shape.
+
+    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
+    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
+    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
+    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
+    ever legitimately becomes a coroutine again."""
+    import asyncio as _a
+    return _a.run(x) if _a.iscoroutine(x) else x
 import asyncio
 import os
 import sys
@@ -620,7 +633,7 @@ fc = FakeClient(store, rpc_data={"commission_leg_label_rollup": ROLLUP,
                                  "commission_leg_ma_rollup": []})
 R.sb = lambda: fc
 QUERY_LOG.clear()
-out = asyncio.get_event_loop().run_until_complete(
+out = run_route(
     R.commission_leg_trend(period="June 2026", months=2, org_id=HOUSE))
 jun = next(c for c in out["company"] if c["period"] == "June 2026")
 may = next(c for c in out["company"] if c["period"] == "May 2026")
@@ -667,16 +680,16 @@ check("the retention note is HONEST that there is no stored 6MR KPI",
       "no stored 6MR" in out["retention_note"])
 
 section("⑦c RULE FIVE filters drive the trend")
-out_mkt = asyncio.get_event_loop().run_until_complete(
+out_mkt = run_route(
     R.commission_leg_trend(period="June 2026", months=1, market="NY", org_id=HOUSE))
 check("a market filter narrows the trend to that market's stores",
       eq2(out_mkt["company"][0]["total"], 45.0), out_mkt["company"][0])
-out_store = asyncio.get_event_loop().run_until_complete(
+out_store = run_route(
     R.commission_leg_trend(period="June 2026", months=1, store=STORE_A, org_id=HOUSE))
 check("a store filter narrows the trend to that store", eq2(out_store["company"][0]["total"], 185.0),
       out_store["company"][0])
 check("an unmatched market yields an honest zero, not everything",
-      eq2(asyncio.get_event_loop().run_until_complete(
+      eq2(run_route(
           R.commission_leg_trend(period="June 2026", months=1, market="ATLANTIS",
                                  org_id=HOUSE))["company"][0]["total"], 0.0))
 
@@ -688,7 +701,7 @@ store_t["store_mapping"] = STORE_ROWS + [
 fc_t = FakeClient(store_t, rpc_data={"commission_leg_label_rollup": [], "commission_leg_ma_rollup": []})
 R.sb = lambda: fc_t
 QUERY_LOG.clear()
-out_t = asyncio.get_event_loop().run_until_complete(
+out_t = run_route(
     R.commission_leg_trend(period="June 2026", months=1, org_id=TENANT))
 check("a second tenant's request is scoped to ITS org on every read",
       all(scoped(q, TENANT) for q in QUERY_LOG) and bool(QUERY_LOG),
@@ -706,7 +719,7 @@ MA_ROLLUP = [dict(ma_sums, period="June 2026", n=3), dict(ma_sums, period="May 2
 fc_ma = FakeClient(store, rpc_data={"commission_leg_label_rollup": ROLLUP,
                                     "commission_leg_ma_rollup": MA_ROLLUP})
 R.sb = lambda: fc_ma
-out_ma = asyncio.get_event_loop().run_until_complete(
+out_ma = run_route(
     R.commission_leg_trend(period="June 2026", months=2, org_id=HOUSE))
 jun_ma = next(c for c in out_ma["company"] if c["period"] == "June 2026")
 may_ma = next(c for c in out_ma["company"] if c["period"] == "May 2026")
@@ -719,7 +732,7 @@ check("...and May (which also has ePay money) is likewise not double-counted",
 fc_ma2 = FakeClient(store, rpc_data={"commission_leg_label_rollup": [],
                                      "commission_leg_ma_rollup": MA_ROLLUP})
 R.sb = lambda: fc_ma2
-out_ma2 = asyncio.get_event_loop().run_until_complete(
+out_ma2 = run_route(
     R.commission_leg_trend(period="June 2026", months=1, org_id=HOUSE))
 jm = out_ma2["company"][0]
 check("an ePay-less month DOES book MA commission, split by leg column",
@@ -728,10 +741,10 @@ check("an ePay-less month DOES book MA commission, split by leg column",
 check("IDENTITY: the MA month's parts add back to its total",
       eq2(jm["m1"] + jm["m2_12"] + jm["unsplit"], jm["total"]))
 check("company-wide MA money is EXCLUDED (and said so) while a store filter is active",
-      eq2(asyncio.get_event_loop().run_until_complete(
+      eq2(run_route(
           R.commission_leg_trend(period="June 2026", months=1, store=STORE_A,
                                  org_id=HOUSE))["company"][0]["total"], 0.0)
-      and any("company-wide" in n for n in asyncio.get_event_loop().run_until_complete(
+      and any("company-wide" in n for n in run_route(
           R.commission_leg_trend(period="June 2026", months=1, store=STORE_A,
                                  org_id=HOUSE))["notes"]))
 
@@ -748,7 +761,7 @@ fc_deg = FakeClient({**store, "raw_payment_detail": [
     missing=("commission_leg_config", "commission_leg_label_map"),
     missing_rpc=("commission_leg_label_rollup", "commission_leg_ma_rollup"))
 R.sb = lambda: fc_deg
-out_deg = asyncio.get_event_loop().run_until_complete(
+out_deg = run_route(
     R.commission_leg_trend(period="June 2026", months=12, org_id=HOUSE))
 check("with NO migration 274 the trend still returns real numbers (per-month fallback)",
       eq2(out_deg["company"][-1]["m1"], 100.0) and eq2(out_deg["company"][-1]["m2_12"], 20.0),
@@ -766,7 +779,7 @@ fc_lab = FakeClient({**store,
                     rpc_data={"commission_leg_label_rollup": ROLLUP})
 R.sb = lambda: fc_lab
 QUERY_LOG.clear()
-labs = asyncio.get_event_loop().run_until_complete(
+labs = run_route(
     R.commission_leg_labels(period="June 2026", months=1, org_id=HOUSE))
 by = {x["label"]: x for x in labs["labels"]}
 check("every read on the label surface is org-scoped",
@@ -785,27 +798,27 @@ check("unsplit labels sort to the top — they are the ones needing a decision",
 check("the surface reports the $ still awaiting a decision", "unsplit_total" in labs)
 
 QUERY_LOG.clear()
-posted = asyncio.get_event_loop().run_until_complete(
+posted = run_route(
     R.set_commission_leg_label({"label": "Ramp Up Subsidy", "bucket": "m1"}, org_id=TENANT))
 w = next(q for q in QUERY_LOG if q["write"] == "upsert")
 check("saving an override writes the label mapping", posted["ok"] is True)
 check("the WRITE stamps org_id (RULE ONE write side — scoping a read without stamping loses rows)",
       w["row"].get("org_id") == TENANT and w["row"].get("bucket") == "m1", w["row"])
 QUERY_LOG.clear()
-asyncio.get_event_loop().run_until_complete(
+run_route(
     R.set_commission_leg_label({"label": "Ramp Up Subsidy", "bucket": ""}, org_id=TENANT))
 d = next(q for q in QUERY_LOG if q["write"] == "delete")
 check("clearing an override deletes only THIS org's row", d["eq"].get("org_id") == TENANT
       and d["eq"].get("label") == "Ramp Up Subsidy", d["eq"])
 try:
-    asyncio.get_event_loop().run_until_complete(
+    run_route(
         R.set_commission_leg_label({"label": "x", "bucket": "nonsense"}, org_id=HOUSE))
     bad_bucket_rejected = False
 except Exception:
     bad_bucket_rejected = True
 check("an invalid bucket is rejected (400), never silently stored", bad_bucket_rejected)
 try:
-    asyncio.get_event_loop().run_until_complete(R.set_commission_leg_label({"bucket": "m1"}, org_id=HOUSE))
+    run_route(R.set_commission_leg_label({"bucket": "m1"}, org_id=HOUSE))
     blank_rejected = False
 except Exception:
     blank_rejected = True

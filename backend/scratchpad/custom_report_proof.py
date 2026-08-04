@@ -211,7 +211,11 @@ BASE_TABLES = {
 
 
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers are now plain `def` (off the single
+    # uvicorn event loop). Dual-shape: drive a coroutine, pass a plain result straight through.
+    if asyncio.iscoroutine(coro):
+        return asyncio.get_event_loop().run_until_complete(coro)
+    return coro
 
 
 def section(resp, key):
