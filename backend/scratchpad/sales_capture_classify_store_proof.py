@@ -14,6 +14,19 @@ Gate-1 REWORK (2026-07-18) proven here with a REAL (range-capable, store-mapping
 
 Run:  cd backend && python3 scratchpad/sales_capture_classify_store_proof.py
 """
+
+
+def run_route(x):
+    """Call a commcalc route handler in EITHER shape.
+
+    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
+    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
+    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
+    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
+    ever legitimately becomes a coroutine again."""
+    import asyncio as _a
+    return _a.run(x) if _a.iscoroutine(x) else x
 import sys, os, asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import date as _date  # noqa: E402
@@ -229,14 +242,14 @@ cli = FakeClient(store)
 _orig_sb = router.sb
 router.sb = lambda: cli
 try:
-    sr = asyncio.run(router.sales_report(period=OPEN, authorization="", org_id=ORG))
+    sr = run_route(router.sales_report(period=OPEN, authorization="", org_id=ORG))
     loc_rows = [r for r in sr["rows"]]
     check("M2: Sales Report shows ONE merged 957 row (both spellings collapsed)",
           len([r for r in loc_rows if "957" in (r["store"] or "")]) == 1)
     merged_label = [r for r in loc_rows if "957" in (r["store"] or "")][0]["store"]
     check("M2: merged row counts all 5 activations", loc_rows[0]["activations"] == 5)
     # drill into the merged store by its label → must return ALL 5 (both spellings)
-    det = asyncio.run(router.sales_report_detail(period=OPEN, store=merged_label,
+    det = run_route(router.sales_report_detail(period=OPEN, store=merged_label,
                                                  salesperson="Jane Rep", date=D, org_id=ORG))
     n_txn = len(det.get("transactions", det.get("rows", [])) or [])
     check("M2: drill-down of the merged store returns ALL 5 transactions (both spellings)", n_txn == 5)

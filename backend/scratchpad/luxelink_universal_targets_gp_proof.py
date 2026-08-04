@@ -20,6 +20,19 @@ Two universality bugs where the HOUSE works only because house data/config exist
 Drives the REAL router functions (get_targets_summary, get_gp_report) + the REAL calc_gp_report over an
 in-memory FakeClient (no DB/network). Run:  cd backend && python3 scratchpad/luxelink_universal_targets_gp_proof.py
 """
+
+
+def run_route(x):
+    """Call a commcalc route handler in EITHER shape.
+
+    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
+    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
+    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
+    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
+    ever legitimately becomes a coroutine again."""
+    import asyncio as _a
+    return _a.run(x) if _a.iscoroutine(x) else x
 import os, sys, asyncio, calendar as _cal
 from datetime import date as _date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -138,7 +151,7 @@ def tstore(storeops, targets, store_mapping=None, sales_store='HEMPSTEAD'):
 def run_summary(store, include_untargeted=False):
     c = FakeClient(store); _o = R.sb; R.sb = lambda: c
     try:
-        return asyncio.run(R.get_targets_summary(period=PERIOD, today=TODAY_ISO, org_id=ORG,
+        return run_route(R.get_targets_summary(period=PERIOD, today=TODAY_ISO, org_id=ORG,
                            include_untargeted=include_untargeted, stores=None, markets=None, reps=None))
     finally:
         R.sb = _o

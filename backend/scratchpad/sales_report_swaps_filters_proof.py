@@ -17,6 +17,19 @@ Proves:
  4. `stores` (union rows actually shown) + `markets` (rows' resolved market ∪ every store_mapping
     market — a market with no sales is still a valid pick) are returned for the page's MultiSelects.
 """
+
+
+def run_route(x):
+    """Call a commcalc route handler in EITHER shape.
+
+    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
+    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
+    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
+    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
+    ever legitimately becomes a coroutine again."""
+    import asyncio as _a
+    return _a.run(x) if _a.iscoroutine(x) else x
 import sys, os, asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,7 +139,7 @@ fc = FakeClient({"daily_sales_feed": feed, "raw_sales": [], "store_mapping": sto
 _orig_sb = router.sb
 router.sb = lambda: fc
 try:
-    res = asyncio.run(router.sales_report(period=OPEN, authorization="", org_id="o"))
+    res = run_route(router.sales_report(period=OPEN, authorization="", org_id="o"))
 finally:
     router.sb = _orig_sb
 

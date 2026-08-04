@@ -37,6 +37,19 @@ every write verb (insert/update/upsert/delete) so "read-side only" is proven rat
 
 Run:  cd backend && python3 harness_team_snapshot_perf.py
 """
+
+
+def run_route(x):
+    """Call a commcalc route handler in EITHER shape.
+
+    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
+    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
+    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
+    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
+    ever legitimately becomes a coroutine again."""
+    import asyncio as _a
+    return _a.run(x) if _a.iscoroutine(x) else x
 import os
 import sys
 import json
@@ -315,7 +328,7 @@ def wire(store, span=None, unrestricted=False):
 
 
 def snap(mod, period=PERIOD, org=HOUSE, today=TODAY_ISO, **kw):
-    return asyncio.run(mod.team_snapshot(period=period, authorization="", today=today,
+    return run_route(mod.team_snapshot(period=period, authorization="", today=today,
                                          org_id=org, **kw))
 
 

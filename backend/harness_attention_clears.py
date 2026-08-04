@@ -182,7 +182,12 @@ ok("B2b …and the unrelated market item is untouched",
 
 # source parity: the row we simulated is the row the real endpoint inserts
 RSRC = open("app/modules/commcalc/router.py", encoding="utf-8").read()
-ins = RSRC.split("async def add_store_alias", 1)[1].split("@router.delete", 1)[0]
+# ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers moved from `async def` to `def`
+# (blocking Supabase I/O off the single uvicorn event loop). Anchor on the bare `def add_store_alias`
+# — it is a substring of BOTH spellings, so this source-parity check is shape-agnostic from here on.
+_anchor = "def add_store_alias"
+assert RSRC.count(_anchor) == 1, f"add_store_alias anchor is not unique ({RSRC.count(_anchor)})"
+ins = RSRC.split(_anchor, 1)[1].split("@router.delete", 1)[0]
 ok("B2c source parity — the real POST /store-aliases inserts exactly {org_id, alias, store_code, note}"
    " (+ optional source/confidence)",
    "row = {'org_id': org_id, 'alias': alias, 'store_code': code," in ins
