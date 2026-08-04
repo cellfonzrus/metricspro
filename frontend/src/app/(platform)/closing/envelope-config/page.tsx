@@ -16,11 +16,15 @@ type Cfg = {
   take_commission: boolean; take_salary: boolean; take_expenses: boolean
   commission_cadence: string; commission_anchor: string; commission_anchor_date: string
   salary_cadence: string; salary_anchor: string; salary_anchor_date: string
+  // Q15 (OWNER DIRECTIVE 2026-08-04): fewest-envelopes stays the objective; this only picks which
+  // envelope wins a TIE on available cash — 'oldest_first' (default) | 'newest_first'.
+  order_preference: string
 }
 const blankCfg = (store_code: string | null = null): Cfg => ({
   store_code, take_commission: true, take_salary: true, take_expenses: true,
   commission_cadence: 'weekly', commission_anchor: '', commission_anchor_date: '',
   salary_cadence: 'weekly', salary_anchor: '', salary_anchor_date: '',
+  order_preference: 'oldest_first',
 })
 
 export default function EnvelopeConfigPage() {
@@ -105,6 +109,17 @@ export default function EnvelopeConfigPage() {
             onChange={p => onChange({ ...cfg, commission_cadence: p.cadence ?? cfg.commission_cadence, commission_anchor: p.anchor ?? cfg.commission_anchor, commission_anchor_date: p.anchorDate ?? cfg.commission_anchor_date })} />
           <CadenceFields label="Salary" cadence={cfg.salary_cadence} anchor={cfg.salary_anchor} anchorDate={cfg.salary_anchor_date}
             onChange={p => onChange({ ...cfg, salary_cadence: p.cadence ?? cfg.salary_cadence, salary_anchor: p.anchor ?? cfg.salary_anchor, salary_anchor_date: p.anchorDate ?? cfg.salary_anchor_date })} />
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 600, marginBottom: 4 }}>Envelope selection order (Q15)</div>
+          <select style={sel} value={cfg.order_preference} onChange={e => onChange({ ...cfg, order_preference: e.target.value })}>
+            <option value="oldest_first">Oldest envelope first (default)</option>
+            <option value="newest_first">Newest envelope first</option>
+          </select>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, maxWidth: 480 }}>
+            Fewest envelopes is always the objective — this only decides which envelope wins when two or
+            more are otherwise an equally-good pick.
+          </div>
         </div>
         <button className="btn btn-primary" disabled={busy} style={{ fontSize: 13 }} onClick={onSave}>💾 Save</button>
       </div>

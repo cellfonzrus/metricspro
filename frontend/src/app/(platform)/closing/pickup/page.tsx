@@ -7,6 +7,8 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { EntityPickerChips } from '../_lib/EntityPickerChips'
+import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import { resolveStoreCodes } from '../_lib/market-store-cascade'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -21,6 +23,13 @@ export default function CashPickupPage() {
   const [rangeStart, setRangeStart] = useState(localToday())
   const [rangeEnd, setRangeEnd] = useState(localToday())
   const [market, setMarket] = useState('')
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): a manual, multi-select
+  // market filter alongside `market` above (unchanged — that one stays the scope AUTO-default for a
+  // market-scoped DM, sent to the server exactly as before). `fMarkets` is purely picker-side; it
+  // narrows the store checkbox list and, when no explicit store is picked, RESOLVES to that market's
+  // full store-code set for the `stores=` query param (owner Q2 — "the filter sent to the backend is
+  // the resolved store set").
+  const [fMarkets, setFMarkets] = useState<string[]>([])
   const [fStores, setFStores] = useState<string[]>([])   // multi-select stores (chips)
   const [fEmps, setFEmps] = useState<string[]>([])       // multi-select employees (chips) — one store,
                                                           // many closers/day
@@ -89,26 +98,36 @@ export default function CashPickupPage() {
     api('/api/v1/storeops/employees?all_company=true').then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
   }, [])
 
+  // Store roster shaped for the cascade widget (needs `.market` per store) — declared before `load`
+  // so the resolved store-code set below can use it.
+  const storesForCascade: StoreOpt[] = useMemo(
+    () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, market: s.market || null })),
+    [pStores])
+  // Resolved store-code set (owner Q2 semantics): explicit store picks win; markets-picked-with-no-
+  // explicit-store expands to that market's whole store list; neither -> no store scoping at all. Fed
+  // to the SAME `stores=` param the backend already accepted (mig-502-era, retail-ops-7) — no backend
+  // change needed.
+  const resolvedStores = useMemo(
+    () => resolveStoreCodes(storesForCascade, fMarkets, fStores),
+    [storesForCascade, fMarkets, fStores])
+
   const load = useCallback(() => {
     if (rangeMode ? !(rangeStart && rangeEnd) : !date) return
     setLoading(true); setSel({}); setNotes({})
     const qs = [
       rangeMode ? `start=${rangeStart}&end=${rangeEnd}` : `date=${date}`,
       market && `market=${encodeURIComponent(market)}`,
-      fStores.length && `stores=${encodeURIComponent(fStores.join(','))}`,
+      resolvedStores.length && `stores=${encodeURIComponent(resolvedStores.join(','))}`,
       fEmps.length && `employees=${encodeURIComponent(fEmps.join(','))}`,
       fDm && `dm=${encodeURIComponent(fDm)}`,
     ].filter(Boolean).join('&')
     api(`/api/v1/closing/pickups?${qs}`).then(setData).catch(console.error).finally(() => setLoading(false))
-  }, [rangeMode, date, rangeStart, rangeEnd, market, fStores, fEmps, fDm])
+  }, [rangeMode, date, rangeStart, rangeEnd, market, resolvedStores, fEmps, fDm])
   useEffect(() => { load() }, [load])
 
   // Filters/id use exact server-side matching (store_code exact-match; employee/dm substring on the
   // name) — the SAME query params as before, just picked instead of typed (id === label for the
   // employee/dm name fields; store's id is already the canonical store_code, not a hack).
-  const storeOptions: EntityOption[] = useMemo(
-    () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),
-    [pStores])
   const empOptions: EntityOption[] = useMemo(
     () => pEmps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
     [pEmps])
@@ -192,10 +211,16 @@ export default function CashPickupPage() {
                 →<input type="date" style={sel} value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} />
               </span>}
         </div>
-        <EntityPickerChips options={storeOptions} value={fStores} onChange={setFStores} placeholder="Add a store…" width={170} />
+        {/* Market->store cascade + checkbox picker (OWNER DIRECTIVE 2026-08-04). `market` (scope
+            auto-default) is untouched above; this is the manual, editable multi-market/store filter. */}
+        <MarketStorePicker
+          stores={storesForCascade}
+          selectedMarkets={fMarkets} onMarketsChange={setFMarkets}
+          selectedStores={fStores} onStoresChange={setFStores}
+        />
         <EntityPickerChips options={empOptions} value={fEmps} onChange={setFEmps} placeholder="Add a rep…" width={180} />
         <EntityPicker options={empOptions} value={fDm || null} onChange={v => setFDm(v || '')} placeholder="DM (picked up by)" width={200} />
-        {(fStores.length > 0 || fEmps.length > 0 || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFStores([]); setFEmps([]); setFDm('') }}>Clear</button>}
+        {(fMarkets.length > 0 || fStores.length > 0 || fEmps.length > 0 || fDm) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFMarkets([]); setFStores([]); setFEmps([]); setFDm('') }}>Clear</button>}
         {market && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Market: {market}</span>}
         {data && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{data.ready} ready · {data.collected} collected{data.flagged ? ` · ${data.flagged} ⚠ flagged` : ''}</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>

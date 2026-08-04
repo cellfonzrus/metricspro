@@ -5,6 +5,7 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
 // X-Tender Recon — the POS "X report" tenders (commcalc.pos_tender_summary) vs the daily closing sheet
 // employees submit (commcalc.daily_closing), per store, cash vs card. Reads GET /commcalc/x-tender-recon.
@@ -62,6 +63,16 @@ export default function XTenderReconPage() {
   const joinedRows = useMemo(() => allRows.map(r => ({ ...r, market: marketFor(r.store) })), [allRows, marketByKey])
   const acc = useMemo(() => ({ store: (r: any) => r.store, market: (r: any) => r.market }), [])
   const opts = useMemo(() => optionsFromRows(joinedRows, acc), [joinedRows, acc])
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): distinct store/market pairs
+  // from the SAME joined rows the rest of this page's filtering already uses — no new backend read.
+  const storesForCascade: StoreOpt[] = useMemo(() => {
+    const seen = new Map<string, StoreOpt>()
+    for (const r of joinedRows) {
+      const id = (r.store || '').trim()
+      if (id && !seen.has(id)) seen.set(id, { id, label: id, market: r.market || null })
+    }
+    return [...seen.values()]
+  }, [joinedRows])
   const filtered = useMemo(() => filterRows(joinedRows, filt, acc), [joinedRows, filt, acc])
   const rows = filtered.filter(r => !onlyMismatch || !r.match)
 
@@ -114,14 +125,21 @@ export default function XTenderReconPage() {
       </div>
 
       {/* RULE FIVE core set (store(s)/market(s) — no rep dimension in this dataset, see header note) +
-          the module's own period control (Day/Month + date/period input) and tolerance, appended. */}
+          the module's own period control (Day/Month + date/period input) and tolerance, appended.
+          Market/store render via the shared cascade-checkbox <MarketStorePicker> (OWNER DIRECTIVE
+          2026-08-04) — the owner named THIS page ("X-Tender") explicitly. */}
       <StandardFilterBar
         value={filt} onChange={setFilt} periodMode="none"
-        show={{ period: false, stores: true, markets: true, reps: true }}
+        show={{ period: false, stores: false, markets: false, reps: true }}
         storeOptions={opts.stores} marketOptions={opts.markets} repOptions={opts.reps}
         storeLabel="Stores…" marketLabel="Markets…"
         right={
           <>
+            <MarketStorePicker
+              stores={storesForCascade}
+              selectedMarkets={filt.markets} onMarketsChange={ids => setFilt(f => ({ ...f, markets: ids }))}
+              selectedStores={filt.stores} onStoresChange={ids => setFilt(f => ({ ...f, stores: ids }))}
+            />
             <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
               <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'date' ? 'var(--accent)' : 'transparent', color: mode === 'date' ? 'white' : 'var(--text2)' }} onClick={() => setMode('date')}>Day</button>
               <button className="btn" style={{ borderRadius: 0, border: 'none', background: mode === 'period' ? 'var(--accent)' : 'transparent', color: mode === 'period' ? 'white' : 'var(--text2)' }} onClick={() => { setMode('period'); if (!period) setPeriod(localToday().slice(0, 7)) }}>Month</button>

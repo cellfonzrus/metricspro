@@ -121,6 +121,53 @@ check("deterministic regardless of input order",
       [p["closing_row_id"] for p in ra["picks"]] == [p["closing_row_id"] for p in rb["picks"]])
 
 
+print("\n== select_envelopes — order_preference (Q15, OWNER DIRECTIVE 2026-08-04) ==")
+
+# Default (no order_preference passed at all) is byte-identical to 'oldest_first' — the pre-Q15 caller
+# shape (envelope_plan before this package) must keep working unchanged.
+envs = [
+    {"closing_row_id": "newer", "close_date": "2026-07-10", "available": 500.0},
+    {"closing_row_id": "older", "close_date": "2026-07-01", "available": 500.0},
+]
+r_default = envelope.select_envelopes(envs, 500.0)
+r_explicit_oldest = envelope.select_envelopes(envs, 500.0, order_preference="oldest_first")
+check("no order_preference kwarg == explicit 'oldest_first' (default unchanged)",
+      r_default["picks"][0]["closing_row_id"] == r_explicit_oldest["picks"][0]["closing_row_id"] == "older")
+
+# newest_first flips the single-sufficient-envelope tie-break.
+r_newest = envelope.select_envelopes(envs, 500.0, order_preference="newest_first")
+check("newest_first: tie on sufficient amount -> NEWEST date wins", r_newest["picks"][0]["closing_row_id"] == "newer")
+
+# newest_first flips the greedy multi-envelope tie-break too (mirrors test 5 above, inverted).
+envs2 = [
+    {"closing_row_id": "e_new", "close_date": "2026-07-10", "available": 200.0},
+    {"closing_row_id": "e_old", "close_date": "2026-07-01", "available": 200.0},
+    {"closing_row_id": "e_mid", "close_date": "2026-07-05", "available": 200.0},
+]
+r_greedy_newest = envelope.select_envelopes(envs2, 350.0, order_preference="newest_first")
+check("newest_first greedy tie-break: newest first, then next-newest",
+      [p["closing_row_id"] for p in r_greedy_newest["picks"]] == ["e_new", "e_mid"])
+check("newest_first greedy: fewest-envelopes objective unaffected (still 2, not 3)", len(r_greedy_newest["picks"]) == 2)
+check("newest_first greedy: total_taken/shortfall unaffected by order_preference",
+      r_greedy_newest["total_taken"] == 350.0 and r_greedy_newest["shortfall"] == 0.0)
+
+# Garbage/unrecognized order_preference -> falls back to the safe 'oldest_first' default, never errors.
+r_garbage = envelope.select_envelopes(envs, 500.0, order_preference="literally anything else")
+check("garbage order_preference falls back to oldest_first (never crashes a live payout)",
+      r_garbage["picks"][0]["closing_row_id"] == "older")
+r_none = envelope.select_envelopes(envs, 500.0, order_preference=None)
+check("order_preference=None falls back to oldest_first", r_none["picks"][0]["closing_row_id"] == "older")
+
+# order_preference NEVER changes which envelope is picked when there's no tie to break.
+envs3 = [
+    {"closing_row_id": "big", "close_date": "2026-07-01", "available": 1000.0},
+    {"closing_row_id": "small_sufficient", "close_date": "2026-07-20", "available": 600.0},
+]
+r_o = envelope.select_envelopes(envs3, 500.0, order_preference="oldest_first")
+r_n = envelope.select_envelopes(envs3, 500.0, order_preference="newest_first")
+check("order_preference doesn't override the smallest-sufficient rule when there's no tie",
+      r_o["picks"][0]["closing_row_id"] == r_n["picks"][0]["closing_row_id"] == "small_sufficient")
+
 print("\n== net_row / net_store_day ==")
 exp_by_row = {"row1": 40.0}
 wd_by_row = {"row1": 60.0}

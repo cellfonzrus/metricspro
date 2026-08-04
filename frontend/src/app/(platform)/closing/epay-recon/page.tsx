@@ -1,8 +1,9 @@
 'use client'
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
+import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
 // ePay bill-payment recon: DECLARED ePay (closing) vs SALES bill-payments (by tender) vs BANK deposited.
 export default function EpayReconPage() {
@@ -49,8 +50,25 @@ export default function EpayReconPage() {
     setDepBusy(false)
   }
 
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): this page had NO store/
+  // market filter at all before — added client-side over `stores` (already fetched for the deposit
+  // form's picker), same pattern as accessory-recon's sibling addition.
+  const [fMarkets, setFMarkets] = useState<string[]>([])
+  const [fStores, setFStores] = useState<string[]>([])
+  const marketByCode = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const s of stores) if (s.store_code && s.market) m[s.store_code] = s.market
+    return m
+  }, [stores])
+  const storesForCascade: StoreOpt[] = useMemo(
+    () => stores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, market: s.market || null })),
+    [stores])
+  const fMarketsFold = useMemo(() => new Set(fMarkets.map(m => m.trim().toLowerCase())), [fMarkets])
   const allRows: any[] = data?.rows || []
-  const rows = allRows.filter(r => !flaggedOnly || r.flag)
+  const rows = allRows.filter(r =>
+    (!flaggedOnly || r.flag) &&
+    (!fStores.length || fStores.includes(r.store_code)) &&
+    (!fMarketsFold.size || fMarketsFold.has((marketByCode[r.store_code] || '').trim().toLowerCase())))
   const t = data?.totals || {}
   const inp = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
@@ -59,6 +77,7 @@ export default function EpayReconPage() {
       title: 'ePay Bank-Deposit Recon', subtitle: date, filename: `epay-recon_${date}`,
       sheets: [{ name: 'By store', rows, columns: [
         { header: 'Store', get: (r: any) => r.store_address },
+        { header: 'Market', get: (r: any) => marketByCode[r.store_code] || '' },
         { header: 'Declared ePay cash', get: (r: any) => r.declared.cash, money: true },
         { header: 'Sales bill-pay cash', get: (r: any) => r.sales.cash, money: true },
         { header: 'Bank deposited', get: (r: any) => r.bank_deposited, money: true },
@@ -125,7 +144,12 @@ export default function EpayReconPage() {
             <Stat label="Bank deposited" value={fmt(t.bank_deposited)} color="#16a34a" />
             <Stat label="Stores flagged" value={`${t.flagged || 0} / ${t.stores || 0}`} color={t.flagged ? '#dc2626' : '#059669'} />
           </div>
-          <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+          <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+            <MarketStorePicker
+              stores={storesForCascade}
+              selectedMarkets={fMarkets} onMarketsChange={setFMarkets}
+              selectedStores={fStores} onStoresChange={setFStores}
+            />
             <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
               <input type="checkbox" checked={flaggedOnly} onChange={e => setFlaggedOnly(e.target.checked)} /> Discrepancies only
             </label>
