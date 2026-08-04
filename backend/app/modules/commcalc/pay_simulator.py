@@ -43,15 +43,34 @@ anything that is not the caller's own resolved rep name is refused unless the ca
 or holds company-wide ('all') scope — those roles already read every rep's pay on the Rep Commission
 Report, so refusing them here would be theatre, not security.
 
-MULTI-TENANT: the acting org comes from the caller's own `app_users` row, and every read is
-`.eq("org_id", org)`. A caller whose token resolves to tenant B can never simulate against tenant A's
-plans even if they pass `org_id=A` — the resolved org WINS over the query param here (this endpoint's
-whole subject is "me", and "me" has exactly one tenant).
+MULTI-TENANT (rewritten 2026-08-04 — this used to be the bug): the acting org is the
+MIDDLEWARE-VERIFIED `org_id` query param, matched against the login's MEMBERSHIP SET. One login has
+one `app_users` row PER TENANT (mig 706), so the previous `.eq("auth_id", uid).limit(1)` picked an
+ARBITRARY membership — in practice the house/Boost one — and pinned carrier mode, plan resolution and
+every downstream read to the wrong tenant. That is the documented hardcoded-house-ORG_ID leak class:
+the acting org was never threaded from the query string. Now:
+
+  • normal user      → tenant_middleware has ALREADY rewritten org_id to a verified membership, so
+                       honoring it can never widen access; a requested org the login is not a member
+                       of falls back to its default membership exactly as the middleware would.
+  • super-admin      → the middleware deliberately does NOT rewrite their org_id (that bypass is what
+                       makes "acting as tenant X" work), so the request's org_id IS the tenant they
+                       switched into and the simulator follows them there.
+  • every read stays `.eq("org_id", org)` against that resolved org.
+
+WHO IS SIMULATED. Self-service by default. A privileged caller (super-admin, or a company-wide
+'all' / admin role — the people who already read every rep's pay on the Rep Commission Report) may
+name another rep, and then the rep's OWN store/market drive plan resolution, not the caller's. A
+super-admin acting in a tenant they don't sell in has no employee record there: that is not an error,
+it answers with the tenant's roster so they can PICK whose plan to model (RULE THREE, pick-don't-type).
+Owner directive 2026-08-04: "this should be for all employee across all tenants."
 
 CARRIER MODE: this is the PLAN engine (`commission_engine`). A Boost/house tenant is paid by the
 legacy `calculator.py` component engine instead, so for a rep whose org resolves to carrier_mode
 'boost' the simulator reports an explicit, honest unsupported-state rather than quoting plan-engine
 dollars that would never be paid. (What-If's 🎯 Employee Payout tab is the Boost-side tool.)
+That unsupported state is keyed on the ACTING tenant's carrier config — it must never appear for a
+plan-mode tenant such as Luxelink/Total.
 """
 import calendar
 import datetime as _dt
@@ -129,12 +148,56 @@ def _name_keys(*names):
     return {_canon_person(n) for n in names if str(n or "").strip()} - {""}
 
 
-def resolve_self(client, authorization, period=""):
-    """The SIGNED-IN employee's (org_id, employee_id, rep_name, store, market, employee_row).
+def _memberships(client, uid):
+    """EVERY `storeops.app_users` row for this auth_id — the login's tenant MEMBERSHIP SET.
 
-    Identity + TENANT both come from the token (auth_id is globally unique → exactly one app_users
-    row), so a self-service simulation always lands in the employee's own tenant regardless of any
-    org_id query param — the same rule storeops' `_caller_identity` uses.
+    A `.limit(1)` here is a TENANT BUG, not an optimisation: since mig 706 one login has one row per
+    tenant, so limit(1) silently picks an arbitrary membership. Column ladder mirrors
+    `tenant_middleware._fetch_memberships` so an un-run mig 706/711 column can never break identity
+    (pre-706 there is at most one row anyway). The public-schema retry is a defensive fallback for
+    deployments that expose app_users there. NOT org-filtered on purpose — auth_id is the key and the
+    rows themselves NAME the tenants."""
+    for cols in ("org_id,employee_id,store_code,store_codes,full_name,super_admin,is_default_org",
+                 "org_id,employee_id,store_code,store_codes,full_name,super_admin",
+                 "org_id,employee_id,store_code,store_codes,full_name"):
+        for _tbl in (lambda: client.schema("storeops").table("app_users"),
+                     lambda: client.table("app_users")):
+            try:
+                rows = (_tbl().select(cols).eq("auth_id", uid).execute().data) or []
+            except Exception:
+                continue
+            if rows:
+                return rows
+    return []
+
+
+def _pick_membership(rows, want_org):
+    """Which membership the caller is ACTING as. PURE (no client) so it is directly unit-testable.
+
+    Same rule `tenant_middleware` applies to `x-active-org`: honor the requested org when the login is
+    a member of it, else the login's DEFAULT membership (`is_default_org`), else the first row. It
+    never invents a membership — a requested org the login doesn't belong to simply loses."""
+    if not rows:
+        return None
+    want = str(want_org or "").strip().lower()
+    if want:
+        for r in rows:
+            if str(r.get("org_id") or "").strip().lower() == want:
+                return r
+    for r in rows:
+        if r.get("is_default_org"):
+            return r
+    return rows[0]
+
+
+def resolve_self(client, authorization, period="", requested_org=""):
+    """The SIGNED-IN employee's (org_id, employee_id, rep_name, store, market, employee_row) IN THE
+    TENANT THEY ARE ACTING AS.
+
+    `requested_org` is the endpoint's `org_id` query param — already rewritten to a verified
+    membership by `tenant_middleware` for every normal user, and deliberately left alone for a
+    super-admin (that bypass is how "acting as tenant X" works). Honoring it is therefore never a
+    widening: see the module docstring.
 
     `rep_name` is the name the SALES/PAY data uses, not the friendly display name: an employee stored
     as "Ali" sells as "ali, mohammad khalid", and the plan's employee-scope assignment is keyed on the
@@ -145,37 +208,33 @@ def resolve_self(client, authorization, period=""):
     uid = _uid(authorization)
     if not uid:
         raise HTTPException(401, "Sign in to use the pay simulator.")
-    # app_users lives in the STOREOPS schema (migration 003) — the same table storeops'
-    # `_caller_identity` reads, and deliberately NOT org-filtered: auth_id is globally unique, so the
-    # row itself names the caller's tenant. The public-schema retry is only a defensive fallback for
-    # deployments that expose it there.
-    rows = []
-    for _tbl in (lambda: client.schema("storeops").table("app_users"),
-                 lambda: client.table("app_users")):
-        try:
-            rows = (_tbl().select("org_id,employee_id,store_code,store_codes,full_name")
-                    .eq("auth_id", uid).limit(1).execute().data) or []
-        except Exception:
-            rows = []
-        if rows:
-            break
+    rows = _memberships(client, uid)
     if not rows:
         raise HTTPException(403, "Your login isn't provisioned in any tenant yet. Ask an admin to add "
                                  "you under Roles & Access.")
-    u = rows[0]
+    super_admin = any(bool(r.get("super_admin")) for r in rows)
+    want = str(requested_org or "").strip()
+    u = _pick_membership(rows, want) or {}
     org = str(u.get("org_id") or "").strip() or _HOUSE_ORG
+    cross_tenant = False
+    if want and super_admin and want.lower() != org.lower():
+        # SUPER-ADMIN CROSS-TENANT. The middleware does not rewrite their org_id, so the request's
+        # org_id IS the tenant they switched into. Follow them there and DROP the home-tenant
+        # membership fields (employee_id / store_code), which name nothing in that tenant.
+        org, u, cross_tenant = want, {"org_id": want}, True
     eid = str(u.get("employee_id") or "").strip()
-    if not eid:
+    if not eid and not super_admin:
         raise HTTPException(403, "Your login isn't linked to an employee record, so there is no pay "
                                  "plan to simulate. Ask an admin to set your Employee ID in "
                                  "Roles & Access.")
     emp = {}
-    try:
-        er = (client.schema("storeops").table("employees").select("*")
-              .eq("org_id", org).eq("employee_id", eid).limit(1).execute().data) or []
-        emp = er[0] if er else {}
-    except Exception:
-        emp = {}
+    if eid:
+        try:
+            er = (client.schema("storeops").table("employees").select("*")
+                  .eq("org_id", org).eq("employee_id", eid).limit(1).execute().data) or []
+            emp = er[0] if er else {}
+        except Exception:
+            emp = {}
     display = str(emp.get("name") or u.get("full_name") or "").strip()
     eslp = str(emp.get("epay_salesperson") or "").strip()
     store = (str(emp.get("home_store") or "").strip()
@@ -211,29 +270,138 @@ def resolve_self(client, authorization, period=""):
     except Exception:
         market = ""
     return {"org_id": org, "employee_id": eid, "rep_name": rep_name, "display_name": display or rep_name,
-            "store": store, "market": market, "employee": emp}
+            "store": store, "market": market, "employee": emp,
+            "super_admin": super_admin, "cross_tenant": cross_tenant,
+            "memberships": [str(r.get("org_id") or "") for r in rows]}
 
 
-def require_self(client, authorization, requested_rep, period=""):
-    """Resolve self and REFUSE a request aimed at anybody else. Returns the `resolve_self` dict.
+def require_self(client, authorization, requested_rep, period="", requested_org=""):
+    """Resolve self IN THE ACTING TENANT and REFUSE a request aimed at anybody else. Returns the
+    `resolve_self` dict (plus `impersonated` / `needs_rep` / `privileged`).
 
     `requested_rep` blank / equal (canonically) to the caller's own rep name  -> allowed.
     Anything else                                                            -> 403, UNLESS the caller
-    is a super-admin or holds company-wide ('all') / admin scope (they already read every rep's pay)."""
+    is a super-admin or holds company-wide ('all') / admin scope (they already read every rep's pay).
+
+    Two behaviours added 2026-08-04, both scoped to callers who were ALREADY allowed to name a rep:
+      • the named rep's OWN store/market are resolved from the acting tenant's roster and used for
+        plan resolution — previously the CALLER's store leaked in, which resolves the wrong plan for
+        anyone whose plan is store- or market-scoped;
+      • a privileged caller with no employee record in the acting tenant (a super-admin who switched
+        into a tenant they don't sell in) gets `needs_rep` instead of a 403 dead end.
+    Neither widens who may be simulated: `is_privileged` is unchanged and still gates both."""
     from fastapi import HTTPException
     from app.modules.commcalc.commission_engine import _canon_person
-    me = resolve_self(client, authorization, period)
+    me = resolve_self(client, authorization, period, requested_org)
+    privileged = bool(me.get("super_admin")) or is_privileged(
+        _caller_perms(client, authorization, me["org_id"]))
+    me = dict(me, privileged=privileged)
     want = str(requested_rep or "").strip()
-    if not want or _canon_person(want) == _canon_person(me["rep_name"]) or _canon_person(want) == _canon_person(me["display_name"]):
+    if not want:
+        if me["rep_name"]:
+            return me
+        if privileged:
+            return dict(me, needs_rep=True)
+        raise HTTPException(403, "Your login isn't linked to an employee record, so there is no pay "
+                                 "plan to simulate. Ask an admin to set your Employee ID in "
+                                 "Roles & Access.")
+    if _canon_person(want) == _canon_person(me["rep_name"]) or _canon_person(want) == _canon_person(me["display_name"]):
         return me
-    if is_privileged(_caller_perms(client, authorization, me["org_id"])):
+    if privileged:
         me = dict(me)
         me["rep_name"] = want
         me["display_name"] = want
         me["impersonated"] = True
+        store, market = _rep_context(client, me["org_id"], want)
+        if store:
+            me["store"], me["market"] = store, market
+        elif me.get("cross_tenant") or me.get("needs_rep"):
+            me["store"], me["market"] = "", ""
         return me
     raise HTTPException(403, "The pay simulator only models YOUR own pay plan — you can't simulate "
                              "another employee's commission.")
+
+
+def _rep_context(client, org_id, rep_name):
+    """(store, market) for a rep NAMED by a privileged caller, resolved from the ACTING tenant's own
+    data — roster first (`storeops.employees`, matched on epay_salesperson or name), then the rep's
+    `rep_commissions` row. Org-scoped on every read; ('', '') when the name isn't in this tenant, in
+    which case plan resolution simply falls back to role/default scope. Never raises."""
+    from app.modules.commcalc.commission_engine import _canon_person, _read_store_market
+    key = _canon_person(rep_name)
+    if not key:
+        return "", ""
+    store = ""
+    try:
+        rows = (client.schema("storeops").table("employees")
+                .select("name,epay_salesperson,home_store")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    for e in rows:
+        if key in _name_keys(e.get("name"), e.get("epay_salesperson")):
+            store = str(e.get("home_store") or "").strip()
+            if store:
+                break
+    if not store:
+        try:
+            rc = (client.schema("commcalc").table("rep_commissions")
+                  .select("storeops_name,epay_salesperson,store,store_code")
+                  .eq("org_id", org_id).limit(20000).execute().data) or []
+        except Exception:
+            rc = []
+        for r in rc:
+            if key in _name_keys(r.get("epay_salesperson"), r.get("storeops_name")):
+                store = str(r.get("store") or r.get("store_code") or "").strip()
+                if store:
+                    break
+    market = ""
+    if store:
+        try:
+            sm = _read_store_market(client, org_id)
+            market = sm.get(store.lower(), "") or sm.get(store.split(" ")[0].lower(), "")
+        except Exception:
+            market = ""
+    return store, market
+
+
+def employee_roster(client, org_id, limit=2000):
+    """The ACTING tenant's own people, for the privileged employee picker (RULE THREE — pick, don't
+    type: the options are the org's REAL roster, never a typed name).
+
+    `value` is the string the plan engine and an employee-scope assignment actually match on
+    (`epay_salesperson || name`), so picking a person here resolves the same plan the payout would.
+    Same-named people are disambiguated by email (§3b). Inactive people are INCLUDED and flagged — a
+    mid-month leaver still has period sales, exactly as `_read_employee_roles` treats them.
+    Org-scoped; returns [] on any failure so the page degrades to self-only instead of erroring."""
+    rows = []
+    for cols in ("id,name,email,epay_salesperson,home_store,is_active",
+                 "id,name,epay_salesperson,home_store",
+                 "id,name"):
+        try:
+            rows = (client.schema("storeops").table("employees").select(cols)
+                    .eq("org_id", org_id).order("name").execute().data) or []
+            break
+        except Exception:
+            continue
+    out, seen = [], set()
+    for e in rows:
+        value = str(e.get("epay_salesperson") or e.get("name") or "").strip()
+        if not value or value.lower() in seen:
+            continue
+        seen.add(value.lower())
+        out.append({"value": value,
+                    "label": str(e.get("name") or value).strip(),
+                    "email": str(e.get("email") or "").strip(),
+                    "store": str(e.get("home_store") or "").strip(),
+                    "active": e.get("is_active", True) is not False})
+    dupes = {}
+    for p in out:
+        dupes[p["label"].lower()] = dupes.get(p["label"].lower(), 0) + 1
+    for p in out:
+        if dupes.get(p["label"].lower(), 0) > 1 and p["email"]:
+            p["label"] = "%s — %s" % (p["label"], p["email"])
+    return out[:limit]
 
 
 # ── which plan pays me ─────────────────────────────────────────────────────────────────────────────
@@ -589,20 +757,33 @@ def simulate(client, org_id, period, rep_name, store, market, inputs):
     }
 
 
-def context(client, authorization, period, requested_rep=""):
-    """GET payload: who am I, which plan pays me, what levers do I have — no simulation yet."""
-    me = require_self(client, authorization, requested_rep, period)
+def context(client, authorization, period, requested_rep="", requested_org=""):
+    """GET payload: who am I (in the tenant I'm acting as), which plan pays me, what levers do I have
+    — no simulation yet. `requested_org` is the middleware-verified org_id query param."""
+    me = require_self(client, authorization, requested_rep, period, requested_org)
     org_id = me["org_id"]
+    # CARRIER MODE IS THE ACTING TENANT'S, resolved from that org's OWN carrier config. This is the
+    # line that produced the defect: with the org pinned to the house/Boost membership, a plan-mode
+    # tenant (Luxelink/Total) was told it is "paid by the Boost component engine".
     mode = _carrier_mode(client, org_id)
+    privileged = bool(me.get("privileged"))
     base = {"period": _canon_period(period), "rep": me["display_name"], "rep_name": me["rep_name"],
             "store": me["store"], "market": me["market"], "employee_id": me["employee_id"],
             "carrier_mode": mode, "org_id": org_id, "no_persist": True,
+            "can_pick_rep": privileged, "impersonated": bool(me.get("impersonated")),
             "engine": "commission_engine.preview (read-only, sales_override)"}
+    if privileged:
+        base["reps"] = employee_roster(client, org_id)
     if mode == "boost":
         return {**base, "ok": False, "unsupported": "boost",
                 "reason": ("Your tenant is paid by the Boost component engine, not by Commission "
                            "Plans, so a plan-based simulation would not match your real payout. "
                            "Use What-If → Employee Payout for Boost scenarios."),
+                "plan": None, "levers": [], "tier": None}
+    if not me["rep_name"]:
+        return {**base, "ok": False, "ready": True, "needs_rep": True,
+                "reason": ("Your login isn't linked to an employee record in this tenant — pick an "
+                           "employee above to model their pay plan."),
                 "plan": None, "levers": [], "tier": None}
     plan, ready, reason = _resolve_my_plan(client, org_id, me["rep_name"], me["store"], me["market"])
     if plan is None:
@@ -615,18 +796,26 @@ def context(client, authorization, period, requested_rep=""):
             "levers": levers, "tier": tier}
 
 
-def run(client, authorization, period, inputs, requested_rep=""):
-    """POST payload: the projected pay for the caller's OWN levers. Read-only, no persist."""
-    me = require_self(client, authorization, requested_rep, period)
+def run(client, authorization, period, inputs, requested_rep="", requested_org=""):
+    """POST payload: the projected pay for the caller's OWN levers, in the tenant they are acting as.
+    Read-only, no persist."""
+    me = require_self(client, authorization, requested_rep, period, requested_org)
     org_id = me["org_id"]
-    mode = _carrier_mode(client, org_id)
+    mode = _carrier_mode(client, org_id)          # the ACTING tenant's mode — see context()
     head = {"period": _canon_period(period), "rep": me["display_name"], "rep_name": me["rep_name"],
             "store": me["store"], "market": me["market"], "carrier_mode": mode,
-            "org_id": org_id, "no_persist": True}
+            "org_id": org_id, "no_persist": True,
+            "can_pick_rep": bool(me.get("privileged")),
+            "impersonated": bool(me.get("impersonated"))}
     if mode == "boost":
         return {**head, "ok": False, "unsupported": "boost",
                 "reason": ("Your tenant is paid by the Boost component engine, not by Commission "
                            "Plans. Use What-If → Employee Payout for Boost scenarios."),
+                "result": None, "levers": [], "tier": None}
+    if not me["rep_name"]:
+        return {**head, "ok": False, "needs_rep": True,
+                "reason": ("Your login isn't linked to an employee record in this tenant — pick an "
+                           "employee to model their pay plan."),
                 "result": None, "levers": [], "tier": None}
     return {**head, **simulate(client, org_id, _canon_period(period), me["rep_name"],
                                me["store"], me["market"], inputs or {})}

@@ -199,5 +199,89 @@ ok('commission-explain feeds its export the SAME filtered+ordered rows (WYSIWYG)
 ok('no shared/other-agent file was touched',
   !/ReportShell\.tsx/.test(rep + exp))
 
+section('7 · DUAL MEMBERSHIP — one sale line, two rules (2026-08-04 presentation fix)')
+// The plan engine evaluates EVERY rule against EVERY line, so the accessory inside an edge-financed
+// sale appears TWICE: paying under the accessory rule, and ⛔ under the edge rule (per-device dedup).
+// The owner read the ⛔-only presentation as "the accessory was not paid" and diagnosed it as
+// "accessories are being classified as edge". These assertions pin the corrected reading.
+const ACC = 'Case — Otterbox XL'
+const dualPayload = [
+  // deliberate payload order: the ⛔ row arrives FIRST, which is how it led on screen
+  L('edge',      '2026-07-09', '7777', ACC, 0.00,
+    { suppressed: true, suppressed_reason: 'device already paid on this transaction', would_have_paid: 6.50 }),
+  L('edge',      '2026-07-09', '7777', 'Financed device — A15', 25.00),
+  L('accessory', '2026-07-09', '7777', ACC, 6.50),
+  L('accessory', '2026-07-09', '7777', 'Screen protector', 3.00),
+]
+const dualTotal = cents(dualPayload.reduce((s, l) => s + (Number(l.amount) || 0), 0))
+
+const idSupp = M.lineIdentity(dualPayload[0]), idPay = M.lineIdentity(dualPayload[2])
+ok('the ⛔ row and the paying row are the SAME sale line (identical identity)', idSupp === idPay,
+  `${idSupp} vs ${idPay}`)
+ok('a DIFFERENT product on the same transaction is a different identity',
+  M.lineIdentity(dualPayload[1]) !== idPay && M.lineIdentity(dualPayload[3]) !== idPay)
+ok('identity ignores the RULE (that difference is the whole point)',
+  M.lineIdentity({ ...dualPayload[2], rule: 'anything else' }) === idPay)
+
+const mem = M.planLineMembership(dualPayload)
+const e = mem.get(idPay)
+ok('membership: 1 paying rule + 1 suppressed rule for that line',
+  e.paying.length === 1 && e.suppressed.length === 1,
+  `${e.paying.length}/${e.suppressed.length}`)
+ok('membership names accessory as the payer, $6.50',
+  e.paying[0].rule === 'accessory' && e.paying[0].amount === 6.5)
+ok('membership carries the ENGINE\'s own suppression reason (not a UI invention)',
+  e.suppressed[0].rule === 'edge'
+  && e.suppressed[0].reason === 'device already paid on this transaction')
+
+const xSupp = M.crossRefFor(dualPayload[0], mem)
+const xPay = M.crossRefFor(dualPayload[2], mem)
+ok('⛔ row cross-references the rule that DID pay it',
+  xSupp.paidElsewhere.length === 1 && xSupp.paidElsewhere[0].rule === 'accessory'
+  && xSupp.paidElsewhere[0].amount === 6.5)
+ok('paying row cross-references the rule that suppressed it',
+  xPay.alsoSuppressed.length === 1 && xPay.alsoSuppressed[0].rule === 'edge')
+ok('a row never cross-references ITSELF',
+  xPay.paidElsewhere.length === 0 && xSupp.alsoSuppressed.length === 0)
+ok('a single-membership line has nothing to cross-reference',
+  (() => { const x = M.crossRefFor(dualPayload[1], mem)
+           return x.paidElsewhere.length === 0 && x.alsoSuppressed.length === 0 })())
+
+const dualGroups = M.groupPlanLinesByTxn(dualPayload)
+const dualOrder = dualGroups[0].lines.map(l => `${l.rule}:${l.product}`)
+console.log('       line order in trans 7777: ' + dualOrder.join('  →  '))
+const iPay = dualGroups[0].lines.findIndex(l => l.rule === 'accessory' && l.product === ACC)
+const iSup = dualGroups[0].lines.findIndex(l => l.suppressed === true)
+ok('the PAYING row leads its ⛔ twin', iPay >= 0 && iSup >= 0 && iPay < iSup, `${iPay} < ${iSup}`)
+ok('the two rows of the same sale line are ADJACENT', iSup - iPay === 1, String(iSup - iPay))
+ok('the other lines of the transaction are still all there',
+  dualGroups[0].lines.length === 4 && dualGroups.length === 1)
+
+ok('transaction subtotal unchanged by the reordering (⛔ contributes $0)',
+  dualGroups[0].subtotal === dualTotal && dualTotal === 34.5, `${dualGroups[0].subtotal}`)
+const dualFlat = M.sortPlanLines(dualPayload)
+ok('reordered dual payload is a PERMUTATION (same objects by identity)',
+  dualFlat.length === dualPayload.length && dualPayload.every(l => dualFlat.includes(l)))
+ok('grand total BYTE-IDENTICAL to the pre-change payload total',
+  M.sumLines(dualFlat) === dualTotal && money(M.sumLines(dualFlat)) === money(dualTotal),
+  money(M.sumLines(dualFlat)))
+ok('category totals still add to the grand total with a duplicated line',
+  cents(M.planCategories(dualPayload).reduce((s, c) => s + c.amount, 0)) === dualTotal)
+ok('the ⛔ row still counts as a LINE but not as a UNIT',
+  M.planLineTotals(dualPayload).lines === 4 && M.planLineTotals(dualPayload).units === 3)
+ok('filtering to just "edge" still shows the ⛔ row (so it can explain itself)',
+  M.filterPlanLinesByCategory(dualPayload, ['edge']).length === 2)
+
+// NO DUAL MEMBERSHIP ⇒ ORDER IS EXACTLY WHAT IT WAS. Characterisation of the previous algorithm
+// (a STABLE sort by date): every group is non-decreasing in date AND preserves payload order among
+// equal dates. The original fixture has no duplicated identity, so it must satisfy both.
+const origIdx = new Map(payload.map((l, i) => [l, i]))
+ok('unchanged for every payload with no duplicated sale line (date-stable order preserved)',
+  groups.every(g => g.lines.every((l, i) =>
+    i === 0 || M.compareDate(M.dateKey(g.lines[i - 1]), M.dateKey(l)) < 0
+      || (M.dateKey(g.lines[i - 1]) === M.dateKey(l) && origIdx.get(g.lines[i - 1]) < origIdx.get(l)))))
+ok('...and the section-1..6 fixture has no duplicated identity to begin with',
+  new Set(payload.map(M.lineIdentity)).size === payload.length)
+
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILURES'} — ${pass} passed, ${fail} failed`)
 process.exitCode = fail === 0 ? 0 : 1

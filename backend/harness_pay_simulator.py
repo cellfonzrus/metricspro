@@ -82,19 +82,19 @@ class FakeClient:
         return type("R", (), {"execute": lambda s=None: type("R2", (), {"data": []})()})()
 
 
-def _plan_tables(rules, tiers=(), plan_extra=None):
-    plan = {"id": "P1", "org_id": ORG, "name": "Sim Test Plan", "is_active": True,
+def _plan_tables(rules, tiers=(), plan_extra=None, org=ORG, plan_id="P1"):
+    plan = {"id": plan_id, "org_id": org, "name": "Sim Test Plan", "is_active": True,
             "carrier_id": None, "base_tier_metric": "none", "tier_count_basis": None,
             "tier_below_min_multiplier": None}
     plan.update(plan_extra or {})
     return {
         ("commcalc", "commission_plan"): [plan],
-        ("commcalc", "commission_rule"): [dict(r, org_id=ORG, plan_id="P1") for r in rules],
-        ("commcalc", "commission_tier"): [dict(t, org_id=ORG, plan_id="P1") for t in tiers],
+        ("commcalc", "commission_rule"): [dict(r, org_id=org, plan_id=plan_id) for r in rules],
+        ("commcalc", "commission_tier"): [dict(t, org_id=org, plan_id=plan_id) for t in tiers],
         ("commcalc", "commission_plan_assignment"): [
-            {"id": "A1", "org_id": ORG, "plan_id": "P1", "scope": "default", "scope_value": None}],
+            {"id": "A1", "org_id": org, "plan_id": plan_id, "scope": "default", "scope_value": None}],
         ("commcalc", "store_mapping"): [
-            {"org_id": ORG, "store_code": "1234", "store_address": STORE, "market": "NY"}],
+            {"org_id": org, "store_code": "1234", "store_address": STORE, "market": "NY"}],
     }
 
 
@@ -256,6 +256,178 @@ def run_self_only():
     return ok
 
 
+# ── F. TENANT MODE: the acting org must come from the VERIFIED org_id, not an arbitrary membership ──
+# THE DEFECT THIS LEG PINS DOWN (owner-reported 2026-08-04, luxelink): the simulator resolved the
+# caller's tenant with `app_users .eq(auth_id) .limit(1)` and IGNORED the org_id query param. One
+# login has one app_users row PER TENANT (mig 706), so limit(1) picked an arbitrary membership — in
+# practice the house/Boost one — and `_carrier_mode` then answered 'boost' for a PLAN-mode tenant,
+# producing "Your tenant is paid by the Boost component engine" on a Commission-Plans tenant.
+ORG_BOOST = "00000000-0000-0000-0000-0000000000b0"   # house-shaped: default carrier IS Boost
+ORG_PLAN = "00000000-0000-0000-0000-0000000000f1"    # luxelink-shaped: default carrier is NOT Boost
+REP_PLAN = "rivera, ana"
+STORE_PLAN = "77 PLAN AVE"
+
+
+def _two_org_tables():
+    """One login (UID-MULTI) that is a member of BOTH orgs, plus a super-admin (UID-ROOT) whose only
+    membership is the Boost org — the owner's real shape when acting as another tenant."""
+    t = _plan_tables(
+        [{"id": "R9", "label": "New Activation", "match_field": "contract_type",
+          "match_op": "equals", "match_value": "New Activation",
+          "payout_kind": "flat_per_unit", "amount": 40, "pct": 0, "tiered": False, "sort": 1}],
+        org=ORG_PLAN, plan_id="PP1")
+    t[("commcalc", "carrier")] = [
+        {"id": "C1", "org_id": ORG_BOOST, "name": "Boost Mobile", "code": "boost", "is_default": True},
+        {"id": "C2", "org_id": ORG_PLAN, "name": "Total Wireless", "code": "total", "is_default": True},
+    ]
+    t[("commcalc", "store_mapping")] = [
+        {"org_id": ORG_PLAN, "store_code": "77", "store_address": STORE_PLAN, "market": "FL"},
+        {"org_id": ORG_BOOST, "store_code": "1234", "store_address": STORE, "market": "NY"},
+    ]
+    au = [
+        # DELIBERATE ORDER: the Boost membership is FIRST, so a limit(1)/rows[0] resolution lands on
+        # Boost. That is exactly the bug, and it is what the negative control below reproduces.
+        {"auth_id": "UID-MULTI", "org_id": ORG_BOOST, "employee_id": "E1", "store_code": STORE,
+         "store_codes": [], "full_name": "Jane Doe", "role": "rep", "super_admin": False,
+         "is_default_org": True},
+        {"auth_id": "UID-MULTI", "org_id": ORG_PLAN, "employee_id": "E2", "store_code": STORE_PLAN,
+         "store_codes": [], "full_name": "Jane Doe", "role": "rep", "super_admin": False,
+         "is_default_org": False},
+        {"auth_id": "UID-ROOT", "org_id": ORG_BOOST, "employee_id": "", "store_code": "",
+         "store_codes": [], "full_name": "Owner", "role": "admin", "super_admin": True,
+         "is_default_org": True},
+    ]
+    t[("storeops", "app_users")] = au
+    t[("public", "app_users")] = au
+    t[("storeops", "employees")] = [
+        {"id": 1, "org_id": ORG_BOOST, "employee_id": "E1", "name": "Jane Doe",
+         "epay_salesperson": REP, "home_store": STORE, "email": "jane@x.com", "is_active": True},
+        {"id": 2, "org_id": ORG_PLAN, "employee_id": "E2", "name": "Ana Rivera",
+         "epay_salesperson": REP_PLAN, "home_store": STORE_PLAN, "email": "ana@x.com",
+         "is_active": True},
+        {"id": 3, "org_id": ORG_PLAN, "employee_id": "E3", "name": "Bob Smith",
+         "epay_salesperson": "smith, bob", "home_store": STORE_PLAN, "email": "bob@x.com",
+         "is_active": True},
+    ]
+    t[("storeops", "roles")] = [
+        {"org_id": ORG_BOOST, "name": "rep", "permissions": {"scope": "self"}},
+        {"org_id": ORG_PLAN, "name": "rep", "permissions": {"scope": "self"}},
+        {"org_id": ORG_BOOST, "name": "admin", "permissions": {"scope": "all"}},
+        {"org_id": ORG_PLAN, "name": "admin", "permissions": {"scope": "all"}},
+    ]
+    return t
+
+
+def run_tenant_mode():
+    print("── F. TENANT MODE HONORS org_id (the luxelink defect) ──────────────────────────")
+    client = FakeClient(_two_org_tables())
+    import app.modules.core.router as core
+    orig_uid = core._uid_from_token
+    core._uid_from_token = lambda auth: ({"multi": "UID-MULTI", "root": "UID-ROOT"}
+                                         .get(str(auth).split()[-1].lower()))
+    results = []
+    try:
+        # F0. the resolver itself is org-aware and PURE — no client, no network.
+        rows = _two_org_tables()[("storeops", "app_users")][:2]
+        results.append(("_pick_membership honors requested org",
+                        ps._pick_membership(rows, ORG_PLAN)["org_id"] == ORG_PLAN, ORG_PLAN[-4:]))
+        results.append(("_pick_membership falls back to default",
+                        ps._pick_membership(rows, "")["org_id"] == ORG_BOOST, "default"))
+        results.append(("_pick_membership ignores a NON-member org (no widening)",
+                        ps._pick_membership(rows, "00000000-0000-0000-0000-0000000000ff")["org_id"]
+                        == ORG_BOOST, "falls back"))
+
+        # F1. THE FIX. Same login, same token — only org_id differs. Mode must follow the ORG.
+        cp = ps.context(client, "Bearer multi", PERIOD, requested_org=ORG_PLAN)
+        results.append(("plan-mode org → carrier_mode 'plan'", cp.get("carrier_mode") == "plan",
+                        cp.get("carrier_mode")))
+        results.append(("plan-mode org → ok, NO Boost message",
+                        cp.get("ok") is True and cp.get("unsupported") is None
+                        and "Boost component engine" not in str(cp.get("reason") or ""),
+                        f"ok={cp.get('ok')} plan={(cp.get('plan') or {}).get('name')}"))
+        results.append(("plan-mode org → acted in that org", cp.get("org_id") == ORG_PLAN,
+                        str(cp.get("org_id"))[-4:]))
+        results.append(("plan-mode org → the RIGHT employee (E2/Ana), not the house one",
+                        cp.get("employee_id") == "E2" and cp.get("rep_name") == REP_PLAN,
+                        f"{cp.get('employee_id')}/{cp.get('rep_name')}"))
+        results.append(("plan-mode org → levers came from THAT org's plan",
+                        len(cp.get("levers") or []) == 1, str(len(cp.get("levers") or []))))
+
+        # F2. Boost-mode org keeps the existing, correct guidance — the fix must not flip it.
+        cb = ps.context(client, "Bearer multi", PERIOD, requested_org=ORG_BOOST)
+        results.append(("boost-mode org → carrier_mode 'boost'", cb.get("carrier_mode") == "boost",
+                        cb.get("carrier_mode")))
+        results.append(("boost-mode org → keeps the Boost guidance",
+                        cb.get("unsupported") == "boost"
+                        and "Boost component engine" in str(cb.get("reason") or ""),
+                        str(cb.get("unsupported"))))
+
+        # F3. A real projection, end to end, in the plan tenant (the thing the owner could not get).
+        sim = ps.run(client, "Bearer multi", PERIOD, {"rule:R9": {"units": 7}},
+                     requested_org=ORG_PLAN)
+        got = _money((sim.get("result") or {}).get("total_payout"))
+        results.append(("plan tenant produces dollars (7 x $40)", got == 280.0, f"${got:,.2f}"))
+
+        # F4. SUPER-ADMIN CROSS-TENANT: membership only in Boost, acting in the plan tenant. No
+        #     employee record there → roster to pick from, then a real simulation for that rep.
+        cs = ps.context(client, "Bearer root", PERIOD, requested_org=ORG_PLAN)
+        results.append(("super-admin follows the switcher into the plan tenant",
+                        cs.get("org_id") == ORG_PLAN and cs.get("carrier_mode") == "plan",
+                        f"{str(cs.get('org_id'))[-4:]}/{cs.get('carrier_mode')}"))
+        results.append(("super-admin w/o employee link → pick-an-employee, not 403/Boost",
+                        cs.get("needs_rep") is True and cs.get("unsupported") is None,
+                        str(cs.get("reason"))[:44]))
+        roster = [p["value"] for p in (cs.get("reps") or [])]
+        results.append(("roster = THAT tenant's people only (pick-don't-type)",
+                        cs.get("can_pick_rep") is True and sorted(roster) == sorted([REP_PLAN, "smith, bob"]),
+                        str(roster)))
+        cr = ps.context(client, "Bearer root", PERIOD, requested_rep=REP_PLAN, requested_org=ORG_PLAN)
+        results.append(("super-admin + picked rep → that rep's OWN store drives the plan",
+                        cr.get("ok") is True and cr.get("store") == STORE_PLAN,
+                        f"{cr.get('store')}"))
+        sr = ps.run(client, "Bearer root", PERIOD, {"rule:R9": {"units": 3}},
+                    requested_rep=REP_PLAN, requested_org=ORG_PLAN)
+        gotr = _money((sr.get("result") or {}).get("total_payout"))
+        results.append(("super-admin simulates any employee in any tenant (3 x $40)",
+                        gotr == 120.0, f"${gotr:,.2f}"))
+
+        # F5. ISOLATION UNCHANGED. A normal rep asking for a tenant they don't belong to lands back
+        #     in their own default membership — the org_id param can never widen access here.
+        au = _two_org_tables()[("storeops", "app_users")]
+        solo_tables = _two_org_tables()
+        solo_tables[("storeops", "app_users")] = [au[0]]
+        solo_tables[("public", "app_users")] = [au[0]]
+        solo = FakeClient(solo_tables)
+        ci = ps.context(solo, "Bearer multi", PERIOD, requested_org=ORG_PLAN)
+        results.append(("non-member org requested → stays in own tenant (no leak)",
+                        ci.get("org_id") == ORG_BOOST and ci.get("carrier_mode") == "boost",
+                        str(ci.get("org_id"))[-4:]))
+        # ... and a rep still cannot name a coworker.
+        from fastapi import HTTPException
+        try:
+            ps.context(client, "Bearer multi", PERIOD, requested_rep="smith, bob",
+                       requested_org=ORG_PLAN)
+            results.append(("rep naming a coworker → 403", False, "allowed (LEAK)"))
+        except HTTPException as e:
+            results.append(("rep naming a coworker → 403", e.status_code == 403, str(e.status_code)))
+
+        # F6. NEGATIVE CONTROL — reproduce the OLD resolution (first membership row wins, org_id
+        #     ignored) and show it yields the WRONG mode for the plan tenant. Proves this leg would
+        #     have FAILED before the fix, i.e. it is not a tautology.
+        old_org = str(ps._memberships(client, "UID-MULTI")[0].get("org_id") or "")
+        results.append(("negative control: old limit(1) resolution → wrong mode",
+                        old_org == ORG_BOOST and ps._carrier_mode(client, old_org) == "boost"
+                        and ps._carrier_mode(client, ORG_PLAN) == "plan",
+                        f"old={old_org[-4:]}→boost, verified={ORG_PLAN[-4:]}→plan"))
+    finally:
+        core._uid_from_token = orig_uid
+    ok = True
+    for label, good, detail in results:
+        ok = ok and good
+        print(f"  {label:<58} {'PASS' if good else 'FAIL'}   ({detail})")
+    return ok
+
+
 def run_gates():
     print("── E. WHAT-IF REPORT GATES (default-closed) ────────────────────────────────────")
     from app.modules.commcalc import whatif_gates as wg
@@ -289,5 +461,6 @@ if __name__ == "__main__":
     b = run_self_only()
     c = run_no_persist()
     d = run_gates()
-    print("\n" + ("ALL PASS" if (a and b and c and d) else "FAILURES ABOVE"))
-    sys.exit(0 if (a and b and c and d) else 1)
+    e = run_tenant_mode()
+    print("\n" + ("ALL PASS" if (a and b and c and d and e) else "FAILURES ABOVE"))
+    sys.exit(0 if (a and b and c and d and e) else 1)
