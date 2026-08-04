@@ -93,6 +93,13 @@ export default function MaCommissionPage() {
     { name: 'By rep', columns: repCols, rows: d.by_rep || [] },
     { name: 'Spiff by month', columns: [{ header: 'Month', get: (r: any) => r.m }, { header: 'Amount', money: true, get: (r: any) => r.v }] as ExportColumn[],
       rows: Object.entries(d.spiff_by_month || {}).map(([m, v]) => ({ m: m.toUpperCase(), v })) },
+    // RULE FOUR — the leg split exports with everything else (what you see is what exports).
+    { name: 'Commission legs', columns: [
+        { header: 'Leg', get: (r: any) => r.k },
+        { header: 'Amount', money: true, get: (r: any) => r.v },
+      ] as ExportColumn[],
+      rows: [{ k: '1st Month', v: d.legs?.m1 || 0 }, { k: 'M2-M12', v: d.legs?.m2_12 || 0 },
+             { k: 'Unsplit', v: d.legs?.unsplit || 0 }, { k: 'Total payable', v: d.legs?.total || 0 }] },
   ] : []
 
   return (
@@ -152,6 +159,38 @@ export default function MaCommissionPage() {
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>{d.airtime.orders} top-ups · {fmt(d.airtime.retail)} retail</div>
             </>)}</div>
         </div>
+
+        {/* COMMISSION LEGS (owner 2026-08-04) — the SAME total_payable above, split into the leg of
+            the activation's life it belongs to. Identical rules and identical wording as the Gross
+            Profit report and the Commission Ledger; one shared classifier feeds all three. */}
+        {d.legs && (
+          <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>🧩 Commission legs — 1st Month vs M2–M12</div>
+            <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8, lineHeight: 1.5 }}>
+              <b>1st Month</b> = received in the month the number activated. <b>M2–M12</b> = received later for a
+              number that was already active. {d.legs.basis}
+            </div>
+            {d.legs.identity_ok === false && (
+              <div style={{ fontSize: 12, color: 'var(--red,#b91c1c)', fontWeight: 600, marginBottom: 6 }}>
+                ⚠ The legs do not add back to total payable — treat this split as unreliable and report it.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {([['m1', '1st Month'], ['m2_12', 'M2–M12'], ['unsplit', 'Unsplit'], ['total', 'Total payable']] as [string, string][])
+                .filter(([k]) => k !== 'unsplit' || (d.legs.unsplit || 0) !== 0)
+                .map(([k, lbl]) => (
+                  <div key={k} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 14px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 700 }}>{lbl}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(d.legs[k])}</div>
+                  </div>
+                ))}
+              <div style={{ alignSelf: 'center', fontSize: 12, color: 'var(--text3)', maxWidth: 300 }}>
+                Same split, same rules, on <a href="/commcalc/gp" style={{ color: 'var(--accent,#2563eb)' }}>Gross Profit</a>{' '}
+                and <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger</a>.
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="card" style={{ padding: 14, marginBottom: 14 }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Residual spiffs by month-in-life</div>

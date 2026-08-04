@@ -9,9 +9,15 @@ import { api } from '@/lib/client'
 // bucket they CURRENTLY land in, so unmapped ("other") payouts are easy to spot and fix. Backed by
 // commcalc.commission_category_map (migration 071); falls back to built-in defaults until 071 is run.
 
-type Rule = { id?: string; source_report: string; match_field: string; match_op: string; pattern: string; category: string; sign_rule: string; priority: number; is_seeded?: boolean }
+type Rule = { id?: string; source_report: string; match_field: string; match_op: string; pattern: string; category: string; sign_rule: string; priority: number; is_seeded?: boolean; leg_bucket?: string | null }
 type Tmpl = { key: string; label: string; builtin: boolean; rule_count: number }
-type Obs = { order_type: string; product_name: string; count: number; payout_total: number; category: string; is_payout: boolean }
+type Obs = { order_type: string; product_name: string; count: number; payout_total: number; category: string; is_payout: boolean; leg_bucket?: string; leg_month?: number | null; leg_why?: string }
+// COMMISSION LEG (owner 2026-08-04) — a SECOND, orthogonal dimension over the five buckets: was this
+// dollar received in the month the number activated (1st Month), or later for an already-activated
+// number (M2–M12)? A rule's leg is OPTIONAL: blank = Derive, which reads the line's own payment month
+// ("… MONTH 4", "… M1"). Every pre-existing rule is blank, so nothing is re-bucketed by this.
+const LEG_LABEL: Record<string, string> = { m1: '1st Month', trailing: 'M2–M12', unsplit: 'Unsplit' }
+const LEG_TINT: Record<string, string> = { m1: '#065f46', trailing: '#1d4ed8', unsplit: '#9a3412' }
 const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const money = (n: number) => (n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
@@ -24,12 +30,14 @@ export default function CommissionCategoryMapPage() {
   const [cats, setCats] = useState<string[]>([])
   const [labels, setLabels] = useState<Record<string, string>>({})
   const [meta, setMeta] = useState<{ match_fields: string[]; match_ops: string[]; sign_rules: string[] }>({ match_fields: ['product_name', 'order_type'], match_ops: ['contains', 'equals'], sign_rules: ['negative_only', 'any'] })
+  const [legBuckets, setLegBuckets] = useState<string[]>(['m1', 'trailing', 'unsplit'])
+  const [legHelp, setLegHelp] = useState('')
   const [obs, setObs] = useState<Obs[]>([])
   // the MA product-class vocabulary — the PATTERN for a `product_class` rule is a class key,
   // never free text (RULE THREE: pick, don't type). Loaded from the tenant's own vocabulary.
   const [classKeys, setClassKeys] = useState<string[]>([])
   const [msg, setMsg] = useState('')
-  const [nr, setNr] = useState<Rule>({ source_report: 'ma_daily_tx', match_field: 'product_name', match_op: 'contains', pattern: '', category: 'commission', sign_rule: 'negative_only', priority: 100 })
+  const [nr, setNr] = useState<Rule>({ source_report: 'ma_daily_tx', match_field: 'product_name', match_op: 'contains', pattern: '', category: 'commission', sign_rule: 'negative_only', priority: 100, leg_bucket: '' })
 
   async function loadTemplates() {
     try { const d = await api('/api/v1/commcalc/commission-ledger/templates'); setTmpls(d?.templates || []) } catch { /* noop */ }
@@ -41,6 +49,7 @@ export default function CommissionCategoryMapPage() {
       setUsingDefaults(!!d?.using_defaults); setReady(d?.ready !== false)
       setCats(d?.categories || []); setLabels(d?.category_labels || {})
       setMeta({ match_fields: d?.match_fields || meta.match_fields, match_ops: d?.match_ops || meta.match_ops, sign_rules: d?.sign_rules || meta.sign_rules })
+      setLegBuckets(d?.leg_buckets || ['m1', 'trailing', 'unsplit']); setLegHelp(d?.leg_help || '')
       setNr(p => ({ ...p, source_report: s, category: (d?.categories || ['commission'])[0] }))
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
   }
@@ -100,6 +109,17 @@ export default function CommissionCategoryMapPage() {
         classifications ever match. Switch, class → leg map and the before/after delta live on{' '}
         <a href="/commcalc/ma-class-wiring" style={{ color: 'var(--accent,#2563eb)' }}>MA Product Class → Money →</a>
       </p>
+      <p style={{ color: 'var(--text2)', fontSize: 12.5, marginBottom: 8, maxWidth: 900, lineHeight: 1.5 }}>
+        Each rule now also carries a <b>Leg</b>: is this money <b>1st Month</b> commission (received in the
+        same month the number activated) or <b>M2–M12</b> (received later for a number that was already
+        active)? Leave it on <b>Derive</b> — the default on every existing rule, and the right answer
+        whenever the label already says which month it is (&ldquo;… MONTH 4&rdquo;, &ldquo;… M1&rdquo;).
+        Set it only for labels whose source never states a month. Category and Leg are independent: adding
+        a leg never moves a line out of the bucket it is already in. Same split, same rules, on{' '}
+        <a href="/commcalc/gp" style={{ color: 'var(--accent,#2563eb)' }}>Gross Profit →</a> and{' '}
+        <a href="/commcalc/commission-legs" style={{ color: 'var(--accent,#2563eb)' }}>Commission Legs →</a>
+        {legHelp ? <><br /><span style={{ fontSize: 12, color: 'var(--text3)' }}>{legHelp}</span></> : null}
+      </p>
       {!ready && (
         <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginBottom: 12 }}>
           Run migration <code>071_commission_ledger.sql</code> to edit + persist rules. Until then the classifier uses the built-in defaults (shown below, read-only).
@@ -150,7 +170,7 @@ export default function CommissionCategoryMapPage() {
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 14 }}>
         <thead><tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
           <th style={{ padding: '6px 8px' }}>Pri</th><th style={{ padding: '6px 8px' }}>Field</th><th style={{ padding: '6px 8px' }}>Op</th>
-          <th style={{ padding: '6px 8px' }}>Pattern</th><th style={{ padding: '6px 8px' }}>→ Category</th><th style={{ padding: '6px 8px' }}>Sign</th><th></th>
+          <th style={{ padding: '6px 8px' }}>Pattern</th><th style={{ padding: '6px 8px' }}>→ Category</th><th style={{ padding: '6px 8px' }} title="1st Month vs M2–M12. Derive = read the line's own payment month.">→ Leg</th><th style={{ padding: '6px 8px' }}>Sign</th><th></th>
         </tr></thead>
         <tbody>
           {[...rules].sort((a, b) => (a.priority || 100) - (b.priority || 100)).map((r, i) => (
@@ -160,6 +180,18 @@ export default function CommissionCategoryMapPage() {
               <td style={{ padding: '5px 8px' }}>{r.match_op === 'product_class' ? 'is product class' : r.match_op}</td>
               <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{r.pattern}{r.match_op === 'product_class' && <span style={{ fontFamily: 'inherit', fontSize: 11, color: 'var(--text3)', marginLeft: 6 }}>(class)</span>}</td>
               <td style={{ padding: '5px 8px', fontWeight: 600 }}>{labels[r.category] || r.category}</td>
+              <td style={{ padding: '5px 8px' }}>
+                {r.id ? (
+                  <select style={{ ...inp, padding: '2px 6px', fontSize: 12 }} value={r.leg_bucket || ''}
+                    onChange={e => save({ ...r, leg_bucket: e.target.value })}
+                    title="Leave on Derive unless this label's source never states a month-of-life">
+                    <option value="">Derive</option>
+                    {legBuckets.map(b => <option key={b} value={b}>{LEG_LABEL[b] || b}</option>)}
+                  </select>
+                ) : (
+                  <span style={{ fontSize: 11, color: 'var(--text3)' }}>Derive</span>
+                )}
+              </td>
               <td style={{ padding: '5px 8px', color: 'var(--text2)' }}>{r.sign_rule === 'any' ? 'any' : 'neg'}</td>
               <td style={{ padding: '5px 8px' }}>{r.id ? <button onClick={() => del(r)} style={{ ...inp, cursor: 'pointer', fontSize: 11, padding: '3px 8px' }}>✕</button> : <span style={{ fontSize: 11, color: 'var(--text3)' }}>default</span>}</td>
             </tr>
@@ -182,6 +214,10 @@ export default function CommissionCategoryMapPage() {
         )}
         <span style={{ fontSize: 13 }}>→</span>
         <select style={inp} value={nr.category} onChange={e => setNr({ ...nr, category: e.target.value })}>{cats.map(c => <option key={c} value={c}>{labels[c] || c}</option>)}</select>
+        <select style={inp} value={nr.leg_bucket || ''} onChange={e => setNr({ ...nr, leg_bucket: e.target.value })} title="Commission leg — leave on Derive to read the line's own payment month">
+          <option value="">leg: Derive</option>
+          {legBuckets.map(b => <option key={b} value={b}>leg: {LEG_LABEL[b] || b}</option>)}
+        </select>
         <select style={inp} value={nr.sign_rule} onChange={e => setNr({ ...nr, sign_rule: e.target.value })}>{meta.sign_rules.map(s => <option key={s} value={s}>{s === 'any' ? 'any sign' : 'negative only'}</option>)}</select>
         <input style={{ ...inp, width: 64 }} type="number" value={nr.priority} onChange={e => setNr({ ...nr, priority: Number(e.target.value) })} title="priority (lower wins)" />
         <button onClick={addRule} style={{ ...inp, cursor: 'pointer', fontWeight: 700, background: 'var(--accent,#2563eb)', color: '#fff', border: 'none' }}>Add</button>
@@ -195,7 +231,7 @@ export default function CommissionCategoryMapPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead><tr style={{ textAlign: 'left', color: 'var(--text3)', fontSize: 11, textTransform: 'uppercase' }}>
             <th style={{ padding: '5px 8px' }}>Order type</th><th style={{ padding: '5px 8px' }}>Product / description</th>
-            <th style={{ padding: '5px 8px', textAlign: 'right' }}>Lines</th><th style={{ padding: '5px 8px', textAlign: 'right' }}>Payout</th><th style={{ padding: '5px 8px' }}>Lands in</th>
+            <th style={{ padding: '5px 8px', textAlign: 'right' }}>Lines</th><th style={{ padding: '5px 8px', textAlign: 'right' }}>Payout</th><th style={{ padding: '5px 8px' }}>Lands in</th><th style={{ padding: '5px 8px' }} title="1st Month = received in the activation month · M2–M12 = received later for an already-activated number">Leg</th>
           </tr></thead>
           <tbody>
             {obs.map((o, i) => (
@@ -205,6 +241,10 @@ export default function CommissionCategoryMapPage() {
                 <td style={{ padding: '5px 8px', textAlign: 'right' }}>{o.count}</td>
                 <td style={{ padding: '5px 8px', textAlign: 'right' }}>{money(o.payout_total)}</td>
                 <td style={{ padding: '5px 8px', fontWeight: 600, color: o.category === 'other' ? '#9a3412' : 'inherit' }}>{labels[o.category] || o.category}</td>
+                <td style={{ padding: '5px 8px', fontWeight: 600, color: LEG_TINT[o.leg_bucket || 'unsplit'] }}
+                  title={`${o.leg_why === 'rule_override' ? 'set by a rule' : o.leg_why === 'payment_month' ? "from the label's own payment month" : o.leg_why === 'label_override' ? 'set for this exact label' : o.leg_why === 'month_in_label' ? 'month named in the label' : 'the source states no month-of-life'}${o.leg_month ? ` · month ${o.leg_month}` : ''}`}>
+                  {LEG_LABEL[o.leg_bucket || 'unsplit'] || o.leg_bucket}
+                </td>
               </tr>
             ))}
           </tbody>
