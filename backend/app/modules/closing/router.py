@@ -14,8 +14,11 @@ import pandas as pd
 import io
 import base64
 import os
+import requests
 from . import gsheet
 from . import ops_chargebacks
+from . import expense_config
+from . import envelope as _envelope
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -894,6 +897,20 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
     ver_by_store = {v.get("store_code"): v for v in vers}
 
+    # EEP (mig 506): categorized expense lines for the day, grouped by the daily_closing row they're
+    # tied to — attached onto each rep row below so DM Verify can render/approve them per line. Degrades
+    # to {} (no expense column shown) when the table isn't migrated yet.
+    try:
+        exp_rows_today = (client.schema("commcalc").table("closing_expense").select("*")
+                          .eq("org_id", org_id).eq("close_date", date).execute().data) or []
+    except Exception:
+        exp_rows_today = []
+    exp_lines_by_row = {}
+    for er in exp_rows_today:
+        rid = er.get("closing_row_id")
+        if rid:
+            exp_lines_by_row.setdefault(rid, []).append(er)
+
     # Close-gate replay (READ ONLY, reuses the exact existing helpers — never redefined): lets each rep
     # row carry the SAME block/flag/ok/recon_pending status the real 3-try close gate and
     # /closing/submissions already compute, instead of DM Verify's own separate (and less precise, no
@@ -1139,7 +1156,8 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             ct_display, rc_display = _rep_custom_displays(rp)
             out_reps.append({**rp, "envelope_url": _signed_envelope(rp.get("envelope_picture")),
                              "_tenders": dt, "_gate": g, "_epay_display": _row_epay_display(rp),
-                             "_custom_tenders_display": ct_display, "_custom_counts_display": rc_display})
+                             "_custom_tenders_display": ct_display, "_custom_counts_display": rc_display,
+                             "_expense_lines": exp_lines_by_row.get(rp.get("id"), [])})
 
         out.append({
             "store_code": code, "store_name": (reps[0].get("store_name") or code or "—"),
@@ -1496,6 +1514,15 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     body["expense_amount"] = exp_amt
     body["expense_description"] = exp_desc or None
     body["expense_approved"] = False
+    # ── Categorized expense LINES (mig 506, EEP) — the new form's replacement for the single field
+    #    above for NEW entries. Validated up front (before the gate/attempt logging below) so a bad
+    #    line (missing category/description/required-employee) fails loudly with a clear 400 instead
+    #    of silently dropping money after a "closing submitted" success message. The legacy
+    #    expense_amount/expense_description fields above are UNTOUCHED — both can be sent on the same
+    #    submit; nothing here changes their behaviour. Rows are inserted AFTER the row itself is
+    #    written (needs the new row's id for closing_row_id) — see `_pending_expense_lines` below.
+    _pending_expense_lines = [_validate_expense_line(client, org_id, ln)
+                              for ln in (payload.get("expense_lines") or []) if isinstance(ln, dict)]
     # ── Six tender types (mirror the POS X-report). Accept the new t_* fields; fall back to the legacy
     #    store/epay/other fields for any caller (old kiosk) that hasn't sent them yet. ──
     def _pt(k):
@@ -1586,6 +1613,21 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
         r = _write(body)
     saved = r.data[0] if r.data else body
 
+    inserted_expense_lines = []
+    if _pending_expense_lines:
+        inserted_expense_lines = [
+            {"org_id": org_id, "store_code": body.get("store_code"), "close_date": d,
+             "closing_row_id": saved.get("id"), "status": "pending",
+             "created_by": (body.get("employee_name") or None), **c}
+            for c in _pending_expense_lines]
+        try:
+            ins = (client.schema("commcalc").table("closing_expense")
+                   .insert(inserted_expense_lines).execute())
+            inserted_expense_lines = ins.data or inserted_expense_lines
+        except Exception as e:
+            print(f"WARN closing_expense insert failed on row submit (run migration 506?): {e}")
+            inserted_expense_lines = []
+
     # 3-way envelope recon: OCR'd cash (the rep's OWN photo) vs entered cash — this is the rep's own
     # data, so it's fine to show. It does NOT reveal the B2B system figure.
     ocr_mismatch = None
@@ -1614,7 +1656,8 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     if ocr_mismatch:
         recon["envelope_mismatch"] = ocr_mismatch
         recon["flags"] = rep_flags + [f"Envelope photo reads {_usd(ocr_mismatch['ocr_cash'])} vs {_usd(declared_cash)} entered"]
-    return {**saved, "accepted": True, "recon": recon, "envelope_url": _signed_envelope(saved.get("envelope_picture"))}
+    return {**saved, "accepted": True, "recon": recon, "envelope_url": _signed_envelope(saved.get("envelope_picture")),
+            "expense_lines": inserted_expense_lines}
 
 
 @router.patch("/row/{row_id}")
@@ -2474,7 +2517,12 @@ def _bank_deposit_declared(client, org_id: str, store_code: str, close_date: str
       bill_payment_cash = sum(epay_on_cash)          — ePay/bill-payment cash only (a subset)
       store_cash        = sum(t_cash) - sum(epay_on_cash) — register cash, excluding the epay portion
       total_cash        = sum(t_cash)                — everything declared as cash (the full envelope; DEFAULT)
-    Returns (amount, rep_row_count)."""
+    EEP (mig 506/507): for `total_cash`/`store_cash` (the two targets that represent the PHYSICAL
+    envelope), the result is additionally NETTED against that (store, date)'s approved closing_expense
+    lines + envelope_withdrawal amounts — cash actually taken out of the envelope before it ever
+    reaches the bank must reduce what's left to deposit. `bill_payment_cash` is a separate ePay
+    reconciliation leg (not the physical cash envelope) and is left unnetted. Empty/pre-migration
+    history nets to 0 -> byte-identical to today. Returns (amount, rep_row_count)."""
     try:
         rows = (client.schema("commcalc").table("daily_closing")
                 .select("t_cash,store_cash,epay_on_cash").eq("org_id", org_id)
@@ -2493,6 +2541,12 @@ def _bank_deposit_declared(client, org_id: str, store_code: str, close_date: str
             total += max(cash - epay, 0.0)
         else:
             total += cash
+    if target in ("total_cash", "store_cash"):
+        exp_by_row, exp_by_sd = _envelope.approved_expense_totals(client, org_id, date_from=close_date,
+                                                                  date_to=close_date, store_codes=[store_code])
+        wd_by_row, wd_by_sd = _envelope.withdrawal_totals(client, org_id, date_from=close_date,
+                                                          date_to=close_date, store_codes=[store_code])
+        total = _envelope.net_store_day(total, store_code, close_date, exp_by_sd, wd_by_sd)
     return round(total, 2), len(rows)
 
 
@@ -3450,9 +3504,22 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # exclude an envelope whose store resolved to a REAL, DIFFERENT market than the one active.
     market_cf = market.strip().casefold() if market else None
 
+    # EEP (mig 506/507): net each envelope's own approved closing_expense lines + envelope_withdrawal
+    # amounts out of its cash — "ready_cash" on this page is what's ACTUALLY left in the envelope to
+    # collect, not the gross declared figure. Computed once for the whole date/range window (byte-
+    # identical to today when neither table is migrated/populated yet — both dicts come back empty).
+    _pu_dates = sorted({str(r.get("close_date")) for r in rows if r.get("close_date")})
+    _exp_by_row, _exp_by_sd = _envelope.approved_expense_totals(
+        client, org_id, date_from=(_pu_dates[0] if _pu_dates else None),
+        date_to=(_pu_dates[-1] if _pu_dates else None))
+    _wd_by_row, _wd_by_sd = _envelope.withdrawal_totals(
+        client, org_id, date_from=(_pu_dates[0] if _pu_dates else None),
+        date_to=(_pu_dates[-1] if _pu_dates else None))
+
     out = []
     for r in rows:
         cash = _f(r.get("store_cash")) + _f(r.get("epay_cash"))
+        cash = _envelope.net_row(cash, r.get("id"), _exp_by_row, _wd_by_row)
         if cash <= 0 and not r.get("envelope_picture"):
             continue
         code = r.get("store_code") or ""
@@ -3622,6 +3689,26 @@ def cash_position(date: str = "", start: str = "", end: str = "",
         c = r.get("created_at")
         if c and str(c) > str(last_deposited_at.get(code) or ""):
             last_deposited_at[code] = c
+
+    # EEP (mig 506/507): cash actually taken out of the envelope (approved closing_expense lines +
+    # envelope_withdrawal) reduces "cash on hand" exactly like a pickup does — folded straight into
+    # `pick_by_store_day` (mathematically `declared - picked - taken` == `declared - (picked+taken)`)
+    # so every downstream running-balance computation (single-day AND range mode, below) nets for free
+    # without duplicating the subtraction logic. Empty pre-migration/no-data -> adds nothing (byte-
+    # identical to today).
+    _exp_by_row, _exp_by_sd = _envelope.approved_expense_totals(
+        client, org_id, date_to=as_of, store_codes=(store_list or None))
+    _wd_by_row, _wd_by_sd = _envelope.withdrawal_totals(
+        client, org_id, date_to=as_of, store_codes=(store_list or None))
+    _taken_by_sd = {}
+    for k, amt in _exp_by_sd.items():
+        _taken_by_sd[k] = _taken_by_sd.get(k, 0.0) + amt
+    for k, amt in _wd_by_sd.items():
+        _taken_by_sd[k] = _taken_by_sd.get(k, 0.0) + amt
+    for (sc, dday), amt in _taken_by_sd.items():
+        code = sc or "?"
+        pick_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
+        pick_by_store_day[code][dday] += amt
 
     codes = sorted({c for c in (set(decl_by_store_day) | set(pick_by_store_day) | set(store_list)) if c and c != "?"})
     if ks is not None:
@@ -4719,6 +4806,638 @@ def _gate_row(client, org_id, store_code, date, emp_name, declared_cash, declare
     flags = [i["reason"] for i in issues if i["severity"] == "flag"]
     return {"status": "blocked" if blocks else ("flagged" if flags else "ok"),
             "block_reasons": blocks, "flags": flags, "b2b": {"cash": repb["cash"], "card": repb["card"]}}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ── Envelope Expense Management + Envelope Payouts (EEP) — migrations 506/507 ───────────────────────
+# OWNER DIRECTIVE 2026-08-04. Spec: /workspaces/commcalc/docs/specs/envelope-expense-payout.md.
+# Money doctrine: nothing here mutates commcalc.rep_commissions or any payout plan/number — this
+# section RECORDS CASH MOVEMENTS against numbers computed elsewhere (mod-commission's daily accrual,
+# mod-people's clock-in salary-owed) and posts P&L lines ONLY for 'expense'-kind category totals (never
+# for payroll/commission-kind lines, which are cash advances). Every table read/write below is
+# try/except-guarded so migrations 506/507 not being run yet degrades to an honest empty/no-op state,
+# never a 500 on an unrelated page.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+CLOSING_INTERNAL_API_BASE = os.environ.get("INTERNAL_API_BASE_URL") or "http://127.0.0.1:8000"
+
+
+# ── Sibling cross-module HTTP calls (mod-commission / mod-people), same pattern as storeops'
+#    PTO_INTERNAL_API_BASE -> mod-commission system-line push. Every call is best-effort: a 404 means
+#    the sibling package isn't deployed YET (both are being built in parallel per the spec), a timeout/
+#    connection error means it's down — EITHER degrades to (None, <note>) / {"posted/pushed": False,...},
+#    never a raised exception, so this module's own endpoints stay usable while a sibling package is
+#    still in flight. ──
+def _get_commission_accrued(org_id, as_of, employee_key=None, store_code=None):
+    url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/commcalc/payout/accrued"
+    params = {"org_id": org_id, "as_of": as_of}
+    if employee_key:
+        params["employee_key"] = employee_key
+    if store_code:
+        params["store_code"] = store_code
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 404:
+            return None, "commission accrual endpoint not deployed yet (mod-commission package pending)"
+        r.raise_for_status()
+        return r.json(), None
+    except Exception as e:
+        return None, f"commission accrual fetch failed ({type(e).__name__}: {e})"
+
+
+def _get_salary_owed(org_id, start, end, store_code=None, employee_id=None):
+    url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/storeops/salary-owed"
+    params = {"org_id": org_id, "start": start, "end": end}
+    if store_code:
+        params["store_code"] = store_code
+    if employee_id:
+        params["employee_id"] = employee_id
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 404:
+            return None, "salary-owed endpoint not deployed yet (mod-people package pending)"
+        r.raise_for_status()
+        return r.json(), None
+    except Exception as e:
+        return None, f"salary-owed fetch failed ({type(e).__name__}: {e})"
+
+
+def _post_commission_payout(org_id, employee_key, amount, paid_date, store_code, withdrawal_ref, recorded_by):
+    url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/commcalc/payout/record"
+    body = {"employee_key": employee_key, "amount": amount, "paid_date": paid_date,
+            "store_code": store_code, "withdrawal_ref": withdrawal_ref, "recorded_by": recorded_by}
+    try:
+        r = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        if r.status_code == 404:
+            return {"posted": False, "status": 404,
+                    "note": "commission payout/record endpoint not deployed yet — withdrawal is still persisted"}
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        return {"posted": True, "status": r.status_code, "data": data}
+    except Exception as e:
+        return {"posted": False, "status": None,
+                "note": f"commission payout push failed ({type(e).__name__}: {e}) — withdrawal is still persisted"}
+
+
+def _post_salary_advance(org_id, employee_id, amount, paid_date, store_code, withdrawal_ref, recorded_by):
+    url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/storeops/salary-advance/record"
+    body = {"employee_id": employee_id, "amount": amount, "paid_date": paid_date,
+            "store_code": store_code, "withdrawal_ref": withdrawal_ref, "recorded_by": recorded_by}
+    try:
+        r = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        if r.status_code == 404:
+            return {"posted": False, "status": 404,
+                    "note": "salary-advance/record endpoint not deployed yet — withdrawal is still persisted"}
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+        return {"posted": True, "status": r.status_code, "data": data}
+    except Exception as e:
+        return {"posted": False, "status": None,
+                "note": f"salary advance push failed ({type(e).__name__}: {e}) — withdrawal is still persisted"}
+
+
+# ── Expense categories (mig 506) — lazy-seeded 5 presets, admin-editable ────────────────────────────
+@router.get("/expense-categories")
+def get_expense_categories(org_id: str = ORG_ID):
+    """The org's Daily-Closing expense categories (lazy-seeded 5 presets on first call). Consumed by
+    the rep submit form's category picker, the DM verify approve panel, and the admin config page."""
+    require_org(org_id)
+    rows = expense_config.load_categories(sb(), org_id, active_only=False)
+    return {"categories": rows, "kinds": list(expense_config.KINDS)}
+
+
+@router.put("/expense-categories")
+def put_expense_categories(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Full-replace-by-upsert save (the admin page always sends the complete edited list — mirrors
+    tender-config/count-config). A row with an `id` updates in place; one without gets a new id. Never
+    deletes — deactivating (is_active=false) is how a tenant retires a category without breaking the
+    FK on every already-posted commcalc.closing_expense row that references it."""
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing expense categories is permission-restricted.")
+    cats = payload.get("categories") or []
+    ups, news = [], []
+    for i, c in enumerate(cats):
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        row = {"org_id": org_id, "name": name, "kind": expense_config._normalize_kind(c.get("kind")),
+               "is_preset": bool(c.get("is_preset")), "is_active": c.get("is_active", True) is not False,
+               "sort_order": c.get("sort_order", i), "updated_at": _now()}
+        if c.get("id"):
+            row["id"] = c["id"]
+            ups.append(row)
+        else:
+            news.append(row)
+    try:
+        if ups:
+            sb().schema("commcalc").table(expense_config.TABLE).upsert(ups, on_conflict="id").execute()
+        if news:
+            sb().schema("commcalc").table(expense_config.TABLE).insert(news).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save expense categories (run migration 506?): {e}")
+    return {"ok": True, "saved": len(ups) + len(news)}
+
+
+# ── closing_expense line items (mig 506) ─────────────────────────────────────────────────────────
+@router.get("/expenses")
+def list_expenses(date_from: str = "", date_to: str = "", store: str = "", stores: str = "",
+                  status: str = "", category_id: str = "", employee_id: str = "",
+                  authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Categorized expense lines, filterable — powers the DM verify panel, the DM execution page's
+    'approved unpaid' list, and the Expenses report (RULE FIVE filters). Manager-span gated."""
+    require_org(org_id)
+    client = sb()
+    q = client.schema("commcalc").table("closing_expense").select("*").eq("org_id", org_id)
+    if date_from:
+        q = q.gte("close_date", date_from)
+    if date_to:
+        q = q.lte("close_date", date_to)
+    if status:
+        q = q.eq("status", status)
+    if category_id:
+        q = q.eq("category_id", category_id)
+    if employee_id:
+        q = q.eq("employee_id", employee_id)
+    store_set = {s.strip().upper() for s in stores.split(",") if s.strip()}
+    if store.strip():
+        store_set.add(store.strip().upper())
+    if len(store_set) == 1:
+        q = q.eq("store_code", next(iter(store_set)))
+    try:
+        rows = q.order("close_date", desc=True).limit(10000).execute().data or []
+    except Exception as e:
+        return {"rows": [], "error": f"closing_expense not available (run migration 506?): {e}"}
+    if len(store_set) > 1:
+        rows = [r for r in rows if (r.get("store_code") or "").upper() in store_set]
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    total = round(sum(_f(r.get("amount")) for r in rows), 2)
+    return {"rows": rows, "count": len(rows), "total": total}
+
+
+def _validate_expense_line(client, org_id, line: dict) -> dict:
+    """One expense-line payload -> a clean insertable dict, or raises HTTPException(400,...). Snapshots
+    category kind/name so a later rename/kind-change never retroactively changes an already-posted
+    line's behaviour/display."""
+    cat_id = (line.get("category_id") or "").strip()
+    cat = expense_config.category_by_id(client, org_id, cat_id) if cat_id else None
+    if not cat:
+        raise HTTPException(400, f"Unknown expense category ({cat_id or 'none supplied'}). Pick one from the list.")
+    amt = _money(line.get("amount"))
+    if amt <= 0:
+        raise HTTPException(400, "Expense amount must be greater than zero.")
+    desc = (line.get("description") or "").strip()
+    if not desc:
+        raise HTTPException(400, "A description is required for every expense line.")
+    kind = expense_config._normalize_kind(cat.get("kind"))
+    emp_id = (line.get("employee_id") or "").strip() or None
+    emp_name = (line.get("employee_name") or "").strip() or None
+    if kind in ("payroll", "commission") and not emp_id:
+        raise HTTPException(400, f"'{cat.get('name')}' requires picking an employee.")
+    return {"category_id": cat.get("id"), "category_kind": kind, "category_name": cat.get("name"),
+            "amount": amt, "description": desc, "employee_id": emp_id, "employee_name": emp_name}
+
+
+@router.post("/expense")
+def create_expense_line(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Standalone expense-line entry (a manager logging a store-level expense not tied to any one
+    rep's own closing submission — closing_row_id stays NULL). The rep-submit-flow path (categorized
+    lines attached to a fresh daily_closing row) is handled inline inside POST /closing/row instead —
+    see `_insert_expense_lines` below, which this endpoint also uses."""
+    require_org(org_id)
+    close_date = _date(payload.get("close_date"))
+    if not close_date:
+        raise HTTPException(400, "valid close_date required")
+    client = sb()
+    clean = _validate_expense_line(client, org_id, payload)
+    row = {"org_id": org_id, "store_code": (payload.get("store_code") or "").strip() or None,
+           "close_date": close_date, "closing_row_id": (payload.get("closing_row_id") or "").strip() or None,
+           "status": "pending", "created_by": (payload.get("created_by") or "").strip() or None,
+           **clean}
+    try:
+        r = client.schema("commcalc").table("closing_expense").insert(row).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save expense line (run migration 506?): {e}")
+    return {"ok": True, "row": (r.data[0] if r.data else row)}
+
+
+def _insert_expense_lines(client, org_id, store_code, close_date, closing_row_id, lines, created_by=None):
+    """Validate + insert a batch of expense lines (used by POST /closing/row's `expense_lines`).
+    All-or-nothing: validates every line BEFORE inserting any, so a bad line in the middle of the
+    batch never leaves a partial write. Returns the inserted rows (or [] if `lines` is empty/absent).
+    Never raises on a missing/un-migrated table — degrades to [] with the row's own submit unaffected
+    (the legacy expense_amount/expense_description fields on daily_closing keep working either way)."""
+    if not lines:
+        return []
+    cleaned = [_validate_expense_line(client, org_id, ln) for ln in lines]
+    rows = [{"org_id": org_id, "store_code": store_code, "close_date": close_date,
+             "closing_row_id": closing_row_id, "status": "pending", "created_by": created_by, **c}
+            for c in cleaned]
+    try:
+        r = client.schema("commcalc").table("closing_expense").insert(rows).execute()
+        return r.data or rows
+    except Exception as e:
+        print(f"WARN closing_expense insert failed (run migration 506?): {e}")
+        return []
+
+
+def _push_expense_category_pl(client, org_id, period, category_id, category_name):
+    """Recompute + push the WHOLE per-store aggregate of APPROVED 'expense'-kind lines for
+    (org, period, category) to mod-commission's Store Expenses system-line receiver. Idempotent full
+    recompute (never an incremental delta) — the receiver already replaces-by-source_key, so re-running
+    this after any approve/reject/edit in the period can never drift or double-count. NEVER called for
+    payroll/commission-kind categories (money doctrine — those are cash advances, not P&L)."""
+    try:
+        rows = (client.schema("commcalc").table("closing_expense").select("store_code,amount,close_date")
+                .eq("org_id", org_id).eq("status", "approved").eq("category_id", category_id)
+                .execute().data) or []
+    except Exception as e:
+        return {"pushed": False, "note": f"closing_expense read failed: {e}"}
+    by_store = {}
+    for r in rows:
+        cd = str(r.get("close_date") or "")
+        if cd[:7] != period:
+            continue
+        sc = (r.get("store_code") or "").strip()
+        if not sc:
+            continue
+        by_store[sc] = round(by_store.get(sc, 0.0) + _f(r.get("amount")), 2)
+    cells = [{"store": sc, "amount": amt} for sc, amt in by_store.items()]
+    url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
+    body = {"source_key": f"closing_expense:{category_id}", "label": category_name, "cells": cells}
+    try:
+        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        if resp.status_code == 404:
+            return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet"}
+        resp.raise_for_status()
+        return {"pushed": True, "status": resp.status_code, "stores": len(cells)}
+    except Exception as e:
+        return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e})"}
+
+
+@router.post("/expense/{expense_id}/decide")
+def decide_expense_line(expense_id: str, payload: dict, org_id: str = ORG_ID,
+                        authorization: str = Header(default="")):
+    """DM/manager decides ONE categorized expense line — approve or reject. Body: {status: 'approved'
+    |'rejected', decided_by?}. Extends the existing single-checkbox approve affordance (POST
+    /closing/expense/approve, unchanged, still governs the legacy mig-109 expense_amount field) to the
+    new categorized-line model. On an 'expense'-kind approval, best-effort pushes that category's
+    updated P&L total for the line's period immediately (never blocks the response on the push)."""
+    client = sb()
+    if not _can_mgmt_review(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Approving expenses is management-restricted.")
+    status = (payload.get("status") or "").strip().lower()
+    if status not in ("approved", "rejected"):
+        raise HTTPException(400, "status must be 'approved' or 'rejected'")
+    try:
+        rows = (client.schema("commcalc").table("closing_expense").select("*")
+                .eq("org_id", org_id).eq("id", expense_id).limit(1).execute().data) or []
+    except Exception as e:
+        raise HTTPException(500, f"could not read expense line (run migration 506?): {e}")
+    if not rows:
+        raise HTTPException(404, "expense line not found")
+    row = rows[0]
+    decided_by = (payload.get("decided_by") or _caller_email(client, authorization) or "manager")
+    upd = {"status": status, "approved_by": decided_by, "approved_at": _now(), "updated_at": _now()}
+    (client.schema("commcalc").table("closing_expense").update(upd)
+     .eq("org_id", org_id).eq("id", expense_id).execute())
+    pl = None
+    if status == "approved" and row.get("category_kind") == "expense" and row.get("category_id"):
+        period = str(row.get("close_date") or "")[:7]
+        try:
+            pl = _push_expense_category_pl(client, org_id, period, row["category_id"], row.get("category_name"))
+        except Exception as e:
+            pl = {"pushed": False, "note": str(e)}
+    return {"ok": True, "id": expense_id, "status": status, "pl_push": pl}
+
+
+@router.post("/expense-pl-sweep/run")
+def expense_pl_sweep_run(org_id: str = ORG_ID):
+    """Manual/testing trigger — recompute + push EVERY 'expense'-kind category's P&L total for the
+    current + prior 2 periods (covers the month-boundary late-approval gap, same class of issue as the
+    daily sales feed's derive-only-current-period bug)."""
+    return _run_expense_pl_sweep(org_id)
+
+
+@router.post("/expense-pl-sweep/run-due")
+def expense_pl_sweep_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (NOTIFY_RUN_SECRET) — nightly, across every tenant. Idempotent (full
+    recompute per category+period), safe to re-run."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    try:
+        orgs = sorted({t.get("org_id") for t in
+                      (client.schema("storeops").table("tenants").select("org_id").execute().data or [])
+                      if t.get("org_id")})
+    except Exception:
+        orgs = []
+    results = {oid: _run_expense_pl_sweep(oid) for oid in orgs}
+    return {"orgs": len(orgs), "results": results}
+
+
+def _sweep_periods(n=3):
+    today = datetime.now(timezone.utc).date()
+    out, y, m = [], today.year, today.month
+    for _ in range(n):
+        out.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    return out
+
+
+def _run_expense_pl_sweep(org_id: str):
+    client = sb()
+    try:
+        cats = (client.schema("commcalc").table(expense_config.TABLE).select("id,name,kind")
+                .eq("org_id", org_id).eq("kind", "expense").execute().data) or []
+    except Exception as e:
+        return {"pushed": [], "error": str(e)}
+    out = []
+    for period in _sweep_periods():
+        for c in cats:
+            r = _push_expense_category_pl(client, org_id, period, c["id"], c.get("name") or "")
+            out.append({"period": period, "category": c.get("name"), **r})
+    return {"pushed": out}
+
+
+# ── Envelope payout config (mig 507) — what may be taken from the envelope + on what cadence ────────
+_ENVELOPE_CFG_DEFAULT = {
+    "take_commission": True, "take_salary": True, "take_expenses": True,
+    "commission_cadence": "weekly", "commission_anchor": None, "commission_anchor_date": None,
+    "salary_cadence": "weekly", "salary_anchor": None, "salary_anchor_date": None,
+}
+
+
+def _envelope_config(client, org_id, store_code=None) -> dict:
+    """Merged config: the org default row (store_code IS NULL), overridden field-by-field by a
+    per-store row when one exists. Missing table/rows -> the coded default (matches the spec's stated
+    defaults: everything ON, weekly cadence) — degrades gracefully pre-migration 507."""
+    cfg = dict(_ENVELOPE_CFG_DEFAULT)
+    try:
+        rows = (client.schema("commcalc").table("envelope_payout_config").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return cfg
+    org_row = next((r for r in rows if not r.get("store_code")), None)
+    if org_row:
+        cfg.update({k: org_row.get(k, cfg[k]) for k in cfg})
+    if store_code:
+        store_row = next((r for r in rows if (r.get("store_code") or "").upper() == store_code.upper()), None)
+        if store_row:
+            cfg.update({k: store_row.get(k, cfg[k]) for k in cfg if store_row.get(k) is not None})
+    return cfg
+
+
+@router.get("/envelope-config")
+def get_envelope_config(store_code: str = "", org_id: str = ORG_ID):
+    require_org(org_id)
+    client = sb()
+    merged = _envelope_config(client, org_id, store_code or None)
+    try:
+        rows = (client.schema("commcalc").table("envelope_payout_config").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    return {"effective": merged, "org_default": next((r for r in rows if not r.get("store_code")), None),
+            "store_overrides": [r for r in rows if r.get("store_code")]}
+
+
+@router.put("/envelope-config")
+def put_envelope_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Body: {store_code: null|"S123", take_commission, take_salary, take_expenses,
+    commission_cadence, commission_anchor, commission_anchor_date, salary_cadence, salary_anchor,
+    salary_anchor_date}. store_code null/absent saves the ORG DEFAULT row; a real code upserts that
+    store's override."""
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing envelope payout configuration is permission-restricted.")
+    store_code = (payload.get("store_code") or "").strip() or None
+    row = {"org_id": org_id, "store_code": store_code,
+           "take_commission": payload.get("take_commission", True) is not False,
+           "take_salary": payload.get("take_salary", True) is not False,
+           "take_expenses": payload.get("take_expenses", True) is not False,
+           "commission_cadence": (payload.get("commission_cadence") or "weekly").strip().lower(),
+           "commission_anchor": payload.get("commission_anchor"),
+           "commission_anchor_date": payload.get("commission_anchor_date") or None,
+           "salary_cadence": (payload.get("salary_cadence") or "weekly").strip().lower(),
+           "salary_anchor": payload.get("salary_anchor"),
+           "salary_anchor_date": payload.get("salary_anchor_date") or None,
+           "updated_by": (payload.get("updated_by") or _caller_email(client, authorization) or None),
+           "updated_at": _now()}
+    if row["commission_cadence"] not in ("daily", "weekly", "biweekly", "monthly"):
+        raise HTTPException(400, "commission_cadence must be daily|weekly|biweekly|monthly")
+    if row["salary_cadence"] not in ("daily", "weekly", "biweekly", "monthly"):
+        raise HTTPException(400, "salary_cadence must be daily|weekly|biweekly|monthly")
+    try:
+        # Upsert-by-value since the unique index is on (org_id, COALESCE(store_code,'')) — PostgREST
+        # can't target a COALESCE expression on_conflict, so emulate: delete-then-insert this one key.
+        d = client.schema("commcalc").table("envelope_payout_config").delete().eq("org_id", org_id)
+        d = d.is_("store_code", "null") if store_code is None else d.eq("store_code", store_code)
+        d.execute()
+        client.schema("commcalc").table("envelope_payout_config").insert(row).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save envelope config (run migration 507?): {e}")
+    return {"ok": True, "store_code": store_code}
+
+
+# ── GET /closing/payout-due — merges commission accrued + salary owed + approved-unpaid expenses ────
+@router.get("/payout-due")
+def payout_due(store_code: str = "", as_of: str = "", org_id: str = ORG_ID,
+              authorization: str = Header(default="")):
+    """What cash the envelope owes out TODAY, per the org/store's cadence config. Merges 3 sources
+    (each independently degrade-safe — a sibling 404 shows as an empty section + note, never a 500):
+      commission_due  — mod-commission's daily-accrual unpaid balance, gated by cadence_due
+      salary_due      — mod-people's clock-in salary-owed balance, gated by cadence_due
+      expenses_due    — this module's own APPROVED + unpaid closing_expense lines (always 'due' —
+                        an approved expense is payable the moment it's approved, no cadence gate)
+    """
+    require_org(org_id)
+    client = sb()
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if store_code and ks is not None and not in_keyset(ks, store_code):
+        raise HTTPException(403, "That store is outside your scope.")
+    d = _date(as_of) or _biz_today_iso()
+    cfg = _envelope_config(client, org_id, store_code or None)
+    notes = []
+
+    commission_due, commission_employees = 0.0, []
+    if cfg["take_commission"]:
+        data, err = _get_commission_accrued(org_id, d, store_code=store_code or None)
+        if err:
+            notes.append(f"commission: {err}")
+        elif data:
+            for e in (data.get("employees") or []):
+                bal = _f(e.get("unpaid_balance"))
+                due, amt = _envelope.cadence_due(cfg["commission_cadence"], cfg["commission_anchor"],
+                                                 cfg["commission_anchor_date"], d, bal)
+                if due and amt > 0:
+                    commission_due = round(commission_due + amt, 2)
+                    commission_employees.append({"employee_key": e.get("employee_key"), "name": e.get("name"),
+                                                 "amount": amt, "store_codes": e.get("store_codes"),
+                                                 "components": e.get("components")})
+
+    salary_due, salary_employees = 0.0, []
+    if cfg["take_salary"]:
+        # 60-day lookback window so `balance` reflects the FULL unpaid-to-date snapshot, not just today
+        # (matches how commission's own `unpaid_balance` is already a running total, not a single day).
+        win_start = (dateparser.parse(d) - timedelta(days=60)).date().isoformat()
+        data, err = _get_salary_owed(org_id, win_start, d, store_code=store_code or None)
+        if err:
+            notes.append(f"salary: {err}")
+        elif data:
+            _salary_emps = data if isinstance(data, list) else (data.get("employees") or [])
+            for e in _salary_emps:
+                bal = _f((e or {}).get("balance"))
+                due, amt = _envelope.cadence_due(cfg["salary_cadence"], cfg["salary_anchor"],
+                                                 cfg["salary_anchor_date"], d, bal)
+                if due and amt > 0:
+                    salary_due = round(salary_due + amt, 2)
+                    salary_employees.append({"employee_id": (e or {}).get("employee_id"),
+                                             "name": (e or {}).get("name"), "amount": amt})
+
+    exp_rows, exp_due = [], 0.0
+    if cfg["take_expenses"]:
+        try:
+            q = (client.schema("commcalc").table("closing_expense").select("*")
+                 .eq("org_id", org_id).eq("status", "approved").eq("paid", False))
+            if store_code:
+                q = q.eq("store_code", store_code)
+            rows = q.limit(5000).execute().data or []
+            if ks is not None:
+                rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+            exp_rows = rows
+            exp_due = round(sum(_f(r.get("amount")) for r in rows), 2)
+        except Exception as e:
+            notes.append(f"expenses: could not read closing_expense (run migration 506?): {e}")
+
+    total = round(commission_due + salary_due + exp_due, 2)
+    return {"as_of": d, "store_code": store_code or None, "config": cfg,
+            "commission_due": commission_due, "commission_employees": commission_employees,
+            "salary_due": salary_due, "salary_employees": salary_employees,
+            "expenses_due": exp_due, "expense_lines": exp_rows,
+            "total_cash_required": total, "notes": notes}
+
+
+# ── GET /closing/envelope-plan — fewest-envelopes SMART selection ───────────────────────────────────
+@router.get("/envelope-plan")
+def envelope_plan(store_code: str = "", as_of: str = "", required_amount: float = None,
+                  org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Given a cash requirement (explicit `required_amount`, else computed from GET /closing/payout-due
+    for the same store/date), pick the FEWEST open envelopes that cover it (see envelope.select_envelopes
+    for the algorithm + scratchpad/prove_envelope.py for the proof). An "open envelope" = a daily_closing
+    row with declared cash and net envelope_available > 0 (not yet fully withdrawn/picked up)."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if store_code and ks is not None and not in_keyset(ks, store_code):
+        raise HTTPException(403, "That store is outside your scope.")
+    d = _date(as_of) or _biz_today_iso()
+    if required_amount is None:
+        pd_data = payout_due(store_code=store_code, as_of=d, org_id=org_id, authorization=authorization)
+        required_amount = pd_data["total_cash_required"]
+
+    try:
+        q = (client.schema("commcalc").table("daily_closing")
+             .select("id,store_code,store_name,store_address,employee_name,close_date,t_cash,store_cash,epay_on_cash")
+             .eq("org_id", org_id).lte("close_date", d))
+        if store_code:
+            q = q.eq("store_code", store_code)
+        rows = q.limit(5000).execute().data or []
+    except Exception as e:
+        raise HTTPException(500, f"could not read daily_closing: {e}")
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
+    store_codes = sorted({r.get("store_code") for r in rows if r.get("store_code")})
+    exp_by_row, exp_by_sd = _envelope.approved_expense_totals(client, org_id, store_codes=store_codes)
+    wd_by_row, wd_by_sd = _envelope.withdrawal_totals(client, org_id, store_codes=store_codes)
+
+    envelopes = []
+    for r in rows:
+        gross = _f(r.get("t_cash")) or _f(r.get("store_cash"))
+        avail = _envelope.net_row(gross, r.get("id"), exp_by_row, wd_by_row)
+        if avail <= 0:
+            continue
+        envelopes.append({"closing_row_id": r.get("id"), "store_code": r.get("store_code"),
+                          "store_name": r.get("store_address") or r.get("store_name"),
+                          "employee_name": r.get("employee_name"), "close_date": str(r.get("close_date")),
+                          "gross_cash": round(gross, 2), "available": avail})
+    plan = _envelope.select_envelopes(envelopes, required_amount)
+    return {"as_of": d, "store_code": store_code or None, "required_amount": plan["required"],
+            "open_envelopes": len(envelopes), "picks": plan["picks"], "total_taken": plan["total_taken"],
+            "shortfall": plan["shortfall"]}
+
+
+# ── POST /closing/envelope-withdrawal — DM execution: record cash taken from ONE envelope ───────────
+@router.post("/envelope-withdrawal")
+def record_envelope_withdrawal(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Body: {store_code, close_date, closing_row_id, amount, purpose('commission_payout'|
+    'salary_payout'|'expense'|'other'), expense_id?, employee_id?, employee_name?, remaining_after?,
+    notes?, taken_by?}. Writes the envelope_withdrawal row (org-stamped), then best-effort:
+      purpose='expense' + expense_id  -> marks that closing_expense row paid=true
+      purpose='commission_payout'     -> calls mod-commission POST /commcalc/payout/record
+      purpose='salary_payout'         -> calls mod-people POST /storeops/salary-advance/record
+    A sibling-call failure/404 is reported in the response but NEVER rolls back the withdrawal write —
+    the cash physically left the envelope; that fact must be durable even if the downstream ledger push
+    needs a retry."""
+    require_org(org_id)
+    client = sb()
+    if not _can_mgmt_review(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Recording an envelope withdrawal is management-restricted.")
+    close_date = _date(payload.get("close_date"))
+    if not close_date:
+        raise HTTPException(400, "valid close_date required (the ENVELOPE's own close_date)")
+    amount = _money(payload.get("amount"))
+    if amount <= 0:
+        raise HTTPException(400, "amount must be greater than zero")
+    purpose = (payload.get("purpose") or "other").strip().lower()
+    if purpose not in ("commission_payout", "salary_payout", "expense", "other"):
+        raise HTTPException(400, "purpose must be one of commission_payout|salary_payout|expense|other")
+    taken_by = (payload.get("taken_by") or _caller_email(client, authorization) or "DM")
+    row = {"org_id": org_id, "store_code": (payload.get("store_code") or "").strip() or None,
+           "close_date": close_date, "closing_row_id": (payload.get("closing_row_id") or "").strip() or None,
+           "amount": amount, "purpose": purpose, "expense_id": (payload.get("expense_id") or "").strip() or None,
+           "employee_id": (payload.get("employee_id") or "").strip() or None,
+           "employee_name": (payload.get("employee_name") or "").strip() or None,
+           "remaining_after": payload.get("remaining_after"), "taken_by": taken_by,
+           "taken_at": _now(), "notes": (payload.get("notes") or "").strip() or None}
+    try:
+        r = client.schema("commcalc").table("envelope_withdrawal").insert(row).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save envelope withdrawal (run migration 507?): {e}")
+    saved = r.data[0] if r.data else row
+    wid = saved.get("id")
+    today_iso = _biz_today_iso()
+    sibling = None
+
+    if purpose == "expense" and row["expense_id"]:
+        try:
+            (client.schema("commcalc").table("closing_expense")
+             .update({"paid": True, "paid_at": _now(), "withdrawal_id": wid, "updated_at": _now()})
+             .eq("org_id", org_id).eq("id", row["expense_id"]).execute())
+        except Exception as e:
+            print(f"WARN could not mark closing_expense paid: {e}")
+    elif purpose == "commission_payout" and row["employee_id"]:
+        sibling = _post_commission_payout(org_id, row["employee_id"], amount, today_iso,
+                                          row["store_code"], wid, taken_by)
+    elif purpose == "salary_payout" and row["employee_id"]:
+        sibling = _post_salary_advance(org_id, row["employee_id"], amount, today_iso,
+                                       row["store_code"], wid, taken_by)
+
+    if sibling and sibling.get("posted") and isinstance(sibling.get("data"), dict) and sibling["data"].get("id"):
+        try:
+            (client.schema("commcalc").table("envelope_withdrawal")
+             .update({"payout_ref": str(sibling["data"]["id"])}).eq("org_id", org_id).eq("id", wid).execute())
+        except Exception:
+            pass
+
+    return {"ok": True, "withdrawal": saved, "sibling_call": sibling}
 
 
 # ── Universal admin-attention contributions (2026-07-26 settings audit) ─────────────────────────────
