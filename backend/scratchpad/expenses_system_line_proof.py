@@ -21,6 +21,19 @@ Proves:
 
 Run: python3 backend/scratchpad/expenses_system_line_proof.py
 """
+
+
+def run_route(x):
+    """Call a commcalc route handler in EITHER shape.
+
+    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
+    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
+    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
+    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
+    ever legitimately becomes a coroutine again."""
+    import asyncio as _a
+    return _a.run(x) if _a.iscoroutine(x) else x
 import sys, os, asyncio
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from app.modules.commcalc import router
@@ -129,7 +142,7 @@ check("expense_type honored when supplied", etype[0]['expense_type'] == 'Variabl
 # ── 2. RECEIVER endpoint: write / idempotent / replace / total ────────────────────────────────────────
 print("\n2. POST /expenses/{period}/system-line (real endpoint)")
 fc = FakeClient(); use(fc)
-res = asyncio.run(router.upsert_expense_system_line(JULY, {
+res = run_route(router.upsert_expense_system_line(JULY, {
     'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 100}, {'store': 'S2', 'amount': 50}, {'store': 'S3', 'amount': 0}]}, org_id=ORGA))
 check("returns ok", res.get('ok') is True)
@@ -137,31 +150,31 @@ check("stores_written = 2 (zero dropped)", res.get('stores_written') == 2)
 check("total = 150.0", res.get('total') == 150.0)
 check("2 tagged rows in store_expenses", len(rows_for(fc, ORGA)) == 2 and all(r['source_key'] == 'pto_accrual' for r in rows_for(fc, ORGA)))
 # idempotent re-run (identical payload) → no duplicate
-asyncio.run(router.upsert_expense_system_line(JULY, {
+run_route(router.upsert_expense_system_line(JULY, {
     'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 100}, {'store': 'S2', 'amount': 50}]}, org_id=ORGA))
 check("idempotent re-run → still exactly 2 rows (no dup)", len(rows_for(fc, ORGA)) == 2)
 # changed re-run → replace (S1 updated, S2 now zero → removed)
-asyncio.run(router.upsert_expense_system_line(JULY, {
+run_route(router.upsert_expense_system_line(JULY, {
     'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 120}, {'store': 'S2', 'amount': 0}]}, org_id=ORGA))
 after = rows_for(fc, ORGA)
 check("changed re-run REPLACES prior values (1 row, S1=120)",
       len(after) == 1 and after[0]['store_code'] == 'S1' and after[0]['amount'] == 120)
-missing = asyncio.run(router.upsert_expense_system_line(JULY, {'source_key': '', 'label': 'x', 'cells': []}, org_id=ORGA))
+missing = run_route(router.upsert_expense_system_line(JULY, {'source_key': '', 'label': 'x', 'cells': []}, org_id=ORGA))
 check("missing source_key rejected", missing.get('ok') is False)
 
 
 # ── 3. ORG-SCOPING ────────────────────────────────────────────────────────────────────────────────────
 print("\n3. org-scoping")
 fc = FakeClient(); use(fc)
-asyncio.run(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
+run_route(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 100}]}, org_id=ORGA))
-asyncio.run(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
+run_route(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 999}]}, org_id=ORGB))
 check("orgB row written independently", len(rows_for(fc, ORGB)) == 1 and rows_for(fc, ORGB)[0]['amount'] == 999)
 # re-run orgA (replace) must not disturb orgB
-asyncio.run(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
+run_route(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 111}]}, org_id=ORGA))
 check("orgA replace left orgB untouched (999)", len(rows_for(fc, ORGB)) == 1 and rows_for(fc, ORGB)[0]['amount'] == 999)
 check("orgA now 111", rows_for(fc, ORGA)[0]['amount'] == 111)
@@ -171,12 +184,12 @@ check("orgA now 111", rows_for(fc, ORGA)[0]['amount'] == 111)
 print("\n4. put_expenses (manual save) protects the system line")
 fc = FakeClient(); use(fc)
 # seed: a system pto line (S1=120,S2=80) + a manual Rent (S1=500)
-asyncio.run(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
+run_route(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 120}, {'store': 'S2', 'amount': 80}]}, org_id=ORGA))
 se(fc).append({'org_id': ORGA, 'period': JULY, 'store_code': 'S1', 'expense_name': 'Rent / Lease',
                'expense_type': 'Variable', 'amount': 500, 'source_key': None})
 # a manual save that (a) updates Rent and (b) WRONGLY tries to write the system line back as manual
-res = asyncio.run(router.put_expenses(JULY, {'rows': [
+res = run_route(router.put_expenses(JULY, {'rows': [
     {'store_code': 'S1', 'expense_name': 'Rent / Lease', 'expense_type': 'Variable', 'amount': 600},
     {'store_code': 'S1', 'expense_name': 'Paid Leave Accumulated', 'expense_type': 'Fixed', 'amount': 9999}]}, org_id=ORGA))
 sysrows = [r for r in rows_for(fc, ORGA) if r.get('source_key')]
@@ -198,12 +211,12 @@ fc = FakeClient(); use(fc)
 # July (source): manual Rent(S1=500) + system pto(S1=120)
 se(fc).append({'org_id': ORGA, 'period': JULY, 'store_code': 'S1', 'expense_name': 'Rent / Lease',
                'expense_type': 'Variable', 'amount': 500, 'source_key': None})
-asyncio.run(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
+run_route(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 120}]}, org_id=ORGA))
 # June (target): already has ITS OWN system pto(S1=77) that must survive
-asyncio.run(router.upsert_expense_system_line('June 2026', {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
+run_route(router.upsert_expense_system_line('June 2026', {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 77}]}, org_id=ORGA))
-res = asyncio.run(router.apply_expenses_to_months(
+res = run_route(router.apply_expenses_to_months(
     {'source_period': JULY, 'target_periods': ['June 2026']}, org_id=ORGA))
 june = rows_for(fc, ORGA, 'June 2026')
 check("apply ok", res.get('ok') is True)
@@ -231,7 +244,7 @@ check("_delete_manual_expenses KEPT the system X row", any(r['source_key'] == 'p
 # ── 6. graceful degradation (pre-mig-206: source_key column absent) ───────────────────────────────────
 print("\n6. pre-migration degradation (no source_key column)")
 fc = FakeClient(has_sk=False); use(fc)
-res = asyncio.run(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
+res = run_route(router.upsert_expense_system_line(JULY, {'source_key': 'pto_accrual', 'label': 'Paid Leave Accumulated',
     'cells': [{'store': 'S1', 'amount': 100}]}, org_id=ORGA))
 check("receiver returns ok=False before mig 206", res.get('ok') is False)
 check("hint names migration 206", '206' in str(res.get('hint', '')))
@@ -239,7 +252,7 @@ check("no rows written pre-migration", len(se(fc)) == 0)
 # put_expenses still works pre-migration (falls back to unguarded delete; no system rows exist to protect)
 se(fc).append({'org_id': ORGA, 'period': JULY, 'store_code': 'S1', 'expense_name': 'Rent / Lease',
                'expense_type': 'Variable', 'amount': 500})   # no source_key column
-r2 = asyncio.run(router.put_expenses(JULY, {'rows': [
+r2 = run_route(router.put_expenses(JULY, {'rows': [
     {'store_code': 'S1', 'expense_name': 'Rent / Lease', 'expense_type': 'Variable', 'amount': 700}]}, org_id=ORGA))
 check("put_expenses still saves manual rows pre-migration", r2.get('saved') == 1)
 check("Rent replaced to 700 (no leftover dup)",

@@ -12,6 +12,19 @@ normalization of a submitted market label:
 Runs the REAL functions from app.modules.commcalc.router against an in-memory fake Supabase client.
 Run: `python3 harness_market_dropdown.py` from backend/.
 """
+
+
+def run_route(x):
+    """Call a commcalc route handler in EITHER shape.
+
+    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
+    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
+    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
+    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
+    ever legitimately becomes a coroutine again."""
+    import asyncio as _a
+    return _a.run(x) if _a.iscoroutine(x) else x
 import asyncio
 import sys
 
@@ -155,73 +168,73 @@ check("4a 'Jersey' (storeops.stores only, never in store_mapping) IS an option",
 
 # ══ 5: the endpoint itself ══════════════════════════════════════════════════════════════════════
 reset()
-resp = asyncio.run(R.list_markets(org_id=ORG))
+resp = run_route(R.list_markets(org_id=ORG))
 check("5a GET /markets returns {'markets': [...]}", resp == {"markets": ["apex", "Bronx", "Jersey", "LI"]}, resp)
-resp2 = asyncio.run(R.list_markets(org_id=ORG2))
+resp2 = run_route(R.list_markets(org_id=ORG2))
 check("5b the endpoint is org-scoped end-to-end", resp2 == {"markets": ["li", "Miami", "Orlando"]}, resp2)
 try:
-    asyncio.run(R.list_markets(org_id=""))
+    run_route(R.list_markets(org_id=""))
     check("5c a missing org_id is rejected (require_org)", False, "no exception raised")
 except Exception as e:
     check("5c a missing org_id is rejected (require_org)", getattr(e, "status_code", None) == 400, e)
 
 # ══ 6: normalization on save — canonical casing of an EXISTING market ═══════════════════════════
 reset()
-asyncio.run(R.update_store("s4", {"market": "li"}, org_id=ORG))
+run_route(R.update_store("s4", {"market": "li"}, org_id=ORG))
 check("6a picking 'li' where 'LI' already exists STORES 'LI' (no second market bucket)",
       sm(ORG, "s4")["market"] == "LI", sm(ORG, "s4"))
 reset()
-asyncio.run(R.update_store("s4", {"market": "  lI  "}, org_id=ORG))
+run_route(R.update_store("s4", {"market": "  lI  "}, org_id=ORG))
 check("6b whitespace + mixed case both normalize to the existing canonical 'LI'",
       sm(ORG, "s4")["market"] == "LI", sm(ORG, "s4"))
 reset()
-asyncio.run(R.update_store("s1", {"market": "JERSEY"}, org_id=ORG))
+run_route(R.update_store("s1", {"market": "JERSEY"}, org_id=ORG))
 check("6c canonical casing also snaps to a storeops-only market ('JERSEY' -> 'Jersey')",
       sm(ORG, "s1")["market"] == "Jersey", sm(ORG, "s1"))
 
 # ══ 7: a genuinely NEW market is kept verbatim (trimmed) — that's how one gets created ══════════
 reset()
-asyncio.run(R.update_store("s6", {"market": "  Westchester  "}, org_id=ORG))
+run_route(R.update_store("s6", {"market": "  Westchester  "}, org_id=ORG))
 check("7a an unmatched market is stored trimmed + verbatim (new market created)",
       sm(ORG, "s6")["market"] == "Westchester", sm(ORG, "s6"))
 check("7b the new market immediately becomes an option for the next store",
       R._org_markets(fake, ORG) == ["apex", "Bronx", "Jersey", "LI", "Westchester"], R._org_markets(fake, ORG))
 reset()
-asyncio.run(R.update_store("s6", {"market": "New   York"}, org_id=ORG))
+run_route(R.update_store("s6", {"market": "New   York"}, org_id=ORG))
 check("7c inner whitespace runs are collapsed ('New   York' -> 'New York')",
       sm(ORG, "s6")["market"] == "New York", sm(ORG, "s6"))
 
 # ══ 8: unassigned stays possible and explicit ═══════════════════════════════════════════════════
 reset()
-asyncio.run(R.update_store("s1", {"market": ""}, org_id=ORG))
+run_route(R.update_store("s1", {"market": ""}, org_id=ORG))
 check("8a clearing a market stores '' (explicitly unassigned), not a bogus label",
       sm(ORG, "s1")["market"] == "", sm(ORG, "s1"))
 reset()
-asyncio.run(R.update_store("s1", {"market": "   "}, org_id=ORG))
+run_route(R.update_store("s1", {"market": "   "}, org_id=ORG))
 check("8b whitespace-only is the same explicit unassigned state", sm(ORG, "s1")["market"] == "", sm(ORG, "s1"))
 reset()
-asyncio.run(R.update_store("s1", {"market": None}, org_id=ORG))
+run_route(R.update_store("s1", {"market": None}, org_id=ORG))
 check("8c a null market is unassigned too (never the string 'None')", sm(ORG, "s1")["market"] == "", sm(ORG, "s1"))
 
 # ══ 9: RULE ONE on the write — normalization + update stay inside the tenant ════════════════════
 reset()
-asyncio.run(R.update_store("x2", {"market": "li"}, org_id=ORG))
+run_route(R.update_store("x2", {"market": "li"}, org_id=ORG))
 check("9a another tenant's store id is NOT updated through this org's PUT",
       sm(ORG2, "x2")["market"] == "li", sm(ORG2, "x2"))
 reset()
-asyncio.run(R.update_store("x2", {"market": "li"}, org_id=ORG2))
+run_route(R.update_store("x2", {"market": "li"}, org_id=ORG2))
 check("9b ORG2's own 'li' is NOT rewritten to ORG's 'LI' (canonicalization is org-scoped)",
       sm(ORG2, "x2")["market"] == "li", sm(ORG2, "x2"))
 
 # ══ 10: non-market updates are untouched by the new code ════════════════════════════════════════
 reset()
 before = dict(sm(ORG, "s4"))
-asyncio.run(R.update_store("s4", {"store_code": "T-104B"}, org_id=ORG))
+run_route(R.update_store("s4", {"store_code": "T-104B"}, org_id=ORG))
 after = sm(ORG, "s4")
 check("10a a store_code-only update leaves market exactly as it was",
       after["market"] == before["market"] and after["store_code"] == "T-104B", after)
 try:
-    asyncio.run(R.update_store("s4", {"nonsense": 1}, org_id=ORG))
+    run_route(R.update_store("s4", {"nonsense": 1}, org_id=ORG))
     check("10b a body with no allowed field still 400s (unchanged behaviour)", False, "no exception")
 except Exception as e:
     check("10b a body with no allowed field still 400s (unchanged behaviour)",
