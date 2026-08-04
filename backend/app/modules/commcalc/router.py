@@ -8117,7 +8117,7 @@ def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
 
 # ── Calculate endpoint ────────────────────────────────────────
 @router.post("/calculate/{period}")
-def calculate(
+async def calculate(
     period: str,
     background_tasks: BackgroundTasks,
     org_id: str = "00000000-0000-0000-0000-000000000001",
