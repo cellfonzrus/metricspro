@@ -8,12 +8,21 @@
 // quarter's rules after the plan changes. So the UI's only job is to collect lever values, debounce,
 // and render the server's answer.
 //
-// SELF-ONLY. No rep/employee picker exists here on purpose — the backend resolves WHO from the bearer
-// token and 403s anything else. The compact widget is the same component in `compact` mode, so the
-// dashboard card and the full page can never disagree about a number.
+// SELF-ONLY BY DEFAULT. The backend resolves WHO from the bearer token and 403s anything else. The
+// employee picker below renders ONLY when the server says this caller may name another rep
+// (`can_pick_rep` — a super-admin, or a company-wide 'all'/admin role, i.e. exactly the people who
+// already read every rep's pay on the Rep Commission Report). A rep never sees it, and asking for it
+// by hand still 403s server-side: the dropdown is an affordance, never the gate. The compact widget
+// is the same component in `compact` mode and stays strictly self-only.
 //
-// PICK-DON'T-TYPE (§3b): the levers themselves are a fixed list rendered from the caller's OWN plan
-// rules (server-derived, never typed), and the quantity inputs are numeric steppers. Nothing here
+// MULTI-TENANT: nothing here names a tenant. `api()` already carries the active org (it appends
+// `org_id=<active>` to org-less URLs and sends `x-active-org`), and the backend now RESOLVES the
+// acting tenant from that verified org_id — which is what makes this page follow the tenant switcher
+// instead of always answering for the house/Boost org.
+//
+// PICK-DON'T-TYPE (§3b): the levers are a fixed list rendered from the resolved plan's OWN rules
+// (server-derived, never typed); the employee picker is a dropdown over the tenant's real roster,
+// same-name people disambiguated by email; the quantity inputs are numeric steppers. Nothing here
 // asks a human to type the name of an existing entity.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, fmt } from '@/lib/client'
@@ -25,9 +34,16 @@ export type Lever = {
   rate: number; rate_kind: 'pct' | 'flat'; tiered: boolean; qualifies: boolean
   simulatable: boolean; note: string | null
 }
+export type RosterPerson = { value: string; label: string; email?: string; store?: string; active?: boolean }
 type Ctx = {
   ok: boolean; ready?: boolean; reason?: string | null; unsupported?: string
   rep?: string; store?: string; period?: string; carrier_mode?: string
+  /** true only for a caller the SERVER says may model another rep (super-admin / 'all' scope). */
+  can_pick_rep?: boolean
+  /** the caller has no employee record in the tenant they're acting as → pick someone. */
+  needs_rep?: boolean
+  impersonated?: boolean
+  reps?: RosterPerson[]
   plan?: { id: string; name: string } | null
   levers?: Lever[]
   tier?: { metric: string; basis: string; below_min_multiplier: any; steps: { min_count: number; multiplier: number }[] } | null
@@ -73,16 +89,22 @@ export function usePaySimulator(period: string) {
   const [sim, setSim] = useState<Sim | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // Blank = "me". Only ever set from the server-supplied roster, and the server re-checks the
+  // permission on every call — this is a convenience, not an authorization.
+  const [rep, setRep] = useState('')
   const timer = useRef<any>(null)
 
+  // The plan, the levers AND the tier all change per rep, so a rep switch refetches the context
+  // rather than replaying the old levers against a different plan.
   useEffect(() => {
     let alive = true
     setCtx(null); setSim(null); setErr('')
-    api(`/api/v1/commcalc/pay-simulator/context?period=${encodeURIComponent(period || '')}`)
+    api(`/api/v1/commcalc/pay-simulator/context?period=${encodeURIComponent(period || '')}`
+        + `&rep=${encodeURIComponent(rep || '')}`)
       .then((d: Ctx) => { if (!alive) return; setCtx(d); setInputs(seedInputs(d.levers || [])) })
       .catch((e) => { if (alive) setErr(String(e?.message || e)) })
     return () => { alive = false }
-  }, [period])
+  }, [period, rep])
 
   // Live result, debounced — one server round-trip per settled edit, never a formula in the browser.
   const run = useCallback((next: Record<string, LeverInput>) => {
@@ -91,12 +113,12 @@ export function usePaySimulator(period: string) {
       setBusy(true)
       api('/api/v1/commcalc/pay-simulator/simulate', {
         method: 'POST',
-        body: JSON.stringify({ period, inputs: next }),
+        body: JSON.stringify({ period, inputs: next, rep: rep || '' }),
       }).then((d: Sim) => setSim(d))
         .catch((e) => setErr(String(e?.message || e)))
         .finally(() => setBusy(false))
     }, 280)
-  }, [period])
+  }, [period, rep])
 
   useEffect(() => { if (ctx?.ok && Object.keys(inputs).length) run(inputs) }, [ctx?.ok, inputs, run])
 
@@ -104,7 +126,7 @@ export function usePaySimulator(period: string) {
     setInputs(prev => ({ ...prev, [key]: { ...{ units: 0, amount: 0 }, ...prev[key], ...patch } }))
   }, [])
 
-  return { ctx, inputs, setLever, sim, busy, err }
+  return { ctx, inputs, setLever, sim, busy, err, rep, setRep }
 }
 
 function Unavailable({ ctx, err }: { ctx: Ctx | null; err: string }) {
@@ -112,8 +134,35 @@ function Unavailable({ ctx, err }: { ctx: Ctx | null; err: string }) {
     'Your pay plan could not be resolved, so there is nothing to simulate yet.'
   return (
     <div style={{ borderLeft: '3px solid #d97706', background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 3 }}>Not available yet</div>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 3 }}>
+        {ctx?.needs_rep ? 'Pick an employee' : 'Not available yet'}
+      </div>
       <div style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</div>
+    </div>
+  )
+}
+
+/** Employee picker — rendered ONLY when the server said this caller may model another rep. Pure
+ *  dropdown over the acting tenant's own roster (§3b pick-don't-type); "Me" is always first. */
+function RepPicker({ ctx, rep, setRep }: { ctx: Ctx; rep: string; setRep: (v: string) => void }) {
+  const reps = ctx.reps || []
+  if (!ctx.can_pick_rep || reps.length === 0) return null
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+      <label htmlFor="ps-rep" style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 700 }}>Employee</label>
+      <select id="ps-rep" value={rep} onChange={e => setRep(e.target.value)}
+              style={{ padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)',
+                       fontSize: 13, background: 'var(--surface)', minWidth: 220 }}>
+        <option value="">— me —</option>
+        {reps.map(p => (
+          <option key={p.value} value={p.value}>
+            {p.label}{p.active === false ? ' (inactive)' : ''}
+          </option>
+        ))}
+      </select>
+      <span style={{ fontSize: 11, color: 'var(--text3)' }}>
+        {rep ? 'modelling this employee’s plan — projection only, nothing is saved' : 'your own plan'}
+      </span>
     </div>
   )
 }
@@ -122,20 +171,29 @@ function Unavailable({ ctx, err }: { ctx: Ctx | null; err: string }) {
  *  otherwise the full table with the per-rule breakdown. ONE component, so the widget and the page
  *  can never show different dollars. */
 export default function PaySimulator({ period, compact = false }: { period: string; compact?: boolean }) {
-  const { ctx, inputs, setLever, sim, busy, err } = usePaySimulator(period)
+  const { ctx, inputs, setLever, sim, busy, err, rep, setRep } = usePaySimulator(period)
 
   const levers = useMemo(() => (ctx?.levers || []).filter(l => l.simulatable), [ctx])
   const blocked = useMemo(() => (ctx?.levers || []).filter(l => !l.simulatable), [ctx])
   const shown = compact ? levers.slice(0, 4) : levers
   const r = sim?.result || null
+  // The widget on someone else's dashboard must stay strictly self-only (see PaySimulatorWidget).
+  const picker = !compact && ctx
+    ? <RepPicker ctx={ctx} rep={rep} setRep={setRep} />
+    : null
 
-  if (err || (ctx && !ctx.ok)) return <Unavailable ctx={ctx} err={err} />
+  // An unusable state still keeps the picker: a super-admin acting in a tenant they don't sell in
+  // has no plan of their OWN, and the whole point is that they can pick whose plan to model.
+  if (err || (ctx && !ctx.ok)) return <div>{picker}<Unavailable ctx={ctx} err={err} /></div>
   if (!ctx) return <div style={{ color: 'var(--text3)', fontSize: 13, padding: 8 }}>Loading your plan…</div>
 
   return (
     <div>
+      {picker}
       <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 10 }}>
-        Plan: <b>{ctx.plan?.name || '—'}</b>{ctx.store ? <> · {ctx.store}</> : null} · {ctx.period}
+        Plan: <b>{ctx.plan?.name || '—'}</b>
+        {ctx.impersonated && ctx.rep ? <> · <b>{ctx.rep}</b></> : null}
+        {ctx.store ? <> · {ctx.store}</> : null} · {ctx.period}
         {' '}· projection only, nothing is saved
       </div>
 

@@ -8,6 +8,15 @@
 // filterable breakdown by category — where a category is the PLAN RULE the line matched (twp, edge,
 // accessory, vhi1-4, …), derived from the data, never a hard-coded list (rules are per-tenant config).
 //
+// DUAL MEMBERSHIP (2026-08-04, display-only): the plan engine evaluates EVERY rule against EVERY line,
+// so one sale line legitimately appears TWICE here — e.g. the accessory inside an edge-financed sale
+// shows under the accessory rule (paying) AND under the edge rule (⛔, per-device dedup suppression).
+// That is correct, but the ⛔-only presentation read as "the accessory wasn't paid" and sent a real
+// diagnosis down the wrong path ("accessories are being classified as edge") when the actual defect was
+// an accessory rule matching nothing. So the table now SAYS it: the ⛔ carries its reason inline and
+// names the rule that suppressed it (not "an accessory suppression"), same-line rows sit together with
+// the PAYING row first, and each cross-references the other.
+//
 // DISPLAY ONLY. Every number shown is the amount the engine already put on the line; the subtotals are
 // plain sums of those amounts. Nothing here writes, recalculates or re-rates anything.
 // The visual language deliberately mirrors the multi-month (installments) drill-down — the grouped
@@ -15,8 +24,8 @@
 import { useMemo, useState } from 'react'
 import { fmt } from '@/lib/client'
 import {
-  categoryOf, filterPlanLinesByCategory, groupPlanLinesByTxn, isFlatOnce, isUnit,
-  planCategories, planLineTotals, type PlanLine,
+  categoryOf, crossRefFor, filterPlanLinesByCategory, groupPlanLinesByTxn, isFlatOnce, isUnit,
+  planCategories, planLineMembership, planLineTotals, type PlanLine,
 } from './planLines'
 
 const COLS = ['Rule', 'Date', 'Trans ID', 'Product', 'Contract', 'Basis', 'Price', 'GP', 'Line $']
@@ -42,6 +51,9 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
   // the SAME rows in the SAME display order — what any export/flat view below must receive (WYSIWYG)
   const ordered = useMemo(
     () => groups.reduce<PlanLine[]>((acc, g) => (acc.push(...g.lines), acc), []), [groups])
+  // Same-sale-line membership is computed over ALL rows, not the visible ones: when the table is
+  // filtered to just `edge`, "paid under accessory" is the MOST useful thing the ⛔ row can say.
+  const membership = useMemo(() => planLineMembership(rows), [rows])
 
   const toggle = (c: string) => setSel(s => s.includes(c) ? s.filter(x => x !== c) : [...s, c])
 
@@ -49,6 +61,15 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
   const td: React.CSSProperties = { padding: pad }
   const th: React.CSSProperties = {
     padding: pad, fontSize: 10, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap',
+  }
+  // muted one-liner that ties a row to the OTHER rows of the same sale line
+  const xref: React.CSSProperties = {
+    fontSize: 10.5, fontWeight: 400, color: 'var(--text3)', lineHeight: 1.35, marginTop: 1,
+  }
+  // the ⛔'s own reason, in the open instead of only in a tooltip
+  const why: React.CSSProperties = {
+    fontSize: 10.5, fontWeight: 400, color: '#b45309', lineHeight: 1.35, marginTop: 1,
+    whiteSpace: 'normal', maxWidth: 230, marginLeft: 'auto', textAlign: 'right',
   }
   const chip = (on: boolean): React.CSSProperties => ({
     padding: '3px 10px', borderRadius: 999, fontSize: 11.5, fontWeight: 600, cursor: 'pointer',
@@ -153,9 +174,27 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
                     {fmt(g.subtotal)}
                   </td>
                 </tr>
-                {g.lines.map((l, i) => (
+                {g.lines.map((l, i) => {
+                  // Same SALE LINE, other RULES. Non-empty only for a genuinely dual-membership line.
+                  const x = crossRefFor(l, membership)
+                  const dual = x.paidElsewhere.length > 0 || x.alsoSuppressed.length > 0
+                  return (
                   <tr key={`${g.key}:${i}`} style={{ borderTop: '1px solid var(--border)' }}>
-                    <td style={{ ...td, borderLeft: '3px solid var(--surface2)' }}>{categoryOf(l)}</td>
+                    <td style={{ ...td, borderLeft: `3px solid ${dual ? 'var(--border)' : 'var(--surface2)'}` }}>
+                      {categoryOf(l)}
+                      {/* CROSS-REFERENCE — the same sale line under another rule, one muted line. */}
+                      {x.paidElsewhere.length > 0 && (
+                        <div style={xref} title="This is the same sale line as the paying row above">
+                          ↳ same line · paid under {x.paidElsewhere
+                            .map(p => `${p.rule}${p.flat ? '' : ` ${fmt(p.amount)}`}`).join(' · ')}
+                        </div>
+                      )}
+                      {x.alsoSuppressed.length > 0 && (
+                        <div style={xref} title="The same sale line also matched these rules, which paid nothing">
+                          ↳ also matched {x.alsoSuppressed.map(s => s.rule).join(' · ')} ⛔
+                        </div>
+                      )}
+                    </td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>{l.date || '—'}</td>
                     <td style={{ ...td, fontFamily: 'monospace', color: 'var(--text3)' }}>{l.trans_id || '—'}</td>
                     <td style={td} title={l.product || ''}>{l.product || '—'}</td>
@@ -173,9 +212,16 @@ export default function PlanLineBreakdown({ rows, compact, children }: {
                       {!isUnit(l) && !l.suppressed && (
                         <span style={{ color: 'var(--text3)', marginLeft: 4 }} title="Matched but non-qualifying">◦</span>
                       )}
+                      {/* WHY the ⛔, in the open — naming the rule that suppressed it, so it can never
+                          be misread as a suppression of the rule the reader had in mind. */}
+                      {l.suppressed && (
+                        <div style={why}>
+                          {categoryOf(l)} — {l.suppressed_reason || 'suppressed by the pay gate'}
+                        </div>
+                      )}
                     </td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             ))}
             <tfoot>

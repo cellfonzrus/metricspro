@@ -118,6 +118,44 @@ ok(`grand total ${money(total)} appears on screen`, html.includes(money(total)))
 ok('no "No lines in the selected category" empty state on the default view',
   !html.includes('No lines in the selected category'))
 
+section('RENDERED HTML — dual membership reads clearly (2026-08-04)')
+// The accessory inside an edge-financed sale: paying under `accessory`, ⛔ under `edge`. Payload order
+// puts the ⛔ row FIRST, the way it led on screen when the owner read it as "not paid".
+const ACC = 'Case — Otterbox XL'
+const dual = [
+  L('edge',      '2026-07-09', '7777', ACC, 0.00,
+    { suppressed: true, suppressed_reason: 'device already paid on this transaction', would_have_paid: 6.50 }),
+  L('edge',      '2026-07-09', '7777', 'Financed device — A15', 25.00),
+  L('accessory', '2026-07-09', '7777', ACC, 6.50),
+]
+const dualTotal = dual.reduce((s, l) => s + (Number(l.amount) || 0), 0)
+const dhtml = renderToStaticMarkup(React.createElement(PlanLineBreakdown, { rows: dual, compact: true }))
+// everything a human can actually READ — tooltips stripped, so a title-only answer cannot pass
+const visible = dhtml.replace(/title="[^"]*"/g, '').replace(/<[^>]+>/g, ' ').replace(/<!-- -->/g, '')
+
+ok('the ⛔ reason is VISIBLE text, not only a tooltip',
+  /device already paid on this transaction/.test(visible))
+ok('the ⛔ names the rule that suppressed it (not "an accessory suppression")',
+  /edge\s*—\s*device already paid on this transaction/.test(visible))
+ok('the ⛔ row says where the line DID get paid',
+  /paid under\s*accessory/.test(visible) && /\$6\.50/.test(visible))
+ok('the paying row says the same line also matched the other rule',
+  /also matched\s*edge/.test(visible))
+ok('the cross-reference calls them the same line',
+  /same line/.test(visible))
+const pPay = dhtml.indexOf('$6.50'), pSup = dhtml.indexOf('device already paid')
+ok('the PAYING row renders BEFORE its ⛔ twin', pPay > -1 && pSup > -1 && pPay < pSup,
+  `${pPay} < ${pSup}`)
+ok('both rows of the same sale line still render (nothing is hidden)',
+  (dhtml.split(ACC).length - 1) >= 2, String(dhtml.split(ACC).length - 1))
+ok(`grand total ${money(dualTotal)} still on screen`, dhtml.includes(money(dualTotal)))
+ok('transaction subtotal is still the sum of the paid rows',
+  [...dhtml.matchAll(/title="Subtotal paid on this transaction">([^<]*)</g)]
+    .map(m => m[1]).join(',') === money(dualTotal), money(dualTotal))
+// a payload with NO dual membership must gain no cross-reference chrome at all
+ok('single-membership payload renders NO cross-reference lines',
+  !/same line/.test(html.replace(/title="[^"]*"/g, '')) && !/also matched/.test(html.replace(/title="[^"]*"/g, '')))
+
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILURES'} — ${pass} passed, ${fail} failed`)
 // react-dom's scheduler keeps a MessageChannel alive, so exit explicitly rather than hanging
 rmSync(OUT, { recursive: true, force: true })

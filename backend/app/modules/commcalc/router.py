@@ -1838,9 +1838,13 @@ def whatif_access(authorization: str = Header(default=""), org_id: str = ORG_ID)
 # set-up-fee item moves the simulator on the same deploy it moves real pay. See pay_simulator.py's
 # docstring for the exact list of engine functions reached.
 #
-# `org_id` is deliberately NOT trusted here: the acting tenant comes from the caller's own app_users
-# row (auth_id is globally unique), so a self-service simulation always lands in the employee's own
-# tenant. The query param stays on the signature only because tenant_middleware rewrites it.
+# ACTING TENANT (fixed 2026-08-04). `org_id` here is the tenant_middleware-VERIFIED query param and
+# it IS threaded through to pay_simulator, where it selects which of the login's memberships is acting
+# (mig 706: one app_users row per tenant). It was previously dropped on the floor, so the simulator
+# resolved an arbitrary membership — in practice the house/Boost one — and told plan-mode tenants
+# (Luxelink/Total) they are "paid by the Boost component engine". Honoring it is not a widening: the
+# middleware has already rewritten org_id to a verified membership for every normal user, and the
+# super-admin bypass (no rewrite) is exactly what "acting as tenant X" means.
 @router.get("/pay-simulator/context")
 def pay_simulator_context(period: str = "", rep: str = "",
                           authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -1850,7 +1854,8 @@ def pay_simulator_context(period: str = "", rep: str = "",
     names anybody but the caller. A rep with no plan assignment gets ok=false + a plain-language
     reason (that is a CONFIG gap, not an error). Boost-mode tenants get an explicit unsupported
     state — they are paid by the legacy component engine, so plan dollars would be a lie."""
-    return pay_simulator.context(sb(), authorization, period, requested_rep=rep)
+    return pay_simulator.context(sb(), authorization, period, requested_rep=rep,
+                                requested_org=org_id)
 
 
 @router.post("/pay-simulator/simulate")
@@ -1861,7 +1866,8 @@ def pay_simulator_simulate(body: dict = None, authorization: str = Header(defaul
     recalculation. body = {period, inputs:{<lever_key>:{units, amount}}, rep?}."""
     b = body or {}
     return pay_simulator.run(sb(), authorization, b.get("period") or "",
-                             b.get("inputs") or {}, requested_rep=(b.get("rep") or ""))
+                             b.get("inputs") or {}, requested_rep=(b.get("rep") or ""),
+                             requested_org=org_id)
 
 
 @router.get("/whatif/source-config")
