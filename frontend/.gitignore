@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# export-proof harness scratch (tools/*-export-proof.mjs — commission + people domains)
+.proof-*
+tsconfig.proof-*.json
