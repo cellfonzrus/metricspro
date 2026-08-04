@@ -586,10 +586,11 @@ export default function EmailImportsPage() {
               <div style={{ fontSize: 11, color: '#b45309', marginTop: 3 }}>💡 {PROVIDERS[providerOf(cfg.imap_host)].hint}</div>
             )}
           </div>
-          <div><label style={lbl}>IMAP host</label><input style={{ ...sel, width: '100%' }} placeholder="mail.metricspro.tech" value={cfg.imap_host || ''} onChange={e => set({ imap_host: e.target.value })} /></div>
+          <div><label style={lbl}>IMAP host</label><input style={{ ...sel, width: '100%' }} placeholder="imap.example.com" value={cfg.imap_host || ''} onChange={e => set({ imap_host: e.target.value })} /></div>
           <div><label style={lbl}>Port</label><input style={{ ...sel, width: '100%' }} value={cfg.imap_port || 993} onChange={e => set({ imap_port: Number(e.target.value) || 993 })} /></div>
-          <div><label style={lbl}>Username</label><input style={{ ...sel, width: '100%' }} placeholder="b2b@metricspro.tech" value={cfg.username || ''} onChange={e => set({ username: e.target.value })} /></div>
-          <div><label style={lbl}>Password {cfg.has_password && <span style={{ color: '#16794a' }}>(set)</span>}</label><input type="password" style={{ ...sel, width: '100%' }} placeholder={cfg.has_password ? '•••• keep' : 'mailbox password'} value={pwd} onChange={e => setPwd(e.target.value)} /></div>
+          <div><label style={lbl}>Username</label><input style={{ ...sel, width: '100%' }} placeholder="the inbox email address" value={cfg.username || ''} onChange={e => set({ username: e.target.value })} /></div>
+          <div><label style={lbl}>Password {cfg.has_password && <span style={{ color: '#16794a' }}>✓ saved</span>}</label><input type="password" style={{ ...sel, width: '100%' }} placeholder={cfg.has_password ? 'saved — leave blank to keep' : 'mailbox password'} value={pwd} onChange={e => setPwd(e.target.value)} />
+            {cfg.has_password && !pwd && <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>The password stays saved — this field is blank for security, not because it was lost.</div>}</div>
           <div><label style={lbl}>Mailbox</label><input style={{ ...sel, width: '100%' }} placeholder="INBOX" value={cfg.mailbox || ''} onChange={e => set({ mailbox: e.target.value })} /></div>
           <div><label style={lbl}>From filter (optional)</label><input style={{ ...sel, width: '100%' }} placeholder="b2bsoft.com" value={cfg.from_filter || ''} onChange={e => set({ from_filter: e.target.value })} /></div>
           <div><label style={lbl}>Security</label>
@@ -603,6 +604,14 @@ export default function EmailImportsPage() {
           <div><label style={lbl}>Hour (0–23)</label><input style={{ ...sel, width: '100%' }} value={cfg.hour ?? 7} onChange={e => set({ hour: Number(e.target.value) || 0 })} /></div>
           <div><label style={lbl}>Auto-run</label><label style={{ fontSize: 12 }}><input type="checkbox" checked={!!cfg.enabled} onChange={e => set({ enabled: e.target.checked })} /> enabled</label></div>
         </div>
+        {cfg.has_password && /auth/i.test(String(cfg.last_status || '')) && (
+          <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)' }}>
+            ⚠️ The mail server <b>rejected the last automatic login</b>{cfg.last_run_at ? ` (${new Date(cfg.last_run_at).toLocaleString()})` : ''}.
+            Your saved password was <b>not</b> lost — mail hosts sometimes temporarily block frequent logins, and the next
+            scheduled run usually recovers on its own. Use <b>Test connection</b> to check right now; only re-enter the
+            password if the test also fails with it.
+          </div>
+        )}
 
         <div style={{ marginTop: 14, fontWeight: 600, fontSize: 13 }}>Attachment filename → upload type</div>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 4 }}>
@@ -742,7 +751,7 @@ export default function EmailImportsPage() {
           </div>
           {(health.days || []).every((d: any) => d.state === 'missing') && (
             <div style={{ marginTop: 8, fontSize: 12, color: '#b45309' }}>
-              No sales ingested for any day in the window. Check: mailbox Enabled + correct password (Test connection), a rule for <code>*Sales*Transaction*Details*</code>, and that b2bsoft is actually delivering the report to this address.
+              No sales ingested for any day in the window. Check: mailbox Enabled, the connection works (use <b>Test connection</b> — a saved password is kept even though the field shows blank), a rule for <code>*Sales*Transaction*Details*</code>, and that b2bsoft is actually delivering the report to this address.
             </div>
           )}
         </div>

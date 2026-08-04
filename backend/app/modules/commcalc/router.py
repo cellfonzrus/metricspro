@@ -3492,7 +3492,14 @@ def _read_upload_df(contents: bytes, filename: str):
     (the wizard advertises CSV too — pd.read_excel alone throws on a CSV)."""
     fname = (filename or "").lower()
     if fname.endswith((".csv", ".txt")):
-        return pd.read_csv(io.BytesIO(contents), dtype=str).fillna("")
+        # b2bsoft exports CSVs in Windows cp1252 (0xa0 non-breaking spaces etc.) — a strict-utf-8 read
+        # hard-failed those ("'utf-8' codec can't decode byte 0xa0") and the sweep retried the same
+        # attachment every run forever. utf-8-sig first (also eats a BOM), then cp1252. Only the
+        # previously-failing case reaches the fallback, so working files read byte-identically.
+        try:
+            return pd.read_csv(io.BytesIO(contents), dtype=str, encoding="utf-8-sig").fillna("")
+        except UnicodeDecodeError:
+            return pd.read_csv(io.BytesIO(contents), dtype=str, encoding="cp1252").fillna("")
     return pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
 
 
@@ -19159,9 +19166,20 @@ async def _run_email_sweep(org_id, account='default'):
     try:
         files = _email.fetch_new_attachments(cfg, already)
     except Exception as e:
+        em = str(e)
+        # An AUTH rejection is routinely misread as "the password was erased" — it never is (nothing in
+        # this module clears a stored password). Mail hosts (e.g. Bluehost/cPHulk) temporarily block
+        # frequent logins, so say exactly that instead of a bare failure the UI turns into
+        # "re-enter your password".
+        if any(s in em.upper() for s in ("AUTHENTICATIONFAILED", "INVALID CREDENTIALS", "LOGIN FAILED")):
+            em = (f"login rejected: {em} — the saved password is UNCHANGED. Mail hosts sometimes "
+                  "temporarily block frequent logins; the next scheduled run usually recovers. "
+                  "Re-enter the password only if Test connection also fails.")
+        else:
+            em = f"connect error: {em}"
         _email_status_update(client, org_id, account,
-            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': f"connect error: {e}"})
-        return {"ok": False, "error": str(e), "account": account}
+            {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': em})
+        return {"ok": False, "error": em, "account": account}
     results = []
     shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
     journal_failures, journal_first_error, retried = 0, None, 0
