@@ -2,6 +2,7 @@
 import base64
 import os
 import requests
+import time
 from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from app.core.database import get_supabase
@@ -45,6 +46,7 @@ from app.modules.storeops.lunch_deduction import (
     period_lunch_deduction as _lunch_period_deduction,
 )
 from app.modules.storeops import salary_owed as _owed
+from app.modules.storeops import target_attribution as _dmta
 
 try:
     from zoneinfo import ZoneInfo
@@ -4536,6 +4538,252 @@ def run_pto_accrual(period: str, authorization: str = Header(default=""), org_id
             "employees": sorted(result["employees"].values(), key=lambda r: r.get("name") or ""),
             "stores": [d for _, d in sorted(result["stores"].items())],
             "ledger_rows_written": len(rows), "push": push}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# DM ACCESSORY-TARGET ATTRIBUTION — migration band 400-499 (no new table; read + rollup only), owner
+# directive 2026-08-04 (ledger Q7 answer): "my team accessory numbers are the accessory target for the
+# [stores] calculated by the schedule and for the dm it is the total of employees which run under him
+# for the stores they worked in, if an employee works under 2 dms then their target for that store
+# goes under the dm for that market."
+#
+# The SCHEDULE-DRIVEN per-rep target is mod-commission's Daily Targets engine
+# (`commcalc/targets_engine.py`) — NOT reimplemented here (money-adjacent, cross-file-owned). Per the
+# 2026-08-04 "plan for a bigger tenant" directive this section makes exactly ONE internal HTTP call —
+# `GET /commcalc/targets/{period}/summary` (the org's existing BULK/all-stores shape) — per rollup,
+# instead of one call per (employee, store) pair; the one number that call doesn't carry (a rep's
+# SHARE of a store's target) is computed locally, off this module's OWN `storeops.shifts` schedule
+# data, by a small pure function that mirrors mod-commission's own proration ratio (see
+# `target_attribution.py`'s module docstring for the full "why one call, why local" reasoning).
+#
+# READ-ONLY / NOT MONEY: nothing here writes a payout, a target, or a schedule row. It only re-groups
+# numbers mod-commission already computed (the store's target $ + each rep's achieved $) and this
+# module's own schedule already describes, by market → DM. Achieved-$ is read VERBATIM off that ONE
+# bulk payload — never recomputed here.
+#
+# SPAN-SCOPING (Gate-1 rework 2026-08-04): a market-scope caller (District Manager) sees ONLY the DM
+# card(s) for market(s) granted to them — see `target_attribution.py`'s span-scoping section for the
+# full reasoning (why the FULL org-wide attribution is still computed once, then redacted for
+# presentation, rather than narrowing the underlying data fetch).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+_DM_TARGET_CACHE_TTL_S = 120.0
+_dm_target_cache: dict = {}   # (org_id, period) -> (fetched_at, summary_json | None)
+
+
+def _norm_upper(v) -> str:
+    return str(v or "").strip().upper()
+
+
+def _safe_float(v) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _requote(period: str) -> str:
+    """URL-safe period path segment ('August 2026' has a space)."""
+    from urllib.parse import quote
+    return quote(str(period), safe="")
+
+
+def _dm_targets_summary_bulk(org_id: str, period: str) -> dict:
+    """THE one bulk internal-HTTP call this whole package makes: mod-commission's OWN all-stores
+    endpoint (`GET /commcalc/targets/{period}/summary?include_untargeted=true`), same
+    `INTERNAL_API_BASE_URL` convention the PTO/payroll-tax packages established. TTL-cached per
+    (org_id, period) — belt-and-braces on top of already being a single call. Degrades to `{}` on any
+    failure (never raises) — the caller turns an empty summary into an honest `warnings` entry, not a
+    500 for the whole rollup."""
+    key = (str(org_id), str(period))
+    now = time.time()
+    hit = _dm_target_cache.get(key)
+    if hit and (now - hit[0]) < _DM_TARGET_CACHE_TTL_S:
+        return hit[1] or {}
+    url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/targets/{_requote(period)}/summary"
+    data = {}
+    try:
+        resp = requests.get(url, params={"org_id": org_id, "include_untargeted": "true"}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json() or {}
+    except Exception as e:
+        print(f"WARN _dm_targets_summary_bulk failed ({org_id}/{period}): {e}")
+        data = None
+    _dm_target_cache[key] = (now, data)
+    return data or {}
+
+
+def _dm_target_rows(org_id: str, period: str, *, max_pairs: int = 20000) -> tuple:
+    """Build the (employee, store) attribution rows for the whole org this period: every distinct
+    pair with at least one positive-hour, non-deleted shift ("the stores they worked in") this
+    module's OWN `storeops.shifts` describes, priced off the ONE bulk `/targets/.../summary` call
+    (store monthly $ + each rep's own achieved $) plus a LOCAL hours-share computation (no HTTP per
+    pair — see the section banner). Labeled with the store's CANONICAL market (app.core.scope's
+    unioned market index — the same source the scope-wiring package used, so a store known only to
+    `commcalc.store_mapping` still resolves).
+
+    Returns (rows, warnings, truncated). `max_pairs` is a safety backstop only (not a performance
+    cap — the bulk call is O(1) regardless of pair count); it is generous enough that no real tenant
+    should ever hit it, and a hit is reported via `truncated`, never silent."""
+    client = sb()
+    ym = _dmta.parse_period_to_ym(period)
+    start, end = pto_month_bounds(ym)
+    try:
+        shifts = (client.table("shifts")
+                  .select("employee_id,employee_name,store_code,scheduled_hours,shift_date,is_deleted")
+                  .eq("org_id", org_id).gte("shift_date", start.isoformat())
+                  .lte("shift_date", end.isoformat()).limit(50000).execute().data) or []
+    except Exception as e:
+        print(f"WARN _dm_target_rows shifts read failed: {e}")
+        shifts = []
+    pairs = _dmta.worked_pairs_from_shifts(shifts)
+    truncated = len(pairs) > max_pairs
+    if truncated:
+        pairs = pairs[:max_pairs]
+
+    idx = _cscope.market_index(get_supabase(), org_id)
+    market_by_code, address_by_code = {}, {}
+    for s in idx.get("stores") or []:
+        code = _norm_upper(s.get("store_code"))
+        if code:
+            market_by_code[code] = s.get("market") or ""
+            address_by_code[code] = s.get("address") or ""
+
+    summary = _dm_targets_summary_bulk(org_id, period)
+    warnings = []
+    if not summary:
+        warnings.append({"employee_name": "", "store_code": "",
+                         "note": "bulk targets summary unavailable this load — every row shows $0 "
+                                 "until it can be reached again"})
+    store_target_by_code, achieved_by_pair = {}, {}
+    for s in (summary.get("stores") or []):
+        code = _norm_upper(s.get("store_code"))
+        if not code:
+            continue
+        store_target_by_code[code] = _safe_float((s.get("categories") or {}).get("accessories", {}).get("monthly"))
+        for r in (s.get("reps") or []):
+            rn = _norm_upper(r.get("rep"))
+            if rn:
+                achieved_by_pair[(code, rn)] = _safe_float(r.get("accessories"))
+
+    today = _date.today()
+    rows = []
+    for pr in pairs:
+        code = pr["store_code"]
+        rep_up = _norm_upper(pr["employee_name"])
+        share = _dmta.rep_share_from_shifts(shifts, code, pr["employee_name"], today, end)
+        target = round(store_target_by_code.get(code, 0.0) * share, 2)
+        achieved = achieved_by_pair.get((code, rep_up), 0.0)
+        rows.append({
+            "employee_name": pr["employee_name"], "employee_id": pr.get("employee_id"),
+            "store_code": code, "address": address_by_code.get(code, ""),
+            "market": market_by_code.get(code, ""), "target": target, "achieved": achieved,
+            "rep_share": round(share, 4), "ok": bool(summary),
+        })
+    return rows, warnings, truncated
+
+
+def _dm_roster(org_id: str) -> dict:
+    """{dm_key: {'label','markets','role'}} — every app_user whose role's reporting scope is
+    'market' (the shipped DM convention — "set the DM role's reporting grants to the 3 markets",
+    ledger Q9/11) with at least one market granted."""
+    client = sb()
+    try:
+        roles = client.table("roles").select("name,permissions").eq("org_id", org_id).execute().data or []
+    except Exception:
+        roles = []
+    scope_by_name = {(r.get("name") or ""): ((r.get("permissions") or {}).get("scope") or "all") for r in roles}
+    try:
+        emps = client.table("employees").select("employee_id,name").eq("org_id", org_id).execute().data or []
+    except Exception:
+        emps = []
+    name_by_id = {e.get("employee_id"): e.get("name") for e in emps if e.get("employee_id")}
+    try:
+        aus = (client.table("app_users").select("id,email,full_name,employee_id,role,market")
+               .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        aus = []
+    return _dmta.dm_roster_from_app_users(aus, scope_by_name, name_by_id)
+
+
+@router.get("/dm-accessory-attribution/{period}")
+def dm_accessory_attribution(period: str, authorization: str = Header(default=""),
+                             dm_id: str = "", org_id: str = ORG_ID):
+    """DM accessory-target ATTRIBUTION rollup (owner directive 2026-08-04, ledger Q7) — see the
+    section banner above for the rule. Returns `by_dm` (one entry per DM the caller may see, even at
+    $0), `unassigned` (rows whose store has no market or no DM grant — never silently dropped),
+    `ambiguous_markets` (a market granted to >1 DM — a config collision, flagged not guessed at), and
+    `cross_dm_employees` (the "verify a 2-DM split at a glance" view).
+
+    SPAN-SCOPING (Gate-1 rework 2026-08-04): under RBAC, this endpoint reads the CALLER's own role
+    scope via the same `_role_scope`/`_caller_app_user` machinery every other storeops read uses:
+      - scope 'all' (admin / RBAC off / unresolvable caller — same "unrestricted" default the rest of
+        this module uses)  -> every DM card, org-wide totals, full cross_dm_employees detail.
+      - scope 'market' (a District Manager) -> `by_dm` narrowed to DM(s) whose granted market(s)
+        intersect the caller's OWN granted market(s) (`app.core.scope`'s market-grant machinery,
+        resolved via this endpoint's OWN `_dm_roster` — the same resolver every DM card already comes
+        from, not a new one). `unassigned` / `ambiguous_markets` narrowed the same way. Grand totals
+        recomputed over ONLY the caller's visible DM(s) (never the whole org's). `cross_dm_employees`
+        keeps full detail for the caller's own DM(s) on a split row but reduces any OTHER dm on that
+        row to a bare identity label (`redacted: true`, no rows, no total) — enough to explain the
+        split exists without exposing that other DM's numbers or roster.
+      - scope 'self' / 'store' -> 403 (not a manager-level report).
+
+    `dm_id` optionally narrows `by_dm` further to one key — for a market-scope caller it can only ever
+    select a key already inside their own visible set (never a way to reach another DM's card)."""
+    au = None
+    caller_scope_kind = "all"
+    if _rbac_enabled(org_id):
+        au = _caller_app_user(authorization, org_id)
+        if au:
+            caller_scope_kind = _role_scope(org_id, (au.get("role") or "").strip())
+    if caller_scope_kind in ("self", "store"):
+        raise HTTPException(403, "This report is not available to your role.")
+    try:
+        ym = _dmta.parse_period_to_ym(period)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    rows, warnings, truncated = _dm_target_rows(org_id, period)
+    dm_markets = _dm_roster(org_id)
+    attributed = _dmta.attribute_rows_to_dms(rows, dm_markets)
+    cross_dm = _dmta.cross_dm_employees(attributed)
+
+    by_dm = attributed["by_dm"]
+    unassigned = attributed["unassigned"]
+    ambiguous = attributed["ambiguous_markets"]
+    total_target = attributed["total_target_all_rows"]
+    total_achieved = attributed["total_achieved_all_rows"]
+    pairs_considered = len(rows)
+
+    if caller_scope_kind == "market":
+        caller_key = str((au or {}).get("id") or "")
+        caller_markets = set((dm_markets.get(caller_key) or {}).get("markets") or ())
+        visible_keys = _dmta.visible_dm_keys_for_markets(dm_markets, caller_markets)
+        by_dm = {k: v for k, v in by_dm.items() if k in visible_keys}
+        unassigned = _dmta.visible_unassigned(unassigned, caller_markets)
+        ambiguous = _dmta.visible_ambiguous_markets(ambiguous, caller_markets)
+        cross_dm = _dmta.redact_cross_dm_employees(cross_dm, visible_keys)
+        total_target = round(sum(d["total_target"] for d in by_dm.values()), 2)
+        total_achieved = round(sum(d["total_achieved"] for d in by_dm.values()), 2)
+        pairs_considered = sum(len(d["rows"]) for d in by_dm.values())
+        folded_markets = {m.strip().lower() for m in caller_markets}
+        market_by_store = {r["store_code"]: r["market"] for r in rows}
+        warnings = [w for w in warnings
+                   if not w.get("store_code")
+                   or str(market_by_store.get(w["store_code"]) or "").strip().lower() in folded_markets]
+
+    if dm_id:
+        by_dm = {dm_id: by_dm[dm_id]} if dm_id in by_dm else {}
+
+    return {"period": period, "period_ym": ym, "by_dm": by_dm,
+            "unassigned": unassigned, "ambiguous_markets": ambiguous,
+            "cross_dm_employees": cross_dm,
+            "total_target_all_rows": total_target,
+            "total_achieved_all_rows": total_achieved,
+            "pairs_considered": pairs_considered, "truncated": truncated, "warnings": warnings,
+            "caller_scope": caller_scope_kind}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
