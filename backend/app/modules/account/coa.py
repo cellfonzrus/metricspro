@@ -341,6 +341,67 @@ def _sales_classifier(client, org_id):
                 lambda dept: (dept or "").strip() in DEVICE_DEPTS)
 
 
+# ── store_expenses system-line routing (source_key → the P&L line it books into) ───────────────
+# `store_expenses.source_key` (mig 206) is NULL for a hand-entered expense and a PRODUCER-CONTRACT
+# token for an AUTO ("system") line pushed through POST /commcalc/expenses/{period}/system-line.
+# This table is the single place that decides which P&L line each producer's token lands on.
+#
+# RULE TWO note — why a code table and not a config table: a source_key is a PROTOCOL constant
+# agreed between two modules (like an HTTP header name), not tenant data. The tenant-authored part
+# of a closing expense is its CATEGORY NAME, which travels in `expense_name` and is used only as the
+# drill-down label — so a tenant adding/renaming an expense category never needs a code change here.
+#
+#   'payroll_gross'      → `wages`             the EXACT gross paid (mod-people). AUTHORITATIVE:
+#                                              suppresses the shifts×rate estimate (see below).
+#   'payroll_expenses'   → `payroll_expenses`  employer burden (tax / unemployment / WC), mod-people.
+#   'additional_payroll' → `payroll_expenses`  EEP 2026-08-04: the excess of envelope CASH salary
+#                                              advanced over what the employee actually earned
+#                                              (mod-people). It is payroll COST, so it does not
+#                                              belong in generic store_opex; it is NOT the clock-in
+#                                              gross, so it must never touch `wages`.
+#   'closing_expense:<category-id>'
+#                        → `store_opex`        EEP 2026-08-04: the per-(period, store, category)
+#                                              rollup of expense-KIND daily-closing expenses
+#                                              (mod-retail-ops). Drill label = the category name.
+#                                              This is the P&L auto-fill the owner asked for.
+#   anything else (NULL / 'pto_accrual' / a future producer)
+#                        → `store_opex`        unchanged pre-existing behaviour, drill = expense_name.
+#
+# Second element = the FALLBACK drill label, used only when the row carries no expense_name.
+# None = this line carries no drill-down (the wages line is one exact figure, not a breakdown).
+_EXPENSE_ROUTES = {
+    "payroll_gross":      ("wages", None),
+    "payroll_expenses":   ("payroll_expenses", "Payroll Expenses"),
+    "additional_payroll": ("payroll_expenses", "Additional Payroll"),
+}
+_EXPENSE_PREFIX_ROUTES = (
+    ("closing_expense:", ("store_opex", "Store expense")),
+)
+_DEFAULT_EXPENSE_ROUTE = ("store_opex", "Expense")
+
+# ONLY these source_keys carry the EXACT gross payroll and therefore SUPPRESS the StoreOps
+# shifts×rate wages fallback. 'additional_payroll' must NEVER be added here: it is an excess ON TOP
+# of the clock-in gross, so treating it as authoritative would DELETE the wages line for any tenant
+# that pays a cash advance but does not push a payroll_gross line. (Double-count guard, EEP.)
+_WAGES_AUTHORITATIVE_KEYS = {"payroll_gross"}
+
+
+def route_expense_line(source_key):
+    """PURE: a `store_expenses.source_key` → (P&L line key, fallback drill label).
+
+    Exact match first, then prefix match (the closing-expense family carries the category id in the
+    key: 'closing_expense:<uuid>'), then the historical default (`store_opex`). Never raises; a
+    None/blank key is the manual-expense case and takes the default, so pre-mig-206 rows and
+    hand-entered expenses behave exactly as they always have."""
+    sk = (source_key or "").strip()
+    if sk in _EXPENSE_ROUTES:
+        return _EXPENSE_ROUTES[sk]
+    for prefix, route in _EXPENSE_PREFIX_ROUTES:
+        if sk.startswith(prefix):
+            return route
+    return _DEFAULT_EXPENSE_ROUTE
+
+
 # ── per-line aggregation: each store-keyed line → {store_address: amount}; company-wide → scalar
 def build_inputs(client, org_id, period):
     """Aggregate every chart-of-accounts line for `period`. Returns a dict:
@@ -543,13 +604,22 @@ def build_inputs(client, org_id, period):
         pass
 
     # store_expenses — operating expenses (opex), drill by expense_name; key by store_code→address.
-    # source_key (mig 206) SPLITS the payroll system lines OUT of generic opex so each is booked in its
-    # OWN P&L line exactly once (no double-count):
-    #   'payroll_gross'    → the Gross Payroll line (reuses `wages`; SUPPRESSES the StoreOps estimate below)
-    #   'payroll_expenses' → its OWN "Payroll Expenses" line (employer burden: tax / unemployment / WC)
-    #   NULL (manual) / 'pto_accrual' / any other token → generic store_opex, unchanged (pto_accrual keeps
-    #   its own "Paid Leave Accumulated" drill-down under store_opex — it is NOT folded into payroll).
+    # source_key (mig 206) SPLITS the system lines OUT of generic opex so each producer's cost is
+    # booked in its OWN P&L line exactly once (no double-count). The routing table + the reasoning
+    # live in `_EXPENSE_ROUTES` / `route_expense_line` above; in short:
+    #   'payroll_gross'      → `wages`            (exact gross; SUPPRESSES the StoreOps estimate below)
+    #   'payroll_expenses'   → `payroll_expenses` (employer burden)
+    #   'additional_payroll' → `payroll_expenses` (EEP: cash-advance excess over earned — NOT wages)
+    #   'closing_expense:*'  → `store_opex`       (EEP: daily-closing expense categories — the auto-fill)
+    #   NULL (manual) / 'pto_accrual' / anything else → `store_opex`, unchanged.
     # Degrades to pre-mig-206 behaviour (every row → store_opex, byte-identical) if source_key is absent.
+    #
+    # ⚠️ DOUBLE-COUNT GUARD (EEP 2026-08-04): this table is the ONLY door the envelope-expense wave
+    # opens into the P&L. The envelope CASH ledgers — commcalc.envelope_withdrawal,
+    # commcalc.commission_payout_ledger, storeops.salary_advance_ledger — are cash MOVEMENTS against
+    # already-booked costs (clock-in wages, rep_commissions) and are deliberately NOT read anywhere
+    # in this module. Reading them here would double-count every dollar. Salary/commission-KIND
+    # closing-expense lines are likewise never posted as system lines by the producer.
     has_payroll_gross = False
     try:
         try:
@@ -563,14 +633,18 @@ def build_inputs(client, org_id, period):
         for r in exp_rows:
             sa = code2addr.get(_norm_store(r.get("store_code")), _norm_store(r.get("store_code")))
             sk = (r.get("source_key") or "").strip()
-            if sk == "payroll_gross":
+            line_key, fallback_label = route_expense_line(sk)
+            if line_key == "wages":
                 add("wages", sa, r.get("amount"))            # exact Gross Payroll — relabelled below
-                has_payroll_gross = True
-            elif sk == "payroll_expenses":
-                add("payroll_expenses", sa, r.get("amount"))
+                # ONLY an authoritative exact-gross key suppresses the shifts×rate fallback.
+                has_payroll_gross = has_payroll_gross or (sk in _WAGES_AUTHORITATIVE_KEYS)
             else:
-                label = (r.get("expense_name") or "Expense").strip()
-                add("store_opex", sa, r.get("amount"), detail_label=label)
+                # Drill label = the row's own expense_name (the tenant's category name for a closing
+                # expense, 'Additional Payroll' for the payroll excess), falling back to the route's
+                # default only when the producer sent none. store_opex's fallback is the historical
+                # "Expense", so manual rows are byte-identical.
+                label = (r.get("expense_name") or "").strip() or fallback_label
+                add(line_key, sa, r.get("amount"), detail_label=label)
     except Exception:
         pass
 
