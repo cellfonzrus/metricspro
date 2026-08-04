@@ -3584,6 +3584,31 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             not_closed.append({"store_code": code, "store_name": s.get("address") or code, "market": mk})
         not_closed.sort(key=lambda s: str(s.get("store_name") or ""))
 
+    # OWNER DIRECTIVE 2026-08-04 ("cash on hand needs to be completed along with cash pickup"):
+    # the pickup action screen previously only ever showed the CURRENTLY-VIEWED date/range's own
+    # envelopes -- a DM working the default single-Day view had zero visibility into a store's TRUE
+    # accumulated cash on hand (declared-to-date minus everything already taken, including carryover
+    # sitting there from days outside today's filter). Reuses `_cash_position_core` -- the SAME
+    # function GET /cash-position and GET /store-cash-on-hand call -- so this number is byte-identical
+    # to those reports for the same store/as-of-date BY CONSTRUCTION, never a second computation.
+    _as_of = date if date else end
+    _cop_store_list = sorted(store_set) if store_set else []
+    _cop_emp_list = sorted(emp_set) if emp_set else []
+    _cop_codes, _cop_decl, _cop_pick, _cop_last_pu, _cop_last_dep, _cop_smeta = _cash_position_core(
+        client, org_id, _as_of, _cop_store_list, _cop_emp_list, ks)
+    by_store = []
+    for _code in _cop_codes:
+        _declared_total = round(sum(_cop_decl.get(_code, {}).values()), 2)
+        _taken_total = round(sum(_cop_pick.get(_code, {}).values()), 2)
+        by_store.append({
+            "store_code": _code,
+            "store_name": (_cop_smeta.get(_code, {}) or {}).get("address") or _code,
+            "market": (_cop_smeta.get(_code, {}) or {}).get("market"),
+            "cash_on_hand": round(_declared_total - _taken_total, 2),
+            "last_pickup_at": _cop_last_pu.get(_code), "last_deposited_at": _cop_last_dep.get(_code),
+        })
+    by_store.sort(key=lambda r: -r["cash_on_hand"])
+
     return {"date": date, "start": start, "end": end, "envelopes": out,
             "ready": sum(1 for e in out if not e["picked_up"]),
             "collected": sum(1 for e in out if e["picked_up"]),
@@ -3592,7 +3617,10 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "total_cash": round(sum(e["cash"] for e in out), 2),
             "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
             "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
-            "not_closed": not_closed}
+            "not_closed": not_closed,
+            # Per-store cash-on-hand, AS OF `_as_of` (the Day-mode date, or Range-mode's end date) --
+            # closes the loop between the Store Cash on Hand report and the actual pickup action.
+            "as_of": _as_of, "by_store": by_store}
 
 
 # ── Cash-position report (retail-ops-7 item 5): per-store cash on hand, as of a chosen day or over a
@@ -3944,6 +3972,41 @@ async def confirm_pickup(payload: dict, org_id: str = ORG_ID):
                                 f"{item_dates[0]}..{item_dates[-1]}" if item_dates else "—")
     notify = await _notify_pickup(client, org_id, dm, notify_label, items, round(total, 2))
     return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify}
+
+
+@router.post("/pickup/undo")
+def undo_pickup(payload: dict, org_id: str = ORG_ID):
+    """Undo a mistaken cash-pickup confirmation (OWNER DIRECTIVE 2026-08-04 completion of the pickup
+    flow -- edit-safe recording). Body: {store_code, close_date, employee_name} OR {pickup_id}.
+    Idempotent: undoing an envelope that isn't currently picked_up (or doesn't exist) is a no-op, not
+    an error -- so a double-tap / a retry never raises. Refuses (409) once a disposition is already
+    recorded (deposited/handed to management) -- that's a completed cash event, not a mis-tap, and
+    must be corrected deliberately rather than silently reversed."""
+    client = sb()
+    pid = (payload.get("pickup_id") or "").strip()
+    if pid:
+        rows = (client.schema("commcalc").table("cash_pickup").select("*")
+                .eq("org_id", org_id).eq("id", pid).limit(1).execute().data) or []
+    else:
+        store = (payload.get("store_code") or "").strip()
+        cdate = _date(payload.get("close_date") or payload.get("date"))
+        emp = (payload.get("employee_name") or "").strip()
+        if not (store and cdate):
+            raise HTTPException(400, "store_code + close_date (or pickup_id) required")
+        rows = (client.schema("commcalc").table("cash_pickup").select("*")
+                .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
+                .eq("employee_name", emp).limit(1).execute().data) or []
+    if not rows or not rows[0].get("picked_up"):
+        return {"ok": True, "already": True}   # idempotent no-op — nothing to undo
+    row = rows[0]
+    if (row.get("disposition") or "").strip():
+        raise HTTPException(409, "This envelope was already deposited/handed to management — "
+                             "undo a pickup only before it's been deposited or handed off.")
+    (client.schema("commcalc").table("cash_pickup").update({
+        "picked_up": False, "picked_up_by": None, "picked_up_at": None,
+    }).eq("id", row["id"]).eq("org_id", org_id).execute())
+    return {"ok": True, "store_code": row.get("store_code"), "close_date": str(row.get("close_date")),
+            "employee_name": row.get("employee_name"), "amount": row.get("amount")}
 
 
 @router.get("/pickup-config")

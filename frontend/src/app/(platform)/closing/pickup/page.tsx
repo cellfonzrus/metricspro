@@ -12,9 +12,15 @@ import { resolveStoreCodes } from '../_lib/market-store-cascade'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
+// OWNER DIRECTIVE 2026-08-04 ("cash on hand needs to be completed along with cash pickup"): the page
+// also shows each STORE's true accumulated cash on hand (declared-to-date minus everything already
+// taken — the same number Store Cash on Hand / Cash Position report, reused not recomputed) and a
+// live "left after this pickup" preview as envelopes get checked off — closing the loop the two
+// features previously left open (a DM working Day-mode never saw carryover cash sitting in a store).
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const inp: React.CSSProperties = { ...sel, width: '100%' }
 const cell: React.CSSProperties = { padding: '8px 10px', borderTop: '1px solid var(--border)', fontSize: 13, verticalAlign: 'middle' }
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
 
 export default function CashPickupPage() {
   const { user, permissions } = useAuth()
@@ -45,6 +51,7 @@ export default function CashPickupPage() {
   const [cfgMsg, setCfgMsg] = useState('')
   const [dep, setDep] = useState<any>(null)   // { e, disposition, deposit_amount, handed_to, slip } when depositing
   const [depBusy, setDepBusy] = useState(false)
+  const [undoBusy, setUndoBusy] = useState<string | null>(null)   // key of the envelope being undone
   const [pStores, setPStores] = useState<any[]>([])   // store roster (RULE THREE picker — see below)
   const [pEmps, setPEmps] = useState<any[]>([])        // employee roster (RULE THREE picker — see below)
 
@@ -66,6 +73,23 @@ export default function CashPickupPage() {
       setDep(null); load()
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
     finally { setDepBusy(false) }
+  }
+
+  // Undo a mis-tapped pickup confirmation (OWNER DIRECTIVE 2026-08-04 — edit-safe recording).
+  // Server refuses (409) once a disposition is already recorded; the cash-on-hand numbers re-derive
+  // automatically on the next load() since they're always computed live from cash_pickup rows, never
+  // a stored running balance.
+  async function undoPickup(e: any) {
+    const k = key(e)
+    setUndoBusy(k); setMsg('')
+    try {
+      const r: any = await api('/api/v1/closing/pickup/undo', { method: 'POST', body: JSON.stringify({
+        store_code: e.store_code, close_date: e.close_date, employee_name: e.employee_name,
+      }) })
+      setMsg(r.already ? 'Nothing to undo.' : `↩️ Pickup undone for ${e.store_name || e.store_code} · ${e.employee_name} — cash is back to "still to collect."`)
+      load()
+    } catch (er: any) { setMsg('❌ ' + (er?.message || er)) }
+    finally { setUndoBusy(null) }
   }
 
   function exportPayload(): ExportPayload {
@@ -140,6 +164,22 @@ export default function CashPickupPage() {
   const ready = envelopes.filter(e => !e.picked_up)
   const selectedKeys = ready.filter(e => sel_[key(e)])
   const selTotal = selectedKeys.reduce((s, e) => s + (e.cash || 0), 0)
+
+  // Per-store "cash on hand" + a live "left after this pickup" preview (OWNER DIRECTIVE 2026-08-04).
+  // `by_store` (backend, reusing the SAME `_cash_position_core` Store Cash on Hand / Cash Position
+  // read) already nets out every past pickup/EEP-withdrawal — subtracting just the CURRENTLY-SELECTED
+  // envelopes' cash gives exactly what will remain once this batch is confirmed.
+  const selByStore = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const e of selectedKeys) { const c = e.store_code || ''; m[c] = (m[c] || 0) + (e.cash || 0) }
+    return m
+  }, [selectedKeys])
+  const byStoreView = useMemo(
+    () => (data?.by_store || []).map((s: any) => ({
+      ...s, selected: selByStore[s.store_code] || 0,
+      after: round2((s.cash_on_hand || 0) - (selByStore[s.store_code] || 0)),
+    })),
+    [data, selByStore])
 
   async function confirm() {
     if (!selectedKeys.length) { setMsg('Select at least one envelope.'); return }
@@ -239,6 +279,31 @@ export default function CashPickupPage() {
         </div>
       )}
 
+      {/* Per-store cash on hand (OWNER DIRECTIVE 2026-08-04): the TRUE accumulated balance for each
+          store as of the filter's as-of date — includes carryover from days outside the current
+          view, not just the envelopes on screen. Same number as Cash Position / Store Cash on Hand
+          (reused via the backend's _cash_position_core), so this page never drifts from those
+          reports. "Left after" updates live as envelopes get checked off below. */}
+      {byStoreView.length > 0 && (
+        <div className="card" style={{ padding: 14, marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>🏦 Cash on hand by store <span style={{ fontWeight: 400, color: 'var(--text3)' }}>as of {data.as_of}</span></div>
+            <Link href="/closing/store-cash-on-hand" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>Full Store Cash on Hand report →</Link>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {byStoreView.map((s: any) => (
+              <div key={s.store_code} style={{ minWidth: 190, padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>{s.store_name}{s.market ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {s.market}</span> : null}</div>
+                <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>{fmt(s.cash_on_hand)}</div>
+                {s.selected > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--accent)', marginTop: 2 }}>− {fmt(s.selected)} selected → {fmt(s.after)} left</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Stores that did NOT submit a daily closing for the selected day (single-day only — ambiguous over a range) */}
       {data && !rangeMode && date && (
         (data.not_closed || []).length > 0 ? (
@@ -295,7 +360,15 @@ export default function CashPickupPage() {
                               {e.deposit_matched && <span style={{ color: '#166534' }}> · ✓ matched</span>}
                               {e.deposit_url && <> · <a href={e.deposit_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>slip</a></>}
                             </span>
-                          : <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setDep({ e, disposition: 'deposited', deposit_amount: '' })}>💰 Record deposit</button>)}
+                          : <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setDep({ e, disposition: 'deposited', deposit_amount: '' })}>💰 Record deposit</button>
+                              {/* Undo (OWNER DIRECTIVE 2026-08-04 — edit-safe recording): only offered before a
+                                  disposition is recorded; once deposited/handed off it's a completed cash event. */}
+                              <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 8px', color: 'var(--text3)' }}
+                                      disabled={undoBusy === key(e)} onClick={() => undoPickup(e)} title="Undo this pickup confirmation">
+                                {undoBusy === key(e) ? '…' : '↩ Undo'}
+                              </button>
+                            </span>)}
                         {!done && <span style={{ fontSize: 11, color: 'var(--text3)' }}>—</span>}
                       </td>
                     </tr>
