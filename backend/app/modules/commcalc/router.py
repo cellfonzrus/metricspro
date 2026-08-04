@@ -23926,8 +23926,19 @@ def _dcr_empty(per, win, gb, basis, ma_date, prec, why):
 # READ THE MODULE DOCSTRING OF payout_accrual.py BEFORE CHANGING ANYTHING HERE. The one rule:
 #   the ACCRUAL is a PROBABLE (expected) number and is NEVER pay. Nothing in this section writes
 #   rep_commissions, plans, schedules, tiers or any payout figure; a recorded payout is a CASH
-#   ADVANCE (a cash movement), it does not reduce what a rep is owed and nothing is ever netted or
-#   clawed back — an over-advance is FLAGGED for a human (ledger Q14 default).
+#   ADVANCE (a cash movement) and it does not reduce what a rep is owed at month end.
+#
+# OWNER FOLLOW-UP ANSWERS 2026-08-04 (ledger Q14/Q17/Q18/Q19), all tenant config, none of which moves
+# a payout — they change what these EXPECTED numbers are and how they are shown:
+#   Q18 tier basis   — default `mtd_attained`: each day accrues at the tier the rep is MEETING, so the
+#                      month-to-date accrual tracks the individual rep report and the month restates as
+#                      attainment moves. 'none' (un-tiered) stays selectable.
+#   Q14 over-advance — always FLAGGED; `over_advance_mode='auto_net'` additionally deducts a PRIOR
+#                      cycle's over-advance from the next cash due, as its own labelled line.
+#   Q19 cycle        — balances are PER CYCLE (calendar month | payroll | commission) and reset with
+#                      it; unsettled prior cycles remain visible as carry-over, with an ADVISORY
+#                      settlement checklist (GET /payout/settlement) that writes nothing.
+#   Q17 who records  — POST /payout/record now requires DM-or-higher on top of the store-span check.
 #
 # Every endpoint is org_id-query-param scoped (RULE ONE), every insert stamps org_id, and every one
 # of them degrades to `ready:false` + a plain-language note until migration 267 has been run.
@@ -23960,6 +23971,37 @@ def _accrual_market_map(client, org_id):
     return out
 
 
+def _accrual_caller(authorization):
+    """The signed-in caller as core resolves them ({org_id, role, super_admin, perms}), or None when
+    RBAC is off / the token can't be resolved. Never raises."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        uid = _uid_from_token(authorization)
+        return _resolve_caller(sb(), uid) if uid else None
+    except Exception:
+        return None
+
+
+def _require_payout_recorder(authorization, org_id, cfg=None):
+    """DM-OR-HIGHER gate on recording a cash advance (owner 2026-08-04, ledger Q17: "dm or higher").
+
+    This is the one WRITE in the accrual feature that moves real cash on paper, so it is gated more
+    tightly than the read surfaces: a store manager (single-store span) cannot record one; a district
+    manager, market/regional manager, director, executive, admin or super-admin can, as can any CUSTOM
+    role whose RBAC scope is 'all' or 'market'. The role list is tenant config
+    (accrual_config.record_roles) — RULE TWO, no hard-coded titles.
+
+    Same degrade posture as _require_commission_admin: an unresolvable caller (no token / RBAC off)
+    is allowed, so the house org is never locked out of its own envelope. The store-span check in the
+    endpoint still applies on top of this."""
+    caller = _accrual_caller(authorization)
+    ok, why = payout_accrual.may_record(caller, cfg if cfg is not None else
+                                        payout_accrual.load_config(sb(), org_id))
+    if not ok:
+        raise HTTPException(403, why)
+    return caller
+
+
 def _accrual_day_param(v, label="date"):
     d = payout_accrual.parse_day(v, None) if v else _date.today()
     if d is None:
@@ -23974,7 +24016,13 @@ async def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: 
 
     This is the cross-module contract the retail-ops envelope payout-due endpoint consumes; the shape
     is fixed in the EEP spec. `accrued_total` is expected commission — it is NOT what the rep is owed
-    on a payslip, and nothing here has changed anyone's pay."""
+    on a payslip, and nothing here has changed anyone's pay.
+
+    BALANCES ARE PER CYCLE (ledger Q19): accrued_total / paid_total / unpaid_balance are THIS cycle's
+    (calendar month by default), `carry_over` is what an earlier cycle left unsettled, and `due_now` is
+    the cash figure to hand over — floored at zero and, under over_advance_mode='auto_net', already net
+    of a prior over-advance (which appears as its own labelled line in `lines[]`). Lifetime figures are
+    still returned as `lifetime_*`."""
     require_org(org_id)
     d = _accrual_day_param(as_of, "as_of")
     client = sb()
@@ -24066,9 +24114,15 @@ async def payout_record(body: dict, org_id: str = ORG_ID, authorization: str = H
     land the row in the wrong tenant (contract §2).
 
     Recording is not paying: this changes `paid_total` / `unpaid_balance` and nothing else. It does
-    not touch rep_commissions, does not reduce what the rep is owed at month end, and is never netted
-    against a later shortfall."""
+    not touch rep_commissions and does not reduce what the rep is owed at month end. (Where the tenant
+    has switched `over_advance_mode` to 'auto_net', a PRIOR cycle's over-advance is deducted from the
+    NEXT cycle's cash due as its own labelled line — a presentation of this same ledger, still not a
+    payroll event.)
+
+    WHO MAY: district manager or above (ledger Q17), on top of the store-span check — see
+    _require_payout_recorder."""
     require_org(org_id)
+    _require_payout_recorder(authorization, org_id)
     ks = _accrual_keyset(authorization, org_id)
     code = str((body or {}).get("store_code") or "").strip()
     if ks is not None and code and not payout_accrual._in_keys(ks, code):
@@ -24108,23 +24162,88 @@ async def payout_over_advance(org_id: str = ORG_ID, as_of: str = None, lookback_
                                               lookback_months=max(1, min(12, int(lookback_months or 3))))
 
 
-@router.get("/payout/accrual/config")
-async def get_payout_accrual_config(org_id: str = ORG_ID):
-    """This tenant's accrual settings (mig 267 `commission_org_config.accrual_config`). RULE TWO: the
-    tier-recognition day, the tier basis and the auto-run window are all per-tenant config, never
-    constants. Code default before the migration runs."""
+@router.get("/payout/settlement")
+async def payout_settlement(org_id: str = ORG_ID, as_of: str = None,
+                            authorization: str = Header(default="")):
+    """END-OF-CYCLE SETTLEMENT CHECKLIST (owner 2026-08-04, ledger Q19) — per employee, this cycle's
+    accrued vs cash advanced vs the remainder to pay or collect, plus every prior cycle that was never
+    settled, as labelled carry-over.
+
+    ADVISORY ONLY. It settles nothing, moves nothing and writes nothing — the owner's instruction was
+    to ADVISE the user to clear employee balances at the end of the month / payroll cycle / commission
+    cycle, not to clear them automatically. Envelope CASH that physically carries to the next month is
+    retail-ops' cash position and is untouched here; what this tracks is the BALANCE."""
     require_org(org_id)
-    return {"config": payout_accrual.load_config(sb(), org_id),
+    d = _accrual_day_param(as_of, "as_of")
+    client = sb()
+    res = payout_accrual.settlement(client, org_id, d, keyset=_accrual_keyset(authorization, org_id))
+    if res.get("ready"):
+        mkt = _accrual_market_map(client, org_id)
+        for e in res.get("employees") or []:
+            e["markets"] = sorted({mkt.get(str(c).upper(), "") for c in (e.get("store_codes") or [])
+                                   if mkt.get(str(c).upper())})
+    return res
+
+
+@router.get("/payout/accrual/config")
+async def get_payout_accrual_config(org_id: str = ORG_ID, as_of: str = None,
+                                    authorization: str = Header(default="")):
+    """This tenant's accrual settings (mig 267 `commission_org_config.accrual_config`). RULE TWO: the
+    tier basis, the tier-recognition day, the over-advance mode, the balance CYCLE, who may record a
+    cash advance and the auto-run window are all per-tenant config, never constants. Code default
+    before the migration runs.
+
+    Also returns the CURRENT cycle window resolved from that config (so the page can label it without
+    re-implementing the cycle maths) and whether the caller may edit / record."""
+    require_org(org_id)
+    cfg = payout_accrual.load_config(sb(), org_id)
+    d = _accrual_day_param(as_of, "as_of")
+    s, e, label, mode = payout_accrual.cycle_bounds(d, cfg)
+    caller = _accrual_caller(authorization)
+    can_record, why = payout_accrual.may_record(caller, cfg)
+    return {"config": cfg,
             "code_default": payout_accrual.CODE_DEFAULT,
             "tier_basis_options": list(payout_accrual.TIER_BASES),
-            "recognition_modes": list(payout_accrual.RECOGNITION_MODES)}
+            "recognition_modes": list(payout_accrual.RECOGNITION_MODES),
+            "over_advance_modes": list(payout_accrual.OVER_ADVANCE_MODES),
+            "cycle_modes": list(payout_accrual.CYCLE_MODES),
+            "payroll_kinds": list(payout_accrual.PAYROLL_KINDS),
+            "default_record_roles": list(payout_accrual.DEFAULT_RECORD_ROLES),
+            "cycle": {"start": s.isoformat(), "end": e.isoformat(), "label": label, "mode": mode,
+                      "days_left": (e - d).days},
+            "can_record": can_record, "can_record_reason": why,
+            "explain": {
+                "tier_basis": {
+                    "mtd_attained": ("Default. Each day is accrued at the tier the rep is MEETING: the "
+                                     "month-to-date total (real attainment) is shared across the "
+                                     "month's accrued days, so the days add up to the rep report's "
+                                     "month-to-date figure and the month restates as attainment moves."),
+                    "none": ("Conservative. Each day accrues un-tiered and the whole tier effect "
+                             "arrives once, later, as the monthly true-up."),
+                    "as_computed": ("Each day gets its OWN tier multiplier — only sensible when the "
+                                    "plan's tiers are attainable within a single day."),
+                },
+                "over_advance_mode": {
+                    "flag": "Over-advances are flagged for a human. Nothing is netted or clawed back.",
+                    "auto_net": ("Also deducts a PRIOR cycle's over-advance from the employee's next "
+                                 "cash due, as its own labelled line. Never touches payroll, the "
+                                 "accrual or rep_commissions."),
+                },
+                "cycle": ("Balances reset each cycle and unsettled prior cycles stay visible as "
+                          "carry-over. calendar_month | payroll (semimonthly/biweekly/weekly/monthly) "
+                          "| commission (closes on end_day)."),
+            }}
 
 
 @router.put("/payout/accrual/config")
 async def put_payout_accrual_config(body: dict, org_id: str = ORG_ID,
                                     authorization: str = Header(default="")):
-    """Save this tenant's accrual settings. Admin-only, same gate as the rest of commission posture.
-    Changing these NEVER changes what anyone is paid — accruals are expected numbers."""
+    """Save this tenant's accrual settings (tier basis, tier recognition, over-advance mode, balance
+    cycle, who may record an advance, auto-run window). Admin-only, same gate as the rest of commission
+    posture. Changing these NEVER changes what anyone is paid — accruals are expected numbers and this
+    module writes no payout. Changing `tier_basis` or the cycle DOES change what the Daily Commission
+    page and the envelope's "due now" show, which is why it is admin-gated and why every value is
+    explained in the GET."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     try:

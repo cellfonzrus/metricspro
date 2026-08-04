@@ -20,9 +20,26 @@ The four claims the package must prove, plus the contract obligations:
   (d) RECORDING ≠ PAY — recording an advance moves paid_total / unpaid_balance ONLY; accrued_total,
                         components.base and components.tier are untouched.
 
-  plus: RULE ONE org isolation both ways · graceful degrade before migration 267 · the un-tiered
-        base rule (a day's own tier multiplier is NOT applied by default) · over-advance FLAG with no
-        clawback/netting · richer-source day pick (never a union → never double-counted).
+  plus: RULE ONE org isolation both ways · graceful degrade before migration 267 · richer-source day
+        pick (never a union → never double-counted).
+
+OWNER FOLLOW-UP ANSWERS, 2026-08-04 (sections P/Q/R/S/T, and the updated expectations in A/D/E/H/I/J):
+
+  (P) ledger Q18 "based on tier meeting on that day, it keeps varying throughout the month as their
+      commission changes in the individual rep report" — the DEFAULT basis is now 'mtd_attained'. The
+      proof is an INVARIANT, not a number: SUM(accruals month-to-date) == commission_engine.preview()
+      over the same month (the individual rep report), including across a MID-MONTH TIER CROSSING that
+      restates earlier days, under re-runs, out-of-order runs and a vanished day. 'none' (the previous
+      default, un-tiered) is retained as a config option and is still proven (D2b / E5b).
+      → the sixteen assertions whose EXPECTED VALUES moved are marked "CHANGED 2026-08-04" in place.
+  (Q) ledger Q14 "flag it and keep an option to auto net" — flag stays the default; auto_net reduces
+      the NEXT cycle's cash due by a prior cycle's over-advance, as its OWN labelled line, with zero
+      writes anywhere (the accrual is identical in both modes).
+  (R) ledger Q19 "reset each month … payroll cycle / commission cycle as defined in the system" —
+      per-cycle balances for all three cycle kinds, carry-over lines that are never hidden, and the
+      advisory settlement checklist (which writes nothing at all).
+  (S/T) ledger Q17 "dm or higher" — who may record a cash advance, and the router wiring that enforces
+      it before the existing store-span check.
 
 Run:  cd backend && python3 harness_payout_accrual.py
 """
@@ -285,11 +302,34 @@ def sale(org, day, rep, store, tid, ct="New", ext=100.0, gp=40.0):
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 print("A. PURE — config normalization (RULE TWO: every knob per-tenant, clamped one-directional-safe)")
 d = PA.normalize_config(None)
-ok("A1 code default is enabled, un-tiered, on_run_available, auto-run 1 day back",
-   d == PA.CODE_DEFAULT and d["tier_basis"] == "none"
+# CHANGED 2026-08-04 (owner ledger Q18, "based on tier meeting on that day"): the DEFAULT basis is now
+# 'mtd_attained'. 'none' (the previous default) is retained as a config option and is still proven
+# below (D2b/D9, E5b).
+ok("A1 code default is enabled, MTD-attained, on_run_available, auto-run 1 day back",
+   d == PA.CODE_DEFAULT and d["tier_basis"] == "mtd_attained"
    and d["tier_recognition"]["mode"] == "on_run_available" and d["auto_run"]["days_back"] == 1)
-ok("A2 a junk tier_basis falls back to the safe default, never to 'as_computed'",
-   PA.normalize_config({"tier_basis": "wishful"})["tier_basis"] == "none")
+ok("A2 a junk tier_basis falls back to the tenant default, never to 'as_computed'",
+   PA.normalize_config({"tier_basis": "wishful"})["tier_basis"] == "mtd_attained")
+ok("A2b the three bases are the only accepted values, and 'none' is still selectable",
+   set(PA.TIER_BASES) == {"mtd_attained", "none", "as_computed"}
+   and PA.normalize_config({"tier_basis": "none"})["tier_basis"] == "none")
+ok("A7 over_advance_mode defaults to FLAG and only accepts flag|auto_net (ledger Q14)",
+   d["over_advance_mode"] == "flag"
+   and PA.normalize_config({"over_advance_mode": "auto_net"})["over_advance_mode"] == "auto_net"
+   and PA.normalize_config({"over_advance_mode": "shred_it"})["over_advance_mode"] == "flag")
+ok("A8 the balance cycle defaults to the calendar month and only accepts known modes (ledger Q19)",
+   d["cycle"]["mode"] == "calendar_month"
+   and PA.normalize_config({"cycle": {"mode": "payroll"}})["cycle"]["mode"] == "payroll"
+   and PA.normalize_config({"cycle": {"mode": "lunar"}})["cycle"]["mode"] == "calendar_month")
+ok("A9 semi_day clamps to 2..28 (a 1st split would empty the first half; a 30th never exists in Feb)",
+   PA.normalize_config({"cycle": {"payroll": {"semi_day": 1}}})["cycle"]["payroll"]["semi_day"] == 2
+   and PA.normalize_config({"cycle": {"payroll": {"semi_day": 31}}})["cycle"]["payroll"]["semi_day"] == 28)
+ok("A10 record_roles defaults to DM-or-higher and an EMPTY list falls back (never locks everyone out)",
+   d["record_roles"] == sorted(PA.DEFAULT_RECORD_ROLES) or d["record_roles"] == list(PA.DEFAULT_RECORD_ROLES),
+   f"got {d['record_roles']}")
+ok("A11 ... and a tenant-supplied role list is honoured, lower-cased",
+   PA.normalize_config({"record_roles": ["Area_Lead"]})["record_roles"] == ["area_lead"]
+   and PA.normalize_config({"record_roles": []})["record_roles"] == list(PA.DEFAULT_RECORD_ROLES))
 ok("A3 days_back clamps to 0..7 (a typo can never turn the daily sweep into a month rewrite)",
    PA.normalize_config({"auto_run": {"days_back": 900}})["auto_run"]["days_back"] == 7
    and PA.normalize_config({"auto_run": {"days_back": -5}})["auto_run"]["days_back"] == 0)
@@ -337,13 +377,25 @@ for i in range(4):                       # 4 activations -> the 3-unit 2.0x tier
 res = PA.compute_day(c, ORG_A, D1)
 row = (res["rows"] or [{}])[0]
 ok("D1 one accrual row for the one selling rep", len(res["rows"]) == 1, f"got {res['rows']}")
-ok("D2 base_amount = 4 x ($10 + $5) = $60 UN-TIERED (the 2.0x tier is NOT speculated on one day)",
-   row.get("base_amount") == 60.0, f"got {row.get('base_amount')}")
-ok("D3 the day's own multiplier is REPORTED (2.0) but not applied",
-   row["components"]["day_tier_multiplier"] == 2.0 and row["components"]["tier_basis"] == "none")
-ok("D4 components names what is deferred, in words",
-   row["components"]["deferred_to_monthly"] == ["plan_tier_multiplier"]
-   and "monthly" in row["components"]["explain"].lower())
+# CHANGED 2026-08-04 (ledger Q18): the default basis now accrues at the tier the rep is MEETING. On a
+# one-day month-to-date window that is 4 x $10 + (4 x $5) x 2.0 = $80 — the same number the individual
+# rep report shows for the month to date, which is the whole point of the owner's answer.
+ok("D2 base_amount = $40 + $20 x 2.0 = $80 — the tier the rep is MEETING month-to-date",
+   row.get("base_amount") == 80.0, f"got {row.get('base_amount')}")
+ok("D2b the retained 'none' basis still accrues the old un-tiered $60",
+   PA.compute_day(c, ORG_A, D1, cfg=PA.normalize_config({"tier_basis": "none"}))
+     ["rows"][0]["base_amount"] == 60.0)
+ok("D3 the day's own multiplier is reported (2.0) and the row says which basis produced it",
+   row["components"]["day_tier_multiplier"] == 2.0
+   and row["components"]["tier_basis"] == "mtd_attained")
+ok("D3b the row carries the month-to-date audit trail: target, un-tiered weight and factor",
+   row["components"]["mtd"]["mtd_total"] == 80.0
+   and row["components"]["mtd"]["untiered_base"] == 60.0
+   and round(row["components"]["mtd"]["factor"], 4) == round(80.0 / 60.0, 4),
+   f"got {row['components'].get('mtd')}")
+ok("D4 nothing is deferred to the monthly true-up under this basis, and the row explains itself",
+   row["components"]["deferred_to_monthly"] == []
+   and "tier the rep is meeting" in row["components"]["explain"].lower())
 ok("D5 components carries the per-rule breakdown that will be shown to the rep",
    sorted([(r["label"], r["payout"]) for r in row["components"]["rules"]])
    == [("Activation", 40.0), ("Tiered spiff", 20.0)],
@@ -353,12 +405,12 @@ ok("D6 employee_key is the module's canonical person key; store resolved to its 
 ok("D7 the day was read from raw_sales and only that day", res["source_table"] == "raw_sales"
    and res["sale_lines"] == 4)
 
-print("\n   D-bis. tier_basis='as_computed' (opt-in) DOES apply the day's own multiplier")
+print("\n   D-bis. tier_basis='as_computed' (opt-in) applies the day's OWN multiplier")
 res_ac = PA.compute_day(c, ORG_A, D1, cfg=PA.normalize_config({"tier_basis": "as_computed"}))
 ok("D8 opt-in accrues 40 + (20 x 2.0) = $80", res_ac["rows"][0]["base_amount"] == 80.0,
    f"got {res_ac['rows'][0]['base_amount']}")
-ok("D9 ...and it is the ONLY way to get there — the default stayed 60",
-   PA.compute_day(c, ORG_A, D1)["rows"][0]["base_amount"] == 60.0)
+ok("D9 on a ONE-DAY window as_computed and mtd_attained agree; the difference appears across days (P)",
+   PA.compute_day(c, ORG_A, D1)["rows"][0]["base_amount"] == 80.0)
 
 print("\n   D-ter. carrier-mode gate: an UNASSIGNED rep accrues $0, and that is CORRECT")
 c.rows("raw_sales").append(sale(ORG_A, D1, "Nobody Unassigned", "1234 Main St", "T9"))
@@ -389,7 +441,7 @@ ok("E1 one row after the first run, still one row after the third (no duplicatio
 ok("E2 the money is identical across all three runs", _cmp(snap1) == _cmp(snap2) == _cmp(snap3),
    f"{_cmp(snap1)} vs {_cmp(snap3)}")
 ok("E3 run report is stable too", (r1["employees"], r1["base_total"]) == (r3["employees"], r3["base_total"])
-   and r1["base_total"] == 60.0)
+   and r1["base_total"] == 80.0, f"got {r1['base_total']}")
 ok("E4 the upsert uses the spec's unique key",
    all(e[0] != "upsert" or e[2] is not None for e in c2.log)
    and any(e[0] == "upsert" and e[1][1] == PA.ACCRUAL_TABLE for e in c2.log))
@@ -397,8 +449,14 @@ ok("E4 the upsert uses the spec's unique key",
 print("\n   E-bis. a sale that VANISHES from the day leaves no phantom accrual (replace, not merge)")
 c2.store[("commcalc", "raw_sales")] = [r for r in c2.rows("raw_sales") if r["trans_id"] != "T3"]
 r4 = PA.run_day(c2, ORG_A, D1)
-ok("E5 re-run restates the day downward: 3 x $15 = $45", c2.rows(PA.ACCRUAL_TABLE)[0]["base_amount"] == 45.0,
+# 3 activations still attain the 3-unit tier (each line qualifies under both rules), so the restated
+# day is 3 x $10 + (3 x $5) x 2.0 = $60. Under the retained 'none' basis it is the old un-tiered $45.
+ok("E5 re-run restates the day downward: $30 + $15 x 2.0 = $60",
+   c2.rows(PA.ACCRUAL_TABLE)[0]["base_amount"] == 60.0,
    f"got {c2.rows(PA.ACCRUAL_TABLE)[0]['base_amount']}")
+ok("E5b the same restatement under tier_basis='none' is the un-tiered $45",
+   PA.compute_day(c2, ORG_A, D1, cfg=PA.normalize_config({"tier_basis": "none"}))
+     ["rows"][0]["base_amount"] == 45.0)
 c2.store[("commcalc", "raw_sales")] = []
 r5 = PA.run_day(c2, ORG_A, D1)
 ok("E6 a day whose sales all vanish is CLEARED, not left stale",
@@ -532,10 +590,10 @@ for i in range(4):
 PA.run_day(c4, ORG_A, D1)
 before = PA.accrued(c4, ORG_A, D1)
 e0 = before["employees"][0]
-ok("H1 before any advance: accrued $60, paid $0, unpaid $60, today $60",
-   (e0["accrued_total"], e0["paid_total"], e0["unpaid_balance"], e0["today_accrual"]) == (60.0, 0.0, 60.0, 60.0),
+ok("H1 before any advance: accrued $80, paid $0, unpaid $80, today $80",
+   (e0["accrued_total"], e0["paid_total"], e0["unpaid_balance"], e0["today_accrual"]) == (80.0, 0.0, 80.0, 80.0),
    f"got {e0}")
-ok("H2 components split base/tier for the consumer", e0["components"] == {"base": 60.0, "tier": 0.0})
+ok("H2 components split base/tier for the consumer", e0["components"] == {"base": 80.0, "tier": 0.0})
 ok("H3 the spec's keys are all present",
    set(["employee_key", "name", "store_codes", "accrued_total", "paid_total", "unpaid_balance",
         "today_accrual", "components"]).issubset(e0.keys()))
@@ -545,8 +603,12 @@ rec = PA.record_payout(c4, ORG_A, {"employee_key": "ali khan", "employee_name": 
                                    "withdrawal_ref": "W-1"}, recorded_by="dm-uid")
 after = PA.accrued(c4, ORG_A, D1)
 e1 = after["employees"][0]
-ok("H4 accrued is UNCHANGED by a payout", e1["accrued_total"] == 60.0 and e1["components"] == e0["components"])
-ok("H5 paid $25, unpaid $35", (e1["paid_total"], e1["unpaid_balance"]) == (25.0, 35.0), f"got {e1}")
+ok("H4 accrued is UNCHANGED by a payout", e1["accrued_total"] == 80.0 and e1["components"] == e0["components"])
+ok("H5 paid $25, unpaid $55", (e1["paid_total"], e1["unpaid_balance"]) == (25.0, 55.0), f"got {e1}")
+ok("H5b due_now is the cycle balance and the labelled lines add up to it (no hidden arithmetic)",
+   e1["due_now"] == 55.0 and e1["net_applied"] == 0.0
+   and round(sum(l["amount"] for l in e1["lines"] if l["affects_due"]), 2) == 55.0,
+   f"got {e1['lines']}")
 ok("H6 the ledger row is org-stamped and carries who recorded it",
    c4.rows(PA.LEDGER_TABLE)[0]["org_id"] == ORG_A
    and c4.rows(PA.LEDGER_TABLE)[0]["recorded_by"] == "dm-uid")
@@ -575,14 +637,18 @@ print("\nI. OVER-ADVANCE — flagged, never netted, never clawed back")
 PA.record_payout(c4, ORG_A, {"employee_key": "ali khan", "employee_name": "Ali Khan", "amount": 100,
                              "paid_date": D1.isoformat(), "store_code": "S100"})
 over = PA.accrued(c4, ORG_A, D1)["employees"][0]
-ok("I1 paid $125 vs accrued $60 -> flagged, unpaid goes NEGATIVE (honest, not clamped)",
-   over["over_advanced"] is True and over["over_advance_amount"] == 65.0
-   and over["unpaid_balance"] == -65.0, f"got {over}")
+ok("I1 paid $125 vs accrued $80 -> flagged, unpaid goes NEGATIVE (honest, not clamped)",
+   over["over_advanced"] is True and over["over_advance_amount"] == 45.0
+   and over["unpaid_balance"] == -45.0, f"got {over}")
+ok("I1b due_now never goes negative — the balance is honest, the CASH figure is floored at zero",
+   over["due_now"] == 0.0)
 rev = PA.over_advance_review(c4, ORG_A, D1)
 ok("I2 the review list names the employee and the amount",
-   len(rev["running"]) == 1 and rev["running"][0]["over_by"] == 65.0)
+   len(rev["running"]) == 1 and rev["running"][0]["over_by"] == 45.0, f"got {rev['running']}")
+ok("I2b the CURRENT-CYCLE list answers the question a DM actually acts on",
+   len(rev["cycle"]) == 1 and rev["cycle"][0]["over_by"] == 45.0)
 ok("I3 the accrual itself was NOT reduced to compensate (no netting)",
-   c4.rows(PA.ACCRUAL_TABLE)[0]["total_amount"] == 60.0)
+   c4.rows(PA.ACCRUAL_TABLE)[0]["total_amount"] == 80.0)
 ok("I4 the policy is stated in the response", "no clawback" in rev["policy"].lower())
 
 # monthly over-advance: cash advanced inside a FINISHED month exceeds what that month paid
@@ -612,10 +678,12 @@ PA.run_day(c6, ORG_A, D1)
 PA.run_day(c6, ORG_B, D1)
 a_rows = [r for r in c6.rows(PA.ACCRUAL_TABLE) if r["org_id"] == ORG_A]
 b_rows = [r for r in c6.rows(PA.ACCRUAL_TABLE) if r["org_id"] == ORG_B]
-ok("J1 each tenant accrued only its OWN sales (A: 2x$15=$30, B: 3x$15=$45)",
-   len(a_rows) == 1 and a_rows[0]["base_amount"] == 30.0
-   and len(b_rows) == 1 and b_rows[0]["base_amount"] == 45.0,
-   f"A={a_rows} B={b_rows}")
+# 2 lines => 4 qualifying units and 3 lines => 6, so both tenants attain their own 3-unit 2.0x tier:
+# A = $20 + $10x2 = $40, B = $30 + $15x2 = $60 (basis flip, ledger Q18).
+ok("J1 each tenant accrued only its OWN sales (A: $40, B: $60)",
+   len(a_rows) == 1 and a_rows[0]["base_amount"] == 40.0
+   and len(b_rows) == 1 and b_rows[0]["base_amount"] == 60.0,
+   f"A={[(r['org_id'], r['base_amount']) for r in a_rows]} B={[(r['org_id'], r['base_amount']) for r in b_rows]}")
 ok("J2 every accrual row carries org_id (write-side stamping)",
    all(r.get("org_id") for r in c6.rows(PA.ACCRUAL_TABLE)))
 acc_a = PA.accrued(c6, ORG_A, D1)
@@ -735,6 +803,278 @@ ok("O1 ledger lists this org's advances with a total", lr["ready"] and lr["count
 ok("O2 rows carry everything the report needs to explain a payment",
    all(set(["employee_key", "name", "amount", "paid_date", "method", "store_code",
             "withdrawal_ref", "recorded_by"]).issubset(r.keys()) for r in lr["rows"]))
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# OWNER ANSWERS 2026-08-04 — ledger Q18 (tier basis) / Q14 (over-advance) / Q19 (cycle) / Q17 (who)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+from app.modules.commcalc import commission_engine as CE  # noqa: E402
+
+JUN = date(2026, 6, 1)
+
+
+def rep_report_mtd(client, org, period="June 2026", rep="ali khan"):
+    """The INDIVIDUAL REP REPORT's month-to-date commission, computed independently of the accrual —
+    commission_engine.preview() over the month's raw_sales, which is the same function the plan-mode
+    monthly payout runs through. This is the number the owner said the accrual must track."""
+    res = CE.preview(client, org, period)
+    return round(sum(float(r.get("total_payout") or 0) for r in (res.get("by_rep") or [])
+                     if PA.canon_key(r.get("rep")) == rep), 2)
+
+
+def accrued_mtd(client, org, rep="ali khan", month=6, year=2026):
+    return round(sum(float(r["total_amount"]) for r in client.rows(PA.ACCRUAL_TABLE)
+                     if r["employee_key"] == rep and r["work_date"][:7] == f"{year}-{month:02d}"), 2)
+
+
+print("\nP. ledger Q18 — MTD AGREEMENT: the accrual stream TRACKS the individual rep report")
+print("   owner: \"it will be based on tier meeting on that day, it keeps varying throughout the month")
+print("   as their commission changes in the individual rep report\"")
+cP = FakeClient()
+seed_plan_tenant(cP, ORG_A, JUN)
+# Day 1: ONE activation -> 2 qualifying units -> BELOW the 3-unit 2.0x tier.
+cP.rows("raw_sales").append(sale(ORG_A, date(2026, 6, 1), "Ali Khan", "1234 Main St", "D1a"))
+PA.run_day(cP, ORG_A, date(2026, 6, 1))
+ok("P1 day 1 accrues un-tiered $15 — the rep is not meeting the tier yet",
+   accrued_mtd(cP, ORG_A) == 15.0, f"got {accrued_mtd(cP, ORG_A)}")
+ok("P2 ... and that already EQUALS the rep report's month-to-date figure",
+   accrued_mtd(cP, ORG_A) == rep_report_mtd(cP, ORG_A), f"{accrued_mtd(cP, ORG_A)} vs {rep_report_mtd(cP, ORG_A)}")
+
+# Day 2: a second activation -> 4 qualifying units -> the 2.0x tier IS met. The rep report's MTD
+# jumps to $20 + $10x2 = $40, so the WHOLE month must restate, not just day 2.
+cP.rows("raw_sales").append(sale(ORG_A, date(2026, 6, 2), "Ali Khan", "1234 Main St", "D2a"))
+r_d2 = PA.run_day(cP, ORG_A, date(2026, 6, 2))
+d1row = [r for r in cP.rows(PA.ACCRUAL_TABLE) if r["work_date"] == "2026-06-01"][0]
+d2row = [r for r in cP.rows(PA.ACCRUAL_TABLE) if r["work_date"] == "2026-06-02"][0]
+ok("P3 MID-MONTH TIER CHANGE: the month-to-date accrual == the rep report exactly ($40)",
+   accrued_mtd(cP, ORG_A) == rep_report_mtd(cP, ORG_A) == 40.0,
+   f"accrual {accrued_mtd(cP, ORG_A)} vs report {rep_report_mtd(cP, ORG_A)}")
+ok("P4 day 1 RESTATED upward ($15 -> $20) — the whole month moves, not just the crossing day",
+   float(d1row["base_amount"]) == 20.0 and float(d2row["base_amount"]) == 20.0,
+   f"d1={d1row['base_amount']} d2={d2row['base_amount']}")
+ok("P5 the run report says how many earlier days it restated", r_d2["restated"] == 1, f"got {r_d2}")
+ok("P6 every restated row keeps its audit trail (weight, factor, target, and words)",
+   d1row["components"]["mtd"]["untiered_base"] == 15.0
+   and d1row["components"]["mtd"]["mtd_total"] == 40.0
+   and "restates" in d1row["components"]["mtd"]["explain"])
+
+# Day 3: a third activation. Report MTD = $30 + $15x2 = $60.
+cP.rows("raw_sales").append(sale(ORG_A, date(2026, 6, 3), "Ali Khan", "1234 Main St", "D3a"))
+PA.run_day(cP, ORG_A, date(2026, 6, 3))
+ok("P7 day 3: the invariant holds again ($60 = $60)",
+   accrued_mtd(cP, ORG_A) == rep_report_mtd(cP, ORG_A) == 60.0,
+   f"{accrued_mtd(cP, ORG_A)} vs {rep_report_mtd(cP, ORG_A)}")
+
+snapP = copy.deepcopy(cP.rows(PA.ACCRUAL_TABLE))
+PA.run_day(cP, ORG_A, date(2026, 6, 3))
+PA.run_day(cP, ORG_A, date(2026, 6, 3))
+ok("P8 IDEMPOTENT: re-running the same date twice more changes nothing (scaling never compounds)",
+   _cmp(cP.rows(PA.ACCRUAL_TABLE)) == _cmp(snapP) and len(cP.rows(PA.ACCRUAL_TABLE)) == 3,
+   f"got {_cmp(cP.rows(PA.ACCRUAL_TABLE))}")
+PA.run_day(cP, ORG_A, date(2026, 6, 1))
+ok("P9 ORDER-INDEPENDENT: re-running an EARLIER day re-allocates the whole month, invariant intact",
+   accrued_mtd(cP, ORG_A) == rep_report_mtd(cP, ORG_A) == 60.0 and len(cP.rows(PA.ACCRUAL_TABLE)) == 3,
+   f"{accrued_mtd(cP, ORG_A)} vs {rep_report_mtd(cP, ORG_A)}")
+
+# a VOIDED day (sales withdrawn) must restate the rest of the month, not strand the money
+cP.store[("commcalc", "raw_sales")] = [r for r in cP.rows("raw_sales") if r["trans_id"] != "D3a"]
+PA.run_day(cP, ORG_A, date(2026, 6, 3))
+ok("P10 a day whose sales VANISH is cleared and the survivors re-absorb the month-to-date total",
+   accrued_mtd(cP, ORG_A) == rep_report_mtd(cP, ORG_A) == 40.0
+   and len(cP.rows(PA.ACCRUAL_TABLE)) == 2,
+   f"{accrued_mtd(cP, ORG_A)} vs {rep_report_mtd(cP, ORG_A)} rows={len(cP.rows(PA.ACCRUAL_TABLE))}")
+ok("P11 the cents always tie out exactly — no rounding drift across the allocation",
+   accrued_mtd(cP, ORG_A) == round(sum(float(r["base_amount"]) for r in cP.rows(PA.ACCRUAL_TABLE)), 2))
+assert_no_pay_writes("P12 the whole MTD basis (3 days, 6 runs, 2 restatements)", cP)
+ok("P13 it STILL writes exactly one table",
+   {e[1][1] for e in cP.log if e[0] in ("insert", "upsert", "update", "delete")} == {PA.ACCRUAL_TABLE})
+
+# uneven days: the allocation is proportional and exact to the cent
+cQ = FakeClient()
+seed_plan_tenant(cQ, ORG_A, JUN)
+for i in range(2):
+    cQ.rows("raw_sales").append(sale(ORG_A, date(2026, 6, 10), "Ali Khan", "1234 Main St", f"E{i}"))
+cQ.rows("raw_sales").append(sale(ORG_A, date(2026, 6, 11), "Ali Khan", "1234 Main St", "E9"))
+PA.run_day(cQ, ORG_A, date(2026, 6, 10))
+PA.run_day(cQ, ORG_A, date(2026, 6, 11))
+rows_q = sorted(cQ.rows(PA.ACCRUAL_TABLE), key=lambda r: r["work_date"])
+ok("P14 an uneven month splits proportionally (2 sales vs 1 -> $40 / $20) and sums to the report",
+   [float(r["base_amount"]) for r in rows_q] == [40.0, 20.0]
+   and accrued_mtd(cQ, ORG_A) == rep_report_mtd(cQ, ORG_A) == 60.0,
+   f"got {[float(r['base_amount']) for r in rows_q]}")
+
+print("\n   P-bis. the monthly TRUE-UP still reconciles whatever residual remains at month close")
+cP2 = FakeClient()
+seed_plan_tenant(cP2, ORG_A, JUN)
+for i in range(2):
+    cP2.rows("raw_sales").append(sale(ORG_A, date(2026, 6, 5), "Ali Khan", "1234 Main St", f"F{i}"))
+PA.run_day(cP2, ORG_A, date(2026, 6, 5))
+cP2.rows("rep_commissions").append(
+    {"org_id": ORG_A, "period": "June 2026", "epay_salesperson": "Ali Khan", "store": "1234 Main St",
+     "total_payout": 55.0})           # the finished run added a $15 monthly component
+PA.run_day(cP2, ORG_A, date(2026, 7, 1))
+jul = [r for r in cP2.rows(PA.ACCRUAL_TABLE) if r["work_date"] == "2026-07-01"]
+ok("P15 the true-up recognizes only the RESIDUAL ($55 run - $40 accrued = $15), not the tier twice",
+   len(jul) == 1 and float(jul[0]["tier_amount"]) == 15.0, f"got {jul}")
+ok("P16 ... and the stream converges on what the month actually paid",
+   round(sum(float(r["total_amount"]) for r in cP2.rows(PA.ACCRUAL_TABLE)), 2) == 55.0)
+assert_no_pay_writes("P17 true-up under the MTD basis", cP2)
+
+print("\nQ. ledger Q14 — OVER-ADVANCE: flag by default, auto_net as an explicit, labelled option")
+print("   owner: \"flag it and keep an option to auto net\"")
+MAY20, JUN10 = date(2026, 5, 20), date(2026, 6, 10)
+cN = FakeClient()
+# May: $100 accrued, $160 advanced -> a $60 over-advance carried into June. June: $90 accrued.
+cN.rows(PA.ACCRUAL_TABLE).extend([
+    {"id": 1, "org_id": ORG_A, "work_date": "2026-05-20", "employee_key": "ali khan",
+     "employee_name": "Ali Khan", "store_code": "S100", "base_amount": 100.0, "tier_amount": 0.0,
+     "total_amount": 100.0, "components": {}},
+    {"id": 2, "org_id": ORG_A, "work_date": "2026-06-05", "employee_key": "ali khan",
+     "employee_name": "Ali Khan", "store_code": "S100", "base_amount": 90.0, "tier_amount": 0.0,
+     "total_amount": 90.0, "components": {}}])
+cN.rows(PA.LEDGER_TABLE).append(
+    {"id": 1, "org_id": ORG_A, "employee_key": "ali khan", "employee_name": "Ali Khan",
+     "amount": 160.0, "paid_date": "2026-05-25", "store_code": "S100", "method": "envelope_cash"})
+flag = PA.accrued(cN, ORG_A, JUN10, cfg=PA.normalize_config({"over_advance_mode": "flag"}))["employees"][0]
+ok("Q1 FLAG (default): June's balance is June's — $90 due, the May over-advance is NOT deducted",
+   flag["accrued_total"] == 90.0 and flag["paid_total"] == 0.0 and flag["due_now"] == 90.0
+   and flag["net_applied"] == 0.0, f"got {flag}")
+ok("Q2 ... but the $60 over-advance is VISIBLE as a labelled carry-over line, never hidden",
+   flag["carry_over"] == -60.0
+   and any(l["kind"] == "carry_over" and "advanced beyond" in l["label"] for l in flag["lines"]),
+   f"got {flag['lines']}")
+ok("Q3 ... and it is still FLAGGED lifetime (advances $160 vs accrual $190 is fine, May alone is not)",
+   flag["prior_over_advance"] == 60.0)
+
+net = PA.accrued(cN, ORG_A, JUN10, cfg=PA.normalize_config({"over_advance_mode": "auto_net"}))["employees"][0]
+ok("Q4 AUTO_NET: the $60 prior over-advance reduces the NEXT payable balance -> due now $30",
+   net["due_now"] == 30.0 and net["net_applied"] == 60.0, f"got {net}")
+ok("Q5 ... and it appears as ITS OWN labelled line — never a silently smaller number",
+   any(l["kind"] == "net" and l["amount"] == -60.0 and "auto-net" in l["label"] for l in net["lines"]),
+   f"got {net['lines']}")
+ok("Q6 ... the labelled lines still add up to due_now exactly",
+   round(sum(l["amount"] for l in net["lines"] if l["affects_due"]), 2) == net["due_now"])
+ok("Q7 auto_net does NOT touch the accrual: the cycle's accrued figure is identical in both modes",
+   net["accrued_total"] == flag["accrued_total"] == 90.0
+   and net["components"] == flag["components"])
+ok("Q8 auto_net never over-recovers: netting is capped at what is due (never a negative payout)",
+   PA.accrued(cN, ORG_A, date(2026, 6, 10),
+              cfg=PA.normalize_config({"over_advance_mode": "auto_net"}))["employees"][0]["due_now"] >= 0)
+assert_no_pay_writes("Q9 auto_net is READ-SIDE ONLY — zero writes anywhere", cN)
+ok("Q10 ... including zero writes to the accrual and ledger tables themselves",
+   not cN.writes_to(PA.ACCRUAL_TABLE) and not cN.writes_to(PA.LEDGER_TABLE))
+revN = PA.over_advance_review(cN, ORG_A, JUN10, cfg=PA.normalize_config({"over_advance_mode": "auto_net"}))
+ok("Q11 the review still FLAGS under auto_net and says so in the policy line",
+   "auto-netted" in revN["policy"].lower() and revN["over_advance_mode"] == "auto_net")
+
+print("\nR. ledger Q19 — PER-CYCLE balances, carry-over lines and the settlement checklist")
+print("   owner: \"reset each month and advise the user to clear the employee balance at the end of")
+print("   the month / payroll cycle / commission cycle as defined in the system\"")
+CAL = PA.normalize_config(None)
+ok("R1 calendar month (default): Aug 4 -> Aug 1..31, labelled by the month",
+   PA.cycle_bounds(date(2026, 8, 4), CAL) == (date(2026, 8, 1), date(2026, 8, 31), "August 2026",
+                                              "calendar_month"))
+SEMI = PA.normalize_config({"cycle": {"mode": "payroll", "payroll": {"kind": "semimonthly", "semi_day": 16}}})
+ok("R2 payroll semimonthly: the 4th is in Aug 1–15, the 20th is in Aug 16–31",
+   PA.cycle_bounds(date(2026, 8, 4), SEMI)[:2] == (date(2026, 8, 1), date(2026, 8, 15))
+   and PA.cycle_bounds(date(2026, 8, 20), SEMI)[:2] == (date(2026, 8, 16), date(2026, 8, 31)))
+ok("R3 ... and a half-month is NOT labelled 'August 2026' (that would be a lie on an export)",
+   PA.cycle_bounds(date(2026, 8, 4), SEMI)[2] == "Aug 1–15 2026")
+BIW = PA.normalize_config({"cycle": {"mode": "payroll",
+                                     "payroll": {"kind": "biweekly", "anchor_date": "2026-08-03"}}})
+ok("R4 payroll biweekly runs in 14-day blocks from the anchor, before AND after it",
+   PA.cycle_bounds(date(2026, 8, 4), BIW)[:2] == (date(2026, 8, 3), date(2026, 8, 16))
+   and PA.cycle_bounds(date(2026, 8, 20), BIW)[:2] == (date(2026, 8, 17), date(2026, 8, 30))
+   and PA.cycle_bounds(date(2026, 7, 30), BIW)[:2] == (date(2026, 7, 20), date(2026, 8, 2)))
+COMM = PA.normalize_config({"cycle": {"mode": "commission", "commission": {"end_day": 25}}})
+ok("R5 commission cycle closing on the 25th: Aug 4 -> Jul 26..Aug 25; Aug 26 -> Aug 26..Sep 25",
+   PA.cycle_bounds(date(2026, 8, 4), COMM)[:2] == (date(2026, 7, 26), date(2026, 8, 25))
+   and PA.cycle_bounds(date(2026, 8, 26), COMM)[:2] == (date(2026, 8, 26), date(2026, 9, 25)))
+COMM31 = PA.normalize_config({"cycle": {"mode": "commission", "commission": {"end_day": 31}}})
+ok("R6 a 31st close CLAMPS to each month's real end (February still closes)",
+   PA.cycle_bounds(date(2026, 2, 15), COMM31)[:2] == (date(2026, 2, 1), date(2026, 2, 28)))
+
+acc_cyc = PA.accrued(cN, ORG_A, JUN10, cfg=CAL)
+ok("R7 a cycle RESETS: June shows June's $90, not the lifetime $190",
+   acc_cyc["employees"][0]["accrued_total"] == 90.0
+   and acc_cyc["employees"][0]["lifetime_accrued"] == 190.0)
+ok("R8 the cycle window and its predecessor are named in the response (for the page banner)",
+   acc_cyc["cycle"]["label"] == "June 2026" and acc_cyc["cycle"]["previous_label"] == "May 2026"
+   and acc_cyc["cycle"]["mode"] == "calendar_month")
+ok("R9 an unsettled prior cycle raises the 'settle employee balances' advisory",
+   acc_cyc["settlement_advisory"]["due"] is True
+   and "unsettled" in (acc_cyc["settlement_advisory"]["message"] or "").lower())
+acc_semi = PA.accrued(cN, ORG_A, JUN10, cfg=PA.normalize_config(
+    {"cycle": {"mode": "payroll", "payroll": {"kind": "semimonthly", "semi_day": 16}}}))
+ok("R10 switching the tenant to a semi-monthly cycle re-cuts the same rows (config, not code)",
+   acc_semi["cycle"]["label"] == "Jun 1–15 2026"
+   and acc_semi["employees"][0]["accrued_total"] == 90.0)
+
+st = PA.settlement(cN, ORG_A, JUN10, cfg=CAL)
+e_st = st["employees"][0]
+ok("R11 the settlement checklist lists every cycle with accrued vs advanced vs remainder",
+   [c["label"] for c in e_st["cycles"]] == ["March 2026", "April 2026", "May 2026", "June 2026"],
+   f"got {[c['label'] for c in e_st['cycles']]}")
+ok("R12 May reads accrued $100 / advanced $160 / remainder -$60 (cash to collect back)",
+   [(c["accrued"], c["advanced"], c["remainder"]) for c in e_st["cycles"] if c["label"] == "May 2026"]
+   == [(100.0, 160.0, -60.0)])
+ok("R13 the current cycle is marked, and its remainder is what to pay in cash",
+   e_st["cycles"][-1]["is_current"] is True and e_st["cycle_remainder"] == 90.0)
+ok("R14 the unsettled prior cycle is carried, labelled and counted — not hidden",
+   e_st["carry_over"] == -60.0 and e_st["unsettled_prior"] is True and e_st["status"] != "settled")
+ok("R15 the advisory is ADVICE: it names the cycle end and says nothing settles automatically",
+   st["advisory"]["due"] is True and "not a payment" in st["advisory"]["message"].lower()
+   and "advisory only" in st["note"].lower())
+assert_no_pay_writes("R16 the settlement checklist is read-only", cN)
+ok("R17 ... and it writes NOTHING at all (advisory, per the owner)",
+   not [e for e in cN.log if e[0] in ("insert", "upsert", "update", "delete")])
+st_missing = PA.settlement(FakeClient(missing={PA.ACCRUAL_TABLE, PA.LEDGER_TABLE}), ORG_A, JUN10)
+ok("R18 the checklist degrades gracefully before migration 267", st_missing["ready"] is False)
+sc = PA.settlement(cN, ORG_A, JUN10, cfg=CAL)
+ok("R19 span scope applies to the checklist too (an alien span sees none of S100's balances)",
+   PA.settlement(cN, ORG_A, JUN10, keyset={"S777"}, cfg=CAL)["employees"] == []
+   and len(sc["employees"]) == 1)
+
+print("\nS. ledger Q17 — WHO may record a cash advance: DM or higher (owner: \"dm or higher\")")
+CFG_R = PA.normalize_config(None)
+ok("S1 a plain rep may NOT record a cash advance",
+   PA.may_record({"role": "sales_rep", "perms": {"scope": "self"}}, CFG_R)[0] is False)
+ok("S2 a STORE manager may not either — this is deliberately above store level",
+   PA.may_record({"role": "store_manager", "perms": {"scope": "store"}}, CFG_R)[0] is False)
+ok("S3 ... and the refusal SAYS what to do instead",
+   "district" in PA.may_record({"role": "store_manager", "perms": {"scope": "store"}}, CFG_R)[1].lower())
+ok("S4 a district manager MAY", PA.may_record({"role": "district_manager", "perms": {}}, CFG_R)[0] is True)
+for r in ("market_manager", "regional_manager", "director", "executive", "admin"):
+    ok(f"S5.{r} {r} may record", PA.may_record({"role": r, "perms": {}}, CFG_R)[0] is True)
+ok("S6 a super-admin always may", PA.may_record({"role": "whatever", "super_admin": True}, CFG_R)[0] is True)
+ok("S7 a CUSTOM role that spans a market qualifies without anyone hard-coding its name",
+   PA.may_record({"role": "area_lead", "perms": {"scope": "market"}}, CFG_R)[0] is True)
+ok("S8 a custom role scoped to one store does not",
+   PA.may_record({"role": "keyholder", "perms": {"scope": "store"}}, CFG_R)[0] is False)
+ok("S9 the role list is TENANT CONFIG (RULE TWO), not a constant",
+   PA.may_record({"role": "shift_lead", "perms": {"scope": "self"}},
+                 PA.normalize_config({"record_roles": ["shift_lead"]}))[0] is True
+   and PA.may_record({"role": "district_manager", "perms": {"scope": "self"}},
+                     PA.normalize_config({"record_roles": ["shift_lead"]}))[0] is False)
+ok("S10 an unresolvable caller (RBAC off / no token) degrades OPEN — the house org is never locked out",
+   PA.may_record(None, CFG_R)[0] is True)
+
+print("\nT. the router's gate + settlement endpoint are wired to the same rules")
+rsrc2 = open("app/modules/commcalc/router.py", encoding="utf-8").read()
+blk = rsrc2[rsrc2.index("DAILY COMMISSION ACCRUAL + ENVELOPE PAYOUT LEDGER (migration 267"):]
+ok("T1 POST /payout/record calls the DM-or-higher gate BEFORE the span check",
+   "_require_payout_recorder(authorization, org_id)" in blk
+   and blk.index("_require_payout_recorder(authorization, org_id)")
+       < blk.index("is outside your assigned stores"))
+ok("T2 the GET surfaces keep the span keyset and gained no new gate",
+   blk.count("_accrual_keyset(authorization, org_id)") >= 5)
+ok("T3 the settlement endpoint exists, is org-scoped and span-scoped",
+   '@router.get("/payout/settlement")' in blk and "require_org(org_id)" in blk
+   and "payout_accrual.settlement(client, org_id, d, keyset=" in blk)
+ok("T4 the config endpoint exposes every new knob as options (RULE TWO admin surface)",
+   all(k in blk for k in ("over_advance_modes", "cycle_modes", "payroll_kinds",
+                          "default_record_roles", "tier_basis_options")))
+ok("T5 the router's accrual section STILL touches no pay table",
+   not any(f'table(\'{t}\')' in blk or f'table("{t}")' in blk for t in PAY_TABLES))
 
 print("\n" + "=" * 90)
 print(f"PASS {PASS}   FAIL {FAIL}")
