@@ -154,6 +154,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/comp-trend', label: 'Total Compensation', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/commission-ledger', label: 'Commission Ledger', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/ma-commission', label: 'Total Processor', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/ma-overview-recon', label: 'MA Overview cross-check', icon: '🧾', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions' },
     { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', icon: '🔻', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'] },
@@ -188,6 +189,7 @@ export const NAV: NavGroup[] = [
   ]},
   { group: 'Targets & Coaching', module: 'targets', items: [
     { href: '/commcalc/targets', label: 'Daily Targets', icon: '📈', module: 'targets', scopes: ['all', 'market', 'store'] },
+    { href: '/commcalc/financing', label: 'Financing', icon: '💳', module: 'commissions', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/action-plan', label: 'Action Plan', icon: '✅', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'] },
@@ -410,7 +412,8 @@ export const REPORT_DIRECTORY: [string, string][] = [
   // Commissions & Pay
   ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'],
   ['/commcalc/reports', 'comm'], ['/commcalc/comp-trend', 'comm'], ['/commcalc/commission-ledger', 'comm'],
-  ['/commcalc/ma-commission', 'comm'], ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
+  ['/commcalc/ma-commission', 'comm'], ['/commcalc/ma-overview-recon', 'comm'], ['/commcalc/financing', 'comm'],
+  ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
   ['/commcalc/discrepancy', 'comm'], ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
   ['/commcalc/chargebacks', 'comm'], ['/commcalc/accessory-flags', 'comm'],
   ['/commcalc/accessory-cost-audit', 'comm'], ['/commcalc/accessory-definition', 'comm'],
