@@ -268,7 +268,13 @@ export default function AssetPage() {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {uploadMsg && <span style={{ fontSize: 13 }}>{uploadMsg}</span>}
           {summary?.loaded && <ExportButtons payload={buildPayload} />}
-          {summary?.loaded && <SendReportButton reportKey="asset_ledger" filters={{}} />}
+          {/* WYSIWYG (§3c) — the send-path used to be the SERVER re-query (reportKey="asset_ledger",
+              filters={{}}): notify/report_registry._asset_ledger calls get_asset_summary(org_id) with
+              NO store/market/date filters at all and has no concept of the open category drill-down,
+              so an emailed/WhatsApp'd export always carried the WHOLE ledger regardless of what was
+              filtered or drilled into on screen. Now renders in-browser from the SAME buildPayload()
+              the Excel/PDF buttons already use — no second query, no filter can be forgotten. */}
+          {summary?.loaded && <SendReportButton exportPayload={buildPayload} title="Asset Ledger" />}
           <a className="btn" href="/commcalc/asset/owed-weekly" style={{ textDecoration: 'none' }}>📅 Weekly Owed to Distributor</a>
           <a className="btn" href="/commcalc/asset/aging" style={{ textDecoration: 'none' }}>⏳ Inventory Aging</a>
           <a className="btn" href="/commcalc/asset/on-inventory" style={{ textDecoration: 'none' }}>🏪 On-Inventory by Store</a>

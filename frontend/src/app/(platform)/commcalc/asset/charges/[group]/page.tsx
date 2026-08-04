@@ -6,12 +6,6 @@ import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { NoLedgerData } from '../../_shared/NoLedgerData'
 
-// cfg.key (backend group) -> notify report key
-const SEND_KEY: Record<string, string> = {
-  appeals: 'charges_appeals', vip_fees: 'charges_vip_fees',
-  stock_balance: 'charges_stock_balance', recon_oddity: 'charges_recon',
-}
-
 // URL slug -> backend group key + display config
 const GROUP_MAP: Record<string, { key: string; title: string; color: string; critical?: boolean; blurb: string }> = {
   'appeals':       { key:'appeals',       title:'Appeals & Denied Payments', color:'#dc2626', critical:true,
@@ -161,7 +155,14 @@ export default function ChargeGroupPage() {
         </div>
         <div style={{ display: 'inline-flex', gap: 6 }}>
           <ExportButtons payload={buildPayload} />
-          {cfg && <SendReportButton reportKey={SEND_KEY[cfg.key]} filters={{ ...(store?{store}:{}), ...(market?{market}:{}), ...(mode==='month'?{month, year}: mode==='week'?{week_friday: weekFriday}:{}) }} />}
+          {/* WYSIWYG (§3c) — the send-path used to be the SERVER re-query (reportKey=SEND_KEY[cfg.key]):
+              notify/report_registry._charges_builder forwards store/market/month/year/week_friday but
+              has NO concept of the on-screen category drill-down (catFilter) and re-fetches line items
+              at a DIFFERENT limit (500) than the page's own load (2000) — so a category-drilled or
+              large-result send came back broader (or narrower) than the screen. Now renders in-browser
+              from the SAME buildPayload() (built off `shownRows`, already catFilter-scoped) the
+              Excel/PDF buttons use. */}
+          {cfg && <SendReportButton exportPayload={buildPayload} title={`${cfg.title} — Asset Charges`} />}
         </div>
       </div>
 

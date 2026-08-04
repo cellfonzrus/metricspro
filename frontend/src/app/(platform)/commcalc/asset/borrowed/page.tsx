@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, Fragment } from 'react'
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -19,6 +19,14 @@ const td: React.CSSProperties = { padding: '7px 10px', borderBottom: '1px solid 
 
 export default function BorrowedMoneyPage() {
   const [stores, setStores] = useState<{ store: string; market: string | null }[]>([])
+  // 2026-08-04 owner report ("added Cellular Services as a store but it does not appear in the
+  // borrowed lending store list"): `stores` above is ledger-derived (asset_ledger has no rows for a
+  // brand-new store — exactly the case for a store BORROWING money to buy its first inventory), so
+  // it can never contain a just-created store. `registryStores` is the tenant's full store roster
+  // (commcalc.store_mapping, via GET /filter-options' additive `registry_stores`) and is unioned
+  // into the borrower/lender pickers ONLY (see `pickerStores` below) — the report filter dropdown
+  // (`fStore`) is left ledger-derived on purpose, same as every other asset report's store filter.
+  const [registryStores, setRegistryStores] = useState<{ store: string; market: string | null }[]>([])
   const [markets, setMarkets] = useState<string[]>([])
   const [loans, setLoans] = useState<Loan[]>([])
   const [totals, setTotals] = useState({ total_borrowed: 0, total_repaid: 0, total_outstanding: 0, count: 0 })
@@ -47,7 +55,7 @@ export default function BorrowedMoneyPage() {
         api(`/api/v1/asset/borrowings?${qs}&status=${fStatus}`),
         api(`/api/v1/asset/borrowings/summary?${qs}`),
       ])
-      setStores(opt.stores || []); setMarkets(opt.markets || [])
+      setStores(opt.stores || []); setMarkets(opt.markets || []); setRegistryStores(opt.registry_stores || [])
       setLoans(list.borrowings || [])
       setTotals({ total_borrowed: list.total_borrowed || 0, total_repaid: list.total_repaid || 0, total_outstanding: list.total_outstanding || 0, count: list.count || 0 })
       setPairs(sum.pairs || []); setByStore(sum.by_store || [])
@@ -56,6 +64,19 @@ export default function BorrowedMoneyPage() {
   }, [fStore, fMarket, fStatus])
   useEffect(() => { load() }, [load])
 
+  // Borrower/lender pickers: union `stores` (has asset rows) with `registryStores` (the FULL store
+  // registry) so a brand-new store with no financing history yet still appears (RULE THREE: pick,
+  // don't type — a new store must be reachable without free-typing its name). Dedup case-
+  // insensitively; a store present in both keeps the ledger-derived market (real data wins over the
+  // registry default). `registryOnly` powers a separate optgroup so it's clear which stores have no
+  // asset history yet.
+  const pickerGroups = useMemo(() => {
+    const seen = new Set(stores.map(s => s.store.trim().toLowerCase()))
+    const registryOnly = registryStores.filter(s => s.store && !seen.has(s.store.trim().toLowerCase()))
+    const all = [...stores, ...registryOnly].sort((a, b) => a.store.localeCompare(b.store))
+    return { withAssets: stores, registryOnly, byName: new Map(all.map(s => [s.store, s])) }
+  }, [stores, registryStores])
+
   async function addBorrowing() {
     if (!borrowed) { setMsg('Same-company funds create no debt — nothing to record.'); return }
     if (!nb.borrower_store || !nb.lender_store) { setMsg('Pick both the borrower and the lender store.'); return }
@@ -63,7 +84,10 @@ export default function BorrowedMoneyPage() {
     if (!(Number(nb.amount) > 0)) { setMsg('Enter an amount greater than 0.'); return }
     setMsg('')
     try {
-      const market = stores.find(s => s.store === nb.borrower_store)?.market || null
+      // A registry-only store (no asset_ledger rows) has no ledger market — resolves from the
+      // registry when store_mapping has one, else null (the create endpoint already tolerates a
+      // null market).
+      const market = pickerGroups.byName.get(nb.borrower_store)?.market || null
       await api('/api/v1/asset/borrowings', { method: 'POST', body: JSON.stringify({ ...nb, amount: Number(nb.amount), market }) })
       setMsg(`Logged: ${nb.borrower_store} borrowed ${fmt(Number(nb.amount))} from ${nb.lender_store}`)
       setNb({ borrower_store: '', lender_store: '', amount: '', borrowed_date: localToday(), note: '' })
@@ -162,12 +186,26 @@ export default function BorrowedMoneyPage() {
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <select style={{ ...sel, width: 200 }} value={nb.borrower_store} onChange={e => setNb({ ...nb, borrower_store: e.target.value })}>
               <option value="">Borrower store (owes) *</option>
-              {stores.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
+              <optgroup label="Stores with assets">
+                {pickerGroups.withAssets.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
+              </optgroup>
+              {pickerGroups.registryOnly.length > 0 && (
+                <optgroup label="Other registered stores (no assets yet)">
+                  {pickerGroups.registryOnly.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
+                </optgroup>
+              )}
             </select>
             <span style={{ fontSize: 13, color: 'var(--text3)' }}>borrowed from</span>
             <select style={{ ...sel, width: 200 }} value={nb.lender_store} onChange={e => setNb({ ...nb, lender_store: e.target.value })}>
               <option value="">Lender store (owed) *</option>
-              {stores.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
+              <optgroup label="Stores with assets">
+                {pickerGroups.withAssets.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
+              </optgroup>
+              {pickerGroups.registryOnly.length > 0 && (
+                <optgroup label="Other registered stores (no assets yet)">
+                  {pickerGroups.registryOnly.map(s => <option key={s.store} value={s.store}>{s.store}</option>)}
+                </optgroup>
+              )}
             </select>
             <input style={{ ...sel, width: 120 }} type="number" placeholder="Amount *" value={nb.amount} onChange={e => setNb({ ...nb, amount: e.target.value })} />
             <input style={{ ...sel, width: 150 }} type="date" value={nb.borrowed_date} onChange={e => setNb({ ...nb, borrowed_date: e.target.value })} />

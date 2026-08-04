@@ -274,7 +274,12 @@ export default function AgingPage() {
           </p>
         </div>
         {data && <ExportButtons payload={buildPayload} />}
-        {data && <SendReportButton reportKey="inventory_aging" filters={{ ...(selStoreKeys.length?{store:selStoreKeys.flatMap(k => keyToVariants.get(k) || [k]).join(',')}:{}), ...(market?{market}:{}), ...(month?{month, year}:{}), ...(dateFrom?{date_from:dateFrom}:{}), ...(dateTo?{date_to:dateTo}:{}) }} />}
+        {/* WYSIWYG (§3c) — the send-path used to be the SERVER re-query (reportKey="inventory_aging"):
+            notify/report_registry._inventory_aging forwards store/market/month/year but DROPS
+            date_from/date_to entirely, so a date-RANGE filter (as opposed to the month/year quick-pick)
+            was silently ignored and the emailed/WhatsApp'd file came back broader than the screen.
+            Now renders in-browser from the SAME buildPayload() the Excel/PDF buttons already use. */}
+        {data && <SendReportButton exportPayload={buildPayload} title="Inventory Aging" />}
       </div>
 
       {/* Stale data banner */}
