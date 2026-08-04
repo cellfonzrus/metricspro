@@ -24282,3 +24282,320 @@ async def payout_accrual_run_due(x_notify_secret: str = Header(default="")):
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
         raise HTTPException(403, "forbidden")
     return payout_accrual.run_all_due(sb())
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# ── FINANCING REPORT + VENDOR REGISTRY + FINANCING TARGETS (migrations 272/273) ────────────────────
+# APPEND-ONLY BLOCK (owner directive 2026-08-04). Everything below is new surface: the vendor registry
+# (config), the Financing report (read-only), and the assignable per-store financing targets. The
+# TIERED payout itself lives in commission_engine + financing_tiers.py and is inert until an owner
+# configures tiers — nothing here writes a payout.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+from app.modules.commcalc import financing_registry as _finreg          # noqa: E402
+from app.modules.commcalc import financing_report as _finrep            # noqa: E402
+from app.modules.commcalc import financing_tiers as _fintier            # noqa: E402
+
+# Columns the Financing report reads. Every one exists in BOTH raw_sales and daily_sales_feed — the
+# report reads the union of the two, and selecting a feed-absent column (e.g. `sku`) throws, which the
+# union read swallows into an empty list. That is why financing_registry.MATCH_FIELDS is deliberately
+# narrower than the pay engine's match vocabulary.
+_FIN_SALES_COLS = ("trans_id,trans_date,store,salesperson,department,category,product_desc,"
+                   "contract_type,tender_type,ext_price,gp,voided,trans_type,mdn,serial_1")
+
+
+def _fin_gate():
+    """(plan_pay_gate module or None, unit config). The report collapses lines to UNITS with the SAME
+    per-device collapse the payout uses, so report units and paid units cannot drift."""
+    try:
+        from app.modules.commcalc import plan_pay_gate as _g
+        return _g, dict(_g.UNIT_DEFAULTS)
+    except Exception:
+        return None, {}
+
+
+@router.get("/financing/vendors")
+def financing_vendors(org_id: str = ORG_ID):
+    """The financing VENDOR REGISTRY for this tenant, with detection resolved and everything the admin
+    UI needs to edit it pick-don't-type: the tenant's own carriers, the commission-plan rules a vendor
+    can inherit its matcher from, and the field/operator vocabulary with plain-English labels."""
+    require_org(org_id)
+    client = sb()
+    vendors, ready = _finreg.load_vendors(client, org_id)
+    resolved = _finreg.resolve_vendors(client, org_id, vendors)
+    carriers = []
+    try:
+        carriers = (client.schema('commcalc').table('carrier').select('id,name,code')
+                    .eq('org_id', org_id).limit(200).execute().data) or []
+    except Exception:
+        carriers = []
+    plan_rules = _finreg.load_plan_rule_matchers(client, org_id)
+    acima_vals, acima_configured = _finreg.load_acima_tenders(client, org_id)
+    return {
+        "ready": ready, "vendors": resolved, "carriers": carriers,
+        "plan_rules": sorted(plan_rules.values(),
+                             key=lambda r: (r.get("plan_name") or "", r.get("label") or "")),
+        "acima_tenders": acima_vals, "acima_configured": acima_configured,
+        "vocabulary": {
+            "match_fields": [{"value": f, "label": _finreg.MATCH_FIELD_LABELS[f]}
+                             for f in _finreg.MATCH_FIELDS],
+            "match_ops": [{"value": o, "label": _finreg.MATCH_OP_LABELS[o]} for o in _finreg.MATCH_OPS],
+            "detection_sources": list(_finreg.DETECTION_SOURCES),
+            "amount_bases": list(_finreg.AMOUNT_BASES),
+        },
+        "note": (None if ready else
+                 "Migration 272 has not been run — you are seeing the built-in vendor defaults and "
+                 "nothing can be saved yet."),
+    }
+
+
+@router.put("/financing/vendors")
+async def save_financing_vendor(body: dict, org_id: str = ORG_ID,
+                                authorization: str = Header(default="")):
+    """Create or update ONE financing vendor (upsert on vendor_key). Admin-gated: a vendor's detection
+    decides what the Financing report counts and which target a tiered rule measures against."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    n = _finreg.normalize_vendor(body or {})
+    if not n:
+        raise HTTPException(400, "vendor_key is required")
+    row = {"org_id": org_id, "vendor_key": n["vendor_key"], "label": n["label"],
+           "enabled": n["enabled"], "detection_source": n["detection_source"],
+           "detection_ref": n["detection_ref"], "amount_basis": n["amount_basis"],
+           "sort_order": n["sort_order"], "notes": n["notes"],
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        r = (client.schema('commcalc').table(_finreg.VENDOR_TABLE)
+             .upsert(row, on_conflict='org_id,vendor_key').execute())
+    except Exception as ex:
+        raise HTTPException(500, f"could not save the vendor (is migration 272 applied?): {ex}")
+    return {"vendor": (r.data[0] if r.data else row)}
+
+
+@router.delete("/financing/vendors/{vendor_key}")
+async def delete_financing_vendor(vendor_key: str, org_id: str = ORG_ID,
+                                  authorization: str = Header(default="")):
+    """Remove a vendor row and its carrier assignments / detection rules. A CODE-SEEDED vendor (edge,
+    acima) reappears as its seed afterwards — to switch one off, save it with enabled=false instead."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    vk = _finreg.clean_key(vendor_key)
+    for tbl in (_finreg.RULE_TABLE, _finreg.CARRIER_TABLE, _finreg.VENDOR_TABLE):
+        try:
+            (client.schema('commcalc').table(tbl).delete()
+             .eq('org_id', org_id).eq('vendor_key', vk).execute())
+        except Exception:
+            pass
+    return {"deleted": vk,
+            "note": ("Built-in vendors reappear as their default after deletion — save them with "
+                     "enabled=false to switch one off permanently.")}
+
+
+@router.post("/financing/vendors/{vendor_key}/carriers")
+async def add_financing_vendor_carrier(vendor_key: str, body: dict, org_id: str = ORG_ID,
+                                       authorization: str = Header(default="")):
+    """Assign a vendor to a carrier. A vendor may serve MANY carriers — this is the whole mechanism
+    behind "ACIMA could also be added to Total at a later date": one row, no release."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    client = sb()
+    row = {"org_id": org_id, "vendor_key": _finreg.clean_key(vendor_key),
+           "carrier_id": (body or {}).get("carrier_id") or None,
+           "carrier_name": ((body or {}).get("carrier_name") or "").strip() or None,
+           "enabled": bool((body or {}).get("enabled", True))}
+    if not row["carrier_id"] and not row["carrier_name"]:
+        raise HTTPException(400, "pick a carrier")
+    try:
+        r = client.schema('commcalc').table(_finreg.CARRIER_TABLE).insert(row).execute()
+    except Exception as ex:
+        raise HTTPException(500, f"could not assign the carrier (is migration 272 applied?): {ex}")
+    return {"carrier": (r.data[0] if r.data else row)}
+
+
+@router.delete("/financing/vendors/{vendor_key}/carriers/{row_id}")
+async def delete_financing_vendor_carrier(vendor_key: str, row_id: str, org_id: str = ORG_ID,
+                                          authorization: str = Header(default="")):
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    try:
+        (sb().schema('commcalc').table(_finreg.CARRIER_TABLE).delete()
+         .eq('org_id', org_id).eq('vendor_key', _finreg.clean_key(vendor_key))
+         .eq('id', row_id).execute())
+    except Exception as ex:
+        raise HTTPException(500, f"could not remove the carrier assignment: {ex}")
+    return {"deleted": row_id}
+
+
+@router.post("/financing/vendors/{vendor_key}/detection")
+async def add_financing_detection_rule(vendor_key: str, body: dict, org_id: str = ORG_ID,
+                                       authorization: str = Header(default="")):
+    """Add ONE detection rule. The operator picks the field, the operator and — for a tender — the value
+    from the tender strings the period's data actually contains (RULE THREE). `word` is the default
+    operator on purpose: it matches the token, never a substring, so mapping 'edge' can never turn every
+    Motorola Edge into a financed sale."""
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    m = _finreg.normalize_matcher(body or {})
+    if not m:
+        raise HTTPException(400, (f"match_field must be one of {', '.join(_finreg.MATCH_FIELDS)}, "
+                                  f"match_op one of {', '.join(_finreg.MATCH_OPS)}, and match_value "
+                                  f"cannot be blank"))
+    row = {"org_id": org_id, "vendor_key": _finreg.clean_key(vendor_key),
+           "match_field": m["match_field"], "match_op": m["match_op"], "match_value": m["match_value"],
+           "priority": m["priority"], "enabled": m["enabled"], "notes": m["notes"]}
+    try:
+        r = sb().schema('commcalc').table(_finreg.RULE_TABLE).insert(row).execute()
+    except Exception as ex:
+        raise HTTPException(500, f"could not save the detection rule (is migration 272 applied?): {ex}")
+    return {"rule": (r.data[0] if r.data else row), "warning": m.get("field_warning")}
+
+
+@router.delete("/financing/detection/{rule_id}")
+async def delete_financing_detection_rule(rule_id: str, org_id: str = ORG_ID,
+                                          authorization: str = Header(default="")):
+    require_org(org_id)
+    _require_commission_admin(authorization, org_id)
+    try:
+        (sb().schema('commcalc').table(_finreg.RULE_TABLE).delete()
+         .eq('org_id', org_id).eq('id', rule_id).execute())
+    except Exception as ex:
+        raise HTTPException(500, f"could not remove the detection rule: {ex}")
+    return {"deleted": rule_id}
+
+
+@router.get("/financing/targets/{period}")
+async def get_financing_targets(period: str, authorization: str = Header(default=""),
+                                org_id: str = ORG_ID):
+    """The assignable per-store financing targets for a period, over the org's own store roster (so the
+    Target Settings grid can render a Financing column next to the existing ones). Span-scoped for a
+    restricted caller, exactly like the main targets list."""
+    require_org(org_id)
+    client = sb()
+    rows = []
+    ready = True
+    try:
+        rows = (client.schema('commcalc').table(_finreg.TARGET_TABLE).select('*')
+                .eq('org_id', org_id).in_('period', _pvariants(period)).limit(20000).execute().data) or []
+    except Exception:
+        rows, ready = [], False
+    by_code = {}
+    per_vendor = {}
+    for r in rows:
+        code = str(r.get('store_code') or '').strip()
+        vk = str(r.get('vendor_key') or '').strip().lower()
+        if not code:
+            continue
+        if vk:
+            per_vendor.setdefault(code.upper(), []).append(
+                {"vendor_key": vk, "target_units": safe_float(r.get('target_units')),
+                 "target_amount": r.get('target_amount')})
+        else:
+            by_code[code.upper()] = r
+    stores = (client.schema('storeops').table('stores')
+              .select('store_code,address,market,is_active').eq('org_id', org_id).execute().data) or []
+    out = []
+    for s in stores:
+        code = str(s.get('store_code') or '').strip()
+        if not code:
+            continue
+        cur = by_code.get(code.upper())
+        out.append({'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
+                    'target_units': safe_float((cur or {}).get('target_units')),
+                    'target_amount': (cur or {}).get('target_amount'),
+                    'notes': (cur or {}).get('notes'),
+                    'vendor_targets': per_vendor.get(code.upper(), []),
+                    '_saved': cur is not None})
+    out.sort(key=lambda r: str(r.get('address') or r.get('store_code') or ''))
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+        if ks is not None:
+            out = [r for r in out if in_keyset(ks, r.get('store_code'), r.get('address'))]
+    except Exception:
+        pass
+    vendors, _vr = _finreg.load_vendors(client, org_id)
+    return {'period': period, 'ready': ready, 'targets': out,
+            'vendors': [{'vendor_key': v['vendor_key'], 'label': v['label']} for v in vendors],
+            'note': (None if ready else
+                     'Migration 272 has not been run — financing targets cannot be saved yet.')}
+
+
+@router.put("/financing/targets/{period}")
+async def save_financing_target(period: str, body: dict, authorization: str = Header(default=""),
+                                org_id: str = ORG_ID):
+    """Set ONE store's monthly financing target (optionally per vendor). Gated on the SAME 'targets'
+    settings area + store span as the existing Target Settings save.
+
+    A target is not a payout: it changes what the Financing report calls attainment, and — only if the
+    owner has configured attainment tiers — which tier a store reaches. It is deliberately a separate
+    table from commcalc.targets so this cannot break the existing target save."""
+    require_org(org_id)
+    client = sb()
+    code = str((body or {}).get('store_code') or '').strip()
+    if not code:
+        raise HTTPException(400, "store_code required")
+    _require_target_edit(authorization, org_id, code)
+    vk = str((body or {}).get('vendor_key') or '').strip().lower()
+    amt = (body or {}).get('target_amount')
+    row = {'org_id': org_id, 'period': period, 'store_code': code,
+           'vendor_key': (vk or None),
+           'target_units': safe_float((body or {}).get('target_units')),
+           'target_amount': (safe_float(amt) if str(amt if amt is not None else '').strip() != '' else None),
+           'notes': (body or {}).get('notes'),
+           'updated_by': (body or {}).get('updated_by') or 'web',
+           'updated_at': datetime.now(timezone.utc).isoformat()}
+    try:
+        r = (client.schema('commcalc').table(_finreg.TARGET_TABLE)
+             .upsert(row, on_conflict='org_id,period,store_code,vendor_key').execute())
+    except Exception:
+        # Upsert on a partial/expression unique index can be rejected by PostgREST; fall back to an
+        # explicit delete-then-insert for this exact key so a target save never silently fails.
+        try:
+            q = (client.schema('commcalc').table(_finreg.TARGET_TABLE).delete()
+                 .eq('org_id', org_id).eq('period', period).eq('store_code', code))
+            q = q.is_('vendor_key', 'null') if not vk else q.eq('vendor_key', vk)
+            q.execute()
+            r = client.schema('commcalc').table(_finreg.TARGET_TABLE).insert(row).execute()
+        except Exception as ex2:
+            raise HTTPException(500, f"could not save the financing target "
+                                     f"(is migration 272 applied?): {ex2}")
+    return (r.data[0] if getattr(r, 'data', None) else row)
+
+
+@router.get("/financing/{period}")
+def financing_report(period: str, org_id: str = ORG_ID):
+    """THE FINANCING REPORT — financed units and financed dollars by vendor x store x rep for a period,
+    with per-store target attainment and MTD pace.
+
+    Read-only. Sales come from the canonical DISPLAY union of raw_sales and daily_sales_feed (so a tenant
+    on the hourly feed sees the open month and a promoted month is never masked by a stale feed), and
+    units are collapsed to DEVICES with the same gate the payout uses."""
+    require_org(org_id)
+    client = sb()
+    rows, meta = _sales_rows_union(client, org_id, period, cols=_FIN_SALES_COLS)
+    vendors = _finreg.resolve_vendors(client, org_id)
+    targets = _fintier.load_targets(client, org_id, _pvariants(period))
+    store_index = _fintier.load_store_index(client, org_id)
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    gate, ucfg = _fin_gate()
+    acc_fn = None
+    try:
+        acc_fn = gate.accessory_predicate(client, org_id) if gate is not None else None
+    except Exception:
+        acc_fn = None
+    md, de = _finrep.month_bounds(period)
+    out = _finrep.build(rows, vendors, targets, store_index, resolve_market, period,
+                        gate=gate, unit_cfg=ucfg, is_accessory=acc_fn,
+                        month_days=md, days_elapsed=de)
+    out["markets"] = all_markets
+    out["source"] = {"rows_read": len(rows), "primary": (meta or {}).get("primary"),
+                     "meta": meta}
+    # A vendor running on an INHERITED DEFAULT (the built-in ACIMA tender fallback) is deliberately NOT
+    # counted as configured: it has a matcher, but nobody chose it, and on the house export the real
+    # tender string is not the fallback. Counting it would turn "nobody mapped this" into a green light.
+    out["configured_vendors"] = sum(1 for v in vendors if v.get("detection_status") == "configured")
+    out["vendors_running_on_defaults"] = sum(
+        1 for v in vendors if v.get("detection_status") == "inherited_default")
+    out["ready"] = True
+    return out
