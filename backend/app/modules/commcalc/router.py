@@ -3492,7 +3492,14 @@ def _read_upload_df(contents: bytes, filename: str):
     (the wizard advertises CSV too — pd.read_excel alone throws on a CSV)."""
     fname = (filename or "").lower()
     if fname.endswith((".csv", ".txt")):
-        return pd.read_csv(io.BytesIO(contents), dtype=str).fillna("")
+        # b2bsoft exports CSVs in Windows cp1252 (0xa0 non-breaking spaces etc.) — a strict-utf-8 read
+        # hard-failed those ("'utf-8' codec can't decode byte 0xa0") and the sweep retried the same
+        # attachment every run forever. utf-8-sig first (also eats a BOM), then cp1252. Only the
+        # previously-failing case reaches the fallback, so working files read byte-identically.
+        try:
+            return pd.read_csv(io.BytesIO(contents), dtype=str, encoding="utf-8-sig").fillna("")
+        except UnicodeDecodeError:
+            return pd.read_csv(io.BytesIO(contents), dtype=str, encoding="cp1252").fillna("")
     return pd.read_excel(io.BytesIO(contents), dtype=str).fillna("")
 
 
