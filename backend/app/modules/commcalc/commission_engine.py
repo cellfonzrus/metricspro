@@ -37,7 +37,7 @@ MATCH_FIELDS = {"contract_type", "tender_type", "department", "category",
                 # Stamped in preview() ONLY when a rule/tier actually uses it → inert + byte-identical
                 # otherwise. MONEY-ADJACENT: pay moves only after an owner writes such a rule AND recalcs.
                 "activation_bucket"}
-PAYOUT_KINDS = {"flat_per_unit", "pct_mrc", "pct_gp", "pct_price_over_cost", "flat"}
+PAYOUT_KINDS = {"flat_per_unit", "pct_mrc", "pct_gp", "pct_price", "pct_price_over_cost", "flat"}
 
 
 def _norm_mdn(v):
@@ -778,6 +778,11 @@ def _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid):
         return round(amt, 2)
     if kind == "pct_gp":
         return round(pct * safe_float(row.get("gp")), 2)
+    if kind == "pct_price":
+        # % of the SALE PRICE, no cost/GP involvement (owner 2026-08-04: accessory pay must track
+        # what the employee actually sold it for — GP depends on the B2B catalog cost setup, which
+        # is untrustworthy for accessories; cost_equals_price zeroed the whole category).
+        return round(pct * safe_float(row.get("ext_price")), 2)
     if kind == "pct_price_over_cost":
         pid = row.get("product_id")
         try:

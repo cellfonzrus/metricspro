@@ -59,6 +59,7 @@ export const FALLBACK_VOCAB: Vocab = {
     { value: 'flat_per_unit', label: 'Flat $ per unit', uses: 'amount' },
     { value: 'pct_mrc', label: '% of MRC (raw_mi)', uses: 'pct' },
     { value: 'pct_gp', label: '% of GP', uses: 'pct' },
+    { value: 'pct_price', label: '% of price (sale price)', uses: 'pct' },
     { value: 'pct_price_over_cost', label: '% of price − cost', uses: 'pct' },
     { value: 'flat', label: 'Flat $ once', uses: 'amount' },
   ],

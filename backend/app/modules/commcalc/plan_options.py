@@ -77,6 +77,7 @@ PAYOUT_KIND_LABELS = {
     "flat_per_unit": ("Flat $ per unit", "amount"),
     "pct_mrc": ("% of MRC (raw_mi)", "pct"),
     "pct_gp": ("% of GP", "pct"),
+    "pct_price": ("% of price (sale price)", "pct"),
     "pct_price_over_cost": ("% of price − cost", "pct"),
     "flat": ("Flat $ once", "amount"),
 }
