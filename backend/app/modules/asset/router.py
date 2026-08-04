@@ -816,6 +816,39 @@ def _filter_options_via_rpc(client, org_id):
     }
 
 
+def _registry_stores(client, org_id: str):
+    """The tenant's FULL registered store roster (commcalc.store_mapping — kept in sync with
+    storeops.stores by storeops' `_sync_store_mapping`/`_sync_store_mapping_update` on every
+    create/edit), regardless of whether the store has any asset_ledger rows yet.
+
+    2026-08-04 owner report: "i added cellular services as a store but it does not appear in the
+    store list in the borrowed lending store list." Root cause: every /filter-options consumer
+    (including the Borrowed-Money pickers) was built from `stores`/`markets` above, which are
+    derived ENTIRELY from asset_ledger — a brand-new store that has never had a device financed
+    through it (exactly the case for a store borrowing money to buy its FIRST inventory) can never
+    appear. This is additive-only: `stores`/`markets`/`store_groups`/`no_market_count` on the
+    response below are UNCHANGED, so every existing report-filter consumer (which correctly wants
+    "only stores with data") stays byte-identical. Best-effort: a lookup failure here must never
+    break the ledger-derived response the rest of the app depends on."""
+    try:
+        rows = client.schema("commcalc").table("store_mapping") \
+            .select("store_address,market,is_active").eq("org_id", org_id).execute().data or []
+    except Exception:
+        return []
+    out = []
+    seen = set()
+    for r in rows:
+        if r.get("is_active") is False:
+            continue
+        addr = (r.get("store_address") or "").strip()
+        if not addr or addr.lower() in seen:
+            continue
+        seen.add(addr.lower())
+        out.append({"store": addr, "market": r.get("market")})
+    out.sort(key=lambda s: s["store"])
+    return out
+
+
 @router.get("/filter-options")
 async def get_filter_options(org_id: str = ORG_ID):
     """Distinct stores + markets for the report dropdowns. Postgres-aggregated (migration 311)
@@ -856,8 +889,14 @@ async def get_filter_options(org_id: str = ORG_ID):
     # "(no market)" bucket (2026-07-27 fix): tell the caller how many rows have no market so a
     # report page can offer an explicit "(no market)" option (value NO_MARKET_SENTINEL) in its
     # market picker instead of those rows being unreachable from every market filter.
+    # ADDITIVE (2026-08-04): the full store REGISTRY (commcalc.store_mapping), independent of
+    # whether a store has any asset_ledger rows yet — see _registry_stores. `stores` above stays
+    # ledger-derived and unchanged for every existing consumer; a picker that needs a brand-new,
+    # not-yet-financing store (Borrowed Money's borrower/lender pickers) unions the two client-side.
+    registry_stores = _registry_stores(client, org_id)
     return {"markets": sorted(markets), "stores": stores, "store_groups": store_groups,
-            "no_market_count": no_market_count, "no_market_value": NO_MARKET_SENTINEL}
+            "no_market_count": no_market_count, "no_market_value": NO_MARKET_SENTINEL,
+            "registry_stores": registry_stores}
 
 
 # ── Inter-store borrowed-money tracking (#6 / roadmap 6a) ─────────────────────
