@@ -489,7 +489,11 @@ ok("G-COVERAGE the pack spans closing, commissions, storeops, asset and finance"
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 print("\nH. WIRING — entitlement + seed path")
 
-ok("H1 SEED_VERSION was bumped to 8 (every tenant re-syncs on its next login)", ENT.SEED_VERSION == 8)
+# Version-RELATIVE (the lesson from harness_fix_pipeline pinning ==7): mig 720 required the bump to 8,
+# and the What's New scope addition on this same branch legitimately took it to 9. What must hold is
+# that the bump happened and never went backwards.
+ok("H1 SEED_VERSION was bumped to >= 8 (every tenant re-syncs on its next login)",
+   ENT.SEED_VERSION >= 8, ENT.SEED_VERSION)
 ok("H2 the training module is registered in the canonical catalog", "training" in ENT.MODULE_CATALOG)
 src = open(os.path.join(os.path.dirname(__file__), "app/modules/core/entitlements.py"), encoding="utf-8").read()
 house_block = src.split("if org_id == ORG_ID:")[1]
@@ -520,8 +524,10 @@ ok("I3 the package adds exactly 7 routes", n_routes == 7, n_routes)
 from app.core import tenant_middleware as TM                          # noqa: E402
 ok("I4 NO training path is allowlisted as public (they keep full tenant protection)",
    not any(TM._is_public(p) for p in paths))
-expect_routes = int(os.environ.get("EXPECT_ROUTES", "1010"))
-ok(f"I5 total app route count is {expect_routes} (base 1003 + exactly 7)",
+# Default is the BRANCH total: 1003 base + 7 training + 5 What's New (the scope addition committed on
+# this same branch). A reviewer checking the training commits ALONE passes EXPECT_ROUTES=1010.
+expect_routes = int(os.environ.get("EXPECT_ROUTES", "1015"))
+ok(f"I5 total app route count is {expect_routes} (base 1003 + 7 training + 5 what's-new)",
    len(app.routes) == expect_routes, len(app.routes))
 
 print(f"\n{'='*78}\n  {PASS} passed, {FAIL} failed\n{'='*78}")
