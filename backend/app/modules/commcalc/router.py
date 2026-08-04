@@ -16957,7 +16957,7 @@ def _as_filter_list(val):
 
 
 @router.get("/targets/{period}/summary")
-async def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
+def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
                               stores: Optional[List[str]] = Query(default=None),
                               markets: Optional[List[str]] = Query(default=None),
                               reps: Optional[List[str]] = Query(default=None),
@@ -17512,7 +17512,7 @@ def _team_snap_invalidate(org_id=None, period=None):
 
 
 @router.get("/team/{period}/snapshot")
-async def team_snapshot(period: str, authorization: str = Header(default=""),
+def team_snapshot(period: str, authorization: str = Header(default=""),
                         unit_id: str = "", today: str = "", refresh: bool = False,
                         org_id: str = ORG_ID):
     """Manager TEAM snapshot for the signed-in caller's span (or a chosen unit_id within it).
@@ -17568,7 +17568,7 @@ async def team_snapshot(period: str, authorization: str = Header(default=""),
                           tuple(push_stores) + ('|',) + tuple(push_keys or ()))
     pair = None if refresh else _team_snap_get(ckey)
     if pair is None:
-        summ = await get_targets_summary(cperiod, today=today, stores=push_stores or None,
+        summ = get_targets_summary(cperiod, today=today, stores=push_stores or None,
                                         markets=None, reps=None, org_id=org_id)
         coach = rep_coaching(cperiod, store=push_keys, org_id=org_id)
         _team_snap_put(ckey, [summ, coach])
