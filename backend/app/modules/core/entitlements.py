@@ -27,7 +27,16 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 7   # bumped: 7 = mig 718 (Auto-Fix Pipeline) added core.seed_token_rates(), which sync_tenant
+SEED_VERSION = 8   # bumped: 8 = mig 720 (Training Center) registered the "training" module — so every
+                   #             existing tenant self-provisions a training tenant_modules entitlement row
+                   #             on its next login — AND added the bundled platform-default walk-through
+                   #             pack, which loads into the HOUSE org on its sync pass (never clobbering an
+                   #             edited tour). The Training Center page itself is NOT entitlement-gated:
+                   #             help/training is universal like the "?" panel, and gating a brand-new
+                   #             module key would silently hide it from every EXISTING role (seeded role
+                   #             modules are forward-only). The entitlement row exists for billing hygiene
+                   #             so the module is never "missing" for a tenant.
+                   #         7 = mig 718 (Auto-Fix Pipeline) added core.seed_token_rates(), which sync_tenant
                    #             now calls on the HOUSE org's pass, so the AI token-rate table self-seeds on
                    #             the next login instead of depending on the migration's own seed line having
                    #             been run. Idempotent (ON CONFLICT DO NOTHING) — it never clobbers an
@@ -61,6 +70,7 @@ MODULE_CATALOG = {
     "account": "Accounting",
     "ai_assistant": "AI Assistant",
     "support": "Tech Support",
+    "training": "Training Center",
 }
 ALL_MODULES = list(MODULE_CATALOG.keys())
 
@@ -191,6 +201,16 @@ def sync_tenant(client, org_id: str) -> dict:
         # silent no-op, so the fix-pipeline board simply shows no $ until the migration lands.
         try:
             client.schema("core").rpc("seed_token_rates", {"p_org": org_id}).execute()
+        except Exception:
+            pass
+        # HOUSE org only: load the bundled PLATFORM-DEFAULT training walk-throughs (mig 720). Same shape
+        # and rationale as the support-doc pack above — the house rows ARE the platform defaults every
+        # tenant reads, so this runs once on the house pass, not per tenant. NEVER clobbers a tour a
+        # human has edited (updated_by not NULL/'seed'). An un-run mig 720 or a missing bundle file is a
+        # silent no-op, so the Training Center simply shows its empty state until the migration lands.
+        try:
+            from app.modules.core.training_seed import seed_training_tours
+            seed_training_tours(client, org_id)
         except Exception:
             pass
     if seeded:

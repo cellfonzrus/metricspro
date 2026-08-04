@@ -1,0 +1,547 @@
+{
+  "pack": "platform-default-tours",
+  "version": 1,
+  "note": "PLATFORM DEFAULT guided walk-throughs, loaded into the HOUSE org by app/modules/core/training_seed.py on the house sync pass (SEED_VERSION 8). Every tenant reads these; a tenant that saves its own tour under the same slug overrides it for itself only. `narration` + `action_hint` are the PHASE-2 video recording script and are never shown to a user in the app. Anchor syntax: tour:<data-tour-id> | text:<visible text> | css:<selector> | null = centered card (an anchor that does not resolve degrades to a centered card).",
+  "tours": [
+    {
+      "slug": "closing-submit",
+      "title": "Close out your day",
+      "module": "closing",
+      "audience": "rep",
+      "description": "Count your drawer, log any cash you took out of the envelope, and submit the day's close.",
+      "start_href": "/closing/submit",
+      "est_minutes": 4,
+      "sort_order": 10,
+      "steps": [
+        {
+          "page_href": "/closing/submit",
+          "target": null,
+          "title": "Closing out your day",
+          "body": "This is the form you fill in at the end of every shift. It takes about two minutes. You will enter what you collected, count the drawer, list anything you paid out of the envelope, photograph the envelope, and submit. Click Next and we'll go through it together.",
+          "narration": "At the end of every shift you close the store out here. It takes about two minutes: enter what you collected, count the drawer, list anything you paid out of the envelope, photograph it, and submit.",
+          "action_hint": "Open /closing/submit. Hold on the empty form for two seconds."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Submit Daily Closing",
+          "target_fragile": true,
+          "title": "Start with the date, store and your name",
+          "body": "The date defaults to today and the store to yours. Change the date only if you are closing out for a day you missed. Pick your own name in Employee — the close is filed under whoever is named here.",
+          "narration": "Start at the top. The date defaults to today and the store to yours. Pick your own name under Employee, because the close is filed under whoever is named here.",
+          "action_hint": "Highlight the Date, Store and Employee fields. Click the Employee picker and select a rep."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Money collected",
+          "target_fragile": true,
+          "title": "Enter what you collected, by payment type",
+          "body": "Type in the amount for each payment type exactly as it shows on your X-report — cash, card, and any other tender your store uses. If your store doesn't use a tender, leave it at zero.",
+          "narration": "Now enter what you collected, one line per payment type, exactly as it shows on your X-report. Leave anything your store doesn't use at zero.",
+          "action_hint": "Type amounts into two or three tender boxes."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Total collected",
+          "target_fragile": true,
+          "title": "The total adds itself up",
+          "body": "This box is calculated for you from the lines above — you cannot type in it. If it doesn't match your X-report total, one of the tender amounts above is wrong.",
+          "narration": "The total adds itself up from the lines above. If it doesn't match your X-report, a tender amount above is wrong.",
+          "action_hint": "Point at the calculated total."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Of which ePay bill payments",
+          "target_fragile": true,
+          "title": "Bill payments are part of the total, not extra",
+          "body": "If a customer paid a phone bill, that money is already inside the cash or card figure above. These boxes just tell us how much of it was bill payments — they are never added on top.",
+          "narration": "Bill payments are already inside the cash or card figures above. These boxes only tell us how much of the money was bill payments. They're never added on top.",
+          "action_hint": "Highlight the ePay-on-cash / on-credit / on-financing boxes."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Transaction counts",
+          "target_fragile": true,
+          "title": "Count your transactions",
+          "body": "Enter how many of each kind of transaction you did today. These counts are what your daily targets and your activation numbers are checked against, so take a second to get them right.",
+          "narration": "Enter how many of each kind of transaction you did. These counts feed your daily targets and activation numbers, so take a second to get them right.",
+          "action_hint": "Type numbers into two count boxes."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Expenses taken from the envelope",
+          "target_fragile": true,
+          "title": "Money you took out of the envelope",
+          "body": "This is the part that is new. Anything paid out of the envelope in cash — a rep's advance, a repair, supplies — goes here as its own line, with a category, an amount and a short description. It is not a free-for-all box: your manager approves each line.",
+          "narration": "This part is new. Anything you paid out of the envelope in cash goes here as its own line, with a category, an amount and a description. Your manager approves each line.",
+          "action_hint": "Scroll to the expenses section and pause on the empty state."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Add expense line",
+          "target_fragile": true,
+          "title": "Add one line per payment",
+          "body": "Click this for each separate payment. Pick the category first — if you pick a payroll or commission category, the form asks which employee the money went to, because that payment has to land on that person's record. Every line needs an amount and a description.",
+          "narration": "Click Add expense line for each separate payment. Pick the category first. If it's payroll or commission, the form asks which employee the money went to, so it lands on their record. Every line needs an amount and a description.",
+          "action_hint": "Click ＋ Add expense line, choose a category, enter an amount, type a description."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Envelope photo",
+          "target_fragile": true,
+          "title": "Photograph the envelope",
+          "body": "Take a photo of the sealed envelope. The app reads the cash figure off the photo and compares it with what you typed. If they don't match it says so — check the count before you submit rather than after.",
+          "narration": "Take a photo of the sealed envelope. The app reads the cash figure off the photo and compares it to what you typed, and tells you if they don't match.",
+          "action_hint": "Click the photo button; show the read-back panel with a matching read."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": "text:Submit closing",
+          "target_fragile": true,
+          "title": "Submit — and what happens next",
+          "body": "Your close is checked against what the system already knows about the day. If the numbers line up, you're done. If they don't, you'll be asked to recount, and if it still doesn't match, your manager reviews it. That's normal — it protects you as much as the store.",
+          "narration": "Hit Submit. Your close is checked against what the system already knows about the day. If it doesn't line up you'll be asked to recount, and after that your manager reviews it.",
+          "action_hint": "Click Submit closing; show the success state and the entry appearing in today's list."
+        },
+        {
+          "page_href": "/closing/submit",
+          "target": null,
+          "title": "That's the whole close",
+          "body": "Tenders, counts, envelope expenses, photo, submit. The expense lines you entered will show up for your manager to approve, and the cash you took out is already subtracted from what the store has to deposit. You can re-run this walk-through any time from the ? button.",
+          "narration": "That's the whole close: tenders, counts, envelope expenses, photo, submit. The expenses go to your manager to approve, and the cash you took out is already subtracted from the store's deposit.",
+          "action_hint": "Fade out on the submitted list."
+        }
+      ]
+    },
+    {
+      "slug": "dm-verify-envelope-payout",
+      "title": "Verify closings and pay from the envelope",
+      "module": "closing",
+      "audience": "manager",
+      "description": "For DMs: check your stores' closings, approve expense lines, then pay commission, salary and expenses out of the envelope and deposit the rest.",
+      "start_href": "/closing/verify",
+      "est_minutes": 6,
+      "sort_order": 20,
+      "steps": [
+        {
+          "page_href": "/closing/verify",
+          "target": null,
+          "title": "Your daily money routine",
+          "body": "Two pages, in this order. First you verify what your reps submitted and approve their expense lines. Then you pay out what is owed from the envelope and deposit whatever is left. This walk-through covers both.",
+          "narration": "There are two pages, in this order. First verify what your reps submitted and approve their expense lines. Then pay out what's owed from the envelope and deposit the rest.",
+          "action_hint": "Open /closing/verify."
+        },
+        {
+          "page_href": "/closing/verify",
+          "target": "text:DM Closing Verification",
+          "target_fragile": true,
+          "title": "Everything your stores submitted",
+          "body": "One block per store, one row per rep. Pick the date at the top. A store with nothing submitted is a store that hasn't closed out — that is the first thing to chase.",
+          "narration": "This page shows everything your stores submitted: one block per store, one row per rep. A store with nothing submitted hasn't closed out yet — chase that first.",
+          "action_hint": "Set the date, expand a store block."
+        },
+        {
+          "page_href": "/closing/verify",
+          "target": "text:Categorized expenses",
+          "target_fragile": true,
+          "title": "Approve or reject each expense line",
+          "body": "Every line the rep entered under envelope expenses shows here with its category, amount and description. Approve the ones you recognise; reject anything you don't. Only approved lines become payable and only approved lines reduce the store's deposit.",
+          "narration": "Every envelope expense the rep entered shows here. Approve the ones you recognise and reject the ones you don't. Only approved lines become payable and reduce the deposit.",
+          "action_hint": "Click Approve on one expense line; show the state change."
+        },
+        {
+          "page_href": "/closing/verify",
+          "target": "text:Mark verified",
+          "target_fragile": true,
+          "title": "Mark the store verified",
+          "body": "Once the numbers look right and the expense lines are dealt with, mark the store verified. That is what tells the rest of the system this day is settled for that store.",
+          "narration": "Once the numbers look right and the expenses are dealt with, mark the store verified. That tells the rest of the system this day is settled.",
+          "action_hint": "Click Mark verified."
+        },
+        {
+          "page_href": "/closing/envelope-payout",
+          "target": "text:Envelope Payout",
+          "title": "Now pay what's owed",
+          "body": "This page answers one question: how much cash has to come out of the envelope today, and out of which envelopes. Pick the store and the date at the top to load it.",
+          "narration": "Now to the payout page. It answers one question: how much cash has to come out of the envelope today, and out of which envelopes.",
+          "action_hint": "Navigate to /closing/envelope-payout, pick a store."
+        },
+        {
+          "page_href": "/closing/envelope-payout",
+          "target": "text:Total cash required",
+          "title": "What is due, and what you actually have",
+          "body": "Commission due, salary due and approved expenses due add up to the total cash required. Next to it is the cash actually on hand at this store. If the cash on hand is lower, it turns red — you cannot pay everything today.",
+          "narration": "Commission, salary and approved expenses add up to the total cash required. Next to it is the cash actually on hand. If it's lower, it turns red and you can't pay everything today.",
+          "action_hint": "Pan across the five stat tiles."
+        },
+        {
+          "page_href": "/closing/envelope-payout",
+          "target": "text:Pay from envelope",
+          "title": "Pay one person, or one expense, at a time",
+          "body": "Each person and each approved expense is its own line with its own button. You never pay a lump sum — you pay a named amount to a named person, so every dollar has a record.",
+          "narration": "Each person and each approved expense is its own line with its own button. You never pay a lump sum — you pay a named amount to a named person.",
+          "action_hint": "Click Pay from envelope on a commission line."
+        },
+        {
+          "page_href": "/closing/envelope-payout",
+          "target": "text:Left after",
+          "title": "The app picks the fewest envelopes",
+          "body": "It works out the smallest number of envelopes that cover this exact amount, and shows you each one: the date and rep it belongs to, what's in it, how much to take, and what will be left. Open only those envelopes.",
+          "narration": "The app works out the fewest envelopes that cover this exact amount, and shows each one: what's in it, how much to take, and what's left. Open only those envelopes.",
+          "action_hint": "Hold on the plan table so each column is readable."
+        },
+        {
+          "page_href": "/closing/envelope-payout",
+          "target": "text:Confirm — cash taken, mark paid",
+          "title": "Confirm once the cash is physically counted out",
+          "body": "Press this only after you have actually taken the cash. It records the withdrawal against each envelope and marks the person paid or the expense settled in one go — you do not have to write it down anywhere else.",
+          "narration": "Press Confirm only after you've actually taken the cash. It records the withdrawal against each envelope and marks the payment settled in one go.",
+          "action_hint": "Click Confirm; show the line disappearing from what's due."
+        },
+        {
+          "page_href": "/closing/envelope-payout",
+          "target": "text:Deposit the rest",
+          "title": "Deposit what's left",
+          "body": "This figure is the cash still in the store after everything you just paid out. It updates itself as you confirm each payout. That number, and only that number, is what goes to the bank.",
+          "narration": "This figure is the cash still in the store after everything you just paid. It updates as you confirm each payout, and it's what goes to the bank.",
+          "action_hint": "Hold on the deposit figure updating."
+        },
+        {
+          "page_href": "/closing/envelope-payout",
+          "target": null,
+          "title": "That's the routine",
+          "body": "Verify, approve expenses, pay from the envelope, deposit the remainder. Do it in that order every day and the store's cash position stays correct without anyone reconciling it by hand.",
+          "narration": "Verify, approve expenses, pay from the envelope, deposit the remainder. In that order, every day, and the cash position stays correct on its own.",
+          "action_hint": "Fade out."
+        }
+      ]
+    },
+    {
+      "slug": "commission-overview",
+      "title": "Where your commission comes from",
+      "module": "commissions",
+      "audience": "all",
+      "description": "How the monthly commission is produced, and how the new Daily Commission page shows what a rep has earned so far and what they have already been advanced in cash.",
+      "start_href": "/commcalc",
+      "est_minutes": 5,
+      "sort_order": 30,
+      "steps": [
+        {
+          "page_href": "/commcalc",
+          "target": null,
+          "title": "Two different numbers, two different pages",
+          "body": "Commission has a monthly number and a daily number and they are not the same thing. The monthly number is what actually gets paid. The daily number is an early estimate so nobody is guessing mid-month. We'll look at both.",
+          "narration": "Commission has a monthly number and a daily number, and they're not the same. The monthly number is what gets paid. The daily number is an early estimate so nobody's guessing mid-month.",
+          "action_hint": "Open /commcalc."
+        },
+        {
+          "page_href": "/commcalc",
+          "target": "text:CommCalc Dashboard",
+          "target_fragile": true,
+          "title": "The monthly picture",
+          "body": "This dashboard is the month you are looking at, the reps in it, and whether the month has been calculated yet. The line under the title tells you the state: not calculated, running, or done.",
+          "narration": "This dashboard shows the month you're looking at, the reps in it, and whether the month has been calculated yet.",
+          "action_hint": "Highlight the header and the calculation status line."
+        },
+        {
+          "page_href": "/commcalc",
+          "target": "text:Run Calculation",
+          "target_fragile": true,
+          "title": "Running the month",
+          "body": "This re-runs the whole month from the sales and payout data. It is safe to re-run — it restates the month, it doesn't add to it. It can take a while on a big month, so start it once and let it finish rather than clicking again.",
+          "narration": "This re-runs the whole month from the sales and payout data. It restates the month rather than adding to it, and it can take a while — start it once and let it finish.",
+          "action_hint": "Hover the Run Calculation button. Do not click during recording."
+        },
+        {
+          "page_href": "/commcalc",
+          "target": "text:What this calculation did not pay",
+          "target_fragile": true,
+          "title": "What it deliberately did NOT pay",
+          "body": "When a calculation skips something on purpose — a device category that doesn't qualify, an activation it couldn't classify — it says so here instead of quietly paying zero. If a rep says their commission looks light, read this box first.",
+          "narration": "When the calculation skips something on purpose it says so here instead of quietly paying zero. If a rep says their commission looks light, read this box first.",
+          "action_hint": "Show the notices panel on a month that has one."
+        },
+        {
+          "page_href": "/commcalc/daily-commission",
+          "target": "text:Daily Commission",
+          "target_fragile": true,
+          "title": "The daily view",
+          "body": "This page is new. It shows what each rep has probably earned so far this period, based on the sales that have landed. Read the line under the title carefully: this is an expected figure, not a payslip.",
+          "narration": "This page is new. It shows what each rep has probably earned so far, based on the sales that have landed. It's an expected figure, not a payslip.",
+          "action_hint": "Navigate to /commcalc/daily-commission."
+        },
+        {
+          "page_href": "/commcalc/daily-commission",
+          "target": "text:Accrued (expected)",
+          "target_fragile": true,
+          "title": "Accrued, advanced, and the balance",
+          "body": "Accrued is what they look to have earned. Paid in cash is what has already been handed to them out of an envelope. Unpaid balance is the difference — roughly what is still coming to them. Over-advanced flags anyone who has taken more than they've earned so far.",
+          "narration": "Accrued is what they look to have earned. Paid in cash is what's already been handed to them from an envelope. Unpaid balance is the difference, and Over-advanced flags anyone who's taken more than they've earned.",
+          "action_hint": "Pan across the tiles, ending on Over-advanced."
+        },
+        {
+          "page_href": "/commcalc/daily-commission",
+          "target": "text:Record a cash advance",
+          "target_fragile": true,
+          "title": "Recording cash you handed over",
+          "body": "If you give a rep cash against their commission, record it here — or, better, pay it through the Envelope Payout page, which records it for you. Either way it changes the paid figure only. It never reduces what the rep is actually owed at month end.",
+          "narration": "If you hand a rep cash against their commission, record it here — or pay it through the Envelope Payout page, which records it for you. Either way it never reduces what they're owed at month end.",
+          "action_hint": "Show the advance form; fill it without submitting."
+        },
+        {
+          "page_href": "/commcalc/daily-commission",
+          "target": "text:Recompute a day",
+          "target_fragile": true,
+          "title": "When a day's sales arrive late",
+          "body": "The daily figure updates itself every day once the sales feed lands. Use this only when a day's sales came in late and that day still looks empty. Re-running a date restates it — it never doubles it, and it never touches anyone's actual pay.",
+          "narration": "The daily figure updates itself once the sales feed lands. Use this only when a day's sales came in late. Re-running a date restates it — it never doubles it and never touches actual pay.",
+          "action_hint": "Highlight the date box and the Recompute button."
+        },
+        {
+          "page_href": "/commcalc/daily-commission",
+          "target": null,
+          "title": "The rule to remember",
+          "body": "Daily is an estimate that helps you manage the month. Monthly is the number that pays. Cash advances move between them; they never change the total a rep earns.",
+          "narration": "Daily is an estimate that helps you manage the month. Monthly is the number that pays. Cash advances move between them and never change what a rep earns.",
+          "action_hint": "Fade out."
+        }
+      ]
+    },
+    {
+      "slug": "storeops-timeclock-schedule",
+      "title": "Time clock and schedules",
+      "module": "storeops",
+      "audience": "manager",
+      "description": "Read the clock-in punches with their selfie, GPS and face check, then build next week's schedule from last week or a saved template.",
+      "start_href": "/storeops/timeclock",
+      "est_minutes": 5,
+      "sort_order": 40,
+      "steps": [
+        {
+          "page_href": "/storeops/timeclock",
+          "target": null,
+          "title": "Hours in, schedule out",
+          "body": "Two pages sit behind payroll: Time Clock, which is what actually happened, and Schedule, which is what you planned. This walk-through shows how to read the first and build the second.",
+          "narration": "Two pages sit behind payroll: Time Clock, what actually happened, and Schedule, what you planned.",
+          "action_hint": "Open /storeops/timeclock."
+        },
+        {
+          "page_href": "/storeops/timeclock",
+          "target": "text:Time Clock",
+          "target_fragile": true,
+          "title": "Every punch, with proof",
+          "body": "Reps clock in and out from the mobile portal, not from here. This page is the record: who, when, which store, and the selfie, GPS and face check taken at the moment they punched.",
+          "narration": "Reps clock in from the mobile portal. This page is the record: who, when, which store, and the selfie, GPS and face check taken at the moment they punched.",
+          "action_hint": "Show the punch table with a few rows."
+        },
+        {
+          "page_href": "/storeops/timeclock",
+          "target": "css:input[type=\"date\"]",
+          "target_fragile": true,
+          "title": "Filter to what you're actually reviewing",
+          "body": "Set the date range, then narrow by store, market or person. Everything below — the punch count, the total hours and the export — follows whatever you pick here.",
+          "narration": "Set the date range, then narrow by store, market or person. The punch count, the hours total and the export all follow the filter.",
+          "action_hint": "Change the date range, pick one store."
+        },
+        {
+          "page_href": "/storeops/timeclock",
+          "target": "text:hrs",
+          "target_fragile": true,
+          "title": "Hours, and the lunch deduction",
+          "body": "The badges give you the punch count and total hours for the filter. Where an automatic lunch has been taken off, the row shows the deduction and the net hours underneath — so a rep asking why their hours look short can be answered from this screen.",
+          "narration": "The badges give you punch count and total hours. Where an automatic lunch has been deducted, the row shows the deduction and the net hours, so you can answer a rep on the spot.",
+          "action_hint": "Zoom on a row with a lunch deduction."
+        },
+        {
+          "page_href": "/storeops/timeclock",
+          "target": "text:Lunch Break Settings",
+          "target_fragile": true,
+          "title": "That lunch rule is yours to set",
+          "body": "The automatic lunch is a setting, not a hard rule — how long a shift has to be before it applies, and how much comes off. Change it here and it applies going forward.",
+          "narration": "The automatic lunch is a setting: how long a shift has to be before it applies, and how much comes off. Change it here and it applies going forward.",
+          "action_hint": "Open the Lunch Break Settings panel, then close it."
+        },
+        {
+          "page_href": "/storeops/schedule",
+          "target": "text:By store",
+          "target_fragile": true,
+          "title": "Two ways to look at a week",
+          "body": "By store shows one store's whole week, which is how you spot an uncovered day. By employee shows one person across every store, which is how you spot someone doubled up or short of hours.",
+          "narration": "By store shows one store's whole week — that's how you spot an uncovered day. By employee shows one person across every store, which is how you spot someone doubled up.",
+          "action_hint": "Navigate to /storeops/schedule, toggle between the two views."
+        },
+        {
+          "page_href": "/storeops/schedule",
+          "target": "text:Copy last week",
+          "target_fragile": true,
+          "title": "Don't build a week from scratch",
+          "body": "Most weeks look like the last one. Copy last week pulls those shifts forward so you only fix the exceptions. Copy weeks pushes this week's pattern into several weeks ahead in one go.",
+          "narration": "Most weeks look like the last one. Copy last week pulls those shifts forward so you only fix the exceptions, and Copy weeks pushes this week's pattern several weeks ahead.",
+          "action_hint": "Click Copy last week; show the grid filling."
+        },
+        {
+          "page_href": "/storeops/schedule",
+          "target": "text:Save template",
+          "target_fragile": true,
+          "title": "Save the pattern once",
+          "body": "If a week is the shape you want to repeat, save it as the template. From then on Apply template fills any empty week with that pattern in one click.",
+          "narration": "If a week is the shape you want to repeat, save it as the template. Apply template then fills any empty week with that pattern in one click.",
+          "action_hint": "Click Save template, move to a new week, click Apply template."
+        },
+        {
+          "page_href": "/storeops/schedule",
+          "target": null,
+          "title": "Why it matters downstream",
+          "body": "The schedule isn't just a rota. It decides who is expected in which store, which is what the closing checks, the time-off approvals and the payroll hours all measure against. A wrong schedule shows up as a wrong number somewhere else.",
+          "narration": "The schedule isn't just a rota. It decides who's expected in which store, and the closing checks, time-off approvals and payroll hours all measure against it.",
+          "action_hint": "Fade out on the filled week."
+        }
+      ]
+    },
+    {
+      "slug": "store-expenses-pl",
+      "title": "Store expenses and the P&L",
+      "module": "account",
+      "audience": "manager",
+      "description": "Enter each store's monthly running costs, and see how they land on the profit and loss statement.",
+      "start_href": "/commcalc/expenses",
+      "est_minutes": 5,
+      "sort_order": 50,
+      "steps": [
+        {
+          "page_href": "/commcalc/expenses",
+          "target": null,
+          "title": "What a store costs to run",
+          "body": "Rent, wages, utilities, everything else — entered once a month per store. It's a small job that decides whether the profit figure for that store means anything, so it's worth doing properly.",
+          "narration": "Rent, wages, utilities, everything else — entered once a month per store. It's a small job that decides whether the store's profit figure means anything.",
+          "action_hint": "Open /commcalc/expenses."
+        },
+        {
+          "page_href": "/commcalc/expenses",
+          "target": "text:Store Expenses",
+          "target_fragile": true,
+          "title": "One month, one grid",
+          "body": "Pick the month at the top. Each column is a store, each row is an expense line. You are filling in a grid, not a form per store.",
+          "narration": "Pick the month at the top. Each column is a store, each row is an expense line. You're filling in a grid, not a form per store.",
+          "action_hint": "Set the month; show the grid."
+        },
+        {
+          "page_href": "/commcalc/expenses",
+          "target": "text:Add expense",
+          "target_fragile": true,
+          "title": "Add the lines your business actually has",
+          "body": "The expense lines are yours to define — add whatever your business really spends money on. They are not fixed by us, and once added a line stays available for every store and every month.",
+          "narration": "The expense lines are yours to define. Add whatever your business actually spends money on — once added, the line stays available for every store and every month.",
+          "action_hint": "Click Add expense, name a line."
+        },
+        {
+          "page_href": "/commcalc/expenses",
+          "target": "text:Salaries from hours",
+          "target_fragile": true,
+          "title": "Let payroll fill itself in",
+          "body": "Rather than typing wages in by hand, pull them from the hours already recorded on the time clock. Same for commission. Both are still editable afterwards if you need to override a figure.",
+          "narration": "Rather than typing wages in by hand, pull them from the hours already on the time clock. Same for commission. Both stay editable if you need to override.",
+          "action_hint": "Click the fill-salaries button; show the column populating."
+        },
+        {
+          "page_href": "/commcalc/expenses",
+          "target": "text:Template",
+          "target_fragile": true,
+          "title": "Or do a whole month in a spreadsheet",
+          "body": "Download the template, fill it in offline, upload it back. Useful when a bookkeeper does the month in one sitting instead of you typing it store by store.",
+          "narration": "You can also download the template, fill it in offline and upload it back — useful when a bookkeeper does the whole month in one sitting.",
+          "action_hint": "Hover the Template and upload controls."
+        },
+        {
+          "page_href": "/commcalc/expenses",
+          "target": "text:Save All",
+          "target_fragile": true,
+          "title": "Nothing counts until you save",
+          "body": "Edits sit on screen until you press Save All. Get in the habit of saving before you change the month, or you'll lose the lot.",
+          "narration": "Edits sit on screen until you press Save All. Save before you change the month, or you'll lose them.",
+          "action_hint": "Click Save All; show the confirmation."
+        },
+        {
+          "page_href": "/accounts/pl",
+          "target": "text:Profit",
+          "target_fragile": true,
+          "title": "Where those numbers end up",
+          "body": "The profit and loss statement takes the income the system already knows about, subtracts cost of goods, then subtracts the expenses you just entered. Pick the period and the company at the top.",
+          "narration": "The profit and loss takes the income the system already knows, subtracts cost of goods, then subtracts the expenses you just entered.",
+          "action_hint": "Navigate to /accounts/pl, set the period."
+        },
+        {
+          "page_href": "/accounts/pl",
+          "target": null,
+          "title": "Reading it honestly",
+          "body": "A store showing an unusually good profit is usually a store whose expenses haven't been entered for that month — not a star performer. When a number looks too good, check the expense grid before you celebrate.",
+          "narration": "A store showing an unusually good profit is usually a store whose expenses weren't entered — not a star performer. When a number looks too good, check the expense grid first.",
+          "action_hint": "Compare two stores; fade out."
+        }
+      ]
+    },
+    {
+      "slug": "asset-charges-dashboard",
+      "title": "Asset charges and where the losses are",
+      "module": "asset",
+      "audience": "manager",
+      "description": "Read the charges dashboard: what is being billed to you, what has been denied, and which of it is a real loss you can still act on.",
+      "start_href": "/commcalc/asset/dashboard",
+      "est_minutes": 4,
+      "sort_order": 60,
+      "steps": [
+        {
+          "page_href": "/commcalc/asset/dashboard",
+          "target": null,
+          "title": "The money side of inventory",
+          "body": "Phones that came in on financing carry charges: fees, balances, denied appeals, returns that were never reimbursed. This dashboard puts all of it on one screen so nothing quietly ages out.",
+          "narration": "Phones that came in on financing carry charges: fees, balances, denied appeals, returns that were never reimbursed. This dashboard puts all of it on one screen.",
+          "action_hint": "Open /commcalc/asset/dashboard."
+        },
+        {
+          "page_href": "/commcalc/asset/dashboard",
+          "target": "text:All time",
+          "target_fragile": true,
+          "title": "Set the window first",
+          "body": "All time, a month, or a single billing week — then narrow to a market or a store. Every figure below reacts to this bar, so set it before you read any number.",
+          "narration": "Choose all time, a month, or a single billing week, then narrow to a market or store. Every figure below reacts to this bar.",
+          "action_hint": "Switch between All time and Month; pick a market."
+        },
+        {
+          "page_href": "/commcalc/asset/dashboard",
+          "target": "text:Total Loss",
+          "target_fragile": true,
+          "title": "The headline is real money lost",
+          "body": "This is not a balance owed — it's money already gone: appeals that were denied plus the net loss on returns. Treat it as the number to drive down, and the two figures under it tell you which half to work on.",
+          "narration": "This headline isn't a balance owed — it's money already gone: denied appeals plus the net loss on returns. The two figures under it tell you which half to work on.",
+          "action_hint": "Hold on the Total Loss card."
+        },
+        {
+          "page_href": "/commcalc/asset/dashboard",
+          "target": "text:View report",
+          "target_fragile": true,
+          "title": "Each tile opens the detail behind it",
+          "body": "The tiles group the charges by what they are — fees, balances, appeals, oddities, returns. Each one shows a total and a count and opens the item-by-item report. The appeals tile is the urgent one: those have deadlines.",
+          "narration": "The tiles group charges by what they are, each with a total, a count, and a link to the item-by-item report. The appeals tile is the urgent one — those have deadlines.",
+          "action_hint": "Hover each tile; click into the appeals report and come back."
+        },
+        {
+          "page_href": "/commcalc/asset/dashboard",
+          "target": "text:Push Flags",
+          "target_fragile": true,
+          "title": "Push the urgent ones to the stores",
+          "body": "This turns the appeals and unreturned-device problems into flags on the stores that own them, so the people who can actually fix a device get told instead of the list sitting here. Denied appeals go out as critical.",
+          "narration": "This turns appeals and unreturned devices into flags on the stores that own them, so the people who can fix a device get told instead of the list sitting here.",
+          "action_hint": "Click Push Flags; show the confirmation."
+        },
+        {
+          "page_href": "/commcalc/asset/dashboard",
+          "target": null,
+          "title": "Make it a weekly habit",
+          "body": "Filter to last week, read the total loss, open appeals, push the flags. Ten minutes a week is the difference between a charge you can still appeal and one you have simply paid.",
+          "narration": "Filter to last week, read the total loss, open appeals, push the flags. Ten minutes a week is the difference between a charge you can still appeal and one you've simply paid.",
+          "action_hint": "Fade out on the dashboard."
+        }
+      ]
+    }
+  ]
+}

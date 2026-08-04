@@ -3928,6 +3928,16 @@ from app.modules.core import fix_pipeline as _fix_pipeline   # noqa: E402  (bott
 
 router.include_router(_fix_pipeline.router)
 
+# ── Training Center — guided walk-throughs (mig 720, owner directive 2026-08-04) ──────────────────
+# Tours-as-data + the Phase-2 recording-script export behind /training and /admin/training. Mounted
+# ONTO this router (same rationale as import_health / fix_pipeline above): main.py needs no change, and
+# the sub-router's own "/training" prefix resolves its paths to /api/v1/core/training/*. It imports
+# core.router only LAZILY (inside functions), so there is no import cycle. NOT middleware-allowlisted:
+# every route carries full tenant-middleware protection like the rest of /core.
+from app.modules.core import training as _training   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_training.router)
+
 # Platform-core's OWN attention providers (tenant provisioning + system-error backlog). Imported purely
 # for the @register_provider side effect — no routes, no gate, no aggregation change. Each of notify /
 # helpdesk registers its own providers from its own module file the same way (see their routers' tails).
