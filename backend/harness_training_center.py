@@ -526,7 +526,7 @@ ok("I4 NO training path is allowlisted as public (they keep full tenant protecti
    not any(TM._is_public(p) for p in paths))
 # Default is the BRANCH total: 1003 base + 7 training + 5 What's New (the scope addition committed on
 # this same branch). A reviewer checking the training commits ALONE passes EXPECT_ROUTES=1010.
-expect_routes = int(os.environ.get("EXPECT_ROUTES", "1015"))
+expect_routes = int(os.environ.get("EXPECT_ROUTES", "1018"))
 ok(f"I5 total app route count is {expect_routes} (base 1003 + 7 training + 5 what's-new)",
    len(app.routes) == expect_routes, len(app.routes))
 

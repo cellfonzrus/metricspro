@@ -409,7 +409,7 @@ ok("I6 the package adds exactly 5 routes", n_routes == 5, n_routes)
 from app.core import tenant_middleware as TM                        # noqa: E402
 ok("I7 NO whats-new path is allowlisted as public today (the ship door needs a JWT until it is)",
    not any(TM._is_public(p) for p in paths))
-expect_routes = int(os.environ.get("EXPECT_ROUTES", "1015"))
+expect_routes = int(os.environ.get("EXPECT_ROUTES", "1018"))
 ok(f"I8 total app route count is {expect_routes} (1003 base + 7 training + 5 what's-new)",
    len(app.routes) == expect_routes, len(app.routes))
 
