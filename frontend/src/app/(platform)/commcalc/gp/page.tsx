@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
+import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { TrendChart } from '@/components/TrendChart'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 import EntityPicker from '@/components/EntityPicker'
@@ -22,6 +23,12 @@ interface StoreRow {
   mi: number; atu: number; total_rev: number
   rep_pay: number; exp_total: number; net_phone_cost: number
   net_profit: number; net_excl_mdf: number
+}
+
+// The By-Rep view's row shape (data.rep_rows) — named so the export columns aren't `any`.
+interface RepRow {
+  rep: string; storeops_name?: string; store?: string
+  acc_gp?: number; setup_gp?: number; phone_sales?: number; plan_gp?: number; comm_earned?: number
 }
 
 interface ColDef { key: string; label: string; group: string; bold?: boolean; red?: boolean; highlight?: boolean }
@@ -124,6 +131,46 @@ export default function GPReportPage() {
     a.click()
   }
 
+  // WYSIWYG (§3c/§3d) — Send used to take the server report-key path (reportKey "gp", period only), so
+  // notify/report_registry._gp re-queried view="store" for the WHOLE org: the market chips, the store
+  // filter, the rep(s) picker and the By-Store/By-Rep toggle were all dropped. Excel · PDF · Print ·
+  // Send now render from the SAME filtered rows the table is showing.
+  const gpFilterDesc = () => [
+    selMarkets.length && `markets: ${selMarkets.join(', ')}`,
+    selStores.length && `stores: ${selStores.join(', ')}`,
+    view === 'rep' && selReps.length && `reps: ${selReps.join(', ')}`,
+  ].filter(Boolean).join(' · ')
+
+  function buildPayload(): ExportPayload {
+    const fd = gpFilterDesc()
+    if (view === 'rep') {
+      return {
+        title: 'Gross Profit Report — By Rep',
+        subtitle: `${period} · ${repRows.length}${repRows.length !== allRepRows.length ? ` of ${allRepRows.length}` : ''} reps${fd ? ` · ${fd}` : ''}`,
+        filename: `gp-report-by-rep-${period.replace(/ /g, '-')}${fd ? '-filtered' : ''}`.toLowerCase(),
+        sheets: [{ name: 'By Rep', rows: repRows, columns: [
+          { header: 'Rep', get: (r: RepRow) => r.storeops_name || r.rep },
+          { header: 'Store', get: (r: RepRow) => r.store || '' },
+          { header: 'Acc GP', get: (r: RepRow) => r.acc_gp, money: true },
+          { header: 'Setup GP', get: (r: RepRow) => r.setup_gp, money: true },
+          { header: 'Phone Sales', get: (r: RepRow) => r.phone_sales, money: true },
+          { header: 'Plan GP', get: (r: RepRow) => r.plan_gp, money: true },
+          { header: 'Comm Earned', get: (r: RepRow) => r.comm_earned, money: true },
+        ] }],
+      }
+    }
+    return {
+      title: 'Gross Profit Report',
+      subtitle: `${period} · ${rows.length}${rows.length !== allRows.length ? ` of ${allRows.length}` : ''} stores · net ${fmt(totals.net_profit || 0)}${fd ? ` · ${fd}` : ''}`,
+      filename: `gp-report-${period.replace(/ /g, '-')}${fd ? '-filtered' : ''}`.toLowerCase(),
+      sheets: [{ name: 'By Store', rows, columns: [
+        { header: 'Store', get: (r: StoreRow) => r.store },
+        { header: 'Market', get: (r: StoreRow) => r.market || '' },
+        ...COLS.map(c => ({ header: c.label, get: (r: StoreRow) => r[c.key as keyof StoreRow], money: true } as ExportColumn)),
+      ] }],
+    }
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
@@ -173,7 +220,8 @@ export default function GPReportPage() {
             <EntityPicker multi options={repOpts} value={selReps} onChange={setSelReps} placeholder="Reps…" width={170} ariaLabel="Filter by rep" />
           )}
           <button className="btn btn-secondary" onClick={exportCSV}>📥 CSV</button>
-          <SendReportButton reportKey="gp" filters={{ period }} />
+          <ExportButtons payload={buildPayload} compact />
+          <SendReportButton exportPayload={buildPayload} title={view === 'rep' ? 'Gross Profit Report — By Rep' : 'Gross Profit Report'} compact />
         </div>
       </div>
 

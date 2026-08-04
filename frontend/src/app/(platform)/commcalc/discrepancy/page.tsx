@@ -202,7 +202,11 @@ export default function DiscrepancyPage() {
             {running ? 'Running…' : 'Run Detection'}
           </button>
           {(isPhantom ? phantomRows.length : filteredRows.length) > 0 && <ExportButtons payload={buildPayload} />}
-          <SendReportButton reportKey="discrepancy" filters={{ period }} />
+          {/* WYSIWYG (§3c/§3d) — Send used to take the server report-key path (reportKey "discrepancy", only the
+              period), so it re-queried the whole org: it ignored the status tab, the store/type/search
+              filters AND the Phantom tab entirely, while the Excel/PDF buttons right beside it already
+              exported buildPayload(). Both now render from the same payload. */}
+          <SendReportButton exportPayload={buildPayload} title={isPhantom ? 'Pay Discrepancy — Phantom Payments' : 'Pay Discrepancy'} />
         </div>
       </div>
 
