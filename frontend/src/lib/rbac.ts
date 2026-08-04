@@ -160,6 +160,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/accessory-cost-audit', label: 'Accessory Cost Audit', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/expected-commission', label: 'Expected vs Earned', icon: '⏳', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/daily-commission', label: 'Daily Commission', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/training', label: 'Training Center', icon: '🎓', module: 'targets' },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions' },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'] },
@@ -353,6 +354,8 @@ export const NAV: NavGroup[] = [
     // Deliberately NOT in REPORT_DIRECTORY — it edits import schedules, and the directory excludes
     // config/entry surfaces by design (one line to add if the operator prefers it listed).
     { href: '/admin/import-health', label: 'Import Health', icon: '📡', module: 'admin' },
+    { href: '/admin/training', label: 'Walk-throughs', icon: '🎓', module: 'admin' },
+    { href: '/admin/whats-new', label: "What's New", icon: '✨', module: 'admin' },
     // Auto-Fix Pipeline board (mig 718) — the fix-request registry + AI token/$ accounting. Tagged
     // module 'admin' with NO `scopes`, byte-identical in shape to its /admin/tenants sibling: the PAGE
     // itself is super-admin-only (it renders an explainer for anyone else, and every backend endpoint
