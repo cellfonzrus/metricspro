@@ -44,6 +44,7 @@ from app.modules.storeops.lunch_deduction import (
     compute_lunch_deduction_from_rows as _lunch_compute_from_rows,
     period_lunch_deduction as _lunch_period_deduction,
 )
+from app.modules.storeops import salary_owed as _owed
 
 try:
     from zoneinfo import ZoneInfo
@@ -4856,6 +4857,418 @@ def run_payroll_expenses(period: str, authorization: str = Header(default=""), o
             "expense_ledger_rows_written": len(exp_rows), "push": push,
             "gross_cells": gross_cells, "gross_ledger_rows_written": gross_ledger_rows_written,
             "gross_ledger_error": _gross_ledger_error, "gross_push": gross_push}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# DAILY SALARY OWED + CASH ADVANCES + ADDITIONAL PAYROLL (EEP package) — owner directive 2026-08-04,
+# migration 419, cross-module spec docs/specs/envelope-expense-payout.md. Pure math lives in
+# salary_owed.py (imported as `_owed` above; unit-tested in harness_salary_owed.py) — everything here
+# is I/O: fetch shift/timelog/employee/ledger rows, call the engine, and push the SEPARATE
+# 'Additional Payroll' system line via the SAME contract PTO/payroll-expenses/payroll-gross already use.
+#
+# MONEY DOCTRINE (owner rule, verbatim intent): salary paid in cash from the daily-closing envelope
+# NEVER changes what payroll counts — GET /storeops/payroll / the 'payroll_gross' P&L line stay
+# EXACTLY as they are today (this section only READS shifts/timelog, never writes them, and never
+# touches payroll_gross_ledger/payroll_tax_ledger/payroll_expense_ledger). Cash payments recorded here
+# are ADVANCES; only the EXCESS of cumulative cash paid over cumulative earned posts to the P&L, as its
+# OWN 'additional_payroll' line — never folded into payroll_gross.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+def _salary_owed_group_by_employee(rows):
+    out = {}
+    for r in rows or ():
+        eid = r.get("employee_id")
+        if eid:
+            out.setdefault(eid, []).append(r)
+    return out
+
+
+def _salary_owed_lunch_by_emp_day(org_id, timelog_rows):
+    """{(employee_id, work_date): deduct_hours} for APPLIED days only, off an already-fetched timelog
+    set — ONE lunch-config fetch regardless of how many employees are in `timelog_rows` (mirrors
+    payroll_actual_hours_detail's own reuse of compute_lunch_deduction_from_rows over rows it already
+    has, never a second per-employee query). Degrades to {} pre-migration-418 / on any failure — never
+    blocks the owed computation."""
+    try:
+        tenant_cfg, overrides, available = _lunch_get_config(org_id, sb())
+        if not available:
+            return {}
+        result = _lunch_compute_from_rows(timelog_rows, tenant_cfg, overrides)
+        return {(d["employee_id"], d["work_date"]): d["deduct_hours"] for d in result["days"] if d.get("applied")}
+    except Exception:
+        return {}
+
+
+def _salary_owed_for_employees(emp_rows, lo_by_emp, hi: _date, shifts_by_emp: dict,
+                                timelog_by_emp: dict, lunch_by_emp_day: dict, pp_settings: dict):
+    """{employee_id: salary_owed.build_employee_salary_owed(...) result} for a set of employees whose
+    shift/timelog rows have ALREADY been fetched + grouped by the caller. `lo_by_emp` is either a
+    single `date` (same report-window start for every employee — GET /salary-owed) or a
+    {employee_id: date} dict (a hire-date-aware per-employee lookback start — the Additional-Payroll
+    gather)."""
+    out = {}
+    for emp in emp_rows:
+        eid = emp.get("employee_id")
+        if not eid:
+            continue
+        lo = lo_by_emp.get(eid) if isinstance(lo_by_emp, dict) else lo_by_emp
+        if lo is None or lo > hi:
+            continue
+        is_inactive = emp.get("is_active") is False
+        day_hours = _owed.daily_hours_for_employee(shifts_by_emp.get(eid, []), timelog_by_emp.get(eid, []), is_inactive)
+        ded = {d: lunch_by_emp_day.get((eid, d), 0.0) for d in day_hours}
+        day_hours = _owed.apply_lunch_deduction(day_hours, ded)
+        out[eid] = _owed.build_employee_salary_owed(emp, pp_settings, lo, hi, day_hours)
+    return out
+
+
+@router.get("/salary-owed")
+def get_salary_owed(start: str, end: str, store_code: str = "", employee_id: str = "",
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Per-employee daily salary owed vs cash paid vs balance for [start, end] (both inclusive) — the
+    Salary Advances page's data source. Hours basis REUSES /storeops/payroll's exact rules (see
+    salary_owed.daily_hours_for_employee's docstring) — this can never diverge from what /payroll shows
+    for the SAME employee/range, including its open-punch exclusion and shift-covered no-double-count
+    guards. `store_code` narrows to shift/timelog activity actually AT that store (a floater's other-
+    store hours don't count toward what's owed from THIS store's envelope, and cash paid is likewise
+    narrowed to advances recorded from that store); `employee_id` narrows to one employee (an unknown
+    id returns an empty list rather than a 500 — same convention as every other filtered GET here)."""
+    try:
+        d_lo, d_hi = _date.fromisoformat(str(start)[:10]), _date.fromisoformat(str(end)[:10])
+    except ValueError:
+        raise HTTPException(400, "start/end must be ISO dates (YYYY-MM-DD)")
+    if d_lo > d_hi:
+        raise HTTPException(400, "start must be on or before end")
+    lo, hi = d_lo.isoformat(), (d_hi + timedelta(days=1)).isoformat()   # half-open bounds for the fetch
+
+    eq = {"employee_id": employee_id} if employee_id else None
+    employees = _employees_with_pay_fields(org_id, "id,name,employee_id,pay_rate,home_store,is_active", eq=eq)
+    if not employees:
+        return {"start": start, "end": end, "employees": []}
+    emp_map = {e["employee_id"]: e for e in employees if e.get("employee_id")}
+
+    shift_q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False) \
+        .gte("shift_date", lo).lt("shift_date", hi)
+    tl_q = sb().table("timelog").select("*").eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi)
+    if employee_id:
+        shift_q = shift_q.eq("employee_id", employee_id)
+        tl_q = tl_q.eq("employee_id", employee_id)
+    if store_code:
+        shift_q = shift_q.eq("store_code", store_code)
+        tl_q = tl_q.eq("store_code", store_code)
+    shifts = shift_q.execute().data or []
+    timelog = tl_q.limit(20000).execute().data or []
+
+    shifts_by_emp = _salary_owed_group_by_employee(shifts)
+    timelog_by_emp = _salary_owed_group_by_employee(timelog)
+    lunch_by_emp_day = _salary_owed_lunch_by_emp_day(org_id, timelog)
+
+    # Employee set: whoever has activity in the (possibly store-filtered) window, UNION every salaried
+    # employee with a usable pay_amount whose home_store matches (mirrors /payroll's
+    # synthesize_zero_activity_rows treatment — a salaried market manager who never clocks in still
+    # earns/owes a figure and must not silently vanish from this report).
+    if employee_id:
+        target_ids = {employee_id} if employee_id in emp_map else set()
+    else:
+        target_ids = set(shifts_by_emp) | set(timelog_by_emp)
+        for e in employees:
+            eid = e.get("employee_id")
+            if not eid or eid in target_ids or "pay_basis" not in e:
+                continue
+            basis, amount = payroll_salary.resolve_pay_basis(e)
+            if basis == "hourly" or amount is None or amount <= 0:
+                continue
+            if store_code and (e.get("home_store") or "").strip() != store_code:
+                continue
+            target_ids.add(eid)
+
+    pp_settings = _tenant_pp_settings(org_id)
+    owed_by_emp = _salary_owed_for_employees([emp_map[e] for e in target_ids if e in emp_map],
+                                              d_lo, d_hi, shifts_by_emp, timelog_by_emp, lunch_by_emp_day, pp_settings)
+
+    # cash paid IN THIS WINDOW (paid_date within [start,end]) — pairs with the windowed owed_total
+    # above. Narrowed by store_code too when given (documented default — "what have I paid this
+    # employee from THIS store's envelopes", not their company-wide cash total).
+    cash_by_emp = {}
+    try:
+        adv_q = (sb().table("salary_advance_ledger").select("employee_id,amount")
+                 .eq("org_id", org_id).gte("paid_date", start).lte("paid_date", end)
+                 .in_("employee_id", list(target_ids) or ["__none__"]))
+        if store_code:
+            adv_q = adv_q.eq("store_code", store_code)
+        for a in adv_q.execute().data or []:
+            eid = a.get("employee_id")
+            cash_by_emp[eid] = round(cash_by_emp.get(eid, 0.0) + float(a.get("amount") or 0), 2)
+    except Exception:
+        pass   # migration 419 not applied yet -> cash_paid_total stays 0 for every employee
+
+    # store attribution (dominant store this window, home_store fallback) — informational + drives scope.
+    store_hours: dict = {}
+    for eid, rows_ in shifts_by_emp.items():
+        for s in rows_:
+            st = (s.get("store_code") or "").strip()
+            if st:
+                d = store_hours.setdefault(eid, {})
+                d[st] = d.get(st, 0.0) + float(s.get("actual_hours") or 0) + float(s.get("scheduled_hours") or 0)
+    for eid, rows_ in timelog_by_emp.items():
+        for t in rows_:
+            st = (t.get("store_code") or "").strip()
+            if st:
+                d = store_hours.setdefault(eid, {})
+                d[st] = d.get(st, 0.0) + float(t.get("hours") or 0)
+
+    out = []
+    for eid, res in owed_by_emp.items():
+        emp = emp_map.get(eid, {})
+        sh = store_hours.get(eid)
+        store = (max(sh.items(), key=lambda kv: kv[1])[0] if sh else (emp.get("home_store") or ""))
+        cash_paid = cash_by_emp.get(eid, 0.0)
+        out.append({
+            "employee_id": eid, "name": emp.get("name") or eid, "store": store,
+            "pay_basis": res["basis"], "days": res["days"], "owed_total": res["owed_total"],
+            "cash_paid_total": cash_paid, "balance": round(res["owed_total"] - cash_paid, 2),
+        })
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        out = [r for r in out if in_keyset(ks, r.get("store"))]
+    return {"start": start, "end": end, "employees": sorted(out, key=lambda r: r["name"])}
+
+
+def _additional_payroll_store_for(org_id, employee_id, period_end_iso, home_store):
+    """The store attribution for an employee's Additional-Payroll excess this period: the store_code
+    of their MOST RECENT salary_advance_ledger row on/before period_end (documented default — "the
+    store where the advance was paid", per docs/specs/envelope-expense-payout.md), falling back to
+    home_store when that row has no store_code, or to 'Unassigned' when even that is blank (never
+    silently vanish — same convention as payroll_salary.allocate_across_stores)."""
+    try:
+        rows = (sb().table("salary_advance_ledger").select("store_code,paid_date")
+                .eq("org_id", org_id).eq("employee_id", employee_id).lte("paid_date", period_end_iso)
+                .order("paid_date", desc=True).limit(1).execute().data) or []
+    except Exception:
+        rows = []
+    st = (rows[0].get("store_code") or "").strip() if rows else ""
+    return st or (home_store or "").strip() or "Unassigned"
+
+
+def _additional_payroll_gather(org_id, period):
+    """Every employee with a cash advance recorded on/before this period's end, their cumulative
+    'earned to date' (salary_owed basis, bounded lookback — see salary_owed.EARNED_LOOKBACK_DAYS) and
+    cumulative 'cash paid to date' (unbounded — every advance ever recorded through period end), the
+    excess (salary_owed.additional_payroll_excess), and the per-store rollup for the P&L push.
+    Read-only; NEVER writes shifts/timelog/employees/payroll_gross_ledger — the only side effect any
+    caller of this can ever cause is the additive 'additional_payroll' Store Expenses system line."""
+    period_start, period_end = pto_month_bounds(period)
+    try:
+        adv_all = (sb().table("salary_advance_ledger").select("employee_id,amount,paid_date")
+                   .eq("org_id", org_id).lte("paid_date", period_end.isoformat()).execute().data) or []
+    except Exception:
+        return {"employees": [], "stores": {}, "cells": [], "available": False}
+    eids = sorted({a.get("employee_id") for a in adv_all if a.get("employee_id")})
+    if not eids:
+        return {"employees": [], "stores": {}, "cells": [], "available": True}
+
+    employees = _employees_with_pay_fields(org_id, "id,name,employee_id,pay_rate,home_store,is_active")
+    emp_map = {e["employee_id"]: e for e in employees if e.get("employee_id")}
+
+    cash_to_date = {}
+    for a in adv_all:
+        eid = a.get("employee_id")
+        cash_to_date[eid] = round(cash_to_date.get(eid, 0.0) + float(a.get("amount") or 0), 2)
+
+    global_lo = _owed.earned_lookback_start(None, period_end)   # widest window any employee could need
+    shifts = (sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)
+              .in_("employee_id", eids).gte("shift_date", global_lo.isoformat())
+              .lte("shift_date", period_end.isoformat()).execute().data) or []
+    timelog = (sb().table("timelog").select("*").eq("org_id", org_id).in_("employee_id", eids)
+               .gte("work_date", global_lo.isoformat()).lte("work_date", period_end.isoformat())
+               .limit(20000).execute().data) or []
+    shifts_by_emp = _salary_owed_group_by_employee(shifts)
+    timelog_by_emp = _salary_owed_group_by_employee(timelog)
+    lunch_by_emp_day = _salary_owed_lunch_by_emp_day(org_id, timelog)
+    pp_settings = _tenant_pp_settings(org_id)
+
+    lo_by_emp = {}
+    for eid in eids:
+        emp = emp_map.get(eid, {})
+        lo_by_emp[eid] = _owed.earned_lookback_start(payroll_salary.parse_date(emp.get("hire_date")), period_end)
+
+    owed_by_emp = _salary_owed_for_employees([emp_map[e] for e in eids if e in emp_map],
+                                              lo_by_emp, period_end, shifts_by_emp, timelog_by_emp,
+                                              lunch_by_emp_day, pp_settings)
+
+    out_employees, stores = [], {}
+    for eid in eids:
+        emp = emp_map.get(eid)
+        res = owed_by_emp.get(eid)
+        if not emp or res is None:
+            continue   # unknown/deleted employee_id on an old ledger row -> can't attribute pay, skip
+        earned = res["owed_total"]
+        paid = cash_to_date.get(eid, 0.0)
+        excess = _owed.additional_payroll_excess(paid, earned)
+        store = _additional_payroll_store_for(org_id, eid, period_end.isoformat(), emp.get("home_store"))
+        out_employees.append({"employee_id": eid, "name": emp.get("name") or eid, "store": store,
+                              "earned_to_date": earned, "cash_paid_to_date": paid, "excess": excess,
+                              "lookback_start": lo_by_emp[eid].isoformat()})
+        if excess > 0:
+            stores[store] = round(stores.get(store, 0.0) + excess, 2)
+
+    cells = [{"store": s, "amount": amt} for s, amt in sorted(stores.items())]
+    return {"employees": out_employees, "stores": stores, "cells": cells, "available": True,
+            "period_start": period_start.isoformat(), "period_end": period_end.isoformat()}
+
+
+def _additional_payroll_push_line(org_id, period, cells):
+    """POST the per-store Additional Payroll excess to mod-commission's Store Expenses system-line
+    endpoint (source_key='additional_payroll', label='Additional Payroll') — a DIFFERENT source_key
+    than 'payroll_gross'/'payroll_expenses'/'pto_accrual' so it coexists as its OWN, non-double-
+    counting P&L line (mod-finance routes it to the payroll_expenses P&L bucket, NOT wages — see
+    docs/specs/envelope-expense-payout.md). Same best-effort contract as every sibling push in this
+    file: any failure is caught and reported, NEVER raised."""
+    url = f"{PTO_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
+    body = {"source_key": "additional_payroll", "label": "Additional Payroll", "cells": cells}
+    try:
+        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        if resp.status_code == 404:
+            return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet — recomputed live, pull via GET /salary-advance/additional-payroll/{period} instead"}
+        resp.raise_for_status()
+        return {"pushed": True, "status": resp.status_code}
+    except Exception as e:
+        return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e}) — recomputed live, pull via GET /salary-advance/additional-payroll/{{period}} instead"}
+
+
+@router.get("/salary-advance/additional-payroll/{period}")
+def get_additional_payroll(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Read-only preview (no push) of this period's Additional Payroll — the Salary Advances page's
+    'Additional Payroll preview' card. Always computed LIVE (see _additional_payroll_gather); degrades
+    to available:false pre-migration-419."""
+    g = _additional_payroll_gather(org_id, period)
+    ks = scope_keyset(authorization, org_id)
+    employees = [e for e in g["employees"] if in_keyset(ks, e.get("store"))] if ks is not None else g["employees"]
+    cells = [c for c in g["cells"] if ks is None or in_keyset(ks, c["store"])]
+    return {"period": period, "employees": sorted(employees, key=lambda r: r["name"]),
+            "cells": cells, "total": round(sum(c["amount"] for c in cells), 2), "available": g["available"]}
+
+
+@router.post("/salary-advance/additional-payroll/run/{period}")
+def run_additional_payroll(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager-triggered explicit recompute + push for one period (mirrors /pto-accrual/run/{period} /
+    /payroll-expenses/run/{period}). NEVER writes shifts/timelog/employees/payroll_gross_ledger — the
+    ONLY write this can ever cause is the additive 'additional_payroll' Store Expenses system line."""
+    _require_manager(authorization, org_id)
+    g = _additional_payroll_gather(org_id, period)
+    push = _additional_payroll_push_line(org_id, period, g["cells"]) if g["cells"] else \
+        {"pushed": False, "status": None, "note": "no excess this period — nothing to push"}
+    return {"period": period, "employees": g["employees"], "cells": g["cells"], "push": push}
+
+
+@router.post("/salary-advance/additional-payroll/run-due")
+def additional_payroll_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (secret-gated, same NOTIFY_RUN_SECRET convention as
+    /google-reviews/sweep/run-due) — recomputes + pushes the CURRENT calendar-month period's
+    Additional Payroll for every org that has EVER recorded a salary advance. An operator must add the
+    pg_cron schedule (see docs/handoffs/people.md OPERATOR ACTIONS) — this endpoint is inert (never
+    called) until something invokes it; NEVER an unauthenticated trigger."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    period = datetime.now(_BIZ_TZ).strftime("%Y-%m")
+    try:
+        orgs = sorted({r.get("org_id") for r in
+                       (sb().table("salary_advance_ledger").select("org_id").execute().data or [])
+                       if r.get("org_id")})
+    except Exception:
+        orgs = []
+    results = []
+    for oid in orgs:
+        g = _additional_payroll_gather(oid, period)
+        push = _additional_payroll_push_line(oid, period, g["cells"]) if g["cells"] else \
+            {"pushed": False, "status": None, "note": "no excess this period"}
+        results.append({"org_id": oid, "stores_written": len(g["cells"]), "push": push})
+    return {"period": period, "orgs_processed": len(orgs), "results": results}
+
+
+@router.post("/salary-advance/record")
+def record_salary_advance(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Records a cash salary advance from the daily-closing envelope, then recomputes + pushes THIS
+    employee's period's Additional Payroll. OWNER RULE (verbatim intent): this NEVER touches
+    payroll_gross / GET /storeops/payroll — it only appends to storeops.salary_advance_ledger and, if
+    cumulative cash now exceeds cumulative earned, updates the SEPARATE 'additional_payroll' P&L line.
+    Body: {employee_id, amount, paid_date, store_code, withdrawal_ref, recorded_by}. org_id is the
+    QUERY param (RULE ONE). employee_id is validated against the real roster — pick-don't-type, never
+    a free-text id (RULE THREE)."""
+    u = _require_manager(authorization, org_id)
+    body = body or {}
+    employee_id = str(body.get("employee_id") or "").strip()
+    if not employee_id:
+        raise HTTPException(400, "employee_id is required")
+    emp_rows = _employees_with_pay_fields(org_id, "id,name,employee_id,home_store", eq={"employee_id": employee_id})
+    if not emp_rows:
+        raise HTTPException(400, "Unknown employee_id — pick an existing employee (no free-text ids).")
+    try:
+        amount = float(body.get("amount"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "amount must be a number")
+    if amount <= 0:
+        raise HTTPException(400, "amount must be greater than 0")
+    paid_date_raw = str(body.get("paid_date") or "").strip()
+    try:
+        paid_date = _date.fromisoformat(paid_date_raw[:10])
+    except ValueError:
+        raise HTTPException(400, "paid_date must be an ISO date (YYYY-MM-DD)")
+
+    row = {
+        "org_id": org_id, "employee_id": employee_id, "amount": amount, "paid_date": paid_date.isoformat(),
+        "method": "envelope_cash", "store_code": body.get("store_code") or None,
+        "withdrawal_ref": body.get("withdrawal_ref") or None,
+        "recorded_by": body.get("recorded_by") or u.get("email") or u.get("employee_id") or "manager",
+    }
+    try:
+        ins = sb().table("salary_advance_ledger").insert(row).execute()
+    except Exception as e:
+        raise HTTPException(503, f"Could not record the advance — is migration 419 applied? ({type(e).__name__}: {e})")
+
+    period = paid_date.strftime("%Y-%m")
+    g = _additional_payroll_gather(org_id, period)
+    push = _additional_payroll_push_line(org_id, period, g["cells"]) if g["cells"] else \
+        {"pushed": False, "status": None, "note": "no excess this period — nothing to push"}
+    return {"ok": True, "id": (ins.data or [{}])[0].get("id"), "employee_id": employee_id,
+            "amount": amount, "paid_date": row["paid_date"],
+            "additional_payroll": {"period": period, "cells": g["cells"], "push": push}}
+
+
+@router.get("/salary-advance/history")
+def salary_advance_history(start: str = "", end: str = "", employee_id: str = "", store_code: str = "",
+                            authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Advance history list for the Salary Advances page — RULE FIVE core filters (period/store/rep).
+    Degrades to an empty, available:false list pre-migration-419 (never a 500)."""
+    try:
+        q = sb().table("salary_advance_ledger").select("*").eq("org_id", org_id)
+        if start:
+            q = q.gte("paid_date", start)
+        if end:
+            q = q.lte("paid_date", end)
+        if employee_id:
+            q = q.eq("employee_id", employee_id)
+        if store_code:
+            q = q.eq("store_code", store_code)
+        rows = q.order("paid_date", desc=True).limit(2000).execute().data or []
+    except Exception:
+        return {"items": [], "available": False}
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    names = {}
+    if rows:
+        eids = sorted({r.get("employee_id") for r in rows if r.get("employee_id")})
+        try:
+            emps = (sb().table("employees").select("employee_id,name").eq("org_id", org_id)
+                    .in_("employee_id", eids).execute().data) or []
+            names = {e["employee_id"]: e.get("name") for e in emps}
+        except Exception:
+            pass
+    for r in rows:
+        r["employee_name"] = names.get(r.get("employee_id")) or r.get("employee_id")
+    return {"items": rows, "available": True}
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
