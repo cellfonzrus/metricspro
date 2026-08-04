@@ -21,14 +21,21 @@ It is built on ONE rule, and every design decision below follows from it:
     * It is the same doctrine as the M2-M6 "expected" column (owner 2026-08-01): calculated, displayed,
       never summed into pay.
     * A recorded payout is an ADVANCE — a cash movement. It changes `paid` / `unpaid`. It does not
-      change `accrued`, it does not reduce what the rep is owed at month end, and it never nets or
-      claws anything back (ledger Q14 default: over-advance is FLAGGED for a human, full stop).
+      change `accrued` and it does not reduce what the rep is owed at month end. An over-advance is
+      always FLAGGED (ledger Q14); a tenant may additionally switch `over_advance_mode='auto_net'`, in
+      which case a PRIOR cycle's over-advance is deducted from the employee's NEXT cash due — as its
+      own labelled line, never silently — and still nothing is written to rep_commissions and no
+      earned pay changes. It nets the envelope-advance balance stream only.
+    * Balances are PER CYCLE (ledger Q19): they reset each calendar month / payroll cycle / commission
+      cycle as the tenant defines, and anything unsettled from an earlier cycle stays visible as a
+      labelled carry-over line with a "settle employee balances" advisory. Advisory only: this module
+      never moves cash.
 
 ════════════════════════════════════════════════════════════════════════════════════════════════════
-HOW A DAY IS COMPUTED (and why it is deliberately UN-TIERED)
+HOW A DAY IS COMPUTED
 ════════════════════════════════════════════════════════════════════════════════════════════════════
-The day's OWN sale lines are read (one day, one table, never a month) and run through the tenant's
-REAL pay logic — resolved by `_resolve_carrier_mode`, exactly like the monthly calc:
+The day's sale lines are read and run through the tenant's REAL pay logic — resolved by
+`_resolve_carrier_mode`, exactly like the monthly calc:
 
   * plan mode  -> commission_engine.preview(sales_override=<that day's lines>). That is the SAME
                   function the live plan payout runs through: the same matcher, _line_payout, the
@@ -39,15 +46,25 @@ REAL pay logic — resolved by `_resolve_carrier_mode`, exactly like the monthly
   * boost mode -> calculator.calc_rep_commissions over that day's lines, with the MONTHLY inputs
                   (ePay payment detail, MI, DLAR) deliberately empty, and we take `subtotal`.
 
-A single DAY cannot know a MONTHLY tier attainment. Multiplying a day by a guessed tier is wrong in
-both directions — it over-advances a rep who ends the month at 50%, and under-states one who ends at
-100%. So `base_amount` is the day's un-tiered commission, and the ENTIRE tier effect is recognized
-once, later, as `tier_amount` (below). Two Boost components are likewise deferred because they are
-not knowable from a day's sale lines: the KPI tier (DLAR, monthly) and the trade-in spiff (ePay
-payment detail, monthly). `components.deferred_to_monthly` says so on every row, in words.
+THE TIER BASIS IS TENANT CONFIG. Owner 2026-08-04 (ledger Q18), verbatim: "it will be based on tier
+meeting on that day, it keeps varying throughout the month as their commission changes in the
+individual rep report."
 
-`tier_basis='as_computed'` (opt-in, per tenant) accrues the day's own tier multiplier instead. It
-exists for tenants whose plans tier on something a day CAN attain; it is not the default.
+  'mtd_attained' (DEFAULT) — see mtd_allocate(). The month's sale lines THROUGH that date are run
+      through the same pay logic WITH the real tier attainment, and that month-to-date total is shared
+      across the month's accrued days in proportion to each day's un-tiered commission. Consequence,
+      by construction: SUM(accruals month-to-date) == the individual rep report's month-to-date
+      commission, and the whole current month RESTATES when attainment moves.
+  'none'         — accrue the day un-tiered; the entire tier effect arrives later as the monthly
+      true-up. (This was the original default: a single day cannot know a monthly attainment, so a day
+      multiplied by a guessed tier is wrong in both directions.) Kept as an option for tenants that
+      want the conservative number.
+  'as_computed'  — accrue the day's OWN multiplier, for plans that tier on something a day can attain.
+
+Two Boost components are deferred under EVERY basis because they are not knowable from sale lines at
+all: the KPI tier (DLAR, monthly) and the trade-in spiff (ePay payment detail, monthly).
+`components.deferred_to_monthly` says so on every row, in words, and the monthly true-up below still
+reconciles whatever residual remains at month close.
 
 ════════════════════════════════════════════════════════════════════════════════════════════════════
 MONTHLY TIER / TRUE-UP RECOGNITION — once, replayably
@@ -89,19 +106,59 @@ from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc.commission_engine import _canon_person, _pvariants
 
 # ── config (RULE TWO: every knob below is per-tenant, this is only the fallback) ──────────────────
+# The management roles that may RECORD a cash advance (owner 2026-08-04, ledger Q17: "dm or higher").
+# A store manager is deliberately NOT in this set — handing envelope cash to a rep is a district-level
+# decision. Tenant-overridable via accrual_config.record_roles, and a custom role whose RBAC scope is
+# 'all' or 'market' (i.e. it already spans more than one store) also qualifies.
+DEFAULT_RECORD_ROLES = ("admin", "district_manager", "market_manager", "regional_manager",
+                        "director", "executive")
+
 CODE_DEFAULT = {
     "enabled": True,
+    # ── tier basis (owner 2026-08-04, ledger Q18: "it will be based on tier meeting on that day, it
+    #    keeps varying throughout the month as their commission changes in the individual rep report")
+    # 'mtd_attained' (DEFAULT) — the day is accrued at the tier the rep is MEETING as of that day. The
+    #                  month-to-date total is computed from the month's OWN sale lines through that date
+    #                  with the real tier attainment applied, then allocated across the month's accrued
+    #                  days in proportion to each day's un-tiered commission. Two consequences, both
+    #                  intended: SUM(accrual month-to-date) == the rep report's current month-to-date
+    #                  commission, and when attainment moves mid-month the WHOLE current month restates.
     # 'none'        — accrue the day UN-TIERED; the whole tier effect arrives as the monthly true-up.
     # 'as_computed' — accrue the day's own tier multiplier (only sane when tiers are day-attainable).
-    "tier_basis": "none",
+    "tier_basis": "mtd_attained",
     "tier_recognition": {"mode": "on_run_available", "day_of_month": None, "lookback_months": 3},
     # min_interval_minutes throttles the SWEEP only (never a hand-pressed run): the accrual rides the
     # hourly promote sweep, and without this a burst of promote calls would re-drive preview() for
     # every tenant several times inside one hour for no new information.
     "auto_run": {"enabled": True, "days_back": 1, "min_interval_minutes": 50},
+    # ── over-advance (owner 2026-08-04, ledger Q14: "flag it and keep an option to auto net")
+    # 'flag'     (DEFAULT) — an over-advance is shown and flagged; the next cycle's payable is untouched.
+    # 'auto_net' — a PRIOR cycle's over-advance reduces the employee's NEXT payable balance, and the
+    #              reduction appears as its OWN labelled line ("Less: prior-cycle over-advance applied").
+    #              It still writes nothing to rep_commissions and changes nobody's earned pay — it only
+    #              nets the envelope-advance balance stream.
+    "over_advance_mode": "flag",
+    # ── balance cycle (owner 2026-08-04, ledger Q19: "reset each month and advise the user to clear the
+    #    employee balance at the end of the month / payroll cycle / commission cycle as defined in the
+    #    system"). Balances RESET per cycle; anything unsettled from a prior cycle stays VISIBLE as a
+    #    labelled carry-over line (never hidden, never silently rolled in).
+    "cycle": {
+        "mode": "calendar_month",              # calendar_month | payroll | commission
+        "payroll": {"kind": "semimonthly", "anchor_date": None, "semi_day": 16},
+        "commission": {"end_day": None},       # None = the calendar month end
+        "carry_cycles": 3,                     # how many prior cycles the settlement view lists
+        "settlement_advice_days": 3,           # advise "settle balances" this many days before cycle end
+    },
+    # ── who may record a cash advance (ledger Q17)
+    "record_roles": list(DEFAULT_RECORD_ROLES),
 }
-TIER_BASES = ("none", "as_computed")
+TIER_BASES = ("mtd_attained", "none", "as_computed")
 RECOGNITION_MODES = ("on_run_available", "day_of_month")
+OVER_ADVANCE_MODES = ("flag", "auto_net")
+CYCLE_MODES = ("calendar_month", "payroll", "commission")
+PAYROLL_KINDS = ("weekly", "biweekly", "semimonthly", "monthly")
+# A Monday, used only when a biweekly/weekly payroll cycle has no anchor_date configured.
+_ANCHOR_FALLBACK = _date(2026, 1, 5)
 ACCRUAL_TABLE = "daily_commission_accrual"
 LEDGER_TABLE = "commission_payout_ledger"
 _MISSING_NOTE = ("Migration 267_commission_daily_accrual_payout_ledger.sql has not been run yet — "
@@ -118,6 +175,10 @@ def normalize_config(raw):
     cfg = dict(CODE_DEFAULT)
     cfg["tier_recognition"] = dict(CODE_DEFAULT["tier_recognition"])
     cfg["auto_run"] = dict(CODE_DEFAULT["auto_run"])
+    cfg["cycle"] = dict(CODE_DEFAULT["cycle"])
+    cfg["cycle"]["payroll"] = dict(CODE_DEFAULT["cycle"]["payroll"])
+    cfg["cycle"]["commission"] = dict(CODE_DEFAULT["cycle"]["commission"])
+    cfg["record_roles"] = list(CODE_DEFAULT["record_roles"])
     if not isinstance(raw, dict):
         return cfg
     if "enabled" in raw:
@@ -155,6 +216,53 @@ def normalize_config(raw):
         except Exception:
             mi = CODE_DEFAULT["auto_run"]["min_interval_minutes"]
         cfg["auto_run"]["min_interval_minutes"] = min(1440, max(0, mi))
+    oam = str(raw.get("over_advance_mode") or "").strip().lower()
+    if oam in OVER_ADVANCE_MODES:
+        cfg["over_advance_mode"] = oam
+    cy = raw.get("cycle")
+    if isinstance(cy, dict):
+        mode = str(cy.get("mode") or "").strip().lower()
+        if mode in CYCLE_MODES:
+            cfg["cycle"]["mode"] = mode
+        pr = cy.get("payroll")
+        if isinstance(pr, dict):
+            kind = str(pr.get("kind") or "").strip().lower()
+            if kind in PAYROLL_KINDS:
+                cfg["cycle"]["payroll"]["kind"] = kind
+            anchor = parse_day(pr.get("anchor_date"), None)
+            cfg["cycle"]["payroll"]["anchor_date"] = anchor.isoformat() if anchor else None
+            try:
+                sd = int(pr.get("semi_day"))
+            except Exception:
+                sd = CODE_DEFAULT["cycle"]["payroll"]["semi_day"]
+            # 2..28: a semi-monthly split on the 1st would make the first half empty, and a split past
+            # the 28th would not exist in February.
+            cfg["cycle"]["payroll"]["semi_day"] = min(28, max(2, sd))
+        cm = cy.get("commission")
+        if isinstance(cm, dict):
+            ed = cm.get("end_day")
+            try:
+                ed = int(ed) if ed not in (None, "") else None
+            except Exception:
+                ed = None
+            cfg["cycle"]["commission"]["end_day"] = min(31, max(1, ed)) if ed else None
+        try:
+            cc = int(cy.get("carry_cycles"))
+        except Exception:
+            cc = CODE_DEFAULT["cycle"]["carry_cycles"]
+        cfg["cycle"]["carry_cycles"] = min(12, max(0, cc))
+        try:
+            sa = int(cy.get("settlement_advice_days"))
+        except Exception:
+            sa = CODE_DEFAULT["cycle"]["settlement_advice_days"]
+        cfg["cycle"]["settlement_advice_days"] = min(28, max(0, sa))
+    rr = raw.get("record_roles")
+    if isinstance(rr, (list, tuple)):
+        roles = sorted({str(x).strip().lower() for x in rr if str(x or "").strip()})
+        # An EMPTY list would lock every non-super-admin out of recording cash, so it falls back to the
+        # default set rather than bricking the envelope flow (one-directional-safe, like every clamp
+        # above).
+        cfg["record_roles"] = roles or list(DEFAULT_RECORD_ROLES)
     return cfg
 
 
@@ -234,6 +342,105 @@ def recognition_earliest(source_month_first_day, cfg):
     return nxt
 
 
+# ── balance CYCLES (ledger Q19) — pure, deterministic, tenant-configured ──────────────────────────
+def _cycle_label(start, end, mode):
+    """A human label for a cycle. A calendar month reads as "August 2026"; anything else names its real
+    span, because "August 2026" would be a lie for an Aug 16–31 payroll half. PURE."""
+    if mode == "calendar_month" or (start == month_bounds(start)[0] and end == month_bounds(start)[1]):
+        return period_label(start)
+    if start.year == end.year and start.month == end.month:
+        return f"{_calendar.month_abbr[start.month]} {start.day}–{end.day} {start.year}"
+    if start.year == end.year:
+        return (f"{_calendar.month_abbr[start.month]} {start.day} – "
+                f"{_calendar.month_abbr[end.month]} {end.day} {start.year}")
+    return f"{start.isoformat()} – {end.isoformat()}"
+
+
+def cycle_bounds(day, cfg=None):
+    """(start, end, label, mode) of the balance CYCLE that `day` falls in. PURE and deterministic.
+
+    Owner 2026-08-04 (ledger Q19): balances "reset each month … or payroll cycle / commission cycle as
+    defined in the system". The cycle is therefore tenant config, never a constant:
+
+      calendar_month (default) — the 1st to the month end.
+      payroll                  — semimonthly (1..semi_day-1 / semi_day..month end), biweekly or weekly
+                                 from an anchor date, or monthly.
+      commission               — the commission cycle: it CLOSES on `end_day` (e.g. the 25th), so the
+                                 cycle runs (end_day+1 of the previous month) .. (end_day of this one).
+                                 end_day is clamped to each month's real length, so a tenant who picks
+                                 the 31st still closes in February.
+
+    Nothing here moves money — a cycle only decides which advances and accruals are shown together and
+    when the "settle balances" advisory appears."""
+    cy = ((cfg or {}).get("cycle") or {})
+    if not isinstance(cy, dict):
+        cy = {}
+    mode = str(cy.get("mode") or "calendar_month").strip().lower()
+    if mode not in CYCLE_MODES:
+        mode = "calendar_month"
+    first, last = month_bounds(day)
+
+    if mode == "payroll":
+        p = cy.get("payroll") if isinstance(cy.get("payroll"), dict) else {}
+        kind = str(p.get("kind") or "semimonthly").strip().lower()
+        if kind not in PAYROLL_KINDS:
+            kind = "semimonthly"
+        if kind == "semimonthly":
+            try:
+                sd = int(p.get("semi_day") or CODE_DEFAULT["cycle"]["payroll"]["semi_day"])
+            except Exception:
+                sd = CODE_DEFAULT["cycle"]["payroll"]["semi_day"]
+            sd = min(max(2, sd), last.day)
+            if day.day < sd:
+                s, e = first, _date(day.year, day.month, sd - 1)
+            else:
+                s, e = _date(day.year, day.month, sd), last
+        elif kind in ("biweekly", "weekly"):
+            n = 14 if kind == "biweekly" else 7
+            anchor = parse_day(p.get("anchor_date"), None) or _ANCHOR_FALLBACK
+            k = (day - anchor).days // n          # floor division: correct before the anchor too
+            s = anchor + _timedelta(days=k * n)
+            e = s + _timedelta(days=n - 1)
+        else:
+            s, e = first, last
+    elif mode == "commission":
+        cm = cy.get("commission") if isinstance(cy.get("commission"), dict) else {}
+        try:
+            ed = int(cm.get("end_day")) if cm.get("end_day") not in (None, "") else None
+        except Exception:
+            ed = None
+        if not ed:
+            s, e = first, last
+        else:
+            def _close(d):
+                f, l = month_bounds(d)
+                return _date(d.year, d.month, min(int(ed), l.day))
+            this_close = _close(day)
+            if day <= this_close:
+                s = _close(add_months(first, -1)) + _timedelta(days=1)
+                e = this_close
+            else:
+                s = this_close + _timedelta(days=1)
+                e = _close(add_months(first, 1))
+    else:
+        s, e = first, last
+    return s, e, _cycle_label(s, e, mode), mode
+
+
+def previous_cycle(start, cfg=None):
+    """The cycle immediately before the one starting at `start`. PURE."""
+    return cycle_bounds(start - _timedelta(days=1), cfg)
+
+
+def cycle_series(day, cfg=None, back=3):
+    """[oldest … current] cycles ending with the one containing `day`. PURE, bounded by `back`."""
+    cur = cycle_bounds(day, cfg)
+    out = [cur]
+    for _ in range(max(0, int(back or 0))):
+        out.insert(0, previous_cycle(out[0][0], cfg))
+    return out
+
+
 def _table_missing(exc):
     """True when the exception looks like 'migration 267 has not been run'. Anything else is a real
     error and is re-raised by the caller, so a genuine outage is never silently reported as 'not set
@@ -298,20 +505,23 @@ def _pick_day_rows(raw, feed):
     return raw, "raw_sales"
 
 
-def read_day_sales(client, org_id, day):
-    """That ONE day's sale lines, org-scoped: (rows, source_table, read_error).
+def read_sales_range(client, org_id, start_day, end_day):
+    """Sale lines for [start_day, end_day] inclusive, org-scoped: (rows, source_table, read_error).
 
     Reads by trans_date, NOT by period, so the period-spelling bug class ('June 2026' vs '2026-06')
     cannot reach it. `read_error` is True only when BOTH tables failed to read — the caller must then
     write nothing at all, because "I couldn't read the sales" and "there were no sales" have to have
-    different consequences (the second legitimately clears a day, the first must never)."""
-    iso = day.isoformat()
+    different consequences (the second legitimately clears a day, the first must never).
+
+    ONE window read serves both the day and the month-to-date pass of the 'mtd_attained' basis, so the
+    two can never disagree about which table the month came from."""
+    s, e = start_day.isoformat(), end_day.isoformat()
 
     def _page(table):
         out, start, page = [], 0, 1000
         while True:
             rows = (client.schema("commcalc").table(table).select("*")
-                    .eq("org_id", org_id).eq("trans_date", iso)
+                    .eq("org_id", org_id).gte("trans_date", s).lte("trans_date", e)
                     .range(start, start + page - 1).execute().data) or []
             out.extend(rows)
             if len(rows) < page:
@@ -333,31 +543,61 @@ def read_day_sales(client, org_id, day):
     return rows, table, (ok == 0)
 
 
+def read_day_sales(client, org_id, day):
+    """That ONE day's sale lines, org-scoped: (rows, source_table, read_error). See read_sales_range."""
+    return read_sales_range(client, org_id, day, day)
+
+
+def day_of(row):
+    """A sale line's trans_date as a date (None when unparseable). PURE."""
+    return parse_day(row.get("trans_date"), None)
+
+
 # ── computing one day ────────────────────────────────────────────────────────────────────────────
+def resolve_mode(client, org_id, carrier_mode=None):
+    """This tenant's carrier mode ('boost' | 'plan') — the same resolver the monthly calc uses."""
+    if carrier_mode is not None:
+        return carrier_mode
+    from app.modules.commcalc import router as _r          # lazy: router imports this module
+    try:
+        carriers = (client.schema("commcalc").table("carrier").select("*")
+                    .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        carriers = []
+    return _r._resolve_carrier_mode(carriers)
+
+
+def _engine_rows(client, org_id, period, lines, cfg, smap, source_table, carrier_mode):
+    """The tenant's REAL pay logic over `lines`, as accrual rows. One switch, used by both the day pass
+    and the month-to-date pass so the two can never diverge."""
+    if carrier_mode != "boost":
+        return _compute_day_plan(client, org_id, period, lines, cfg, smap, source_table)
+    return _compute_day_boost(client, org_id, period, lines, cfg, smap, source_table)
+
+
 def compute_day(client, org_id, day, cfg=None, carrier_mode=None):
     """Per-employee accrual rows for ONE date. READ-ONLY — writes nothing.
 
-    Returns {ready, mode, work_date, source_table, sale_lines, rows:[...], note}. Each row:
-    {employee_key, employee_name, store_code, store_raw, base_amount, components}.
+    Returns {ready, mode, work_date, source_table, sale_lines, rows:[...], restate:[...], note}. Each
+    row: {employee_key, employee_name, store_code, store_raw, base_amount, components}.
 
-    LIGHT BY CONSTRUCTION: one day of sale lines, one plan/calculator pass over them. It never calls
-    _run_calculation, never touches the 300s-502-prone recompute path, and never deletes or rewrites
-    anything a payout reads."""
+    LIGHT BY CONSTRUCTION: under the 'none'/'as_computed' bases this reads ONE day of sale lines and
+    makes ONE plan/calculator pass over them. Under the default 'mtd_attained' basis it reads the
+    month-to-date WINDOW once and makes two passes over it (the window and the day inside it) — still
+    a single bounded read and never `_run_calculation`, never the 300s-502-prone recompute path, and
+    never a delete/rewrite of anything a payout reads.
+
+    `restate` is non-empty only under 'mtd_attained': it is the OTHER days of the same month whose
+    allocated amount moved because attainment changed (see mtd_allocate)."""
     cfg = cfg or normalize_config(None)
-    from app.modules.commcalc import router as _r          # lazy: router imports this module
-
-    if carrier_mode is None:
-        try:
-            carriers = (client.schema("commcalc").table("carrier").select("*")
-                        .eq("org_id", org_id).execute().data) or []
-        except Exception:
-            carriers = []
-        carrier_mode = _r._resolve_carrier_mode(carriers)
+    carrier_mode = resolve_mode(client, org_id, carrier_mode)
+    if (cfg.get("tier_basis") or "") == "mtd_attained":
+        return mtd_allocate(client, org_id, day, cfg, carrier_mode)
 
     lines, source_table, read_error = read_day_sales(client, org_id, day)
     if read_error:
         return {"ready": True, "mode": carrier_mode, "work_date": day.isoformat(), "rows": [],
-                "sale_lines": 0, "source_table": None, "read_error": True,
+                "restate": [], "sale_lines": 0, "source_table": None, "read_error": True,
                 "note": ("neither raw_sales nor daily_sales_feed could be read for this date — "
                          "nothing was computed and nothing will be written")}
 
@@ -366,14 +606,13 @@ def compute_day(client, org_id, day, cfg=None, carrier_mode=None):
 
     if not lines:
         return {"ready": True, "mode": carrier_mode, "work_date": day.isoformat(), "rows": [],
-                "sale_lines": 0, "source_table": source_table, "read_error": False,
+                "restate": [], "sale_lines": 0, "source_table": source_table, "read_error": False,
                 "note": "no sale lines for this date (nothing accrued — not an error)"}
 
-    rows = (_compute_day_plan(client, org_id, period, lines, cfg, smap, source_table)
-            if carrier_mode != "boost"
-            else _compute_day_boost(client, org_id, period, lines, cfg, smap, source_table))
+    rows = _engine_rows(client, org_id, period, lines, cfg, smap, source_table, carrier_mode)
     return {"ready": True, "mode": carrier_mode, "work_date": day.isoformat(), "rows": rows,
-            "sale_lines": len(lines), "source_table": source_table, "read_error": False, "note": None}
+            "restate": [], "sale_lines": len(lines), "source_table": source_table,
+            "read_error": False, "note": None}
 
 
 def _compute_day_plan(client, org_id, period, lines, cfg, smap, source_table):
@@ -388,7 +627,8 @@ def _compute_day_plan(client, org_id, period, lines, cfg, smap, source_table):
     res = _ce.preview(client, org_id, period, sales_override=lines)
     if not res.get("ready"):
         return []
-    tier_as_computed = (cfg.get("tier_basis") == "as_computed")
+    basis = cfg.get("tier_basis") or "none"
+    tier_as_computed = (basis == "as_computed")
     out = []
     for r in res.get("by_rep") or []:
         base = safe_float(r.get("base_payout"))
@@ -413,6 +653,11 @@ def _compute_day_plan(client, org_id, period, lines, cfg, smap, source_table):
                 "market": r.get("market"),
                 "rule_payout": _round(base + tiered),
                 "setup_fee_comm": _round(setup),
+                # the two numbers the MTD basis aims at: what these lines pay WITHOUT the tier
+                # multiplier, and what they pay WITH the attainment these very lines produce (which,
+                # over a month-to-date window, IS the rep report's month-to-date commission).
+                "untiered_total": _round(base + tiered + setup),
+                "tiered_total": _round(base + tiered * mult + setup),
                 "qualifying_units": r.get("qualifying_units"),
                 "day_tier_multiplier": mult,
                 "tier_basis": cfg.get("tier_basis"),
@@ -421,12 +666,9 @@ def _compute_day_plan(client, org_id, period, lines, cfg, smap, source_table):
                            "qualifying_units": rb.get("qualifying_units"),
                            "tiered": rb.get("tiered"), "payout": _round(rb.get("payout"))}
                           for rb in (r.get("rules") or [])],
-                "deferred_to_monthly": ([] if tier_as_computed else ["plan_tier_multiplier"]),
-                "explain": ("Un-tiered day total: the plan's tier multiplier is a MONTHLY attainment "
-                            "and is recognized once, later, as the monthly true-up."
-                            if not tier_as_computed else
-                            "Includes this day's own tier multiplier (tenant setting "
-                            "tier_basis='as_computed')."),
+                "deferred_to_monthly": ([] if basis in ("as_computed", "mtd_attained")
+                                        else ["plan_tier_multiplier"]),
+                "explain": _basis_explain(basis, "plan"),
             },
         })
     return out
@@ -472,7 +714,8 @@ def _compute_day_boost(client, org_id, period, lines, cfg, smap, source_table):
         shifts=[], employees=_fetch("employees"), stores=_fetch("stores"),
         period=period, name_map=_fetch("name_map"), carrier_mode="boost")
 
-    tier_as_computed = (cfg.get("tier_basis") == "as_computed")
+    basis = cfg.get("tier_basis") or "none"
+    tier_as_computed = (basis == "as_computed")
     out = []
     for r in res.get("commissions") or []:
         name = str(r.get("epay_salesperson") or "").strip()
@@ -500,15 +743,248 @@ def _compute_day_boost(client, org_id, period, lines, cfg, smap, source_table):
                 "acima_comm": _round(r.get("acima_comm")),
                 "custom_comm": _round(r.get("custom_comm")),
                 "subtotal": _round(subtotal),
+                # Boost: the KPI tier multiplier comes from the MONTHLY DLAR, which a sales-only window
+                # cannot know, so the month-to-date target is the un-tiered subtotal for BOTH numbers.
+                # The KPI tier stays deferred to the monthly true-up under every basis (see explain).
+                "untiered_total": _round(subtotal),
+                "tiered_total": _round(subtotal),
                 "tier_basis": cfg.get("tier_basis"),
-                "deferred_to_monthly": (["kpi_tier", "trade_in_spiff"] if not tier_as_computed
-                                        else ["trade_in_spiff"]),
-                "explain": ("Un-tiered day total. The KPI tier comes from the MONTHLY DLAR and the "
-                            "trade-in spiff from the MONTHLY ePay payment detail — neither is knowable "
-                            "from one day's sales, so both arrive in the monthly true-up."),
+                "deferred_to_monthly": (["trade_in_spiff"] if tier_as_computed
+                                        else ["kpi_tier", "trade_in_spiff"]),
+                "explain": _basis_explain(basis, "boost"),
             },
         })
     return out
+
+
+# ── the 'mtd_attained' basis (ledger Q18) ────────────────────────────────────────────────────────
+def _basis_explain(basis, mode):
+    """The plain-language sentence stored on every accrual row. It is SHOWN TO REPS, so it has to say
+    what the number is, not merely assert it."""
+    if basis == "mtd_attained":
+        if mode == "boost":
+            return ("This day's share of the month-to-date commission at the tier the rep is meeting "
+                    "TODAY. The KPI tier comes from the MONTHLY DLAR and the trade-in spiff from the "
+                    "MONTHLY ePay payment detail — neither is knowable from sales alone, so both still "
+                    "arrive in the monthly true-up. The month restates as attainment moves.")
+        return ("This day's share of the month-to-date commission at the tier the rep is meeting TODAY. "
+                "The month-to-date total is computed from this month's own sale lines with the real tier "
+                "attainment applied and shared across the month's accrued days, so the days add up to "
+                "what the rep report shows today — and the whole month restates when attainment moves.")
+    if basis == "as_computed":
+        return ("Includes this day's own tier multiplier (tenant setting tier_basis='as_computed').")
+    if mode == "boost":
+        return ("Un-tiered day total. The KPI tier comes from the MONTHLY DLAR and the trade-in spiff "
+                "from the MONTHLY ePay payment detail — neither is knowable from one day's sales, so "
+                "both arrive in the monthly true-up.")
+    return ("Un-tiered day total: the plan's tier multiplier is a MONTHLY attainment and is recognized "
+            "once, later, as the monthly true-up.")
+
+
+def _row_weight(row):
+    """The ALLOCATION WEIGHT of a stored accrual row: the day's own UN-TIERED commission.
+
+    Read from components.mtd.untiered_base when the row has already been allocated, else from
+    base_amount (which is exactly the un-tiered figure for a row written under the 'none' basis — so a
+    tenant switching basis mid-month re-weights correctly on the first run). Reading the weight rather
+    than the already-scaled amount is what makes a re-run IDEMPOTENT: scaling never compounds."""
+    comp = row.get("components") or {}
+    if isinstance(comp, dict):
+        m = comp.get("mtd")
+        if isinstance(m, dict) and m.get("untiered_base") is not None:
+            return safe_float(m.get("untiered_base"))
+    return safe_float(row.get("base_amount"))
+
+
+def _allocate(target, entries):
+    """Split `target` across `entries` (each {weight}) in proportion to weight, EXACTLY. PURE.
+
+    The last entry absorbs the rounding residue, so the allocated amounts always sum to `target` to the
+    cent — the whole point of this basis is that the days add up to the rep report's month-to-date
+    number, and a half-cent of float drift would break that claim on every export."""
+    if not entries:
+        return []
+    total = sum(safe_float(e["weight"]) for e in entries)
+    out = []
+    if total <= 0:
+        # No un-tiered weight anywhere (e.g. every rule paid $0 but a flat month-to-date figure exists).
+        # Put it all on the LAST entry rather than inventing a split.
+        for e in entries[:-1]:
+            out.append(0.0)
+        out.append(_round(target))
+        return out
+    run = 0.0
+    for e in entries[:-1]:
+        v = _round(safe_float(e["weight"]) / total * target)
+        run = _round(run + v)
+        out.append(v)
+    out.append(_round(target - run))
+    return out
+
+
+def mtd_allocate(client, org_id, day, cfg, carrier_mode):
+    """The DEFAULT basis (owner 2026-08-04, ledger Q18): accrue each day at the tier the rep is MEETING.
+
+    Owner, verbatim: "it will be based on tier meeting on that day, it keeps varying throughout the
+    month as their commission changes in the individual rep report."
+
+    HOW, and why this shape:
+      1. Read this month's sale lines ONCE, from the 1st through `edge` (= the later of `day` and the
+         last day already accrued this month, capped at month end).
+      2. Run the tenant's REAL pay logic over that whole window. For a plan-mode tenant that is
+         commission_engine.preview() — the same function the monthly payout runs through — so the
+         window total IS what the individual rep report shows for the month to date, tier and all.
+      3. Run the same logic over `day`'s lines alone to get the day's UN-TIERED commission. That is the
+         allocation WEIGHT, not the answer.
+      4. Share the month-to-date total across every accrued day of the month in proportion to those
+         weights, to the cent.
+
+    Therefore SUM(accruals month-to-date) == the rep report's month-to-date commission, by construction,
+    and when attainment moves mid-month EVERY day of the current month restates (that is the "keeps
+    varying" the owner described — a rep who crosses into 2.0x sees the whole month lift, not just the
+    day they crossed).
+
+    IDEMPOTENT: the weights are read from `components.mtd.untiered_base`, never from the already-scaled
+    amount, so re-running a date recomputes the identical split instead of compounding it. It is also
+    ORDER-INDEPENDENT — the allocation is a pure function of the month's sale lines plus the stored
+    weights.
+
+    STILL NOT PAY. Every number here is expected/probable; nothing is written to rep_commissions, and
+    the monthly true-up still reconciles whatever residual remains at month close (for Boost that is
+    always the KPI tier + trade-in spiff, which sales alone cannot know)."""
+    m_first, m_last = month_bounds(day)
+    period = period_label(day)
+    empty = {"ready": True, "mode": carrier_mode, "work_date": day.isoformat(), "rows": [],
+             "restate": [], "sale_lines": 0, "source_table": None, "read_error": False,
+             "tier_basis": "mtd_attained"}
+
+    try:
+        stored = _page_accruals(client, org_id, m_last, since=m_first)
+    except Exception as e:
+        if not _table_missing(e):
+            raise
+        stored = []                       # pre-migration: degrade to "this day only"
+
+    edge = day
+    for r in stored:
+        wd = parse_day(r.get("work_date"), None)
+        if wd and wd > edge:
+            edge = wd
+    edge = min(edge, m_last)
+
+    window, source_table, read_error = read_sales_range(client, org_id, m_first, edge)
+    if read_error:
+        out = dict(empty)
+        out.update({"read_error": True,
+                    "note": ("neither raw_sales nor daily_sales_feed could be read for this month — "
+                             "nothing was computed and nothing will be written")})
+        return out
+
+    smap = store_code_map(client, org_id)
+    day_lines = [r for r in window if day_of(r) == day]
+    day_rows = (_engine_rows(client, org_id, period, day_lines, cfg, smap, source_table, carrier_mode)
+                if day_lines else [])
+    mtd_rows = (_engine_rows(client, org_id, period, window, cfg, smap, source_table, carrier_mode)
+                if window else [])
+
+    target, untiered, meta = {}, {}, {}
+    for r in mtd_rows:
+        k = r["employee_key"]
+        c = r.get("components") or {}
+        target[k] = _round(target.get(k, 0.0) + safe_float(c.get("tiered_total", r.get("base_amount"))))
+        untiered[k] = _round(untiered.get(k, 0.0) + safe_float(c.get("untiered_total", r.get("base_amount"))))
+        meta.setdefault(k, {"name": r.get("employee_name"), "store_code": r.get("store_code"),
+                            "store_raw": r.get("store_raw"), "multiplier": (c or {}).get("day_tier_multiplier")})
+
+    # ── build the allocation entries: this day's FRESH rows + every OTHER stored day of the month ──
+    entries = {}
+    for r in day_rows:
+        entries.setdefault(r["employee_key"], []).append(
+            {"kind": "day", "work_date": day.isoformat(), "store_code": r.get("store_code") or "",
+             "weight": safe_float(r.get("base_amount")), "row": r})
+    iso_day = day.isoformat()
+    for r in stored:
+        wd = str(r.get("work_date") or "")[:10]
+        if wd == iso_day:
+            continue                       # this day is being recomputed from scratch above
+        k = r.get("employee_key") or ""
+        if not k:
+            continue
+        entries.setdefault(k, []).append(
+            {"kind": "stored", "work_date": wd, "store_code": str(r.get("store_code") or ""),
+             "weight": _row_weight(r), "stored": r})
+
+    # an employee the month-to-date pass pays but with no accrued day at all (their days were never
+    # accrued): give them a row on `day` rather than losing the money, and say so in words.
+    for k, amt in target.items():
+        if k in entries or abs(amt) < 0.005:
+            continue
+        info = meta.get(k) or {}
+        code = info.get("store_code") or resolve_store_code(info.get("store_raw"), smap)
+        row = {"employee_key": k, "employee_name": info.get("name") or k, "store_code": code or "",
+               "store_raw": info.get("store_raw") or "", "base_amount": 0.0,
+               "components": {"mode": "mtd_only", "source_table": source_table,
+                              "explain": ("No accrued day carries this rep's weight yet, so the whole "
+                                          "month-to-date figure is shown here.")}}
+        day_rows.append(row)
+        entries.setdefault(k, []).append(
+            {"kind": "day", "work_date": iso_day, "store_code": code or "", "weight": 0.0,
+             "row": row, "no_weights": True})
+
+    restate = []
+    for k, items in entries.items():
+        items.sort(key=lambda x: (x["work_date"], x["store_code"]))
+        tgt = safe_float(target.get(k, 0.0))
+        unt = safe_float(untiered.get(k, 0.0))
+        total_w = _round(sum(safe_float(i["weight"]) for i in items))
+        factor = round(tgt / total_w, 6) if total_w else None
+        amounts = _allocate(tgt, items)
+        for it, amt in zip(items, amounts):
+            mtd_block = {
+                "basis": "mtd_attained", "period": period,
+                "untiered_base": _round(it["weight"]),
+                "factor": factor, "mtd_total": _round(tgt), "mtd_untiered": _round(unt),
+                "mtd_through": edge.isoformat(), "allocated": _round(amt),
+                "days_in_allocation": len(items),
+                "no_daily_weights": bool(it.get("no_weights")) or (total_w == 0 and tgt != 0),
+                "explain": (f"Month-to-date ({period}, through {edge.isoformat()}) this rep's commission "
+                            f"is ${_round(tgt):,.2f} at the tier they are meeting now"
+                            + (f" (x{factor:.4g} on ${_round(unt):,.2f} un-tiered)" if factor else "")
+                            + f"; this day's ${_round(it['weight']):,.2f} of un-tiered commission is "
+                              f"{'its share' if total_w else 'carrying the whole figure'} of it, "
+                              f"${_round(amt):,.2f}. The month restates as attainment moves."),
+            }
+            if it["kind"] == "day":
+                row = it["row"]
+                row["base_amount"] = _round(amt)
+                comp = row.setdefault("components", {})
+                comp["mtd"] = mtd_block
+                comp["tier_basis"] = "mtd_attained"
+            else:
+                s = it["stored"]
+                if abs(safe_float(s.get("base_amount")) - _round(amt)) < 0.005 and \
+                        isinstance((s.get("components") or {}).get("mtd"), dict) and \
+                        (s["components"]["mtd"] or {}).get("mtd_total") == _round(tgt):
+                    continue               # already correct — do not rewrite an unchanged row
+                comp = dict(s.get("components") or {})
+                comp["mtd"] = mtd_block
+                comp["tier_basis"] = "mtd_attained"
+                tier = _round(s.get("tier_amount"))
+                restate.append({
+                    "work_date": it["work_date"], "employee_key": k,
+                    "store_code": it["store_code"], "employee_name": s.get("employee_name"),
+                    "base_amount": _round(amt), "tier_amount": tier,
+                    "total_amount": _round(_round(amt) + tier), "components": comp,
+                })
+
+    note = None
+    if not day_lines:
+        note = "no sale lines for this date (nothing accrued — not an error)"
+    return {"ready": True, "mode": carrier_mode, "work_date": day.isoformat(),
+            "rows": day_rows, "restate": restate, "sale_lines": len(day_lines),
+            "source_table": source_table, "read_error": False, "tier_basis": "mtd_attained",
+            "mtd_through": edge.isoformat(), "mtd_window_lines": len(window),
+            "mtd_totals": {k: _round(v) for k, v in target.items()}, "note": note}
 
 
 # ── monthly tier / true-up recognition ───────────────────────────────────────────────────────────
@@ -742,12 +1218,31 @@ def run_day(client, org_id, day, cfg=None, carrier_mode=None):
             "computed_at": now_iso,
         })
 
+    # RESTATEMENT (tier_basis='mtd_attained', ledger Q18). When attainment moves, the OTHER days of the
+    # current month are re-allocated so the month still adds up to the rep report's month-to-date
+    # number. These rows carry their own (already recognized) tier_amount untouched — only the allocated
+    # base moves, and only inside the month `day` belongs to.
+    restated = []
+    for r in (day_res.get("restate") or []):
+        restated.append({
+            "org_id": org_id,                       # RULE ONE write side, on the restatement too
+            "work_date": r["work_date"], "employee_key": r["employee_key"],
+            "store_code": r.get("store_code") or "", "employee_name": r.get("employee_name"),
+            "base_amount": _round(r.get("base_amount")), "tier_amount": _round(r.get("tier_amount")),
+            "total_amount": _round(r.get("total_amount")), "components": r.get("components") or {},
+            "computed_at": now_iso,
+        })
+
     try:
         if payload:
             for i in range(0, len(payload), 500):
                 (client.schema("commcalc").table(ACCRUAL_TABLE)
                  .upsert(payload[i:i + 500],
                          on_conflict="org_id,work_date,employee_key,store_code").execute())
+        for i in range(0, len(restated), 500):
+            (client.schema("commcalc").table(ACCRUAL_TABLE)
+             .upsert(restated[i:i + 500],
+                     on_conflict="org_id,work_date,employee_key,store_code").execute())
         # drop rows for this date that the recomputation no longer produces (idempotent replace)
         existing = (client.schema("commcalc").table(ACCRUAL_TABLE).select("id,employee_key,store_code")
                     .eq("org_id", org_id).eq("work_date", day.isoformat())
@@ -766,6 +1261,8 @@ def run_day(client, org_id, day, cfg=None, carrier_mode=None):
     return {"ready": True, "org_id": org_id, "date": day.isoformat(), "mode": day_res.get("mode"),
             "source_table": day_res.get("source_table"), "sale_lines": day_res.get("sale_lines", 0),
             "employees": len(payload), "written": len(payload), "removed": len(stale),
+            "restated": len(restated), "tier_basis": cfg.get("tier_basis"),
+            "mtd_through": day_res.get("mtd_through"),
             "base_total": _round(sum(p["base_amount"] for p in payload)),
             "tier_recognized": tier_total, "tier_recognitions": len(pend),
             "note": day_res.get("note")}
@@ -808,16 +1305,38 @@ def _page_ledger(client, org_id, until, employee_key=None, store_code=None, sinc
         start_i += page
 
 
-def accrued(client, org_id, as_of, employee_key=None, store_code=None, keyset=None, since=None):
-    """GET /commcalc/payout/accrued — per-employee accrued / paid / unpaid as of a date.
+def accrued(client, org_id, as_of, employee_key=None, store_code=None, keyset=None, since=None,
+            cfg=None):
+    """GET /commcalc/payout/accrued — per-employee accrued / advanced / balance for the CURRENT CYCLE.
 
     Shape is FIXED by docs/specs/envelope-expense-payout.md (retail-ops' payout-due endpoint consumes
     it): {employees:[{employee_key, name, store_codes[], accrued_total, paid_total, unpaid_balance,
-    today_accrual, components:{base,tier}}], as_of}. Additional keys (flags, counts, note) are additive
-    and safe for that consumer to ignore.
+    today_accrual, components:{base,tier}}], as_of}. Additional keys (cycle, carry-over, due_now, lines,
+    flags, counts, note) are additive and safe for that consumer to ignore.
 
-    accrued_total is the LIFETIME accrual up to as_of, and paid_total the lifetime advances, because
-    the useful figure for the envelope is a running unpaid BALANCE, not a month-slice."""
+    ── PER-CYCLE BALANCES (owner 2026-08-04, ledger Q19) ──────────────────────────────────────────
+    Owner, verbatim: "reset each month and advise the user to clear the employee balance at the end of
+    the month / payroll cycle / commission cycle as defined in the system; also the cash can carry over
+    to next month as it might or might not be picked up."
+
+    So `accrued_total` / `paid_total` / `unpaid_balance` are THIS CYCLE's figures (cycle = calendar
+    month by default, or the tenant's payroll / commission cycle — see cycle_bounds). Anything left
+    unsettled from an earlier cycle is NOT swept under the rug and NOT silently rolled in: it is a
+    labelled `carry_over` line, visible on every surface, and settling it is a human decision (the
+    settlement checklist). Lifetime figures are still returned as `lifetime_*` for anyone who wants the
+    running total. NOTE: envelope CASH physically carrying to the next month is retail-ops' cash
+    position, not this stream — nothing here moves or hides it.
+
+    ── OVER-ADVANCE (ledger Q14) ─────────────────────────────────────────────────────────────────
+    Owner: "flag it and keep an option to auto net". Default `over_advance_mode='flag'` — the
+    over-advance is flagged and NOTHING is netted. With `'auto_net'`, a PRIOR cycle's over-advance
+    reduces this cycle's `due_now`, and the reduction is its OWN labelled line in `lines[]` ("Less:
+    prior-cycle over-advance applied") so it can never happen silently. Under either mode this writes
+    nothing, changes no accrual and never touches rep_commissions: it nets the ENVELOPE-ADVANCE balance
+    stream only, and what the rep is actually owed at month end is unaffected."""
+    cfg = cfg if cfg is not None else load_config(client, org_id)
+    c_start, c_end, c_label, c_mode = cycle_bounds(as_of, cfg)
+    mode = (cfg.get("over_advance_mode") or "flag")
     try:
         arows = _page_accruals(client, org_id, as_of, employee_key, store_code, since)
         lrows = _page_ledger(client, org_id, as_of, employee_key, store_code, since)
@@ -835,12 +1354,15 @@ def accrued(client, org_id, as_of, employee_key=None, store_code=None, keyset=No
                           "accrued_total": 0.0, "paid_total": 0.0, "unpaid_balance": 0.0,
                           "today_accrual": 0.0, "components": {"base": 0.0, "tier": 0.0},
                           "accrual_days": 0, "payout_count": 0, "last_paid_date": None,
-                          "last_accrual_date": None}
+                          "last_accrual_date": None,
+                          "prior_accrued": 0.0, "prior_paid": 0.0,
+                          "lifetime_accrued": 0.0, "lifetime_paid": 0.0}
         if name and (e["name"] == k or not e["name"]):
             e["name"] = name
         return e
 
     iso = as_of.isoformat()
+    c_start_iso = c_start.isoformat()
     for r in arows:
         k = r.get("employee_key") or ""
         if not k:
@@ -852,13 +1374,18 @@ def accrued(client, org_id, as_of, employee_key=None, store_code=None, keyset=No
         if keyset is not None and code and not _in_keys(keyset, code):
             continue
         e = _slot(k, r.get("employee_name"))
-        e["accrued_total"] = _round(e["accrued_total"] + safe_float(r.get("total_amount")))
-        e["components"]["base"] = _round(e["components"]["base"] + safe_float(r.get("base_amount")))
-        e["components"]["tier"] = _round(e["components"]["tier"] + safe_float(r.get("tier_amount")))
-        e["accrual_days"] += 1
+        amt = safe_float(r.get("total_amount"))
         wd = str(r.get("work_date") or "")[:10]
+        e["lifetime_accrued"] = _round(e["lifetime_accrued"] + amt)
+        if wd >= c_start_iso:
+            e["accrued_total"] = _round(e["accrued_total"] + amt)
+            e["components"]["base"] = _round(e["components"]["base"] + safe_float(r.get("base_amount")))
+            e["components"]["tier"] = _round(e["components"]["tier"] + safe_float(r.get("tier_amount")))
+            e["accrual_days"] += 1
+        else:
+            e["prior_accrued"] = _round(e["prior_accrued"] + amt)
         if wd == iso:
-            e["today_accrual"] = _round(e["today_accrual"] + safe_float(r.get("total_amount")))
+            e["today_accrual"] = _round(e["today_accrual"] + amt)
         if code and code not in e["store_codes"]:
             e["store_codes"].append(code)
         if wd and (e["last_accrual_date"] is None or wd > e["last_accrual_date"]):
@@ -874,33 +1401,234 @@ def accrued(client, org_id, as_of, employee_key=None, store_code=None, keyset=No
         # A payout for someone with no accrual row still belongs in the answer — that IS the
         # over-advance case, and dropping it would hide exactly what the flag exists to show.
         e = _slot(k, r.get("employee_name"))
-        e["paid_total"] = _round(e["paid_total"] + safe_float(r.get("amount")))
-        e["payout_count"] += 1
+        amt = safe_float(r.get("amount"))
         pd = str(r.get("paid_date") or "")[:10]
+        e["lifetime_paid"] = _round(e["lifetime_paid"] + amt)
+        if pd >= c_start_iso:
+            e["paid_total"] = _round(e["paid_total"] + amt)
+            e["payout_count"] += 1
+        else:
+            e["prior_paid"] = _round(e["prior_paid"] + amt)
         if pd and (e["last_paid_date"] is None or pd > e["last_paid_date"]):
             e["last_paid_date"] = pd
         if code and code not in e["store_codes"]:
             e["store_codes"].append(code)
 
+    prior_label = previous_cycle(c_start, cfg)[2]
     out = []
     for e in emp.values():
         e["unpaid_balance"] = _round(e["accrued_total"] - e["paid_total"])
+        e["lifetime_balance"] = _round(e["lifetime_accrued"] - e["lifetime_paid"])
+        e["carry_over"] = _round(e["prior_accrued"] - e["prior_paid"])
         e["over_advanced"] = bool(e["paid_total"] - e["accrued_total"] > 0.005)
         e["over_advance_amount"] = _round(max(0.0, e["paid_total"] - e["accrued_total"]))
+        e["over_advanced_lifetime"] = bool(-e["lifetime_balance"] > 0.005)
+        e["over_advance_amount_lifetime"] = _round(max(0.0, -e["lifetime_balance"]))
+        # ── due now, and the netting decision (ledger Q14) ────────────────────────────────────────
+        due_before = _round(max(0.0, e["unpaid_balance"]))
+        prior_over = _round(max(0.0, -e["carry_over"]))
+        applied = _round(min(due_before, prior_over)) if mode == "auto_net" else 0.0
+        e["prior_over_advance"] = prior_over
+        e["net_applied"] = applied
+        e["due_now"] = _round(due_before - applied)
+        e["over_advance_mode"] = mode
+        lines = [{"label": f"Accrued this cycle ({c_label}) — expected commission",
+                  "kind": "accrued", "amount": e["accrued_total"], "affects_due": True},
+                 {"label": "Cash advanced this cycle",
+                  "kind": "advance", "amount": _round(-e["paid_total"]), "affects_due": True}]
+        if abs(e["carry_over"]) >= 0.005:
+            lines.append({
+                "kind": "carry_over", "amount": e["carry_over"], "affects_due": False,
+                "label": (f"Carry-over from {prior_label} and earlier — "
+                          + ("unsettled balance still owed to the rep"
+                             if e["carry_over"] > 0 else "cash advanced beyond what was accrued")
+                          + " (not settled; shown so it is never hidden)")})
+        if applied:
+            lines.append({
+                "kind": "net", "amount": _round(-applied), "affects_due": True,
+                "label": (f"Less: prior-cycle over-advance applied (auto-net) — ${applied:,.2f} of the "
+                          f"{prior_label} over-advance is recovered from this cycle's cash")})
+        lines.append({"label": "Due now (cash this cycle)", "kind": "due", "amount": e["due_now"],
+                      "affects_due": False})
+        e["lines"] = lines
         e["store_codes"].sort()
         out.append(e)
-    out.sort(key=lambda x: -(x.get("unpaid_balance") or 0))
-    flagged = [e for e in out if e["over_advanced"]]
+    out.sort(key=lambda x: -(x.get("due_now") or 0))
+    flagged = [e for e in out if e["over_advanced"] or e["over_advanced_lifetime"]]
+    days_left = (c_end - as_of).days
+    advise_in = int(((cfg.get("cycle") or {}).get("settlement_advice_days")
+                     if isinstance(cfg.get("cycle"), dict) else None) or 0)
+    unsettled = [e for e in out if abs(e["carry_over"]) >= 0.005]
+    advisory_due = bool(unsettled) or (0 <= days_left <= advise_in)
     return {
         "ready": True, "as_of": as_of.isoformat(), "employees": out,
+        "cycle": {"start": c_start.isoformat(), "end": c_end.isoformat(), "label": c_label,
+                  "mode": c_mode, "days_left": days_left,
+                  "previous_label": prior_label},
+        "over_advance_mode": mode,
+        "tier_basis": cfg.get("tier_basis"),
+        "settlement_advisory": {
+            "due": advisory_due,
+            "employees_with_carry_over": len(unsettled),
+            "message": (
+                (f"{len(unsettled)} employee(s) still carry an unsettled balance from a previous cycle."
+                 if unsettled else "")
+                + ((" " if unsettled else "")
+                   + f"This cycle ({c_label}) ends in {days_left} day(s) — settle employee balances "
+                     f"before it closes." if 0 <= days_left <= advise_in else "")
+            ).strip() or None},
         "totals": {"accrued": _round(sum(e["accrued_total"] for e in out)),
                    "paid": _round(sum(e["paid_total"] for e in out)),
                    "unpaid": _round(sum(e["unpaid_balance"] for e in out)),
+                   "due_now": _round(sum(e["due_now"] for e in out)),
+                   "carry_over": _round(sum(e["carry_over"] for e in out)),
+                   "net_applied": _round(sum(e["net_applied"] for e in out)),
+                   "lifetime_balance": _round(sum(e["lifetime_balance"] for e in out)),
                    "today": _round(sum(e["today_accrual"] for e in out)),
                    "employees": len(out)},
         "over_advanced": len(flagged),
+        # CROSS-MODULE CONTRACT NOTE (retail-ops' /closing/payout-due consumes this shape): the cash
+        # figure to advance is `due_now`, NOT `unpaid_balance`. `unpaid_balance` stays the honest
+        # arithmetic (this cycle's accrued minus this cycle's advances, negative when over-advanced);
+        # `due_now` is that floored at zero AND, under over_advance_mode='auto_net', reduced by a prior
+        # cycle's over-advance. A consumer still reading `unpaid_balance` behaves exactly as before for
+        # a 'flag' tenant (the default) and merely fails to recover the netting for an 'auto_net' one —
+        # it can never advance more than the cycle balance.
+        "payable_field": "due_now",
+        "consumer_note": ("Use `due_now` for the cash to hand over: it is floored at zero and already "
+                          "net of any prior-cycle over-advance the tenant asked to auto-net. "
+                          "`unpaid_balance` is the raw cycle arithmetic and can be negative."),
         "note": ("Accrued figures are EXPECTED (probable) commission, not pay. Paid figures are cash "
-                 "ADVANCES against them. Nothing here changes what anyone is owed."),
+                 "ADVANCES against them. Balances are per CYCLE and reset each cycle; an unsettled "
+                 "prior-cycle balance is shown as a labelled carry-over line, never hidden. Nothing "
+                 "here changes what anyone is owed."),
+    }
+
+
+def settlement(client, org_id, as_of, keyset=None, cfg=None):
+    """GET /commcalc/payout/settlement — the END-OF-CYCLE "settle employee balances" CHECKLIST.
+
+    Owner 2026-08-04 (ledger Q19): "advise the user to clear the employee balance at the end of the
+    month / payroll cycle / commission cycle as defined in the system".
+
+    ADVISORY ONLY. It moves no money, writes nothing and settles nothing — it lists, per employee and
+    per cycle, what was accrued, what cash was advanced, and the remainder to pay or collect, so a human
+    can clear it deliberately. Prior cycles that were never settled stay on the list as carry-over."""
+    try:
+        arows = _page_accruals(client, org_id, as_of)
+        lrows = _page_ledger(client, org_id, as_of)
+    except Exception as e:
+        if _table_missing(e):
+            return {"ready": False, "as_of": as_of.isoformat(), "employees": [], "note": _MISSING_NOTE}
+        raise
+    cfg = cfg if cfg is not None else load_config(client, org_id)
+    back = int(((cfg.get("cycle") or {}).get("carry_cycles")
+                if isinstance(cfg.get("cycle"), dict) else 3) or 0)
+    series = cycle_series(as_of, cfg, back)
+    cur = series[-1]
+    # index cycles by start so a row is bucketed by comparing dates only (no repeated cycle math)
+    def _bucket(d):
+        for i, (s, e, _l, _m) in enumerate(series):
+            if s <= d <= e:
+                return i
+        return -1 if d < series[0][0] else None
+
+    emp = {}
+
+    def _slot(k, name=None):
+        e = emp.get(k)
+        if not e:
+            e = emp[k] = {"employee_key": k, "name": name or k, "store_codes": [],
+                          "cycles": [{"label": l, "start": s.isoformat(), "end": en.isoformat(),
+                                      "accrued": 0.0, "advanced": 0.0, "remainder": 0.0,
+                                      "is_current": (i == len(series) - 1)}
+                                     for i, (s, en, l, _m) in enumerate(series)],
+                          "older": {"label": f"before {series[0][2]}", "accrued": 0.0,
+                                    "advanced": 0.0, "remainder": 0.0}}
+        if name and (e["name"] == k or not e["name"]):
+            e["name"] = name
+        return e
+
+    for r in arows:
+        k = r.get("employee_key") or ""
+        code = str(r.get("store_code") or "").strip()
+        if not k or (keyset is not None and code and not _in_keys(keyset, code)):
+            continue
+        d = parse_day(r.get("work_date"), None)
+        if not d:
+            continue
+        e = _slot(k, r.get("employee_name"))
+        b = _bucket(d)
+        tgt = e["older"] if b == -1 else (e["cycles"][b] if isinstance(b, int) else None)
+        if tgt is None:
+            continue
+        tgt["accrued"] = _round(tgt["accrued"] + safe_float(r.get("total_amount")))
+        if code and code not in e["store_codes"]:
+            e["store_codes"].append(code)
+
+    for r in lrows:
+        k = r.get("employee_key") or ""
+        code = str(r.get("store_code") or "").strip()
+        if not k or (keyset is not None and code and not _in_keys(keyset, code)):
+            continue
+        d = parse_day(r.get("paid_date"), None)
+        if not d:
+            continue
+        e = _slot(k, r.get("employee_name"))
+        b = _bucket(d)
+        tgt = e["older"] if b == -1 else (e["cycles"][b] if isinstance(b, int) else None)
+        if tgt is None:
+            continue
+        tgt["advanced"] = _round(tgt["advanced"] + safe_float(r.get("amount")))
+        if code and code not in e["store_codes"]:
+            e["store_codes"].append(code)
+
+    out = []
+    for e in emp.values():
+        for c in e["cycles"] + [e["older"]]:
+            c["remainder"] = _round(c["accrued"] - c["advanced"])
+        cur_c = e["cycles"][-1]
+        carry = _round(sum(c["remainder"] for c in e["cycles"][:-1]) + e["older"]["remainder"])
+        e["store_codes"].sort()
+        e.update({
+            "cycle_label": cur_c["label"],
+            "cycle_accrued": cur_c["accrued"], "cycle_advanced": cur_c["advanced"],
+            "cycle_remainder": cur_c["remainder"],
+            "carry_over": carry,
+            "to_pay": _round(max(0.0, cur_c["remainder"] + max(0.0, carry))),
+            "to_collect": _round(max(0.0, -(cur_c["remainder"] + min(0.0, carry)))),
+            "status": ("settled" if abs(cur_c["remainder"]) < 0.005 and abs(carry) < 0.005
+                       else ("owed to employee" if cur_c["remainder"] + carry > 0 else "over-advanced")),
+            "unsettled_prior": bool(abs(carry) >= 0.005),
+        })
+        out.append(e)
+    out.sort(key=lambda x: -(abs(x["cycle_remainder"]) + abs(x["carry_over"])))
+    days_left = (cur[1] - as_of).days
+    advise_in = int(((cfg.get("cycle") or {}).get("settlement_advice_days")
+                     if isinstance(cfg.get("cycle"), dict) else 0) or 0)
+    return {
+        "ready": True, "as_of": as_of.isoformat(),
+        "cycle": {"start": cur[0].isoformat(), "end": cur[1].isoformat(), "label": cur[2],
+                  "mode": cur[3], "days_left": days_left},
+        "cycles": [{"label": l, "start": s.isoformat(), "end": e2.isoformat()}
+                   for (s, e2, l, _m) in series],
+        "employees": out,
+        "totals": {"cycle_accrued": _round(sum(e["cycle_accrued"] for e in out)),
+                   "cycle_advanced": _round(sum(e["cycle_advanced"] for e in out)),
+                   "cycle_remainder": _round(sum(e["cycle_remainder"] for e in out)),
+                   "carry_over": _round(sum(e["carry_over"] for e in out)),
+                   "employees": len(out),
+                   "unsettled": len([e for e in out if e["status"] != "settled"])},
+        "advisory": {
+            "due": bool([e for e in out if e["status"] != "settled"]) and (
+                days_left <= advise_in or any(e["unsettled_prior"] for e in out)),
+            "message": (f"{cur[2]} ends {cur[1].isoformat()} ({days_left} day(s)). Settle each "
+                        f"employee's balance: pay the remainder in cash, or record what you collected "
+                        f"back. Nothing is settled automatically — this list is advice, not a payment."),
+        },
+        "note": ("Advisory only: no money moves from this view and nothing here changes anyone's pay. "
+                 "Envelope cash left uncollected is retail-ops' cash position — it may legitimately "
+                 "carry to the next month; an unsettled BALANCE is what this list tracks."),
     }
 
 
@@ -910,23 +1638,40 @@ def _in_keys(keyset, *vals):
     return any(str(v or "").strip().upper() in keyset for v in vals if v)
 
 
-def over_advance_review(client, org_id, as_of, keyset=None, lookback_months=3):
-    """The review list for advances that outran the accrual. NO clawback, NO netting (ledger Q14).
+def over_advance_review(client, org_id, as_of, keyset=None, lookback_months=3, cfg=None):
+    """The review list for advances that outran the accrual. ALWAYS FLAGGED — never a clawback.
 
-    Two independent questions, both answered:
-      running — lifetime advances exceed lifetime accrual as of `as_of`;
+    Owner 2026-08-04 (ledger Q14): "flag it and keep an option to auto net". Flagging is unconditional
+    and is what this endpoint is; the tenant's `over_advance_mode` decides only whether a PRIOR cycle's
+    over-advance is additionally netted off the NEXT cycle's cash due (shown as its own labelled line on
+    /payout/accrued and the settlement view). Neither mode writes rep_commissions, reduces an accrual or
+    changes earned pay.
+
+    Three independent questions, all answered:
+      running — LIFETIME advances exceed lifetime accrual as of `as_of`;
+      cycle   — the CURRENT cycle's advances exceed the current cycle's accrual (the one a DM acts on);
       monthly — for a month whose commission run is FINISHED, cash advanced within that month exceeds
                 what that month actually paid. This is the one an owner cares about: it means real
                 cash left the envelope against commission that did not materialize."""
-    acc = accrued(client, org_id, as_of, keyset=keyset)
+    cfg = cfg if cfg is not None else load_config(client, org_id)
+    mode = cfg.get("over_advance_mode") or "flag"
+    acc = accrued(client, org_id, as_of, keyset=keyset, cfg=cfg)
     if not acc.get("ready"):
-        return {"ready": False, "as_of": as_of.isoformat(), "running": [], "monthly": [],
+        return {"ready": False, "as_of": as_of.isoformat(), "running": [], "cycle": [], "monthly": [],
                 "note": _MISSING_NOTE}
     running = [{"employee_key": e["employee_key"], "name": e["name"], "store_codes": e["store_codes"],
-                "accrued_total": e["accrued_total"], "paid_total": e["paid_total"],
-                "over_by": e["over_advance_amount"],
+                "accrued_total": e["lifetime_accrued"], "paid_total": e["lifetime_paid"],
+                "over_by": e["over_advance_amount_lifetime"],
                 "reason": "lifetime cash advances exceed lifetime accrued commission"}
-               for e in acc["employees"] if e["over_advanced"]]
+               for e in acc["employees"] if e["over_advanced_lifetime"]]
+    cyc = [{"employee_key": e["employee_key"], "name": e["name"], "store_codes": e["store_codes"],
+            "period": acc["cycle"]["label"],
+            "accrued_total": e["accrued_total"], "paid_total": e["paid_total"],
+            "over_by": e["over_advance_amount"], "net_applied": e["net_applied"],
+            "reason": (f"cash advanced in {acc['cycle']['label']} exceeds what has accrued in it"
+                       + (f"; ${e['net_applied']:,.2f} is being auto-netted off this cycle's cash due"
+                          if e["net_applied"] else ""))}
+           for e in acc["employees"] if e["over_advanced"]]
 
     monthly = []
     this_first = _date(as_of.year, as_of.month, 1)
@@ -959,10 +1704,14 @@ def over_advance_review(client, org_id, as_of, keyset=None, lookback_months=3):
                     "reason": (f"cash advanced during {period} exceeds what {period}'s finished "
                                f"commission run actually paid")})
     monthly.sort(key=lambda x: -x["over_by"])
-    return {"ready": True, "as_of": as_of.isoformat(), "running": running, "monthly": monthly,
-            "counts": {"running": len(running), "monthly": len(monthly)},
-            "policy": ("Flag only — no clawback and no netting. Correcting an over-advance is a human "
-                       "decision (ledger Q14 default).")}
+    return {"ready": True, "as_of": as_of.isoformat(), "running": running, "cycle": cyc,
+            "monthly": monthly, "over_advance_mode": mode, "cycle_window": acc.get("cycle"),
+            "counts": {"running": len(running), "cycle": len(cyc), "monthly": len(monthly)},
+            "policy": (("Flag only — no clawback and no netting. Correcting an over-advance is a human "
+                        "decision (ledger Q14 default).") if mode != "auto_net" else
+                       ("Flagged AND auto-netted: a prior cycle's over-advance is deducted from the "
+                        "employee's next cash due, shown as its own line. No clawback from payroll, no "
+                        "change to the accrual and nothing written to what anyone is paid."))}
 
 
 def ledger_rows(client, org_id, start=None, end=None, employee_key=None, store_code=None, keyset=None):
@@ -989,6 +1738,35 @@ def ledger_rows(client, org_id, start=None, end=None, employee_key=None, store_c
     out.sort(key=lambda x: (x["paid_date"], x["id"] or 0), reverse=True)
     return {"ready": True, "rows": out, "total": _round(sum(r["amount"] for r in out)),
             "count": len(out)}
+
+
+def may_record(caller, cfg=None):
+    """(allowed, reason) — may this resolved caller RECORD a cash advance? PURE (no I/O).
+
+    Owner 2026-08-04, ledger Q17: "dm or higher". `caller` is core.router._resolve_caller's shape
+    ({role, super_admin, perms}) — the same resolution every other management gate in this module uses.
+    A STORE manager is deliberately excluded: handing envelope cash to a rep is a district-level call.
+
+    Allowed when the caller is a super-admin, OR their role is in the tenant's `record_roles`
+    (default DEFAULT_RECORD_ROLES), OR their RBAC scope already spans more than one store
+    ('all' / 'market') — that last clause is what lets a tenant's CUSTOM district-level role work
+    without anyone hard-coding its name. `caller is None` (RBAC off / unresolvable token) degrades OPEN,
+    the same posture as _require_commission_admin, so the house org can never be locked out of its own
+    envelope."""
+    if caller is None:
+        return True, "caller could not be resolved (RBAC off) — same open posture as the rest of the module"
+    if caller.get("super_admin"):
+        return True, "super admin"
+    roles = [str(r).strip().lower() for r in ((cfg or {}).get("record_roles") or DEFAULT_RECORD_ROLES)]
+    role = str(caller.get("role") or "").strip().lower()
+    if role in roles:
+        return True, f"role '{role}' is permitted to record cash advances"
+    scope = str(((caller.get("perms") or {}).get("scope") or "")).strip().lower()
+    if scope in ("all", "market"):
+        return True, f"role '{role}' spans {scope} stores (district level or above)"
+    return False, ("Recording a cash advance against commission is a district-manager-or-above action. "
+                   f"'{caller.get('role') or 'this role'}' covers a single store or less. Ask a DM "
+                   "(or an admin) to record it.")
 
 
 def record_payout(client, org_id, body, recorded_by=None):

@@ -27,7 +27,9 @@
 -- from the day's sale lines and UPSERTs them, so a replay can only ever restate the same day, never
 -- accumulate.
 --
---   base_amount  — the day's OWN sale-derived commission, computed UN-TIERED. Plan-mode tenants: the
+--   base_amount  — the day's accrued commission UNDER THE TENANT'S tier_basis (default 'mtd_attained':
+--                  this day's share of the month-to-date total at the tier the rep is meeting; under
+--                  'none' it is the day's OWN sale-derived commission, computed UN-TIERED). Plan-mode tenants: the
 --                  commission_engine's base + tiered rule payouts at multiplier 1.0 plus the set-up-fee
 --                  pay item. Boost tenants: the calculator's `subtotal` (the 8 sale-derived components)
 --                  before the KPI tier multiplier. A single DAY cannot know a MONTHLY tier attainment,
@@ -61,14 +63,43 @@
 -- RULE TWO: nothing about this is hard-coded. One jsonb per tenant; NULL = the code default in
 -- backend/app/modules/commcalc/payout_accrual.py:
 --     {"enabled": true,
---      "tier_basis": "none",                  -- "none" = accrue un-tiered (default) | "as_computed"
+--      "tier_basis": "mtd_attained",          -- "mtd_attained" (default) | "none" | "as_computed"
 --      "tier_recognition": {"mode": "on_run_available", "day_of_month": null, "lookback_months": 3},
---      "auto_run": {"enabled": true, "days_back": 1, "min_interval_minutes": 50}}
+--      "auto_run": {"enabled": true, "days_back": 1, "min_interval_minutes": 50},
+--      "over_advance_mode": "flag",           -- "flag" (default) | "auto_net"
+--      "cycle": {"mode": "calendar_month",    -- "calendar_month" | "payroll" | "commission"
+--                "payroll": {"kind": "semimonthly", "anchor_date": null, "semi_day": 16},
+--                "commission": {"end_day": null},
+--                "carry_cycles": 3, "settlement_advice_days": 3},
+--      "record_roles": ["admin","director","district_manager","executive","market_manager",
+--                       "regional_manager"]}
+--   tier_basis  (owner 2026-08-04, ledger Q18: "based on tier meeting on that day, it keeps varying
+--               throughout the month as their commission changes in the individual rep report")
+--      "mtd_attained" (default) — each day is accrued at the tier the rep is MEETING: the month's own
+--                                 sale lines THROUGH that date are run through the same pay logic with
+--                                 the real attainment, and that month-to-date total is shared across
+--                                 the month's accrued days in proportion to each day's un-tiered
+--                                 commission. SUM(accruals month-to-date) therefore equals the
+--                                 individual rep report's month-to-date figure, and the whole current
+--                                 month RESTATES when attainment moves. Still expected, never pay.
+--      "none"                   — accrue un-tiered; the whole tier effect arrives as the monthly
+--                                 true-up (the original default; kept as an option).
+--      "as_computed"            — accrue the day's OWN multiplier (day-attainable tiers only).
 --   tier_recognition.mode
 --      "on_run_available" (default) — recognize the prior month's true-up as soon as that month's
 --                                     commission run exists (earliest = the 1st of the next month).
 --      "day_of_month"               — recognize on `day_of_month` of the FOLLOWING month (clamped to
 --                                     month end), and still only once the run exists.
+--   over_advance_mode (ledger Q14: "flag it and keep an option to auto net")
+--      "flag" (default) — an over-advance is flagged; nothing is netted or clawed back.
+--      "auto_net"       — a PRIOR cycle's over-advance also reduces the employee's NEXT cash due, as
+--                         its own labelled line. Writes nothing; rep_commissions is untouched either way.
+--   cycle (ledger Q19: balances "reset each month … or payroll cycle / commission cycle as defined in
+--      the system") — the window balances reset on. Unsettled prior cycles stay VISIBLE as labelled
+--      carry-over and are settled by a human (the advisory settlement checklist), never automatically.
+--   record_roles (ledger Q17: "dm or higher") — the roles that may POST /commcalc/payout/record. A
+--      store manager is excluded by default; a custom role whose RBAC scope is 'all'/'market' also
+--      qualifies. An empty list falls back to the default set rather than locking everyone out.
 --   auto_run.days_back — how many days back of accrual the daily sweep re-runs (1 = yesterday+today),
 --                        clamped 0..7 in code so a typo can never turn the sweep into a month rewrite.
 --   auto_run.min_interval_minutes — throttles the SWEEP only (0 = no throttle; a hand-pressed
@@ -163,13 +194,13 @@ ALTER TABLE commcalc.commission_org_config
   ADD COLUMN IF NOT EXISTS accrual_config JSONB;
 
 COMMENT ON COLUMN commcalc.commission_org_config.accrual_config IS
-  'Daily commission accrual settings. NULL = code default '
-  '{"enabled":true,"tier_basis":"none","tier_recognition":{"mode":"on_run_available",'
-  '"day_of_month":null,"lookback_months":3},"auto_run":{"enabled":true,"days_back":1,'
-  '"min_interval_minutes":50}}. '
-  'tier_recognition.mode: on_run_available | day_of_month (of the FOLLOWING month, clamped to month '
-  'end; still gated on the prior month''s commission run existing). Accruals are expected numbers — '
-  'changing this never changes what anyone is paid.';
+  'Daily commission accrual settings. NULL = the code default in payout_accrual.CODE_DEFAULT: '
+  'tier_basis=mtd_attained (accrue at the tier the rep is MEETING month-to-date; also none | '
+  'as_computed), tier_recognition={on_run_available|day_of_month, lookback_months}, '
+  'auto_run={enabled,days_back,min_interval_minutes}, over_advance_mode=flag|auto_net, '
+  'cycle={calendar_month|payroll|commission, ...} for per-cycle balances, and record_roles '
+  '(DM-or-higher) for who may record a cash advance. Accruals are expected numbers — changing any of '
+  'this never changes what anyone is paid.';
 
 NOTIFY pgrst, 'reload schema';
 
