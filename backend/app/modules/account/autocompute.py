@@ -59,6 +59,15 @@ _PERIOD_SOURCES = [
     ("raw_ma_daily_tx",     ["created_at"]),
     ("raw_comp_report",     ["created_at"]),
     ("rep_commissions",     ["created_at"]),
+    # store_expenses carries BOTH hand-entered expenses and every AUTO "system line"
+    # (source_key non-null): PTO accrual, gross payroll, payroll burden, and — EEP 2026-08-04 —
+    # 'additional_payroll' (mod-people) + 'closing_expense:<category-id>' (mod-retail-ops).
+    # A system-line POST is a DELETE-by-(org,period,source_key) followed by an INSERT of the fresh
+    # cells (commcalc.upsert_expense_system_line), and store_expenses.created_at defaults to now()
+    # (mig 002) — so every re-post writes a NEWER created_at than the last statement snapshot and
+    # correctly marks the period stale. No extra wiring is needed for the new producers; they ride
+    # the same probe. (A hypothetical in-place UPDATE producer would NOT bump created_at — if one is
+    # ever added, this entry needs an updated_at candidate.)
     ("store_expenses",      ["created_at"]),
     ("chargeback_items",    ["created_at", "decided_at"]),
     ("journal_entries",     ["created_at"]),
@@ -66,6 +75,13 @@ _PERIOD_SOURCES = [
     ("vip_paygo_payments",  ["swept_at", "created_at"]),
     ("vip_credit_memos",    ["swept_at", "created_at"]),
 ]
+# ⚠️ NOT SOURCES — the envelope cash ledgers (commcalc.envelope_withdrawal,
+# commcalc.commission_payout_ledger, storeops.salary_advance_ledger, EEP 2026-08-04) are cash
+# MOVEMENTS against costs already booked from clock-in payroll / rep_commissions. They must never
+# appear in either list: the P&L does not read them (coa.build_inputs has no such query), so making
+# them a staleness trigger would only churn recomputes — and adding them as a coa source would
+# double-count. Their P&L-visible consequence reaches the books ONLY as the derived
+# 'additional_payroll' / 'closing_expense:*' store_expenses system lines above.
 _POINT_IN_TIME_SOURCES = [
     ("asset_ledger",     ["updated_at", "created_at"]),
     ("inventory_value",  ["updated_at"]),
