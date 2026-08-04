@@ -2,6 +2,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken,
          onSessionInvalid, clearSessionInvalid } from './client'
+import { setCacheIdentity } from './cache'
 import type { Permissions, CarrierRef } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -315,6 +316,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
     return () => { mounted = false; sub.subscription.unsubscribe() }
   }, [loadProfile])
+
+  // ── Client-cache identity (nav-perf 2026-08-04) ─────────────────────────────────────────────────
+  // lib/cache.ts namespaces every cached lookup by (user, acting org) so a cached roster can never be
+  // served across tenants OR across two users of the same tenant (span-scoped endpoints return
+  // different rows per caller). The namespace is published from here — i.e. from the values the
+  // BACKEND resolved on /core/me, not from localStorage — and any change (login, tenant switch,
+  // sign-out → null) bumps the cache epoch and purges the store. Before this fires there is NO
+  // namespace, and cache.ts then degrades to plain uncached api() calls.
+  useEffect(() => {
+    setCacheIdentity(user ? (user.auth_id || user.id || null) : null,
+                     user ? (activeOrg || user.org_id || null) : null)
+  }, [user, activeOrg])
 
   // ── Dead client session (auth-ux hardening 2026-08-03) ──────────────────────────────────────────
   // client.ts latches this the first time a module call 401s with the middleware's "authentication
