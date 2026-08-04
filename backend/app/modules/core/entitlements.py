@@ -27,7 +27,12 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 8   # bumped: 8 = mig 720 (Training Center) registered the "training" module — so every
+SEED_VERSION = 9   # bumped: 9 = mig 721 (What's New) added the bundled platform release-note pack, which
+                   #             loads into the HOUSE org on its sync pass so every tenant's ADMIN STAFF see
+                   #             the new-features / improvements feed beside the login warnings. No new
+                   #             entitlement module: it is an admin surface gated by the SAME gate as the
+                   #             warnings (import_health.can_view_attention), not a billable module.
+                   #         8 = mig 720 (Training Center) registered the "training" module — so every
                    #             existing tenant self-provisions a training tenant_modules entitlement row
                    #             on its next login — AND added the bundled platform-default walk-through
                    #             pack, which loads into the HOUSE org on its sync pass (never clobbering an
@@ -211,6 +216,14 @@ def sync_tenant(client, org_id: str) -> dict:
         try:
             from app.modules.core.training_seed import seed_training_tours
             seed_training_tours(client, org_id)
+        except Exception:
+            pass
+        # HOUSE org only: load the bundled platform What's New entries (mig 721). Same never-clobber
+        # shape as the two seeds above; an un-run mig 721 is a silent no-op, so the popup simply shows
+        # its existing Warnings tab until the migration lands.
+        try:
+            from app.modules.core.whats_new_seed import seed_release_notes
+            seed_release_notes(client, org_id)
         except Exception:
             pass
     if seeded:

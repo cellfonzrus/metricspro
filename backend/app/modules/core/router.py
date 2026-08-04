@@ -3938,6 +3938,16 @@ from app.modules.core import training as _training   # noqa: E402  (bottom-of-fi
 
 router.include_router(_training.router)
 
+# ── What's New — new features + improvements for ADMIN STAFF (mig 721, owner directive 2026-08-04) ──
+# The other two panes beside the login WARNINGS. Mounted onto this router for the same reason as the
+# three above: main.py (SHARED) needs no change, and the sub-router's "/whats-new" prefix resolves to
+# /api/v1/core/whats-new*. Lazy imports only, so there is no import cycle. NOT allowlisted in the
+# middleware: /whats-new/ingest self-gates (secret OR super-admin) and today is reachable by a
+# super-admin JWT only — the tokenless secret path needs the one-line allowlist filed for the operator.
+from app.modules.core import whats_new as _whats_new   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_whats_new.router)
+
 # Platform-core's OWN attention providers (tenant provisioning + system-error backlog). Imported purely
 # for the @register_provider side effect — no routes, no gate, no aggregation change. Each of notify /
 # helpdesk registers its own providers from its own module file the same way (see their routers' tails).
