@@ -22,6 +22,23 @@ import calendar as _calendar
 from datetime import datetime, timezone
 
 import requests
+
+
+def _bounded_session(_timeout=60):
+    """requests.Session with a DEFAULT per-request timeout (2026-08-04 outage class fix).
+    requests has NO default timeout — a blackholed portal (e.g. an IP-blocking host that
+    drops packets after SYN-ACK) hangs the calling THREAD forever. These sweeps run hourly
+    in the threadpool; each eternal thread is gone for good, and once enough accumulate the
+    pool exhausts and EVERY sync endpoint starves (app-wide zero-byte hangs). All Session
+    verbs funnel through Session.request, so wrapping it covers get/post/head/etc. An
+    explicit timeout= at a call site still wins."""
+    s = requests.Session()
+    _orig = s.request
+    def _req(method, url, **kw):
+        kw.setdefault("timeout", _timeout)
+        return _orig(method, url, **kw)
+    s.request = _req
+    return s
 from bs4 import BeautifulSoup
 
 BASE = "https://boostelevatego.com"
@@ -194,7 +211,7 @@ def run_dlar_sweep(client, org_id, user, pw):
 
     A full snapshot (not incremental): the DLAR is month-to-date cumulative, so we wipe the
     period and re-insert. Returns a summary dict; raises DlarLoginError on auth failure."""
-    session = requests.Session()
+    session = _bounded_session()
     session.headers.update({"User-Agent": UA})
     login(session, user, pw)
 

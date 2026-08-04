@@ -20,6 +20,23 @@ from datetime import datetime, timezone
 
 import requests
 
+
+def _bounded_session(_timeout=60):
+    """requests.Session with a DEFAULT per-request timeout (2026-08-04 outage class fix).
+    requests has NO default timeout — a blackholed portal (e.g. an IP-blocking host that
+    drops packets after SYN-ACK) hangs the calling THREAD forever. These sweeps run hourly
+    in the threadpool; each eternal thread is gone for good, and once enough accumulate the
+    pool exhausts and EVERY sync endpoint starves (app-wide zero-byte hangs). All Session
+    verbs funnel through Session.request, so wrapping it covers get/post/head/etc. An
+    explicit timeout= at a call site still wins."""
+    s = requests.Session()
+    _orig = s.request
+    def _req(method, url, **kw):
+        kw.setdefault("timeout", _timeout)
+        return _orig(method, url, **kw)
+    s.request = _req
+    return s
+
 BASE = "https://wsreports.b2bsoft.com"
 UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120 Safari/537.36")
@@ -357,7 +374,7 @@ def write_inventory_values(client, org_id, store_values, as_of_date):
 def run_inventory_sweep(client, org_id, user, pw, store_field=None, value_field=None):
     """Log in → fetch Inventory Aging → normalize → upsert swept values. Returns a summary dict.
     Raises B2BNotConfigured until the portal client stubs above are implemented."""
-    session = requests.Session()
+    session = _bounded_session()
     session.headers.update({"User-Agent": UA})
     login(session, user, pw)
     raw = fetch_inventory_aging(session)
