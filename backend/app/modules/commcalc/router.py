@@ -19164,7 +19164,13 @@ async def _run_email_sweep(org_id, account='default'):
     _prior_nonterminal = {(r.get('message_id'), r.get('filename')) for r in seen
                           if (r.get('message_id'), r.get('filename')) not in already}
     try:
-        files = _email.fetch_new_attachments(cfg, already)
+        # to_thread (2026-08-04 outage fix): fetch_new_attachments is SYNCHRONOUS imaplib network I/O
+        # (connect + search + full RFC822 downloads). Awaited inline it blocks the event loop for the
+        # whole mailbox session — with a wedged mail host that meant the entire backend froze at the
+        # top of every hour. The 30s socket timeout in email_sweep._connect caps the hang; this keeps
+        # even the capped hang off the loop.
+        import asyncio as _asyncio
+        files = await _asyncio.to_thread(_email.fetch_new_attachments, cfg, already)
     except Exception as e:
         em = str(e)
         # An AUTH rejection is routinely misread as "the password was erased" — it never is (nothing in

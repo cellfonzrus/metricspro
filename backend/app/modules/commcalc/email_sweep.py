@@ -60,10 +60,14 @@ def _connect(cfg):
     # (16 alphanumerics once spaces are removed); otherwise just trim the ends so a normal password is safe.
     _nospace = pw.replace(" ", "")
     pw = _nospace if (" " in pw and len(_nospace) == 16 and _nospace.isalnum()) else pw.strip()
+    # timeout=30 (2026-08-04 PRODUCTION OUTAGE FIX): imaplib's default socket timeout is None =
+    # INFINITE. This sweep runs hourly on the web process's event loop; when the mail host wedged
+    # (Bluehost, twice today) the connect/read hung forever and froze the ENTIRE backend — the
+    # 000-everywhere signature. FTP (_connect in ftp_sweep.py) already had timeout=30; IMAP did not.
     if cfg.get("use_ssl", True):
-        M = imaplib.IMAP4_SSL(host, port)
+        M = imaplib.IMAP4_SSL(host, port, timeout=30)
     else:
-        M = imaplib.IMAP4(host, port)
+        M = imaplib.IMAP4(host, port, timeout=30)
         try:
             M.starttls()
         except Exception:
