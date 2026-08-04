@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { api, ORG_ID } from '@/lib/client'
+import { apiCached, CONFIG } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import AiAssistant from '@/components/AiAssistant'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
@@ -42,8 +43,12 @@ export default function HelpdeskInbox() {
   // deviation — core set applied where meaningful): period = created-date range, people = requester.
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
 
+  // NAV-PERF 2026-08-04: the status/priority vocabulary is tenant CONFIG edited in
+  // /helpdesk/settings, yet this read MEASURED **1,086 ms (house) / 1,083 ms (Luxelink)** on every
+  // single visit to the ticket list. Cached per (user, acting org); the ticket list itself below is
+  // deliberately NOT cached — that is live operational data.
   useEffect(() => {
-    api(`/api/v1/helpdesk/config/bootstrap?org_id=${ORG_ID}`)
+    apiCached(`/api/v1/helpdesk/config/bootstrap?org_id=${ORG_ID}`, CONFIG)
       .then((d: any) => { setStatuses(d.statuses || []); setPriorities(d.priorities || []) })
       .catch(() => {})
   }, [])

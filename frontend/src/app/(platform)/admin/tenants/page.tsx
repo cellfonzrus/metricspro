@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, CONFIG } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 
 // SaaS logins — super-admin onboarding: create a company (tenant) + provision its first admin login.
@@ -25,13 +26,20 @@ export default function TenantsAdmin() {
   const [saBusy, setSaBusy] = useState(false)
   const [saCreated, setSaCreated] = useState<any>(null)
 
-  const load = useCallback(() => {
-    api('/api/v1/core/tenants').then((d: any) => setTenants(d.tenants || [])).catch(e => setErr(e?.message || 'Failed to load'))
+  // NAV-PERF 2026-08-04: MEASURED /core/tenants 368 ms + /core/super-admins 248 ms. Both are
+  // slow-changing config. `cache` is true ONLY on mount — every reload after a WRITE on this page
+  // (add tenant, rename, activate/deactivate, add/remove super-admin) passes false, so an operator
+  // always sees their own change land. Locking yourself out of tenant admin by reading a stale list
+  // is not an acceptable trade for 600 ms.
+  const load = useCallback((cache = false) => {
+    (cache ? apiCached('/api/v1/core/tenants', CONFIG) : api('/api/v1/core/tenants'))
+      .then((d: any) => setTenants(d.tenants || [])).catch(e => setErr(e?.message || 'Failed to load'))
   }, [])
-  const loadSupers = useCallback(() => {
-    api('/api/v1/core/super-admins').then((d: any) => setSupers(d.super_admins || [])).catch(() => {})
+  const loadSupers = useCallback((cache = false) => {
+    (cache ? apiCached('/api/v1/core/super-admins', CONFIG) : api('/api/v1/core/super-admins'))
+      .then((d: any) => setSupers(d.super_admins || [])).catch(() => {})
   }, [])
-  useEffect(() => { if (isSuper) { load(); loadSupers() } }, [isSuper, load, loadSupers])
+  useEffect(() => { if (isSuper) { load(true); loadSupers(true) } }, [isSuper, load, loadSupers])
 
   async function addTenant() {
     if (!np.name.trim() || !np.admin_email.trim()) { setErr('Company name and admin email are required.'); return }

@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import TourRunner from '@/components/TourRunner'
 import { Tour, fetchTours, startTour, tourDoneAt } from '@/lib/tours'
 
@@ -65,7 +66,10 @@ export default function HelpPanel() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await api(`/api/v1/core/support-doc/resolve?path=${encodeURIComponent(pathname)}`)
+      // NAV-PERF 2026-08-04: MEASURED 775 ms (house) / 759 ms (Luxelink). A support doc is
+      // editorial content that changes when someone edits it in /admin/support/docs — not between
+      // two clicks — so it is cached per (user, acting org) and per page path.
+      const r = await apiCached(`/api/v1/core/support-doc/resolve?path=${encodeURIComponent(pathname)}`, LOOKUP)
       setDoc(r?.found ? (r.doc || null) : null)
     } catch {
       setDoc(null)   // FAIL-SILENT: any error → fallback, never throws

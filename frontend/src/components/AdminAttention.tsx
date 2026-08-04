@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { api, getActiveOrg } from '@/lib/client'
+import { getActiveOrg } from '@/lib/client'
+import { apiCached } from '@/lib/cache'
 import { canSeeAttention } from '@/lib/rbac'
 import {
   CATEGORY_ICON, CATEGORY_LABEL, ReleaseNote, WhatsNewPayload, EMPTY_PAYLOAD,
@@ -37,6 +38,21 @@ import {
 // hammer the endpoint) and offers an explicit "Re-check now" button. Cost of a refresh = the cheap
 // providers only (config-table reads, TTL-memoized feed derivation).
 //
+// ── NAV-PERF 2026-08-04 (owner: "it takes some time to load the screen when moving from one menu to
+// the other") ───────────────────────────────────────────────────────────────────────────────────────
+// MEASURED in production: GET /api/v1/core/attention takes **5.1 s** (house) / **5.4 s** (Luxelink) —
+// ~25 registered providers, each several sequential Supabase round trips. This component re-fired that
+// on EVERY navigation (throttled to 20 s), and the backend handler was an `async def` doing blocking
+// I/O on the SINGLE uvicorn event loop, so one admin walking the menu repeatedly froze the whole
+// product for everybody. Three changes, none of which alter what the admin sees:
+//   1. the read goes through `apiCached` (in-memory, namespaced by user+acting org — a cached payload
+//      can never cross a tenant), so a navigation inside the fresh window costs ZERO network;
+//   2. REFRESH_MS is raised to match that window — the pill still refreshes on navigation, just not
+//      several times a minute;
+//   3. "Re-check now" / "Run full check" stay TRULY live: they pass `fresh=1` (bypassing the backend's
+//      short per-org memo) with `force` + `cacheAs`, so the fix-then-recheck loop the owner asked for
+//      ("a notification must disappear once the check is OK") is unchanged and immediate.
+//
 // ── "NEW FEATURES" + "IMPROVEMENTS" (owner directive 2026-08-04, mig 721) ────────────────────────────
 // "like we have the warnings for the admin who logs in, there should be 2 more areas new features and
 // improvements and keep them logged somewhere only for admin staff."
@@ -46,7 +62,11 @@ import {
 // and "unseen" is a per-tenant localStorage watermark stamped when the admin opens the tab.
 // The popup now also fires when there are NO warnings but there ARE unseen updates — an admin with a
 // clean system still learns what shipped — and still renders NOTHING when both are empty.
-const REFRESH_MS = 20_000
+// How long an attention payload may be reused across navigations. Matches ATTENTION_CACHE.ttlMs
+// below: inside this window a menu hop reuses the last answer instead of paying for a full re-scan.
+const REFRESH_MS = 90_000
+const ATTENTION_CACHE = { ttlMs: 90_000, maxMs: 10 * 60_000 }
+const ATTENTION_PATH = '/api/v1/core/attention'
 
 type Item = {
   group: string; key: string; severity: 'error' | 'warning' | 'info'
@@ -104,11 +124,16 @@ export default function AdminAttention() {
     setWn(p)
   }, [])
 
-  const load = useCallback(async (deep: boolean) => {
+  // `fresh` = the admin explicitly asked to re-check (button), so bypass BOTH caches: `force` skips
+  // the client entry and `fresh=1` skips the backend memo. `cacheAs` makes the result land on the
+  // canonical entry, so the next navigation serves the POST-fix answer rather than the pre-fix one.
+  const load = useCallback(async (deep: boolean, fresh = false) => {
     setBusy(true)
     lastAt.current = Date.now()
     try {
-      const d: Payload = await api(`/api/v1/core/attention${deep ? '?deep=1' : ''}`)
+      const canonical = `${ATTENTION_PATH}${deep ? '?deep=1' : ''}`
+      const url = fresh ? `${canonical}${deep ? '&' : '?'}fresh=1` : canonical
+      const d: Payload = await apiCached(url, { ...ATTENTION_CACHE, force: fresh, cacheAs: canonical })
       setData(d)
       return d
     } catch {
@@ -352,13 +377,13 @@ export default function AdminAttention() {
               display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               {tab === 'warnings' && data && (
                 <>
-                  <button className="btn" disabled={busy} onClick={() => load(data.deep)}
+                  <button className="btn" disabled={busy} onClick={() => load(data.deep, true)}
                     title="Re-run the checks now — anything you have just fixed drops off the list"
                     style={{ fontSize: 12.5 }}>
                     {busy ? 'Checking…' : 'Re-check now'}
                   </button>
                   {!data.deep && (data.deferred || []).length > 0 && (
-                    <button className="btn" disabled={busy} onClick={() => load(true)}
+                    <button className="btn" disabled={busy} onClick={() => load(true, true)}
                       title={`Also runs the slower checks: ${(data.deferred || []).map(d => d.label).join(', ')}`}
                       style={{ fontSize: 12.5 }}>
                       {busy ? 'Checking…' : 'Run full check'}
