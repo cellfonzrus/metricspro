@@ -70,7 +70,7 @@ def get_auth_config():
 
 
 @router.put("/auth-config")
-async def set_auth_config(body: dict, org_id: str = ORG_ID):
+def set_auth_config(body: dict, org_id: str = ORG_ID):
     """Flip login enforcement on/off (from the Roles admin). Once ON, every user must sign in."""
     enabled = bool(body.get("rbac_enabled"))
     sb().schema("storeops").table("app_config").upsert(
@@ -81,7 +81,7 @@ async def set_auth_config(body: dict, org_id: str = ORG_ID):
 
 # ── Portal reports: which reports are surfaced in the employee portal + to which roles (mig 052) ──
 @router.get("/portal-reports")
-async def get_portal_reports(org_id: str = ORG_ID):
+def get_portal_reports(org_id: str = ORG_ID):
     """Per-report portal config keyed by href: {href: {enabled, roles[], label, category}}. The
     Reports hub merges this over the report catalog; the portal/employee surfaces read it to gate
     what each role sees. Empty {} if migration 052 hasn't run."""
@@ -94,7 +94,7 @@ async def get_portal_reports(org_id: str = ORG_ID):
 
 
 @router.put("/portal-reports")
-async def set_portal_report(body: dict, org_id: str = ORG_ID):
+def set_portal_report(body: dict, org_id: str = ORG_ID):
     """Upsert one report's portal config. Body: {href, enabled, roles[], label?, category?}."""
     href = (body.get("href") or "").strip()
     if not href:
@@ -476,7 +476,7 @@ _BASE_ROLES = [
 
 
 @router.get("/tenants")
-async def list_tenants(authorization: str = Header(default="")):
+def list_tenants(authorization: str = Header(default="")):
     _require_super_admin(authorization)
     client = sb()
     tens = client.schema("storeops").table("tenants").select("*").order("created_at").execute().data or []
@@ -521,7 +521,7 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
 
 
 @router.post("/tenants")
-async def create_tenant(body: dict, authorization: str = Header(default="")):
+def create_tenant(body: dict, authorization: str = Header(default="")):
     """Super-admin: create a tenant + provision its first admin login (returns a temp password)."""
     _require_super_admin(authorization)
     name = (body.get("name") or "").strip()
@@ -538,7 +538,7 @@ async def create_tenant(body: dict, authorization: str = Header(default="")):
 # ─────────────────────────────────────────────
 
 @router.get("/super-admins")
-async def list_super_admins(authorization: str = Header(default="")):
+def list_super_admins(authorization: str = Header(default="")):
     """Super-admin: every login holding platform-wide (cross-tenant) access. These bypass tenant
     scoping (tenant_middleware honours super_admin), so this is the audit surface for who holds the keys."""
     _require_super_admin(authorization)
@@ -549,7 +549,7 @@ async def list_super_admins(authorization: str = Header(default="")):
 
 
 @router.post("/super-admins")
-async def create_super_admin(body: dict, authorization: str = Header(default="")):
+def create_super_admin(body: dict, authorization: str = Header(default="")):
     """Super-admin: mint OR elevate a PLATFORM super-admin. A brand-new email gets a Supabase Auth
     login created (house org = the platform home; super_admin bypasses tenant scoping regardless of
     org_id) and a temp password returned. An EXISTING login is simply flagged — its password is left
@@ -586,7 +586,7 @@ async def create_super_admin(body: dict, authorization: str = Header(default="")
 
 
 @router.delete("/super-admins")
-async def revoke_super_admin(email: str = "", authorization: str = Header(default="")):
+def revoke_super_admin(email: str = "", authorization: str = Header(default="")):
     """Super-admin: strip platform access from a login (demote to a normal tenant-scoped user). Does
     NOT delete the login. Refuses to remove the LAST super-admin so the platform can't be locked out."""
     _require_super_admin(authorization)
@@ -606,7 +606,7 @@ async def revoke_super_admin(email: str = "", authorization: str = Header(defaul
 
 
 @router.get("/modules")
-async def list_modules():
+def list_modules():
     """PUBLIC: the canonical module registry (module_key → label). Single source of truth is
     core.module_catalog (mig 700), with an in-code fallback so an unrun migration is a no-op.
     Drives the billing plan editor's per-module picker and the tenant entitlement view."""
@@ -615,7 +615,7 @@ async def list_modules():
 
 
 @router.post("/tenants/sync")
-async def sync_tenants_endpoint(authorization: str = Header(default=""), x_notify_secret: str = Header(default="")):
+def sync_tenants_endpoint(authorization: str = Header(default=""), x_notify_secret: str = Header(default="")):
     """Reconcile EVERY tenant — module entitlement (all-access default) + tenant-safe default
     content — bringing tenants created before a feature shipped up to date. Auth: super-admin,
     OR the NOTIFY_RUN_SECRET header (so a post-deploy / cron backfill can run without a UI token)."""
@@ -625,7 +625,7 @@ async def sync_tenants_endpoint(authorization: str = Header(default=""), x_notif
 
 
 @router.post("/tenants/{org_id}/sync")
-async def sync_one_tenant_endpoint(org_id: str, authorization: str = Header(default="")):
+def sync_one_tenant_endpoint(org_id: str, authorization: str = Header(default="")):
     """Super-admin: reconcile a SINGLE tenant's entitlement + default content."""
     _require_super_admin(authorization)
     return sync_tenant(sb(), org_id)
@@ -636,13 +636,13 @@ def _signups_open() -> bool:
 
 
 @router.get("/signup-status")
-async def signup_status():
+def signup_status():
     """PUBLIC: whether self-serve signup is open (env SIGNUPS_OPEN). The /signup page reads this."""
     return {"open": _signups_open()}
 
 
 @router.post("/signup")
-async def signup(body: dict):
+def signup(body: dict):
     """PUBLIC self-serve signup — GATED on env SIGNUPS_OPEN (default OFF). Creates a new company + its
     admin login with the chosen password. ⚠️ v1 auto-confirms the email — add real email verification
     + rate-limit/captcha before opening this to the public internet."""
@@ -668,7 +668,7 @@ async def signup(body: dict):
 
 
 @router.patch("/tenants/{org_id}")
-async def update_tenant(org_id: str, body: dict, authorization: str = Header(default="")):
+def update_tenant(org_id: str, body: dict, authorization: str = Header(default="")):
     _require_super_admin(authorization)
     upd = {}
     if "name" in body:
@@ -948,7 +948,7 @@ def _can_edit_setting(caller, area):
 
 
 @router.get("/setting-areas")
-async def list_setting_areas(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def list_setting_areas(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The registry of permission-controlled settings areas (drives the Roles UI toggles). Also returns
     which areas the CALLER can edit, so pages can gate their own edit affordances if they prefer."""
     uid = _uid_from_token(authorization)
@@ -1302,14 +1302,14 @@ def _can_view_failures(caller):
 
 
 @router.get("/failure-types")
-async def failure_types(authorization: str = Header(default="")):
+def failure_types(authorization: str = Header(default="")):
     """The registry of known failure categories + default remediation (drives filters / UI)."""
     return {"types": [{"key": k, "label": v["label"], "severity": v["severity"],
                        "remediation": v["remediation"]} for k, v in FAILURE_TYPES.items()]}
 
 
 @router.post("/failures")
-async def record_failure(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def record_failure(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Record a failure (best-effort — never raises). Any authed surface may call it; org comes from the
     caller (falls back to body/house org for system callers). Remediation is auto-filled by category, and a
     category the tenant has DISABLED is silently skipped (configurable)."""
@@ -1345,7 +1345,7 @@ async def record_failure(body: dict, authorization: str = Header(default=""), x_
 
 
 @router.get("/failures")
-async def list_failures(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def list_failures(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                         status: str = "", category: str = "", reviewed: str = "", limit: int = 300):
     """Flat list (drives the export + detail table). `reviewed` = '' (all) | 'false' (unreviewed — the
     default triage view) | 'true'. Degrades gracefully if mig 716's `reviewed` column is un-run."""
@@ -1370,7 +1370,7 @@ async def list_failures(authorization: str = Header(default=""), x_active_org: s
 
 
 @router.patch("/failures/{fid}")
-async def update_failure(fid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def update_failure(fid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -1392,7 +1392,7 @@ async def update_failure(fid: str, body: dict, authorization: str = Header(defau
 
 
 @router.get("/failures/config")
-async def get_failures_config(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def get_failures_config(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -1411,7 +1411,7 @@ async def get_failures_config(authorization: str = Header(default=""), x_active_
 
 
 @router.put("/failures/config")
-async def put_failures_config(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def put_failures_config(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -1437,7 +1437,7 @@ async def put_failures_config(body: dict, authorization: str = Header(default=""
 
 # ── Failure TRIAGE (mig 716): plain-English registry · grouped view · bulk-review · fix requests ──
 @router.get("/failure-kind-docs")
-async def failure_kind_docs(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def failure_kind_docs(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The MERGED plain-English how-to-fix registry (editable DB rows over the in-code fallback). Readable
     by any signed-in user (the /failures + support pages render "what this means" + "how to fix it" from
     it). `can_edit` is true only for house support staff (they edit the GLOBAL registry)."""
@@ -1448,7 +1448,7 @@ async def failure_kind_docs(authorization: str = Header(default=""), x_active_or
 
 
 @router.post("/failure-kind-docs")
-async def upsert_failure_kind_doc(body: dict, authorization: str = Header(default=""),
+def upsert_failure_kind_doc(body: dict, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Create/update one plain-English kind doc in the HOUSE global registry. Support-gated (the SAME gate
     as the support docs editor). Keyed by (org_id, kind)."""
@@ -1470,7 +1470,7 @@ async def upsert_failure_kind_doc(body: dict, authorization: str = Header(defaul
 
 
 @router.get("/failures/grouped")
-async def failures_grouped(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def failures_grouped(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                            reviewed: str = "false", category: str = "", limit: int = 1500):
     """Grouped TRIAGE view for THIS tenant (admin-gated, org-scoped). Groups similar failures by kind with
     count / latest / unreviewed_count + the plain-English doc, so the UI renders collapsible groups and
@@ -1495,7 +1495,7 @@ async def failures_grouped(authorization: str = Header(default=""), x_active_org
 
 
 @router.post("/failures/bulk-review")
-async def failures_bulk_review(body: dict, authorization: str = Header(default=""),
+def failures_bulk_review(body: dict, authorization: str = Header(default=""),
                                x_active_org: str = Header(default="")):
     """The CLEAR action: mark selected failure rows reviewed (or un-reviewed) — keeps the rows for the audit
     trail, org-scoped to the caller's tenant. body: {ids:[...], reviewed:true|false}."""
@@ -1522,7 +1522,7 @@ async def failures_bulk_review(body: dict, authorization: str = Header(default="
 
 
 @router.post("/fix-requests")
-async def create_fix_request(body: dict, authorization: str = Header(default=""),
+def create_fix_request(body: dict, authorization: str = Header(default=""),
                              x_active_org: str = Header(default="")):
     """Club a group of similar failures (from /failures) into ONE fix request for THIS tenant. Admin-gated,
     org-scoped. Enters the pipeline at 'pending_approval' → a super-admin approves it in the support console.
@@ -1547,7 +1547,7 @@ async def create_fix_request(body: dict, authorization: str = Header(default="")
 
 
 @router.get("/fix-requests")
-async def list_fix_requests(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def list_fix_requests(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                             status: str = ""):
     """This tenant's fix requests (admin-gated, org-scoped)."""
     uid = _uid_from_token(authorization)
@@ -1568,7 +1568,7 @@ async def list_fix_requests(authorization: str = Header(default=""), x_active_or
 
 
 @router.get("/tenant-settings")
-async def get_tenant_settings(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def get_tenant_settings(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The signed-in user's OWN tenant pay-period settings + a worked example of upcoming periods.
     Any signed-in user may read; only an admin may write (PUT)."""
     uid = _uid_from_token(authorization)
@@ -1588,7 +1588,7 @@ async def get_tenant_settings(authorization: str = Header(default=""), x_active_
 
 
 @router.put("/tenant-settings")
-async def put_tenant_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def put_tenant_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The tenant ADMIN defines/updates the pay period (captured at onboarding). Saving a complete,
     valid definition marks the tenant setup_complete (clears the setup banner). Super-admins may pass
     org_id to set it for any tenant; otherwise it targets the caller's own tenant."""
@@ -1677,7 +1677,7 @@ def _ensure_roles_for_levels(client, org_id: str) -> None:
 
 
 @router.get("/roles")
-async def list_roles(org_id: str = ORG_ID):
+def list_roles(org_id: str = ORG_ID):
     client = sb()
     try:
         _ensure_roles_for_levels(client, org_id)   # org-chart levels become assignable roles
@@ -1689,7 +1689,7 @@ async def list_roles(org_id: str = ORG_ID):
 
 
 @router.post("/roles")
-async def create_role(body: dict, org_id: str = ORG_ID):
+def create_role(body: dict, org_id: str = ORG_ID):
     name = (body.get("name") or "").strip().lower().replace(" ", "_")
     if not name:
         raise HTTPException(400, "name required")
@@ -1701,7 +1701,7 @@ async def create_role(body: dict, org_id: str = ORG_ID):
 
 
 @router.put("/roles/{role_id}")
-async def update_role(role_id: int, body: dict):
+def update_role(role_id: int, body: dict):
     upd = {}
     if "display_name" in body:
         upd["display_name"] = body["display_name"]
@@ -1716,7 +1716,7 @@ async def update_role(role_id: int, body: dict):
 
 
 @router.delete("/roles/{role_id}")
-async def delete_role(role_id: int, org_id: str = ORG_ID):
+def delete_role(role_id: int, org_id: str = ORG_ID):
     """Delete a custom role. Refuses to delete 'admin' (lock-out guard) and blocks deletion while any
     user is still assigned it (reassign them first) so nobody is silently orphaned."""
     client = sb()
@@ -1740,7 +1740,7 @@ async def delete_role(role_id: int, org_id: str = ORG_ID):
 
 # ── Users (app accounts) + provisioning ────────────────────────────────────────────────
 @router.get("/users")
-async def list_users(org_id: str = ORG_ID):
+def list_users(org_id: str = ORG_ID):
     """All app users (core.users) with their role + login state. Degrades to [] if migration
     015 hasn't run (so the admin page doesn't hard-error out of order)."""
     try:
@@ -1872,7 +1872,7 @@ async def list_employees(org_id: str = ORG_ID):
 
 
 @router.get("/filter-options")
-async def filter_options(org_id: str = ORG_ID):
+def filter_options(org_id: str = ORG_ID):
     """Org-scoped option source for the shared StandardFilterBar (RULE FIVE §3d): the tenant's stores
     (+their markets), distinct markets, and the rep/employee roster (union of the storeops roster and any
     app_users). PICK-DON'T-TYPE source — every value is a real org row, so a filter can never reference
@@ -1951,7 +1951,7 @@ async def filter_options(org_id: str = ORG_ID):
 # app/core/scope.market_index() is the ONE canonical union, and it is the SAME function that RESOLVES
 # a market grant to its member stores, so the picker can never offer a market the resolver cannot bind.
 @router.get("/markets")
-async def grant_universe(org_id: str = ORG_ID):
+def grant_universe(org_id: str = ORG_ID):
     """Canonical org-scoped GRANT universe for the roles/config market + store pickers (RULE THREE:
     pick-don't-type). Deliberately NOT span-scoped — you cannot delegate a market you are forbidden
     to see, and an admin assigning a DM to 3 markets must be able to see all of the tenant's markets.
@@ -1964,7 +1964,7 @@ async def grant_universe(org_id: str = ORG_ID):
 
 
 @router.get("/scope-preview")
-async def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
+def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
                         authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """DIAGNOSTIC: show what a role and/or a specific login actually resolves to, split into the two
     independent questions. Read-only; changes nothing.
@@ -2073,7 +2073,7 @@ async def assign_role(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/users/bulk-assign")
-async def bulk_assign(body: dict, org_id: str = ORG_ID):
+def bulk_assign(body: dict, org_id: str = ORG_ID):
     """Bulk upsert app_users (assign roles) from a list — powers the employee-sheet upload and
     the multi-add form. Body: {users:[{email, full_name, role, market, store_code}]}. Does NOT
     create logins (call /users/bulk-provision or per-row create-login after). Role names are
@@ -2640,7 +2640,7 @@ async def reinstate_login(body: dict, authorization: str = Header(default="")):
 
 # ── Password policy (RULE TWO: config + admin UI) ──────────────────────────────────────────────────
 @router.get("/password-policy/public")
-async def password_policy_public():
+def password_policy_public():
     """PUBLIC: the owner DEFAULT password policy — drives client-side strength hints on UNAUTHENTICATED
     screens (signup / self-serve reset). The tenant's REAL policy (server-enforced) rides on /core/me;
     exposing only the default here avoids any per-email enumeration."""
@@ -2713,7 +2713,7 @@ def _enforce_self_2fa(client, org_id, uid, role, twofa_enabled, x_2fa_token):
 
 
 @router.get("/security-settings")
-async def get_security_settings(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def get_security_settings(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The tenant's password + 2FA policy (admin Security Settings UI). Any signed-in user may READ (so
     pages can show the policy); only a 'security'-setting editor may WRITE."""
     uid = _uid_from_token(authorization)
@@ -2734,7 +2734,7 @@ async def get_security_settings(authorization: str = Header(default=""), x_activ
 
 
 @router.put("/security-settings")
-async def put_security_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def put_security_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Update the tenant password policy and/or 2FA policy. Gated on the 'security' setting permission.
     Values are normalized + clamped (max_length <= 128 hard cap) before persisting."""
     uid = _uid_from_token(authorization)
@@ -2763,7 +2763,7 @@ async def put_security_settings(body: dict, authorization: str = Header(default=
 
 # ── Authenticated self password change (reroutes the client-side supabase-js set → policy enforced) ──
 @router.post("/me/set-password")
-async def set_own_password(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def set_own_password(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The signed-in user sets their OWN password (must-reset first-login screen + normal change). Routed
     through the backend so the tenant password policy CANNOT be bypassed client-side (the old screen
     called supabase.auth.updateUser directly). Validates → sets via the admin API → clears must_reset."""
@@ -2847,7 +2847,7 @@ async def forgot_password(body: dict, request: Request, background: BackgroundTa
 
 
 @router.post("/auth/reset-password")
-async def reset_password_otp(body: dict):
+def reset_password_otp(body: dict):
     """PUBLIC: complete a reset with {email, code, new_password}. Uniform 'Invalid or expired code.' for
     every failure mode (missing/expired/attempts/wrong) so nothing is revealed. The new password is
     validated against the tenant policy ONLY AFTER a valid code is proven (so policy detail is never a
@@ -2979,7 +2979,7 @@ async def resend_invite(body: dict, org_id: str = ORG_ID, authorization: str = H
 
 
 @router.post("/users/reveal-code")
-async def reveal_code(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def reveal_code(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Reveal the CURRENT active invite/access code for troubleshooting hand-off. Allowed for a
     super-admin OR the tenant's own admin (their own tenant's data — doctrine-compatible; NEVER exposes
@@ -3053,7 +3053,7 @@ async def admin_set_password(body: dict, org_id: str = ORG_ID, authorization: st
 
 # ── Two-factor authentication ─────────────────────────────────────────────────────────────────────────
 @router.get("/me/2fa")
-async def get_2fa_status(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def get_2fa_status(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                          x_2fa_token: str = Header(default="")):
     """The signed-in user's 2FA status for the active tenant: whether it's required, whether THIS session
     is already verified (a valid x-2fa-token), the tenant's allowed channels, the user's phone state."""
@@ -3111,7 +3111,7 @@ async def start_2fa(body: dict, request: Request, authorization: str = Header(de
 
 
 @router.post("/me/2fa/verify")
-async def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Verify a 2FA code and mint a signed 'verified session' marker (x-2fa-token) the client sends on
     every request. 'remember' → a 30-day device marker; otherwise a 12-hour session marker. Uniform
     'Invalid or expired code.' on any failure."""
@@ -3149,7 +3149,7 @@ async def verify_2fa(body: dict, authorization: str = Header(default=""), x_acti
 
 
 @router.post("/me/2fa/settings")
-async def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                           x_2fa_token: str = Header(default="")):
     """The user turns 2FA on/off for themselves (matters under the 'optional' tenant mode) and picks
     channels. Cannot turn OFF when the tenant policy is 'required'. When 2FA is currently required for
@@ -3220,7 +3220,7 @@ async def set_phone(body: dict, request: Request, authorization: str = Header(de
 
 
 @router.post("/me/phone/verify")
-async def verify_phone(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def verify_phone(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                        x_2fa_token: str = Header(default="")):
     """Verify the phone with the WhatsApp code → mark it verified + enable WhatsApp as a 2FA channel. When
     2FA is currently required for this user, a valid 2FA marker is required (same channel-bypass guard as
@@ -3253,7 +3253,7 @@ async def verify_phone(body: dict, authorization: str = Header(default=""), x_ac
 
 
 @router.post("/users/reset-password")
-async def reset_password(body: dict, authorization: str = Header(default="")):
+def reset_password(body: dict, authorization: str = Header(default="")):
     """Super-admin: reset ANY user's password by email, ACROSS ALL TENANTS (not org-scoped, unlike
     /users/create-login). Uses the admin SDK to (re)set the Supabase Auth password and forces a change
     on next login wherever the email has an app_users row. Returns the temp password to hand out. Pass
@@ -3287,7 +3287,7 @@ async def reset_password(body: dict, authorization: str = Header(default="")):
 
 
 @router.post("/tenants/{org_id}/reset-admin-password")
-async def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: str = Header(default="")):
+def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: str = Header(default="")):
     """Super-admin: reset a TENANT's admin login password (on request from that tenant's admin who
     is locked out). Finds the tenant's admin app_users row(s) that have a provisioned login — the
     common case is exactly one, which is reset directly. If a tenant has MORE than one admin login,
@@ -3341,7 +3341,7 @@ async def reset_tenant_admin_password(org_id: str, body: dict = None, authorizat
 
 
 @router.post("/users/bulk-provision")
-async def bulk_provision(body: dict, org_id: str = ORG_ID):
+def bulk_provision(body: dict, org_id: str = ORG_ID):
     """Create logins for every assigned core.users row that has an email and no auth_id yet
     (optionally limited to body['emails']). Returns the per-user temp passwords to distribute."""
     client = sb()
@@ -3371,7 +3371,7 @@ async def bulk_provision(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/users/delete")
-async def delete_user(body: dict, org_id: str = ORG_ID):
+def delete_user(body: dict, org_id: str = ORG_ID):
     """Hard-delete an app user: remove the storeops.app_users row AND its Supabase Auth account."""
     email = (body.get("email") or "").strip().lower()
     if not email:
@@ -3393,7 +3393,7 @@ async def delete_user(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/users/deactivate")
-async def deactivate_user(body: dict, org_id: str = ORG_ID):
+def deactivate_user(body: dict, org_id: str = ORG_ID):
     """Soft-disable an app user (keeps the auth account; flip is_active)."""
     email = (body.get("email") or "").strip().lower()
     if not email:
@@ -3454,7 +3454,7 @@ def purge_app_user(org_id, *, email=None, employee_id=None, hard=True):
 
 
 @router.post("/employees/purge")
-async def purge_employee(body: dict, org_id: str = ORG_ID):
+def purge_employee(body: dict, org_id: str = ORG_ID):
     """Delete or deactivate a person from BOTH the StoreOps roster and the Roles module in one
     call (the Roles & Access remove action). Identify by employee_pk (storeops.employees.id) for
     a real employee, or by email/employee_id for a manually-added Roles user (which has no
@@ -3703,7 +3703,7 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
 
 
 @router.put("/employee-widgets")
-async def set_employee_widget_overrides(body: dict, org_id: str = ORG_ID):
+def set_employee_widget_overrides(body: dict, org_id: str = ORG_ID):
     """Per-employee Employee-Dashboard widget overrides (#1b). Body:
     {employee_id?, email?, widget_overrides: {widget_key: bool} | null}. Writes onto the
     person's storeops.app_users row (so they must be assigned a role first). null/{} = clear
@@ -3775,7 +3775,7 @@ _DOC_FIELDS = ("page_key", "title", "module", "user_md", "support_md", "common_i
 
 
 @router.get("/support-doc/resolve")
-async def support_doc_resolve(path: str = "", authorization: str = Header(default=""),
+def support_doc_resolve(path: str = "", authorization: str = Header(default=""),
                               x_active_org: str = Header(default="")):
     """Resolve the help doc for a pathname (the "?" panel calls this for the CURRENT page). Returns the
     trimmed `user_md` view for a normal user; the FULL row when the caller passes the support gate.
@@ -3809,7 +3809,7 @@ async def support_doc_resolve(path: str = "", authorization: str = Header(defaul
 
 
 @router.get("/support-docs")
-async def support_docs_list(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def support_docs_list(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                             org: str = ""):
     """List help docs for the coverage/editor view (support-gated). Defaults to HOUSE (global) docs; pass
     ?org=<tenant> to view a tenant's overrides."""
@@ -3829,7 +3829,7 @@ def _clean_doc(body: dict) -> dict:
 
 
 @router.post("/support-docs")
-async def support_docs_upsert(body: dict, authorization: str = Header(default=""),
+def support_docs_upsert(body: dict, authorization: str = Header(default=""),
                               x_active_org: str = Header(default="")):
     """Create/update one help doc (support-gated). Keyed by (org_id, page_key); defaults to the HOUSE
     (global) org unless an explicit org_id is supplied (a per-tenant override)."""
@@ -3850,7 +3850,7 @@ async def support_docs_upsert(body: dict, authorization: str = Header(default=""
 
 
 @router.delete("/support-docs/{did}")
-async def support_docs_delete(did: str, authorization: str = Header(default=""),
+def support_docs_delete(did: str, authorization: str = Header(default=""),
                               x_active_org: str = Header(default="")):
     if not _support_gate(authorization, x_active_org):
         raise HTTPException(403, "Editing help docs is restricted to house support staff.")
@@ -3859,7 +3859,7 @@ async def support_docs_delete(did: str, authorization: str = Header(default=""),
 
 
 @router.post("/support-docs/import")
-async def support_docs_import(body: dict, authorization: str = Header(default=""),
+def support_docs_import(body: dict, authorization: str = Header(default=""),
                               x_active_org: str = Header(default="")):
     """Bulk-import a domain content pack (support-gated). Contract:
         {"domain": str, "pages": [{"page_key","title","module","user_md","support_md",
@@ -3895,7 +3895,7 @@ async def support_docs_import(body: dict, authorization: str = Header(default=""
 
 
 @router.post("/support-docs/seed-bundled")
-async def support_docs_seed_bundled(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_docs_seed_bundled(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Re-run the BUNDLED help-doc seed (app/data/support_docs_seed.json) into the HOUSE org on demand
     (support-gated). This is the same never-clobber load that runs automatically on the house org's
     sync_tenant pass — a human-edited row (updated_by not NULL/'seed') is never overwritten. Zero manual

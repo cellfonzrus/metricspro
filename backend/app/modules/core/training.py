@@ -259,7 +259,7 @@ def _fetch(orgs):
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────────────────────────
 @router.get("/tours")
-async def list_tours(path: str = "", module: str = "", authorization: str = Header(default=""),
+def list_tours(path: str = "", module: str = "", authorization: str = Header(default=""),
                      x_active_org: str = Header(default="")):
     """Every tour this caller can take: the platform defaults ∪ this tenant's own, with a tenant row
     overriding the platform row of the same slug. Optional `path` filters to tours that touch that page
@@ -285,7 +285,7 @@ async def list_tours(path: str = "", module: str = "", authorization: str = Head
 
 
 @router.get("/tours/{slug}")
-async def get_tour(slug: str, authorization: str = Header(default=""),
+def get_tour(slug: str, authorization: str = Header(default=""),
                    x_active_org: str = Header(default="")):
     """ONE resolved tour with its ordered steps — what the tour engine actually runs."""
     caller = _caller(authorization, x_active_org)
@@ -303,7 +303,7 @@ async def get_tour(slug: str, authorization: str = Header(default=""),
 
 
 @router.post("/tours")
-async def save_tour(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def save_tour(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
                     x_active_org: str = Header(default="")):
     """Create or replace ONE tour AND its steps (steps are replace-all: the payload IS the tour).
     A tenant admin always writes its own org; only a super-admin can write the platform defaults by
@@ -343,7 +343,7 @@ async def save_tour(body: dict, org_id: str = ORG_ID, authorization: str = Heade
 
 
 @router.delete("/tours/{tour_id}")
-async def delete_tour(tour_id: str, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def delete_tour(tour_id: str, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Delete ONE tour (steps cascade). Org-scoped on the DELETE, so a tenant admin can only ever
     remove its OWN row — deleting a tenant override simply restores the platform default."""
@@ -359,7 +359,7 @@ async def delete_tour(tour_id: str, org_id: str = ORG_ID, authorization: str = H
 
 
 @router.get("/scripts")
-async def list_scripts(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def list_scripts(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """PHASE-2 SCAFFOLD: every resolved tour rendered as a recording script (storyboard + narration +
     a Playwright outline). Edit-gated, because narration/action hints are production notes, not user
     help. This endpoint produces the SOURCE for the videos; it records nothing."""
@@ -375,7 +375,7 @@ async def list_scripts(authorization: str = Header(default=""), x_active_org: st
 
 
 @router.get("/script/{slug}")
-async def get_script(slug: str, authorization: str = Header(default=""),
+def get_script(slug: str, authorization: str = Header(default=""),
                      x_active_org: str = Header(default="")):
     """PHASE-2 SCAFFOLD: ONE tour's recording script."""
     caller = _caller(authorization, x_active_org)
@@ -392,7 +392,7 @@ async def get_script(slug: str, authorization: str = Header(default=""),
 
 
 @router.post("/seed")
-async def reseed(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def reseed(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Re-run the BUNDLED platform-default tour seed into the HOUSE org (super-admin only). This is the
     same never-clobber load that runs automatically on the house org's sync_tenant pass — a tour a human
     has edited (updated_by not NULL/'seed') is skipped. Zero manual steps are needed after mig 720 +

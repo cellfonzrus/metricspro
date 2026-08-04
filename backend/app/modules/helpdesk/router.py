@@ -914,7 +914,7 @@ def _tenant_names(org_ids):
 
 
 @router.get("/support/cases")
-async def support_cases(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def support_cases(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                         status: str = "", priority: str = "", org: str = "", assignee: str = "",
                         page_key: str = "", limit: int = 300):
     """CROSS-TENANT queue: every escalated case across all tenants (house-gated). Filters: status,
@@ -971,7 +971,7 @@ def _load_case(cid: str):
 
 
 @router.get("/support/cases/{cid}")
-async def support_case_detail(cid: str, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_detail(cid: str, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Case detail: the case + its timeline + the origin ticket (subject/description/thread) + the tenant
     name + recent core.failure_log rows for the case's org within ±24h of ticket creation. House-gated."""
     _require_support(authorization, x_active_org)
@@ -1072,7 +1072,7 @@ async def _notify_ticket_reply(org_id, ticket_id):
 
 
 @router.post("/support/cases/{cid}/note")
-async def support_case_note(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_note(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Internal note — NEVER fanned to the tenant (visible_to_user=false). House-gated."""
     ctx = _require_support(authorization, x_active_org)
     text = (body.get("body") or "").strip()
@@ -1086,7 +1086,7 @@ async def support_case_note(cid: str, body: dict, authorization: str = Header(de
 
 
 @router.post("/support/cases/{cid}/assign")
-async def support_case_assign(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_assign(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Assign the case to a support agent (assignee_email). House-gated."""
     ctx = _require_support(authorization, x_active_org)
     assignee = (body.get("assignee_email") or "").strip() or None
@@ -1099,7 +1099,7 @@ async def support_case_assign(cid: str, body: dict, authorization: str = Header(
 
 
 @router.post("/support/cases/{cid}/status")
-async def support_case_status(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_status(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Change case status/priority. Resolving (status='resolved') REQUIRES resolution text. House-gated."""
     ctx = _require_support(authorization, x_active_org)
     case = _load_case(cid)
@@ -1141,7 +1141,7 @@ def _support_can_edit(authorization: str, x_active_org: str = "") -> bool:
 
 
 @router.get("/support/canned-responses")
-async def canned_list(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def canned_list(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     _require_support(authorization, x_active_org)
     try:
         rows = (db("support_canned_response").select("*").eq("org_id", HOUSE_ORG)
@@ -1152,7 +1152,7 @@ async def canned_list(authorization: str = Header(default=""), x_active_org: str
 
 
 @router.post("/support/canned-responses")
-async def canned_create(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def canned_create(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     _require_support(authorization, x_active_org)
     if not _support_can_edit(authorization, x_active_org):
         raise HTTPException(403, "you don't have permission to edit support canned responses")
@@ -1170,7 +1170,7 @@ async def canned_create(body: dict, authorization: str = Header(default=""), x_a
 
 
 @router.delete("/support/canned-responses/{rid}")
-async def canned_delete(rid: str, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def canned_delete(rid: str, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     _require_support(authorization, x_active_org)
     if not _support_can_edit(authorization, x_active_org):
         raise HTTPException(403, "you don't have permission to edit support canned responses")
@@ -1179,14 +1179,14 @@ async def canned_delete(rid: str, authorization: str = Header(default=""), x_act
 
 
 @router.get("/support/sla-policy")
-async def sla_get(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def sla_get(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     _require_support(authorization, x_active_org)
     return {"policy": _house_sla_policy(), "priorities": list(_SUPPORT_PRIORITIES),
             "can_edit": _support_can_edit(authorization, x_active_org)}
 
 
 @router.put("/support/sla-policy")
-async def sla_put(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def sla_put(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Upsert one priority's SLA (body: {priority, response_hours, resolve_hours}). House config."""
     _require_support(authorization, x_active_org)
     if not _support_can_edit(authorization, x_active_org):
@@ -1226,7 +1226,7 @@ def _core_triage():
 
 
 @router.get("/support/failures")
-async def support_failures(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def support_failures(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                            org: str = "", module: str = "", kind: str = "", reviewed: str = "false",
                            date_from: str = "", date_to: str = "", limit: int = 1500):
     """CROSS-TENANT failure triage (house-gated): every tenant's core.failure_log, grouped by kind with the
@@ -1266,7 +1266,7 @@ async def support_failures(authorization: str = Header(default=""), x_active_org
 
 
 @router.post("/support/failures/bulk-review")
-async def support_failures_bulk_review(body: dict, authorization: str = Header(default=""),
+def support_failures_bulk_review(body: dict, authorization: str = Header(default=""),
                                        x_active_org: str = Header(default="")):
     """CROSS-TENANT clear: mark the given failure rows reviewed/un-reviewed BY ID (house-gated — the failure
     ids carry their own org_id, so no org filter is applied; this is the sanctioned cross-tenant write)."""
@@ -1295,7 +1295,7 @@ def _decorate_fix_request(fr, names):
 
 
 @router.post("/support/fix-requests")
-async def support_create_fix_request(body: dict, authorization: str = Header(default=""),
+def support_create_fix_request(body: dict, authorization: str = Header(default=""),
                                      x_active_org: str = Header(default="")):
     """Club a group of similar failures (across one or more tenants) into ONE house-owned fix request.
     House-gated. Enters at 'pending_approval' — a non-super support agent CANNOT create it directly in an
@@ -1320,7 +1320,7 @@ async def support_create_fix_request(body: dict, authorization: str = Header(def
 
 
 @router.get("/support/fix-requests")
-async def support_list_fix_requests(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def support_list_fix_requests(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                                     status: str = "", org: str = "", kind: str = "", limit: int = 500):
     """CROSS-TENANT list of fix requests (house-gated). Filter by status / owner org / kind. Pass
     status='approved' to read the AUTOMATION QUEUE the fleet picks up. `can_approve` = caller is a
@@ -1345,7 +1345,7 @@ async def support_list_fix_requests(authorization: str = Header(default=""), x_a
 
 
 @router.get("/support/fix-requests/{fid}")
-async def support_fix_request_detail(fid: str, authorization: str = Header(default=""),
+def support_fix_request_detail(fid: str, authorization: str = Header(default=""),
                                      x_active_org: str = Header(default="")):
     """One fix request + its clubbed failure rows (tenant-named). House-gated."""
     ctx = _require_support(authorization, x_active_org)
@@ -1364,7 +1364,7 @@ async def support_fix_request_detail(fid: str, authorization: str = Header(defau
 
 
 @router.post("/support/fix-requests/{fid}/status")
-async def support_fix_request_status(fid: str, body: dict, authorization: str = Header(default=""),
+def support_fix_request_status(fid: str, body: dict, authorization: str = Header(default=""),
                                      x_active_org: str = Header(default="")):
     """Move a fix request through the pipeline. approve/reject REQUIRE a super_admin (the approval gate);
     other transitions are open to any support agent. Resolving with mark_reviewed=true bulk-marks the

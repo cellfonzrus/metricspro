@@ -90,7 +90,7 @@ def _store_artifact(org_id, filename, mime, data: bytes, report_key=None, create
 
 # ── recipients ────────────────────────────────────────────────────────────────
 @router.get("/recipients")
-async def list_recipients(org_id: str = ORG_ID):
+def list_recipients(org_id: str = ORG_ID):
     """Saved notify recipients + active employees (with contact info) for the picker."""
     saved = sb().table("recipients").select("*").eq("org_id", org_id).order("name").execute().data or []
     emps = get_supabase().schema("storeops").table("employees") \
@@ -112,7 +112,7 @@ def _norm_save_phone(org_id, raw):
 
 
 @router.post("/recipients")
-async def create_recipient(body: dict, org_id: str = ORG_ID):
+def create_recipient(body: dict, org_id: str = ORG_ID):
     row = {"org_id": org_id, "name": body.get("name"), "email": body.get("email"),
            "phone": _norm_save_phone(org_id, body.get("phone")), "employee_id": body.get("employee_id")}
     r = sb().table("recipients").insert(row).execute()
@@ -120,7 +120,7 @@ async def create_recipient(body: dict, org_id: str = ORG_ID):
 
 
 @router.put("/recipients/{rid}")
-async def update_recipient(rid: str, body: dict, org_id: str = ORG_ID):
+def update_recipient(rid: str, body: dict, org_id: str = ORG_ID):
     allowed = {k: v for k, v in body.items() if k in ("name", "email", "phone", "employee_id")}
     if "phone" in allowed:
         allowed["phone"] = _norm_save_phone(org_id, allowed.get("phone"))
@@ -129,19 +129,19 @@ async def update_recipient(rid: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/recipients/{rid}")
-async def delete_recipient(rid: str, org_id: str = ORG_ID):
+def delete_recipient(rid: str, org_id: str = ORG_ID):
     sb().table("recipients").delete().eq("org_id", org_id).eq("id", rid).execute()
     return {"deleted": rid}
 
 
 # ── reports + health ─────────────────────────────────────────────────────────
 @router.get("/reports")
-async def list_reports():
+def list_reports():
     return {"reports": report_registry.list_reports()}
 
 
 @router.get("/health")
-async def health():
+def health():
     return {"email_configured": email_resend.is_configured(),
             "whatsapp_configured": whatsapp_meta.is_configured(),
             "from_email": settings.NOTIFY_FROM_EMAIL or None}
@@ -149,7 +149,7 @@ async def health():
 
 # ── unified report → designated recipient routing (Theme 4) ───────────────────
 @router.get("/report-config")
-async def get_report_config(org_id: str = ORG_ID):
+def get_report_config(org_id: str = ORG_ID):
     """EVERY sendable report merged with its saved designated-recipient config, so one page can show
     the full routing table (report → who it's sent to). Reports with no config come back with empty
     recipients + sensible defaults."""
@@ -174,7 +174,7 @@ async def get_report_config(org_id: str = ORG_ID):
 
 
 @router.put("/report-config/{report_key}")
-async def put_report_config(report_key: str, body: dict, org_id: str = ORG_ID):
+def put_report_config(report_key: str, body: dict, org_id: str = ORG_ID):
     """Set the designated recipients + channels for one report."""
     if report_key not in report_registry.REPORTS:
         raise HTTPException(400, f"unknown report_key '{report_key}'")
@@ -434,7 +434,7 @@ def _content_disposition(filename) -> str:
 # probe learns nothing (anti-enumeration). No org_id is taken from the request; nothing but the one file
 # is reachable from the token.
 @router.get("/dl/{token}")
-async def download_artifact(token: str):
+def download_artifact(token: str):
     aid = download_token.verify(token)
     if not aid:
         raise HTTPException(404, "Not found")
@@ -481,12 +481,12 @@ async def download_artifact(token: str):
 
 # ── tenant notify settings (RULE TWO — download-link expiry, default 7 days) ──────────────────────────
 @router.get("/settings")
-async def get_settings(org_id: str = ORG_ID):
+def get_settings(org_id: str = ORG_ID):
     return {"download_link_expiry_days": _download_expiry_days(org_id)}
 
 
 @router.put("/settings")
-async def put_settings(body: dict, org_id: str = ORG_ID,
+def put_settings(body: dict, org_id: str = ORG_ID,
                        authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     # M1 (per-setting edit-permissions doctrine): gate on the 'notify_policy' settings area, resolving the
     # caller from the auth header (same shape as core's put_tenant_settings). GET stays open to the org.
@@ -624,13 +624,13 @@ def _sub_with_next(body, org_id):
 
 
 @router.get("/subscriptions")
-async def list_subscriptions(org_id: str = ORG_ID):
+def list_subscriptions(org_id: str = ORG_ID):
     return sb().table("subscriptions").select("*").eq("org_id", org_id) \
         .order("created_at", desc=True).execute().data or []
 
 
 @router.post("/subscriptions")
-async def create_subscription(body: dict, org_id: str = ORG_ID):
+def create_subscription(body: dict, org_id: str = ORG_ID):
     if body.get("report_key") not in report_registry.REPORTS:
         raise HTTPException(400, f"unknown report_key '{body.get('report_key')}'")
     r = sb().table("subscriptions").insert(_sub_with_next(body, org_id)).execute()
@@ -638,20 +638,20 @@ async def create_subscription(body: dict, org_id: str = ORG_ID):
 
 
 @router.put("/subscriptions/{sid}")
-async def update_subscription(sid: str, body: dict, org_id: str = ORG_ID):
+def update_subscription(sid: str, body: dict, org_id: str = ORG_ID):
     r = sb().table("subscriptions").update(_sub_with_next(body, org_id)) \
         .eq("org_id", org_id).eq("id", sid).execute()
     return r.data[0] if r.data else {}
 
 
 @router.delete("/subscriptions/{sid}")
-async def delete_subscription(sid: str, org_id: str = ORG_ID):
+def delete_subscription(sid: str, org_id: str = ORG_ID):
     sb().table("subscriptions").delete().eq("org_id", org_id).eq("id", sid).execute()
     return {"deleted": sid}
 
 
 @router.get("/send-log")
-async def send_log(org_id: str = ORG_ID, limit: int = 200):
+def send_log(org_id: str = ORG_ID, limit: int = 200):
     return sb().table("send_log").select("*").eq("org_id", org_id) \
         .order("created_at", desc=True).limit(min(max(limit, 1), 1000)).execute().data or []
 

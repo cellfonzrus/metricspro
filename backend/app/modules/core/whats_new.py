@@ -192,7 +192,7 @@ def _secret_ok(header_value: str) -> bool:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────────────────────────
 @router.get("")
-async def list_notes(since: str = "", category: str = "", module: str = "",
+def list_notes(since: str = "", category: str = "", module: str = "",
                      from_date: str = "", to_date: str = "",
                      authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The What's New feed for admin staff. `since` (a YYYY-MM-DD watermark) additionally returns the
@@ -223,7 +223,7 @@ async def list_notes(since: str = "", category: str = "", module: str = "",
 
 
 @router.post("")
-async def save_note(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def save_note(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
                     x_active_org: str = Header(default="")):
     """Create or update ONE entry. A super-admin passing ?org_id=<house> writes a PLATFORM-WIDE entry
     every tenant's admins will see; anyone else writes their own organisation's entry."""
@@ -244,7 +244,7 @@ async def save_note(body: dict, org_id: str = ORG_ID, authorization: str = Heade
 
 
 @router.delete("/{note_id}")
-async def delete_note(note_id: str, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def delete_note(note_id: str, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Delete ONE entry — org-scoped on the DELETE, so a tenant admin can only remove its own."""
     caller = _caller(authorization, x_active_org)
@@ -259,7 +259,7 @@ async def delete_note(note_id: str, org_id: str = ORG_ID, authorization: str = H
 
 
 @router.post("/ingest")
-async def ingest(body: dict, x_release_secret: str = Header(default=""),
+def ingest(body: dict, x_release_secret: str = Header(default=""),
                  authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """INTERNAL receiver so a future ship process can append entries automatically. DUAL-AUTH, default
     DENY: a valid x-release-secret (env RELEASE_NOTE_SECRET, EMPTY = door closed) or a verified
@@ -293,7 +293,7 @@ async def ingest(body: dict, x_release_secret: str = Header(default=""),
 
 
 @router.post("/seed")
-async def reseed(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def reseed(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Re-run the BUNDLED platform entry seed into the HOUSE org (super-admin only). Never clobbers a
     hand-edited entry. Same load that runs automatically on the house org's sync_tenant pass."""
     caller = _caller(authorization, x_active_org)
