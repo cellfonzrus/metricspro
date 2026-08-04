@@ -5355,7 +5355,14 @@ def payout_due(store_code: str = "", as_of: str = "", org_id: str = ORG_ID,
             notes.append(f"commission: {err}")
         elif data:
             for e in (data.get("employees") or []):
-                bal = _f(e.get("unpaid_balance"))
+                # mod-commission cross-module contract update (agent/commission/accrual-owner-answers,
+                # 2026-08-04): prefer `due_now` (already floored at 0, cycle-aware per Q19's cycle-reset
+                # semantics, and net of any auto-netted prior over-advance per Q14's over_advance_mode)
+                # when the sibling package sends it; fall back to `unpaid_balance` for an older deploy
+                # or a degrade response that only has the legacy field. due_now <= unpaid_balance always
+                # (never a bigger number), so this can only ever REDUCE what the envelope thinks is due,
+                # never inflate it — no over-payment risk either way.
+                bal = _f(e.get("due_now")) if e.get("due_now") is not None else _f(e.get("unpaid_balance"))
                 due, amt = _envelope.cadence_due(cfg["commission_cadence"], cfg["commission_anchor"],
                                                  cfg["commission_anchor_date"], d, bal)
                 if due and amt > 0:
