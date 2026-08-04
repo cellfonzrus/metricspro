@@ -1,8 +1,10 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
+import { CheckboxDropdown } from '../_lib/CheckboxDropdown'
+import { cascadeStores, marketsFromStores, type StoreOpt } from '../_lib/market-store-cascade'
 
 // DM Envelope Payout execution page (mig 506/507, EEP). Flow: pick a store + date -> see what's due
 // (commission accrual balance, clock-in salary balance, approved-unpaid expense lines, each gated by
@@ -30,7 +32,23 @@ export default function EnvelopePayoutPage() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
-  const storeOptions: EntityOption[] = stores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined }))
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): this is a single-STORE
+  // ACTION page (payout-due/envelope-plan only ever operate on ONE store_code at a time), so the store
+  // control stays a single-select EntityPicker rather than the checkbox multi-select used on report
+  // pages — but a market picker still narrows the store search space first, per the owner's "market
+  // and then selectable store" ask, and clears the picked store if it falls outside a newly-picked
+  // market (never leaves a stale, now-hidden store silently selected).
+  const [fMarkets, setFMarkets] = useState<string[]>([])
+  const storesForCascade: StoreOpt[] = useMemo(
+    () => stores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, market: s.market || null })),
+    [stores])
+  const marketOpts = useMemo(() => marketsFromStores(storesForCascade), [storesForCascade])
+  const cascadedStores = useMemo(() => cascadeStores(storesForCascade, fMarkets), [storesForCascade, fMarkets])
+  const storeOptions: EntityOption[] = cascadedStores.map(s => ({ id: s.id, label: s.label, sublabel: fMarkets.length ? undefined : (s.market || undefined) }))
+  useEffect(() => {
+    if (storeCode && fMarkets.length && !cascadedStores.some(s => s.id === storeCode)) setStoreCode(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fMarkets])
 
   const loadDue = useCallback(() => {
     if (!storeCode) { setDue(null); return }
@@ -145,6 +163,9 @@ export default function EnvelopePayoutPage() {
       </div>
 
       <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+        {marketOpts.length > 0 && (
+          <CheckboxDropdown options={marketOpts} value={fMarkets} onChange={setFMarkets} placeholder="Market…" width={160} ariaLabel="Narrow store list by market" />
+        )}
         <EntityPicker options={storeOptions} value={storeCode} onChange={setStoreCode} placeholder="Store…" width={240} />
         <input type="date" style={sel} value={asOf} onChange={e => setAsOf(e.target.value)} />
         {msg && <span style={{ fontSize: 13 }}>{msg}</span>}

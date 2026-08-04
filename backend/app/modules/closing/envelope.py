@@ -128,15 +128,34 @@ def net_store_day(gross_cash, store_code, close_date, exp_by_store_day, wd_by_st
 
 
 # ── Fewest-envelopes selection (pure, deterministic) ────────────────────────────────────────────────
-def select_envelopes(envelopes, required_amount):
+_ORDER_PREFERENCES = ("oldest_first", "newest_first")
+
+
+def _date_ordinal(s):
+    """YYYY-MM-DD -> a comparable int (toordinal-equivalent, no datetime import needed at call sites).
+    Garbage/missing dates -> 0 (still deterministic, groups with each other, never crashes the sort)."""
+    try:
+        y, m, d = (int(p) for p in str(s or "").split("-")[:3])
+        # days-since-epoch-ish, monotonic for real calendar dates — exact epoch doesn't matter, only order
+        return y * 372 + (m - 1) * 31 + d   # 31 days/month upper bound keeps every real date monotonic
+    except Exception:
+        return 0
+
+
+def select_envelopes(envelopes, required_amount, order_preference="oldest_first"):
     """envelopes: [{closing_row_id, store_code, close_date, employee_name, available}], available =
     that envelope's CURRENT net cash on hand (already netted via net_row, > 0 to be eligible).
 
     Algorithm (spec §mod-retail-ops item 11 / Q15):
       1. If any single envelope's `available` >= required_amount, pick the SMALLEST such envelope
-         (fewest envelopes AND least cash disturbed) — ties broken by OLDEST close_date first.
-      2. Else greedy LARGEST-first until the requirement is covered — ties broken by OLDEST
-         close_date first (drains stale cash preferentially).
+         (fewest envelopes AND least cash disturbed) — ties broken per `order_preference`.
+      2. Else greedy LARGEST-first until the requirement is covered — ties broken per
+         `order_preference` (default drains stale/oldest cash preferentially).
+    `order_preference` ('oldest_first' default | 'newest_first', OWNER Q15 2026-08-04: "fewest envelopes
+    stays the objective ... the user can define [the tie-break] in configuration") ONLY changes which
+    envelope wins a TIE on `available` — it never changes the fewest-envelopes objective itself, and an
+    unrecognized value falls back to the safe 'oldest_first' default rather than erroring (a bad/garbage
+    config value must never break a live payout page).
     Deterministic (stable sort keys only — never depends on input order or dict iteration order).
     Returns {required, picks:[{...envelope fields, take}], total_taken, shortfall}."""
     req = round(max(_f(required_amount), 0.0), 2)
@@ -144,8 +163,11 @@ def select_envelopes(envelopes, required_amount):
     if req <= 0:
         return {"required": req, "picks": [], "total_taken": 0.0, "shortfall": 0.0}
 
+    newest_first = str(order_preference or "oldest_first").strip().lower() == "newest_first"
+
     def _dkey(e):
-        return str(e.get("close_date") or "")
+        o = _date_ordinal(e.get("close_date"))
+        return -o if newest_first else o
 
     asc = sorted(pool, key=lambda e: (round(_f(e.get("available")), 2), _dkey(e)))
     single = next((e for e in asc if round(_f(e.get("available")), 2) >= req), None)

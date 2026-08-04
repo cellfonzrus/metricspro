@@ -1,8 +1,8 @@
 'use client'
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
-import { MultiSelect } from '@/lib/multiselect'
+import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
 // Accessory reporting recon: what reps DECLARED as accessory sales on the daily closing sheet vs what
 // the sales transactions ACTUALLY show for that store/day. Catches reps entering wrong accessory numbers.
@@ -10,9 +10,15 @@ export default function AccessoryReconPage() {
   const [date, setDate] = useState(() => localToday())
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [selMarkets, setSelMarkets] = useState<string[]>([])
   const [selStores, setSelStores] = useState<string[]>([])
   const [flaggedOnly, setFlaggedOnly] = useState(false)
   const [open, setOpen] = useState<Record<string, boolean>>({})
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): this page had no market
+  // dimension at all before — joined here from the org-scoped store roster, same as the other recon
+  // pages in this module.
+  const [pStores, setPStores] = useState<any[]>([])
+  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
 
   function load() {
     setLoading(true)
@@ -22,9 +28,22 @@ export default function AccessoryReconPage() {
   useEffect(() => { load() }, [date])
 
   const allRows: any[] = data?.rows || []
-  const storeOpts = allRows.map(r => ({ value: r.store_code, label: r.store_address }))
+  const marketByCode = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const s of pStores) if (s.store_code && s.market) m[s.store_code] = s.market
+    return m
+  }, [pStores])
+  const storesForCascade: StoreOpt[] = useMemo(() => {
+    const seen = new Map<string, StoreOpt>()
+    for (const r of allRows) {
+      if (r.store_code && !seen.has(r.store_code)) seen.set(r.store_code, { id: r.store_code, label: r.store_address || r.store_code, market: marketByCode[r.store_code] || null })
+    }
+    return [...seen.values()]
+  }, [allRows, marketByCode])
+  const selMarketsFold = useMemo(() => new Set(selMarkets.map(m => m.trim().toLowerCase())), [selMarkets])
   const rows = allRows.filter(r =>
     (!selStores.length || selStores.includes(r.store_code)) &&
+    (!selMarketsFold.size || selMarketsFold.has((marketByCode[r.store_code] || '').trim().toLowerCase())) &&
     (!flaggedOnly || r.flag))
 
   function buildPayload(): ExportPayload {
@@ -33,6 +52,7 @@ export default function AccessoryReconPage() {
       filename: `accessory-recon_${date}`,
       sheets: [{ name: 'By store', rows, columns: [
         { header: 'Store', get: (r: any) => r.store_address },
+        { header: 'Market', get: (r: any) => marketByCode[r.store_code] || '' },
         { header: 'Declared', get: (r: any) => r.declared, money: true },
         { header: 'Actual (sales)', get: (r: any) => r.actual, money: true },
         { header: 'Variance', get: (r: any) => r.variance, money: true },
@@ -73,7 +93,11 @@ export default function AccessoryReconPage() {
           </div>
 
           <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-            <MultiSelect allLabel="All stores" width={160} value={selStores} searchable options={storeOpts} onChange={setSelStores} />
+            <MarketStorePicker
+              stores={storesForCascade}
+              selectedMarkets={selMarkets} onMarketsChange={setSelMarkets}
+              selectedStores={selStores} onStoresChange={setSelStores}
+            />
             <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
               <input type="checkbox" checked={flaggedOnly} onChange={e => setFlaggedOnly(e.target.checked)} /> Discrepancies only
             </label>

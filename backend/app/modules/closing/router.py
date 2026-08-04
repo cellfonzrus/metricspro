@@ -3599,34 +3599,19 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
 #    range, as a running ledger (declared cash accumulated MINUS cash actually picked up). Never
 #    re-derives a dollar figure — reads the SAME t_cash/store_cash (daily_closing) and amount
 #    (cash_pickup, picked_up=true) values every other closing surface already uses. ──
-@router.get("/cash-position")
-def cash_position(date: str = "", start: str = "", end: str = "",
-                  stores: str = "", employees: str = "",
-                  authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Per store: cash on hand AS OF a chosen day (all declared cash to date minus all cash actually
-    picked up to date — a store not swept in a few days shows its TRUE uncollected balance, not just
-    today's own figure), last pickup at, last deposited at (cash_pickup.deposited_at ∪
-    bank_deposit.created_at). `date` alone -> one row per store, the running balance as of that day.
-    `start`+`end` -> one row per (store, day-in-range) that had activity, with a CUMULATIVE column
-    carried from an opening balance computed from all history before `start` (so day 1 of the range
-    never falsely resets to zero). `stores`/`employees` are comma-separated multi-select filters
-    (store_code exact / employee_name exact — same convention as GET /closing/pickups)."""
-    require_org(org_id)
-    if not date and not (start and end):
-        raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
-    client = sb()
-    # retail-ops-26 (cross-endpoint audit, PACKAGE C, explicitly named in the owner's list): the cash
-    # position report had ZERO manager-span keyset enforcement -- gated below on `codes` (covers BOTH
-    # the org-wide listing case AND a scoped viewer passing an explicit out-of-span `stores=` directly).
-    from app.modules.storeops.router import scope_keyset, in_keyset
-    ks = scope_keyset(authorization, org_id)
-    store_list = [s.strip().upper() for s in stores.split(",") if s.strip()]
-    emp_list = [e.strip().lower() for e in employees.split(",") if e.strip()]
-    as_of = _date(date) if date else _date(end)
-    range_start = _date(start) if start else None
-    if not as_of:
-        raise HTTPException(400, "valid date required (YYYY-MM-DD)")
-
+# ── Cash-on-hand core (SHARED by GET /cash-position range/day modes AND GET /store-cash-on-hand) ────
+# retail-ops (OWNER DIRECTIVE 2026-08-04, "Store Cash on Hand" report): factored out of the original
+# single-function `cash_position` so the new report can NEVER drift from this endpoint's own math — both
+# read the exact same per-(store,day) declared/picked maps, never a second/parallel computation.
+def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
+    """Returns (codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta) —
+    ALL history up to and including `as_of`, already net of EEP envelope withdrawals/approved expenses
+    (folded into pick_by_store_day, matching `declared - picked - taken == declared - (picked+taken)`).
+    `pick_by_store_day` is named for its ORIGINAL meaning (cash_pickup) but is really "cash that left the
+    envelope by any means" once EEP is applied — every caller of this function already relies on that."""
+    from app.modules.storeops.router import in_keyset   # GATE-1-class fix: this helper needs its OWN
+                                                          # import — a caller's local import doesn't reach
+                                                          # into a function it merely calls.
     smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
                   .eq("org_id", org_id).execute().data) or []
     smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
@@ -3693,9 +3678,8 @@ def cash_position(date: str = "", start: str = "", end: str = "",
     # EEP (mig 506/507): cash actually taken out of the envelope (approved closing_expense lines +
     # envelope_withdrawal) reduces "cash on hand" exactly like a pickup does — folded straight into
     # `pick_by_store_day` (mathematically `declared - picked - taken` == `declared - (picked+taken)`)
-    # so every downstream running-balance computation (single-day AND range mode, below) nets for free
-    # without duplicating the subtraction logic. Empty pre-migration/no-data -> adds nothing (byte-
-    # identical to today).
+    # so every downstream running-balance computation nets for free without duplicating the subtraction
+    # logic. Empty pre-migration/no-data -> adds nothing (byte-identical to today).
     _exp_by_row, _exp_by_sd = _envelope.approved_expense_totals(
         client, org_id, date_to=as_of, store_codes=(store_list or None))
     _wd_by_row, _wd_by_sd = _envelope.withdrawal_totals(
@@ -3713,6 +3697,39 @@ def cash_position(date: str = "", start: str = "", end: str = "",
     codes = sorted({c for c in (set(decl_by_store_day) | set(pick_by_store_day) | set(store_list)) if c and c != "?"})
     if ks is not None:
         codes = [c for c in codes if in_keyset(ks, c, smeta.get(c, {}).get("address"))]
+    return codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta
+
+
+@router.get("/cash-position")
+def cash_position(date: str = "", start: str = "", end: str = "",
+                  stores: str = "", employees: str = "",
+                  authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Per store: cash on hand AS OF a chosen day (all declared cash to date minus all cash actually
+    picked up to date — a store not swept in a few days shows its TRUE uncollected balance, not just
+    today's own figure), last pickup at, last deposited at (cash_pickup.deposited_at ∪
+    bank_deposit.created_at). `date` alone -> one row per store, the running balance as of that day.
+    `start`+`end` -> one row per (store, day-in-range) that had activity, with a CUMULATIVE column
+    carried from an opening balance computed from all history before `start` (so day 1 of the range
+    never falsely resets to zero). `stores`/`employees` are comma-separated multi-select filters
+    (store_code exact / employee_name exact — same convention as GET /closing/pickups)."""
+    require_org(org_id)
+    if not date and not (start and end):
+        raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
+    client = sb()
+    # retail-ops-26 (cross-endpoint audit, PACKAGE C, explicitly named in the owner's list): the cash
+    # position report had ZERO manager-span keyset enforcement -- gated below on `codes` (covers BOTH
+    # the org-wide listing case AND a scoped viewer passing an explicit out-of-span `stores=` directly).
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    store_list = [s.strip().upper() for s in stores.split(",") if s.strip()]
+    emp_list = [e.strip().lower() for e in employees.split(",") if e.strip()]
+    as_of = _date(date) if date else _date(end)
+    range_start = _date(start) if start else None
+    if not as_of:
+        raise HTTPException(400, "valid date required (YYYY-MM-DD)")
+
+    codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta = _cash_position_core(
+        client, org_id, as_of, store_list, emp_list, ks)
 
     def _label(code):
         m = smeta.get(code, {})
@@ -3759,6 +3776,58 @@ def cash_position(date: str = "", start: str = "", end: str = "",
     return {"mode": "range", "start": range_start, "end": as_of,
             "opening_note": "cumulative carries an opening balance computed from all history before the range start",
             "rows": out}
+
+
+@router.get("/store-cash-on-hand")
+def store_cash_on_hand(date: str = "", stores: str = "", employees: str = "",
+                       authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """"Store Cash on Hand" daily report (OWNER DIRECTIVE 2026-08-04: "how much cash is in each store
+    at the end of the day added with the other days from the past if not picked by the dm or given
+    out"). Per store, for `date`: TODAY's declared cash minus what left the envelope TODAY (pickup/
+    deposit/EEP withdrawal), PLUS the carry-over balance from every day before `date` not yet swept —
+    i.e. exactly `today_declared - today_taken + carryover_prior`. Deliberately reuses
+    `_cash_position_core` (the SAME function GET /cash-position's single-day mode calls) rather than a
+    second computation — `total_cash_on_hand` here is mathematically identical to that endpoint's
+    `cash_on_hand` for the same store/date by construction (proven in harness_store_cash_on_hand.py).
+    This report's value-add over the general Cash Position tool is the explicit TODAY-vs-CARRYOVER
+    split the owner asked for, not a different number."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    store_list = [s.strip().upper() for s in stores.split(",") if s.strip()]
+    emp_list = [e.strip().lower() for e in employees.split(",") if e.strip()]
+    as_of = _date(date) or _biz_today_iso()
+
+    codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta = _cash_position_core(
+        client, org_id, as_of, store_list, emp_list, ks)
+
+    def _label(code):
+        return smeta.get(code, {}).get("address") or code
+
+    out = []
+    for code in codes:
+        today_declared = round(decl_by_store_day.get(code, {}).get(as_of, 0.0), 2)
+        today_taken = round(pick_by_store_day.get(code, {}).get(as_of, 0.0), 2)
+        # Carry-over = the running balance as of the day BEFORE `as_of` — every prior day's declared
+        # cash minus everything taken against it, still sitting in the store (never swept/paid out).
+        carryover_prior = round(
+            sum(v for dd, v in decl_by_store_day.get(code, {}).items() if dd < as_of) -
+            sum(v for dd, v in pick_by_store_day.get(code, {}).items() if dd < as_of), 2)
+        total = round(carryover_prior + today_declared - today_taken, 2)
+        out.append({
+            "store_code": code, "store_name": _label(code), "market": smeta.get(code, {}).get("market"),
+            "date": as_of, "today_declared": today_declared, "today_taken": today_taken,
+            "carryover_from_prior_days": carryover_prior, "total_cash_on_hand": total,
+            "last_pickup_at": last_pickup_at.get(code), "last_deposited_at": last_deposited_at.get(code),
+        })
+    out.sort(key=lambda r: -r["total_cash_on_hand"])
+    return {"date": as_of, "rows": out,
+            "totals": {"today_declared": round(sum(r["today_declared"] for r in out), 2),
+                       "today_taken": round(sum(r["today_taken"] for r in out), 2),
+                       "carryover_from_prior_days": round(sum(r["carryover_from_prior_days"] for r in out), 2),
+                       "total_cash_on_hand": round(sum(r["total_cash_on_hand"] for r in out), 2),
+                       "stores": len(out)}}
 
 
 def _ocr_deposit_amount(raw: bytes, ext: str):
@@ -5170,6 +5239,9 @@ _ENVELOPE_CFG_DEFAULT = {
     "take_commission": True, "take_salary": True, "take_expenses": True,
     "commission_cadence": "weekly", "commission_anchor": None, "commission_anchor_date": None,
     "salary_cadence": "weekly", "salary_anchor": None, "salary_anchor_date": None,
+    # Q15 (OWNER DIRECTIVE 2026-08-04): fewest-envelopes stays the objective; this only picks the
+    # TIE-BREAK order (see envelope.select_envelopes) — 'oldest_first' | 'newest_first'.
+    "order_preference": "oldest_first",
 }
 
 
@@ -5211,8 +5283,8 @@ def get_envelope_config(store_code: str = "", org_id: str = ORG_ID):
 def put_envelope_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Body: {store_code: null|"S123", take_commission, take_salary, take_expenses,
     commission_cadence, commission_anchor, commission_anchor_date, salary_cadence, salary_anchor,
-    salary_anchor_date}. store_code null/absent saves the ORG DEFAULT row; a real code upserts that
-    store's override."""
+    salary_anchor_date, order_preference('oldest_first'|'newest_first', Q15)}. store_code null/absent
+    saves the ORG DEFAULT row; a real code upserts that store's override."""
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing envelope payout configuration is permission-restricted.")
@@ -5227,19 +5299,29 @@ def put_envelope_config(payload: dict, org_id: str = ORG_ID, authorization: str 
            "salary_cadence": (payload.get("salary_cadence") or "weekly").strip().lower(),
            "salary_anchor": payload.get("salary_anchor"),
            "salary_anchor_date": payload.get("salary_anchor_date") or None,
+           "order_preference": (payload.get("order_preference") or "oldest_first").strip().lower(),
            "updated_by": (payload.get("updated_by") or _caller_email(client, authorization) or None),
            "updated_at": _now()}
     if row["commission_cadence"] not in ("daily", "weekly", "biweekly", "monthly"):
         raise HTTPException(400, "commission_cadence must be daily|weekly|biweekly|monthly")
     if row["salary_cadence"] not in ("daily", "weekly", "biweekly", "monthly"):
         raise HTTPException(400, "salary_cadence must be daily|weekly|biweekly|monthly")
+    if row["order_preference"] not in ("oldest_first", "newest_first"):
+        raise HTTPException(400, "order_preference must be oldest_first|newest_first")
     try:
         # Upsert-by-value since the unique index is on (org_id, COALESCE(store_code,'')) — PostgREST
         # can't target a COALESCE expression on_conflict, so emulate: delete-then-insert this one key.
         d = client.schema("commcalc").table("envelope_payout_config").delete().eq("org_id", org_id)
         d = d.is_("store_code", "null") if store_code is None else d.eq("store_code", store_code)
         d.execute()
-        client.schema("commcalc").table("envelope_payout_config").insert(row).execute()
+        try:
+            client.schema("commcalc").table("envelope_payout_config").insert(row).execute()
+        except Exception:
+            # mig 508 (order_preference column) not yet run -> degrade: save every OTHER field exactly
+            # as before, never fail the whole config save over one not-yet-migrated column (Q15,
+            # additive/degrade-gracefully doctrine).
+            row.pop("order_preference", None)
+            client.schema("commcalc").table("envelope_payout_config").insert(row).execute()
     except Exception as e:
         raise HTTPException(500, f"could not save envelope config (run migration 507?): {e}")
     return {"ok": True, "store_code": store_code}
@@ -5273,7 +5355,14 @@ def payout_due(store_code: str = "", as_of: str = "", org_id: str = ORG_ID,
             notes.append(f"commission: {err}")
         elif data:
             for e in (data.get("employees") or []):
-                bal = _f(e.get("unpaid_balance"))
+                # mod-commission cross-module contract update (agent/commission/accrual-owner-answers,
+                # 2026-08-04): prefer `due_now` (already floored at 0, cycle-aware per Q19's cycle-reset
+                # semantics, and net of any auto-netted prior over-advance per Q14's over_advance_mode)
+                # when the sibling package sends it; fall back to `unpaid_balance` for an older deploy
+                # or a degrade response that only has the legacy field. due_now <= unpaid_balance always
+                # (never a bigger number), so this can only ever REDUCE what the envelope thinks is due,
+                # never inflate it — no over-payment risk either way.
+                bal = _f(e.get("due_now")) if e.get("due_now") is not None else _f(e.get("unpaid_balance"))
                 due, amt = _envelope.cadence_due(cfg["commission_cadence"], cfg["commission_anchor"],
                                                  cfg["commission_anchor_date"], d, bal)
                 if due and amt > 0:
@@ -5368,10 +5457,11 @@ def envelope_plan(store_code: str = "", as_of: str = "", required_amount: float 
                           "store_name": r.get("store_address") or r.get("store_name"),
                           "employee_name": r.get("employee_name"), "close_date": str(r.get("close_date")),
                           "gross_cash": round(gross, 2), "available": avail})
-    plan = _envelope.select_envelopes(envelopes, required_amount)
+    cfg = _envelope_config(client, org_id, store_code or None)
+    plan = _envelope.select_envelopes(envelopes, required_amount, order_preference=cfg.get("order_preference", "oldest_first"))
     return {"as_of": d, "store_code": store_code or None, "required_amount": plan["required"],
             "open_envelopes": len(envelopes), "picks": plan["picks"], "total_taken": plan["total_taken"],
-            "shortfall": plan["shortfall"]}
+            "shortfall": plan["shortfall"], "order_preference": cfg.get("order_preference", "oldest_first")}
 
 
 # ── POST /closing/envelope-withdrawal — DM execution: record cash taken from ONE envelope ───────────

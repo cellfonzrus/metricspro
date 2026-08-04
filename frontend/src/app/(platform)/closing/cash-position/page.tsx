@@ -6,6 +6,8 @@ import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { EntityOption } from '@/components/EntityPicker'
 import { EntityPickerChips } from '../_lib/EntityPickerChips'
+import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
+import { resolveStoreCodes } from '../_lib/market-store-cascade'
 
 // Cash Position report (retail-ops-7 item 5): per-store cash on hand — declared cash accumulated
 // MINUS cash actually picked up, as a running ledger (a store not swept in a few days shows its TRUE
@@ -20,6 +22,10 @@ export default function CashPositionPage() {
   const [date, setDate] = useState(() => localToday())
   const [rangeStart, setRangeStart] = useState(() => localToday())
   const [rangeEnd, setRangeEnd] = useState(() => localToday())
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): see pickup/page.tsx for the
+  // same resolved-store-set pattern (`fMarkets` narrows the store list + resolves to the market's full
+  // store set when no explicit store is picked — owner Q2).
+  const [fMarkets, setFMarkets] = useState<string[]>([])
   const [fStores, setFStores] = useState<string[]>([])
   const [fEmps, setFEmps] = useState<string[]>([])
   const [data, setData] = useState<any>(null)
@@ -32,25 +38,26 @@ export default function CashPositionPage() {
     api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {})
     api('/api/v1/storeops/employees?all_company=true').then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
   }, [])
-  const storeOptions: EntityOption[] = useMemo(
-    () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),
+  const storesForCascade: StoreOpt[] = useMemo(
+    () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, market: s.market || null })),
     [pStores])
   const empOptions: EntityOption[] = useMemo(
     () => pEmps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
     [pEmps])
+  const resolvedStores = useMemo(() => resolveStoreCodes(storesForCascade, fMarkets, fStores), [storesForCascade, fMarkets, fStores])
 
   const load = useCallback(() => {
     setLoading(true); setErr('')
     const qs = [
       rangeMode ? `start=${rangeStart}&end=${rangeEnd}` : `date=${date}`,
-      fStores.length && `stores=${encodeURIComponent(fStores.join(','))}`,
+      resolvedStores.length && `stores=${encodeURIComponent(resolvedStores.join(','))}`,
       fEmps.length && `employees=${encodeURIComponent(fEmps.join(','))}`,
     ].filter(Boolean).join('&')
     api(`/api/v1/closing/cash-position?${qs}`)
       .then(setData)
       .catch(e => { setErr(e?.message || String(e)); setData(null) })
       .finally(() => setLoading(false))
-  }, [rangeMode, date, rangeStart, rangeEnd, fStores, fEmps])
+  }, [rangeMode, date, rangeStart, rangeEnd, resolvedStores, fEmps])
   useEffect(() => { load() }, [load])
 
   const rows: any[] = data?.rows || []
@@ -111,9 +118,13 @@ export default function CashPositionPage() {
                 →<input type="date" style={sel} value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} />
               </span>}
         </div>
-        <EntityPickerChips options={storeOptions} value={fStores} onChange={setFStores} placeholder="Add a store…" width={170} />
+        <MarketStorePicker
+          stores={storesForCascade}
+          selectedMarkets={fMarkets} onMarketsChange={setFMarkets}
+          selectedStores={fStores} onStoresChange={setFStores}
+        />
         <EntityPickerChips options={empOptions} value={fEmps} onChange={setFEmps} placeholder="Add a rep…" width={180} />
-        {(fStores.length > 0 || fEmps.length > 0) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFStores([]); setFEmps([]) }}>Clear</button>}
+        {(fMarkets.length > 0 || fStores.length > 0 || fEmps.length > 0) && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => { setFMarkets([]); setFStores([]); setFEmps([]) }}>Clear</button>}
       </div>
 
       {loading ? (

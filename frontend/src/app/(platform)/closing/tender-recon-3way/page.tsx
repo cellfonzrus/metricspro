@@ -5,6 +5,7 @@ import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
 // 3-Way Tender Recon — the SAME tenders captured three independent ways, per store, per day, per tender:
 //  (1) Daily Closing (what the rep entered), (2) POS X-report, (3) Sales Transactions (raw_sales/feed).
@@ -114,6 +115,16 @@ export default function TenderRecon3WayPage() {
 
   const acc = useMemo(() => ({ store: (r: StoreDay) => r.store_address, market: (r: StoreDay) => r.market }), [])
   const opts = useMemo(() => optionsFromRows(flat, acc), [flat, acc])
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): distinct store/market pairs
+  // from the same flattened rows — no new backend read.
+  const storesForCascade: StoreOpt[] = useMemo(() => {
+    const seen = new Map<string, StoreOpt>()
+    for (const r of flat) {
+      const id = (r.store_address || '').trim()
+      if (id && !seen.has(id)) seen.set(id, { id, label: id, market: r.market || null })
+    }
+    return [...seen.values()]
+  }, [flat])
   // The RULE FIVE filter selection (store/market) — drives everything below, live. "Mismatches only" is
   // a module-specific DISPLAY toggle (not part of the core filter set), applied on top for the table/
   // cards but NOT for the selection-totals summary, which reflects the full filtered selection.
@@ -272,16 +283,24 @@ export default function TenderRecon3WayPage() {
       </div>
 
       {/* RULE FIVE core set — store(s)/market(s)/date-range. No rep dimension in this per-store recon
-          dataset (same as the sibling tender-recon page). */}
+          dataset (same as the sibling tender-recon page). Market/store render via the shared cascade-
+          checkbox <MarketStorePicker> (OWNER DIRECTIVE 2026-08-04). */}
       <StandardFilterBar
         value={filt} onChange={setFilt} periodMode="range"
-        show={{ reps: false }}
+        show={{ reps: false, stores: false, markets: false }}
         storeOptions={opts.stores} marketOptions={opts.markets}
         storeLabel="Stores…" marketLabel="Markets…"
         right={
-          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={onlyMismatch} onChange={e => setOnlyMismatch(e.target.checked)} /> Stores with a mismatch only
-          </label>
+          <>
+            <MarketStorePicker
+              stores={storesForCascade}
+              selectedMarkets={filt.markets} onMarketsChange={ids => setFilt(f => ({ ...f, markets: ids }))}
+              selectedStores={filt.stores} onStoresChange={ids => setFilt(f => ({ ...f, stores: ids }))}
+            />
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={onlyMismatch} onChange={e => setOnlyMismatch(e.target.checked)} /> Stores with a mismatch only
+            </label>
+          </>
         }
       />
 

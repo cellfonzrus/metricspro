@@ -456,6 +456,35 @@ check("sibling 404 -> commission_due degrades to 0, not a crash", r4["commission
 check("sibling 404 -> a note is surfaced", any("commission" in n for n in r4["notes"]))
 check("sibling 404 -> a note is surfaced for salary too", any("salary" in n for n in r4["notes"]))
 
+# F2. mod-commission cross-module contract update (agent/commission/accrual-owner-answers, 2026-08-04):
+# `due_now` (Q19 cycle-reset + Q14 auto-net-aware) wins over the legacy `unpaid_balance` when the
+# sibling sends both; an older/degraded sibling response with only `unpaid_balance` still works
+# (fallback, byte-identical to pre-contract-update behaviour).
+store_f2 = fresh_store()
+fake_f2 = wire(store_f2)
+fr_f2 = FakeRequests()
+cr.requests = fr_f2
+fr_f2.route("/commcalc/payout/accrued", FakeResp(200, {
+    "employees": [{"employee_key": "e1", "name": "Jane Rep", "unpaid_balance": 250.0, "due_now": 90.0,
+                   "payable_field": "due_now", "consumer_note": "net of prior over-advance",
+                   "store_codes": ["S1"]}],
+    "as_of": "2026-08-04"}))
+fr_f2.route("/storeops/salary-owed", FakeResp(404))
+r_f2 = cr.payout_due(store_code="S1", as_of="2026-08-04", org_id=HOUSE, authorization="")
+check("due_now present + less than unpaid_balance -> payout-due uses due_now (90, not 250)",
+      r_f2["commission_due"] == 90.0, str(r_f2["commission_due"]))
+check("due_now present -> the employee's OWN amount reflects due_now too",
+      r_f2["commission_employees"][0]["amount"] == 90.0, str(r_f2["commission_employees"]))
+
+fr_f2b = FakeRequests()
+cr.requests = fr_f2b
+fr_f2b.route("/commcalc/payout/accrued", FakeResp(200, {
+    "employees": [{"employee_key": "e1", "name": "Jane Rep", "unpaid_balance": 250.0, "store_codes": ["S1"]}],
+    "as_of": "2026-08-04"}))   # no due_now at all -> older/degraded sibling response
+fr_f2b.route("/storeops/salary-owed", FakeResp(404))
+r_f2b = cr.payout_due(store_code="S1", as_of="2026-08-04", org_id=HOUSE, authorization="")
+check("due_now ABSENT -> falls back to unpaid_balance (250) unchanged", r_f2b["commission_due"] == 250.0, str(r_f2b["commission_due"]))
+
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # G. GET /closing/envelope-plan (fewest envelopes, real netted availability)

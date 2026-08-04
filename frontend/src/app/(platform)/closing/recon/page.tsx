@@ -1,8 +1,9 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
+import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
 // Reconciliation sheet — every day's closing-vs-B2B discrepancies for the month.
 // BLOCK = cash short or credit over (these stop a rep from closing). FLAG = cash over / credit
@@ -26,11 +27,19 @@ export default function ClosingReconPage() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'all' | 'block' | 'flag' | 'pending'>('all')
-  const [storeFilter, setStoreFilter] = useState('')
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): replaces the old single-
+  // select native `<select>` store filter. `market` above stays the server-side scope AUTO-default
+  // (unchanged); `fMarkets`/`fStores` are the new manual, editable, MULTI-select client-side filters —
+  // this endpoint returns the whole period's rows once, so narrowing by market/store is client-side
+  // the same way the direction checkboxes below already work.
+  const [fMarkets, setFMarkets] = useState<string[]>([])
+  const [fStores, setFStores] = useState<string[]>([])
   const [dateFilter, setDateFilter] = useState('')
   const [dirs, setDirs] = useState({ cash_over: true, cash_under: true, credit_over: true, credit_under: true })
+  const [pStores, setPStores] = useState<any[]>([])
 
   useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
+  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
 
   const load = useCallback(() => {
     if (!period) return
@@ -57,7 +66,29 @@ export default function ClosingReconPage() {
 
   const s = data?.summary || {}
   const errors: any[] = data?.errors || []
-  const storeOpts = Array.from(new Set(errors.map(e => e.store_address || e.store_code).filter(Boolean))).sort()
+  // Market joined onto each error row from the org-scoped store roster (by code, else address) — the
+  // same join shape the sibling recon pages already use. Feeds both the cascade widget's options AND
+  // the actual store/market narrowing below.
+  const marketByKey = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const st of pStores) {
+      if (!st.market) continue
+      for (const k of [st.store_code, st.store_address, st.address]) {
+        const key = (k || '').trim().toLowerCase()
+        if (key && !m[key]) m[key] = st.market
+      }
+    }
+    return m
+  }, [pStores])
+  const marketOf = (e: any) => marketByKey[(e.store_code || '').trim().toLowerCase()] || marketByKey[(e.store_address || '').trim().toLowerCase()] || ''
+  const storesForCascade: StoreOpt[] = useMemo(() => {
+    const seen = new Map<string, StoreOpt>()
+    for (const e of errors) {
+      const id = (e.store_address || e.store_code || '').trim()
+      if (id && !seen.has(id)) seen.set(id, { id, label: id, market: marketOf(e) || null })
+    }
+    return [...seen.values()]
+  }, [errors, marketByKey])
   const dateOpts = Array.from(new Set(errors.map(e => e.date).filter(Boolean))).sort()
   // A money row's direction: cash short=under / cash over; credit over / credit under. Non-money rows null.
   const dirOf = (e: any): keyof typeof dirs | null => {
@@ -66,9 +97,13 @@ export default function ClosingReconPage() {
     if (e.metric === 'credit') return e.variance > 0 ? 'credit_over' : 'credit_under'
     return null
   }
+  const fMarketsFold = useMemo(() => new Set(fMarkets.map(m => m.trim().toLowerCase())), [fMarkets])
+  const fStoresFold = useMemo(() => new Set(fStores.map(s => s.trim().toLowerCase())), [fStores])
   const shown = errors.filter(e => {
     if (filter !== 'all' && e.severity !== filter) return false
-    if (storeFilter && (e.store_address || e.store_code) !== storeFilter) return false
+    const storeKey = (e.store_address || e.store_code || '').trim().toLowerCase()
+    if (fStoresFold.size && !fStoresFold.has(storeKey)) return false
+    if (fMarketsFold.size && !fMarketsFold.has((marketOf(e) || '').trim().toLowerCase())) return false
     if (dateFilter && e.date !== dateFilter) return false
     const d = dirOf(e)                       // direction checkboxes only hide the money rows they name
     if (d && !dirs[d]) return false
@@ -90,10 +125,11 @@ export default function ClosingReconPage() {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <input type="month" style={sel} value={period} onChange={e => setPeriod(e.target.value)} />
-        <select style={sel} value={storeFilter} onChange={e => setStoreFilter(e.target.value)}>
-          <option value="">All stores</option>
-          {storeOpts.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <MarketStorePicker
+          stores={storesForCascade}
+          selectedMarkets={fMarkets} onMarketsChange={setFMarkets}
+          selectedStores={fStores} onStoresChange={setFStores}
+        />
         <select style={sel} value={dateFilter} onChange={e => setDateFilter(e.target.value)}>
           <option value="">All dates</option>
           {dateOpts.map(d => <option key={d} value={d}>{d}</option>)}

@@ -9,6 +9,7 @@ import type { StandardFilterValue } from '@/lib/standard-filters'
 import ReportShell from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import SubmissionsTable, { monthStart } from './_lib/SubmissionsTable'
+import { MarketStorePicker, type StoreOpt } from './_lib/MarketStorePicker'
 
 const csv = (a: string[]) => (a.length ? a.join(',') : undefined)
 
@@ -67,6 +68,11 @@ export default function ClosingDashboard() {
   }, [])
   const storeOptions: EntityOption[] = useMemo(
     () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),
+    [pStores])
+  // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): the same roster, shaped for
+  // <MarketStorePicker> (needs each store's own `.market` to cascade against).
+  const storesForCascade: StoreOpt[] = useMemo(
+    () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, market: s.market || null })),
     [pStores])
   const marketOptions: EntityOption[] = useMemo(() => {
     const real = Array.from(new Set(pStores.map((s: any) => s.market).filter(Boolean))).sort()
@@ -159,6 +165,7 @@ export default function ClosingDashboard() {
           <Link href="/closing/submit" className="btn btn-primary" style={{ fontSize: 13 }}>➕ Submit closing</Link>
           <Link href="/closing/verify" className="btn btn-secondary" style={{ fontSize: 13 }}>✅ DM verify</Link>
           <Link href="/closing/cash-position" className="btn btn-secondary" style={{ fontSize: 13 }}>💰 Cash Position</Link>
+          <Link href="/closing/store-cash-on-hand" className="btn btn-secondary" style={{ fontSize: 13 }}>🏦 Store Cash on Hand</Link>
           <Link href="/closing/duplicates" className="btn btn-secondary" style={{ fontSize: 13 }}>🧾 Duplicates</Link>
           <Link href="/closing/envelope-payout" className="btn btn-secondary" style={{ fontSize: 13 }}>✉️ Envelope Payout</Link>
           <Link href="/closing/expenses-report" className="btn btn-secondary" style={{ fontSize: 13 }}>🧾 Expenses Report</Link>
@@ -177,12 +184,25 @@ export default function ClosingDashboard() {
 
       {/* Filters — RULE FIVE core set (date-range + store(s)/market(s)/rep(s)), canonical org-scoped
           option sources. Drives the tiles + all 3 tabs below (including "All submissions", which no
-          longer renders its own competing bar — see SubmissionsTable's filterValue prop). */}
+          longer renders its own competing bar — see SubmissionsTable's filterValue prop). Market/store
+          render via the shared cascade-checkbox <MarketStorePicker> (OWNER DIRECTIVE 2026-08-04, appended
+          through StandardFilterBar's `right` slot with its own built-in market/store pickers hidden) —
+          the underlying `filt.stores`/`filt.markets` string arrays are unchanged, so every downstream
+          consumer (tiles, SubmissionsTable, exports) needs no changes. */}
       <StandardFilterBar
         value={filt} onChange={setFilt}
         periodMode="range"
+        show={{ stores: false, markets: false }}
         storeOptions={storeOptions} marketOptions={marketOptions} repOptions={repOptions}
         storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
+        right={
+          <MarketStorePicker
+            stores={storesForCascade}
+            selectedMarkets={filt.markets} onMarketsChange={ids => setFilt(f => ({ ...f, markets: ids }))}
+            selectedStores={filt.stores} onStoresChange={ids => setFilt(f => ({ ...f, stores: ids }))}
+            marketPlaceholder="Markets…" storePlaceholder="Stores…" marketWidth={170} storeWidth={200}
+          />
+        }
       />
 
       {loading ? (
