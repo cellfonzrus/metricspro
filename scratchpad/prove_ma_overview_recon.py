@@ -709,6 +709,83 @@ close("and the number is unchanged at 240.00", tm9["residual"]["system"], 240.00
 check("the page states it as OWNER-CONFIRMED, not an assumption",
       any(a["kind"] == "owner_decided" and a["tile"] == "Residual" for a in p9["assumptions"]), True)
 
+print("\n⑱ REGRESSION — DUPLICATE RATE ROWS ARE TOLERATED, NEVER SUMMED (prod defect 2026-08-04)")
+# The rate table shipped with UNIQUE (org_id, month_index, effective_from) and a seed that leaves
+# effective_from NULL. Postgres treats NULLs as DISTINCT in a unique constraint, so running 268 and then
+# 268b seeded EVERY month twice. Migration 268b now dedupes + enforces a COALESCE-based expression index,
+# but the reader must never depend on a clean database: it must pick ONE row per month and say so.
+_dup = [
+    {"org_id": ORG, "month_index": i, "rate_pct": (50 if i == 1 else 75), "spiff_flat": 0,
+     "effective_from": None, "id": f"a{i}", "created_at": "2026-08-04T10:00:00Z"}
+    for i in range(1, 7)
+] * 2                                                    # <- seeded TWICE, exactly as production was
+cl_d = new_client(matching)
+cl_d.tables["ma_commission_month_rate"] = [dict(r) for r in _dup]
+p15 = mo.compute(cl_d, ORG, PERIOD, pvariants, canon_period, month_year)
+check("12 rows are present (the duplicated state)", len(cl_d.tables["ma_commission_month_rate"]), 12)
+close("M1 is still 50%, NOT 100% — duplicates are not summed",
+      p15["expected_commission"]["rate_pct"], 50.0)
+close("EXPECTED is still 157.50, NOT 315.00 (the double)",
+      p15["expected_commission"]["expected"], EXPECTED_M1)
+check("every month resolves to a single rate",
+      [r["rate_pct"] for r in p15["rate_plan"]["rates"]], [50.0] + [75.0] * 5)
+check("the duplication is REPORTED, not silently absorbed",
+      p15["rate_plan"]["duplicates"]["duplicate_rows"], 6)
+check("...naming every affected month",
+      p15["rate_plan"]["duplicates"]["duplicate_months"], [1, 2, 3, 4, 5, 6])
+check("...and the note points at the migration that fixes it",
+      "268b" in (p15["rate_plan"]["duplicates"].get("note") or ""), True)
+check("no false alarm on a CLEAN table",
+      mo.resolve_m_rates(new_client(), ORG, PERIOD, month_year)[2]["duplicate_rows"], 0)
+
+# Worse case: duplicates that DISAGREE. The pick must be deterministic (never "whichever row came back
+# last", because PostgREST row order is unspecified) and the conflict must be called out.
+cl_c = new_client(matching)
+cl_c.tables["ma_commission_month_rate"] = [
+    {"org_id": ORG, "month_index": 1, "rate_pct": 50, "spiff_flat": 0, "effective_from": None,
+     "id": "old", "created_at": "2026-08-04T10:00:00Z", "updated_at": "2026-08-04T10:00:00Z"},
+    {"org_id": ORG, "month_index": 1, "rate_pct": 90, "spiff_flat": 0, "effective_from": None,
+     "id": "new", "created_at": "2026-08-04T11:00:00Z", "updated_at": "2026-08-04T11:00:00Z"},
+]
+_r1 = [mo.resolve_m_rates(cl_c, ORG, PERIOD, month_year)[0][1]["rate_pct"] for _ in range(3)]
+check("a conflicting duplicate resolves DETERMINISTICALLY (same answer every call)",
+      len(set(_r1)), 1)
+close("...to the most recently updated row (90), not an arbitrary one", _r1[0], 90.0)
+# ...and reversing the row order the DB happens to return must not change the answer.
+cl_c.tables["ma_commission_month_rate"].reverse()
+close("...and row order from the database does not change it",
+      mo.resolve_m_rates(cl_c, ORG, PERIOD, month_year)[0][1]["rate_pct"], 90.0)
+check("a DISAGREEING duplicate is escalated beyond a plain duplicate",
+      mo.resolve_m_rates(cl_c, ORG, PERIOD, month_year)[2]["conflicting_months"], [1])
+
+print("\n⑲ MIGRATION AUDIT — no uniqueness rule may depend on a NULLABLE column")
+import re as _re_h
+for _f in ("database/migrations/268_commission_ma_overview_recon.sql",
+           "database/migrations/268b_commission_ma_overview_owner_answers.sql"):
+    _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", _f)
+    _sql = open(_p, encoding="utf-8").read()
+    _code = "\n".join(ln for ln in _sql.splitlines() if not ln.strip().startswith("--"))
+    _name = os.path.basename(_f)
+    # the broken pattern must be gone
+    check(f"{_name}: no UNIQUE over the nullable effective_from",
+          "UNIQUE (org_id, month_index, effective_from)" in _code, False)
+    check(f"{_name}: uniqueness is the COALESCE expression index",
+          "COALESCE(effective_from, '0001-01-01'::date))" in _code, True)
+    check(f"{_name}: the unenforceable constraint is dropped for existing tables",
+          "DROP CONSTRAINT IF EXISTS ma_commission_month_rate_org_id_month_index_effective_from_key" in _code, True)
+    check(f"{_name}: duplicates are deleted BEFORE the unique index is created",
+          _code.index("DELETE FROM commcalc.ma_commission_month_rate a")
+          < _code.index("CREATE UNIQUE INDEX IF NOT EXISTS ma_commission_month_rate_uq"), True)
+    check(f"{_name}: the rate seed no longer relies on ON CONFLICT",
+          bool(_re_h.search(r"INSERT INTO commcalc\.ma_commission_month_rate[\s\S]{0,2600}?WHERE NOT EXISTS", _code)), True)
+    # every remaining ON CONFLICT target must be over NOT NULL columns only
+    for _tgt in _re_h.findall(r"ON CONFLICT \(([^)]*)\)", _code):
+        check(f"{_name}: ON CONFLICT ({_tgt}) targets NOT NULL columns only",
+              _tgt.strip(), "org_id, tile_key")
+    check(f"{_name}: still zero anon/authenticated grants and zero policies",
+          (_code.count("TO anon"), _code.count("TO authenticated"), _code.count("CREATE POLICY")),
+          (0, 0, 0))
+
 print("\n" + ("=" * 78))
 if FAILURES:
     print(f"❌ {len(FAILURES)} FAILURE(S):")

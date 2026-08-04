@@ -5,6 +5,21 @@
 --   • You HAVE already run 268          →  run **THIS FILE**. It is the complete delta.
 --   • Not sure                          →  run **THIS FILE**. It is additive + idempotent and safe on
 --                                          either state; running both, in either order, is also safe.
+--
+-- ⚠️ CORRECTION — 2026-08-04, A REAL PRODUCTION DEFECT (found by the owner running 268 AND 268b).
+--    The "safe in either order" promise above was FALSE for one table in the first cut of these files.
+--    `commcalc.ma_commission_month_rate` declared `UNIQUE (org_id, month_index, effective_from)` while
+--    the seed leaves effective_from NULL. Postgres treats NULLs as DISTINCT inside a unique constraint,
+--    so the second run raised NO conflict, `ON CONFLICT DO NOTHING` never fired, and every month_index
+--    was seeded TWICE. FIXED in both files (see §2 below): the constraint is dropped, duplicates are
+--    deleted keeping the earliest, and uniqueness is enforced by a COALESCE-based EXPRESSION index —
+--    plus the seed now uses WHERE NOT EXISTS instead of ON CONFLICT, so it no longer depends on any
+--    constraint existing at all. Both files are now genuinely correct on EVERY state: fresh DB,
+--    268-only, 268+268b-with-duplicates, and a database already cleaned up by hand (each step is
+--    individually conditional and the index name matches the one the cleanup created).
+--    NOTE: this defect only ever affected the CROSS-CHECK's EXPECTED column, and not even that in
+--    practice — the reader (ma_overview.resolve_m_rates) selects ONE row per month and can never sum
+--    across duplicates. No payout, anywhere, was ever exposed to it.
 -- ════════════════════════════════════════════════════════════════════════════════════════════════
 --
 -- WHY: migration 268 shipped the MA "Overview of Accounts" cross-check with the tile definitions we
@@ -68,12 +83,45 @@ CREATE TABLE IF NOT EXISTS commcalc.ma_commission_month_rate (
   note           TEXT,
   updated_by     TEXT,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (org_id, month_index, effective_from)
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  -- NO table-level UNIQUE here on purpose — see the expression index below.
 );
 CREATE INDEX IF NOT EXISTS ma_commission_month_rate_org
   ON commcalc.ma_commission_month_rate (org_id, month_index);
 ALTER TABLE commcalc.ma_commission_month_rate ENABLE ROW LEVEL SECURITY;
+
+-- ── UNIQUENESS FOR THE RATE PLAN — an EXPRESSION index, not a table constraint ─────────────────────
+-- ⚠️ DEFECT FIXED HERE (found in PRODUCTION 2026-08-04 by running 268 and then 268b). The original
+-- `UNIQUE (org_id, month_index, effective_from)` did NOT prevent a duplicate seed: the seed rows leave
+-- effective_from NULL, Postgres treats NULLs as DISTINCT in a unique constraint, so no conflict ever
+-- arose and `ON CONFLICT DO NOTHING` never fired — every month_index was inserted TWICE. The fix is a
+-- unique index over COALESCE(effective_from, '0001-01-01'), which makes "no start date" a real, single
+-- value. The seed below additionally uses WHERE NOT EXISTS rather than ON CONFLICT, so it is idempotent
+-- even on a database where neither the constraint nor the index exists yet.
+--
+-- This block is correct on EVERY state: a fresh database, a 268-only database, a 268+268b database that
+-- still holds the duplicate rows, and the owner's post-cleanup database (where the constraint is already
+-- dropped and an index of this exact name already exists). Each step is individually conditional.
+
+-- 1. drop the unenforceable constraint (auto-named by Postgres; also try the explicit name).
+ALTER TABLE commcalc.ma_commission_month_rate
+  DROP CONSTRAINT IF EXISTS ma_commission_month_rate_org_id_month_index_effective_from_key;
+ALTER TABLE commcalc.ma_commission_month_rate
+  DROP CONSTRAINT IF EXISTS ma_commission_month_rate_uq;
+
+-- 2. DEDUPE before indexing — otherwise CREATE UNIQUE INDEX fails on a dirty table and the whole
+--    migration aborts. Keeps the EARLIEST row of each (org, month, effective-date) group (ctid breaks
+--    a tie when created_at is identical, which it is for rows inserted by the same statement).
+DELETE FROM commcalc.ma_commission_month_rate a
+ USING commcalc.ma_commission_month_rate b
+ WHERE a.org_id = b.org_id
+   AND a.month_index = b.month_index
+   AND COALESCE(a.effective_from, '0001-01-01'::date) = COALESCE(b.effective_from, '0001-01-01'::date)
+   AND (a.created_at, a.ctid) > (b.created_at, b.ctid);
+
+-- 3. the real uniqueness rule.
+CREATE UNIQUE INDEX IF NOT EXISTS ma_commission_month_rate_uq
+  ON commcalc.ma_commission_month_rate (org_id, month_index, COALESCE(effective_from, '0001-01-01'::date));
 
 COMMENT ON TABLE commcalc.ma_commission_month_rate IS
   'The CARRIER''s M1-M6 commission plan (percent of MRC + any flat spiff), per tenant and effective-'
@@ -81,14 +129,19 @@ COMMENT ON TABLE commcalc.ma_commission_month_rate IS
   'sales x Commission Plans and never reads this table.';
 
 INSERT INTO commcalc.ma_commission_month_rate (org_id, month_index, rate_pct, spiff_flat, note)
-VALUES
-  ('00000000-0000-0000-0000-000000000001', 1, 50, 0, 'Total plan 2026-08-04 (owner): M1 = 50% of MRC.'),
-  ('00000000-0000-0000-0000-000000000001', 2, 75, 0, 'Total plan 2026-08-04 (owner): M2 = 75% of MRC.'),
-  ('00000000-0000-0000-0000-000000000001', 3, 75, 0, 'Total plan 2026-08-04 (owner): M3 = 75% of MRC — TEMPORARY spiff, expect changes.'),
-  ('00000000-0000-0000-0000-000000000001', 4, 75, 0, 'Total plan 2026-08-04 (owner): M4 = 75% of MRC — TEMPORARY spiff, expect changes.'),
-  ('00000000-0000-0000-0000-000000000001', 5, 75, 0, 'Total plan 2026-08-04 (owner): M5 = 75% of MRC — TEMPORARY spiff, expect changes.'),
-  ('00000000-0000-0000-0000-000000000001', 6, 75, 0, 'Total plan 2026-08-04 (owner): M6 = 75% of MRC — TEMPORARY spiff, expect changes.')
-ON CONFLICT DO NOTHING;
+SELECT v.org_id, v.month_index, v.rate_pct, v.spiff_flat, v.note
+  FROM (VALUES
+    ('00000000-0000-0000-0000-000000000001'::uuid, 1, 50::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M1 = 50% of MRC.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 2, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M2 = 75% of MRC.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 3, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M3 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 4, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M4 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 5, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M5 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 6, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M6 = 75% of MRC — TEMPORARY spiff, expect changes.')
+  ) AS v(org_id, month_index, rate_pct, spiff_flat, note)
+ WHERE NOT EXISTS (
+   SELECT 1 FROM commcalc.ma_commission_month_rate x
+    WHERE x.org_id = v.org_id AND x.month_index = v.month_index
+ );
 
 -- ── 3) the follow-up-worklist function (the Appeal tile's source) ──────────────────────────────────
 DROP FUNCTION IF EXISTS commcalc.ma_overview_unpaid_lines(uuid, text[], text[], text[], int);

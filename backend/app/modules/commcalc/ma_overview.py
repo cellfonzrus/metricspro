@@ -606,11 +606,24 @@ M_RATE_FIELDS = ("month_index", "rate_pct", "spiff_flat", "effective_from", "not
 
 
 def resolve_m_rates(client, org_id, period="", month_year=None):
-    """{month_index: rate row} for a period. Effective-dated: the newest row whose effective_from is on
-    or before the period's first day wins; rows with no effective_from always apply. Absent table or
-    zero rows => the code defaults, so a tenant that never ran the migration still gets the Total plan.
-    Returns (rates, source)."""
+    """{month_index: rate row} for a period, plus a meta block. Effective-dated: the newest row whose
+    effective_from is on or before the period's first day wins; rows with no effective_from always apply.
+    Absent table or zero rows => the code defaults, so a tenant that never ran the migration still gets
+    the Total plan. Returns (rates, source, meta).
+
+    DUPLICATE-TOLERANT BY CONSTRUCTION (hardened 2026-08-04 after a real production defect). The rate
+    table's original UNIQUE (org_id, month_index, effective_from) did NOT stop a duplicate seed, because
+    Postgres treats NULLs as DISTINCT in a unique constraint and the seed leaves effective_from NULL —
+    so `ON CONFLICT DO NOTHING` never fired and running both 268 and 268b seeded every month TWICE.
+    Migration 268b now dedupes and replaces that constraint with a COALESCE-based unique index, but this
+    reader must never depend on the DB being clean: it selects exactly ONE row per month_index (it can
+    never SUM across duplicates — that would silently double every EXPECTED figure), and the choice is
+    DETERMINISTIC rather than "whichever row the query happened to return last", because PostgREST row
+    order is unspecified. Order of preference: latest in-force effective_from, then the most recently
+    updated/created row, then the highest id. Any duplicate found is REPORTED in meta so the page can
+    say so out loud instead of quietly picking one."""
     rates = {int(r["month_index"]): dict(r) for r in DEFAULT_M_RATES}
+    meta = {"duplicate_rows": 0, "duplicate_months": [], "conflicting_months": [], "rows": 0}
     src = "code_default"
     try:
         rows = (client.schema("commcalc").table("ma_commission_month_rate").select("*")
@@ -618,14 +631,21 @@ def resolve_m_rates(client, org_id, period="", month_year=None):
     except Exception:
         rows = []
     if not rows:
-        return rates, src
+        return rates, src, meta
     src = "org_config"
+    meta["rows"] = len(rows)
     start = None
     if month_year and period:
         mo, yr = month_year(period)
         if 1 <= int(mo or 0) <= 12 and yr:
             start = _date(int(yr), int(mo), 1).isoformat()
-    best = {}
+
+    def _rank(r):
+        """Deterministic preference. Sorted ASC, the LAST element wins."""
+        return (_s(r.get("effective_from"))[:10],
+                _s(r.get("updated_at")), _s(r.get("created_at")), _s(r.get("id")))
+
+    by_month = {}
     for r in rows:
         try:
             mi = int(r.get("month_index"))
@@ -634,16 +654,41 @@ def resolve_m_rates(client, org_id, period="", month_year=None):
         eff = _s(r.get("effective_from"))[:10]
         if eff and start and eff > start:
             continue                                  # not in force yet for this period
-        prev = best.get(mi)
-        if prev is None or _s(prev.get("effective_from"))[:10] <= eff:
-            best[mi] = r
-    for mi, r in best.items():
+        by_month.setdefault(mi, []).append(r)
+
+    for mi, cands in by_month.items():
+        # duplicate = more than one row sharing the same effective_from for this month
+        seen = {}
+        for r in cands:
+            seen.setdefault(_s(r.get("effective_from"))[:10], []).append(r)
+        for eff, group in seen.items():
+            if len(group) > 1:
+                meta["duplicate_rows"] += len(group) - 1
+                if mi not in meta["duplicate_months"]:
+                    meta["duplicate_months"].append(mi)
+                # duplicates that DISAGREE are worse than duplicates that merely repeat
+                vals = {(safe_float(g.get("rate_pct")), safe_float(g.get("spiff_flat"))) for g in group}
+                if len(vals) > 1 and mi not in meta["conflicting_months"]:
+                    meta["conflicting_months"].append(mi)
+        chosen = sorted(cands, key=_rank)[-1]          # exactly ONE row — never a sum
         base = rates.get(mi, {"month_index": mi, "rate_pct": 0.0, "spiff_flat": 0.0})
         for f in M_RATE_FIELDS:
-            if r.get(f) is not None:
-                base[f] = r.get(f)
+            if chosen.get(f) is not None:
+                base[f] = chosen.get(f)
         rates[mi] = base
-    return rates, src
+
+    meta["duplicate_months"].sort()
+    meta["conflicting_months"].sort()
+    if meta["duplicate_rows"]:
+        meta["note"] = (
+            f"{meta['duplicate_rows']} duplicate rate row(s) found for month(s) "
+            f"{', '.join('M%d' % m for m in meta['duplicate_months'])}. ONE row per month is used — "
+            "duplicates are never added together — but they should be cleaned up: run migration "
+            "268b_commission_ma_overview_owner_answers.sql, which dedupes and adds the unique index "
+            "that prevents it recurring."
+            + (f" ⚠ Month(s) {', '.join('M%d' % m for m in meta['conflicting_months'])} have duplicates "
+               "with DIFFERENT rates — check which one is right." if meta["conflicting_months"] else ""))
+    return rates, src, meta
 
 
 def expected_from_plan(groups, tile, rates, month_index=1):
@@ -1027,7 +1072,7 @@ def compute(client, org_id, period, pvariants, canon_period, month_year,
                 if f.strip() and f.strip() not in _pay_cols:
                     _pay_cols.append(f.strip())
         unpaid_rows, unpaid_via = load_unpaid_lines(client, org_id, variants, _pay_cols, accounts)
-    m_rates, m_rate_source = resolve_m_rates(client, org_id, period, month_year)
+    m_rates, m_rate_source, m_rate_meta = resolve_m_rates(client, org_id, period, month_year)
 
     up_rows = load_uploaded(client, org_id, variants) if variants else []
     # RULE FIVE / WYSIWYG: an account filter narrows BOTH sides. Narrowing only our cube would compare a
@@ -1159,6 +1204,7 @@ def compute(client, org_id, period, pvariants, canon_period, month_year,
         payload["expected_commission"] = exp
     payload["rate_plan"] = {"source": m_rate_source,
                             "rates": [m_rates[i] for i in sorted(m_rates)],
+                            "duplicates": m_rate_meta,
                             "note": ("M1-M6 percentages of MRC + any flat spiff, per tenant and "
                                      "effective-dated. The owner's standing Total plan is M1 50%, "
                                      "M2-M6 75%; M3-M6 are TEMPORARY spiffs, so edit the plan here "

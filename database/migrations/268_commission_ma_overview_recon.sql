@@ -31,6 +31,13 @@
 -- rather than a fake 0. The page instead shows the candidate value distributions (raw_ma_commission
 -- .line_status / .suspension_reason) so the owner can pick the right filter and save it as config.
 --
+-- ⚠️ IDEMPOTENCE NOTE (2026-08-04): a uniqueness rule that includes a NULLABLE column does NOT make an
+-- INSERT idempotent — Postgres treats NULLs as DISTINCT inside a UNIQUE constraint, so ON CONFLICT never
+-- fires. That defect reached production once here (the rate-plan seed ran twice); it is fixed below with
+-- a COALESCE-based expression index plus a WHERE NOT EXISTS seed. Every other uniqueness rule in this
+-- file is over NOT NULL columns only (ma_overview_upload: org_id/period/merchant_account_id;
+-- ma_overview_tile_config: org_id/tile_key), which is why those ON CONFLICT clauses are sound.
+--
 -- ADDITIVE + IDEMPOTENT + RLS-ZERO-POLICY: safe to re-run; RLS on, NO policies, NO anon/authenticated
 -- grants (contract §5 — all access is via the backend service role). Degrades gracefully: until this runs,
 -- the recon page reads the code-default tiles, computes the system side from the raw tables via the
@@ -142,11 +149,44 @@ CREATE TABLE IF NOT EXISTS commcalc.ma_commission_month_rate (
   note           TEXT,
   updated_by     TEXT,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (org_id, month_index, effective_from)
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  -- NO table-level UNIQUE here on purpose — see the expression index below.
 );
 CREATE INDEX IF NOT EXISTS ma_commission_month_rate_org
   ON commcalc.ma_commission_month_rate (org_id, month_index);
+
+-- ── UNIQUENESS FOR THE RATE PLAN — an EXPRESSION index, not a table constraint ─────────────────────
+-- ⚠️ DEFECT FIXED HERE (found in PRODUCTION 2026-08-04 by running 268 and then 268b). The original
+-- `UNIQUE (org_id, month_index, effective_from)` did NOT prevent a duplicate seed: the seed rows leave
+-- effective_from NULL, Postgres treats NULLs as DISTINCT in a unique constraint, so no conflict ever
+-- arose and `ON CONFLICT DO NOTHING` never fired — every month_index was inserted TWICE. The fix is a
+-- unique index over COALESCE(effective_from, '0001-01-01'), which makes "no start date" a real, single
+-- value. The seed below additionally uses WHERE NOT EXISTS rather than ON CONFLICT, so it is idempotent
+-- even on a database where neither the constraint nor the index exists yet.
+--
+-- This block is correct on EVERY state: a fresh database, a 268-only database, a 268+268b database that
+-- still holds the duplicate rows, and the owner's post-cleanup database (where the constraint is already
+-- dropped and an index of this exact name already exists). Each step is individually conditional.
+
+-- 1. drop the unenforceable constraint (auto-named by Postgres; also try the explicit name).
+ALTER TABLE commcalc.ma_commission_month_rate
+  DROP CONSTRAINT IF EXISTS ma_commission_month_rate_org_id_month_index_effective_from_key;
+ALTER TABLE commcalc.ma_commission_month_rate
+  DROP CONSTRAINT IF EXISTS ma_commission_month_rate_uq;
+
+-- 2. DEDUPE before indexing — otherwise CREATE UNIQUE INDEX fails on a dirty table and the whole
+--    migration aborts. Keeps the EARLIEST row of each (org, month, effective-date) group (ctid breaks
+--    a tie when created_at is identical, which it is for rows inserted by the same statement).
+DELETE FROM commcalc.ma_commission_month_rate a
+ USING commcalc.ma_commission_month_rate b
+ WHERE a.org_id = b.org_id
+   AND a.month_index = b.month_index
+   AND COALESCE(a.effective_from, '0001-01-01'::date) = COALESCE(b.effective_from, '0001-01-01'::date)
+   AND (a.created_at, a.ctid) > (b.created_at, b.ctid);
+
+-- 3. the real uniqueness rule.
+CREATE UNIQUE INDEX IF NOT EXISTS ma_commission_month_rate_uq
+  ON commcalc.ma_commission_month_rate (org_id, month_index, COALESCE(effective_from, '0001-01-01'::date));
 
 COMMENT ON TABLE commcalc.ma_commission_month_rate IS
   'The CARRIER''s M1-M6 commission plan (percent of MRC + any flat spiff), per tenant and effective-'
@@ -424,14 +464,19 @@ GRANT EXECUTE ON FUNCTION commcalc.ma_overview_dailytx_dates(uuid, text[], text[
 
 -- ── 4b) seed the HOUSE org's carrier rate plan (owner: Total = M1 50%, M2–M6 75%) ──────────────────
 INSERT INTO commcalc.ma_commission_month_rate (org_id, month_index, rate_pct, spiff_flat, note)
-VALUES
-  ('00000000-0000-0000-0000-000000000001', 1, 50, 0, 'Total plan 2026-08-04 (owner): M1 = 50% of MRC.'),
-  ('00000000-0000-0000-0000-000000000001', 2, 75, 0, 'Total plan 2026-08-04 (owner): M2 = 75% of MRC.'),
-  ('00000000-0000-0000-0000-000000000001', 3, 75, 0, 'Total plan 2026-08-04 (owner): M3 = 75% of MRC — TEMPORARY spiff, expect changes.'),
-  ('00000000-0000-0000-0000-000000000001', 4, 75, 0, 'Total plan 2026-08-04 (owner): M4 = 75% of MRC — TEMPORARY spiff, expect changes.'),
-  ('00000000-0000-0000-0000-000000000001', 5, 75, 0, 'Total plan 2026-08-04 (owner): M5 = 75% of MRC — TEMPORARY spiff, expect changes.'),
-  ('00000000-0000-0000-0000-000000000001', 6, 75, 0, 'Total plan 2026-08-04 (owner): M6 = 75% of MRC — TEMPORARY spiff, expect changes.')
-ON CONFLICT DO NOTHING;
+SELECT v.org_id, v.month_index, v.rate_pct, v.spiff_flat, v.note
+  FROM (VALUES
+    ('00000000-0000-0000-0000-000000000001'::uuid, 1, 50::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M1 = 50% of MRC.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 2, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M2 = 75% of MRC.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 3, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M3 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 4, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M4 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 5, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M5 = 75% of MRC — TEMPORARY spiff, expect changes.'),
+    ('00000000-0000-0000-0000-000000000001'::uuid, 6, 75::numeric, 0::numeric, 'Total plan 2026-08-04 (owner): M6 = 75% of MRC — TEMPORARY spiff, expect changes.')
+  ) AS v(org_id, month_index, rate_pct, spiff_flat, note)
+ WHERE NOT EXISTS (
+   SELECT 1 FROM commcalc.ma_commission_month_rate x
+    WHERE x.org_id = v.org_id AND x.month_index = v.month_index
+ );
 
 -- ── 5) seed the HOUSE org with the Total-Wireless tile defaults ─────────────────────────────────────
 -- Identical to ma_overview.DEFAULT_TILES. Every other tenant inherits those code defaults until it saves

@@ -22065,9 +22065,9 @@ def ma_overview_rate_plan(period: str = "", org_id: str = ORG_ID):
     sales x Commission Plans and never reads this. Absent table => the code defaults."""
     require_org(org_id)
     mo = _ma_ov()
-    rates, src = mo.resolve_m_rates(sb(), org_id, period, _month_year)
+    rates, src, meta = mo.resolve_m_rates(sb(), org_id, period, _month_year)
     return {"ok": True, "org_id": org_id, "source": src, "period": period,
-            "rates": [rates[i] for i in sorted(rates)],
+            "rates": [rates[i] for i in sorted(rates)], "duplicates": meta,
             "note": ("Percent of the line's MRC, plus any flat per-activation spiff. Effective-dated: "
                      "the newest row on or before the period's first day wins, so a rate change is "
                      "history, not a silent overwrite. Changing these changes the EXPECTED column of "
@@ -22093,13 +22093,37 @@ def ma_overview_put_rate(month_index: int, body: dict, org_id: str = ORG_ID,
            "note": (body.get("note") or None),
            "updated_by": "api_v1",
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    # NOT an upsert with on_conflict: the table's uniqueness is a COALESCE-based EXPRESSION index
+    # (mig 268b — a plain UNIQUE on a nullable effective_from is not enforceable, which is exactly the
+    # defect that let the seed run twice), and PostgREST cannot infer an expression index from a column
+    # list. So: NULL-safe read, then UPDATE or INSERT. Also collapses any pre-existing duplicate rows
+    # for this key, so saving a rate cleans up after the old defect instead of adding to it.
+    client = sb()
     try:
-        res = (sb().schema("commcalc").table("ma_commission_month_rate")
-               .upsert(row, on_conflict="org_id,month_index,effective_from").execute())
+        q = (client.schema("commcalc").table("ma_commission_month_rate").select("id,created_at")
+             .eq("org_id", org_id).eq("month_index", int(month_index)))
+        q = (q.is_("effective_from", "null") if row["effective_from"] is None
+             else q.eq("effective_from", row["effective_from"]))
+        existing = q.execute().data or []
     except Exception as e:
-        raise HTTPException(400, f"Could not save the rate — run migration "
+        raise HTTPException(400, f"Could not read the rate plan — run migration "
                                  f"268b_commission_ma_overview_owner_answers.sql first ({e}).")
-    return {"ok": True, "rate": (res.data[0] if res.data else row)}
+    try:
+        if existing:
+            keep = sorted(existing, key=lambda r: (str(r.get("created_at") or ""), str(r.get("id"))))[0]
+            res = (client.schema("commcalc").table("ma_commission_month_rate")
+                   .update(row).eq("org_id", org_id).eq("id", keep["id"]).execute())
+            dupes = [r["id"] for r in existing if r["id"] != keep["id"]]
+            if dupes:
+                (client.schema("commcalc").table("ma_commission_month_rate").delete()
+                 .eq("org_id", org_id).in_("id", dupes).execute())
+        else:
+            res = client.schema("commcalc").table("ma_commission_month_rate").insert(row).execute()
+            dupes = []
+    except Exception as e:
+        raise HTTPException(400, f"Could not save the rate ({e}).")
+    return {"ok": True, "rate": (res.data[0] if res.data else row),
+            "duplicates_removed": len(dupes)}
 
 
 @router.delete("/ma-overview-recon/report/{period}")

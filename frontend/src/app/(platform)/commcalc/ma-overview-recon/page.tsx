@@ -346,6 +346,12 @@ export default function MaOverviewReconPage() {
             <Explain title="MRC base" money value={d.expected_commission.mrc_total}
               detail={`avg ${fmt(d.expected_commission.avg_mrc || 0)} per activation`} />
           </div>
+          {!!d.rate_plan?.duplicates?.duplicate_rows && (
+            <div style={{ marginTop: 8, padding: '7px 10px', borderRadius: 8, fontSize: 12,
+                          background: 'rgba(245,158,11,.12)', color: '#b45309' }}>
+              ⚠ {d.rate_plan.duplicates.note}
+            </div>
+          )}
           {d.rate_plan && (
             <div style={{ fontSize: 11, color: 'var(--text2)', marginTop: 8 }}>
               rate plan: <b>{d.rate_plan.source === 'org_config' ? 'this tenant’s saved plan' : 'built-in default'}</b>
