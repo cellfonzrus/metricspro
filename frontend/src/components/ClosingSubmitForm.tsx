@@ -26,16 +26,19 @@ type State = {
   t_cash: string; t_credit: string; t_ext_cc: string; t_gift: string; t_store_acct: string; t_zelle: string; t_acima: string
   epay_on_cash: string; epay_on_credit: string; epay_on_acima: string
   acc_sale: string
-  expense_amount: string; expense_description: string
   upgrade_count: string; new_line_count: string; postpaid_count: string; envelope_picture: string; remarks: string
 }
 
 const blank = (): State => ({
   close_date: localToday(), sfid: '', store_name: '', store_code: '', employee_name: '',
   t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
-  expense_amount: '', expense_description: '',
   upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '',
 })
+
+// EEP (mig 506) — categorized expense LINES replace the single expense_amount/description field for
+// NEW submissions (the legacy field stays readable everywhere it already shows). One line per category.
+type ExpLine = { category_id: string; amount: string; description: string; employee_id: string; employee_name: string }
+const blankExpLine = (): ExpLine => ({ category_id: '', amount: '', description: '', employee_id: '', employee_name: '' })
 // Total collected = the tender boxes ONLY. Accessory is declared separately (tallied vs sales), NOT a tender.
 const MONEY_KEYS: (keyof State)[] = ['t_cash', 't_credit', 't_ext_cc', 't_gift', 't_store_acct', 't_zelle', 't_acima']
 // The 7 built-in tender_keys that map to physical t_* columns; anything else is a custom tender (mig 111).
@@ -66,6 +69,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [cdefs, setCdefs] = useState<any[] | null>(null)      // configured count fields (null = built-in 3, static)
   const [cv, setCv] = useState<Record<string, string>>({})    // value per configured field_key
   const [emps, setEmps] = useState<any[]>([])                 // employee roster (RULE THREE picker, see below)
+  const [cats, setCats] = useState<any[]>([])                 // expense categories (mig 506, lazy-seeded)
+  const [expLines, setExpLines] = useState<ExpLine[]>([])
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
 
@@ -106,6 +111,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
   // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).
   useEffect(() => { api('/api/v1/storeops/employees?all_company=true').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
+  // Expense categories (mig 506, EEP) — lazy-seeded 5 presets on first call.
+  useEffect(() => { api('/api/v1/closing/expense-categories').then((d: any) => setCats(d?.categories || [])).catch(() => setCats([])) }, [])
   // Prefill from the logged-in user's own name — but ONLY once the roster has loaded and it's an
   // EXACT (case-insensitive) match to a real roster entry. allowCreate is false on this picker, so a
   // default that doesn't match anything must NOT be silently carried in state (it would look blank in
@@ -132,7 +139,18 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     if (!f.close_date) { setMsg('❌ Pick a date.'); return }
     if (!f.sfid && !f.store_code) { setMsg('❌ Pick your store.'); return }
     if (!f.employee_name.trim()) { setMsg('❌ Enter your name.'); return }
-    if ((parseFloat(f.expense_amount) || 0) > 0 && !f.expense_description.trim()) { setMsg('❌ Describe the expense before submitting.'); return }
+    // Categorized expense lines (mig 506) — client-side mirror of the server's _validate_expense_line
+    // so a rep gets an immediate, specific message instead of a generic submit failure.
+    const activeLines = expLines.filter(l => (parseFloat(l.amount) || 0) > 0 || l.description.trim() || l.category_id)
+    for (const l of activeLines) {
+      if (!l.category_id) { setMsg('❌ Pick a category for every expense line.'); return }
+      if (!((parseFloat(l.amount) || 0) > 0)) { setMsg('❌ Every expense line needs an amount greater than zero.'); return }
+      if (!l.description.trim()) { setMsg('❌ Every expense line needs a description.'); return }
+      const cat = cats.find((c: any) => c.id === l.category_id)
+      if ((cat?.kind === 'payroll' || cat?.kind === 'commission') && !l.employee_id) {
+        setMsg(`❌ "${cat?.name}" requires picking an employee.`); return
+      }
+    }
     setBusy(true); setMsg('')
     // Build the tender fields: configured tenders → standard keys to t_*, custom keys to custom_tenders;
     // no config → the static t_* fields (unchanged behaviour).
@@ -165,7 +183,10 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         ...tenderFields, custom_tenders: customTenders,
         epay_on_cash: f.epay_on_cash, epay_on_credit: f.epay_on_credit, epay_on_acima: f.epay_on_acima,
         acc_sale: f.acc_sale,
-        expense_amount: f.expense_amount, expense_description: f.expense_description.trim(),
+        expense_lines: activeLines.map(l => ({
+          category_id: l.category_id, amount: l.amount, description: l.description.trim(),
+          employee_id: l.employee_id || undefined, employee_name: l.employee_name || undefined,
+        })),
         ...countFields,
         envelope_picture: f.envelope_picture, remarks: f.remarks,
         ocr_cash: ocrCash || undefined,
@@ -185,9 +206,8 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         : pending ? '✅ Submitted (B2B not loaded yet — will reconcile once it lands).'
         : '✅ Closing submitted and tallies with the system. You can enter another below.')
       setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
-        expense_amount: '', expense_description: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
-      setTv({}); setCv({})
+      setTv({}); setCv({}); setExpLines([])
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
       loadRecent()
       onSubmitted?.()
@@ -199,6 +219,11 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // storage contract this wave. sublabel = email; EntityPicker auto-appends it only on a same-name clash.
   const empOptions: EntityOption[] = useMemo(
     () => emps.filter((e: any) => (e.name || '').trim()).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
+    [emps])
+  // Employee options keyed by the REAL id (for the payroll/commission expense-line picker — those
+  // lines carry commcalc.closing_expense.employee_id, a real FK, unlike the name-string rep picker above).
+  const empOptionsById: EntityOption[] = useMemo(
+    () => emps.filter((e: any) => e.id && (e.name || '').trim()).map((e: any) => ({ id: String(e.id), label: e.name, sublabel: e.email || undefined })),
     [emps])
 
   const storeIdx = stores.findIndex(s => (f.sfid && s.sfid === f.sfid) || (!f.sfid && f.store_code && s.store_code === f.store_code))
@@ -284,13 +309,46 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           </Row>
         )}
 
-        <SectionLabel>Expense incurred (reimbursement — DM approves)</SectionLabel>
-        <Row>
-          <Field label="Expense amount $"><input style={inp} inputMode="decimal" value={f.expense_amount} onChange={e => set({ expense_amount: e.target.value })} placeholder="0.00" /></Field>
-          <Field label={`Description${(parseFloat(f.expense_amount) || 0) > 0 ? ' (required)' : ''}`} wide>
-            <input style={inp} value={f.expense_description} onChange={e => set({ expense_description: e.target.value })} placeholder="What was the expense for? (required if an amount is entered)" />
-          </Field>
-        </Row>
+        <SectionLabel>Expenses taken from the envelope (categorized — DM approves each line)</SectionLabel>
+        {expLines.map((l, i) => {
+          const cat = cats.find((c: any) => c.id === l.category_id)
+          const needsEmp = cat?.kind === 'payroll' || cat?.kind === 'commission'
+          return (
+            <Row key={i}>
+              <Field label="Category">
+                <EntityPicker
+                  options={cats.map((c: any) => ({ id: c.id, label: c.name }))}
+                  value={l.category_id || null}
+                  onChange={v => setExpLines(ls => ls.map((x, j) => j === i ? { ...x, category_id: v || '' } : x))}
+                  placeholder="Category…" width="100%" />
+              </Field>
+              <Field label="Amount $">
+                <input style={inp} inputMode="decimal" value={l.amount}
+                  onChange={e => setExpLines(ls => ls.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} placeholder="0.00" />
+              </Field>
+              {needsEmp && (
+                <Field label="Employee (required)">
+                  <EntityPicker
+                    options={empOptionsById}
+                    value={l.employee_id || null}
+                    onChange={v => { const e = emps.find((e: any) => e.id === v); setExpLines(ls => ls.map((x, j) => j === i ? { ...x, employee_id: v || '', employee_name: e?.name || '' } : x)) }}
+                    placeholder="Employee…" width="100%" />
+                </Field>
+              )}
+              <Field label="Description (required)" wide>
+                <input style={inp} value={l.description}
+                  onChange={e => setExpLines(ls => ls.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
+                  placeholder="What was this for?" />
+              </Field>
+              <div style={{ alignSelf: 'flex-end', paddingBottom: 8 }}>
+                <button type="button" className="btn btn-secondary" style={{ fontSize: 12 }}
+                  onClick={() => setExpLines(ls => ls.filter((_, j) => j !== i))}>✕ Remove</button>
+              </div>
+            </Row>
+          )
+        })}
+        <button type="button" className="btn btn-secondary" style={{ fontSize: 13 }}
+          onClick={() => setExpLines(ls => [...ls, blankExpLine()])}>＋ Add expense line</button>
 
         <SectionLabel>Envelope photo & remarks</SectionLabel>
         <Row>

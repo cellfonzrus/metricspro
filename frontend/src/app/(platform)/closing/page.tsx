@@ -160,6 +160,10 @@ export default function ClosingDashboard() {
           <Link href="/closing/verify" className="btn btn-secondary" style={{ fontSize: 13 }}>✅ DM verify</Link>
           <Link href="/closing/cash-position" className="btn btn-secondary" style={{ fontSize: 13 }}>💰 Cash Position</Link>
           <Link href="/closing/duplicates" className="btn btn-secondary" style={{ fontSize: 13 }}>🧾 Duplicates</Link>
+          <Link href="/closing/envelope-payout" className="btn btn-secondary" style={{ fontSize: 13 }}>✉️ Envelope Payout</Link>
+          <Link href="/closing/expenses-report" className="btn btn-secondary" style={{ fontSize: 13 }}>🧾 Expenses Report</Link>
+          <Link href="/closing/expense-categories" className="btn btn-secondary" style={{ fontSize: 13 }}>🗂️ Expense Categories</Link>
+          <Link href="/closing/envelope-config" className="btn btn-secondary" style={{ fontSize: 13 }}>⚙️ Envelope Config</Link>
           <Link href="/closing/count-config" className="btn btn-secondary" style={{ fontSize: 13 }}>🔢 Count fields</Link>
           <Link href="/closing/readiness" className="btn btn-secondary" style={{ fontSize: 13 }}>🩺 Readiness</Link>
         </div>

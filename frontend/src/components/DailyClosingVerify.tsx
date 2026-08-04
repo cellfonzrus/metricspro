@@ -375,6 +375,19 @@ export default function DailyClosingVerify() {
     } catch (e: any) { alert('Approve failed: ' + (e?.message || e)) }
   }
 
+  // Per-line decide for the CATEGORIZED expense lines (mig 506, EEP) — replaces the single checkbox
+  // above for new-form entries. Approving/rejecting one line refreshes just that store (same pattern).
+  async function decideExpenseLine(r: any, expenseId: string, status: 'approved' | 'rejected') {
+    if (status === 'approved' && !window.confirm('Approve this expense line?')) return
+    if (status === 'rejected' && !window.confirm('Reject this expense line?')) return
+    try {
+      await api(`/api/v1/closing/expense/${expenseId}/decide`, { method: 'POST', body: JSON.stringify({
+        status, decided_by: user?.full_name || 'DM',
+      }) })
+      if (r.store_code && r.close_date) refreshStore(r.store_code, r.close_date); else load()
+    } catch (e: any) { alert('Decide failed: ' + (e?.message || e)) }
+  }
+
   function setForm(k: string, patch: Partial<Form>) { setForms(p => ({ ...p, [k]: { ...p[k], ...patch } })) }
 
   const stores: any[] = data?.stores || []
@@ -433,6 +446,8 @@ export default function DailyClosingVerify() {
     { header: 'Custom counts', field: 'custom_counts', get: (r: any) => r._custom_counts_display },
     { header: 'Expense $', field: 'expense_amount', money: true, get: (r: any) => r.expense_amount },
     { header: 'Expense approved', field: 'expense_approved', get: (r: any) => r.expense_approved ? 'Yes' : 'No' },
+    { header: 'Categorized expenses', field: 'expense_lines', get: (r: any) =>
+        (r._expense_lines || []).map((e: any) => `${e.category_name}: ${fmt(e.amount)} (${e.status})`).join('; ') },
     { header: 'Gate status', field: 'gate_status', get: (r: any) => (r._gate?.status && GATE_LABEL[r._gate.status]) || '' },
     { header: 'Gate reason(s)', field: 'gate_reasons', get: (r: any) => (r._gate?.reasons || []).join('; ') },
   ], [])
@@ -642,7 +657,7 @@ export default function DailyClosingVerify() {
                   <thead><tr style={{ background: 'var(--surface2)' }}>
                     {['Employee', 'Store cash', 'Store CC', 'ePay cash', 'ePay CC', 'ACIMA', 'Acc', 'Other', 'Custom tenders',
                       ...(countCols.length > 0 ? countCols.map(c => c.label) : ['Upg', 'New', 'Post']),
-                      'Gate', 'Env', 'Expense', 'Approve exp.'].map((h, i) =>
+                      'Gate', 'Env', 'Expense', 'Approve exp.', 'Categorized expenses'].map((h, i) =>
                       <th key={i} style={{ textAlign: 'left', padding: '6px 9px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
                   </tr></thead>
                   <tbody>
@@ -679,6 +694,30 @@ export default function DailyClosingVerify() {
                                   : <span style={{ color: 'var(--text3)' }}>approve</span>}
                               </label>
                             : <span style={{ color: 'var(--text3)' }}>—</span>}
+                        </td>
+                        <td style={cell}>
+                          {(r._expense_lines || []).length === 0
+                            ? <span style={{ color: 'var(--text3)' }}>—</span>
+                            : <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                {(r._expense_lines || []).map((e: any) => (
+                                  <div key={e.id} style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                                    <b>{fmt(e.amount)}</b> · {e.category_name}
+                                    {e.employee_name ? ` (${e.employee_name})` : ''}
+                                    {e.description ? <span style={{ color: 'var(--text3)' }}> · {e.description}</span> : null}
+                                    {' '}
+                                    {e.status === 'approved'
+                                      ? <span style={{ color: 'var(--green, #16794a)', fontWeight: 600 }}>✓ approved</span>
+                                      : e.status === 'rejected'
+                                      ? <span style={{ color: '#b42318', fontWeight: 600 }}>✕ rejected</span>
+                                      : <span style={{ display: 'inline-flex', gap: 4 }}>
+                                          <button className="btn btn-secondary" style={{ fontSize: 10, padding: '1px 6px' }}
+                                            onClick={() => decideExpenseLine(r, e.id, 'approved')}>approve</button>
+                                          <button className="btn btn-secondary" style={{ fontSize: 10, padding: '1px 6px' }}
+                                            onClick={() => decideExpenseLine(r, e.id, 'rejected')}>reject</button>
+                                        </span>}
+                                  </div>
+                                ))}
+                              </div>}
                         </td>
                       </tr>
                     ))}
