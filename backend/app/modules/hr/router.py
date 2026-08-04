@@ -9,6 +9,7 @@ this router adds the one genuinely new thing: per-employee TOTAL COMPENSATION (w
 """
 import base64
 import calendar
+import inspect
 import re
 import secrets
 import uuid
@@ -23,6 +24,15 @@ from app.modules.storeops import payroll_salary
 
 router = APIRouter(prefix="/hr", tags=["HR"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+async def _maybe_await(value):
+    """core.router's list_employees/assign_role/create_login are `async def` today (nav-perf 2026-08-04
+    ask: this file's `await` on them is the ONLY reason platform-core can't convert them to sync `def`
+    for threadpool dispatch). Calling the function always executes it correctly either way; the only
+    question is whether the RESULT needs an `await`. Resilient to either shape so this file needs no
+    follow-up edit whenever core.router converts."""
+    return (await value) if inspect.isawaitable(value) else value
+
 
 _MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
 
@@ -78,7 +88,7 @@ def _pvariants(period):
 async def hr_list_employees(org_id: str = ORG_ID):
     """The roster + role/login state (delegates to the same merge core/Roles uses)."""
     from app.modules.core.router import list_employees
-    return await list_employees(org_id)
+    return await _maybe_await(list_employees(org_id))
 
 
 @router.post("/employees")
@@ -118,16 +128,16 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID):
     assigned, login = None, None
     if email and (role or has_scope):
         from app.modules.core.router import assign_role
-        await assign_role({
+        await _maybe_await(assign_role({
             "email": email, "full_name": name, "role": role or "sales_rep",
             "market": body.get("market"), "store_code": body.get("store_code"),
             "store_codes": body.get("store_codes"), "employee_id": emp.get("employee_id"),
-        }, org_id)
+        }, org_id))
         assigned = role or "sales_rep"
         if body.get("create_login"):
             from app.modules.core.router import create_login as core_create_login
             try:
-                login = await core_create_login({"email": email}, org_id)
+                login = await _maybe_await(core_create_login({"email": email}, org_id))
             except Exception as e:
                 login = {"error": str(e)[:200]}
     elif (role or has_scope) and not email:
@@ -169,12 +179,12 @@ async def hr_update_employee(emp_id: str, body: dict, authorization: str = Heade
     has_scope = any(k in body for k in ("market", "store_code", "store_codes"))
     if email and (role or has_scope):
         from app.modules.core.router import assign_role
-        await assign_role({
+        await _maybe_await(assign_role({
             "email": email, "full_name": body.get("name") or (res or {}).get("name"),
             "role": role or None, "market": body.get("market"),
             "store_code": body.get("store_code"), "store_codes": body.get("store_codes"),
             "employee_id": (res or {}).get("employee_id"),
-        }, org_id)
+        }, org_id))
     return res or {"ok": True, "id": emp_id}
 
 
@@ -1446,7 +1456,7 @@ def onboarding_document_url(employee_id: str, task_id: str, file_id: str, org_id
     return {"url": url, "name": target.get("name")}
 
 
-async def _do_onboard_delete_document(org_id, employee_id, task_id, file_id, actor, actor_role):
+def _do_onboard_delete_document(org_id, employee_id, task_id, file_id, actor, actor_role):
     """Shared delete core for the admin ('always') and employee ('only-while-pending') surfaces —
     migration 402. Removes the file from the task's `documents` list, mirrors document_path/document_name
     to whatever remains (or clears them if none), best-effort removes the storage object (the DB list is
@@ -1487,9 +1497,9 @@ async def _do_onboard_delete_document(org_id, employee_id, task_id, file_id, act
 
 
 @router.delete("/onboarding/employee/{employee_id}/task/{task_id}/document/{file_id}")
-async def onboarding_delete_document(employee_id: str, task_id: str, file_id: str, actor: str = "", org_id: str = ORG_ID):
+def onboarding_delete_document(employee_id: str, task_id: str, file_id: str, actor: str = "", org_id: str = ORG_ID):
     """ADMIN/HR: delete any uploaded file on this task, at any time (migration 402)."""
-    return await _do_onboard_delete_document(org_id, employee_id, task_id, file_id, actor or "HR", "admin")
+    return _do_onboard_delete_document(org_id, employee_id, task_id, file_id, actor or "HR", "admin")
 
 
 # ── Root-cause recovery tool (migration 402) — the PRE-fix bug overwrote employee_onboarding.document_path
@@ -1690,7 +1700,7 @@ def public_onboarding_document_url(token: str, task_id: str, file_id: str, value
 
 
 @router.delete("/public/onboarding/{token}/task/{task_id}/document/{file_id}")
-async def public_onboarding_delete_document(token: str, task_id: str, file_id: str, value: str = ""):
+def public_onboarding_delete_document(token: str, task_id: str, file_id: str, value: str = ""):
     """Step 3 companion: the employee deletes a file THEY uploaded, only while the task is still
     'pending' (migration 402) — same rule as the logged-in portal, see _employee_can_delete_document."""
     prof = _profile_by_token(token)
@@ -1698,7 +1708,7 @@ async def public_onboarding_delete_document(token: str, task_id: str, file_id: s
         raise HTTPException(404, "This onboarding link is invalid or has expired.")
     if not _check_gate(prof, value):
         raise HTTPException(403, "Identity check failed.")
-    return await _do_onboard_delete_document(prof["org_id"], prof["employee_id"], task_id, file_id, "employee", "employee")
+    return _do_onboard_delete_document(prof["org_id"], prof["employee_id"], task_id, file_id, "employee", "employee")
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -2079,9 +2089,9 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, 
         try:
             from app.modules.core.router import assign_role, create_login as core_create_login
             # ensure an app_users row exists so create_login can attach the auth account
-            await assign_role({"email": email, "full_name": employee.get("name"),
-                               "role": (role_name or "sales_rep"), "employee_id": employee_id}, org_id)
-            login = await core_create_login({"email": email}, org_id)
+            await _maybe_await(assign_role({"email": email, "full_name": employee.get("name"),
+                               "role": (role_name or "sales_rep"), "employee_id": employee_id}, org_id))
+            login = await _maybe_await(core_create_login({"email": email}, org_id))
         except Exception as e:
             return {**result, "ok": False, "error": str(e)[:200]}
         url = f"{settings.APP_PUBLIC_URL}/portal"
@@ -2297,11 +2307,11 @@ async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_I
                                   "message": _compliance_block_message(gate_reasons), "reasons": gate_reasons})
     from app.modules.core.router import assign_role, create_login as core_create_login
     role = (body.get("role_name") or "sales_rep").strip()
-    await assign_role({"email": email, "full_name": emp[0].get("name"), "role": role,
+    await _maybe_await(assign_role({"email": email, "full_name": emp[0].get("name"), "role": role,
                        "market": body.get("market"), "store_code": body.get("store_code"),
-                       "store_codes": body.get("store_codes"), "employee_id": employee_id}, org_id)
+                       "store_codes": body.get("store_codes"), "employee_id": employee_id}, org_id))
     try:
-        login = await core_create_login({"email": email}, org_id)
+        login = await _maybe_await(core_create_login({"email": email}, org_id))
     except Exception as e:
         raise HTTPException(400, f"could not create login: {str(e)[:200]}")
     _set_status(so, org_id, employee_id, "provisioned",
@@ -2528,11 +2538,11 @@ def onboarding_me_document_url(task_id: str, file_id: str, authorization: str = 
 
 
 @router.delete("/onboarding/me/task/{task_id}/document/{file_id}")
-async def onboarding_me_delete_document(task_id: str, file_id: str, authorization: str = Header(default="")):
+def onboarding_me_delete_document(task_id: str, file_id: str, authorization: str = Header(default="")):
     """Logged-in portal: the employee deletes a file THEY uploaded, only while the task is still
     'pending' (migration 402) — server-enforced, see _employee_can_delete_document."""
     me = _me_from_token(authorization)
-    res = await _do_onboard_delete_document(me["org_id"], me["employee_id"], task_id, file_id, "employee", "employee")
+    res = _do_onboard_delete_document(me["org_id"], me["employee_id"], task_id, file_id, "employee", "employee")
     _recompute_status(_so(), me["org_id"], me["employee_id"], actor="employee")
     return res
 
@@ -2700,7 +2710,7 @@ async def _notify_return(org_id, employee_id, task, missing, reason):
     return False
 
 
-async def _do_onboard_sign(org_id, employee_id, task_id, form_data, signature, signed_name, who="employee"):
+def _do_onboard_sign(org_id, employee_id, task_id, form_data, signature, signed_name, who="employee"):
     """Online FILL & SIGN: validate the task's configured fields, store the drawn signature as a
     PNG in the private bucket, mark the item submitted. Deterministic — a missing field 400s with
     the exact list, so an incomplete online submission is bounced BEFORE it enters the system."""
@@ -2744,7 +2754,7 @@ async def _do_onboard_sign(org_id, employee_id, task_id, form_data, signature, s
 
 
 @router.post("/public/onboarding/{token}/sign")
-async def public_onboarding_sign(token: str, body: dict):
+def public_onboarding_sign(token: str, body: dict):
     """Credential-less portal: fill & sign an item online (gate re-checked on every call)."""
     prof = _profile_by_token(token)
     if not _token_valid(prof):
@@ -2754,21 +2764,21 @@ async def public_onboarding_sign(token: str, body: dict):
     task = _task_row(prof["org_id"], str((body or {}).get("task_id") or ""))
     if not task or task.get("owner_role") != "employee":
         raise HTTPException(403, "That item can't be signed from this portal.")
-    return await _do_onboard_sign(prof["org_id"], prof["employee_id"], task["id"],
-                                  (body or {}).get("form_data"), (body or {}).get("signature") or "",
-                                  (body or {}).get("signed_name") or "")
+    return _do_onboard_sign(prof["org_id"], prof["employee_id"], task["id"],
+                             (body or {}).get("form_data"), (body or {}).get("signature") or "",
+                             (body or {}).get("signed_name") or "")
 
 
 @router.post("/onboarding/me/sign")
-async def onboarding_me_sign(body: dict, authorization: str = Header(default="")):
+def onboarding_me_sign(body: dict, authorization: str = Header(default="")):
     """Logged-in portal: fill & sign an item online."""
     me = _me_from_token(authorization)
     task = _task_row(me["org_id"], str((body or {}).get("task_id") or ""))
     if not task or task.get("owner_role") != "employee":
         raise HTTPException(403, "That item can't be signed here.")
-    return await _do_onboard_sign(me["org_id"], me["employee_id"], task["id"],
-                                  (body or {}).get("form_data"), (body or {}).get("signature") or "",
-                                  (body or {}).get("signed_name") or "")
+    return _do_onboard_sign(me["org_id"], me["employee_id"], task["id"],
+                             (body or {}).get("form_data"), (body or {}).get("signature") or "",
+                             (body or {}).get("signed_name") or "")
 
 
 @router.post("/onboarding/employee/{employee_id}/task/{task_id}/return")
