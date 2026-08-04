@@ -204,6 +204,7 @@ export default function StoreOpsReportsPage() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <a href="/storeops/salary-advances" className="btn" style={{ fontSize: 13 }}>💵 Salary Advances</a>
           <a href="/storeops/payroll-change-log" className="btn" style={{ fontSize: 13 }}>📜 Payroll Change Log</a>
+          <a href="/storeops/dm-accessory-attribution" className="btn" style={{ fontSize: 13 }}>🗺️ DM Accessory Attribution</a>
         </div>
       </div>
 
