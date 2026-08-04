@@ -3,9 +3,19 @@ import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
+import { ExportButtons, type ExportPayload } from '@/lib/export'
 
 const SEVERITY_COLORS: Record<string, string> = {
   CRITICAL: '#dc2626', HIGH: '#d97706', MEDIUM: '#2563eb', LOW: '#64748b',
+}
+
+// The flag row shape the table + exports read (the endpoint returns more; these are the used fields).
+interface Flag {
+  flag_type?: string; severity?: string; days_active?: number | null
+  epay_salesperson?: string; store_address?: string; mdn?: string; imei?: string
+  phone_model?: string; customer_plan?: string
+  activation_date?: string; transaction_date?: string
+  amount?: number; description?: string
 }
 
 const WINDOWS = [
@@ -109,6 +119,39 @@ export default function FlagsPage() {
     a.download = `flags-${period.replace(' ','-')}.csv`; a.click()
   }
 
+  // WYSIWYG (§3c/§3d) — Send used to take the server report-key path (reportKey "flags", period only), so
+  // notify/report_registry._flags re-queried every flag in the org: type / rep / store / model /
+  // window / activation-month / search were all dropped, and a per-rep compliance send carried the
+  // whole team. Excel · PDF · Print · Send now all render from THESE filtered+sorted rows.
+  const filterDesc = () => [
+    fType && `type: ${fType}`, fRep && `rep: ${fRep}`, fStore && `store: ${fStore}`,
+    fModel && `model: ${fModel}`, fWindow && `window: ${WINDOWS.find(w => w.id === fWindow)?.label || fWindow}`,
+    fActMonth && `activated: ${fActMonth}`, fSearch && `search: “${fSearch}”`,
+  ].filter(Boolean).join(' · ')
+
+  function buildPayload(): ExportPayload {
+    const fd = filterDesc()
+    return {
+      title: 'Flags & Compliance',
+      subtitle: `${period} · ${filtered.length}${filtered.length !== flags.length ? ` of ${flags.length}` : ''} flags · at risk ${fmt(totalAtRisk)}${fd ? ` · ${fd}` : ''}`,
+      filename: `flags-${period.replace(/ /g, '-')}${filtered.length !== flags.length ? '-filtered' : ''}`.toLowerCase(),
+      sheets: [{ name: 'Flags', rows: filtered, columns: [
+        { header: 'Flag Type', get: (f: Flag) => (f.flag_type || '').replace(/_/g, ' ') },
+        { header: 'Severity', get: (f: Flag) => f.severity },
+        { header: 'Days Active', get: (f: Flag) => (f.days_active ?? ''), align: 'right' },
+        { header: 'Rep', get: (f: Flag) => f.epay_salesperson || '' },
+        { header: 'Store', get: (f: Flag) => f.store_address || '' },
+        { header: 'MDN', get: (f: Flag) => f.mdn || '' },
+        { header: 'IMEI', get: (f: Flag) => f.imei || '' },
+        { header: 'Phone Model', get: (f: Flag) => f.phone_model || '' },
+        { header: 'Plan', get: (f: Flag) => f.customer_plan || '' },
+        { header: 'Activated', get: (f: Flag) => String(f.activation_date || f.transaction_date || '').slice(0, 10) },
+        { header: 'Amount', get: (f: Flag) => Math.abs(f.amount || 0), money: true },
+        { header: 'Description', get: (f: Flag) => f.description || '' },
+      ] }],
+    }
+  }
+
   const TH = ({ k, label, align = 'left' }: { k: string; label: string; align?: string }) => (
     <th onClick={() => sortBy(k)} style={{
       padding: '10px 10px', fontSize: 11, fontWeight: 700, color: 'white', textAlign: align as any,
@@ -129,7 +172,8 @@ export default function FlagsPage() {
         </div>
         <div style={{ display: 'inline-flex', gap: 6 }}>
           <button className="btn btn-secondary" onClick={exportCSV}>📥 CSV</button>
-          <SendReportButton reportKey="flags" filters={{ period }} />
+          <ExportButtons payload={buildPayload} compact />
+          <SendReportButton exportPayload={buildPayload} title="Flags & Compliance" compact />
         </div>
       </div>
 

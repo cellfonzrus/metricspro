@@ -3,6 +3,8 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
+import { ExportButtons, type ExportPayload } from '@/lib/export'
+import { buildCommissionExport, payloadToCsv, repLabel, type CommissionExportInput, type CommissionTab } from '../_lib/commissionExport'
 import { useAuth } from '@/lib/auth-context'
 import { carrierMode } from '@/lib/rbac'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -143,6 +145,28 @@ export default function ReportsPage() {
   const showSaleRow  = instSale !== 0 || !showResidRow
 
   const COMP_LABEL: Record<string, string> = { premium: 'Premium Activations', byod: 'BYOD Activations', upgrade: 'Device Upgrades', accessories: 'Accessories', setup: 'Setup Fees', acima: 'ACIMA Lease' }
+
+  // ── EXPORTS (owner bug 2026-08-04: “exporting ONE employee sent EVERY employee’s pay”) ─────────
+  // Root cause + the WYSIWYG contract live in _lib/commissionExport.ts, which is a PURE module
+  // precisely so the scope rule ("individual tab exports the selected rep ALONE") can be proven by
+  // frontend/tools/commission-export-proof.mjs instead of only argued in a comment.
+  // READ-PATH ONLY — no rate, tier, plan rule or stored payout is touched.
+  const exportInput = (): CommissionExportInput => ({
+    tab: tab as CommissionTab, period, isBoost, reps, filtered, currentRep: currentRep || null,
+    filt, cfg, chargebacks, hasInstallment,
+  })
+  const buildPayload = (): ExportPayload => buildCommissionExport(exportInput())
+  function downloadCSV() {
+    const p = buildPayload()
+    const a = document.createElement('a')
+    a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(payloadToCsv(p))
+    a.download = `${p.filename}.csv`; a.click()
+  }
+  // Cheap title for the Send modal's header (buildPayload() itself only runs on click).
+  const exportTitle = tab === 'individual'
+    ? `Commission Statement — ${currentRep ? repLabel(currentRep) : 'no rep selected'}`
+    : tab === 'compensation' ? 'Compensation by Line' : 'Rep Commission Report'
+
   function openDrill(comp: string) {
     setDrillComp(comp)
     const rep = currentRep?.storeops_name || currentRep?.epay_salesperson || ''
@@ -237,19 +261,22 @@ export default function ReportsPage() {
             {period} · {filtered.length}{filterActive ? ` of ${reps.length}` : ''} reps · Total: <strong style={{ color: 'var(--accent)' }}>{fmt(totalPayout)}</strong>
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-secondary" onClick={() => {
-            // WYSIWYG (§3c): export the FILTERED rows, exactly what the standard bar is showing.
-            const csv = ['Rep,Store,Tier,KPIs,PA,BA,UA,Acc GP,Subtotal,Payout']
-            filtered.forEach(r => csv.push(`"${r.epay_salesperson}","${r.store}",${Math.round(r.tier*100)}%,${r.kpis_met}/${r.total_kpis},${r.premium_acts},${r.byod_acts},${r.upgrade_acts},${r.acc_comm?.toFixed(2)},${r.subtotal?.toFixed(2)},${r.total_payout?.toFixed(2)}`))
-            const a = document.createElement('a'); a.href = 'data:text/csv,' + encodeURIComponent(csv.join('\n'))
-            a.download = `commissions-${period.replace(' ','-')}.csv`; a.click()
-          }}>
-            📥 CSV
-          </button>
-          <SendReportButton reportKey="commissions" filters={{ period }} />
+        {/* WYSIWYG (§3c): every format renders from buildPayload() — the FILTERED rows on the list tabs,
+            the SELECTED rep alone on Individual Rep. Send takes `exportPayload` (in-browser render →
+            /notify/send-file), NOT the old server report-key path (reportKey "commissions", period
+            only) which re-queried the whole org and emailed every rep's pay. */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button className="btn btn-secondary" onClick={downloadCSV}>📥 CSV</button>
+          <ExportButtons payload={buildPayload} compact />
+          <SendReportButton exportPayload={buildPayload} title={exportTitle} compact />
         </div>
       </div>
+      {tab === 'individual' && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', margin: '-10px 0 14px' }}>
+          🔒 Exports on this tab contain <b>only {currentRep ? repLabel(currentRep) : 'the selected rep'}</b>.
+          {' '}Switch to Rep Breakdown to export the whole filtered team.
+        </div>
+      )}
 
       {/* RULE FIVE (§3d) standard bar — ABOVE the tabs so the active filter (which drives the always-visible
           header total AND both the Breakdown and Compensation tables) is always visible + clearable, on any tab. */}
