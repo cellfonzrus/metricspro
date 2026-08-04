@@ -436,7 +436,11 @@ rows_base = [BCL.build_row({"product_name": n, "raw_amount": -10, "order_type": 
                            {"org_id": LUX, "period": JUNE}, base_rules)
              for n, _c, _t in MPC.DEFAULT_PROPOSALS]
 check("build_row() byte-identical to base on all 69 names", rows_now == rows_base)
-check("summarize() byte-identical to base", CL.summarize(rows_now) == BCL.summarize(rows_base))
+# leg-split merge note (2026-08-04): summarize() now returns ADDITIVE leg keys; compare only the
+# keys the base version had — build_row() byte-identity below still guards the money shape.
+_BASE_KEYS = set(BCL.summarize(rows_base))
+check("summarize() byte-identical to base on its pre-existing keys",
+      {k: CL.summarize(rows_now)[k] for k in _BASE_KEYS} == BCL.summarize(rows_base))
 # product_class ROWS PRESENT but no index compiled — the mode-off path
 pc_rules = legacy_rules + [{"match_field": "product_name", "match_op": "product_class",
                             "pattern": "residual", "category": "spiff", "sign_rule": "any",
