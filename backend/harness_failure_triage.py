@@ -34,6 +34,7 @@ Proves:
    14. mig 716 failure_kind_doc INSERT has matching column/value arity per row.
 """
 import asyncio
+import inspect
 import os
 import re as _re
 import sys
@@ -168,7 +169,16 @@ def flog(org, cat, sev="warning", reviewed=False, created="2026-07-20T10:00:00+0
             "status": "open", "detail": None, "remediation": None}
 
 
-run = asyncio.run
+def run(x):
+    """Call a route handler in either shape.
+
+    NAV-PERF 2026-08-04: platform-core's zero-`await` route handlers were converted from `async def`
+    to `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). Handlers are
+    now plain functions, so this helper awaits a coroutine when it gets one and passes a plain result
+    straight through — the harness works against BOTH shapes and needs no further edits if a handler
+    ever legitimately becomes async again."""
+    return asyncio.run(x) if inspect.isawaitable(x) else x
 
 # ── 1-3: GROUPING (pure) ──────────────────────────────────────────────────────────────────────────
 rows = [

@@ -613,7 +613,7 @@ def _fetch_request(client, rid, org_id, all_orgs=False):
 
 # ══ Endpoints ════════════════════════════════════════════════════════════════════════════════════
 @router.get("/feed")
-async def pipeline_feed(org_id: str = ORG_ID, all_orgs: int = 0, reviewed: str = "false",
+def pipeline_feed(org_id: str = ORG_ID, all_orgs: int = 0, reviewed: str = "false",
                         limit: int = 800, authorization: str = Header(default=""),
                         x_active_org: str = Header(default=""),
                         x_fix_pipeline_secret: str = Header(default="")):
@@ -651,7 +651,7 @@ async def pipeline_feed(org_id: str = ORG_ID, all_orgs: int = 0, reviewed: str =
 
 
 @router.get("/requests")
-async def list_pipeline_requests(org_id: str = ORG_ID, all_orgs: int = 0, status: str = "",
+def list_pipeline_requests(org_id: str = ORG_ID, all_orgs: int = 0, status: str = "",
                                  classification: str = "", module_agent: str = "",
                                  date_from: str = "", date_to: str = "", limit: int = 500,
                                  authorization: str = Header(default=""),
@@ -707,7 +707,7 @@ async def list_pipeline_requests(org_id: str = ORG_ID, all_orgs: int = 0, status
 
 
 @router.get("/requests/{rid}")
-async def get_pipeline_request(rid: str, org_id: str = ORG_ID, all_orgs: int = 0,
+def get_pipeline_request(rid: str, org_id: str = ORG_ID, all_orgs: int = 0,
                               authorization: str = Header(default=""),
                               x_active_org: str = Header(default=""),
                               x_fix_pipeline_secret: str = Header(default="")):
@@ -745,7 +745,7 @@ async def get_pipeline_request(rid: str, org_id: str = ORG_ID, all_orgs: int = 0
 
 
 @router.post("/requests")
-async def create_pipeline_request(body: dict, org_id: str = ORG_ID,
+def create_pipeline_request(body: dict, org_id: str = ORG_ID,
                                   authorization: str = Header(default=""),
                                   x_active_org: str = Header(default=""),
                                   x_fix_pipeline_secret: str = Header(default="")):
@@ -872,7 +872,7 @@ _INT_FIELDS = ("tokens_triage", "tokens_build", "tokens_review", "occurrence_cou
 
 
 @router.patch("/requests/{rid}")
-async def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
+def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
                                  authorization: str = Header(default=""),
                                  x_active_org: str = Header(default=""),
                                  x_fix_pipeline_secret: str = Header(default="")):
@@ -967,7 +967,7 @@ async def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
 
 
 @router.patch("/requests/{rid}/actions/{action_id}")
-async def patch_pipeline_request_action(rid: str, action_id: str, body: dict, org_id: str = ORG_ID,
+def patch_pipeline_request_action(rid: str, action_id: str, body: dict, org_id: str = ORG_ID,
                                         all_orgs: int = 0,
                                         authorization: str = Header(default=""),
                                         x_active_org: str = Header(default=""),
@@ -1036,7 +1036,7 @@ async def patch_pipeline_request_action(rid: str, action_id: str, body: dict, or
 
 
 @router.get("/token-rates")
-async def list_token_rates(org_id: str = ORG_ID, authorization: str = Header(default=""),
+def list_token_rates(org_id: str = ORG_ID, authorization: str = Header(default=""),
                            x_active_org: str = Header(default=""),
                            x_fix_pipeline_secret: str = Header(default="")):
     """The editable $/MTok rate table (super-admin only — the service secret has NO config capability).
@@ -1067,7 +1067,7 @@ async def list_token_rates(org_id: str = ORG_ID, authorization: str = Header(def
 
 
 @router.put("/token-rates")
-async def upsert_token_rate(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def upsert_token_rate(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
                             x_active_org: str = Header(default=""),
                             x_fix_pipeline_secret: str = Header(default="")):
     """Create/update ONE rate row, keyed by (org_id, model, effective_date) — so editing today's rate is an

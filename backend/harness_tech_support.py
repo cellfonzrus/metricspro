@@ -30,6 +30,7 @@ Proves:
    16. no policy row for the priority → None (NO hard-coded hours).
 """
 import asyncio
+import inspect
 import os
 import sys
 from datetime import datetime, timezone, timedelta
@@ -173,7 +174,16 @@ def role_row(org, name, perms):
     return {"id": nid("role"), "org_id": org, "name": name, "display_name": name, "permissions": perms}
 
 
-run = asyncio.run
+def run(x):
+    """Call a route handler in either shape.
+
+    NAV-PERF 2026-08-04: platform-core's zero-`await` route handlers were converted from `async def`
+    to `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). Handlers are
+    now plain functions, so this helper awaits a coroutine when it gets one and passes a plain result
+    straight through — the harness works against BOTH shapes and needs no further edits if a handler
+    ever legitimately becomes async again."""
+    return asyncio.run(x) if inspect.isawaitable(x) else x
 
 # ── 1-6: GATE ────────────────────────────────────────────────────────────────────────────────────
 def gate_allows(store, uid_ok=True):

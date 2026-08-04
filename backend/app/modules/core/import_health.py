@@ -65,7 +65,9 @@ DEGRADES GRACEFULLY: mig 717 un-run ⇒ every endpoint returns an honest empty p
   popup never fires. A missing sibling table (mig 202, 075, 083 …) just contributes no evidence.
 """
 import json
+import os
 import re
+import threading
 import time
 from datetime import datetime, timezone, timedelta
 
@@ -1122,9 +1124,69 @@ def _gate(authorization, active_org, org_id, *, edit=False):
     return client, caller, org
 
 
+# ── /attention response memo (nav-perf, 2026-08-04) ──────────────────────────────────────────────────
+# MEASURED (production, 2026-08-04): GET /api/v1/core/attention takes **5.1 s** (house) / **5.4 s**
+# (Luxelink) because ~25 registered providers each run several sequential Supabase round trips at a
+# ~170 ms floor. The frontend `AdminAttention` component re-fires it on EVERY navigation (throttled to
+# once per 20 s), so an admin clicking through the menu pays for a full re-scan several times a minute —
+# and, until the sibling `async def` → `def` fix below, paid for it ON THE EVENT LOOP.
+#
+# The payload is a pure function of (org, deep): `collect_attention(client, org, deep)` takes no caller
+# argument, so two admins of the same tenant provably receive the same answer. Memoising it per
+# (org, deep) for a few seconds therefore changes NOTHING a user can observe except latency.
+#
+# MULTI-TENANT (contract §2): the key's org is `_scope_org(caller, org_id)` — the SERVER-resolved acting
+# org, never the raw query param — so one tenant's payload can never be served to another. The
+# permission gate `_gate()` runs on EVERY request, before and independently of the memo, so a
+# non-admin still gets a 403 and a revoked permission takes effect immediately.
+#
+# TUNABLE / REVERSIBLE: `ATTENTION_CACHE_TTL_S` (default 45 s). Set it to 0 to disable the memo
+# entirely — that is a complete, no-deploy revert to today's behaviour. `?fresh=1` always bypasses it
+# (the admin page's "Run full check" button and anyone re-checking after a fix).
+_ATTN_MEMO: dict = {}
+_ATTN_LOCK = threading.Lock()
+_ATTN_MAX = 128          # hard cap: a memo must never become a memory leak on a many-tenant instance
+
+
+def _attention_ttl() -> float:
+    """Seconds to hold a payload. Any unparseable value falls back to the default (never crashes)."""
+    try:
+        return max(0.0, float(os.getenv("ATTENTION_CACHE_TTL_S", "45")))
+    except Exception:
+        return 45.0
+
+
+def _attention_memo_get(org, deep):
+    ttl = _attention_ttl()
+    if not ttl:
+        return None
+    hit = _ATTN_MEMO.get((org, bool(deep)))
+    return hit[1] if hit and hit[0] > time.monotonic() else None
+
+
+def _attention_memo_put(org, deep, payload):
+    ttl = _attention_ttl()
+    if not ttl:
+        return
+    now = time.monotonic()
+    with _ATTN_LOCK:
+        _ATTN_MEMO[(org, bool(deep))] = (now + ttl, payload)
+        if len(_ATTN_MEMO) > _ATTN_MAX:
+            for k in [k for k, v in list(_ATTN_MEMO.items()) if v[0] <= now]:
+                _ATTN_MEMO.pop(k, None)
+            while len(_ATTN_MEMO) > _ATTN_MAX:
+                _ATTN_MEMO.pop(next(iter(_ATTN_MEMO)), None)
+
+
+def _attention_memo_clear():
+    """Drop everything. Used by the harness; also a safe hook for a future 'I fixed it' invalidation."""
+    with _ATTN_LOCK:
+        _ATTN_MEMO.clear()
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────────────────────────────
 @router.get("/import-feeds")
-async def get_import_feeds(org_id: str = ORG_ID, authorization: str = Header(default=""),
+def get_import_feeds(org_id: str = ORG_ID, authorization: str = Header(default=""),
                            x_active_org: str = Header(default="")):
     """The tenant's import registry + live freshness. Derives any missing feeds on read (idempotent), so
     a brand-new tenant is covered without a seed step."""
@@ -1135,7 +1197,7 @@ async def get_import_feeds(org_id: str = ORG_ID, authorization: str = Header(def
 
 
 @router.post("/import-feeds/sync")
-async def sync_import_feeds(org_id: str = ORG_ID, authorization: str = Header(default=""),
+def sync_import_feeds(org_id: str = ORG_ID, authorization: str = Header(default=""),
                             x_active_org: str = Header(default="")):
     """Explicit re-derive. Idempotent: only feed_keys that don't exist yet are inserted; an admin's
     cadence/label/enabled edits and any disabled feed are never touched."""
@@ -1147,7 +1209,7 @@ async def sync_import_feeds(org_id: str = ORG_ID, authorization: str = Header(de
 
 
 @router.post("/import-feeds")
-async def create_import_feed(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def create_import_feed(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
                              x_active_org: str = Header(default="")):
     """Register a feed the auto-derivation can't know about (a vendor emailing a file to a person, etc.)."""
     client, caller, org = _gate(authorization, x_active_org, org_id, edit=True)
@@ -1179,7 +1241,7 @@ _EDITABLE = ("label", "module", "source_type", "cadence_hours", "grace_hours", "
 
 
 @router.put("/import-feeds/{feed_id}")
-async def update_import_feed(feed_id: str, body: dict, org_id: str = ORG_ID,
+def update_import_feed(feed_id: str, body: dict, org_id: str = ORG_ID,
                              authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Edit one feed (cadence / grace / deep link / enabled / snooze). org-scoped on the UPDATE itself."""
     client, caller, org = _gate(authorization, x_active_org, org_id, edit=True)
@@ -1203,7 +1265,7 @@ async def update_import_feed(feed_id: str, body: dict, org_id: str = ORG_ID,
 
 
 @router.delete("/import-feeds/{feed_id}")
-async def delete_import_feed(feed_id: str, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def delete_import_feed(feed_id: str, org_id: str = ORG_ID, authorization: str = Header(default=""),
                              x_active_org: str = Header(default="")):
     """Delete a HAND-ADDED feed. An auto-derived feed cannot be deleted (the next read would recreate it) —
     disable it instead, which the derivation deliberately never reverses."""
@@ -1223,11 +1285,25 @@ async def delete_import_feed(feed_id: str, org_id: str = ORG_ID, authorization: 
 
 
 @router.get("/attention")
-async def get_attention(org_id: str = ORG_ID, deep: int = 0, authorization: str = Header(default=""),
-                        x_active_org: str = Header(default="")):
+def get_attention(org_id: str = ORG_ID, deep: int = 0, fresh: int = 0,
+                  authorization: str = Header(default=""),
+                  x_active_org: str = Header(default="")):
     """CONSOLIDATED admin-attention feed backing the login popup + the persistent indicator.
     deep=0 (default, what the popup calls): cheap providers only — never makes a login slow.
     deep=1 (the admin page / "Run full check"): also runs the heavy scans listed in `deferred`.
-    A non-admin caller is 403'd by _gate — the popup simply never renders for them."""
+    fresh=1: bypass the short per-org memo (see _ATTN_MEMO above) and re-scan now.
+    A non-admin caller is 403'd by _gate — the popup simply never renders for them.
+
+    `def`, NOT `async def` (nav-perf 2026-08-04): the body is entirely blocking Supabase I/O with no
+    `await` anywhere, and this scan takes ~5 s in production. As an `async def` it held the SINGLE
+    uvicorn event loop for those 5 s, so every other request from every other user — every module, every
+    tenant — queued behind one admin's navigation. As a `def`, FastAPI runs it in the threadpool and
+    nothing else stalls. The response is byte-identical either way."""
     client, caller, org = _gate(authorization, x_active_org, org_id)
-    return {**collect_attention(client, org, deep=bool(deep)), "org_id": org}
+    if not fresh:
+        memo = _attention_memo_get(org, deep)
+        if memo is not None:
+            return {**memo, "org_id": org}
+    payload = collect_attention(client, org, deep=bool(deep))
+    _attention_memo_put(org, deep, payload)
+    return {**payload, "org_id": org}

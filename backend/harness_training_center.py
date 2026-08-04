@@ -20,6 +20,7 @@ No database, no network: a recording fake Supabase client feeds the REAL router 
 Run:  cd backend && python3 harness_training_center.py
 """
 import asyncio
+import inspect
 import json
 import os
 import re
@@ -48,7 +49,16 @@ def ok(name, cond, extra=""):
 HOUSE = "00000000-0000-0000-0000-000000000001"
 LUXE = "00000000-0000-0000-0000-0000000000ff"
 OTHER = "00000000-0000-0000-0000-0000000000aa"
-run = asyncio.get_event_loop().run_until_complete if sys.version_info < (3, 10) else asyncio.run
+def run(x):
+    """Call a route handler in either shape.
+
+    NAV-PERF 2026-08-04: platform-core's zero-`await` route handlers were converted from `async def`
+    to `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
+    `async def` doing blocking Supabase I/O froze the whole product for its duration). Handlers are
+    now plain functions, so this helper awaits a coroutine when it gets one and passes a plain result
+    straight through — the harness works against BOTH shapes and needs no further edits if a handler
+    ever legitimately becomes async again."""
+    return asyncio.run(x) if inspect.isawaitable(x) else x
 
 
 # ── recording fake client ────────────────────────────────────────────────────────────────────────

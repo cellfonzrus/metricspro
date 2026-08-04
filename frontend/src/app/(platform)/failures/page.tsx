@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback, useMemo, Fragment } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, CONFIG } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Failure Logs (TRIAGE) — the system log of things the app couldn't complete, grouped by similar nature so
@@ -72,7 +73,9 @@ export default function FailureLogsPage() {
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
-    api('/api/v1/core/failures/config').then((d: any) => {
+    // NAV-PERF 2026-08-04: the threshold/category registry is config (MEASURED 329 ms house /
+    // 341 ms lux). The failure ROWS above stay uncached — they are live incident data.
+    apiCached('/api/v1/core/failures/config', CONFIG).then((d: any) => {
       setThr(Number(d.face_match_threshold) || 0.60); setDisabled(d.disabled_categories || [])
       setTypes(d.types || []); setCanConfigure(!!d.can_configure)
     }).catch(() => {})
