@@ -688,7 +688,19 @@ sw = PA.run_all_due(c9, dates=[D1])
 ok("M3 the sweep accrues both tenants", sw["orgs"] == 2 and sw["runs"] == 2
    and len(c9.rows(PA.ACCRUAL_TABLE)) == 2, f"got {sw}")
 sw2 = PA.run_all_due(c9, dates=[D1])
-ok("M4 the sweep is idempotent (a second pass adds nothing)", len(c9.rows(PA.ACCRUAL_TABLE)) == 2)
+ok("M4 an immediate second sweep pass is THROTTLED (the accrual rides the hourly promote sweep; a "
+   "burst must not re-drive the engine for every tenant)",
+   all("already accrued" in str(d.get("skipped") or "") for d in sw2["detail"])
+   and len(c9.rows(PA.ACCRUAL_TABLE)) == 2, f"got {sw2['detail']}")
+c9.rows("commission_org_config").extend([
+    {"org_id": ORG_A, "accrual_config": {"auto_run": {"min_interval_minutes": 0}}},
+    {"org_id": ORG_B, "accrual_config": {"auto_run": {"min_interval_minutes": 0}}}])
+sw3 = PA.run_all_due(c9, dates=[D1])
+ok("M4b with the throttle off it re-runs and is STILL idempotent (no duplication)",
+   all(d.get("skipped") is None for d in sw3["detail"]) and len(c9.rows(PA.ACCRUAL_TABLE)) == 2,
+   f"got {sw3['detail']}")
+ok("M4c a hand-pressed run_day is NEVER throttled (a human asking for a recompute gets one)",
+   PA.run_day(c9, ORG_A, D1).get("skipped") is None)
 assert_no_pay_writes("M5 the daily sweep", c9)
 ok("M6 the sweep never raises into its caller (a broken tenant is reported, not thrown)",
    PA.run_all_due(FakeClient(missing={"raw_sales", "daily_sales_feed"}), dates=[D1])["ok"] is True)

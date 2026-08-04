@@ -23942,6 +23942,24 @@ def _accrual_keyset(authorization, org_id):
         return None
 
 
+def _accrual_market_map(client, org_id):
+    """{UPPER store_code -> market} for this org. RULE FIVE: the standard filter bar's MARKET control
+    has to filter on something real, and an accrual row only carries a store_code. Resolved here (not
+    guessed in the browser) off the same store_mapping every other commcalc surface uses. Degrades to
+    an empty map — a missing mapping means "(no market)", never a hidden row."""
+    out = {}
+    try:
+        rows = (client.schema('commcalc').table('store_mapping').select('store_code,market')
+                .eq('org_id', org_id).limit(5000).execute().data) or []
+    except Exception:
+        return out
+    for r in rows:
+        code = str(r.get('store_code') or '').strip()
+        if code:
+            out[code.upper()] = (r.get('market') or '').strip()
+    return out
+
+
 def _accrual_day_param(v, label="date"):
     d = payout_accrual.parse_day(v, None) if v else _date.today()
     if d is None:
@@ -23959,10 +23977,19 @@ async def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: 
     on a payslip, and nothing here has changed anyone's pay."""
     require_org(org_id)
     d = _accrual_day_param(as_of, "as_of")
-    return payout_accrual.accrued(sb(), org_id, d,
-                                  employee_key=(employee_key or None) and employee_key.strip(),
-                                  store_code=(store_code or None) and store_code.strip(),
-                                  keyset=_accrual_keyset(authorization, org_id))
+    client = sb()
+    res = payout_accrual.accrued(client, org_id, d,
+                                 employee_key=(employee_key or None) and employee_key.strip(),
+                                 store_code=(store_code or None) and store_code.strip(),
+                                 keyset=_accrual_keyset(authorization, org_id))
+    # ADDITIVE `markets` (RULE FIVE: the market filter needs a real value to filter on). The spec's
+    # keys are untouched, so the cross-module consumer is unaffected.
+    if res.get("ready"):
+        mkt = _accrual_market_map(client, org_id)
+        for e in res.get("employees") or []:
+            e["markets"] = sorted({mkt.get(str(c).upper(), "") for c in (e.get("store_codes") or [])
+                                   if mkt.get(str(c).upper())})
+    return res
 
 
 @router.get("/payout/accrual")
@@ -23984,6 +24011,7 @@ async def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str 
         if payout_accrual._table_missing(ex):
             return {"ready": False, "rows": [], "note": payout_accrual._MISSING_NOTE}
         raise
+    mkt = _accrual_market_map(sb(), org_id)
     out = []
     for r in rows:
         code = str(r.get("store_code") or "").strip()
@@ -23993,6 +24021,7 @@ async def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str 
                     "employee_key": r.get("employee_key"),
                     "name": r.get("employee_name") or r.get("employee_key"),
                     "store_code": code,
+                    "market": mkt.get(code.upper(), ""),
                     "base_amount": safe_float(r.get("base_amount")),
                     "tier_amount": safe_float(r.get("tier_amount")),
                     "total_amount": safe_float(r.get("total_amount")),

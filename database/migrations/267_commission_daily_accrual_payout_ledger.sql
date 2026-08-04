@@ -63,7 +63,7 @@
 --     {"enabled": true,
 --      "tier_basis": "none",                  -- "none" = accrue un-tiered (default) | "as_computed"
 --      "tier_recognition": {"mode": "on_run_available", "day_of_month": null, "lookback_months": 3},
---      "auto_run": {"enabled": true, "days_back": 1}}
+--      "auto_run": {"enabled": true, "days_back": 1, "min_interval_minutes": 50}}
 --   tier_recognition.mode
 --      "on_run_available" (default) — recognize the prior month's true-up as soon as that month's
 --                                     commission run exists (earliest = the 1st of the next month).
@@ -71,6 +71,10 @@
 --                                     month end), and still only once the run exists.
 --   auto_run.days_back — how many days back of accrual the daily sweep re-runs (1 = yesterday+today),
 --                        clamped 0..7 in code so a typo can never turn the sweep into a month rewrite.
+--   auto_run.min_interval_minutes — throttles the SWEEP only (0 = no throttle; a hand-pressed
+--                        POST /payout/accrual/run is never throttled). The accrual rides the hourly
+--                        promote sweep; this stops a burst of promote calls from re-driving the pay
+--                        engine for every tenant several times inside one hour for no new information.
 --
 -- ADDITIVE + IDEMPOTENT. Safe to re-run. RLS enabled with ZERO policies; no GRANT, no CREATE POLICY,
 -- no anon/authenticated (contract §5) — all access is the backend service role.
@@ -161,7 +165,8 @@ ALTER TABLE commcalc.commission_org_config
 COMMENT ON COLUMN commcalc.commission_org_config.accrual_config IS
   'Daily commission accrual settings. NULL = code default '
   '{"enabled":true,"tier_basis":"none","tier_recognition":{"mode":"on_run_available",'
-  '"day_of_month":null,"lookback_months":3},"auto_run":{"enabled":true,"days_back":1}}. '
+  '"day_of_month":null,"lookback_months":3},"auto_run":{"enabled":true,"days_back":1,'
+  '"min_interval_minutes":50}}. '
   'tier_recognition.mode: on_run_available | day_of_month (of the FOLLOWING month, clamped to month '
   'end; still gated on the prior month''s commission run existing). Accruals are expected numbers — '
   'changing this never changes what anyone is paid.';

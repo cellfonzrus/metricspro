@@ -95,7 +95,10 @@ CODE_DEFAULT = {
     # 'as_computed' — accrue the day's own tier multiplier (only sane when tiers are day-attainable).
     "tier_basis": "none",
     "tier_recognition": {"mode": "on_run_available", "day_of_month": None, "lookback_months": 3},
-    "auto_run": {"enabled": True, "days_back": 1},
+    # min_interval_minutes throttles the SWEEP only (never a hand-pressed run): the accrual rides the
+    # hourly promote sweep, and without this a burst of promote calls would re-drive preview() for
+    # every tenant several times inside one hour for no new information.
+    "auto_run": {"enabled": True, "days_back": 1, "min_interval_minutes": 50},
 }
 TIER_BASES = ("none", "as_computed")
 RECOGNITION_MODES = ("on_run_available", "day_of_month")
@@ -147,6 +150,11 @@ def normalize_config(raw):
         except Exception:
             db = CODE_DEFAULT["auto_run"]["days_back"]
         cfg["auto_run"]["days_back"] = min(7, max(0, db))
+        try:
+            mi = int(ar.get("min_interval_minutes"))
+        except Exception:
+            mi = CODE_DEFAULT["auto_run"]["min_interval_minutes"]
+        cfg["auto_run"]["min_interval_minutes"] = min(1440, max(0, mi))
     return cfg
 
 
@@ -1051,6 +1059,31 @@ def active_orgs(client, days):
     return sorted(seen)
 
 
+def _recently_computed(client, org_id, day, minutes):
+    """True when this (org, date) was accrued less than `minutes` ago. Throttles the SWEEP only —
+    `POST /payout/accrual/run` never consults it, because a human pressing the button is asking for a
+    recompute NOW. Fails OPEN (returns False) so a read error can only cause an extra run, never a
+    silently skipped one."""
+    if not minutes:
+        return False
+    try:
+        rows = (client.schema("commcalc").table(ACCRUAL_TABLE).select("computed_at")
+                .eq("org_id", org_id).eq("work_date", day.isoformat())
+                .order("computed_at", desc=True).limit(1).execute().data) or []
+    except Exception:
+        return False
+    if not rows:
+        return False
+    try:
+        ts = str(rows[0].get("computed_at") or "").replace("Z", "+00:00")
+        last = _datetime.fromisoformat(ts)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=_timezone.utc)
+    except Exception:
+        return False
+    return (_datetime.now(_timezone.utc) - last) < _timedelta(minutes=minutes)
+
+
 def run_all_due(client, dates=None, org_ids=None, today=None):
     """The DAILY AUTO-RUN. Re-accrues yesterday + today (per-tenant `auto_run.days_back`) for every
     tenant with sales on those dates.
@@ -1075,8 +1108,13 @@ def run_all_due(client, dates=None, org_ids=None, today=None):
                 out.append({"org_id": oid, "skipped": "accrual auto-run disabled"})
                 continue
             back = int((cfg.get("auto_run") or {}).get("days_back", 1))
+            mins = int((cfg.get("auto_run") or {}).get("min_interval_minutes", 50))
             days = dates or [today - _timedelta(days=i) for i in range(back, -1, -1)]
             for d in days:
+                if mins and _recently_computed(client, oid, d, mins):
+                    out.append({"org_id": oid, "date": d.isoformat(),
+                                "skipped": f"already accrued within {mins} min"})
+                    continue
                 res = run_day(client, oid, d, cfg=cfg)
                 ran += 1
                 out.append({"org_id": oid, "date": d.isoformat(),
