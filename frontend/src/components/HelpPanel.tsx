@@ -11,6 +11,8 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { api } from '@/lib/client'
+import TourRunner from '@/components/TourRunner'
+import { Tour, fetchTours, startTour, tourDoneAt } from '@/lib/tours'
 
 // Minimal, SAFE markdown → JSX (no dangerouslySetInnerHTML): headings, bullets, blank-line spacing,
 // inline **bold** and `code`. Anything unrecognized renders as plain text.
@@ -56,6 +58,9 @@ export default function HelpPanel() {
   const [loading, setLoading] = useState(false)
   const [doc, setDoc] = useState<{ title?: string; user_md?: string } | null>(null)
   const [loadedPath, setLoadedPath] = useState<string | null>(null)
+  // Guided walk-throughs that touch THIS page (mig 720). Fail-silent exactly like the doc above: an
+  // un-run migration or any error means the section simply does not render.
+  const [tours, setTours] = useState<Tour[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -67,6 +72,7 @@ export default function HelpPanel() {
     } finally {
       setLoadedPath(pathname); setLoading(false)
     }
+    fetchTours({ path: pathname }).then(r => setTours(r.tours)).catch(() => setTours([]))
   }, [pathname])
 
   // Re-resolve when the panel opens (or the page changed while it was open).
@@ -76,6 +82,11 @@ export default function HelpPanel() {
 
   return (
     <>
+      {/* The guided walk-through overlay. It lives HERE (and not in layout.tsx, a SHARED file) because
+          HelpPanel is already mounted in the platform layout: the runner is therefore present on every
+          page and survives client-side navigation, which is what lets one tour walk the user across
+          several pages. It renders nothing at all until a tour is started. */}
+      <TourRunner />
       <button onClick={() => setOpen(true)} title="Help for this page"
         aria-label="Open help" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text2)',
           background: 'white', border: '1px solid var(--border)', borderRadius: 8, width: 30, height: 30,
@@ -93,6 +104,39 @@ export default function HelpPanel() {
                 style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--text3)' }}>×</button>
             </div>
             <div style={{ padding: 16, overflowY: 'auto', flex: 1 }}>
+              {tours.length > 0 && (
+                <div style={{ marginBottom: 16, paddingBottom: 14, borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em',
+                    textTransform: 'uppercase', color: 'var(--text3)', marginBottom: 8 }}>
+                    Walk me through it
+                  </div>
+                  {tours.map(t => {
+                    const done = tourDoneAt(t.slug)
+                    return (
+                      <button key={t.slug} onClick={() => { setOpen(false); startTour(t.slug) }}
+                        style={{ display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
+                          background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 10,
+                          padding: '9px 11px', marginBottom: 6 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>
+                          ▶︎ {t.title} {done && <span style={{ color: '#16794a', fontWeight: 600 }}>✓</span>}
+                        </div>
+                        {t.description && (
+                          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.45 }}>
+                            {t.description}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 3 }}>
+                          {t.step_count || 0} steps{t.est_minutes ? ` · about ${t.est_minutes} min` : ''}
+                        </div>
+                      </button>
+                    )
+                  })}
+                  <Link href="/training" onClick={() => setOpen(false)}
+                    style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', textDecoration: 'none' }}>
+                    All walk-throughs →
+                  </Link>
+                </div>
+              )}
               {loading ? (
                 <div style={{ color: 'var(--text3)', fontSize: 13 }}>Loading help…</div>
               ) : doc?.user_md ? (
