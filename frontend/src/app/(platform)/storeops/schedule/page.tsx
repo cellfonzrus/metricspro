@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { api, localToday, parseLocalDate, addDays, mondayOf } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { buildScheduleExport } from '../lib/scheduleExport'
 
 interface Shift {
   id: number
@@ -323,30 +324,20 @@ export default function SchedulePage() {
     } finally { setBusy(false) }
   }
 
-  // ── export payload (current view) ──
+  // ── export payload (current view) ── delegates to the pure buildScheduleExport (storeops/lib/
+  // scheduleExport.ts) so SendReportButton renders from EXACTLY this — see the export-privacy fix
+  // note below on the Send button.
   function buildPayload(): ExportPayload {
-    const rows = (view === 'store' ? filteredStores : filteredEmps).map((r: any) => {
-      const isStore = view === 'store'
-      const label = isStore ? r.store_code : r.name
-      const rowShifts = isStore
-        ? shiftsOf(s => s.store_code === r.store_code)
-        : shiftsOf(s => s.employee_name === r.name)
-      const cells = weekDates.map(d => rowShifts.filter(s => s.shift_date === d)
-        .map(s => `${isStore ? s.employee_name : s.store_code} ${s.start_time}-${s.end_time}`).join('; '))
-      const total = rowShifts.reduce((a, s) => a + (s.scheduled_hours || 0), 0)
-      return { label, cells, total }
+    return buildScheduleExport({
+      view,
+      weekStartLabel: parseLocalDate(weekStart).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
+      weekStartIso: weekStart,
+      weekDates: weekDates.map(d => ({ iso: d, ...dayLabel(d) })),
+      filterMarkets,
+      filteredStores: filteredStores.map(s => ({ store_code: s.store_code })),
+      filteredEmps: filteredEmps.map(e => ({ name: e.name })),
+      shifts,
     })
-    const cols = [
-      { header: view === 'store' ? 'Store' : 'Employee', get: (r: any) => r.label },
-      ...weekDates.map((d, i) => { const { dow, md } = dayLabel(d); return { header: `${dow} ${md}`, get: (r: any) => r.cells[i] } }),
-      { header: 'Total Hrs', get: (r: any) => r.total.toFixed(1), align: 'right' as const },
-    ]
-    return {
-      title: `Schedule — week of ${parseLocalDate(weekStart).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`,
-      subtitle: `${view === 'store' ? 'By store' : 'By employee'}${filterMarkets.length ? ` · ${filterMarkets.join(', ')}` : ''}`,
-      filename: `schedule_${weekStart}`,
-      sheets: [{ name: 'Schedule', columns: cols, rows }],
-    }
   }
 
   const today = localToday()
@@ -426,7 +417,12 @@ export default function SchedulePage() {
           <button className="btn btn-secondary" disabled={busy} onClick={saveTemplate} title="Save this week as the recurring weekly template">⭐ Save template</button>
           <button className="btn btn-secondary" disabled={busy} onClick={applyTemplate} title="Fill this week from the saved templates">📌 Apply template</button>
           <ExportButtons payload={buildPayload} compact />
-          <SendReportButton reportKey="storeops_schedule" filters={{ week_start: weekStart, ...(filterStore ? { store_code: filterStore } : {}) }} compact />
+          {/* 2026-08-04 export-privacy fix: was reportKey="storeops_schedule" filters={week_start, store_code} —
+              the backend re-query dropped the on-screen MARKET filter (only forwarded store_code), so
+              filtering by market alone and hitting Send emailed/WhatsApp'd every store's schedule org-wide.
+              Now renders from the same buildPayload() the local Excel/PDF/Print buttons use — WYSIWYG,
+              honors market + store + view exactly as shown on screen. See docs/handoffs/people.md. */}
+          <SendReportButton exportPayload={buildPayload} compact />
         </div>
       </div>
 

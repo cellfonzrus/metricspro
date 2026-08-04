@@ -40,6 +40,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# commission export proof harness scratch (tools/commission-export-proof.mjs)
+# export-proof harness scratch (tools/*-export-proof.mjs — commission + people domains)
 .proof-*
 tsconfig.proof-*.json
