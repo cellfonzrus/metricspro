@@ -479,6 +479,72 @@ try:
 except Exception as e:                                                   # pragma: no cover
     ck("F3 the whole app still imports and registers its full route surface", False, repr(e)[:160])
 
+# ══ G. THROUGH THE REAL ASGI STACK ═════════════════════════════════════════════════════════════════
+print("\nG. converted handlers still serve correctly through the real FastAPI/Starlette stack")
+try:
+    from fastapi.testclient import TestClient                             # noqa: E402
+    from app.modules.commcalc import router as CR                         # noqa: E402
+
+    class _T:
+        def __init__(s, rows): s.rows = rows
+        def select(s, *a, **k): return s
+        def eq(s, *a, **k): return s
+        def in_(s, *a, **k): return s
+        def limit(s, *a, **k): return s
+        def order(s, *a, **k): return s
+        def execute(s): return type("X", (), {"data": s.rows})()
+
+    class _S:
+        def table(s, n): return _T([])
+        def rpc(s, *a, **k): return _T([])
+
+    class _C:
+        def schema(s, n): return _S()
+        def table(s, n): return _T([])
+
+    _orig_sb = CR.sb
+    CR.sb = lambda: _C()
+    _probe_app = FastAPI()
+    # CR.router already carries prefix="/commcalc" (router.py:60); main.py mounts it at "/api/v1".
+    _probe_app.include_router(CR.router, prefix="/api/v1")
+    tc = TestClient(_probe_app)
+    ORG = "00000000-0000-0000-0000-000000000001"
+
+    # A plain GET on a converted handler.
+    r1 = tc.get("/api/v1/commcalc/markets", params={"org_id": ORG})
+    ck("G1 a converted GET handler answers 200 through the real stack", r1.status_code == 200,
+       f"/markets -> {r1.status_code}")
+
+    # THE shape most at risk: Optional[List[str]] = Query(default=None) REPEATED params. FastAPI binds
+    # these identically for sync and async endpoints, but this is the one place a `def` conversion
+    # could plausibly have changed how a param arrives, so it is proven rather than assumed.
+    r2 = tc.get("/api/v1/commcalc/exec-mtd/July%202026",
+                params=[("org_id", ORG), ("stores", "A"), ("stores", "B"), ("markets", "LI")])
+    ck("G2 repeated Query(default=None) params still bind on a sync handler",
+       r2.status_code == 200 and r2.json().get("applied", {}).get("stores") == ["a", "b"],
+       f"exec-mtd -> {r2.status_code}, applied={r2.json().get('applied') if r2.status_code == 200 else ''}")
+
+    # A converted handler that takes BackgroundTasks — the enqueue path must still work.
+    r3 = tc.post("/api/v1/commcalc/calculate/July%202026", params={"org_id": ORG})
+    ck("G3 POST /calculate (BackgroundTasks, now sync) still returns 'started'",
+       r3.status_code == 200 and r3.json().get("status") == "started",
+       f"{r3.status_code} {str(r3.json())[:90]}")
+
+    # A handler with a Header param.
+    r4 = tc.get("/api/v1/commcalc/team/July%202026/snapshot", params={"org_id": ORG},
+                headers={"authorization": ""})
+    ck("G4 team_snapshot (converted, Header param, calls the converted get_targets_summary "
+       "WITHOUT await) answers without a TypeError",
+       r4.status_code in (200, 400, 403), f"-> {r4.status_code} {r4.text[:110]}")
+
+    # And a handler DELIBERATELY left async still works — the package did not half-convert anything.
+    r5 = tc.get("/api/v1/commcalc/gp/July%202026", params={"org_id": ORG})
+    ck("G5 a deliberately-still-async handler (get_gp_report) also answers",
+       r5.status_code in (200, 400, 403), f"-> {r5.status_code}")
+    CR.sb = _orig_sb
+except Exception as e:                                                    # pragma: no cover
+    ck("G1 a converted GET handler answers 200 through the real stack", False, repr(e)[:200])
+
 print(f"\n{'=' * 96}\nASYNC-SWEEP: {PASS} passed, {FAIL} failed")
 if FAILED:
     for f in FAILED:
