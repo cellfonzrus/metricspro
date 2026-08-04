@@ -1,0 +1,97 @@
+{
+  "pack": "platform-release-notes",
+  "version": 1,
+  "note": "PLATFORM-WIDE What's New / Improvements entries, loaded into the HOUSE org by app/modules/core/whats_new_seed.py on the house sync pass (SEED_VERSION 9). Every tenant's ADMIN STAFF read these; a tenant can add its own entries, which only its own admins see. Written for an owner/admin, not a developer. `status: in_progress` items are badged 'Coming shortly' rather than announced as done.",
+  "entries": [
+    {
+      "slug": "eep-envelope-expenses",
+      "category": "new_feature",
+      "module": "closing",
+      "status": "shipped",
+      "released_at": "2026-08-04",
+      "title": "Cash taken out of the envelope is now recorded on the closing",
+      "body": "When a rep closes the day they now list each payment made out of the envelope on its own line — with a category, an amount, who it was for and what it was for. You approve or reject each line on the verification screen, and every approved line comes straight off what that store has to deposit.",
+      "deep_link": "/closing/submit"
+    },
+    {
+      "slug": "eep-envelope-payout",
+      "category": "new_feature",
+      "module": "closing",
+      "status": "shipped",
+      "released_at": "2026-08-04",
+      "title": "Pay commission, salary and expenses from the envelope",
+      "body": "A new page shows exactly how much cash is due out of a store today and works out the fewest envelopes that cover each payment — so you open two envelopes instead of nine. You confirm what was taken and what is left, and the deposit figure updates itself.",
+      "deep_link": "/closing/envelope-payout"
+    },
+    {
+      "slug": "daily-commission-accrual",
+      "category": "new_feature",
+      "module": "commissions",
+      "status": "shipped",
+      "released_at": "2026-08-04",
+      "title": "See what reps have earned so far, mid-month",
+      "body": "The new Daily Commission page shows what each rep looks to have earned to date, what has already been advanced to them in cash, and the balance between the two. It is an early estimate for managing the month — it never changes what anyone is actually paid.",
+      "deep_link": "/commcalc/daily-commission"
+    },
+    {
+      "slug": "salary-advances-additional-payroll",
+      "category": "new_feature",
+      "module": "storeops",
+      "status": "shipped",
+      "released_at": "2026-08-04",
+      "title": "Salary advances and additional payroll",
+      "body": "Advances given to staff and one-off additional payroll amounts are now recorded against the person instead of living in someone's notebook, and they flow through to what is owed at payroll time.",
+      "deep_link": "/storeops/salary-advances"
+    },
+    {
+      "slug": "training-center",
+      "category": "new_feature",
+      "module": "training",
+      "status": "shipped",
+      "released_at": "2026-08-04",
+      "title": "Training Center — guided walk-throughs of the main jobs",
+      "body": "Instead of a manual nobody reads, the app can now walk a person through a job step by step on the real page: it points at each control and explains it while they click through it themselves. Closing, envelope payouts, commission, time clock, expenses and asset charges are covered, and you can reword any of it for the way your business works.",
+      "deep_link": "/training"
+    },
+    {
+      "slug": "store-cash-on-hand",
+      "category": "new_feature",
+      "module": "closing",
+      "status": "in_progress",
+      "released_at": "2026-08-04",
+      "title": "Store Cash on Hand report",
+      "body": "A single view of how much cash each store is actually holding right now, after everything paid out and everything deposited. Being finished — it will appear under Daily Closing.",
+      "deep_link": "/closing/cash-position"
+    },
+    {
+      "slug": "deposit-net-of-expenses",
+      "category": "improvement",
+      "module": "closing",
+      "status": "shipped",
+      "released_at": "2026-08-04",
+      "title": "Deposit and pickup figures are now net of what was paid out",
+      "body": "The amount a store is expected to deposit, and the amount a pickup should collect, now subtract approved envelope expenses and any cash withdrawn for payouts. Previously those figures showed the gross takings and every payout looked like a shortage.",
+      "deep_link": "/closing/cash-position"
+    },
+    {
+      "slug": "market-store-cascade-filters",
+      "category": "improvement",
+      "module": "closing",
+      "status": "in_progress",
+      "released_at": "2026-08-04",
+      "title": "Picking a market now narrows the store list",
+      "body": "On the reporting filters, choosing a market will filter the store list to that market's stores, and stores become tick boxes so you can pick several without holding a key down. Rolling out across the report pages.",
+      "deep_link": "/closing/expenses-report"
+    },
+    {
+      "slug": "dm-accessory-target-attribution",
+      "category": "improvement",
+      "module": "commissions",
+      "status": "in_progress",
+      "released_at": "2026-08-04",
+      "title": "Accessory targets show who the sale was credited to",
+      "body": "District managers will be able to see how accessory sales were attributed between the rep who rang the sale and the store, so a target that looks missed can be checked rather than argued about. In build.",
+      "deep_link": "/commcalc/targets/accessories"
+    }
+  ]
+}

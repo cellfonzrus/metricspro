@@ -481,12 +481,19 @@ ok("F7b …zero counts in every group",
    all(zero["counts"][k] == 0 for k in ("total", "error", "warning", "import", "mapping",
                                         "duplicate", "config", "system")), zero["counts"])
 ok("F7c …and no provider errored on the way", zero["provider_errors"] == [], zero["provider_errors"])
+# 2026-08-04: the guard's LITERAL changed when the What's New tabs landed (mig 721) — the component must
+# now also render when there are unseen UPDATES and no warnings. Its MEANING is unchanged and is what is
+# asserted here: one guard, covering pill AND popup, that returns null when there is nothing to say.
+ZERO_GUARD = "if (!allowed || (!warnItems.length && !unseenTotal)) return null"
 ok("F8 the frontend renders NOTHING for that payload (source parity: the single null-guard)",
-   "if (!allowed || !data || !(data.items || []).length) return null" in AD)
-ok("F8b …and the popup can only be OPENED when items exist",
+   ZERO_GUARD in AD)
+ok("F8a …and the zero state still requires BOTH to be empty (an update alone may render; a clean "
+   "system with neither renders nothing)",
+   "!warnItems.length && !unseenTotal" in AD)
+ok("F8b …and the WARNINGS popup can only be OPENED when items exist (semantics untouched)",
    "if (!alive || !d || !(d.items || []).length) return" in AD)
 ok("F8c the pill is inside the same guarded return (no separate render path)",
-   AD.index("if (!allowed || !data || !(data.items || []).length) return null") < AD.index("needs attention"))
+   AD.index(ZERO_GUARD) < AD.index("needs attention"))
 
 # permissions: unchanged gate, still admin-only, still clamped
 personas = [
