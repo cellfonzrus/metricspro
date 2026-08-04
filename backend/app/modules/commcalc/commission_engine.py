@@ -1246,6 +1246,29 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                 if _b != "per_line" and _ucfg.get("exclude_accessory_units"):
                     _needs_acc = True
     _acc_fn = _gate.accessory_predicate(client, org_id) if (_gate is not None and _needs_acc) else None
+    # ── FINANCING TIERS (mig 273; owner directive + answers 2026-08-04) ────────────────────────
+    # "target based commission payout right now we have flat payment, need it tiered levels" +
+    # "achieved rate applies to that months sales, attainment is monthly".
+    # A rule-scoped commission_tier row carrying a `unit_rate` replaces that rule's flat per-unit amount
+    # with the rate the store's MONTHLY attainment earned, applied to EVERY unit of the month.
+    # INERT BY CONSTRUCTION: with no such tier row `build_context` returns active=False and not one
+    # number below changes - the negative control in financing_tier_proof.py asserts byte identity.
+    # The matcher and the per-device unit collapse are INJECTED, so the store's unit count is produced
+    # by exactly the code that decides what pays (never a second copy of the matching logic).
+    _fin, _fin_ctx = None, None
+    try:
+        from app.modules.commcalc import financing_tiers as _fin
+        _fin_ctx = _fin.build_context(
+            client, org_id, _pvariants(period), plans, valid, _rule_matches,
+            paying_lines=(_gate.select_paying_lines if _gate is not None else None),
+            basis_by_rule=_basis_by_rule, unit_cfg=_ucfg, is_accessory=_acc_fn,
+            is_excluded=((lambda _r: _gate.exclusion_hit(_r, _excl_rules) is not None)
+                         if (_gate is not None and _excl_rules) else None))
+    except Exception as _fte:
+        print(f"WARN financing tiers unavailable: {_fte}")
+        _fin, _fin_ctx = None, None
+    _fin_on = bool(_fin is not None and _fin_ctx and _fin_ctx.get("active"))
+    _fin_notices = []
     # DEVICE SET-UP FEE / ACTIVATION FEE as its OWN pay item (owner 2026-08-01, mig 263).
     # The Boost engine has paid a % of the set-up fee COLLECTED since day one (calculator.py); every
     # other carrier had no way to. This is that pay item for the plan engine. It is NOT a commission
@@ -1376,6 +1399,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         matched_ids = set() if coverage else None   # coverage: which lines ANY rule matched
         qualifying_units = 0
         flat_pending = {}     # rule_id -> amount (flat bonus, paid once if any qualifying match)
+        _fin_lines = {}       # rule_id -> [(row, line_detail, paid)] for financing-tier re-pricing
         base_total = 0.0      # payout that is NOT tiered
         tiered_total = 0.0    # payout that IS tiered (scaled by multiplier later)
 
@@ -1536,6 +1560,8 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                 rb["payout"] = round(rb["payout"] + pay, 2)
                 if ldet is not None:
                     ldet["amount"] = pay
+                if _fin_on and kind == "flat_per_unit" and str(rid) in (_fin_ctx.get("rules") or {}):
+                    _fin_lines.setdefault(str(rid), []).append((row, ldet, pay))
                 if is_tiered:
                     tiered_total += pay
                 else:
@@ -1552,6 +1578,40 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                     tiered_total += amt
                 else:
                     base_total += amt
+
+        # FINANCING TIER RATES (mig 273) - replace the flat per-unit amount with the rate the
+        # store's MONTHLY attainment earned, on EVERY unit of the month (owner 2026-08-04). Runs only
+        # for rules the tenant attached rate tiers to; `_fin_lines` is empty for every other rule and
+        # for every tenant that has configured none, so the arithmetic below is untouched. A rule whose
+        # store reached NO tier (or whose store has no target) is reported and keeps its flat amount -
+        # a missing target never silently drops anyone to a bottom rate.
+        _fin_applied = []
+        if _fin_on and _fin_lines:
+            for _frid, _fitems in _fin_lines.items():
+                try:
+                    _adj = _fin.apply_rule_tiers(_fin_ctx, _frid, store, e["name"], _fitems)
+                except Exception as _fae:
+                    print(f"WARN financing tier pricing skipped for rule {_frid}: {_fae}")
+                    continue
+                if not _adj:
+                    continue
+                if len(_fin_notices) < _GUARD_CAP:
+                    _fin_notices.append(_adj)
+                if not _adj.get("applied"):
+                    continue
+                _fdelta = _adj["delta"]
+                _frule = (_fin_ctx["rules"].get(_frid) or {}).get("rule") or {}
+                if bool(_frule.get("tiered")):
+                    tiered_total += _fdelta
+                else:
+                    base_total += _fdelta
+                _rbf = rule_breakdown.get(_frule.get("id"))
+                if _rbf is not None:
+                    _rbf["payout"] = round(_rbf["payout"] + _fdelta, 2)
+                    _rbf["financing_tier"] = _adj["tier"]
+                    _rbf["financing_unit_rate"] = _adj["unit_rate"]
+                    _rbf["financing_attainment_pct"] = _adj["attainment_pct"]
+                _fin_applied.append(_adj)
 
         # TIER ATTAINMENT (mig 232): a plan may DEFINE what its tier counts (distinct activation
         # transactions, matched lines, …). Legacy plans return (None, 'rule_units') → the historic
@@ -1611,6 +1671,10 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
             "rules": sorted([rb for rb in rule_breakdown.values() if (detail or rb["matched_lines"])],
                             key=lambda x: -(x.get("payout") or 0)),
         })
+        if _fin_applied:
+            # its OWN key, added only when a tier actually re-priced this rep's units - so a tenant with
+            # no financing tiers receives a rep row byte-identical to the pre-2026-08-04 engine.
+            out_rows[-1]["financing_tiers"] = _fin_applied
         if _sf_pay or (_sf_on and e["name"] in _sf_guard["by_rep"]):
             # its OWN line on the rep row — never blended into base/tiered, never into an accessory total
             out_rows[-1]["setup_fee_comm"] = _sf_pay
@@ -1647,6 +1711,23 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
            "note": None}
     # PAY GATE REPORT - emitted ONLY when the gate actually changed something, so every tenant it
     # does not touch receives a result dict byte-identical to the pre-2026-08-01 engine.
+    # Emitted when the tenant has configured financing tiers AT ALL - including the case where the
+    # context refused to activate them (a rate tier on a %-of-basis rule), so a misconfiguration is
+    # visible instead of silently doing nothing. A tenant with NO tier rows produces neither, and its
+    # result dict is byte-identical to the pre-2026-08-04 engine.
+    if _fin_notices or ((_fin_ctx or {}).get("notes")):
+        out["financing_tiers"] = {
+            "applied": [n for n in _fin_notices if n.get("applied")],
+            "not_applied": [n for n in _fin_notices if not n.get("applied")],
+            "rules": [{"rule_id": k, "label": v["label"], "scope": v["scope"], "mode": v["mode"],
+                       "vendor_key": v["vendor_key"], "flat_amount": v["flat_amount"],
+                       "tiers": v["tiers"]}
+                      for k, v in ((_fin_ctx or {}).get("rules") or {}).items()],
+            "notes": ((_fin_ctx or {}).get("notes") or []),
+            "basis": ("The tier a store reaches sets the per-unit rate for EVERY financing unit of that "
+                      "month (whole-month), and attainment is measured monthly against the store's "
+                      "financing target - owner decision 2026-08-04."),
+        }
     if _sf_on and (_sf_guard["collected"] or _sf_guard["paid"]):
         _sf_guard["config_source"] = "tenant" if (_sf_cfg or {}).get("_stored") else "code_default"
         _sf_guard["keywords"] = _sf_kws

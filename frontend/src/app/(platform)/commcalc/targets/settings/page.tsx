@@ -12,6 +12,11 @@ interface TargetRow {
   accessories_monthly: number
   byod_pct: number | null
   notes?: string | null
+  // FINANCING (owner directive 2026-08-04: "assignable target for each store in target area").
+  // Held on its OWN row in commcalc.financing_target and saved by its own endpoint, so this column can
+  // never break the save of the four targets that were already here.
+  financing_units?: number
+  _financingReady?: boolean
   _seeded?: boolean
   _seed_basis?: Record<string, string>   // per-category: 'stretch' | 'carry' | 'new'
   _prior_period?: string
@@ -27,7 +32,7 @@ export default function TargetSettingsPage() {
   const [search, setSearch] = useState('')
   const [market, setMarket] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [bulk, setBulk] = useState<any>({ activations_monthly: '', upgrades_monthly: '', accessories_monthly: '', byod_pct: '' })
+  const [bulk, setBulk] = useState<any>({ activations_monthly: '', upgrades_monthly: '', accessories_monthly: '', byod_pct: '', financing_units: '' })
   const [savingAll, setSavingAll] = useState(false)
   const [bulkMsg, setBulkMsg] = useState('')
   const [rolling, setRolling] = useState(false)
@@ -39,7 +44,20 @@ export default function TargetSettingsPage() {
     setLoading(true)
     try {
       const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
-      setRows(d.targets || [])
+      // The financing target lives in its own table (migration 272). Fetched alongside and merged in;
+      // if that migration has not been run the column simply renders as unavailable.
+      let finByCode: Record<string, number> = {}
+      let finReady = false
+      try {
+        const f = await api(`/api/v1/commcalc/financing/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+        finReady = !!f?.ready
+        for (const t of (f?.targets || [])) finByCode[String(t.store_code).toUpperCase()] = Number(t.target_units) || 0
+      } catch { finReady = false }
+      setRows((d.targets || []).map((r: TargetRow) => ({
+        ...r,
+        financing_units: finByCode[String(r.store_code).toUpperCase()] ?? 0,
+        _financingReady: finReady,
+      })))
       setByodDefault(d.byod_pct_default ?? 35)
     } catch (e) { console.error(e) }
     setLoading(false)
@@ -64,10 +82,25 @@ export default function TargetSettingsPage() {
     })
   }
 
+  // Saved separately from the four legacy targets, on purpose: a failure here must never lose the
+  // activation/upgrade/accessory numbers the user just typed.
+  async function putFinancing(row: TargetRow) {
+    if (!row._financingReady) return
+    await api(`/api/v1/commcalc/financing/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        store_code: row.store_code,
+        target_units: Number(row.financing_units) || 0,
+        updated_by: 'web',
+      }),
+    })
+  }
+
   async function save(row: TargetRow) {
     setSavingCode(row.store_code)
     try {
       await putTarget(row)
+      await putFinancing(row)
       setRows(rs => rs.map(r => r.store_code === row.store_code ? { ...r, _seeded: false } : r))
       setSavedCode(row.store_code)
       setTimeout(() => setSavedCode(null), 3000)
@@ -106,6 +139,7 @@ export default function TargetSettingsPage() {
       if (bulk.upgrades_monthly !== '') u.upgrades_monthly = Number(bulk.upgrades_monthly) || 0
       if (bulk.accessories_monthly !== '') u.accessories_monthly = Number(bulk.accessories_monthly) || 0
       if (bulk.byod_pct !== '') u.byod_pct = Number(bulk.byod_pct) || 0
+      if (bulk.financing_units !== '') u.financing_units = Number(bulk.financing_units) || 0
       return u
     }))
     setBulkMsg(`Applied to ${targets.size} store(s). Review, then "Save selected".`)
@@ -116,7 +150,7 @@ export default function TargetSettingsPage() {
     if (!toSave.length) { setBulkMsg('No stores selected.'); return }
     setSavingAll(true); setBulkMsg('Saving…')
     let ok = 0, fail = 0
-    for (const row of toSave) { try { await putTarget(row); ok++ } catch { fail++ } }
+    for (const row of toSave) { try { await putTarget(row); await putFinancing(row); ok++ } catch { fail++ } }
     setRows(rs => rs.map(r => targetCodes.has(r.store_code) ? { ...r, _seeded: false } : r))
     setSavingAll(false)
     setBulkMsg(`Saved ${ok} store(s)${fail ? ` · ${fail} failed` : ''}.`)
@@ -149,6 +183,9 @@ export default function TargetSettingsPage() {
         💡 <strong>Activations</strong> = premium + BYOD acts (count). <strong>Upgrades</strong> = upgrade acts (count).
         <strong> Accessories</strong> = monthly GP ($, seeded from the store's StoreOps monthly target).
         <strong> BYOD %</strong> = share of activations expected to be BYOD (blank = KPI default {byodDefault}%).
+        <strong> Financing</strong> = financed units per month (Edge / ACIMA / any vendor you map) — this is
+        what the <a href="/commcalc/financing" style={{ textDecoration: 'underline' }}>Financing report</a>
+        {' '}measures attainment against, monthly.
       </div>
 
       {/* Month-over-month carry-forward */}
@@ -185,6 +222,7 @@ export default function TargetSettingsPage() {
             <input className="input" type="number" placeholder="Upg/mo" value={bulk.upgrades_monthly} onChange={e => setBulk({ ...bulk, upgrades_monthly: e.target.value })} style={{ width: 90 }} />
             <input className="input" type="number" placeholder="Acc $/mo" value={bulk.accessories_monthly} onChange={e => setBulk({ ...bulk, accessories_monthly: e.target.value })} style={{ width: 100 }} />
             <input className="input" type="number" placeholder="BYOD %" value={bulk.byod_pct} onChange={e => setBulk({ ...bulk, byod_pct: e.target.value })} style={{ width: 80 }} />
+            <input className="input" type="number" placeholder="Financing/mo" value={bulk.financing_units} onChange={e => setBulk({ ...bulk, financing_units: e.target.value })} style={{ width: 110 }} />
             <button className="btn" onClick={() => applyBulk(filteredCodes)}>Apply to {selected.size || filtered.length}</button>
             <button className="btn btn-primary" onClick={() => saveSelected(filteredCodes)} disabled={savingAll}>{savingAll ? 'Saving…' : `💾 Save ${selected.size || filtered.length}`}</button>
             {bulkMsg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{bulkMsg}</span>}
@@ -205,7 +243,7 @@ export default function TargetSettingsPage() {
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
                 <th style={th}><input type="checkbox" checked={filtered.length > 0 && filtered.every(r => selected.has(r.store_code))} onChange={e => selectAllFiltered(e.target.checked, filteredCodes)} /></th>
-                {['Store', 'Activations /mo', 'Upgrades /mo', 'Accessories $/mo', 'BYOD %', 'BYOD target', ''].map(h => (
+                {['Store', 'Activations /mo', 'Upgrades /mo', 'Accessories $/mo', 'BYOD %', 'BYOD target', 'Financing /mo', ''].map(h => (
                   <th key={h} style={th}>{h}</th>
                 ))}
               </tr>
@@ -250,6 +288,15 @@ export default function TargetSettingsPage() {
                       onChange={e => update(r.store_code, 'byod_pct', e.target.value === '' ? ('' as any) : (parseFloat(e.target.value) || 0))} />
                   </td>
                   <td style={{ ...td, color: 'var(--text2)' }}>{byodCount(r)} acts</td>
+                  <td style={td}>
+                    {r._financingReady === false ? (
+                      <span style={{ fontSize: 11, color: 'var(--text3)' }} title="Migration 272 has not been run yet">—</span>
+                    ) : (
+                      <input className="input" type="number" min="0" style={{ width: 90 }}
+                        value={r.financing_units ?? 0}
+                        onChange={e => update(r.store_code, 'financing_units', parseFloat(e.target.value) || 0)} />
+                    )}
+                  </td>
                   <td style={td}>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                       <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }}
