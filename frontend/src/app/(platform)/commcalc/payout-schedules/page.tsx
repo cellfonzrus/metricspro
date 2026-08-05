@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { api, apiUpload, fmt } from '@/lib/client'
 import EntityPicker from '@/components/EntityPicker'
+import RunCommissionButton from '../_lib/RunCommissionButton'
 
 // Multi-month payout schedules (migration 057). A schedule spreads one activation's commission over
 // N months (flat or %MRC); months 2..N pay only if the bill was paid + residual received that month.
@@ -156,25 +157,10 @@ export default function PayoutSchedulesPage() {
     try { setPreview(await api(`/api/v1/commcalc/payout-schedule/preview?period=${encodeURIComponent(period.trim())}`)) }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
   }
-  // Preview is read-only; THIS applies the saved schedules/plans to the live Rep Commission report by
-  // recomputing the period. Recompute can exceed the gateway timeout but still completes server-side.
-  async function recompute() {
-    if (!period.trim()) { setMsg('Enter a pay period (e.g. June 2026).'); return }
-    if (!confirm(`Recompute live commissions for ${period.trim()}?\n\nApplies your saved schedules/plans to the Rep Commission report. It can take a few minutes.`)) return
-    setBusy(true); setMsg('⏳ Recomputing ' + period.trim() + ' — this can take a few minutes and may look like it times out; the report updates when it finishes. Don’t re-run it.')
-    try {
-      await api(`/api/v1/commcalc/calculate/${encodeURIComponent(period.trim())}`, { method: 'POST' })
-      setMsg('✅ Recompute finished — open the Rep Commission report for ' + period.trim() + '.')
-    } catch (e: any) {
-      // Distinguish the two very different failures: a REFUSED start (another calculation for this month
-      // is already running — the single-flight guard, HTTP 409) versus the familiar gateway timeout on a
-      // recompute that IS running and will finish. Telling the operator "it's running, check back" when
-      // the server actually refused would hide the reason.
-      const m = String(e?.message || '')
-      if (m.includes('already running')) setMsg('⚠️ ' + m)
-      else setMsg('⏳ Recompute is running (the request timed out at the gateway but completes server-side). Check the Rep Commission report for ' + period.trim() + ' in a minute.')
-    } finally { setBusy(false) }
-  }
+  // Preview is read-only. Applying the saved schedules/plans to the live Rep Commission report is the
+  // SHARED <RunCommissionButton> (commcalc/_lib) — this page's bespoke recompute() was folded into it on
+  // 2026-08-05 so the confirm, the 409 handling and the never-re-fire rule are identical on every
+  // commission-structure page instead of being re-implemented per page.
   const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || (id ? 'carrier' : 'Any carrier')
 
   return (
@@ -481,13 +467,21 @@ export default function PayoutSchedulesPage() {
         </div>
       </div>
 
+      {/* RUN COMMISSION (owner directive 2026-08-05) — the shared control. It targets the SAME `period`
+          state the preview below uses, and its picker writes back to it, so the page can never preview
+          one month and recompute another. */}
+      <div className="card" style={{ padding: 16, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>⚡ Apply these schedules to live pay</div>
+        <RunCommissionButton period={period} onPeriodChange={setPeriod}
+          note="Preview is read-only. This is the action that writes the new numbers into the Rep Commission report for the period shown." />
+      </div>
+
       {/* preview */}
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>🔎 Preview (read-only)</div>
           <input style={{ ...sel, width: 150 }} placeholder="Pay period e.g. June 2026" value={period} onChange={e => setPeriod(e.target.value)} />
           <button className="btn btn-primary" disabled={busy} onClick={runPreview}>{busy ? '…' : 'Run preview'}</button>
-          <button className="btn btn-secondary" disabled={busy} onClick={recompute} title="Apply the saved schedules/plans to the live Rep Commission report for this period">⚙️ Recompute live payout</button>
           {preview?.totals && <span style={{ fontSize: 13, color: 'var(--text2)' }}>{fmt(preview.totals.amount)} · {preview.totals.reps} reps · {preview.totals.paid} paid / {preview.totals.withheld} withheld / {preview.totals.pending} pending</span>}
         </div>
         {preview?.note && <div style={{ fontSize: 13, color: 'var(--text3)' }}>{preview.note}</div>}

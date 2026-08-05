@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { PlanOptions, MatchValuePicker, MatchEvidence, FALLBACK_VOCAB, countMatches, OptionsSourceNote } from '../_lib/planMatch'
 import EntityPicker from '@/components/EntityPicker'
+import RunCommissionButton from '../_lib/RunCommissionButton'
 
 // SALE-TRIGGERED multi-month rep pay (commission-0 doctrine, mig 201; edit + m1-gate mig 210). A schedule
 // attaches to a Commission Plan and is triggered by the SALE LINE (M1..N relative to trans_date). Months are
@@ -103,7 +104,9 @@ function TagPicker({ label, values, options, onChange, allowFree }: { label: str
 }
 
 export default function PlanInstallmentsPage() {
-  const { period } = usePeriod()
+  // The page's OWN period context — the Run Commission control targets exactly this period and its
+  // picker writes back here, so the page can never show one month and recompute another.
+  const { period, setPeriod } = usePeriod()
   const [plans, setPlans] = useState<any[]>([])
   const [scheds, setScheds] = useState<Sched[]>([])
   const [ready, setReady] = useState(true)
@@ -184,6 +187,11 @@ export default function PlanInstallmentsPage() {
     })
     return out
   }, [planOpts?.periods, draft.eligible_sale_periods])
+  // Same source, but WITHOUT the draft's saved-eligibility additions: the recalculate picker must only
+  // offer periods this tenant genuinely has sales for.
+  const runPeriodOptions = useMemo(
+    () => (planOpts?.periods || []).map(p => ({ id: p.value, label: p.value, sublabel: `${(p.lines || 0).toLocaleString()} sale lines` })),
+    [planOpts?.periods])
   const triggerCount = useMemo(() => countMatches(planOpts, {
     match_field: draft.trigger_match_field, match_op: draft.trigger_match_op,
     match_value: draft.trigger_match_value,
@@ -408,6 +416,15 @@ export default function PlanInstallmentsPage() {
         receiving residual ("we pay as we get paid"). Schedules are editable; an edit applies from the next
         Run Calculation onward and never rewrites months already paid. Nothing here changes pay until you Run Calculation.
       </p>
+
+      {/* RUN COMMISSION (owner directive 2026-08-05) — a schedule edit applies from the NEXT calculation
+          onward, so the recalculate control belongs on the page where the schedule is edited. */}
+      <div className="card" style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>⚡ Apply these schedules to live pay</div>
+        <RunCommissionButton period={period} onPeriodChange={setPeriod} periodOptions={runPeriodOptions}
+          note="Editing a multi-month schedule changes nothing until the period is recalculated. Months already paid in the ledger are never rewritten." />
+      </div>
+
       {msg && <div className="card" style={{ marginBottom: 16, borderLeft: '4px solid var(--accent)', fontSize: 13 }}>{msg}</div>}
       {!ready && <div className="card" style={{ marginBottom: 16, borderLeft: '4px solid var(--amber)', fontSize: 13 }}>
         Migration 201 not applied yet — schedules save once it runs (endpoints degrade to a code default meanwhile).
