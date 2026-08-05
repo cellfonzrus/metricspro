@@ -183,7 +183,8 @@ def run_request(*, token, rows=None, writes=None, fail_cols=None, boom=None, boo
 
 def fresh(**env):
     """Reload the middleware with a clean cache + the given env, so no test leaks into another."""
-    for k in ("MULTI_TENANT_ENFORCE", "REQUIRE_AUTH", "TWOFA_ENFORCE", "IDENTITY_BACKEND_503"):
+    for k in ("MULTI_TENANT_ENFORCE", "REQUIRE_AUTH", "TWOFA_ENFORCE", "IDENTITY_BACKEND_503",
+              "STRICT_MEMBERSHIP"):
         os.environ.pop(k, None)
     os.environ["MULTI_TENANT_ENFORCE"] = "1"
     os.environ["TWOFA_ENFORCE"] = "0"        # 2FA is a separate gate, proven in prove_twofa_gate.py
@@ -322,7 +323,12 @@ c = run_request(token="GOOD", rows=MEMBER,
 ck("only the newest column missing → still resolves", c.reached_app is True)
 
 print("F. BREAK-GLASS — IDENTITY_BACKEND_503=0 restores the pre-2026-08-03 behaviour")
-fresh(IDENTITY_BACKEND_503="0")
+# NOTE (2026-08-05, H2): fully restoring the pre-honesty *pass-through* for an EMPTY membership now
+# also requires STRICT_MEMBERSHIP=0 — H2 added an independent fail-closed on the empty-membership case
+# (a verified login with no app_users row → 401 instead of honoring the client org_id). The 503
+# break-glass and the H2 break-glass are separate switches; this test exercises the 503 one, so it sets
+# both OFF to isolate it. (Section J below proves H2 is ON by default with its own switch.)
+fresh(IDENTITY_BACKEND_503="0", STRICT_MEMBERSHIP="0")
 c = run_request(token="GOOD", boom=RuntimeError("down"), query=b"org_id=OTHER-TENANT")
 ck("switch off → no 503", c.status != 503)
 ck("switch off → old pass-through restored (empty membership ⇒ no rewrite)",
@@ -421,6 +427,26 @@ os.environ["MULTI_TENANT_ENFORCE"] = "0"
 importlib.reload(M)
 c = run_request(token="GOOD", boom=RuntimeError("down"))
 ck("MULTI_TENANT_ENFORCE=0 → pure pass-through, no 503", c.reached_app is True and c.status is None)
+
+print("K. H2 — verified login with NO membership fails CLOSED (default) / passes with break-glass")
+# A GOOD token that verifies to a uid but whose app_users fetch returns [] = "no membership". The old
+# code skipped the org rewrite and honored the CLIENT-SUPPLIED org_id (query=b"org_id=OTHER-TENANT").
+fresh()                                   # STRICT_MEMBERSHIP defaults ON
+c = run_request(token="GOOD", rows=[], query=b"org_id=OTHER-TENANT")
+ck("H2 default ON → no-membership verified user is 401", c.status == 401)
+ck("H2 default ON → byte-identical 401 body", c.body == GOLDEN_401_BODY)
+ck("H2 default ON → never reached the app", c.reached_app is False)
+ck("H2 default ON → zero DB writes", c.writes == [])
+# NEGATIVE CONTROL: STRICT_MEMBERSHIP=0 restores the pre-H2 pass-through (the attack works on base).
+fresh(STRICT_MEMBERSHIP="0")
+c = run_request(token="GOOD", rows=[], query=b"org_id=OTHER-TENANT")
+ck("H2 break-glass OFF → old pass-through reaches the app (client org honored) = base behaviour",
+   c.reached_app is True and c.app_scope["query_string"] == b"org_id=OTHER-TENANT")
+# A provisioned member is unaffected either way.
+fresh()
+c = run_request(token="GOOD", rows=MEMBER, query=b"org_id=SOMETHING-ELSE")
+ck("H2 default ON → a provisioned member still passes and org_id is rewritten to their tenant",
+   c.reached_app is True and c.app_scope["query_string"] == b"org_id=ORG-A")
 
 print("\n%s: %d passed, %d failed" % ("PASS" if F == 0 else "FAIL", P, F))
 sys.exit(1 if F else 0)
