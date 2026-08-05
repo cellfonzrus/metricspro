@@ -11,6 +11,7 @@ import {
 import {
   UnassignedRow, UnmatchedExplorer, OrphanAssignments, StoreBridgePanel, ExcludedSellers,
 } from '../_lib/coverageDiagnosis'
+import RunCommissionButton from '../_lib/RunCommissionButton'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
 // rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
@@ -561,6 +562,16 @@ export default function CommissionPlansPage() {
           plan <strong>would</strong> pay; it is <strong>read-only</strong> and does not change live commissions.
         </p>
       </div>
+
+      {/* RUN COMMISSION (owner directive 2026-08-05) — editing a plan changes NOTHING until the period
+          is recomputed, so the recalculate control lives here, next to the structure being edited.
+          Shares the period picker below (Preview) so one page never targets two different months. */}
+      <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>⚡ Apply these plans to live pay</div>
+        <RunCommissionButton period={period} onPeriodChange={setPeriod} periodOptions={periodOptions}
+          note="Saving a plan, rule, tier or assignment does not change anyone's pay by itself. Recalculate the period to write the new numbers into the Rep Commission report." />
+      </div>
+
       {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || 'Run migration 059_commission_plans.sql in Supabase to enable.'}</div>}
 
       {/* tab bar — plan-centric editor  vs  people-centric bulk assign */}

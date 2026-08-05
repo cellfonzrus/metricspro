@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import RunCommissionButton from '../_lib/RunCommissionButton'
 
 // Commission Payout Plans — the ONE place that answers "how does each carrier's rep get paid?".
 // It reads /payout-plans/overview, which uses the SAME carrier gate as the live calculator, so what
@@ -40,7 +41,7 @@ type Diag = {
 }
 
 export default function PayoutPlansHub() {
-  const { period } = usePeriod()
+  const { period, setPeriod } = usePeriod()
   const [ov, setOv] = useState<Overview | null>(null)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
@@ -86,6 +87,15 @@ export default function PayoutPlansHub() {
         <Link href="/commcalc/carrier-mapping" className="btn btn-sm">📡 Carrier Mapping</Link>
         <Link href="/commcalc/commission-category-map" className="btn btn-sm">🗺️ Category → Bucket Map</Link>
         <Link href="/commcalc/commission-import" className="btn btn-sm">🪄 Import Wizard</Link>
+      </div>
+
+      {/* RUN COMMISSION (owner directive 2026-08-05) — the same shared control the three editor pages
+          mount. This hub is where an operator lands after changing which engine a carrier pays from,
+          so the recalculate lives here too. Hidden for anyone who cannot reach /commcalc/payout-schedules. */}
+      <div className="card" style={{ padding: 16, marginBottom: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ fontWeight: 700, fontSize: 13 }}>⚡ Apply the current structure to live pay</div>
+        <RunCommissionButton period={period} onPeriodChange={setPeriod}
+          note="Config changes on any of the pages above do nothing until the period is recalculated." />
       </div>
 
       {loading && <div className="card" style={{ padding: 16 }}>Loading…</div>}
