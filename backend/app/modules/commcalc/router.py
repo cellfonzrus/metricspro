@@ -22,6 +22,7 @@ from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_legs as _commission_legs
+from app.modules.commcalc import commission_received as _commission_received
 from app.modules.commcalc import commission_engine
 from app.modules.commcalc import plan_options
 from app.modules.commcalc import sale_installment_engine
@@ -13855,6 +13856,245 @@ async def set_commission_leg_config(body: dict, org_id: str = ORG_ID):
     except Exception as e:
         raise HTTPException(400, f'Could not save — run migration 274_commission_leg_split.sql first. [{e}]')
     return {'ok': True, 'carrier_mode': mode}
+
+
+# ═══ COMMISSION RECEIVED — the FULL breakout (owner directive 2026-08-05) ════════════════════════
+#   "we need to see what we made in M1 and other months and how much is on ATU and how much is on
+#    residual."
+# READ-ONLY, and it MOVES NOTHING. Every figure here is a finer split of a figure the Gross Profit
+# report already shows: the commission rows re-sum to its Commission column, the MI/ATU rows to its
+# MI and ATU columns, and the VidaPay airtime row to its ATU column for an MA-fed org. The pure
+# decomposition lives in `commcalc/commission_received.py`; this endpoint only fetches and filters.
+
+
+def _breakout_tx_rows(client, sc, org_id, variants, labels, pattern, sign, out_notes):
+    """Per-period VidaPay daily-tx figures (airtime margin + postpaid residual orders). Migration 278
+    RPC first; a BOUNDED per-period read of the most recent 3 months if it has not been run yet, so
+    the page degrades to less history instead of to a wrong number. Never raises."""
+    try:
+        rows = (sc.rpc('commission_received_tx_rollup',
+                       {'p_org_id': org_id, 'p_periods': variants,
+                        'p_residual_pattern': pattern}).execute().data) or []
+        return [{'period': r.get('period'),
+                 'airtime_all': safe_float(r.get('airtime_all')),
+                 'airtime_residual_orders': safe_float(r.get('airtime_residual_orders')),
+                 'residual_orders': safe_float(r.get('residual_orders')) * sign,
+                 'n': r.get('n'), 'n_residual': r.get('n_residual')} for r in rows], False
+    except Exception as e:
+        print(f'WARN commission_received_tx_rollup RPC unavailable ({e}) — bounded fallback')
+    pat = str(pattern or '').strip().lower()
+    out, cap = [], min(len(labels), 3)
+    for lab in labels[-cap:]:
+        try:
+            tx = (sc.table('raw_ma_daily_tx').select('order_type,merchant_discount,retail_cost')
+                  .eq('org_id', org_id).in_('period', _pvariants(lab)).limit(100000).execute().data) or []
+        except Exception:
+            tx = []
+        if not tx:
+            continue
+        a_all = a_res = r_res = 0.0
+        n_res = 0
+        for r in tx:
+            d = safe_float(r.get('merchant_discount'))
+            a_all += d
+            if pat and pat in str(r.get('order_type') or '').strip().lower():
+                a_res += d
+                r_res += safe_float(r.get('retail_cost'))
+                n_res += 1
+        out.append({'period': lab, 'airtime_all': a_all, 'airtime_residual_orders': a_res,
+                    'residual_orders': r_res * sign, 'n': len(tx), 'n_residual': n_res})
+    if out:
+        out_notes.append(f'Migration 278 not applied yet — the VidaPay airtime / residual-order rows '
+                         f'are being summed month by month, so only the most recent {cap} month(s) '
+                         f'carry them. Run 278 for the full window.')
+    return out, True
+
+
+@router.get("/commission-received-breakout")
+async def commission_received_breakout(period: str = "", months: int = 12, market: str = "",
+                                       store: str = "", org_id: str = ORG_ID):
+    """WHAT DID WE MAKE — 1st Month, M2…M6 individually, ATU, MI/residual, and the unsplit margin
+    block — per money stream, per month, over the last `months` months ending at `period`.
+
+    WHAT EACH ROW IS (stated on the page too, so nobody has to guess):
+      • Commission received (ePay)      — raw_payment_detail rows in the Commission payment category;
+                                          the leg is the month written into the payment type.
+      • Commission received (VidaPay)   — raw_ma_commission; the leg is the COLUMN (1st…6th Month
+                                          Spiff). The activation-order margins carry no month-of-life
+                                          and sit in Unsplit (owner ruling 2026-08-05) — which is why
+                                          the M1 figure here equals the portal's Commissions Paid.
+      • Comprehensive Comp              — its own column on the GP report; reported beside, never
+                                          added into, the Commission total.
+      • MI residual / ATU residual      — raw_mi, split by the subscriber's activation date vs the
+                                          month the money arrived (migration 274's mi rollup, wired
+                                          here for the first time).
+      • Airtime margin (VidaPay)        — raw_ma_daily_tx merchant discount; the SAME figure the GP
+                                          report's ATU column shows for an MA-fed org.
+      • Postpaid Residual Orders        — the /ma-overview-recon + What-If residual basis. A
+                                          CROSS-CHECK row, in NO total: see `divergence_note`.
+
+    RULE FIVE: period + store + market drive every figure and therefore every export. Carrier money
+    that carries no store address (VidaPay commission, airtime, residual orders) is company-wide and
+    is EXCLUDED while a store or market filter is active, which the payload says out loud.
+
+    MONEY-SAFE: no write, no recompute, no rep_commissions read. Nothing here can change a payout.
+    """
+    require_org(org_id)
+    client = sb(); sc = client.schema('commcalc')
+    labels = _leg_window(period, months)
+    pkey = _leg_period_key(labels)
+    variants = sorted(pkey.keys())
+    markets = {m.strip().upper() for m in (market or '').split(',') if m.strip()}
+    stores = [s.strip() for s in (store or '').split(',') if s.strip()]
+    filtered = bool(markets or stores)
+
+    try:
+        mode = _resolve_carrier_mode(sc.table('carrier').select('*').eq('org_id', org_id)
+                                     .execute().data or [])
+    except Exception:
+        mode = 'boost'
+    try:
+        legcls = _commission_legs.for_org(client, org_id, carrier_mode=mode)
+    except Exception:
+        legcls = _commission_legs.default_classifier()
+    store_idx, sfid_idx = _leg_store_index(client, org_id)
+    notes, gaps, degraded = [], [], False
+
+    # ── 1. ePay Payment Detail + Comprehensive Comp (mig 274 rollup, bounded fallback) ───────────
+    label_rows = []
+    try:
+        label_rows = (sc.rpc('commission_leg_label_rollup',
+                             {'p_org_id': org_id, 'p_periods': variants}).execute().data) or []
+    except Exception as e:
+        degraded = True
+        print(f'WARN commission_leg_label_rollup RPC unavailable ({e}) — bounded fallback')
+        cap = min(len(labels), 3)
+        notes.append(f'Migration 274 not applied yet — the ePay rows are being summed month by month, '
+                     f'so only the most recent {cap} month(s) carry them. Run 274 for the full window.')
+        try:
+            cat_map = {str(r['description']).strip(): r['category']
+                       for r in (sc.table('payment_categories').select('description,category')
+                                 .eq('org_id', org_id).execute().data or []) if r.get('description')}
+        except Exception:
+            cat_map = {}
+        for lab in labels[-cap:]:
+            try:
+                pd = (sc.table('raw_payment_detail').select('business_address,payment_type,amount')
+                      .eq('org_id', org_id).in_('period', _pvariants(lab))
+                      .limit(60000).execute().data) or []
+            except Exception:
+                pd = []
+            for r in pd:
+                pt = str(r.get('payment_type') or '').strip()
+                label_rows.append({'source': 'payment_detail', 'period': lab,
+                                   'store_num': str(r.get('business_address') or '').strip().split(' ')[0],
+                                   'label': pt, 'category': cat_map.get(pt, 'Unknown'),
+                                   'amount': safe_float(r.get('amount')), 'n': 1})
+
+    # Months that HAVE ePay payment detail are ePay months: VidaPay commission is the ePay-LESS
+    # fallback (the same emptiness gate _compute_gp and /commission-leg-trend use), so adding both
+    # for one month would double-count that month's commission across two feeds.
+    skip_periods = set()
+    for r in label_rows:
+        if str(r.get('source') or '') == 'payment_detail' and safe_float(r.get('amount')):
+            lab = pkey.get(str(r.get('period') or '').strip())
+            if lab:
+                skip_periods.add(lab)
+
+    # ── 2. VidaPay / master-agent commission (mig 274 rollup, bounded fallback) ──────────────────
+    ma_rows = []
+    if not filtered:
+        try:
+            ma_rows = (sc.rpc('commission_leg_ma_rollup',
+                              {'p_org_id': org_id, 'p_periods': variants}).execute().data) or []
+        except Exception:
+            for lab in labels[-min(len(labels), 3):]:
+                try:
+                    mr = (sc.table('raw_ma_commission').select('*').eq('org_id', org_id)
+                          .in_('period', _pvariants(lab)).limit(100000).execute().data) or []
+                except Exception:
+                    mr = []
+                if mr:
+                    agg = {'period': lab, 'n': len(mr)}
+                    for c in _MA_LEG_COMPONENTS:
+                        agg[c] = sum(safe_float(x.get(c)) for x in mr)
+                    ma_rows.append(agg)
+
+    # ── 3. ePay MI/ATU residual — migration 274's rollup, wired here for the FIRST time ──────────
+    mi_rows = []
+    try:
+        mi_rows = (sc.rpc('commission_leg_mi_rollup',
+                          {'p_org_id': org_id, 'p_periods': variants}).execute().data) or []
+    except Exception as e:
+        print(f'WARN commission_leg_mi_rollup RPC unavailable ({e}) — bounded fallback')
+        cap = min(len(labels), 3)
+        for lab in labels[-cap:]:
+            try:
+                mr = (sc.table('raw_mi')
+                      .select('salesforce_id,actual_mi_payout,actual_atu_payout,mi_activation_date')
+                      .eq('org_id', org_id).in_('period', _pvariants(lab))
+                      .limit(60000).execute().data) or []
+            except Exception:
+                mr = []
+            for r in mr:
+                _b, _leg, _why = legcls.activation(lab, r.get('mi_activation_date'))
+                mi_rows.append({'period': lab, 'salesforce_id': str(r.get('salesforce_id') or ''),
+                                'leg_month': _leg, 'mi': safe_float(r.get('actual_mi_payout')),
+                                'atu': safe_float(r.get('actual_atu_payout')), 'n': 1})
+            if mr:
+                degraded = True
+
+    # ── 4. VidaPay daily transactions — airtime margin + postpaid residual orders (mig 278) ──────
+    tx_rows = []
+    if not filtered:
+        try:
+            _wcfg = whatif._whatif_source_config(client, org_id, None, mode)
+        except Exception:
+            _wcfg = {}
+        _pattern = str(_wcfg.get('residual_order_type') or 'Postpaid Residual Order').strip() \
+            or 'Postpaid Residual Order'
+        _sign = -1.0 if str(_wcfg.get('residual_sign') or 'negate').strip().lower() == 'negate' else 1.0
+        tx_rows, _tx_degraded = _breakout_tx_rows(client, sc, org_id, variants, labels,
+                                                  _pattern, _sign, notes)
+        degraded = degraded or _tx_degraded
+
+    if filtered:
+        notes.append('VidaPay/master-agent money (commission, airtime margin, residual orders) carries '
+                     'no store address, so it is company-wide and is EXCLUDED while a store or market '
+                     'filter is active.')
+
+    out = _commission_received.build_breakout(
+        labels, legcls,
+        label_rows=label_rows, ma_rows=ma_rows, mi_rows=mi_rows, tx_rows=tx_rows,
+        components=_MA_LEG_COMPONENTS, period_key=pkey,
+        passes=lambda num: _leg_passes(store_idx.get(num), markets, stores),
+        passes_sfid=lambda sf: _leg_passes(sfid_idx.get(sf), markets, stores),
+        comp_is_commission=_leg_comp_is_commission,
+        skip_periods=skip_periods, notes=notes, gaps=gaps, degraded=degraded)
+
+    # WHAT IS MISSING, NAMED. An empty row is either "this tenant does not use that feed" (correct
+    # isolation) or "that report was never ingested" (a real gap) — the page must not leave the owner
+    # guessing which. Only report a gap for a feed this tenant's CARRIER MODE actually expects.
+    present = {s['key'] for s in out['streams']}
+    expect = ({'comm_ma': ('MA Commission Details (VidaPay) — Commission by month',
+                           'Data Imports → ma_commission, or the ⬆ on /commcalc/ma-upload'),
+               'ma_airtime': ('MA Daily Transactions (VidaPay) — airtime margin / ATU',
+                              'Data Imports → ma_daily_tx, or the ⬆ on /commcalc/ma-upload')}
+              if mode != 'boost' else
+              {'comm_epay': ('ePay Commission Payment Detail (#50273) — Commission by month',
+                             'the ePay sweep, or Data Imports → payment_detail'),
+               'mi': ('ePay MI/ATU residual — Monthly Incentive report',
+                      'the ePay sweep, or Data Imports → mi')})
+    for k, (what, how) in expect.items():
+        if k not in present and not filtered:
+            gaps.append({'stream': k, 'what': what, 'how': how,
+                         'why': f'No rows for {labels[0]} – {labels[-1]}. Either this feed has never '
+                                f'been ingested for these months, or this tenant does not use it.'})
+    out['gaps'] = gaps
+    out['carrier_mode'] = mode
+    out['filtered'] = filtered
+    out['window'] = {'period': labels[-1] if labels else period, 'months': len(labels)}
+    return out
 
 
 @router.get("/chargebacks/{period}")
