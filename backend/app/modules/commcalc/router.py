@@ -7742,11 +7742,10 @@ def _do_dlar_sweep(org_id):
         # and Targets employee KPIs — which read the rep_commissions snapshot, NOT live DLAR
         # — stay current with the freshly-imported DLAR. This runs on every sweep (the daily
         # cron AND manual 'Import DLAR now'). A recalc failure must NOT fail the sweep, so it
-        # is isolated and only noted in last_detail. (_do_dlar_sweep is a sync background
-        # worker running in a threadpool thread, so asyncio.run() has no running loop.)
+        # is isolated and only noted in last_detail. (Both this sweep and _run_calculation are plain
+        # sync functions running in threadpool threads, so this is a direct call — no loop involved.)
         try:
-            import asyncio
-            _cres = asyncio.run(_run_calculation(res['period'], org_id))
+            _cres = _run_calculation(res['period'], org_id)
             if isinstance(_cres, dict) and _cres.get('skipped'):
                 detail += (f" · recalc skipped for {res['period']} — a calculation was already running"
                            f" (since {_cres.get('running_since')})")
@@ -8247,7 +8246,7 @@ def _calc_busy_message(period, holder):
 
 # ── Calculate endpoint ────────────────────────────────────────
 @router.post("/calculate/{period}")
-async def calculate(
+def calculate(
     period: str,
     background_tasks: BackgroundTasks,
     org_id: str = "00000000-0000-0000-0000-000000000001",
@@ -8664,8 +8663,13 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
         return comms
 
 
-async def _run_calculation(period: str, org_id: str, force: bool = False, guard_token: str = None):
+def _run_calculation(period: str, org_id: str, force: bool = False, guard_token: str = None):
     """Background calculation task. force=True bypasses the zero-wipe guard.
+
+    PLAIN `def` ON PURPOSE (2026-08-05): Starlette runs an *async* BackgroundTask ON the event loop and a
+    *sync* one in the threadpool. This body contains zero `await`s and takes minutes, so as `async def`
+    every recompute froze the whole product — every tenant, every page — for its full duration. Sync
+    keeps the identical work on a worker thread instead. Not one line of the calculation below changed.
 
     `guard_token` is the single-flight claim from _calc_guard_acquire. POST /calculate claims the slot
     itself (so it can answer 409 synchronously) and hands the token down; an internal caller (the DLAR
@@ -20018,7 +20022,12 @@ async def _run_email_sweep(org_id, account='default'):
                     _carriers = (client.schema('commcalc').table('carrier').select('*')
                                  .eq('org_id', org_id).execute().data) or []
                     if _resolve_carrier_mode(_carriers) != 'boost':
-                        await _run_calculation(_ftp_current_period(), org_id)
+                        # _run_calculation is a plain `def` now (it has zero awaits and takes minutes).
+                        # _run_email_sweep IS a real coroutine, so calling it inline would block the one
+                        # event loop for the whole recompute — exactly the freeze this package removes.
+                        # run_in_threadpool is what Starlette itself does with a sync BackgroundTask.
+                        from starlette.concurrency import run_in_threadpool as _in_pool
+                        await _in_pool(_run_calculation, _ftp_current_period(), org_id)
             except Exception as e2:
                 print(f"WARN auto-recalc after promote failed: {e2}")
     except Exception as e:

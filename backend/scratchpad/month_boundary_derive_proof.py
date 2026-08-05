@@ -552,11 +552,17 @@ check("sales_derive.py names no calculator/engine at all",
 
 # the email sweep's ONE recompute is the pre-existing current-month one, and the grace loop is outside it
 sweep_src = inspect.getsource(R._run_email_sweep)
-check("the email sweep still has exactly ONE _run_calculation call", sweep_src.count("_run_calculation") == 1)
+# SHAPE-AGNOSTIC (2026-08-05): _run_calculation is a plain `def` now (it had zero awaits and takes
+# minutes, so as an async BackgroundTask it froze the whole product), and _run_email_sweep IS a real
+# coroutine — so the sweep hands it to the threadpool instead of awaiting it inline. What this proof
+# asserts is unchanged: ONE recompute call, for the CURRENT period, AFTER the grace loop.
+_sweep_code = "\n".join(l for l in sweep_src.splitlines() if not l.strip().startswith("#"))
+check("the email sweep still has exactly ONE _run_calculation call", _sweep_code.count("_run_calculation") == 1)
 check("that call is still the CURRENT period (unchanged)",
-      "await _run_calculation(_ftp_current_period(), org_id)" in sweep_src)
-gi = sweep_src.index("_sales_derive_plan")
-ri = sweep_src.index("await _run_calculation")
+      any(p in _sweep_code for p in ("await _run_calculation(_ftp_current_period(), org_id)",
+                                     "_run_calculation, _ftp_current_period(), org_id")))
+gi = _sweep_code.index("_sales_derive_plan")
+ri = _sweep_code.index("_run_calculation")
 check("the grace loop sits BEFORE the recompute block and is not inside it", gi < ri)
 check("the grace loop passes grace=True through to the promotion",
       "grace=_g, retain=_gret" in sweep_src)
