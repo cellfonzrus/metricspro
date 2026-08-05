@@ -10,8 +10,9 @@ link is a no-login DIRECT-DOWNLOAD url (built by the router), never a login page
      customer-service window — the only way to attach a file business-initiated). On the "no title
      component" header error (#132018) the template lacks a real header → fall through.
   2. Free-form `type:"document"` message (NO template) → attaches the real file, but Meta delivers it
-     only INSIDE the 24h window (recipient messaged us in the last 24h). Outside → a re-engagement/window
-     error (#131047 etc.) → fall through.
+     only INSIDE the 24h window (recipient messaged us in the last 24h). ⚠️ 2026-08-05: this rung is now
+     attempted ONLY with POSITIVE EVIDENCE that the window is open (an inbound recorded by the Meta
+     webhook — `notify.whatsapp_window`). See the "why" note below.
   3. Body-only approved template whose BODY text variable carries the caller-supplied link (now the
      no-login download url). Always deliverable business-initiated → the guaranteed fallback.
 
@@ -19,19 +20,41 @@ Meta 24h-window rule (why the ladder exists): business-initiated messages OUTSID
 an APPROVED template; free-form text/document is rejected there. So a template is ALWAYS in the ladder,
 and the file only attaches via (1) a doc-header template or (2) an in-window free-form document.
 
+⚠️ WHY RUNG 2 IS NOW EVIDENCE-GATED (owner incident 2026-08-05 — silent WhatsApp failure in production)
+A 2xx from the Graph API is NOT proof of delivery, and the out-of-window rejection is NOT reliably
+synchronous. Luxelink sends to +1516…0422 at 03:01/03:02Z logged `status='sent'` with real
+`wamid.HBgL…` ids — and nothing arrived; Meta Insights showed ZERO conversations in 30 days (a delivered
+free-form message would have opened a service conversation). The recipient was an active WhatsApp user and
+the Phone Number ID matched the dashboard. So Meta ACCEPTED the out-of-window free-form document
+(200 + wamid), `classify_send_result` read that as 'ok', the ladder STOPPED, rung 3 — the approved template
+that would actually have arrived — was never attempted, and Meta dropped the message asynchronously.
+
+Fix: `plan_delivery` now takes `window_open` and only includes the free-form rung when we hold POSITIVE
+EVIDENCE the window is open (an inbound recorded on the Meta webhook → `notify.whatsapp_window`). With no
+evidence, a business-initiated send goes STRAIGHT to the approved template — which always arrives. Inside a
+known window the real file still attaches, and a configured doc-header template is untouched (it is
+outside-window capable by design). Break-glass `WHATSAPP_FREEFORM_WHEN_UNKNOWN=1` restores the old ladder.
+
 Needs env (see app/core/config.py):
   WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_TEMPLATE_NAME,
   WHATSAPP_TEMPLATE_LANG (default en), WHATSAPP_GRAPH_VERSION (default v21.0),
   WHATSAPP_TEMPLATE_DOC_HEADER (default false — set true only when the approved template has a real
-  document header; see the owner setup steps in docs/handoffs/platform-core.md).
+  document header; see the owner setup steps in docs/handoffs/platform-core.md),
+  WHATSAPP_WINDOW_HOURS (default 23) + WHATSAPP_FREEFORM_WHEN_UNKNOWN (default false).
 """
+import asyncio
 import re
 
 import httpx
 
 from app.core.config import settings
+from app.modules.notify import whatsapp_window
 
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+
+# The rungs that carry the REAL file (vs the link-only template). Used to report `attached` back to the
+# caller so the send log can say whether the recipient got the document or just the download link.
+_ATTACH_ROUTES = ("template_doc", "freeform_doc")
 
 
 def _strip_link(text: str) -> str:
@@ -130,17 +153,29 @@ def _is_window_error(text: str) -> bool:
         "24 hours", "24-hour", "customer service window", "outside the allowed", "(#470)", "470"))
 
 
-def plan_delivery(doc_header_configured: bool, media_ok: bool) -> list:
-    """PURE. The ordered list of send attempts for one file. Attaching the real file needs an uploaded
-    media id; without one we can only send the link template. With media: the doc-header template first
-    (outside-window capable) when configured, then a free-form document (inside-window), then the link
-    template as the guaranteed business-initiated fallback."""
+def plan_delivery(doc_header_configured: bool, media_ok: bool, window_open: bool = False) -> list:
+    """PURE. The ordered list of send attempts for one file.
+
+    Attaching the real file needs an uploaded media id; without one we can only send the link template.
+    With media:
+      · doc-header template FIRST when configured — it attaches the file and is deliverable
+        business-initiated (outside the 24h window), so it is always worth trying;
+      · free-form document ONLY when `window_open` — POSITIVE evidence (a webhook-recorded inbound within
+        WHATSAPP_WINDOW_HOURS) that Meta will actually deliver a free-form message. Without that evidence
+        the rung is SKIPPED, because Meta answers 200 + wamid and then drops it (owner incident
+        2026-08-05) — an accepted-then-dropped send used to END the ladder and the recipient got nothing;
+      · link template LAST and ALWAYS — the guaranteed business-initiated deliverable.
+
+    Invariant relied on by callers and proofs: the returned list is non-empty and its LAST element is
+    always "template_link", so every planned delivery ends on an APPROVED TEMPLATE.
+    """
     if not media_ok:
         return ["template_link"]
     steps = []
     if doc_header_configured:
         steps.append("template_doc")
-    steps.append("freeform_doc")
+    if window_open:
+        steps.append("freeform_doc")
     steps.append("template_link")
     return steps
 
@@ -280,16 +315,43 @@ async def send_otp(to: str, code: str, purpose: str = "verification") -> str:
                                f"Do not share it with anyone.")
 
 
-async def send_document(to: str, data: bytes, mime: str, filename: str, body_text: str) -> str:
+async def resolve_window_open(to: str) -> bool:
+    """Is the 24h customer-service window PROVEN open for `to`? Positive evidence only — a webhook-recorded
+    inbound inside WHATSAPP_WINDOW_HOURS. Fails closed (False) on any error, and the sync Supabase read is
+    hopped onto a thread so it can never block the event loop. `WHATSAPP_FREEFORM_WHEN_UNKNOWN=1` is the
+    documented break-glass that forces the old always-try-free-form ladder."""
+    if bool(getattr(settings, "WHATSAPP_FREEFORM_WHEN_UNKNOWN", False)):
+        return True
+    try:
+        return bool(await asyncio.to_thread(whatsapp_window.is_window_open, _to_number(to)))
+    except Exception:
+        return False
+
+
+async def send_document(to: str, data: bytes, mime: str, filename: str, body_text: str,
+                        window_open=None) -> str:
+    """Back-compatible wrapper: SAME signature + return (the provider message id) every existing caller
+    already uses (notify `_dispatch` / `send_file`, recovery, closing). See `send_document_detailed`."""
+    return (await send_document_detailed(to, data, mime, filename, body_text,
+                                         window_open=window_open)).get("message_id", "")
+
+
+async def send_document_detailed(to: str, data: bytes, mime: str, filename: str, body_text: str,
+                                 window_open=None) -> dict:
     """Deliver the ACTUAL report file on WhatsApp wherever Meta permits, else the caller-supplied link.
 
-    Walks the `plan_delivery` ladder (doc-header template → in-window free-form document → link template),
-    reading each Meta response with `classify_send_result` and advancing on anything but 'ok'. `body_text`
-    is the template/caption text and, for the link fallback, MUST already contain the no-login download
-    url (the router builds it). Returns the provider message id; raises only if EVERY planned attempt
-    failed. See the module docstring for the Meta 24h-window rationale."""
+    Walks the `plan_delivery` ladder (doc-header template → PROVEN-in-window free-form document → link
+    template), reading each Meta response with `classify_send_result` and advancing on anything but 'ok'.
+    `body_text` is the template/caption text and, for the link fallback, MUST already contain the no-login
+    download url (the router builds it). `window_open=None` resolves the window from the webhook-recorded
+    inbound log; pass a bool to override (tests, or a caller that already knows).
+
+    Returns {"message_id", "route" (the rung that succeeded), "planned", "window_open", "attached"}.
+    Raises only if EVERY planned attempt failed. See the module docstring for the 24h-window rationale."""
     if not is_configured():
         raise RuntimeError("WhatsApp not configured (set WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)")
+    if window_open is None:
+        window_open = await resolve_window_open(to)
 
     async with httpx.AsyncClient(timeout=120) as cx:
         # One media id serves both attach paths (doc-header template + free-form document); upload once.
@@ -304,7 +366,9 @@ async def send_document(to: str, data: bytes, mime: str, filename: str, body_tex
                 media_id = ""
 
         last = None
-        for step in plan_delivery(bool(settings.WHATSAPP_TEMPLATE_DOC_HEADER), bool(media_id)):
+        planned = plan_delivery(bool(settings.WHATSAPP_TEMPLATE_DOC_HEADER), bool(media_id),
+                                bool(window_open))
+        for step in planned:
             if step == "template_doc":
                 r = await cx.post(f"{_base()}/messages", headers=_headers(),
                                   json=_template_msg(to, filename, media_id, body_text, True))
@@ -315,10 +379,77 @@ async def send_document(to: str, data: bytes, mime: str, filename: str, body_tex
                                   json=_template_msg(to, filename, "", body_text, False))
             last = r
             if classify_send_result(r.status_code, r.text) == "ok":
-                return _msg_id(r)
+                return {"message_id": _msg_id(r), "route": step, "planned": planned,
+                        "window_open": bool(window_open), "attached": step in _ATTACH_ROUTES}
             # else: advance to the next planned attempt (header/window/other error)
 
     if last is not None and 200 <= last.status_code < 300:
-        return _msg_id(last)
+        return {"message_id": _msg_id(last), "route": planned[-1] if planned else "",
+                "planned": planned, "window_open": bool(window_open),
+                "attached": bool(planned) and planned[-1] in _ATTACH_ROUTES}
     raise RuntimeError(f"WhatsApp send {last.status_code if last is not None else '??'}: "
                        f"{last.text[:300] if last is not None else 'no send attempted'}")
+
+
+async def account_info(timeout: float = 12.0) -> dict:
+    """DIAGNOSTIC — "which WhatsApp account am I actually sending as?".
+
+    Reads the configured phone number id straight from the Graph API so the owner can compare it against
+    the Meta dashboard without guessing. Returns display_phone_number / verified_name / quality_rating /
+    code_verification_status / name_status / platform_type / throughput when Graph provides them.
+
+    App LIVE-vs-DEVELOPMENT mode is NOT readable with a WhatsApp system-user token (it needs an app access
+    token, i.e. the app SECRET), so it is reported as an explicit "unknown" with the manual check rather
+    than guessed. NEVER returns or logs the access token. Never raises — a failure comes back as
+    {"ok": False, "error": ...} so a diagnostics page can render it."""
+    if not is_configured():
+        return {"ok": False, "configured": False,
+                "error": "WhatsApp not configured (WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / TEMPLATE_NAME)"}
+    fields = ("display_phone_number,verified_name,quality_rating,code_verification_status,"
+              "name_status,platform_type,throughput,id")
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as cx:
+            r = await cx.get(_base(), headers=_headers(), params={"fields": fields})
+            if r.status_code >= 300:
+                # An unknown field on an older Graph version 400s the whole read — retry with the
+                # minimum every version supports, so a field drift never blanks the diagnostic.
+                r = await cx.get(_base(), headers=_headers(),
+                                 params={"fields": "display_phone_number,verified_name,quality_rating,id"})
+    except Exception as e:
+        return {"ok": False, "configured": True, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+    if r.status_code >= 300:
+        return {"ok": False, "configured": True, "status": r.status_code,
+                "error": _redact(r.text)[:400]}
+    try:
+        d = r.json() or {}
+    except Exception:
+        return {"ok": False, "configured": True, "error": "unparsable Graph response"}
+    qr = d.get("quality_rating")
+    return {
+        "ok": True, "configured": True,
+        "phone_number_id": str(settings.WHATSAPP_PHONE_NUMBER_ID or ""),
+        "graph_version": settings.WHATSAPP_GRAPH_VERSION or "v21.0",
+        "id": d.get("id"),
+        "display_phone_number": d.get("display_phone_number"),
+        "verified_name": d.get("verified_name"),
+        "quality_rating": qr,
+        "code_verification_status": d.get("code_verification_status"),
+        "name_status": d.get("name_status"),
+        "platform_type": d.get("platform_type"),
+        "throughput": (d.get("throughput") or {}).get("level") if isinstance(d.get("throughput"), dict)
+        else d.get("throughput"),
+        # Explicitly NOT guessed — see the docstring.
+        "app_mode": "unknown",
+        "app_mode_note": ("App Live-vs-Development mode needs an app access token; check it manually at "
+                          "Meta App Dashboard → App settings → Basic (the App Mode toggle). In "
+                          "Development mode Meta delivers ONLY to numbers on the test recipient list."),
+    }
+
+
+def _redact(text) -> str:
+    """Strip anything token-shaped out of a Graph error body before it can reach a UI or a log."""
+    t = str(text or "")
+    tok = str(settings.WHATSAPP_ACCESS_TOKEN or "")
+    if tok:
+        t = t.replace(tok, "***")
+    return re.sub(r"(access_token=)[^&\s\"']+", r"\1***", t)

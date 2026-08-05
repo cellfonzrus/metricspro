@@ -10,12 +10,13 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Header, Response
+from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
 from app.modules.core import auth_security as _sec
-from . import report_registry, render, download_token
+from . import report_registry, render, download_token, whatsapp_window
 from .channels import email_resend, whatsapp_meta
 
 router = APIRouter(prefix="/notify", tags=["Notify"])
@@ -142,9 +143,54 @@ def list_reports():
 
 @router.get("/health")
 def health():
+    """Cheap, NETWORK-FREE configuration truth for the notify surfaces.
+
+    The extra whatsapp_* keys answer the questions that made the 2026-08-05 silent-failure incident hard
+    to see from inside the app: is the delivery-status webhook actually wired (verify token + app secret),
+    is window tracking live (mig 723), and which template/ladder are we on. NO secrets are returned — only
+    booleans and the non-secret template name/graph version. The live "which account am I sending as"
+    probe is the separate, super-admin-gated GET /notify/whatsapp-account (it calls Meta)."""
+    try:
+        window_tracking = whatsapp_window.tracking_available()
+    except Exception:
+        window_tracking = False
     return {"email_configured": email_resend.is_configured(),
             "whatsapp_configured": whatsapp_meta.is_configured(),
-            "from_email": settings.NOTIFY_FROM_EMAIL or None}
+            "from_email": settings.NOTIFY_FROM_EMAIL or None,
+            # ── WhatsApp deliverability diagnostics (no network, no secrets) ──
+            "whatsapp_template": settings.WHATSAPP_TEMPLATE_NAME or None,
+            "whatsapp_template_lang": settings.WHATSAPP_TEMPLATE_LANG or None,
+            "whatsapp_graph_version": settings.WHATSAPP_GRAPH_VERSION or None,
+            "whatsapp_doc_header": bool(settings.WHATSAPP_TEMPLATE_DOC_HEADER),
+            "whatsapp_verify_token_set": bool(settings.WHATSAPP_VERIFY_TOKEN),
+            "whatsapp_app_secret_set": bool(settings.WHATSAPP_APP_SECRET),
+            "whatsapp_webhook_ready": bool(settings.WHATSAPP_VERIFY_TOKEN and settings.WHATSAPP_APP_SECRET),
+            "whatsapp_window_tracking": bool(window_tracking),
+            "whatsapp_window_hours": whatsapp_window.window_hours(),
+            "whatsapp_freeform_when_unknown": bool(
+                getattr(settings, "WHATSAPP_FREEFORM_WHEN_UNKNOWN", False)),
+            "whatsapp_webhook_url": (settings.API_PUBLIC_URL or "").rstrip("/")
+                                    + "/api/v1/remediation/whatsapp-webhook"}
+
+
+@router.get("/whatsapp-account")
+async def whatsapp_account(org_id: str = ORG_ID, authorization: str = Header(default=""),
+                           x_active_org: str = Header(default="")):
+    """DIAGNOSTIC — "which WhatsApp account am I actually sending as?" Calls the Meta Graph API for the
+    configured phone number id and reports display_phone_number / verified_name / quality_rating / etc.
+
+    SUPER-ADMIN ONLY: the Meta WABA is PLATFORM infrastructure shared by every tenant (one app, one
+    number), so this is not tenant data and must not be readable by a tenant admin. No token is ever
+    returned or logged (Graph error bodies are redacted). Never 500s on a Meta outage — it reports
+    {"ok": false, "error": ...} so the page can render the failure."""
+    from app.modules.core.router import _uid_from_token, _resolve_caller
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    caller = await run_in_threadpool(_resolve_caller, get_supabase(), uid, x_active_org)
+    if not caller or not caller.get("super_admin"):
+        raise HTTPException(403, "super-admin only — the WhatsApp Business account is platform-wide")
+    return await whatsapp_meta.account_info()
 
 
 # ── unified report → designated recipient routing (Theme 4) ───────────────────
@@ -279,6 +325,27 @@ def _email_html(payload, link, message) -> str:
     )
 
 
+def _insert_log(log_rows) -> None:
+    """Write send_log rows. Never lets a logging failure abort a real send, and DEGRADES GRACEFULLY when
+    migration 723 has not been run: PostgREST rejects the whole batch if `delivery_route` doesn't exist,
+    so we strip that one key and retry once. Without the retry an un-run migration would silently lose the
+    ENTIRE send history — exactly the class of failure this package exists to remove."""
+    if not log_rows:
+        return
+    try:
+        sb().table("send_log").insert(log_rows).execute()
+        return
+    except Exception:
+        pass
+    if not any("delivery_route" in r for r in log_rows):
+        return
+    try:
+        sb().table("send_log").insert(
+            [{k: v for k, v in r.items() if k != "delivery_route"} for r in log_rows]).execute()
+    except Exception:
+        pass
+
+
 async def _dispatch(org_id, report_key, filters, channels, formats, emails, phones, message,
                     subscription_id=None, triggered_by="manual", authorization="", tz=""):
     """Build the report once, deliver to every target, log each attempt.
@@ -302,16 +369,19 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
     log_rows = []
     sent = failed = 0
 
-    def _log(channel, target, status, err="", mid=""):
+    def _log(channel, target, status, err="", mid="", route=""):
         nonlocal sent, failed
         sent += status == "sent"
         failed += status == "failed"
-        log_rows.append({
+        row = {
             "org_id": org_id, "subscription_id": subscription_id, "report_key": report_key,
             "channel": channel, "target": target, "status": status,
             "provider_message_id": mid or None, "error": (err or None),
             "filters": filters or {}, "triggered_by": triggered_by,
-        })
+        }
+        if route:
+            row["delivery_route"] = route   # stripped + retried if mig 723 is un-run (see _insert_log)
+        log_rows.append(row)
 
     if "email" in channels:
         html = _email_html(payload, link, message)
@@ -331,16 +401,13 @@ async def _dispatch(org_id, report_key, filters, channels, formats, emails, phon
             for (data, fn, mime), dl in zip(files, dls):
                 body_text = f"{title} — {dl or link}"
                 try:
-                    mid = await whatsapp_meta.send_document(ph, data, mime, fn, body_text)
-                    _log("whatsapp", ph, "sent", mid=mid)
+                    res = await whatsapp_meta.send_document_detailed(ph, data, mime, fn, body_text)
+                    _log("whatsapp", ph, "sent", mid=res.get("message_id"),
+                         route=res.get("route") or "")
                 except Exception as e:
                     _log("whatsapp", ph, "failed", err=str(e))
 
-    if log_rows:
-        try:
-            sb().table("send_log").insert(log_rows).execute()
-        except Exception:
-            pass  # never let logging failure abort a real send
+    _insert_log(log_rows)
 
     return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones},
             "formats": formats, "channels": channels}
@@ -379,13 +446,16 @@ async def send_file(body: dict, org_id: str = ORG_ID):
     sent = failed = 0
     log_rows = []
 
-    def _log(channel, target, status, err="", mid=""):
+    def _log(channel, target, status, err="", mid="", route=""):
         nonlocal sent, failed
         sent += status == "sent"
         failed += status == "failed"
-        log_rows.append({"org_id": org_id, "report_key": "(client-export)", "channel": channel,
-                         "target": target, "status": status, "provider_message_id": mid or None,
-                         "error": (err or None), "triggered_by": "manual"})
+        row = {"org_id": org_id, "report_key": "(client-export)", "channel": channel,
+               "target": target, "status": status, "provider_message_id": mid or None,
+               "error": (err or None), "triggered_by": "manual"}
+        if route:
+            row["delivery_route"] = route   # stripped + retried if mig 723 is un-run (see _insert_log)
+        log_rows.append(row)
 
     if "email" in channels and emails:
         attachments = [(fn, data, mime) for (data, fn, mime) in files]
@@ -402,15 +472,13 @@ async def send_file(body: dict, org_id: str = ORG_ID):
         for ph in phones:
             for (data, fn, mime), dl in zip(files, dls):
                 try:
-                    mid = await whatsapp_meta.send_document(ph, data, mime, fn, f"{title} — {dl or link}")
-                    _log("whatsapp", ph, "sent", mid=mid)
+                    res = await whatsapp_meta.send_document_detailed(
+                        ph, data, mime, fn, f"{title} — {dl or link}")
+                    _log("whatsapp", ph, "sent", mid=res.get("message_id"),
+                         route=res.get("route") or "")
                 except Exception as e:
                     _log("whatsapp", ph, "failed", err=str(e))
-    if log_rows:
-        try:
-            sb().table("send_log").insert(log_rows).execute()
-        except Exception:
-            pass
+    _insert_log(log_rows)
     return {"sent": sent, "failed": failed, "targets": {"emails": emails, "phones": phones}, "channels": channels}
 
 

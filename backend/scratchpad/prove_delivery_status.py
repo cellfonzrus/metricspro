@@ -119,8 +119,14 @@ class FakeRequest:
         return self._body
 
 
-# signature verification: verify-if-secret-set → force no secret so well-formed payloads reach the loop
+# Signature verification is now FAIL-CLOSED when no app secret is configured (2026-08-05 hardening: the
+# POST is on the PUBLIC allowlist, so the HMAC is its only auth). These scenarios exercise the payload
+# HANDLING, not the signature — so use the documented break-glass to reach the loop. Signature
+# accept/reject (incl. a wrong-signature negative control) is proven in harness_whatsapp_delivery_truth.py.
 R.settings.WHATSAPP_APP_SECRET = ""
+R.settings.WHATSAPP_WEBHOOK_REQUIRE_SIGNATURE = False
+ok("break-glass off + no secret ⇒ unsigned POST is accepted (old behaviour, opt-in)",
+   R._valid_signature("", b"{}") is True)
 
 
 # ── 1. PURE: _merge_delivery_status (monotonic; failed wins & is terminal) ───────────────────────────

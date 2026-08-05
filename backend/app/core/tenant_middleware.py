@@ -78,6 +78,15 @@ _PUBLIC_EXACT = frozenset({
     "/api/v1/core/password-policy/public",  # PUBLIC: owner DEFAULT policy for pre-login strength hints
     "/api/v1/core/auth/forgot-password",  # PUBLIC self-serve reset request (anti-enumeration; anonymous)
     "/api/v1/core/auth/reset-password",   # PUBLIC self-serve reset completion (code-gated; anonymous)
+    "/api/v1/remediation/whatsapp-webhook",  # Meta webhook. EXACT path + METHOD-SCOPED below to
+                                          # {GET, POST} only (2026-08-05: it was a PREFIX, so any future
+                                          # sibling path under it would have been public too, and every
+                                          # method was public). GET = the hub.challenge verification
+                                          # handshake (self-gates on WHATSAPP_VERIFY_TOKEN, fail-closed
+                                          # when unset); POST = Meta's inbound/status callback, whose ONLY
+                                          # auth is the X-Hub-Signature-256 HMAC it self-verifies (now
+                                          # fail-closed when WHATSAPP_APP_SECRET is unset). Meta carries no
+                                          # JWT, so the auth requirement must not fire before the handler.
     "/api/v1/core/bootstrap",             # ONE-call login bootstrap (auth-config + my-tenants +
                                           # pending-connections + me). Same rationale as the
                                           # /api/v1/core/me prefix below: it SELF-GATES on the bearer
@@ -93,7 +102,6 @@ _PUBLIC_PREFIXES = (
     "/docs",                              # Swagger UI + /docs/oauth2-redirect (currently open)
     "/redoc",                             # ReDoc UI (currently open)
     "/api/v1/core/me",                    # token-verified whoami + /me/password-changed (self-gate on token)
-    "/api/v1/remediation/whatsapp-webhook",  # Meta webhook: GET verify handshake + POST receive (self-gates)
     "/api/v1/hr/public/onboarding",       # HR onboarding public token endpoints (the link token IS the auth)
     "/api/v1/notify/dl",                   # no-login report download: the HMAC token IS the auth; reaches
                                            # ONLY the one artifact it signs (uniform 404 on any bad token)
@@ -245,6 +253,26 @@ def _is_public(path: str) -> bool:
     if path.endswith(_RUN_DUE_SUFFIX):
         return True
     return False
+
+
+# METHOD SCOPING for allowlisted paths. An entry here means "public for THESE methods only"; every other
+# method on that same path falls through to the normal auth + org_id-rewrite path (and then the handler's
+# own permission gate). A path NOT listed keeps today's method-agnostic behaviour.
+#   · /api/v1/core/auth-config — GET is read by the login page BEFORE sign-in; the PUT that FLIPS the
+#     global enforce-login flag must never be anonymous (2026-08-05 security hardening).
+#   · /api/v1/remediation/whatsapp-webhook — Meta only ever calls GET (verify handshake) and POST
+#     (inbound + delivery-status callback); nothing else on that path should skip authentication.
+_PUBLIC_METHODS = {
+    "/api/v1/core/auth-config": ("GET",),
+    "/api/v1/remediation/whatsapp-webhook": ("GET", "POST"),
+}
+
+
+def _public_method_ok(path: str, method: str) -> bool:
+    """PURE. For an ALREADY-allowlisted path, is this HTTP method one of the public ones? True for any
+    path with no method restriction (today's behaviour for everything not in _PUBLIC_METHODS)."""
+    allowed = _PUBLIC_METHODS.get(path)
+    return True if allowed is None else (method or "").upper() in allowed
 
 
 def _fetch_memberships(client, uid):
@@ -426,12 +454,13 @@ class TenantScopeMiddleware:
         path = scope.get("path", "")
         method = (scope.get("method") or "GET").upper()
         if _is_public(path):
-            # `/api/v1/core/auth-config` is allowlisted so the login page can READ the enforce-login
-            # flag before sign-in. That path is method-agnostic here, which also exposed the PUT that
-            # FLIPS the (global-singleton) flag to an ANONYMOUS caller. The write must never be
-            # anonymous: only the GET stays public; any other method falls through to the normal
-            # auth path + the handler's _require_super_admin gate. (2026-08-05 security hardening.)
-            if not (path == "/api/v1/core/auth-config" and method != "GET"):
+            # Allowlisting skips BOTH the auth requirement and the org_id rewrite, so a path that only
+            # needs ONE public method must not hand every method away. `_PUBLIC_METHODS` scopes those:
+            # /core/auth-config is public for GET only (the PUT flips the global enforce-login flag and
+            # must never be anonymous), and the Meta webhook for GET+POST only. Any other method on a
+            # scoped path falls through to the normal auth path + the handler's own gate.
+            # (2026-08-05 security hardening.)
+            if _public_method_ok(path, method):
                 return await self.app(scope, receive, send)
         headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
         auth = headers.get("authorization", "")
