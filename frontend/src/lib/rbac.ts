@@ -287,9 +287,17 @@ export const NAV: NavGroup[] = [
     { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/expenses-report', label: 'Closing Expenses', icon: '📋', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'] },
+    // Cash Deposit Recon + Deposit Categories (mig 509) — nav entries per mod-retail-ops NEEDS CORE
+    // 2026-08-05 (both pages were reachable only via direct links on the Closing dashboard / ePay recon).
+    // Same `module: 'closing'` key + scope tiers as every sibling above, so NO role re-seeding is needed
+    // ([[seeded-role-modules-forward-only]]): any role that already has the closing module sees them, and
+    // neither href falls under a REPORT_TREES prefix (`/closing/recon` boundary-matches only itself), so
+    // there is no extra report-area gate — identical gating to Closing Expenses / Expense Categories.
+    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', icon: '💵', module: 'closing', scopes: ['all', 'market'] },
     { href: '/closing/cash-config', label: 'Cash Setup', icon: '⚙️', module: 'closing', scopes: ['all'] },
     { href: '/closing/tender-config', label: 'Tender Setup', icon: '🧾', module: 'closing', scopes: ['all'] },
     { href: '/closing/expense-categories', label: 'Expense Categories', icon: '🗂️', module: 'closing', scopes: ['all'] },
+    { href: '/closing/deposit-categories', label: 'Deposit Categories', icon: '🗂️', module: 'closing', scopes: ['all'] },
     { href: '/closing/envelope-config', label: 'Envelope Payout Setup', icon: '⚙️', module: 'closing', scopes: ['all'] },
     { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'] },
   ]},
