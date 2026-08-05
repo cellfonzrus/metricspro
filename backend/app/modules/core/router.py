@@ -70,8 +70,15 @@ def get_auth_config():
 
 
 @router.put("/auth-config")
-def set_auth_config(body: dict, org_id: str = ORG_ID):
-    """Flip login enforcement on/off (from the Roles admin). Once ON, every user must sign in."""
+def set_auth_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                    x_active_org: str = Header(default="")):
+    """Flip login enforcement on/off (from the Roles admin). Once ON, every user must sign in.
+
+    storeops.app_config is a GLOBAL singleton (CHECK id=1) — this master switch is platform-wide, not
+    per-tenant (per-tenant enforcement is MULTI_TENANT_ENFORCE in the middleware). So a single tenant's
+    admin must NOT be able to flip it for everyone: it is gated to super-admins (or the bootstrap
+    house-org admin), exactly like the other platform-level operations."""
+    _require_super_admin(authorization, x_active_org)
     enabled = bool(body.get("rbac_enabled"))
     sb().schema("storeops").table("app_config").upsert(
         {"id": 1, "org_id": org_id, "rbac_enabled": enabled,
@@ -94,8 +101,10 @@ def get_portal_reports(org_id: str = ORG_ID):
 
 
 @router.put("/portal-reports")
-def set_portal_report(body: dict, org_id: str = ORG_ID):
+def set_portal_report(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                      x_active_org: str = Header(default="")):
     """Upsert one report's portal config. Body: {href, enabled, roles[], label?, category?}."""
+    _require_setting(authorization, x_active_org, "security")
     href = (body.get("href") or "").strip()
     if not href:
         raise HTTPException(400, "href required")
@@ -448,6 +457,26 @@ def _require_super_admin(authorization: str, active_org: str = ""):
     if u and u.get("org_id") == ORG_ID and u.get("role") == "admin":
         return u
     raise HTTPException(403, "super-admin only")
+
+
+def _require_setting(authorization: str, active_org: str, area: str):
+    """Server-side gate for a permission-controlled ADMIN operation. Resolves the caller from the
+    verified JWT (never from a client-set body/header) and requires edit rights on `area` via the
+    existing `_can_edit_setting` precedence (super_admin → explicit settings[area] grant/deny →
+    full-scope admin). Returns the caller dict on success.
+
+    Raises 401 when the request carries no valid token and 403 when the caller lacks the right. This
+    is the SAME gate the account-security endpoints already use (e.g. POST /users/set-password gates on
+    area 'security'); applying it to the role/user write paths closes the privilege-escalation holes
+    where those endpoints self-gated on nothing but the UI hiding the control. `_can_edit_setting` is
+    defined later in this module — resolved at call time, which is fine (this only runs per request)."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    caller = _resolve_caller(sb(), uid, active_org)
+    if not _can_edit_setting(caller, area):
+        raise HTTPException(403, f"not authorized to edit {area}")
+    return caller
 
 
 def _mods(**on):
@@ -1689,7 +1718,9 @@ def list_roles(org_id: str = ORG_ID):
 
 
 @router.post("/roles")
-def create_role(body: dict, org_id: str = ORG_ID):
+def create_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                x_active_org: str = Header(default="")):
+    _require_setting(authorization, x_active_org, "security")
     name = (body.get("name") or "").strip().lower().replace(" ", "_")
     if not name:
         raise HTTPException(400, "name required")
@@ -1701,7 +1732,9 @@ def create_role(body: dict, org_id: str = ORG_ID):
 
 
 @router.put("/roles/{role_id}")
-def update_role(role_id: int, body: dict):
+def update_role(role_id: int, body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                x_active_org: str = Header(default="")):
+    _require_setting(authorization, x_active_org, "security")
     upd = {}
     if "display_name" in body:
         upd["display_name"] = body["display_name"]
@@ -1709,16 +1742,24 @@ def update_role(role_id: int, body: dict):
         upd["permissions"] = body["permissions"]
     if not upd:
         raise HTTPException(400, "nothing to update")
-    res = sb().schema("storeops").table("roles").update(upd).eq("id", role_id).execute()
+    # role_id is a GLOBAL primary key (BIGSERIAL, enumerable 1,2,3…). WITHOUT an org filter the old
+    # handler let a caller rewrite ANOTHER TENANT's role permissions by guessing an integer id —
+    # cross-tenant privilege escalation. org_id is the tenant-middleware-rewritten query param (a
+    # normal admin cannot forge it; a super-admin's chosen org_id is honored for legitimate
+    # cross-tenant admin), so scoping the UPDATE to it is correct for every caller.
+    res = (sb().schema("storeops").table("roles").update(upd)
+           .eq("id", role_id).eq("org_id", org_id).execute())
     if not res.data:
         raise HTTPException(404, "role not found")
     return res.data[0]
 
 
 @router.delete("/roles/{role_id}")
-def delete_role(role_id: int, org_id: str = ORG_ID):
+def delete_role(role_id: int, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                x_active_org: str = Header(default="")):
     """Delete a custom role. Refuses to delete 'admin' (lock-out guard) and blocks deletion while any
     user is still assigned it (reassign them first) so nobody is silently orphaned."""
+    _require_setting(authorization, x_active_org, "security")
     client = sb()
     rows = (client.schema("storeops").table("roles").select("id,name")
             .eq("org_id", org_id).eq("id", role_id).limit(1).execute().data) or []
@@ -2043,9 +2084,11 @@ def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
 
 
 @router.post("/users/assign")
-async def assign_role(body: dict, org_id: str = ORG_ID):
+async def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                      x_active_org: str = Header(default="")):
     """Upsert a core.users row (assign role + scope). Keyed on (org_id, email). Does NOT create
     the auth login — call /users/create-login (or bulk-provision) for that."""
+    _require_setting(authorization, x_active_org, "security")
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
@@ -2073,11 +2116,13 @@ async def assign_role(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/users/bulk-assign")
-def bulk_assign(body: dict, org_id: str = ORG_ID):
+def bulk_assign(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                x_active_org: str = Header(default="")):
     """Bulk upsert app_users (assign roles) from a list — powers the employee-sheet upload and
     the multi-add form. Body: {users:[{email, full_name, role, market, store_code}]}. Does NOT
     create logins (call /users/bulk-provision or per-row create-login after). Role names are
     validated against storeops.roles; bad rows are reported, the rest still apply."""
+    _require_setting(authorization, x_active_org, "security")
     users = body.get("users")
     if not isinstance(users, list) or not users:
         raise HTTPException(400, "users[] required")
@@ -2425,7 +2470,8 @@ async def _deliver_access_code(client, org_id, email, code, *, record_on_invite=
 
 
 @router.post("/users/create-login")
-async def create_login(body: dict, org_id: str = ORG_ID):
+async def create_login(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                       x_active_org: str = Header(default="")):
     """Create (or relink) the Supabase Auth account for ONE assigned user and store auth_id. Returns
     an ACCESS CODE to hand out (user resets on first login). Consent-based (platform-core-11): if the
     email ALREADY has a MetricsPro login in another tenant, NO second login / alias / shared bind is
@@ -2433,6 +2479,7 @@ async def create_login(body: dict, org_id: str = ORG_ID):
     brand-new email (the admin can't learn the email exists elsewhere). The user then CONNECTs or
     DISABLEs on their own next sign-in. Pass {separate_login:true} to force a distinct tenant-aliased
     login (the isolated-per-tenant escape hatch, e.g. kiosk clock-punching reps)."""
+    _require_setting(authorization, x_active_org, "security")
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
@@ -3341,9 +3388,11 @@ def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: s
 
 
 @router.post("/users/bulk-provision")
-def bulk_provision(body: dict, org_id: str = ORG_ID):
+def bulk_provision(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                   x_active_org: str = Header(default="")):
     """Create logins for every assigned core.users row that has an email and no auth_id yet
     (optionally limited to body['emails']). Returns the per-user temp passwords to distribute."""
+    _require_setting(authorization, x_active_org, "security")
     client = sb()
     rows = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
         .execute().data or []
@@ -3371,8 +3420,10 @@ def bulk_provision(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/users/delete")
-def delete_user(body: dict, org_id: str = ORG_ID):
+def delete_user(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                x_active_org: str = Header(default="")):
     """Hard-delete an app user: remove the storeops.app_users row AND its Supabase Auth account."""
+    _require_setting(authorization, x_active_org, "security")
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
@@ -3393,8 +3444,10 @@ def delete_user(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/users/deactivate")
-def deactivate_user(body: dict, org_id: str = ORG_ID):
+def deactivate_user(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                    x_active_org: str = Header(default="")):
     """Soft-disable an app user (keeps the auth account; flip is_active)."""
+    _require_setting(authorization, x_active_org, "security")
     email = (body.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
@@ -3454,12 +3507,14 @@ def purge_app_user(org_id, *, email=None, employee_id=None, hard=True):
 
 
 @router.post("/employees/purge")
-def purge_employee(body: dict, org_id: str = ORG_ID):
+def purge_employee(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                   x_active_org: str = Header(default="")):
     """Delete or deactivate a person from BOTH the StoreOps roster and the Roles module in one
     call (the Roles & Access remove action). Identify by employee_pk (storeops.employees.id) for
     a real employee, or by email/employee_id for a manually-added Roles user (which has no
     employees row). mode='delete' hard-removes the employees row + login + Supabase Auth account;
     mode='deactivate' flips both is_active=False and revokes access (keeps the auth account)."""
+    _require_setting(authorization, x_active_org, "security")
     mode = (body.get("mode") or "delete").strip().lower()
     hard = mode != "deactivate"
     emp_pk = body.get("employee_pk", body.get("id"))
@@ -3703,11 +3758,13 @@ def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = OR
 
 
 @router.put("/employee-widgets")
-def set_employee_widget_overrides(body: dict, org_id: str = ORG_ID):
+def set_employee_widget_overrides(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+                                  x_active_org: str = Header(default="")):
     """Per-employee Employee-Dashboard widget overrides (#1b). Body:
     {employee_id?, email?, widget_overrides: {widget_key: bool} | null}. Writes onto the
     person's storeops.app_users row (so they must be assigned a role first). null/{} = clear
     (inherit the role default). Unknown widget keys are dropped."""
+    _require_setting(authorization, x_active_org, "security")
     eid = (body.get("employee_id") or "").strip()
     email = (body.get("email") or "").strip().lower()
     if not eid and not email:

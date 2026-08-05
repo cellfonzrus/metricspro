@@ -147,6 +147,14 @@ def _identity_503() -> bool:
     return os.environ.get("IDENTITY_BACKEND_503", "1").lower() not in ("0", "false", "no", "off")
 
 
+def _strict_membership() -> bool:
+    """Break-glass for the 2026-08-05 empty-membership fail-closed (H2). Default ON when unset;
+    STRICT_MEMBERSHIP=0 restores the pre-2026-08-05 pass-through in which a verified login with NO
+    app_users row skipped the org rewrite and the CLIENT-SUPPLIED org_id was honored. Same
+    never-strand-the-operator posture as REQUIRE_AUTH / IDENTITY_BACKEND_503 / TWOFA_ENFORCE."""
+    return os.environ.get("STRICT_MEMBERSHIP", "1").lower() not in ("0", "false", "no", "off")
+
+
 class IdentityBackendUnavailable(Exception):
     """The MEMBERSHIP STORE could not be read — as distinct from the token being bad.
 
@@ -416,8 +424,15 @@ class TenantScopeMiddleware:
         if scope.get("type") != "http" or not _enabled():
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
+        method = (scope.get("method") or "GET").upper()
         if _is_public(path):
-            return await self.app(scope, receive, send)
+            # `/api/v1/core/auth-config` is allowlisted so the login page can READ the enforce-login
+            # flag before sign-in. That path is method-agnostic here, which also exposed the PUT that
+            # FLIPS the (global-singleton) flag to an ANONYMOUS caller. The write must never be
+            # anonymous: only the GET stays public; any other method falls through to the normal
+            # auth path + the handler's _require_super_admin gate. (2026-08-05 security hardening.)
+            if not (path == "/api/v1/core/auth-config" and method != "GET"):
+                return await self.app(scope, receive, send)
         headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
         auth = headers.get("authorization", "")
         token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
@@ -441,6 +456,17 @@ class TenantScopeMiddleware:
             return await self.app(scope, receive, send)
         if super_admin:
             # Super-admin ⇒ no rewrite; the client-supplied org_id is honored (cross-tenant admin).
+            return await self.app(scope, receive, send)
+        if not member_orgs:
+            # H2 (2026-08-05): the token VERIFIED but the login has NO tenant membership (no app_users
+            # row). There is no org to rewrite to, so the OLD code fell through and honored the
+            # CLIENT-SUPPLIED org_id — a verified-but-unprovisioned account could read/write any tenant
+            # it named. Fail CLOSED (401). The pre-login / self-provisioning routes a fresh login needs
+            # (/core/me, /core/bootstrap, /core/my-tenants, /core/signup, /core/connect-tenant callers
+            # already hold a membership) are on the public allowlist and returned above, so this only
+            # blocks membership-less access to PROTECTED tenant data. Break-glass: STRICT_MEMBERSHIP=0.
+            if _strict_membership():
+                return await _reject_401(send)
             return await self.app(scope, receive, send)
         # Normal login: honor the caller's chosen tenant ONLY if it is one of their memberships,
         # else fall back to their default membership. Empty membership ⇒ no rewrite (unprovisioned).
