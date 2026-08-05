@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import { api } from '@/lib/client'
 
 // Cash-management configuration (mig 089): the daily-closing deadline + gate, the assigned closer
@@ -51,6 +52,15 @@ export default function CashConfigPage() {
   async function saveDepCfg(match_target: string) {
     setDepMsg('')
     try { const r: any = await api('/api/v1/closing/deposit-config', { method: 'PUT', body: JSON.stringify({ match_target }) }); setDepCfg(r); setDepMsg('✅ Saved.') }
+    catch (e: any) { setDepMsg('❌ ' + (e?.message || e)) }
+  }
+
+  // Cash Deposit Recon (mig 509, OWNER 2026-08-05) — org-default include/exclude toggles for the
+  // expected-deposit adjustment calc. ALL DEFAULT FALSE ("excluded") — the report itself can still
+  // override per-run without touching this config.
+  async function saveDepReconToggle(key: string, val: boolean) {
+    setDepMsg('')
+    try { const r: any = await api('/api/v1/closing/deposit-config', { method: 'PUT', body: JSON.stringify({ [key]: val }) }); setDepCfg(r); setDepMsg('✅ Saved.') }
     catch (e: any) { setDepMsg('❌ ' + (e?.message || e)) }
   }
 
@@ -205,6 +215,40 @@ export default function CashConfigPage() {
           </>
         )}
         {!depCfg && <div style={{ fontSize: 12, color: 'var(--text3)' }}>Loading…</div>}
+      </div>
+
+      <div className="card" style={card}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>💵 Cash Deposit Reconciliation — default adjustments</div>
+        <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
+          The Cash Deposit Recon report&apos;s <b>expected deposit</b> = cash collected <b>minus</b> whichever
+          adjustments are checked below. All three are <b>excluded by default</b> (expected = full cash
+          collected) — the report itself has its own checkboxes to run either way for a single query without
+          changing this org-wide default. Manage the deposit CATEGORIES themselves (Bill Payment Cash
+          Deposit / Store Cash Deposit / any you add) on the <Link href="/closing/deposit-categories" style={{ color: 'var(--accent)' }}>Deposit Categories</Link> page.
+        </p>
+        {depCfg && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={!!depCfg.include_expenses_default}
+                onChange={e => saveDepReconToggle('include_expenses_default', e.target.checked)} />
+              Include cash expenses paid from the envelope
+            </label>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={!!depCfg.include_bill_payments_default}
+                onChange={e => saveDepReconToggle('include_bill_payments_default', e.target.checked)} />
+              Include bill-payment cash (only affects a combined/&quot;total cash&quot; category — a Bill
+              Payment Cash Deposit / Store Cash Deposit split already excludes this automatically)
+            </label>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={!!depCfg.include_other_adj_default}
+                onChange={e => saveDepReconToggle('include_other_adj_default', e.target.checked)} />
+              Include other tenant-configured adjustments
+            </label>
+          </div>
+        )}
+        <div style={{ marginTop: 8 }}>
+          <Link href="/closing/deposit-recon" className="btn btn-secondary" style={{ fontSize: 12 }}>📊 Open Cash Deposit Recon report</Link>
+        </div>
       </div>
 
       <div className="card" style={card}>

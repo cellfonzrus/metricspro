@@ -19,6 +19,7 @@ from . import gsheet
 from . import ops_chargebacks
 from . import expense_config
 from . import envelope as _envelope
+from . import deposit_recon
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -2495,8 +2496,10 @@ _DEFAULT_OCR_MODEL = "claude-haiku-4-5-20251001"   # cheap vision model; tenant-
 
 
 def _deposit_config(client, org_id: str) -> dict:
-    """Per-tenant bank-deposit OCR settings (mig 502). Missing table/row -> the documented default
-    (total_cash / the coded default model), so an un-configured tenant still gets OCR verification."""
+    """Per-tenant bank-deposit OCR settings (mig 502) + the Cash Deposit Recon default adjustment
+    toggles (mig 509 — OWNER 2026-08-05: all default False/excluded). Missing table/row -> the
+    documented defaults, so an un-configured tenant still gets OCR verification + the excluded-by-
+    default recon behaviour."""
     try:
         rows = (client.schema("commcalc").table("closing_deposit_config").select("*")
                 .eq("org_id", org_id).limit(1).execute().data) or []
@@ -2506,7 +2509,10 @@ def _deposit_config(client, org_id: str) -> dict:
     target = (c.get("match_target") or "total_cash").strip()
     if target not in _DEPOSIT_MATCH_TARGETS:
         target = "total_cash"
-    return {"match_target": target, "ocr_model": (c.get("ocr_model") or "").strip() or _DEFAULT_OCR_MODEL}
+    return {"match_target": target, "ocr_model": (c.get("ocr_model") or "").strip() or _DEFAULT_OCR_MODEL,
+            "include_expenses_default": bool(c.get("include_expenses_default")),
+            "include_bill_payments_default": bool(c.get("include_bill_payments_default")),
+            "include_other_adj_default": bool(c.get("include_other_adj_default"))}
 
 
 def _bank_deposit_declared(client, org_id: str, store_code: str, close_date: str, target: str):
@@ -2523,31 +2529,22 @@ def _bank_deposit_declared(client, org_id: str, store_code: str, close_date: str
     reaches the bank must reduce what's left to deposit. `bill_payment_cash` is a separate ePay
     reconciliation leg (not the physical cash envelope) and is left unnetted. Empty/pre-migration
     history nets to 0 -> byte-identical to today. Returns (amount, rep_row_count)."""
-    try:
-        rows = (client.schema("commcalc").table("daily_closing")
-                .select("t_cash,store_cash,epay_on_cash").eq("org_id", org_id)
-                .eq("store_code", store_code).eq("close_date", close_date).limit(5000).execute().data) or []
-    except Exception:
-        rows = []
-    total = 0.0
-    for r in rows:
-        cash = _f(r.get("t_cash"))
-        if not cash:
-            cash = _f(r.get("store_cash"))   # pre-mig-103 tenants never populated t_cash
-        epay = _f(r.get("epay_on_cash"))
-        if target == "bill_payment_cash":
-            total += epay
-        elif target == "store_cash":
-            total += max(cash - epay, 0.0)
-        else:
-            total += cash
+    # retail-ops Cash Deposit Recon package (mig 509): the raw (t_cash, epay_on_cash) sum below is now
+    # read via deposit_recon.closing_cash_raw_by_store_day — the SAME single-source-of-truth reader the
+    # new /closing/deposit-recon report uses — instead of a second inline query+loop. Byte-identical
+    # (target is always pre-validated to one of the 3 real values by _deposit_config before it reaches
+    # here, so cash_for_basis's "manual -> 0" branch is unreachable from this call site).
+    raw = deposit_recon.closing_cash_raw_by_store_day(client, org_id, close_date, close_date,
+                                                        store_codes=[store_code])
+    agg = raw.get((store_code, str(close_date)), {"t_cash": 0.0, "epay_cash": 0.0, "rows": 0})
+    total = deposit_recon.cash_for_basis(agg["t_cash"], agg["epay_cash"], target)
     if target in ("total_cash", "store_cash"):
         exp_by_row, exp_by_sd = _envelope.approved_expense_totals(client, org_id, date_from=close_date,
                                                                   date_to=close_date, store_codes=[store_code])
         wd_by_row, wd_by_sd = _envelope.withdrawal_totals(client, org_id, date_from=close_date,
                                                           date_to=close_date, store_codes=[store_code])
         total = _envelope.net_store_day(total, store_code, close_date, exp_by_sd, wd_by_sd)
-    return round(total, 2), len(rows)
+    return round(total, 2), agg["rows"]
 
 
 # Event-loop safety limits for the ONE outbound AI call this module makes on a live request path
@@ -2633,6 +2630,12 @@ def put_deposit_config(body: dict, org_id: str = ORG_ID, authorization: str = He
     model = (body.get("ocr_model") or "").strip()
     if model:
         row["ocr_model"] = model
+    # mig 509 — Cash Deposit Recon default adjustment toggles (org-level "excluded by default";
+    # the report itself can override per-run without touching this config). Only written when the
+    # caller explicitly sends the key, so a plain OCR-settings save from the old UI never resets them.
+    for k in ("include_expenses_default", "include_bill_payments_default", "include_other_adj_default"):
+        if k in body:
+            row[k] = bool(body.get(k))
     try:
         sb().schema("commcalc").table("closing_deposit_config").upsert(row, on_conflict="org_id").execute()
     except Exception:
@@ -2641,7 +2644,7 @@ def put_deposit_config(body: dict, org_id: str = ORG_ID, authorization: str = He
 
 
 @router.post("/bank-deposit")
-async def bank_deposit(body: dict, org_id: str = ORG_ID):
+async def bank_deposit(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Record a bank deposit (ePay cash / store cash reps collected and deposited). One row per
     deposit; reconciled vs the tenant's CONFIGURED declared-cash basis (bill_payment_cash | store_cash |
     total_cash — see /closing/deposit-config). Accepts EITHER an already-uploaded `receipt_path` OR an
@@ -2649,11 +2652,34 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID):
     it (mig 502). OCR NEVER blocks the deposit from saving and NEVER silently swallows a mismatch — a
     mismatch is stored honestly on the row (`ocr_match`) and alerted (scope 'deposit_mismatch'), for
     management review, never auto-corrected. Missing key/lib -> 'ocr_unavailable', with `manual_confirmed`
-    as the degrade path (a human checks the box after eyeballing the slip themselves)."""
+    as the degrade path (a human checks the box after eyeballing the slip themselves).
+
+    Cash Deposit Recon (mig 509, OWNER 2026-08-05) — ADDITIVE, fully backward compatible: a caller that
+    omits every new field behaves byte-identically to before (category_id stays NULL = "uncategorized",
+    no expected/short computation attempted). New, optional inputs:
+      category_id       — one of GET /closing/deposit-categories' rows (pick-don't-type on the frontend).
+      parent_deposit_id — set when this is a SUPPLEMENTAL deposit against an earlier short one for the
+                          same (store, day, category). This endpoint is ALREADY a bare `.insert()` with
+                          no upsert — a supplemental deposit is a NEW row by construction; nothing here
+                          ever updates/overwrites a prior deposit's amount.
+      short_reason / will_deposit_more — captured by the frontend's short-deposit modal; persisted with
+                          THIS deposit row (the original or the supplemental, whichever the caller is
+                          submitting for).
+      include_expenses / include_bill_payments / include_other_adj — override the org's configured
+                          recon defaults (`closing_deposit_config`) for THIS one deposit's short/over
+                          determination only; omitted -> the org defaults apply (all False out of the
+                          box, i.e. "excluded by default" exactly as the owner specified).
+    Response gains `recon`: {category_id, category_name, basis, expected_deposit, cash_collected,
+    total_deposited_today (this category, this store/day, ACROSS every deposit incl. this one),
+    variance, status, is_short, remaining_short} — the frontend's short-deposit-modal trigger. Degrades
+    to `recon: None` when store/date/category can't be resolved (e.g. no category picked) or mig 509
+    hasn't run — never blocks the deposit from saving either way."""
     require_org(org_id)
     client = sb()
     d = _date(body.get("close_date")) or body.get("close_date")
     store = (body.get("store_code") or "").strip() or None
+    cat_id = (body.get("category_id") or "").strip() or None
+    cat = deposit_recon.category_by_id(client, org_id, cat_id) if cat_id else None
     row = {"org_id": org_id, "close_date": d, "period": (str(d)[:7] if d else None),
            "store_code": store,
            "store_address": body.get("store_name") or body.get("store_address"),
@@ -2661,7 +2687,14 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID):
            "amount": _money(body.get("amount")),
            "receipt_path": body.get("receipt_path") or body.get("receipt") or None,
            "handed_to": (body.get("handed_to") or "").strip() or None,
-           "note": (body.get("note") or "").strip() or None}
+           "note": (body.get("note") or "").strip() or None,
+           "category_id": cat.get("id") if cat else None,
+           "category_name": cat.get("name") if cat else None,
+           "short_reason": (body.get("short_reason") or "").strip() or None,
+           "is_supplemental": bool(body.get("parent_deposit_id")),
+           "parent_deposit_id": (body.get("parent_deposit_id") or "").strip() or None,
+           "will_deposit_more": bool(body.get("will_deposit_more")) if "will_deposit_more" in body else None,
+           "recorded_by": _caller_email(client, authorization)}
 
     cfg = _deposit_config(client, org_id)
     ocr_amount, ocr_detail, ocr_status = None, None, "pending"
@@ -2690,6 +2723,43 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID):
         ocr_status = ("matched" if abs(ocr_amount - declared_amount) <= 1.0 else "mismatch") \
             if declared_amount is not None else "pending"   # nothing to compare against yet -> honest pending, not a verdict
 
+    # ── Cash Deposit Recon (mig 509): compute this category's expected/short state, best-effort. Only
+    # attempted when a category was actually picked — an "uncategorized" deposit (category_id omitted,
+    # the pre-509 default) gets no recon block, exactly the old behaviour.
+    recon_block = None
+    include_expenses = bool(body.get("include_expenses", cfg["include_expenses_default"]))
+    include_bill_payments = bool(body.get("include_bill_payments", cfg["include_bill_payments_default"]))
+    include_other_adj = bool(body.get("include_other_adj", cfg["include_other_adj_default"]))
+    if cat and store and d:
+        try:
+            raw = deposit_recon.closing_cash_raw_by_store_day(client, org_id, d, d, store_codes=[store])
+            agg = raw.get((store, str(d)), {"t_cash": 0.0, "epay_cash": 0.0, "rows": 0})
+            _e_row, exp_by_sd = _envelope.approved_expense_totals(client, org_id, date_from=d, date_to=d,
+                                                                   store_codes=[store])
+            expenses_amt = exp_by_sd.get((store, str(d)), 0.0)
+            _adj_rows, adj_by_key = deposit_recon.load_other_adjustments(client, org_id, d, d, store_codes=[store])
+            other_amt = adj_by_key.get((store, str(d), cat.get("id")), 0.0) + adj_by_key.get((store, str(d), None), 0.0)
+            existing = (client.schema("commcalc").table("bank_deposit").select("amount")
+                        .eq("org_id", org_id).eq("store_code", store).eq("close_date", d)
+                        .eq("category_id", cat.get("id")).execute().data) or []
+            grp = deposit_recon.build_deposit_group(existing + [{"amount": row["amount"], "created_at": "~new~"}])
+            expected, adj_applied, gross = deposit_recon.expected_deposit(
+                agg["t_cash"], agg["epay_cash"], cat.get("basis"), expenses_amt, agg["epay_cash"], other_amt,
+                include_expenses, include_bill_payments, include_other_adj)
+            variance = round(grp["total_deposited"] - expected, 2)
+            status = deposit_recon.status_for(variance)
+            row["expected_amount_recon"] = expected
+            row["include_expenses"] = include_expenses
+            row["include_bill_payments"] = include_bill_payments
+            row["include_other_adj"] = include_other_adj
+            recon_block = {"category_id": cat.get("id"), "category_name": cat.get("name"),
+                           "basis": cat.get("basis"), "expected_deposit": expected, "cash_collected": gross,
+                           "total_deposited_today": grp["total_deposited"], "variance": variance,
+                           "status": status, "is_short": status == "short",
+                           "remaining_short": deposit_recon.remaining_short(expected, grp["total_deposited"])}
+        except Exception:
+            recon_block = None
+
     row.update({
         "ocr_amount": ocr_amount,
         "ocr_date": (ocr_detail or {}).get("date") if isinstance(ocr_detail, dict) else None,
@@ -2700,10 +2770,13 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID):
     try:
         r = client.schema("commcalc").table("bank_deposit").insert(row).execute()
     except Exception:
-        # mig 502 not yet run -> the new OCR/config columns don't exist on bank_deposit. Degrade to the
+        # mig 502/509 not yet run -> the newer columns don't exist on bank_deposit. Degrade to the
         # pre-502 row shape (receipt_path / amount / handed_to / note still save).
         for k in ("ocr_amount", "ocr_date", "ocr_bank_name", "ocr_match", "ocr_detail",
-                  "match_target", "declared_amount", "manual_confirmed"):
+                  "match_target", "declared_amount", "manual_confirmed",
+                  "category_id", "category_name", "short_reason", "is_supplemental",
+                  "parent_deposit_id", "will_deposit_more", "recorded_by",
+                  "expected_amount_recon", "include_expenses", "include_bill_payments", "include_other_adj"):
             row.pop(k, None)
         r = client.schema("commcalc").table("bank_deposit").insert(row).execute()
     saved = (r.data or [row])[0]
@@ -2718,8 +2791,279 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID):
                               ref_key=f"bankdep|{store}|{d}|{saved.get('id')}", store_code=store)
         except Exception:
             pass
+    if recon_block and recon_block["is_short"]:
+        try:
+            await _send_alert(client, org_id, "deposit_short",
+                              "⚠️ Cash deposit short",
+                              (f"{row.get('store_address') or store or '—'} on {d} — {recon_block['category_name']}: "
+                               f"deposited {_usd(recon_block['total_deposited_today'])} of an expected "
+                               f"{_usd(recon_block['expected_deposit'])} (short by {_usd(recon_block['remaining_short'])})."),
+                              ref_key=f"bankdep-short|{store}|{d}|{cat.get('id') if cat else ''}", store_code=store)
+        except Exception:
+            pass
     return {"ok": True, "row": saved, "ocr": ocr_detail, "ocr_match": ocr_status,
-            "declared_amount": declared_amount, "match_target": cfg["match_target"]}
+            "declared_amount": declared_amount, "match_target": cfg["match_target"], "recon": recon_block}
+
+
+# ── Deposit categories + adjustment types/ledger (mig 509) — admin CRUD, mirrors expense-categories ──
+@router.get("/deposit-categories")
+def get_deposit_categories(org_id: str = ORG_ID):
+    """The org's deposit/reconciliation categories (lazy-seeded 2 presets on first call). Consumed by
+    the bank-deposit recording form's category picker, the deposit-recon report, and the admin page."""
+    require_org(org_id)
+    rows = deposit_recon.load_categories(sb(), org_id, active_only=False)
+    return {"categories": rows, "basis_values": list(deposit_recon.BASIS_VALUES)}
+
+
+@router.put("/deposit-categories")
+def put_deposit_categories(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Full-replace-by-upsert save (mirrors /closing/expense-categories). Never deletes — deactivate
+    instead, since already-posted bank_deposit/closing_deposit_adjustment rows reference a category id."""
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing deposit categories is permission-restricted.")
+    cats = payload.get("categories") or []
+    ups, news = [], []
+    for i, c in enumerate(cats):
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        row = {"org_id": org_id, "name": name, "basis": deposit_recon._normalize_basis(c.get("basis")),
+               "is_preset": bool(c.get("is_preset")), "is_active": c.get("is_active", True) is not False,
+               "sort_order": c.get("sort_order", i), "updated_at": _now()}
+        if c.get("id"):
+            row["id"] = c["id"]
+            ups.append(row)
+        else:
+            news.append(row)
+    try:
+        if ups:
+            client.schema("commcalc").table(deposit_recon.CAT_TABLE).upsert(ups, on_conflict="id").execute()
+        if news:
+            client.schema("commcalc").table(deposit_recon.CAT_TABLE).insert(news).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save deposit categories (run migration 509?): {e}")
+    return {"ok": True, "saved": len(ups) + len(news)}
+
+
+@router.get("/deposit-adjustment-types")
+def get_deposit_adjustment_types(org_id: str = ORG_ID):
+    require_org(org_id)
+    return {"types": deposit_recon.load_adjustment_types(sb(), org_id, active_only=False)}
+
+
+@router.put("/deposit-adjustment-types")
+def put_deposit_adjustment_types(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    client = sb()
+    if not _can_edit_closing_setting(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Editing deposit adjustment types is permission-restricted.")
+    types = payload.get("types") or []
+    ups, news = [], []
+    for i, t in enumerate(types):
+        name = (t.get("name") or "").strip()
+        if not name:
+            continue
+        row = {"org_id": org_id, "name": name, "is_active": t.get("is_active", True) is not False,
+               "sort_order": t.get("sort_order", i), "updated_at": _now()}
+        if t.get("id"):
+            row["id"] = t["id"]
+            ups.append(row)
+        else:
+            news.append(row)
+    try:
+        if ups:
+            client.schema("commcalc").table(deposit_recon.ADJ_TYPE_TABLE).upsert(ups, on_conflict="id").execute()
+        if news:
+            client.schema("commcalc").table(deposit_recon.ADJ_TYPE_TABLE).insert(news).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save adjustment types (run migration 509?): {e}")
+    return {"ok": True, "saved": len(ups) + len(news)}
+
+
+@router.get("/deposit-adjustments")
+def list_deposit_adjustments(date_from: str = "", date_to: str = "", stores: str = "",
+                             org_id: str = ORG_ID):
+    """The manual 'other adjustment' ledger — the tenant-configured 3rd adjustment bucket (cash
+    expenses / bill-payment cash are read live off closing_expense / epay_on_cash instead; this table
+    is only the open-ended extra bucket)."""
+    require_org(org_id)
+    client = sb()
+    d_from = _date(date_from) or date_from
+    d_to = _date(date_to) or date_to
+    if not d_from or not d_to:
+        raise HTTPException(400, "date_from/date_to required (YYYY-MM-DD)")
+    store_codes = [s.strip().upper() for s in stores.split(",") if s.strip()] or None
+    rows, _by_key = deposit_recon.load_other_adjustments(client, org_id, str(d_from), str(d_to), store_codes)
+    return {"rows": rows, "total": round(sum(_f(r.get("amount")) for r in rows), 2)}
+
+
+@router.post("/deposit-adjustment")
+def create_deposit_adjustment(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """Record one manual 'other' adjustment line (store/day, amount, tenant-configured type,
+    optionally tied to a specific deposit category). Org-stamped; never touches bank_deposit rows —
+    picked up by GET /closing/deposit-recon's own read the next time that report runs."""
+    require_org(org_id)
+    client = sb()
+    close_date = _date(payload.get("close_date"))
+    if not close_date:
+        raise HTTPException(400, "valid close_date required")
+    amt = _money(payload.get("amount"))
+    if amt <= 0:
+        raise HTTPException(400, "Adjustment amount must be greater than zero.")
+    atype = deposit_recon.adjustment_type_by_id(client, org_id, payload.get("adjustment_type_id"))
+    row = {"org_id": org_id, "store_code": (payload.get("store_code") or "").strip() or None,
+           "close_date": close_date, "adjustment_type_id": atype.get("id") if atype else None,
+           "adjustment_type_name": atype.get("name") if atype else (payload.get("adjustment_type_name") or "").strip() or None,
+           "category_id": (payload.get("category_id") or "").strip() or None,
+           "amount": amt, "description": (payload.get("description") or "").strip() or None,
+           "created_by": _caller_email(client, authorization)}
+    try:
+        r = client.schema("commcalc").table(deposit_recon.ADJ_TABLE).insert(row).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not save adjustment (run migration 509?): {e}")
+    return {"ok": True, "row": (r.data[0] if r.data else row)}
+
+
+@router.put("/bank-deposit/{deposit_id}")
+def update_bank_deposit_meta(deposit_id: str, payload: dict, org_id: str = ORG_ID,
+                             authorization: str = Header(default="")):
+    """NARROW, metadata-only edit — short_reason / will_deposit_more ONLY. The short-deposit modal
+    posts the reason a moment AFTER the deposit itself was recorded (the user hasn't typed it yet at
+    POST time); this lets that text land on the SAME row, append-only on every money field (amount,
+    category_id, expected_amount_recon are never accepted here — a 400 if the caller tries). Org-scoped
+    on both the read-check and the write."""
+    require_org(org_id)
+    client = sb()
+    for forbidden in ("amount", "category_id", "close_date", "store_code", "expected_amount_recon"):
+        if forbidden in payload:
+            raise HTTPException(400, f"'{forbidden}' cannot be changed on an existing deposit — record a new (supplemental) deposit instead.")
+    patch = {}
+    if "short_reason" in payload:
+        patch["short_reason"] = (payload.get("short_reason") or "").strip() or None
+    if "will_deposit_more" in payload:
+        patch["will_deposit_more"] = bool(payload.get("will_deposit_more"))
+    if not patch:
+        return {"ok": True, "updated": 0}
+    try:
+        r = (client.schema("commcalc").table("bank_deposit").update(patch)
+             .eq("id", deposit_id).eq("org_id", org_id).execute())
+    except Exception as e:
+        raise HTTPException(500, f"could not update deposit (run migration 509?): {e}")
+    return {"ok": True, "row": (r.data[0] if r.data else None)}
+
+
+@router.get("/deposit-recon")
+def deposit_recon_report(date: str = "", date_from: str = "", date_to: str = "", stores: str = "",
+                         category_id: str = "", include_expenses: str = "", include_bill_payments: str = "",
+                         include_other_adj: str = "", tolerance: float = 1.0,
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Cash Deposit Reconciliation report (OWNER DIRECTIVE 2026-08-05) — for every (store, day) that has
+    at least one recorded bank deposit in range, cross-checks cash COLLECTED (Daily Closing declared
+    cash + the POS X-Report, where available) against cash DEPOSITED, per tenant-defined category, net
+    of tenant-configurable adjustments (expenses / bill-payment cash / other — each EXCLUDED by default,
+    per query param or the org's `closing_deposit_config` defaults). RULE FIVE standard filters (date
+    range + store/market via `stores=`) + RULE FOUR exports (ReportShell on the frontend renders this
+    payload directly). Manager-span keyset scoped, same precedent as every other closing report
+    (retail-ops-26) — a DM only ever sees their own stores' deposits."""
+    require_org(org_id)
+    client = sb()
+    d_from = _date(date_from or date)
+    d_to = _date(date_to or date)
+    if not d_from or not d_to:
+        raise HTTPException(400, "date or date_from/date_to required (YYYY-MM-DD)")
+    if str(d_from) > str(d_to):
+        d_from, d_to = d_to, d_from
+    store_codes = [s.strip().upper() for s in stores.split(",") if s.strip()] or None
+
+    cfg = _deposit_config(client, org_id)
+
+    def _tri(v, default):
+        v = (v or "").strip().lower()
+        if v in ("1", "true", "yes"):
+            return True
+        if v in ("0", "false", "no"):
+            return False
+        return default
+    inc_exp = _tri(include_expenses, cfg["include_expenses_default"])
+    inc_bill = _tri(include_bill_payments, cfg["include_bill_payments_default"])
+    inc_other = _tri(include_other_adj, cfg["include_other_adj_default"])
+
+    cats_all = deposit_recon.load_categories(client, org_id, active_only=True)
+    if category_id:
+        cats_all = [c for c in cats_all if str(c.get("id")) == category_id]
+    active_cat_ids = {c.get("id") for c in cats_all}
+
+    raw_by_sd = deposit_recon.closing_cash_raw_by_store_day(client, org_id, str(d_from), str(d_to), store_codes=store_codes)
+    _exp_row, exp_by_sd = _envelope.approved_expense_totals(client, org_id, date_from=str(d_from),
+                                                            date_to=str(d_to), store_codes=store_codes)
+    _adj_rows, adj_by_key = deposit_recon.load_other_adjustments(client, org_id, str(d_from), str(d_to), store_codes)
+    deposits = deposit_recon.bank_deposits_by_store_day(client, org_id, str(d_from), str(d_to), store_codes)
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    sm = (client.schema("commcalc").table("store_mapping").select("store_code,store_address")
+          .eq("org_id", org_id).execute().data) or []
+    name_by_code = {s.get("store_code"): s.get("store_address") for s in sm if s.get("store_code")}
+
+    by_store_day = {}
+    for x in deposits:
+        store = x.get("store_code") or ""
+        if ks is not None and not in_keyset(ks, store, name_by_code.get(store)):
+            continue
+        key = (store, str(x.get("close_date") or ""))
+        by_store_day.setdefault(key, []).append(x)
+
+    xrep_cache = {}
+
+    def _xrep_for(dstr):
+        if dstr not in xrep_cache:
+            xrep_cache[dstr] = _xreport_tenders_by_store(client, org_id, dstr)
+        return xrep_cache[dstr]
+
+    out_days = []
+    for (store, dstr), drows in by_store_day.items():
+        agg = raw_by_sd.get((store, dstr), {"t_cash": 0.0, "epay_cash": 0.0, "rows": 0})
+        xrep_store = _xrep_for(dstr).get(store)
+        expenses_amt = exp_by_sd.get((store, dstr), 0.0)
+        bill_amt = agg["epay_cash"]
+
+        by_cat = {}
+        for x in drows:
+            by_cat.setdefault(x.get("category_id"), []).append(x)
+
+        cat_blocks = []
+        for cat in cats_all:
+            cid = cat.get("id")
+            crows = by_cat.get(cid, [])
+            other_amt = round(adj_by_key.get((store, dstr, cid), 0.0) + adj_by_key.get((store, dstr, None), 0.0), 2)
+            cat_blocks.append(deposit_recon.assemble_category_block(
+                cat, agg["t_cash"], agg["epay_cash"], expenses_amt, bill_amt, other_amt,
+                inc_exp, inc_bill, inc_other, crows, tolerance))
+
+        uncategorized_rows = [x for cid, rows_ in by_cat.items() if cid not in active_cat_ids for x in rows_]
+        uncategorized = None
+        if uncategorized_rows:
+            grp = deposit_recon.build_deposit_group(uncategorized_rows)
+            uncategorized = {"category_id": None, "category_name": "Uncategorized", "basis": None,
+                             "total_deposited": grp["total_deposited"], "deposits": grp["deposits"]}
+
+        day_total_deposited = round(sum(b["total_deposited"] for b in cat_blocks) +
+                                     (uncategorized["total_deposited"] if uncategorized else 0.0), 2)
+        day_total_expected = round(sum(b["expected_deposit"] for b in cat_blocks), 2)
+        day_variance = round(day_total_deposited - day_total_expected, 2)
+        out_days.append({
+            "store_code": store, "store_address": name_by_code.get(store) or store, "close_date": dstr,
+            "closing_cash_total": agg["t_cash"],
+            "xreport_cash": (xrep_store or {}).get("cash") if xrep_store else None,
+            "xreport_available": bool(xrep_store),
+            "categories": cat_blocks, "uncategorized": uncategorized,
+            "day_total": {"deposited": day_total_deposited, "expected": day_total_expected,
+                         "variance": day_variance, "status": deposit_recon.status_for(day_variance, tolerance)},
+        })
+    out_days.sort(key=lambda r: (r["close_date"], r["store_address"] or ""), reverse=True)
+    return {"date_from": str(d_from), "date_to": str(d_to), "days": out_days, "categories": cats_all,
+            "toggles": {"include_expenses": inc_exp, "include_bill_payments": inc_bill, "include_other_adj": inc_other},
+            "tolerance": tolerance}
 
 
 @router.get("/epay-recon")

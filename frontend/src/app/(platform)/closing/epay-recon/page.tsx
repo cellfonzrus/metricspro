@@ -14,10 +14,14 @@ export default function EpayReconPage() {
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [stores, setStores] = useState<any[]>([])
   // bank-deposit entry (mig 502: inline slip -> OCR-verified against the tenant's configured basis)
-  const [dep, setDep] = useState<{ store_code: string; amount: string; employee_name: string; note: string; slip?: string; manual_confirmed?: boolean }>({ store_code: '', amount: '', employee_name: '', note: '' })
+  const [dep, setDep] = useState<{ store_code: string; category_id: string; amount: string; employee_name: string; note: string; slip?: string; manual_confirmed?: boolean }>({ store_code: '', category_id: '', amount: '', employee_name: '', note: '' })
   const [depMsg, setDepMsg] = useState('')
   const [depBusy, setDepBusy] = useState(false)
   const [depCfg, setDepCfg] = useState<any>(null)
+  // Cash Deposit Recon (mig 509, OWNER 2026-08-05): deposit categories are pick-don't-type here too —
+  // the SAME /closing/deposit-categories list the deposit-recon report + admin page use.
+  const [depCats, setDepCats] = useState<any[]>([])
+  const [shortModal, setShortModal] = useState<any>(null)
 
   function load() {
     setLoading(true)
@@ -27,6 +31,7 @@ export default function EpayReconPage() {
   useEffect(() => {
     api('/api/v1/closing/stores').then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {})
     api('/api/v1/closing/deposit-config').then(setDepCfg).catch(() => {})
+    api('/api/v1/closing/deposit-categories').then((d: any) => setDepCats(d?.categories || [])).catch(() => {})
   }, [])
 
   function pickSlip(f: File) {
@@ -45,9 +50,21 @@ export default function EpayReconPage() {
         : r.ocr_match === 'unreadable' ? '⚠️ Slip uploaded but the amount couldn’t be read — recorded as entered.'
         : ''
       setDepMsg(`✅ Bank deposit recorded. ${badge}`)
-      setDep({ store_code: '', amount: '', employee_name: '', note: '' }); load()
+      if (r?.recon?.is_short) {
+        setShortModal({ recon: r.recon, depositId: r.row?.id, store_code: dep.store_code, category_id: dep.category_id })
+      } else {
+        setDep({ store_code: '', category_id: '', amount: '', employee_name: '', note: '' })
+      }
+      load()
     } catch (e: any) { setDepMsg('❌ ' + (e?.message || e)) }
     setDepBusy(false)
+  }
+  const [shortReason, setShortReason] = useState('')
+  async function closeShortModal(willDepositMore: boolean) {
+    if (shortModal?.depositId) {
+      try { await api(`/api/v1/closing/bank-deposit/${shortModal.depositId}`, { method: 'PUT', body: JSON.stringify({ short_reason: shortReason, will_deposit_more: willDepositMore }) }) } catch { /* best-effort */ }
+    }
+    setShortModal(null); setShortReason(''); setDep({ store_code: '', category_id: '', amount: '', employee_name: '', note: '' })
   }
 
   // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): this page had NO store/
@@ -110,6 +127,10 @@ export default function EpayReconPage() {
           <option value="">Store…</option>
           {stores.map((s, i) => <option key={i} value={s.store_code}>{s.store_address || s.store_code}</option>)}
         </select>
+        <select style={inp} value={dep.category_id} onChange={e => setDep(d => ({ ...d, category_id: e.target.value }))}>
+          <option value="">Category (optional)…</option>
+          {depCats.map((c: any) => <option key={c.id || c.name} value={c.id || ''}>{c.name}</option>)}
+        </select>
         <input style={{ ...inp, width: 110 }} inputMode="decimal" placeholder="Amount $" value={dep.amount} onChange={e => setDep(d => ({ ...d, amount: e.target.value }))} />
         <input style={{ ...inp, width: 130 }} placeholder="Deposited by" value={dep.employee_name} onChange={e => setDep(d => ({ ...d, employee_name: e.target.value }))} />
         <label className="btn" style={{ cursor: 'pointer' }}>{dep.slip ? '📎 Slip ✓' : '📎 Deposit slip'}
@@ -128,9 +149,27 @@ export default function EpayReconPage() {
             Slip checked against: <b>{String(depCfg.match_target || 'total_cash').replace('_', ' ')}</b>
             {depCfg.anthropic_configured === false ? ' · OCR unavailable (server key not set)' : ''}
             {' · '}<Link href="/closing/cash-config" style={{ color: 'var(--accent)' }}>change</Link>
+            {' · '}<Link href="/closing/deposit-recon" style={{ color: 'var(--accent)' }}>Cash Deposit Recon report</Link>
           </span>
         )}
       </div>
+
+      {shortModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div className="card" style={{ padding: 20, maxWidth: 420, width: '90%' }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>⚠️ Cash deposit is short by {fmt(shortModal.recon.remaining_short)}</h3>
+            <p style={{ fontSize: 13, color: 'var(--text2)' }}>
+              Expected {fmt(shortModal.recon.expected_deposit)}, deposited {fmt(shortModal.recon.total_deposited_today)} so far.
+            </p>
+            <textarea style={{ width: '100%', minHeight: 70, padding: 8, borderRadius: 6, border: '1px solid var(--border)', fontSize: 13 }}
+              placeholder="Reason for the short deposit…" value={shortReason} onChange={e => setShortReason(e.target.value)} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+              <button className="btn btn-secondary" onClick={() => closeShortModal(true)}>Save reason — will deposit more (record it on <Link href="/closing/deposit-recon" style={{ color: 'var(--accent)' }}>Cash Deposit Recon</Link>)</button>
+              <button className="btn btn-secondary" onClick={() => closeShortModal(false)}>Save reason — that's final</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
