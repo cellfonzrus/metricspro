@@ -163,7 +163,7 @@ async def run():
     fc1 = FakeClient({"raw_sales": raw1, "daily_sales_feed": [], "accessory_config": [],
                       "flag_rules": [], "gp_category_map": []}, COLS)
     router.sb = lambda: fc1
-    res = router.sales_report_detail(period=CLOSED, store="0123 Main St", salesperson="Jane Rep",
+    res = await router.sales_report_detail(period=CLOSED, store="0123 Main St", salesperson="Jane Rep",
                                            date=f"{CLOSED}-12", org_id=ORG)
     txns = {t["trans_id"]: t for t in res["transactions"]}
     check("S1 two transactions returned", res["txn_count"] == 2 and set(txns) == {"T1", "T2"})
@@ -193,7 +193,7 @@ async def run():
                       "accessory_config": [{"org_id": ORG, "box_departments": ["Total Devices"]}],
                       "flag_rules": [], "gp_category_map": []}, COLS)
     router.sb = lambda: fc2
-    res2 = router.sales_report_detail(period=CLOSED, store="0123 Main St", salesperson="Jane Rep",
+    res2 = await router.sales_report_detail(period=CLOSED, store="0123 Main St", salesperson="Jane Rep",
                                             date=f"{CLOSED}-13", org_id=ORG)
     x1 = res2["transactions"][0]
     lines2 = {l["product"]: l for l in x1["lines"]}
@@ -216,7 +216,7 @@ async def run():
     fc3 = FakeClient({"daily_sales_feed": feed3, "raw_sales": [], "accessory_config": [],
                       "flag_rules": [], "gp_category_map": []}, COLS)
     router.sb = lambda: fc3
-    res3 = router.sales_report_detail(period=OPEN, store="0123 Main St", salesperson="Jane Rep",
+    res3 = await router.sales_report_detail(period=OPEN, store="0123 Main St", salesperson="Jane Rep",
                                             date=f"{OPEN}-03", org_id=ORG)
     check("S3 feed drill-down NOT empty (sku select skipped, no throw)", res3["txn_count"] == 1)
     f1 = res3["transactions"][0]

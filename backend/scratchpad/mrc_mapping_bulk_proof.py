@@ -1,19 +1,6 @@
 """Proof for /mrc-mapping/bulk-classify: write-in filter semantics, bulk apply in one call, cross-menu
 conflict guard (blocks whole batch + accurate list), money-safety (existing MRC $ preserved, item_mapping
 never written = sync deferred), org isolation. Drives the REAL endpoint against a FakeClient."""
-
-
-def run_route(x):
-    """Call a commcalc route handler in EITHER shape.
-
-    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
-    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
-    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
-    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
-    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
-    ever legitimately becomes a coroutine again."""
-    import asyncio as _a
-    return _a.run(x) if _a.iscoroutine(x) else x
 import sys, asyncio, uuid, copy
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -89,7 +76,7 @@ def item_rows(org):
     return [x for x in fake.store['item_mapping'] if x['org_id'] == org]
 
 def call(body, org=ORG_A):
-    return run_route(
+    return asyncio.get_event_loop().run_until_complete(
         r.mrc_mapping_bulk_classify(body, authorization="", org_id=org))
 
 results = []

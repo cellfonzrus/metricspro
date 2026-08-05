@@ -49,19 +49,6 @@ WHAT THIS PROVES
 No DB, no network — the real functions over an in-memory FakeClient that COUNTS table reads.
 Run:  cd backend && python3 scratchpad/catalog_followups_proof.py
 """
-
-
-def run_route(x):
-    """Call a commcalc route handler in EITHER shape.
-
-    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
-    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
-    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
-    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
-    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
-    ever legitimately becomes a coroutine again."""
-    import asyncio as _a
-    return _a.run(x) if _a.iscoroutine(x) else x
 import importlib.util
 import json
 import os
@@ -542,11 +529,11 @@ check("A10c CLEARING an override also invalidates (file category restored)",
 
 c = fresh()
 R._accessory_config(c, ORG_A)
-run_route(R.set_gp_category_map({'department': 'GPACC', 'category': 'accessory'}, org_id=ORG_A))
+asyncio.run(R.set_gp_category_map({'department': 'GPACC', 'category': 'accessory'}, org_id=ORG_A))
 check("A11a POST /gp-category-map (upsert) invalidates → the new dept appears",
       'gpacc' in R._accessory_config(c, ORG_A)['departments'],
       str(R._accessory_config(c, ORG_A)['departments']))
-run_route(R.set_gp_category_map({'department': 'GPACC', 'category': ''}, org_id=ORG_A))
+asyncio.run(R.set_gp_category_map({'department': 'GPACC', 'category': ''}, org_id=ORG_A))
 check("A11b …and the DELETE branch invalidates too → the dept is gone",
       'gpacc' not in R._accessory_config(c, ORG_A)['departments'],
       str(R._accessory_config(c, ORG_A)['departments']))

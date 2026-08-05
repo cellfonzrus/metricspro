@@ -17,19 +17,6 @@ FIXTURES ARE THE OWNER'S OWN JULY 2026 M1 ROWS (pasted 2026-07-27):
 
 Run:  cd backend && python3 scratchpad/installment_category_qualification_proof.py
 """
-
-
-def run_route(x):
-    """Call a commcalc route handler in EITHER shape.
-
-    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
-    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
-    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
-    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
-    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
-    ever legitimately becomes a coroutine again."""
-    import asyncio as _a
-    return _a.run(x) if _a.iscoroutine(x) else x
 import os
 import sys
 import types
@@ -825,25 +812,25 @@ R.require_org = lambda *a, **k: None
 R._require_commission_admin = lambda *a, **k: None
 R._caller_uid = lambda *a, **k: "harness"
 
-g = run_route(R.get_category_qualification(period=PERIOD, org_id=LUXE))
+g = asyncio.run(R.get_category_qualification(period=PERIOD, org_id=LUXE))
 check("GET category-qualification returns the owner's defaults, the labels, the built-ins and this "
       "tenant's REAL department/category/product vocabulary (pick-don't-type)",
       g["qualification"]["tablet"] is False and g["qualification"]["sim"] is False
       and g["is_default"] is True and len(g["builtin_rules"]) > 10
       and "BrandedHandset" in g["departments"] and "SimMarketplace" in g["categories_seen"]
       and any("Galaxy Tab" in p for p in g["products"]), {k: g[k] for k in ("qualification", "is_default")})
-run_route(R.put_category_qualification({"qualification": {**ALL_ON, "tablet": False}}, org_id=LUXE))
+asyncio.run(R.put_category_qualification({"qualification": {**ALL_ON, "tablet": False}}, org_id=LUXE))
 check("PUT saves an org-level set (and it is org-stamped)",
       _st["commission_org_config"][0]["org_id"] == LUXE
       and _st["commission_org_config"][0]["installment_category_qualification"]["tablet"] is False,
       _st["commission_org_config"])
 check("…and the ENGINE reads exactly what the UI saved (SIM back on, tablets still off)",
       money(run(NEW, _st)) == round(2.75 + 2.75 + 3.25, 2), rows(run(NEW, _st)))
-run_route(R.put_category_qualification({"reset": True}, org_id=LUXE))
+asyncio.run(R.put_category_qualification({"reset": True}, org_id=LUXE))
 check("PUT {reset:true} restores the code defaults (stored NULL)",
       _st["commission_org_config"][0]["installment_category_qualification"] is None)
 
-run_route(R.save_category_rule({"category_key": "tablet", "match_field": "department",
+asyncio.run(R.save_category_rule({"category_key": "tablet", "match_field": "department",
                                   "match_op": "equals", "match_value": "Tablets"}, org_id=LUXE))
 check("POST category-rules stamps org_id on the INSERT (write-side multi-tenant)",
       _st["installment_category_rule"][0]["org_id"] == LUXE, _st["installment_category_rule"])
@@ -851,12 +838,12 @@ for bad, why in (({"category_key": "spaceship", "match_value": "x"}, "unknown ca
                  ({"category_key": "tablet", "match_field": "nope", "match_value": "x"}, "unknown field"),
                  ({"category_key": "tablet", "match_value": ""}, "empty value")):
     try:
-        run_route(R.save_category_rule(bad, org_id=LUXE))
+        asyncio.run(R.save_category_rule(bad, org_id=LUXE))
         check(f"rejects {why}", False)
     except Exception as e:
         check(f"rejects {why} with a 400 that says what is allowed", "400" in str(type(e)) or True)
 
-imp = run_route(R.category_impact(PERIOD, org_id=LUXE))
+imp = asyncio.run(R.category_impact(PERIOD, org_id=LUXE))
 check("GET category-impact returns the per-rep BLAST RADIUS (now / before / delta) without writing "
       "anything",
       imp["by_rep"] and imp["by_rep"][0]["delta"] < 0

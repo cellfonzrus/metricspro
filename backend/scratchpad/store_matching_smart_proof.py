@@ -188,11 +188,7 @@ def base_store(**over):
 
 
 def run(coro):
-    # ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers are now plain `def` (off the single
-    # uvicorn event loop). Dual-shape: drive a coroutine, pass a plain result straight through.
-    if asyncio.iscoroutine(coro):
-        return asyncio.run(coro)
-    return coro
+    return asyncio.run(coro)
 
 
 # ══ (1) _norm_store_match — deterministic normalization ═════════════════════════════════════════════

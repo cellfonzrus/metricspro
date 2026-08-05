@@ -22,19 +22,6 @@ trans_ids (a STALE duplicate like 'A' below, same trans_id, is still dropped) an
 trans_ids ('Z' below). The all-three-surfaces-agree invariant is UNCHANGED (they call the same union); the
 ground-truth values here rise by exactly the recovered raw-only transaction. See the updated (a0)/(a1)/(b).
 """
-
-
-def run_route(x):
-    """Call a commcalc route handler in EITHER shape.
-
-    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
-    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
-    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
-    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
-    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
-    ever legitimately becomes a coroutine again."""
-    import asyncio as _a
-    return _a.run(x) if _a.iscoroutine(x) else x
 import os, sys, asyncio, calendar as _cal
 from datetime import date as _date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -226,7 +213,7 @@ print("\n(a2) Sales Report totals == ground truth (same shared aggregation)")
 _orig = R.sb
 R.sb = lambda: c
 try:
-    sr = run_route(R.sales_report(period=OPEN, authorization="", org_id=ORG))
+    sr = asyncio.run(R.sales_report(period=OPEN, authorization="", org_id=ORG))
 finally:
     R.sb = _orig
 srt = sr['totals']
@@ -271,7 +258,7 @@ store_b['daily_sales_feed'].append(row('S1', 'ALICE', 'FUT', 'Activation', day=D
 cb = FakeClient(store_b)
 R.sb = lambda: cb
 try:
-    sr_b = run_route(R.sales_report(period=OPEN, authorization="", org_id=ORG))
+    sr_b = asyncio.run(R.sales_report(period=OPEN, authorization="", org_id=ORG))
 finally:
     R.sb = _orig
 ex_cut = R._exec_mtd(cb, ORG, OPEN, today=CUT)                       # cut at the 15th → FUT (20th) excluded
@@ -293,7 +280,7 @@ store_c = {**{k: [dict(r) for r in v] for k, v in store.items()}, 'daily_sales_f
 cc = FakeClient(store_c)
 R.sb = lambda: cc
 try:
-    sr_c = run_route(R.sales_report(period=OPEN, authorization="", org_id=ORG))
+    sr_c = asyncio.run(R.sales_report(period=OPEN, authorization="", org_id=ORG))
 finally:
     R.sb = _orig
 check("Sales Report totals identical with vs without the voided/Return/admin rows",
@@ -359,7 +346,7 @@ store_d = {'daily_sales_feed': [dict(r) for r in sfeed], 'raw_sales': [], 'acces
 cd = FakeClient(store_d)
 R.sb = lambda: cd
 try:
-    sr_d = run_route(R.sales_report(period=OPEN, authorization="", org_id='LUX'))
+    sr_d = asyncio.run(R.sales_report(period=OPEN, authorization="", org_id='LUX'))
 finally:
     R.sb = _orig
 ex_d = R._exec_mtd(cd, 'LUX', OPEN, today=_date(_T.year, _T.month, DIM))
