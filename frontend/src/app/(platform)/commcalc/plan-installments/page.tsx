@@ -495,6 +495,22 @@ export default function PlanInstallmentsPage() {
           same Contract Type on every line let a <b>handset's price</b> be paid as if it were a monthly
           charge. <b>Switching to legacy can increase pay</b> — it takes effect on the next Run Calculation.
         </p>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
+          Treat a calculation as dead after:
+          <input type="number" min={1} max={1440} style={{ ...sel, width: 110 }}
+            placeholder="20"
+            value={settings.calc_stale_minutes ?? ''}
+            onChange={e => setSettings({ ...settings, calc_stale_minutes: e.target.value === '' ? null : Number(e.target.value) })} />
+          minutes
+        </label>
+        <p style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 12px', maxWidth: 760 }}>
+          Only <b>one</b> calculation can run for a month at a time — pressing Run Calculation again while
+          one is still going is refused, so the two runs can&apos;t overwrite each other half-way and leave
+          the month part-written. If a calculation is interrupted (a deploy, a restart) it can be left
+          marked &quot;running&quot; forever; after this many minutes the next Run Calculation assumes it
+          died and takes over. Leave blank for the default of <b>20 minutes</b>. Set it comfortably above
+          your longest real calculation. <b>This does not change anyone&apos;s pay.</b>
+        </p>
         <button className="btn btn-primary" onClick={saveSettings}>Save pay settings</button>
       </div>
 

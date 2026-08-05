@@ -107,7 +107,13 @@ export default function CommCalcDashboard() {
             try {
               await api(`/api/v1/commcalc/calculate/${encodeURIComponent(period)}?org_id=${ORG_ID}`, { method: 'POST' })
               setTimeout(loadData, 2000)
-            } catch (e: any) { alert(e.message) }
+            } catch (e: any) {
+              // A 409 here means a calculation for this month is ALREADY running (single-flight guard) —
+              // show the server's plain-English reason, then re-read the real status so the badge above
+              // stops claiming this press started something.
+              alert(e.message)
+              loadData()
+            }
           }}
           className="btn btn-primary"
         >
