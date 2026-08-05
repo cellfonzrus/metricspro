@@ -5238,6 +5238,26 @@ def _ad_verdict_builder(client, org_id, map_rows, rule, setup_kws):
     return verdicts_of
 
 
+def _ad_pay_switch(client, org_id):
+    """Does this tenant's ACCESSORY DEFINITION also decide plan pay? (mig 276; default/degrades False.)"""
+    try:
+        from app.modules.commcalc import plan_pay_gate as _ppg
+        return bool(_ppg.definition_drives_pay(client, org_id))
+    except Exception:
+        return False
+
+
+def _ad_pay_switch_ready(client, org_id):
+    """True when the mig-276 column exists (so the UI can say 'run migration 276' instead of silently
+    offering a toggle that saves nothing)."""
+    try:
+        (client.schema("commcalc").table("accessory_config")
+         .select("definition_drives_pay").eq("org_id", org_id).limit(1).execute())
+        return True
+    except Exception:
+        return False
+
+
 @router.get("/accessory-definition/classes")
 def accessory_definition_classes(org_id: str = ORG_ID):
     """The accessory-class vocabulary for the dropdown (RULE THREE: pick, don't type). Tenant rows when
@@ -5330,7 +5350,48 @@ def get_accessory_definition(period: str = "", store: str = "", rep: str = "",
                        "proposed": len([m for m in map_rows if str(m.get("status") or "proposed") != "confirmed"]),
                        "classes_confirmed": len([c for c in classes if c["status"] == "confirmed"])},
             "meta": meta, "ready": ready,
+            # THE PAY SWITCH (mig 276). False (the default, and the state of every tenant today) means
+            # this page's mappings are a DEFINITION + a comparison report and decide NO payout — which is
+            # exactly why products mapped here still paid $0 under a plan rule keyed on `accessory`.
+            "definition_drives_pay": bool(_ad_pay_switch(client, org_id)),
+            "pay_switch_ready": _ad_pay_switch_ready(client, org_id),
             "migration": None if ready else "257_commission_accessory_definition.sql"}
+
+
+@router.get("/accessory-definition/pay-impact/{period}")
+def accessory_definition_pay_impact(period: str, org_id: str = ORG_ID):
+    """READ-ONLY before/after for the mig-276 pay switch: what WOULD change if this tenant's Accessory
+    Definition also decided the plan engine's `accessory` match_field, for one period.
+
+    Drives the REAL engine twice (definition OFF, then ON) rather than arithmetically guessing, so tiers,
+    the pay gate and the flat-once accumulation are all honoured — the same technique the unit-dedup and
+    exclusion impact endpoints use. Writes NOTHING and triggers no recalculation; the stored payout
+    numbers only move when someone flips the switch and presses Run Commission."""
+    require_org(org_id)
+    client = sb()
+    try:
+        off = commission_engine.preview(client, org_id, period, definition_pay_override=False)
+        on = commission_engine.preview(client, org_id, period, definition_pay_override=True)
+    except Exception as e:
+        raise HTTPException(500, f"accessory-definition pay impact failed: {e}")
+    if not off.get("ready"):
+        return {"ready": False, "period": period, "note": off.get("note")}
+    b = {str(r.get("rep") or ""): safe_float(r.get("total_payout")) for r in (off.get("by_rep") or [])}
+    a = {str(r.get("rep") or ""): safe_float(r.get("total_payout")) for r in (on.get("by_rep") or [])}
+    rows = []
+    for nm in sorted(set(b) | set(a)):
+        was, now = round(b.get(nm, 0.0), 2), round(a.get(nm, 0.0), 2)
+        if round(now - was, 2):
+            rows.append({"rep": nm, "was": was, "now": now, "delta": round(now - was, 2)})
+    rows.sort(key=lambda x: -abs(x["delta"]))
+    t_was = round(sum(b.values()), 2)
+    t_now = round(sum(a.values()), 2)
+    return {"ready": True, "period": period,
+            "definition_drives_pay": bool(_ad_pay_switch(client, org_id)),
+            "total_was": t_was, "total_now": t_now, "total_delta": round(t_now - t_was, 2),
+            "reps_changed": len(rows), "by_rep": rows[:500],
+            "note": ("Nothing is saved by reading this. The numbers move only after the switch is turned "
+                     "on AND Run Commission is pressed for this period.")}
 
 
 @router.post("/accessory-definition")
@@ -6922,6 +6983,19 @@ def _accessory_config_uncached(client, org_id):
             catalog_accessory_categories = [str(c).strip() for c in (ccrows[0].get("catalog_accessory_categories") or []) if str(c).strip()]
     except Exception:
         catalog_classify_enabled = False
+    # ACCESSORY DEFINITION AS A PAY BASIS (mig 276). Surfaced here purely so the Accessory Definition
+    # page and the Classification modal can READ/WRITE it through the existing accessory-config API — it
+    # is CONSUMED only by commission_engine.preview (the synthetic `accessory` match_field), never by any
+    # display classifier. Own defensive query; missing column (pre-276) / default false → the pay path is
+    # BYTE-IDENTICAL to before.
+    definition_drives_pay = False
+    try:
+        dprows = (client.schema("commcalc").table("accessory_config")
+                  .select("definition_drives_pay").eq("org_id", org_id).limit(1).execute().data) or []
+        if dprows:
+            definition_drives_pay = bool(dprows[0].get("definition_drives_pay"))
+    except Exception:
+        definition_drives_pay = False
     catalog_classifier = None
     if catalog_classify_enabled:
         try:
@@ -6951,6 +7025,7 @@ def _accessory_config_uncached(client, org_id):
             "catalog_classify_enabled": catalog_classify_enabled,
             "catalog_accessory_categories_list": catalog_accessory_categories,
             "apply_to_gp": apply_to_gp,
+            "definition_drives_pay": definition_drives_pay,
             "catalog_classifier": catalog_classifier}
 
 
@@ -14330,7 +14405,8 @@ def get_accessory_config(org_id: str = ORG_ID):
             "box_count_buckets": c["box_count_buckets_list"],
             "catalog_classify_enabled": c["catalog_classify_enabled"],
             "catalog_accessory_categories": c["catalog_accessory_categories_list"],
-            "apply_to_gp": c.get("apply_to_gp", False)}
+            "apply_to_gp": c.get("apply_to_gp", False),
+            "definition_drives_pay": c.get("definition_drives_pay", False)}
 
 
 @router.put("/accessory-config")
@@ -14447,15 +14523,22 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
     # GP-report adoption flag (mig 250 — editable from the shared Classification-settings UI).
     row["apply_to_gp"] = (bool(body.get("apply_to_gp")) if "apply_to_gp" in body
                           else bool(cur.get("apply_to_gp", False)))
+    # ACCESSORY DEFINITION AS A PAY BASIS (mig 276) — A MONEY SWITCH. It changes nothing until the next
+    # recalculation, and it is strictly additive (it can only ADD accessory lines to what a plan rule
+    # keyed on `accessory` matches). Written only when the caller sent it; default false.
+    row["definition_drives_pay"] = (bool(body.get("definition_drives_pay"))
+                                    if "definition_drives_pay" in body
+                                    else bool(cur.get("definition_drives_pay", False)))
     # Persist defensively: pre-mig-214/213/217/218/231 those columns don't exist, so a save carrying them
     # 500s — retry progressively dropping the NEWEST columns first (mig-231 columns are the newest) so
     # editing the accessory lists never breaks before the migrations run (billpay → Boost-token fallback,
     # contract-type map → empty/classifier, box → _BOX_DEPTS, set-up fee → 'Device Setup Charge', catalog →
     # disabled/legacy classification).
-    _new250 = ["apply_to_gp"]
+    _new276 = ["definition_drives_pay"]
+    _new250 = _new276 + ["apply_to_gp"]
     _new231 = _new250 + ["box_count_buckets", "catalog_classify_enabled", "catalog_accessory_categories"]
     _drop_final = _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords", "box_departments"]
-    for _drop in ([], _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
+    for _drop in ([], _new276, _new250, _new231, _new231 + ["activation_rules"], _new231 + ["activation_rules", "billpay_products"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map"],
                   _new231 + ["activation_rules", "billpay_products", "contract_type_map", "setup_fee_keywords"], _drop_final):
         attempt = dict(row)

@@ -1068,7 +1068,8 @@ def _unmatched_record(row, why, rep, store, market, plan_name=None):
 # ── preview ────────────────────────────────────────────────────────────────────────────────────
 def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
             rule_overrides=None, unmatched_detail=False, gate_override=None,
-            setup_fee_override=None, sales_override=None, mrc_override=None):
+            setup_fee_override=None, sales_override=None, mrc_override=None,
+            definition_pay_override=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -1093,6 +1094,12 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     a simulated line is priced by exactly the rules a real line would be. NOTHING IS WRITTEN — preview()
     has never written and still doesn't. Both default to None → this whole feature is inert and the
     result is BYTE-IDENTICAL for every existing caller.
+
+    definition_pay_override (read-only; the accessory-definition PAY-IMPACT endpoint, mig 276):
+    True/False forces the "does the tenant's ACCESSORY DEFINITION also decide the synthetic `accessory`
+    match_field" switch instead of reading `accessory_config.definition_drives_pay`. It is how the impact
+    endpoint quotes an honest before/after — by driving the REAL engine twice rather than arithmetically
+    guessing. None (every other caller, always) reads the tenant's stored switch, which defaults FALSE.
 
     coverage=True (diagnostics only; mig 232) additionally returns a top-level "coverage" block: every
     seller with sales but NO plan attached (today they are silently skipped → a legit-looking $0), the
@@ -1152,15 +1159,59 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     # a rule AND runs a recalc.
     _uses_acc = any((rule.get("match_field") or "").strip().lower() == "accessory"
                     for p in plans for rule in (p.get("rules") or []))
+    _acc_stamp = None      # DIAGNOSTICS ONLY (detail/coverage) — how each line's `accessory` was decided
+    _def_acc_fn = None     # the tenant's ACCESSORY DEFINITION as a predicate, when it drives pay (mig 276)
     if _uses_acc:
         try:
             from app.modules.commcalc import accessory_catalog as _accat
             _clf = _accat.build(client, org_id)
         except Exception:
             _clf = None
-        if _clf is not None:
+        # ── THE ACCESSORY DEFINITION AS A PAY BASIS (mig 276) — per-tenant, DEFAULT OFF ───────────
+        # OWNER REPORT 2026-08-05 (luxelink, July): products mapped on /commcalc/accessory-definition
+        # still paid $0 under a rule `accessory equals yes`. Cause: TWO surfaces. The owner maps into
+        # `accessory_definition_map` (mig 257); this stamp has only ever read
+        # `accessory_catalog.AccessoryClassifier` (accessory_config's department/category/keyword lists
+        # + the raw_catalog category layer). Migration 257 says so out loud. Nothing was "overriding"
+        # the mapping — the pay path could not see it.
+        #
+        # With the switch ON the stamp becomes  legacy OR catalog OR the tenant's CONFIRMED definition —
+        # strictly ADDITIVE, so no line that is an accessory today stops being one, and set-up fees stay
+        # out (accessory_definition.classify checks the set-up-fee keywords first, standing owner rule).
+        # With it OFF (every tenant until a human flips it, and every tenant pre-mig-276) `_def_acc_fn`
+        # is None and the loop below is byte-identical to the pre-2026-08-05 engine.
+        # SCOPE: the PAY path only. The Sales Report / GP / P&L / Analyzer accessory classifiers are
+        # untouched — unifying those ~8 surfaces is a separate owner decision.
+        try:
+            from app.modules.commcalc import plan_pay_gate as _gate_def
+            _def_on = (bool(definition_pay_override) if definition_pay_override is not None
+                       else _gate_def.definition_drives_pay(client, org_id))
+            if _def_on:
+                _def_acc_fn = _gate_def.accessory_predicate(client, org_id)
+        except Exception as _dpe:
+            print(f"WARN accessory-definition pay basis unavailable: {_dpe}")
+            _def_acc_fn = None
+        if _clf is not None or _def_acc_fn is not None:
+            _acc_stamp = {"lines": 0, "yes": 0, "by_catalog_or_legacy": 0, "by_definition": 0,
+                          "definition_drives_pay": bool(_def_acc_fn),
+                          "classifier_loaded": _clf is not None,
+                          "migration": None if _def_acc_fn is not None else
+                          "276_commission_accessory_definition_pay.sql (switch is OFF or unapplied)"}
             for r in valid:
-                r["accessory"] = "yes" if _clf.is_accessory_row(r) else "no"
+                _acc_stamp["lines"] += 1
+                _y = bool(_clf.is_accessory_row(r)) if _clf is not None else False
+                if _y:
+                    _acc_stamp["by_catalog_or_legacy"] += 1
+                elif _def_acc_fn is not None:
+                    try:
+                        _y = bool(_def_acc_fn(r))
+                    except Exception:
+                        _y = False
+                    if _y:
+                        _acc_stamp["by_definition"] += 1
+                if _y:
+                    _acc_stamp["yes"] += 1
+                r["accessory"] = "yes" if _y else "no"
 
     # SYNTHETIC 'activation_bucket' + optional 'mapped' contract-type resolution (mig 232). Both reuse the
     # tenant's EXISTING display classification config (contract_type_map mig 213 + activation_rules mig 224)
@@ -1250,7 +1301,11 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                 _basis_by_rule[id(_r)] = (_b, _s)
                 if _b != "per_line" and _ucfg.get("exclude_accessory_units"):
                     _needs_acc = True
-    _acc_fn = _gate.accessory_predicate(client, org_id) if (_gate is not None and _needs_acc) else None
+    # Same predicate the gate has always built; when the mig-276 switch already built it above we
+    # reuse that instance instead of re-reading the definition. Behaviourally identical.
+    _acc_fn = None
+    if _gate is not None and _needs_acc:
+        _acc_fn = _def_acc_fn if _def_acc_fn is not None else _gate.accessory_predicate(client, org_id)
     # ── FINANCING TIERS (mig 273; owner directive + answers 2026-08-04) ────────────────────────
     # "target based commission payout right now we have flat payment, need it tiered levels" +
     # "achieved rate applies to that months sales, attainment is monthly".
@@ -1747,6 +1802,22 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
              "source": r.get("source")} for r in (_excl_rules or [])]
         _guard["accessory_definition_loaded"] = bool(_acc_fn)
         out["pay_gate"] = _guard
+    if _acc_stamp is not None and (detail or coverage):
+        # DIAGNOSTICS ONLY — attached for the drill-down / coverage callers, never on the money path,
+        # so `_apply_new_engines` receives a byte-identical dict. This is the block that answers
+        # "my accessory rule matched nothing — why?" without anyone reading engine source.
+        if _acc_stamp["yes"] == 0:
+            _acc_stamp["note"] = (
+                "NO line was classified as an accessory, so a rule matching `accessory = yes` pays $0. "
+                "The pay path reads the accessory DEPARTMENT/CATEGORY/keyword lists and the product "
+                "catalog — not the Accessory Definition mapping page — unless this tenant's "
+                "'Accessory Definition decides pay' switch is on.")
+        elif _acc_stamp["by_definition"]:
+            _acc_stamp["note"] = (
+                f"{_acc_stamp['by_definition']} line(s) were classified as accessories by this tenant's "
+                f"own Accessory Definition mapping (the rest by the department/category/keyword lists or "
+                f"the product catalog).")
+        out["accessory_stamp"] = _acc_stamp
     if coverage:
         # suspected POS artifacts sink to the BOTTOM (still listed) so the real people needing an
         # assignment are the first thing the owner reads.
@@ -1758,7 +1829,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                                           _uses_bucket or _ct_mapped, _bucket_lines,
                                           excluded_reps=_excluded_reps, cov_cfg=_cov_cfg,
                                           store_res=_store_res, bridge=_bridge,
-                                          store_market=store_market)
+                                          store_market=store_market, acc_stamp=_acc_stamp)
         if _unmatched_rows is not None:
             out["coverage"]["unmatched_detail"] = _unmatched_rows
             out["coverage"]["unmatched_detail_excluded_lines"] = _unmatched_excluded_lines
@@ -1767,7 +1838,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
 
 def _coverage_block(plans, valid, out_rows, unassigned, pay_cfg, bucket_built, bucket_lines,
                     excluded_reps=None, cov_cfg=None, store_res="exact", bridge=None,
-                    store_market=None):
+                    store_market=None, acc_stamp=None):
     """Diagnostics for "why doesn't my plan pay what I configured?" — PURE (everything passed in) and
     money-free: it reads the already-computed rows and never changes a payout. Returns
     {unassigned_reps, excluded_reps, orphan_assignments, stores, unmatched, contract_type,
@@ -1821,6 +1892,19 @@ def _coverage_block(plans, valid, out_rows, unassigned, pay_cfg, bucket_built, b
                             f"can never match, so they pay $0. Either key the rules on 'activation_bucket', "
                             f"or set Contract-type resolution to 'mapped' (Commission settings) after "
                             f"configuring the tenant's activation rules.")})
+        acc_rules = [r for r in rules
+                     if (r.get("match_field") or "").strip().lower() == "accessory"]
+        if acc_rules and isinstance(acc_stamp, dict) and not acc_stamp.get("yes"):
+            warnings.append({
+                "plan": nm, "severity": "high", "code": "accessory_rule_classifies_nothing",
+                "message": (f"'{nm}' has {len(acc_rules)} rule(s) that pay on `accessory = yes`, but NOT "
+                            f"ONE of this period's {len(valid)} sale lines is classified as an accessory "
+                            f"by the PAY path — so those rules pay $0. The pay path reads the accessory "
+                            f"DEPARTMENT / CATEGORY / product-keyword lists (Accessory settings) and the "
+                            f"product catalog. It does NOT read the Accessory Definition mapping page "
+                            f"unless this tenant's 'Accessory Definition decides pay' switch is turned on "
+                            f"(Commissions -> Accessory Definition). Turn that switch on, or add the "
+                            f"tenant's real category/department spellings to Accessory settings.")})
         if not rules:
             warnings.append({"plan": nm, "severity": "high", "code": "plan_without_rules",
                              "message": f"'{nm}' has no rules — every rep it covers pays $0."})
