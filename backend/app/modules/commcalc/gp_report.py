@@ -428,16 +428,28 @@ def calc_gp_report(
     # booked company-wide instead of inventing a phantom per-store bucket. comm = MA Commission Details
     # payable (sign-flipped, positive = dealer receives); atu = airtime margin (merchant_discount).
     # ma_income is None for every ePay org (house/Boost) → no row, byte-identical.
+    _ma_leg_note = None
     if ma_income and (safe_float(ma_income.get('comm')) or safe_float(ma_income.get('atu'))):
         _mc, _ma = safe_float(ma_income.get('comm')), safe_float(ma_income.get('atu'))
         # LEG SPLIT of the MA commission: the leg is the COLUMN (spiff_m1 = 1st month, spiff_m2..m6 =
-        # trailing; activation-order margins = 1st month). Split over the EXACT component list the
-        # router built _mc from, so the three buckets re-sum to _mc. Without components (older caller)
-        # the money is honestly reported as unsplit rather than guessed.
+        # trailing). The activation-order MARGIN columns are NOT commission legs (owner 2026-08-04:
+        # "these are not margins but paid commission based on MRC") — they carry no month-of-life and
+        # land in `unsplit`, named on the card below. Split over the EXACT component list the router
+        # built _mc from, so the three buckets re-sum to _mc. Without components (older caller) the
+        # money is honestly reported as unsplit rather than guessed.
         _ma_comp_list = list(ma_income.get('component_list') or [])
         if _ma_comp_list:
             _ma_split_res = leg_classify.ma(ma_income.get('components') or {}, _ma_comp_list)
             _ma_legs = dict(_ma_split_res['buckets'])
+            _ma_leg_note = {
+                'source': 'raw_ma_commission (VidaPay / master agent)',
+                'splits_on': ('the leg COLUMN on the MA Commission Details export — spiff_m1 = 1st '
+                              'month, spiff_m2…m6 = M2–M12'),
+                'unsplit_fields': list(_ma_split_res.get('unsplit_fields') or []),
+                'unsplit_why': ('these columns are activation-order margins/rebates, not commission '
+                                'legs — VidaPay states them as their own figures, so folding them '
+                                'into 1st Month would double-count them against the portal'),
+            }
             for _lk, _lv in (_ma_split_res.get('leg_ladder') or {}).items():
                 _leg_ladder_add(leg_ladder, 'comm', None if _lk == 'unknown' else _lk, _lv)
             # Guard the identity even if a component list and the caller's total ever disagree
@@ -592,8 +604,11 @@ def calc_gp_report(
     # that, and the page says so rather than quietly showing numbers that don't add up.
     leg_sources = []
     for _p, _label, _how in (
-            ('comm', 'Commission received (ePay Payment Detail)',
-             'the month named in the payment type — "… - Month N"'),
+            ('comm',
+             'Commission received (VidaPay / master agent)' if _ma_leg_note
+             else 'Commission received (ePay Payment Detail)',
+             (_ma_leg_note or {}).get('splits_on')
+             or 'the month named in the payment type — "… - Month N"'),
             ('comp_comm', 'Comp Comm (Comprehensive Compensation)',
              'the month named in the compensation type — "… - Month N"'),
             ('mi', 'MI residual', 'the subscriber\'s activation date vs this report month'),
@@ -610,6 +625,10 @@ def calc_gp_report(
             'total': _tot, 'parts_total': _sum,
             'identity_ok': abs(_tot - _sum) < 0.01,
             'ladder': leg_ladder.get(_p, {}),
+            # Only ever set on the MA-fed Commission row: WHICH columns are in `unsplit` and WHY, so
+            # an unexplained pile of money can never appear next to the two legs the owner reads.
+            **({'unsplit_fields': _ma_leg_note['unsplit_fields'],
+                'unsplit_why': _ma_leg_note['unsplit_why']} if (_p == 'comm' and _ma_leg_note) else {}),
         })
     commission_legs_block = {
         'sources': leg_sources,

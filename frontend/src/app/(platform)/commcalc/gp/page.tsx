@@ -38,6 +38,12 @@ interface RepRow {
 }
 
 interface ColDef { key: string; label: string; group: string; bold?: boolean; red?: boolean; highlight?: boolean; leg?: boolean; title?: string }
+// One row of the server's commission-leg card. `unsplit_fields` / `unsplit_why` are present only on the
+// Commission row of a master-agent-fed org, naming the export columns that are not commission legs.
+type LegSource = { key: string; label?: string; splits_on?: string; m1?: number; m2_12?: number
+                   unsplit?: number; total?: number; identity_ok?: boolean
+                   unsplit_fields?: string[]; unsplit_why?: string }
+
 // Owner directive 2026-08-04: the Commission column is split into the 1st-month leg and the M2–M12
 // trailing legs. They are SUB-columns of Commission (Commission itself stays, so nothing that read this
 // report before reads differently) and are shown/hidden together by the 🧩 toggle — which the exports
@@ -166,8 +172,16 @@ export default function GPReportPage() {
   })
   const legOk = legRows.every(l => l.ok)
   const legCfg = data?.commission_legs?.config
+  const legSources: LegSource[] = data?.commission_legs?.sources || []
   const legSourceHow: Record<string, string> = Object.fromEntries(
-    (data?.commission_legs?.sources || []).map((x: any) => [x.key, x.splits_on]))
+    legSources.map(x => [x.key, x.splits_on || '']))
+  // When the Commission column is fed by the VidaPay/master-agent export there are no carrier LABELS to
+  // map — the leg is the column name, and the activation-order margin columns simply are not commission
+  // legs (owner 2026-08-04). The server names those columns so this page can explain the Unsplit figure
+  // instead of pointing at a label-mapping screen that cannot resolve it.
+  const commSrc = legSources.find(x => x.key === 'comm')
+  const commUnsplitFields: string[] = commSrc?.unsplit_fields || []
+  const commUnsplitWhy: string = commSrc?.unsplit_why || ''
 
   function Cell({ val, col }: { val: number; col: ColDef }) {
     const color = col.highlight
@@ -454,14 +468,22 @@ export default function GPReportPage() {
               </tbody>
             </table>
           </div>
-          {(totals.comm_unsplit || 0) !== 0 && (
+          {(totals.comm_unsplit || 0) !== 0 && (commUnsplitFields.length ? (
+            <div style={{ fontSize: 11, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>
+              {fmt(totals.comm_unsplit)} of Commission sits outside both legs: it is{' '}
+              {commUnsplitFields.map(f => f.replace(/_/g, ' ')).join(', ')} on the master-agent export
+              {commUnsplitWhy ? ` — ${commUnsplitWhy}` : ''}. It is still counted in the Commission total on the
+              right; it is simply not 1st-month commission, so <b>1st Month here is what the carrier portal states
+              as Commissions Paid</b>. Nothing was guessed and nothing was dropped.
+            </div>
+          ) : (
             <div style={{ fontSize: 11, color: '#b45309', marginTop: 8, lineHeight: 1.5 }}>
               {fmt(totals.comm_unsplit)} of Commission could not be attributed to a leg — those carrier labels never
               state a month-of-life. Nothing was guessed. Assign them on{' '}
               <a href="/commcalc/commission-legs" style={{ fontWeight: 600, color: 'var(--accent)' }}>Commission Legs</a>{' '}
               and they move into one of the two columns.
             </div>
-          )}
+          ))}
           {legCfg?.resolved_from && (
             <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 6 }}>
               Rules in use: {legCfg.resolved_from.replace(/_/g, ' ')}

@@ -223,15 +223,27 @@ check("MA split total == the router's own sign-flipped component sum",
       eq2(res["total"], router_total), (res["total"], router_total))
 check("m1 + trailing + unsplit == that same total",
       eq2(sum(res["buckets"].values()), router_total), res["buckets"])
-check("1st month = spiff_m1 + every activation-order margin",
-      eq2(res["buckets"]["m1"], 5.0 + 20.0 + 8.0 + 2.0 + 529.0 + 0.0 + 1.5), res["buckets"]["m1"])
+# CORRECTED 2026-08-05 (mig 277). The margin columns are NOT commission legs: the owner's settled
+# 2026-08-04 definition is that MA M1 commission is the MRC-based spiff, "not margins", and the portal
+# states Rebates Paid / Fees Margin Paid as their OWN figures. They stay in the TOTAL, in `unsplit`.
+check("1st month = spiff_m1 ALONE (the margins are not commission legs)",
+      eq2(res["buckets"]["m1"], 5.0), res["buckets"]["m1"])
 check("M2–M12 = spiff_m2..m6 only",
       eq2(res["buckets"]["trailing"], 48.75 + 10.0 + 3.25), res["buckets"]["trailing"])
-check("nothing is unsplit when every component is mapped", eq2(res["buckets"]["unsplit"], 0))
+check("the six activation-order margins are UNSPLIT, not dropped and not in a leg",
+      eq2(res["buckets"]["unsplit"], 20.0 + 8.0 + 2.0 + 529.0 + 0.0 + 1.5), res["buckets"]["unsplit"])
+check("unsplit_fields NAMES those six columns so a page can explain the pile",
+      sorted(res["unsplit_fields"]) == ["consumer_financing", "consumer_margin", "device_margin",
+                                        "fees_margin", "rebate", "wallet_funding"],
+      res["unsplit_fields"])
+check("an org that WANTS margins in M1 still can (ma_m1_fields is config, not code)",
+      eq2(CL.LegClassifier({**CL.DEFAULT_CFG, "ma_m1_fields": ["rebate"]})
+          .ma(ma_sums, MACOMP)["buckets"]["m1"], 5.0 + 529.0))
 check("a NET CLAWBACK stays in its own leg (it is a negative payout, not a reclassification)",
       eq2(cls.ma({**ma_sums, "spiff_m2": +48.75}, MACOMP)["buckets"]["trailing"], 10.0 + 3.25 - 48.75))
 check("an UNKNOWN component in the caller's list is reported unsplit, never dropped",
-      eq2(cls.ma({**ma_sums, "mystery_bonus": -99.0}, MACOMP + ["mystery_bonus"])["buckets"]["unsplit"], 99.0))
+      eq2(cls.ma({**ma_sums, "mystery_bonus": -99.0}, MACOMP + ["mystery_bonus"])["buckets"]["unsplit"],
+          99.0 + 20.0 + 8.0 + 2.0 + 529.0 + 0.0 + 1.5))
 check("the split iterates the CALLER's component list, so its total tracks the caller's total",
       eq2(cls.ma(ma_sums, ["spiff_m1", "spiff_m2"])["total"], 5.0 + 48.75))
 check("ma_max_month bounds the per-leg columns; a spiff beyond it is still trailing, not unsplit",
@@ -722,9 +734,12 @@ R.sb = lambda: fc_ma2
 out_ma2 = asyncio.get_event_loop().run_until_complete(
     R.commission_leg_trend(period="June 2026", months=1, org_id=HOUSE))
 jm = out_ma2["company"][0]
+# mig 277: M1 is spiff_m1 ALONE (5.0 x 1 rollup row); the 560.5 of margins moved to unsplit and the
+# month TOTAL is byte-identical — the reclassification never touches the trend's commission line.
 check("an ePay-less month DOES book MA commission, split by leg column",
-      eq2(jm["total"], router_total) and eq2(jm["m1"], 565.5) and eq2(jm["m2_12"], 62.0),
-      (jm["m1"], jm["m2_12"], jm["total"]))
+      eq2(jm["total"], router_total) and eq2(jm["m1"], 5.0) and eq2(jm["m2_12"], 62.0)
+      and eq2(jm["unsplit"], 560.5),
+      (jm["m1"], jm["m2_12"], jm["unsplit"], jm["total"]))
 check("IDENTITY: the MA month's parts add back to its total",
       eq2(jm["m1"] + jm["m2_12"] + jm["unsplit"], jm["total"]))
 check("company-wide MA money is EXCLUDED (and said so) while a store filter is active",
