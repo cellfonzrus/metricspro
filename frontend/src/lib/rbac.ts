@@ -50,7 +50,8 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/asset', 'asset'], ['/commcalc/vip', 'vip'], ['/accounts', 'accounts'],
-  ['/storeops/reports', 'storeops'], ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
+  ['/storeops/reports', 'storeops'], ['/storeops/reviews', 'storeops'],
+  ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
   ['/closing/recon', 'closing'],
 ]
 // The report area for a path, or null if it's an operational (non-report) page.
@@ -256,6 +257,8 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'] },
+    { href: '/storeops/reviews', label: 'Google Reviews', icon: '⭐', module: 'storeops', scopes: ['all', 'market', 'store'] },
+    { href: '/storeops/reviews/config', label: 'Reviews Setup', icon: '⚙️', module: 'storeops', scopes: ['all'] },
     { href: '/storeops/reports', label: 'Reports', icon: '📋', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/admin', label: 'Admin', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'] },
   ]},
