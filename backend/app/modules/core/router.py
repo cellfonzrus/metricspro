@@ -936,6 +936,10 @@ SETTING_AREAS = [
     {"key": "security",          "label": "Security (password policy · 2FA · admin-set passwords)"},
     {"key": "support_config",    "label": "Tech Support (SLA policy · canned responses · help docs)"},
     {"key": "import_health",     "label": "Import Health (feed schedules · expected cadence · snooze)"},
+    # Registered 2026-08-05 (owner hit "you don't have permission to save" on Reviews Setup).
+    # storeops._require_google_reviews_admin has always gated on this key; until it was listed here it
+    # could not be granted per-role in the Roles UI, so only a super-admin could save the API key.
+    {"key": "google_reviews",    "label": "Google Reviews (API key · rating targets · store place matching · sweep schedule)"},
 ]
 
 
