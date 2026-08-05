@@ -32,8 +32,27 @@ HOW EACH SOURCE SPLITS (verified against the org's real export files, 2026-08-04
     file (30,339 / 30,339 rows on the Apr-2026 run), so a date-based split is NOT available here. The
     label is the only month-of-life the source carries.
   • VidaPay / master-agent (raw_ma_commission) names the leg in the COLUMN: spiff_m1 is the M1 leg,
-    spiff_m2..spiff_m6 the trailing legs. The activation-order margin components (rebate, device_margin,
-    consumer_margin, consumer_financing, wallet_funding, fees_margin) are recognised at activation → M1.
+    spiff_m2..spiff_m6 the trailing legs. NOTHING ELSE ON THAT EXPORT IS A COMMISSION LEG.
+    ⚠ CORRECTED 2026-08-05 (`ma_m1_fields` default was the six margin columns, now empty).
+    The first draft of this file put the activation-order MARGIN columns (rebate, device_margin,
+    consumer_margin, consumer_financing, wallet_funding, fees_margin) into M1 "because they are
+    recognised at activation". That over-stated the org's 1st-month commission by the whole margin
+    block (owner-reported 2026-08-05: our M1 ~$124k vs VidaPay's stated M1 ~$28k, a 4.4x gap that is
+    exactly Sigma(margins)). Three things in this repo already said otherwise and the leg split did not
+    follow them:
+      – OWNER, verbatim 2026-08-04 (recorded in ma_overview.py): "commission is only the current months
+        commission paid out on the activations which would be M1, these are not margins but paid
+        commission based on MRC." The /ma-overview-recon "Commissions Paid (M1)" tile therefore reads
+        `spiff_m1` ALONE, and was live-verified at $17,140.91 for luxelink Feb-Jul 2026.
+      – The canonical Commission Ledger's map of the SAME twelve columns
+        (`ledger_ma_sync.DEFAULT_COMPONENTS`) carries `payment_month: None` on all six margins and
+        `payment_month: 1` on spiff_m1 only.
+      – VidaPay itself reports Rebates Paid and Fees Margin Paid as their OWN tiles, separate from
+        Commissions Paid — so folding them into M1 double-counts them against the portal's own figure.
+    The margins are real money the dealer receives and they stay in the COMMISSION COLUMN TOTAL, which
+    does not move by one cent; they simply carry no month-of-life, so they sit in the honest `unsplit`
+    bucket next to it. An org that wants them in M1 puts them back in `ma_m1_fields` (config, per org
+    and carrier) — the behaviour is available, it is just no longer the default.
   • ePay MI/ATU residual (raw_mi) carries `mi_activation_date`, so residual splits on the owner's LITERAL
     definition: activation month == report month → 1st month; earlier → M2–M12; missing/unparseable →
     unsplit (never guessed).
@@ -130,8 +149,10 @@ DEFAULT_CFG = {
     "unlabeled_bucket": UNSPLIT,
     "ma_month_field_prefix": "spiff_m",
     "ma_max_month": 6,
-    "ma_m1_fields": ["rebate", "device_margin", "consumer_margin",
-                     "consumer_financing", "wallet_funding", "fees_margin"],
+    # EMPTY BY DEFAULT (corrected 2026-08-05 — see the module docstring). Only `spiff_m1` is the MA
+    # 1st-month COMMISSION leg. Any column named here is ADDITIONALLY forced into M1; the six
+    # activation-order margin columns used to be listed here and inflated M1 by the whole margin block.
+    "ma_m1_fields": [],
     "ma_payout_sign": -1.0,
     "mi_split_by_activation": True,
 }
@@ -276,7 +297,8 @@ def classify_activation(period, activation_date, cfg=None):
 
 def ma_field_leg(field, cfg=None):
     """(bucket, leg_month) for ONE raw_ma_commission money column. PURE.
-    spiff_mN -> leg N; a configured activation-order margin column -> leg 1; anything else -> unsplit."""
+    spiff_mN -> leg N; a column the org has EXPLICITLY listed in `ma_m1_fields` -> leg 1 (empty by
+    default: the margin columns are not commission legs); anything else -> unsplit."""
     cfg = cfg or DEFAULT_CFG
     f = str(field or "").strip().lower()
     prefix = str(cfg.get("ma_month_field_prefix") or DEFAULT_CFG["ma_month_field_prefix"]).lower()
@@ -314,6 +336,9 @@ def split_ma_components(sums, components, cfg=None):
         ladder[key] = round(ladder.get(key, 0.0) + amt, 2)
     return {"buckets": {k: round(v, 2) for k, v in out.items()},
             "leg_ladder": ladder, "fields": fields,
+            # The columns whose money carries NO month-of-life, so a surface can NAME them instead of
+            # showing an unexplained 'unsplit' pile (the margin block lives here by default).
+            "unsplit_fields": [c for c in components if fields.get(c, {}).get("bucket") == UNSPLIT],
             "total": round(sum(out.values()), 2)}
 
 
@@ -355,6 +380,7 @@ class LegClassifier:
             "mi_split_by_activation": bool(self.cfg.get("mi_split_by_activation", True)),
             "ma_month_field_prefix": self.cfg.get("ma_month_field_prefix"),
             "ma_max_month": _int(self.cfg.get("ma_max_month"), 6),
+            "ma_m1_fields": list(self.cfg.get("ma_m1_fields") or []),
             "sources": [
                 {"source": "raw_payment_detail (ePay Commission Payment Detail)",
                  "splits_on": "the month stated in the payment type — \"… - Month N\"",
@@ -366,7 +392,11 @@ class LegClassifier:
                  "splits_on": "mi_activation_date vs the report month",
                  "splittable": bool(self.cfg.get("mi_split_by_activation", True))},
                 {"source": "raw_ma_commission (VidaPay / master agent)",
-                 "splits_on": "the leg column — spiff_m1 = 1st month, spiff_m2…m6 = trailing",
+                 "splits_on": ("the leg column — spiff_m1 = 1st month, spiff_m2…m6 = trailing. The "
+                               "activation-order margin columns (rebate, device/consumer margin, "
+                               "consumer financing, wallet funding, fees margin) are NOT commission "
+                               "legs — VidaPay reports them as their own figures — so they stay "
+                               "unsplit unless this org lists them in ma_m1_fields."),
                  "splittable": True},
             ],
         }

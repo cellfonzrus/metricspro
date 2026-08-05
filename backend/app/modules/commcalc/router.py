@@ -13393,8 +13393,12 @@ def _ma_summary_legs(client, org_id, comps):
                 "unsplit": res["buckets"]["unsplit"], "total": total,
                 "ladder": res["leg_ladder"],
                 "identity_ok": abs(round(sum(res["buckets"].values()), 2) - total) < 0.01,
-                "basis": ("1st Month = the activation-order margins + spiff_m1; M2–M12 = spiff_m2…m6 — "
-                          "the leg is the column name on the MA Commission Details export.")}
+                "unsplit_fields": res.get("unsplit_fields") or [],
+                "basis": ("1st Month = spiff_m1; M2–M12 = spiff_m2…m6 — the leg is the column name on "
+                          "the MA Commission Details export. The activation-order margins "
+                          "(rebate / device / consumer / financing / wallet funding / fees) are NOT "
+                          "commission legs (owner 2026-08-04) — they are in the total but sit in "
+                          "Unsplit, which is why 1st Month here equals the portal's Commissions Paid.")}
     except Exception as e:
         return {"m1": 0.0, "m2_12": 0.0, "unsplit": 0.0, "total": 0.0, "ladder": {},
                 "identity_ok": False, "basis": f"leg split unavailable ({e})"}
