@@ -8246,7 +8246,7 @@ def _calc_busy_message(period, holder):
 
 # ── Calculate endpoint ────────────────────────────────────────
 @router.post("/calculate/{period}")
-async def calculate(
+def calculate(
     period: str,
     background_tasks: BackgroundTasks,
     org_id: str = "00000000-0000-0000-0000-000000000001",
