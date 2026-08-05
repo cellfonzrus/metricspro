@@ -20,6 +20,18 @@ type LogRow = {
   id: string; report_key: string; channel: string; target: string; status: string
   error: string | null; triggered_by: string | null; created_at: string
   delivery_status?: string | null; delivery_error?: string | null; delivery_updated_at?: string | null
+  delivery_route?: string | null
+}
+// GET /notify/health — configuration truth (no network calls, no secrets). The whatsapp_* keys make the
+// 2026-08-05 silent-failure class visible from inside the app instead of only in the Meta dashboard.
+type Health = {
+  email_configured: boolean; whatsapp_configured: boolean; from_email?: string | null
+  whatsapp_template?: string | null; whatsapp_template_lang?: string | null
+  whatsapp_graph_version?: string | null; whatsapp_doc_header?: boolean
+  whatsapp_verify_token_set?: boolean; whatsapp_app_secret_set?: boolean
+  whatsapp_webhook_ready?: boolean; whatsapp_window_tracking?: boolean
+  whatsapp_window_hours?: number; whatsapp_freeform_when_unknown?: boolean
+  whatsapp_webhook_url?: string
 }
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -58,7 +70,7 @@ export default function NotifyPage() {
   const [employees, setEmployees] = useState<Emp[]>([])
   const [subs, setSubs] = useState<Sub[]>([])
   const [log, setLog] = useState<LogRow[]>([])
-  const [health, setHealth] = useState<{ email_configured: boolean; whatsapp_configured: boolean } | null>(null)
+  const [health, setHealth] = useState<Health | null>(null)
   const [msg, setMsg] = useState('')
 
   const reload = useCallback(async () => {
@@ -98,12 +110,12 @@ export default function NotifyPage() {
       {tab === 'recipients' && <Recipients saved={saved} employees={employees} onChange={reload} setMsg={setMsg} />}
       {tab === 'subs' && <Subscriptions reports={reports} saved={saved} subs={subs} onChange={reload} setMsg={setMsg} />}
       {tab === 'log' && <SendLog log={log} />}
-      {tab === 'settings' && <NotifySettings setMsg={setMsg} />}
+      {tab === 'settings' && <NotifySettings setMsg={setMsg} health={health} />}
     </div>
   )
 }
 
-function NotifySettings({ setMsg }: { setMsg: (s: string) => void }) {
+function NotifySettings({ setMsg, health }: { setMsg: (s: string) => void; health: Health | null }) {
   const [days, setDays] = useState<number>(7)
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -128,6 +140,7 @@ function NotifySettings({ setMsg }: { setMsg: (s: string) => void }) {
     finally { setBusy(false) }
   }
   return (
+    <>
     <div style={card}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>WhatsApp / download links</div>
       <div style={{ fontSize: 12, color: 'var(--muted,#888)', marginBottom: 12 }}>
@@ -146,6 +159,91 @@ function NotifySettings({ setMsg }: { setMsg: (s: string) => void }) {
           {busy ? '⏳ Saving…' : 'Save'}
         </button>
       </div>
+    </div>
+    <WhatsAppDelivery health={health} />
+    </>
+  )
+}
+
+// ── WhatsApp delivery diagnostics ─────────────────────────────────────────────────────────────────
+// Owner incident 2026-08-05: reports were logged as 'sent' with real Meta message ids and NOTHING was
+// delivered. Everything needed to spot that from inside the app now lives here: which account we send
+// as, whether the delivery-status callback is actually wired, and whether the 24h-window evidence that
+// lets us attach the real file is being collected.
+function Row({ good, label, detail }: { good: boolean; label: string; detail?: string }) {
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13, padding: '3px 0' }}>
+      <span style={{ color: good ? 'green' : '#b45309' }}>{good ? '✓' : '⚠'}</span>
+      <span style={{ minWidth: 250 }}>{label}</span>
+      <span style={{ color: 'var(--muted,#888)', fontSize: 12 }}>{detail || ''}</span>
+    </div>
+  )
+}
+
+function WhatsAppDelivery({ health }: { health: Health | null }) {
+  const [acct, setAcct] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  async function check() {
+    setBusy(true); setErr(''); setAcct(null)
+    try {
+      setAcct(await api(`/api/v1/notify/whatsapp-account?org_id=${ORG_ID}`))
+    } catch (e: any) {
+      setErr(String(e?.message || e))
+    } finally { setBusy(false) }
+  }
+  if (!health) return null
+  const h = health
+  return (
+    <div style={card}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>WhatsApp delivery health</div>
+      <div style={{ fontSize: 12, color: 'var(--muted,#888)', marginBottom: 10 }}>
+        WhatsApp only lets a business send a FREE-FORM message (the one that attaches the actual file)
+        within 24 hours of the recipient messaging you. Outside that, only an approved template arrives.
+        Meta sometimes accepts an out-of-window message and drops it silently — these checks tell you
+        whether we can see that happening.
+      </div>
+      <Row good={!!h.whatsapp_configured} label="WhatsApp credentials configured"
+        detail={h.whatsapp_configured ? `template “${h.whatsapp_template || '—'}” (${h.whatsapp_template_lang || 'en'})` : 'set the WHATSAPP_* variables on the server'} />
+      <Row good={!!h.whatsapp_webhook_ready} label="Delivery-status callback wired"
+        detail={h.whatsapp_webhook_ready
+          ? 'delivered / read / failed are recorded on each send'
+          : `missing ${!h.whatsapp_verify_token_set ? 'verify token' : ''}${!h.whatsapp_verify_token_set && !h.whatsapp_app_secret_set ? ' + ' : ''}${!h.whatsapp_app_secret_set ? 'app secret' : ''} — sends will show “sent” with no proof of delivery`} />
+      <Row good={!!h.whatsapp_window_tracking} label="24-hour window tracking"
+        detail={h.whatsapp_window_tracking
+          ? `on — the real file is attached to anyone who messaged us in the last ${h.whatsapp_window_hours ?? 23}h`
+          : 'off (migration 723 not run) — every report goes out as an approved template link, which always arrives'} />
+      <Row good={!!h.whatsapp_doc_header} label="Document-header template approved"
+        detail={h.whatsapp_doc_header
+          ? 'the real file attaches even to a cold recipient'
+          : 'not configured — cold recipients get a no-login download link instead of the file'} />
+      {h.whatsapp_freeform_when_unknown && (
+        <Row good={false} label="Override: free-form allowed with no window evidence"
+          detail="this re-enables the silent-drop failure mode — turn it off unless you are deliberately testing" />
+      )}
+      {h.whatsapp_webhook_url && (
+        <div style={{ fontSize: 11, color: 'var(--muted,#888)', marginTop: 8 }}>
+          Callback URL to set in Meta → WhatsApp → Configuration:{' '}
+          <code style={{ fontSize: 11 }}>{h.whatsapp_webhook_url}</code>
+        </div>
+      )}
+      <div style={{ marginTop: 12 }}>
+        <button className="btn btn-secondary" disabled={busy} onClick={check}>
+          {busy ? '⏳ Checking…' : 'Which account am I sending as?'}
+        </button>
+      </div>
+      {err && <div style={{ fontSize: 12, color: '#c00', marginTop: 8 }}>{err}</div>}
+      {acct && !acct.ok && (
+        <div style={{ fontSize: 12, color: '#c00', marginTop: 8 }}>Could not read the account: {acct.error}</div>
+      )}
+      {acct && acct.ok && (
+        <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.7 }}>
+          <div><b>Number:</b> {acct.display_phone_number || '—'} &nbsp;<b>Name:</b> {acct.verified_name || '—'}</div>
+          <div><b>Quality:</b> {acct.quality_rating || '—'} &nbsp;<b>Number status:</b> {acct.code_verification_status || '—'} / {acct.name_status || '—'}</div>
+          <div><b>Phone number ID:</b> <code style={{ fontSize: 11 }}>{acct.phone_number_id}</code> — this must match the one shown in the Meta dashboard.</div>
+          <div style={{ color: 'var(--muted,#888)', fontSize: 12 }}>{acct.app_mode_note}</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -339,6 +437,15 @@ function Subscriptions({ reports, saved, subs, onChange, setMsg }: {
   )
 }
 
+// Which rung of the WhatsApp ladder actually delivered, in plain English (mig 723 fills this in;
+// pre-migration and non-WhatsApp rows stay '—').
+function routeLabel(r?: string | null): string {
+  if (r === 'template_doc') return 'file attached (template)'
+  if (r === 'freeform_doc') return 'file attached (in-window)'
+  if (r === 'template_link') return 'download link (template)'
+  return '—'
+}
+
 function deliveryColor(s?: string | null): string {
   const v = (s || '').toLowerCase()
   if (v === 'delivered' || v === 'read') return 'green'
@@ -352,11 +459,13 @@ function SendLog({ log }: { log: LogRow[] }) {
     <div style={card}>
       <div style={{ fontWeight: 600, marginBottom: 8 }}>Recent sends</div>
       <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
-        “Delivery” is the latest Meta/WhatsApp status (delivered/read = confirmed on the handset; a WhatsApp
-        row stuck on <b>sent</b> with no delivery was accepted by Meta but not confirmed delivered).
+        “Status” is only what Meta ACCEPTED. “Delivery” is what actually happened on the handset
+        (delivered/read = confirmed; <b>failed</b> shows Meta's own reason; a WhatsApp row stuck on
+        <b> sent</b> with no delivery was accepted and never confirmed — that is the silent-drop case).
+        “Sent as” says whether the recipient got the real file or a download link.
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead><tr><th style={th}>When</th><th style={th}>Report</th><th style={th}>Channel</th><th style={th}>Target</th><th style={th}>Status</th><th style={th}>Delivery</th><th style={th}>By</th><th style={th}>Error</th></tr></thead>
+        <thead><tr><th style={th}>When</th><th style={th}>Report</th><th style={th}>Channel</th><th style={th}>Target</th><th style={th}>Status</th><th style={th}>Delivery</th><th style={th}>Sent as</th><th style={th}>By</th><th style={th}>Error</th></tr></thead>
         <tbody>
           {log.map(l => (
             <tr key={l.id}>
@@ -364,11 +473,12 @@ function SendLog({ log }: { log: LogRow[] }) {
               <td style={td}>{l.target}</td>
               <td style={{ ...td, color: l.status === 'sent' ? 'green' : '#c00' }}>{l.status}</td>
               <td style={{ ...td, color: deliveryColor(l.delivery_status) }}>{l.delivery_status || '—'}</td>
+              <td style={{ ...td, fontSize: 12 }}>{routeLabel(l.delivery_route)}</td>
               <td style={td}>{l.triggered_by}</td>
               <td style={{ ...td, color: '#c00', fontSize: 11 }}>{l.delivery_error || l.error}</td>
             </tr>
           ))}
-          {log.length === 0 && <tr><td style={td} colSpan={8}>No sends yet.</td></tr>}
+          {log.length === 0 && <tr><td style={td} colSpan={9}>No sends yet.</td></tr>}
         </tbody>
       </table>
     </div>

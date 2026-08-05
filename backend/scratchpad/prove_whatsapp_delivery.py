@@ -27,24 +27,43 @@ def ok(name, cond):
 # ── plan_delivery: the ordered attempt list ─────────────────────────────────────
 # doc-header configured + media uploaded → try the doc-header template first, then in-window free-form,
 # then the link template.
-ok("doc_header + media → full ladder",
-   W.plan_delivery(True, True) == ["template_doc", "freeform_doc", "template_link"])
-# no doc-header template but media uploaded → free-form document (in-window) then link fallback.
-ok("no doc_header + media → freeform then link",
-   W.plan_delivery(False, True) == ["freeform_doc", "template_link"])
+ok("doc_header + media + PROVEN window → full ladder",
+   W.plan_delivery(True, True, True) == ["template_doc", "freeform_doc", "template_link"])
+# 2026-08-05: the free-form rung needs POSITIVE window evidence. With none, it is SKIPPED — Meta answers
+# 200 + a wamid out of window and then drops the message, which used to END the ladder (owner incident).
+ok("doc_header + media, window UNKNOWN → doc-header template then link (no free-form)",
+   W.plan_delivery(True, True, False) == ["template_doc", "template_link"])
+# no doc-header template but media uploaded → free-form document only when the window is PROVEN open.
+ok("no doc_header + media + PROVEN window → freeform then link",
+   W.plan_delivery(False, True, True) == ["freeform_doc", "template_link"])
+ok("no doc_header + media, window UNKNOWN → APPROVED TEMPLATE ONLY (the cold-recipient case)",
+   W.plan_delivery(False, True, False) == ["template_link"])
+ok("default window arg is the SAFE one (unknown ⇒ closed)",
+   W.plan_delivery(False, True) == W.plan_delivery(False, True, False) == ["template_link"])
 # media upload failed → we can't attach anything → link template only (still delivers).
-ok("doc_header but NO media → link only", W.plan_delivery(True, False) == ["template_link"])
-ok("no doc_header + NO media → link only", W.plan_delivery(False, False) == ["template_link"])
-# invariant: the link template is ALWAYS the terminal guaranteed fallback.
+ok("doc_header but NO media → link only", W.plan_delivery(True, False, True) == ["template_link"])
+ok("no doc_header + NO media → link only", W.plan_delivery(False, False, True) == ["template_link"])
+# invariant: the link template is ALWAYS the terminal guaranteed fallback, in EVERY combination.
 for dh in (True, False):
     for md in (True, False):
-        ok(f"link template is terminal ({dh},{md})", W.plan_delivery(dh, md)[-1] == "template_link")
-# invariant: an attach step (real file) is attempted whenever media is available.
-ok("media present ⇒ an attach step is attempted",
-   any(s in ("template_doc", "freeform_doc") for s in W.plan_delivery(True, True)) and
-   any(s in ("template_doc", "freeform_doc") for s in W.plan_delivery(False, True)))
+        for wo in (True, False):
+            ok(f"link template is terminal ({dh},{md},{wo})",
+               W.plan_delivery(dh, md, wo)[-1] == "template_link")
+            ok(f"plan is never empty ({dh},{md},{wo})", len(W.plan_delivery(dh, md, wo)) >= 1)
+# invariant: an attach step (real file) is attempted whenever media is available AND we may attach —
+# i.e. a doc-header template is configured, or the window is PROVEN open.
+ok("media + doc_header ⇒ an attach step is attempted (window irrelevant)",
+   all(any(s in ("template_doc", "freeform_doc") for s in W.plan_delivery(True, True, wo))
+       for wo in (True, False)))
+ok("media + PROVEN window ⇒ an attach step is attempted",
+   any(s in ("template_doc", "freeform_doc") for s in W.plan_delivery(False, True, True)))
 ok("no media ⇒ NO attach step attempted",
-   not any(s in ("template_doc", "freeform_doc") for s in W.plan_delivery(True, False)))
+   not any(s in ("template_doc", "freeform_doc") for s in W.plan_delivery(True, False, True)))
+# THE REGRESSION GUARD: a cold recipient (no doc-header template, no window evidence) must never be
+# offered a free-form rung — that is the send Meta accepts and silently drops.
+ok("cold recipient ⇒ free-form is NEVER planned",
+   "freeform_doc" not in W.plan_delivery(False, True, False)
+   and "freeform_doc" not in W.plan_delivery(False, False, False))
 
 # ── classify_send_result: reading a Meta response ───────────────────────────────
 ok("200 → ok", W.classify_send_result(200, '{"messages":[{"id":"wamid.X"}]}') == "ok")
@@ -72,9 +91,9 @@ ok("_is_window_error re-engagement", W._is_window_error("Re-engagement message (
 ok("_is_window_error negative", W._is_window_error("invalid parameter") is False)
 
 # ── END-TO-END MATRIX: walk the ladder against scripted responses, prove the DELIVERED step ───────────
-def walk(doc_header, media_ok, responder):
+def walk(doc_header, media_ok, responder, window_open=True):
     """Simulate send_document's loop purely: return the step that delivered ('ok'), or None if all failed."""
-    for step in W.plan_delivery(doc_header, media_ok):
+    for step in W.plan_delivery(doc_header, media_ok, window_open):
         status, text = responder(step)
         if W.classify_send_result(status, text) == "ok":
             return step

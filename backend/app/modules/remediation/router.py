@@ -6,6 +6,7 @@ and stores an awaiting-approval request with a signed magic-link. The assignee g
 WhatsApp) with Approve/Reject. On APPROVE the one bounded playbook executes and the result is recorded +
 returned. CODE-class issues are escalated, never auto-fixed. Everything is audited in remediation_request.
 """
+import asyncio
 import hashlib
 import hmac
 import json
@@ -18,6 +19,7 @@ from fastapi.responses import PlainTextResponse
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.modules.notify import whatsapp_window
 from . import playbooks as pb
 
 router = APIRouter(prefix="/remediation", tags=["remediation"])
@@ -428,7 +430,13 @@ def _record_delivery_statuses(statuses):
             continue  # unknown wamid → nothing to update (no crash)
         err = _flatten_delivery_errors(st.get("errors")) if status == "failed" else ""
         for r in rows:
-            merged = _merge_delivery_status(r.get("delivery_status"), status)
+            cur = r.get("delivery_status")
+            merged = _merge_delivery_status(cur, status)
+            # IDEMPOTENT REPLAY (Meta retries a webhook until it sees a 2xx, and re-sends the same
+            # status events): when the merge changes nothing and there is no new error to record, skip
+            # the write entirely. Replaying a batch is then a pure no-op on the row.
+            if merged == cur and not err:
+                continue
             upd = {"delivery_status": merged, "delivery_updated_at": now_iso}
             if err:
                 upd["delivery_error"] = err
@@ -439,10 +447,18 @@ def _record_delivery_statuses(statuses):
 
 
 def _valid_signature(sig_header, body):
-    """Validate Meta's X-Hub-Signature-256 when an app secret is configured (else allow — the payload
-    token still gates every mutation)."""
+    """Validate Meta's `X-Hub-Signature-256` (HMAC-SHA256 of the RAW body under the app secret), in
+    CONSTANT TIME. This POST is on the PUBLIC middleware allowlist — Meta carries no JWT — so the
+    signature is its ONLY authentication.
+
+    2026-08-05 hardening: with NO app secret configured this used to return True, i.e. the endpoint
+    accepted anonymous payloads. That is a real hole: a spoofed inbound can drive the free-text YES/NO
+    remediation approval path (which matches on the sender's digits) and can write fake delivery
+    statuses onto notify.send_log. It now fails CLOSED — an unset WHATSAPP_APP_SECRET rejects every POST.
+    Break-glass: WHATSAPP_WEBHOOK_REQUIRE_SIGNATURE=0 restores the old verify-only-if-set behaviour with
+    one Railway env change (no code rollback), for the window between deploying and setting the secret."""
     if not settings.WHATSAPP_APP_SECRET:
-        return True
+        return not bool(getattr(settings, "WHATSAPP_WEBHOOK_REQUIRE_SIGNATURE", True))
     if not (sig_header or "").startswith("sha256="):
         return False
     expected = hmac.new(settings.WHATSAPP_APP_SECRET.encode(), body, hashlib.sha256).hexdigest()
@@ -546,6 +562,17 @@ async def whatsapp_inbound(request: Request):
         for ch in entry.get("changes", []) or []:
             for m in (ch.get("value", {}) or {}).get("messages", []) or []:
                 frm = m.get("from")
+                # WINDOW EVIDENCE (owner incident 2026-08-05): ANY inbound message — whatever its type,
+                # whether or not we can act on it — opens/refreshes Meta's 24h customer-service window
+                # for that handset. Recording it is the ONLY positive evidence that a free-form
+                # `type:document` send will actually be delivered, so notify's ladder can attach the real
+                # file instead of falling back to the link template. Best-effort + thread-hopped: it must
+                # never raise, never 500 the webhook, and never block the event loop.
+                if frm:
+                    try:
+                        await asyncio.to_thread(whatsapp_window.record_inbound, frm)
+                    except Exception:
+                        pass
                 payload, text = None, None
                 mtype = m.get("type")
                 if mtype == "button":                       # template quick-reply
@@ -559,7 +586,10 @@ async def whatsapp_inbound(request: Request):
             # Delivery-STATUS events (sent/delivered/read/failed) ride the same subscription → record them
             # onto send_log so a silently-dropped send is visible. Fully guarded → never 500s the webhook.
             try:
-                _record_delivery_statuses((ch.get("value", {}) or {}).get("statuses", []) or [])
+                # Sync Supabase calls — hop a thread so a slow DB can never freeze the event loop
+                # (the sync-in-async class that caused the 2026-07-30 whole-backend freeze).
+                await asyncio.to_thread(
+                    _record_delivery_statuses, (ch.get("value", {}) or {}).get("statuses", []) or [])
             except Exception:
                 pass
     return {"ok": True}

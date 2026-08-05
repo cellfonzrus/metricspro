@@ -30,6 +30,7 @@ Offline: no network, no DB, no real Supabase. Run:
 import asyncio
 import importlib
 import os
+import re
 import subprocess
 import sys
 
@@ -242,16 +243,41 @@ else:
     ck("_reject_401 source is byte-identical to origin/main", old.strip() == new.strip())
     ck("the 401 literal appears exactly once (no second copy to drift)",
        NOW.count('b\'{"detail":"authentication required"}\'') == 1)
-    # The public allowlist is untouched: a change there would silently open routes.
-    ck("_PUBLIC_EXACT block byte-identical to main",
-       fn_src(MAIN, "_PUBLIC_EXACT = frozenset({", "# Public path PREFIXES")
-       == fn_src(NOW, "_PUBLIC_EXACT = frozenset({", "# Public path PREFIXES"))
-    ck("_PUBLIC_PREFIXES block byte-identical to main",
-       fn_src(MAIN, "_PUBLIC_PREFIXES = (", "# Self-authenticating background sweeps")
-       == fn_src(NOW, "_PUBLIC_PREFIXES = (", "# Self-authenticating background sweeps"))
-    ck("_is_public byte-identical to main",
-       fn_src(MAIN, "def _is_public(path: str) -> bool:", "\ndef _fetch_memberships")
-       == fn_src(NOW, "def _is_public(path: str) -> bool:", "\ndef _fetch_memberships"))
+    # The public allowlist must not silently open routes. 2026-08-05 (whatsapp-delivery-truth) makes ONE
+    # intentional, strictly-TIGHTENING change: /api/v1/remediation/whatsapp-webhook moves from the PREFIX
+    # list to the EXACT list and is method-scoped to {GET, POST}. So instead of byte-identity we assert
+    # the SET of public paths is unchanged and the move is exactly that one path.
+    def paths_in(block):
+        return {m.group(1) for m in re.finditer(r'"(/[^"]+)"', block)}
+
+    main_exact = paths_in(fn_src(MAIN, "_PUBLIC_EXACT = frozenset({", "# Public path PREFIXES"))
+    now_exact = paths_in(fn_src(NOW, "_PUBLIC_EXACT = frozenset({", "# Public path PREFIXES"))
+    main_pre = paths_in(fn_src(MAIN, "_PUBLIC_PREFIXES = (", "# Self-authenticating background sweeps"))
+    now_pre = paths_in(fn_src(NOW, "_PUBLIC_PREFIXES = (", "# Self-authenticating background sweeps"))
+    WH = "/api/v1/remediation/whatsapp-webhook"
+    ck("no public path ADDED vs main (the union is unchanged)",
+       (now_exact | now_pre) == (main_exact | main_pre))
+    ck("the ONLY exact-list delta is the webhook (moved in)", now_exact - main_exact == {WH})
+    ck("the ONLY prefix-list delta is the webhook (moved out)", main_pre - now_pre == {WH})
+    ck("nothing else left the exact list", main_exact - now_exact == set())
+    ck("nothing else joined the prefix list", now_pre - main_pre == set())
+    ck("_is_public body byte-identical to main (only the trailing marker differs)",
+       fn_src(MAIN, "def _is_public(path: str) -> bool:", "\ndef _fetch_memberships").strip()
+       == fn_src(NOW, "def _is_public(path: str) -> bool:", "\n\n# METHOD SCOPING").strip())
+
+    # ── method scoping (the auth-config lesson, applied to the webhook) ──
+    ck("auth-config is public for GET only",
+       M._public_method_ok("/api/v1/core/auth-config", "GET") is True
+       and M._public_method_ok("/api/v1/core/auth-config", "PUT") is False
+       and M._public_method_ok("/api/v1/core/auth-config", "POST") is False)
+    ck("the Meta webhook is public for GET+POST only",
+       M._public_method_ok(WH, "GET") is True and M._public_method_ok(WH, "POST") is True
+       and all(M._public_method_ok(WH, m) is False for m in ("PUT", "DELETE", "PATCH")))
+    ck("an UNSCOPED allowlisted path stays method-agnostic (no behaviour change)",
+       all(M._public_method_ok("/api/v1/core/me", m) is True
+           for m in ("GET", "POST", "PUT", "DELETE")))
+    ck("the webhook is now an EXACT match — a sub-path is NOT public",
+       M._is_public(WH) is True and M._is_public(WH + "/anything") is False)
 
 print("B. a VALID token still passes, and the org_id rewrite is unchanged")
 fresh()

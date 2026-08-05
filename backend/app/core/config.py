@@ -60,6 +60,26 @@ class Settings(BaseSettings):
     # and the app secret to validate X-Hub-Signature-256 on inbound POSTs (optional but recommended).
     WHATSAPP_VERIFY_TOKEN: str = ""
     WHATSAPP_APP_SECRET: str = ""
+    # POST /api/v1/remediation/whatsapp-webhook is on the PUBLIC allowlist (Meta carries no JWT), so its
+    # ONLY authentication is Meta's X-Hub-Signature-256. Default TRUE = an UNSET WHATSAPP_APP_SECRET makes
+    # the POST reject (403) instead of accepting anonymous payloads — a spoofed inbound could otherwise
+    # drive the remediation free-text YES/NO approval path or write fake delivery statuses. Break-glass:
+    # WHATSAPP_WEBHOOK_REQUIRE_SIGNATURE=0 restores the pre-2026-08-05 verify-only-if-secret-set behaviour
+    # with one Railway env change and no code rollback. The GET verification handshake is unaffected (it
+    # self-gates on WHATSAPP_VERIFY_TOKEN, which is already fail-closed when unset).
+    WHATSAPP_WEBHOOK_REQUIRE_SIGNATURE: bool = True
+    # ── WhatsApp 24h customer-service window (delivery-truth ladder) ───────────────────────
+    # Meta only delivers FREE-FORM (non-template) messages — including the `type:document` rung that
+    # attaches the real report file — inside 24h of the recipient's last inbound message. Outside it the
+    # Graph API frequently still answers 200 + a wamid and then drops the message asynchronously (owner
+    # incident 2026-08-05: luxelink sends 'sent' with real wamids, nothing delivered, zero Meta
+    # conversations in 30 days). We therefore attempt the free-form rung ONLY with positive evidence of an
+    # open window (an inbound recorded by the Meta webhook, notify.whatsapp_window). Hours is tunable and
+    # deliberately a little under Meta's 24 so a send racing the boundary falls back to the template.
+    WHATSAPP_WINDOW_HOURS: float = 23.0
+    # Break-glass: TRUE restores the pre-2026-08-05 ladder EXACTLY (free-form document attempted even with
+    # no window evidence). Leave FALSE — TRUE reintroduces the silent-drop failure mode.
+    WHATSAPP_FREEFORM_WHEN_UNKNOWN: bool = False
 
     # ── Auth hardening (OTP / 2FA / invite delivery) ─────────────────────────────
     # Pepper mixed into the SHA-256 hash of every stored OTP code (core.auth_otp.code_hash), so a DB
