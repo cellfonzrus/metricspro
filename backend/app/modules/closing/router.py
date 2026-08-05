@@ -3594,7 +3594,8 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     _as_of = date if date else end
     _cop_store_list = sorted(store_set) if store_set else []
     _cop_emp_list = sorted(emp_set) if emp_set else []
-    _cop_codes, _cop_decl, _cop_pick, _cop_last_pu, _cop_last_dep, _cop_smeta = _cash_position_core(
+    (_cop_codes, _cop_decl, _cop_pick, _cop_last_pu, _cop_last_dep, _cop_smeta,
+     _cop_pu_only, _cop_eep_only) = _cash_position_core(
         client, org_id, _as_of, _cop_store_list, _cop_emp_list, ks)
     by_store = []
     for _code in _cop_codes:
@@ -3679,6 +3680,14 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
         return v if v else _f(r.get("store_cash"))
 
     decl_by_store_day, pick_by_store_day = {}, {}
+    # retail-ops (OWNER DIRECTIVE 2026-08-05, "Store cash on hand should have the date range"): a
+    # RANGE view needs to show the MOVEMENT that produced the balance -- opening + collected - taken,
+    # where "taken" splits into "pickups/deposits" (physical cash_pickup rows) vs "envelope expenses"
+    # (EEP approved-expense/withdrawal lines). `pick_by_store_day` stays the COMBINED total (every
+    # existing caller of this function relies on that combined figure unchanged); these two extra
+    # dicts are a strict breakdown of it (pickup_by_store_day + eep_by_store_day == pick_by_store_day
+    # at every (store,day) key, by construction) for callers that want the split.
+    pickup_by_store_day, eep_by_store_day = {}, {}
     last_pickup_at, last_deposited_at = {}, {}
     for r in drows:
         code = r.get("store_code") or "?"
@@ -3689,8 +3698,11 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
         code = r.get("store_code") or "?"
         dday = str(r.get("close_date") or "")
         if r.get("picked_up"):
+            amt = _f(r.get("amount"))
             pick_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
-            pick_by_store_day[code][dday] += _f(r.get("amount"))
+            pick_by_store_day[code][dday] += amt
+            pickup_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
+            pickup_by_store_day[code][dday] += amt
             pu = r.get("picked_up_at")
             if pu and str(pu) > str(last_pickup_at.get(code) or ""):
                 last_pickup_at[code] = pu
@@ -3721,11 +3733,14 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
         code = sc or "?"
         pick_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
         pick_by_store_day[code][dday] += amt
+        eep_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
+        eep_by_store_day[code][dday] += amt
 
     codes = sorted({c for c in (set(decl_by_store_day) | set(pick_by_store_day) | set(store_list)) if c and c != "?"})
     if ks is not None:
         codes = [c for c in codes if in_keyset(ks, c, smeta.get(c, {}).get("address"))]
-    return codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta
+    return (codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta,
+            pickup_by_store_day, eep_by_store_day)
 
 
 @router.get("/cash-position")
@@ -3756,7 +3771,8 @@ def cash_position(date: str = "", start: str = "", end: str = "",
     if not as_of:
         raise HTTPException(400, "valid date required (YYYY-MM-DD)")
 
-    codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta = _cash_position_core(
+    (codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta,
+     _pu_only, _eep_only) = _cash_position_core(
         client, org_id, as_of, store_list, emp_list, ks)
 
     def _label(code):
@@ -3807,31 +3823,83 @@ def cash_position(date: str = "", start: str = "", end: str = "",
 
 
 @router.get("/store-cash-on-hand")
-def store_cash_on_hand(date: str = "", stores: str = "", employees: str = "",
+def store_cash_on_hand(date: str = "", start: str = "", end: str = "", stores: str = "", employees: str = "",
                        authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """"Store Cash on Hand" daily report (OWNER DIRECTIVE 2026-08-04: "how much cash is in each store
-    at the end of the day added with the other days from the past if not picked by the dm or given
-    out"). Per store, for `date`: TODAY's declared cash minus what left the envelope TODAY (pickup/
-    deposit/EEP withdrawal), PLUS the carry-over balance from every day before `date` not yet swept —
-    i.e. exactly `today_declared - today_taken + carryover_prior`. Deliberately reuses
-    `_cash_position_core` (the SAME function GET /cash-position's single-day mode calls) rather than a
-    second computation — `total_cash_on_hand` here is mathematically identical to that endpoint's
-    `cash_on_hand` for the same store/date by construction (proven in harness_store_cash_on_hand.py).
-    This report's value-add over the general Cash Position tool is the explicit TODAY-vs-CARRYOVER
-    split the owner asked for, not a different number."""
+    """"Store Cash on Hand" report (OWNER DIRECTIVE 2026-08-04: "how much cash is in each store at the
+    end of the day added with the other days from the past if not picked by the dm or given out"; OWNER
+    DIRECTIVE 2026-08-05: "Store cash on hand should have the date range.").
+
+    SEMANTICS (stated on the page too — cash on hand is an AS-OF balance, not a sum over a range):
+      • `date` alone (or no params at all — defaults to business-today) -> AS-OF mode, unchanged from
+        2026-08-04: TODAY's declared cash minus what left the envelope TODAY, PLUS the carry-over
+        balance from every earlier un-swept day. Answers "what is sitting in this store right now /
+        as of date X" — this stays the primary, default question the page answers.
+      • `start`+`end` -> RANGE mode: the MOVEMENT that produced the balance over that window, per
+        store — opening_balance (the as-of balance the instant before `start`) + cash_collected
+        (declared cash over the range) - pickups_deposits - envelope_expenses = closing_balance.
+        closing_balance for a range ENDING on date X is BYTE-IDENTICAL to the as-of `total_cash_on_hand`
+        for `date=X` — both are `declared(all history to X) - taken(all history to X)`, just arrived at
+        via a running opening balance instead of one lump sum. Proven in
+        harness_store_cash_on_hand_range.py.
+    Both modes reuse `_cash_position_core` (the SAME function GET /cash-position calls) — never a
+    second computation, so nothing here can drift from that report or from GET /closing/pickups'
+    `by_store` panel."""
     require_org(org_id)
     client = sb()
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
     store_list = [s.strip().upper() for s in stores.split(",") if s.strip()]
     emp_list = [e.strip().lower() for e in employees.split(",") if e.strip()]
+
+    def _label(smeta, code):
+        return smeta.get(code, {}).get("address") or code
+
+    if start and end:
+        range_start, range_end = _date(start), _date(end)
+        if not range_start or not range_end:
+            raise HTTPException(400, "valid start/end required (YYYY-MM-DD)")
+        (codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta,
+         pickup_by_store_day, eep_by_store_day) = _cash_position_core(
+            client, org_id, range_end, store_list, emp_list, ks)
+        day_before_start = (dateparser.parse(range_start) - timedelta(days=1)).date().isoformat()
+
+        out = []
+        for code in codes:
+            opening_balance = round(
+                sum(v for dd, v in decl_by_store_day.get(code, {}).items() if dd <= day_before_start) -
+                sum(v for dd, v in pick_by_store_day.get(code, {}).items() if dd <= day_before_start), 2)
+            cash_collected = round(sum(
+                v for dd, v in decl_by_store_day.get(code, {}).items() if range_start <= dd <= range_end), 2)
+            pickups_deposits = round(sum(
+                v for dd, v in pickup_by_store_day.get(code, {}).items() if range_start <= dd <= range_end), 2)
+            envelope_expenses = round(sum(
+                v for dd, v in eep_by_store_day.get(code, {}).items() if range_start <= dd <= range_end), 2)
+            closing_balance = round(opening_balance + cash_collected - pickups_deposits - envelope_expenses, 2)
+            out.append({
+                "store_code": code, "store_name": _label(smeta, code), "market": smeta.get(code, {}).get("market"),
+                "start": range_start, "end": range_end,
+                "opening_balance": opening_balance, "cash_collected": cash_collected,
+                "pickups_deposits": pickups_deposits, "envelope_expenses": envelope_expenses,
+                "closing_balance": closing_balance,
+                "last_pickup_at": last_pickup_at.get(code), "last_deposited_at": last_deposited_at.get(code),
+            })
+        out.sort(key=lambda r: -r["closing_balance"])
+        return {"mode": "range", "start": range_start, "end": range_end, "rows": out,
+                "opening_note": "opening_balance is the as-of cash-on-hand balance the instant before "
+                                 "the range start; closing_balance for a range ending on date X equals "
+                                 "the as-of total_cash_on_hand for date=X",
+                "totals": {"opening_balance": round(sum(r["opening_balance"] for r in out), 2),
+                           "cash_collected": round(sum(r["cash_collected"] for r in out), 2),
+                           "pickups_deposits": round(sum(r["pickups_deposits"] for r in out), 2),
+                           "envelope_expenses": round(sum(r["envelope_expenses"] for r in out), 2),
+                           "closing_balance": round(sum(r["closing_balance"] for r in out), 2),
+                           "stores": len(out)}}
+
     as_of = _date(date) or _biz_today_iso()
 
-    codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta = _cash_position_core(
+    (codes, decl_by_store_day, pick_by_store_day, last_pickup_at, last_deposited_at, smeta,
+     pickup_by_store_day, eep_by_store_day) = _cash_position_core(
         client, org_id, as_of, store_list, emp_list, ks)
-
-    def _label(code):
-        return smeta.get(code, {}).get("address") or code
 
     out = []
     for code in codes:
@@ -3844,13 +3912,13 @@ def store_cash_on_hand(date: str = "", stores: str = "", employees: str = "",
             sum(v for dd, v in pick_by_store_day.get(code, {}).items() if dd < as_of), 2)
         total = round(carryover_prior + today_declared - today_taken, 2)
         out.append({
-            "store_code": code, "store_name": _label(code), "market": smeta.get(code, {}).get("market"),
+            "store_code": code, "store_name": _label(smeta, code), "market": smeta.get(code, {}).get("market"),
             "date": as_of, "today_declared": today_declared, "today_taken": today_taken,
             "carryover_from_prior_days": carryover_prior, "total_cash_on_hand": total,
             "last_pickup_at": last_pickup_at.get(code), "last_deposited_at": last_deposited_at.get(code),
         })
     out.sort(key=lambda r: -r["total_cash_on_hand"])
-    return {"date": as_of, "rows": out,
+    return {"mode": "single_day", "date": as_of, "rows": out,
             "totals": {"today_declared": round(sum(r["today_declared"] for r in out), 2),
                        "today_taken": round(sum(r["today_taken"] for r in out), 2),
                        "carryover_from_prior_days": round(sum(r["carryover_from_prior_days"] for r in out), 2),
