@@ -49,6 +49,7 @@ from app.modules.commcalc import productivity as _prod
 from app.modules.commcalc import payout_accrual
 from app.core.config import settings
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
+from uuid import uuid4 as _uuid4
 # Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
 # classes — datetime.now/.fromisoformat, timezone.utc, timedelta(...)); without this they NameError
 # when their branch executes (most sat in swallowed try/except, so it went unnoticed).
@@ -7741,12 +7742,15 @@ def _do_dlar_sweep(org_id):
         # and Targets employee KPIs — which read the rep_commissions snapshot, NOT live DLAR
         # — stay current with the freshly-imported DLAR. This runs on every sweep (the daily
         # cron AND manual 'Import DLAR now'). A recalc failure must NOT fail the sweep, so it
-        # is isolated and only noted in last_detail. (_do_dlar_sweep is a sync background
-        # worker running in a threadpool thread, so asyncio.run() has no running loop.)
+        # is isolated and only noted in last_detail. (Both this sweep and _run_calculation are plain
+        # sync functions running in threadpool threads, so this is a direct call — no loop involved.)
         try:
-            import asyncio
-            asyncio.run(_run_calculation(res['period'], org_id))
-            detail += f" · recalculated commissions for {res['period']}"
+            _cres = _run_calculation(res['period'], org_id)
+            if isinstance(_cres, dict) and _cres.get('skipped'):
+                detail += (f" · recalc skipped for {res['period']} — a calculation was already running"
+                           f" (since {_cres.get('running_since')})")
+            else:
+                detail += f" · recalculated commissions for {res['period']}"
         except Exception as _ce:
             detail += f" · ⚠ auto-recalc failed: {_ce}"
         _dlar_set_status(client, org_id, 'ok', detail, mark_run=True)
@@ -8115,9 +8119,134 @@ def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     return {"triggered": len(due)}
 
 
+# ── RECOMPUTE SINGLE-FLIGHT GUARD (mig 275) ───────────────────
+# A recompute is a DELETE-then-INSERT over rep_commissions / flags / chargeback_items with no database
+# lock. Until now nothing stopped two of them running at once for the same (org, period): the endpoint
+# WROTE calc_status='running' but no code ever READ it. It was accidentally serialised only because
+# _run_calculation was an `async def` background task, so Starlette awaited it ON the single event loop
+# (which is also why every recompute froze the entire product for its 300s+ duration). Moving it to the
+# threadpool — the point of this package — removes that accident, so the guard has to become real.
+#
+# Design notes:
+#   • The claim is ONE conditional UPDATE. Under READ COMMITTED, a second UPDATE targeting the same row
+#     blocks on the row lock, then re-evaluates its WHERE against the COMMITTED new version; the winner
+#     has already set calc_status='running' + a fresh calc_started_at, so the loser matches zero rows.
+#     Exactly one caller gets a row back — that is the whole mutual exclusion, no advisory lock needed.
+#   • STALE TAKEOVER: a 'running' row older than the tenant's threshold (default 20 min) is presumed
+#     dead and may be claimed, so a crashed/killed run can never wedge recomputes forever. A row that
+#     says 'running' with NO calc_started_at is legacy (written before this migration, or by a run that
+#     died) and is likewise takeable.
+#   • FAIL OPEN, ALWAYS: any guard-infrastructure error — mig 275 not applied, PostgREST down, an
+#     unexpected payload — logs and returns "acquired" after best-effort writing today's plain
+#     calc_status='running' upsert. A broken guard must never block a recompute.
+#   • `force=true` does NOT bypass this guard: force is about the zero-wipe outcome check, and two
+#     interleaved delete-then-inserts are unsafe no matter what the operator intended.
+CALC_STALE_MINUTES_DEFAULT = 20
+
+
+def _calc_stale_minutes(client, org_id):
+    """Minutes after which a 'running' recompute is presumed DEAD and may be taken over. Tenant
+    configurable (RULE TWO) via commcalc.commission_org_config.calc_stale_minutes; clamped to 1..1440;
+    degrades to the code default when the column/table/row is absent."""
+    try:
+        v = _commission_org_config(client, org_id).get('calc_stale_minutes')
+        if v is None:
+            return CALC_STALE_MINUTES_DEFAULT
+        return min(1440, max(1, int(v)))
+    except Exception:
+        return CALC_STALE_MINUTES_DEFAULT
+
+
+def _calc_guard_legacy_mark(client, org_id, period):
+    """Today's behaviour, byte-identical: mark the period 'running', best effort. Used on every
+    fail-open path so a degraded guard leaves the status row exactly as main leaves it."""
+    try:
+        client.schema('commcalc').table('calc_status').upsert({
+            'org_id': org_id, 'period': _canon_period(period), 'calc_status': 'running'
+        }, on_conflict='org_id,period').execute()
+    except Exception:
+        pass
+
+
+def _calc_guard_acquire(client, org_id, period):
+    """Atomically claim the recompute slot for ONE (org, period).
+
+    Returns (acquired: bool, token: str|None, holder: dict|None).
+      • (True, '<run id>', None)  — claimed; caller owns the slot.
+      • (True, None, None)        — guard degraded (fail open); caller proceeds exactly as before.
+      • (False, None, {...})      — someone else holds it; holder carries running_since + stale_minutes.
+    Scope is (org_id, canonical period): a different period, or the same period in another tenant, is
+    never blocked."""
+    canon = _canon_period(period)
+    try:
+        stale = _calc_stale_minutes(client, org_id)
+        now = _datetime.now(_timezone.utc)
+        # 'Z' rather than '+00:00': the value is interpolated into a PostgREST or= filter, and a literal
+        # '+' in a query string is ambiguous. Postgres parses the Z form as UTC identically.
+        now_iso = now.isoformat().replace('+00:00', 'Z')
+        cutoff = (now - _timedelta(minutes=stale)).isoformat().replace('+00:00', 'Z')
+        token = _uuid4().hex
+        claim = {'calc_status': 'running', 'calc_started_at': now_iso, 'calc_run_id': token}
+        takeable = (f'calc_status.is.null,calc_status.neq.running,'
+                    f'calc_started_at.is.null,calc_started_at.lt.{cutoff}')
+
+        def _try_claim():
+            return (client.schema('commcalc').table('calc_status').update(claim)
+                    .eq('org_id', org_id).eq('period', canon).or_(takeable)
+                    .execute().data) or []
+
+        def _read_row():
+            r = (client.schema('commcalc').table('calc_status')
+                 .select('calc_status,calc_started_at,calc_run_id')
+                 .eq('org_id', org_id).eq('period', canon).limit(1).execute().data) or []
+            return r[0] if r else None
+
+        if _try_claim():
+            return True, token, None
+
+        # Zero rows updated = either no status row exists yet, or someone holds a FRESH 'running'.
+        row = _read_row()
+        if row is None:
+            # First-ever calc for this (org, period). UNIQUE(org_id, period) is the race arbiter: the
+            # loser of a simultaneous insert takes a duplicate-key error and re-runs the conditional
+            # update, which then sees the winner's fresh 'running' and refuses.
+            try:
+                client.schema('commcalc').table('calc_status').insert(
+                    {'org_id': org_id, 'period': canon, **claim}).execute()
+                return True, token, None
+            except Exception:
+                if _try_claim():
+                    return True, token, None
+                row = _read_row()
+        if row is None:
+            # Can't see a holder and can't claim — do not invent a refusal. Fail open.
+            _calc_guard_legacy_mark(client, org_id, period)
+            print(f"WARN calc guard indeterminate for org={org_id} period={canon} — proceeding")
+            return True, None, None
+        return False, None, {'running_since': row.get('calc_started_at'),
+                             'run_id': row.get('calc_run_id'),
+                             'stale_minutes': stale}
+    except Exception as e:
+        # FAIL OPEN — includes "migration 275 not applied" (calc_started_at / calc_run_id absent).
+        print(f"WARN calc guard unavailable for org={org_id} period={canon} "
+              f"({type(e).__name__}: {e}) — proceeding UNGUARDED")
+        _calc_guard_legacy_mark(client, org_id, period)
+        return True, None, None
+
+
+def _calc_busy_message(period, holder):
+    since = (holder or {}).get('running_since') or 'just now'
+    mins = (holder or {}).get('stale_minutes') or CALC_STALE_MINUTES_DEFAULT
+    return (f"A calculation for {period} is already running (started {since}). Refusing to start a "
+            f"second one — two recomputes at once would interleave the delete-and-rewrite of the "
+            f"commission rows and could leave the period half-written. Wait for it to finish "
+            f"(watch /commcalc/commissions/{period}); a run that is still marked running after "
+            f"{mins} minutes is treated as dead and the next Calculate takes over automatically.")
+
+
 # ── Calculate endpoint ────────────────────────────────────────
 @router.post("/calculate/{period}")
-async def calculate(
+def calculate(
     period: str,
     background_tasks: BackgroundTasks,
     org_id: str = "00000000-0000-0000-0000-000000000001",
@@ -8129,17 +8258,15 @@ async def calculate(
 
     client = sb()
 
-    # Mark as pending. Key calc_status on the SINGLE canonical 'Month YYYY' spelling so '2026-07' and
-    # 'July 2026' don't maintain two divergent status rows for the same month (the read path
-    # /calc-status/{period} already resolves via _pvariants). The calc itself still runs on the raw
-    # `period` string — only the status key is normalized.
-    try:
-        client.schema('commcalc').table('calc_status').upsert({
-            'org_id': org_id, 'period': _canon_period(period), 'calc_status': 'running'
-        }, on_conflict='org_id,period').execute()
-    except: pass
+    # Claim the slot AND mark the period running in one atomic conditional update. Same status key as
+    # before: the SINGLE canonical 'Month YYYY' spelling, so '2026-07' and 'July 2026' don't maintain
+    # two divergent status rows for the same month (the read path /calc-status/{period} already
+    # resolves via _pvariants). The calc itself still runs on the raw `period` string.
+    acquired, token, holder = _calc_guard_acquire(client, org_id, period)
+    if not acquired:
+        raise HTTPException(409, _calc_busy_message(period, holder))
 
-    background_tasks.add_task(_run_calculation, period, org_id, force)
+    background_tasks.add_task(_run_calculation, period, org_id, force, token)
     return {"status": "started", "period": period, "message": "Calculation running in background"}
 
 
@@ -8169,7 +8296,7 @@ def _commission_org_config(client, org_id):
     rate-plan line — the engine's own default, so the read degrading changes nothing)."""
     default = {"pay_disabled": False, "residual_visibility": "all", "plan_ct_resolution": "raw",
                "installment_mrc_basis": "plan_line", "installment_mrc_hardware_guard": True,
-               "store_resolution": "exact"}
+               "store_resolution": "exact", "calc_stale_minutes": None}
     try:
         rows = (client.schema('commcalc').table('commission_org_config').select('*')
                 .eq('org_id', org_id).limit(1).execute().data) or []
@@ -8185,6 +8312,10 @@ def _commission_org_config(client, org_id):
     # assignment. 'exact' (default, and the value read when the column is absent) is today's
     # store_mapping-only lookup, byte-identical.
     _sr = str(r.get("store_resolution") or "exact").strip().lower()
+    try:
+        _csm = int(r["calc_stale_minutes"]) if r.get("calc_stale_minutes") is not None else None
+    except Exception:
+        _csm = None
     return {"pay_disabled": bool(r.get("pay_disabled")),
             "residual_visibility": (r.get("residual_visibility") or "all").strip().lower(),
             "plan_ct_resolution": _ctr if _ctr in ("raw", "mapped") else "raw",
@@ -8192,7 +8323,10 @@ def _commission_org_config(client, org_id):
             # mig 246 — TRUE unless the tenant explicitly turned the structural device-price guard off
             # (the column is absent before the migration → the engine's own default, TRUE).
             "installment_mrc_hardware_guard": True if _hg is None else bool(_hg),
-            "store_resolution": _sr if _sr in ("exact", "alias") else "exact"}
+            "store_resolution": _sr if _sr in ("exact", "alias") else "exact",
+            # mig 275 — NOT a money setting: how long a recompute may stay marked 'running' before the
+            # next Calculate presumes it dead and takes the slot over. None = the code default (20 min).
+            "calc_stale_minutes": _csm}
 
 
 def _can_view_carrier_residual(authorization, org_id):
@@ -8529,9 +8663,25 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
         return comms
 
 
-async def _run_calculation(period: str, org_id: str, force: bool = False):
-    """Background calculation task. force=True bypasses the zero-wipe guard."""
+def _run_calculation(period: str, org_id: str, force: bool = False, guard_token: str = None):
+    """Background calculation task. force=True bypasses the zero-wipe guard.
+
+    PLAIN `def` ON PURPOSE (2026-08-05): Starlette runs an *async* BackgroundTask ON the event loop and a
+    *sync* one in the threadpool. This body contains zero `await`s and takes minutes, so as `async def`
+    every recompute froze the whole product — every tenant, every page — for its full duration. Sync
+    keeps the identical work on a worker thread instead. Not one line of the calculation below changed.
+
+    `guard_token` is the single-flight claim from _calc_guard_acquire. POST /calculate claims the slot
+    itself (so it can answer 409 synchronously) and hands the token down; an internal caller (the DLAR
+    sweep, the email sweep) passes nothing and this function claims it. A refusal returns a
+    {'skipped': ...} dict WITHOUT touching rep_commissions — it never raises into a sweep."""
     client = sb()
+    if not guard_token:
+        _ok, _tok, _holder = _calc_guard_acquire(client, org_id, period)
+        if not _ok:
+            print(f"INFO recompute skipped org={org_id} period={period} — already running "
+                  f"(since {(_holder or {}).get('running_since')})")
+            return {'skipped': 'already_running', 'running_since': (_holder or {}).get('running_since')}
     # MONEY-PATH FRESHNESS (Gate-1 rework finding 1b): the accessory/classification memo is bounded by a
     # TTL, not by a request boundary (get_supabase() is a process-wide singleton), and the owner edits
     # config by hand in the SQL Editor — which fires no invalidate. A recalc decides what people are PAID,
@@ -9440,11 +9590,35 @@ def put_commission_settings(body: dict, authorization: str = Header(default=""),
     if "store_resolution" in body:
         sr = (body.get("store_resolution") or "exact").strip().lower()
         row["store_resolution"] = sr if sr in ("exact", "alias") else "exact"
+    # mig 275 — NOT MONEY: minutes before a recompute still marked 'running' is presumed dead and the next
+    # Calculate takes the slot over. Blank/None clears the override back to the 20-minute code default.
+    # Clamped 1..1440 here as well as at read time so a bad save can neither wedge recomputes (too high)
+    # nor let two of them overlap. Parsed HERE, written BELOW in its own statement.
+    _csm_set, _csm_val = False, None
+    if "calc_stale_minutes" in body:
+        _csm_set = True
+        _v = body.get("calc_stale_minutes")
+        if _v is None or str(_v).strip() == "":
+            _csm_val = None
+        else:
+            try:
+                _csm_val = min(1440, max(1, int(_v)))
+            except Exception:
+                raise HTTPException(400, "calc_stale_minutes must be a whole number of minutes (1-1440)")
     try:
         client = sb()
         client.schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
     except Exception as e:
         raise HTTPException(500, f"could not save commission settings (is migration 201 applied?): {e}")
+    # Written in its OWN statement on purpose (the mig-247 lesson): a column that does not exist yet fails
+    # the WHOLE statement, and folding it into the upsert above would take every OTHER pay setting down
+    # with it before migration 275 runs. Best effort, never fails the save.
+    if _csm_set:
+        try:
+            (sb().schema('commcalc').table('commission_org_config')
+             .update({"calc_stale_minutes": _csm_val}).eq('org_id', org_id).execute())
+        except Exception as e:
+            print(f"WARN calc_stale_minutes not saved for org {org_id} (is migration 275 applied?): {e}")
     return _commission_org_config(sb(), org_id)
 
 
@@ -19848,7 +20022,12 @@ async def _run_email_sweep(org_id, account='default'):
                     _carriers = (client.schema('commcalc').table('carrier').select('*')
                                  .eq('org_id', org_id).execute().data) or []
                     if _resolve_carrier_mode(_carriers) != 'boost':
-                        await _run_calculation(_ftp_current_period(), org_id)
+                        # _run_calculation is a plain `def` now (it has zero awaits and takes minutes).
+                        # _run_email_sweep IS a real coroutine, so calling it inline would block the one
+                        # event loop for the whole recompute — exactly the freeze this package removes.
+                        # run_in_threadpool is what Starlette itself does with a sync BackgroundTask.
+                        from starlette.concurrency import run_in_threadpool as _in_pool
+                        await _in_pool(_run_calculation, _ftp_current_period(), org_id)
             except Exception as e2:
                 print(f"WARN auto-recalc after promote failed: {e2}")
     except Exception as e:

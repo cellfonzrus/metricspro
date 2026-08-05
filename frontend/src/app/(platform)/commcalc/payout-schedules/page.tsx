@@ -165,8 +165,14 @@ export default function PayoutSchedulesPage() {
     try {
       await api(`/api/v1/commcalc/calculate/${encodeURIComponent(period.trim())}`, { method: 'POST' })
       setMsg('✅ Recompute finished — open the Rep Commission report for ' + period.trim() + '.')
-    } catch {
-      setMsg('⏳ Recompute is running (the request timed out at the gateway but completes server-side). Check the Rep Commission report for ' + period.trim() + ' in a minute.')
+    } catch (e: any) {
+      // Distinguish the two very different failures: a REFUSED start (another calculation for this month
+      // is already running — the single-flight guard, HTTP 409) versus the familiar gateway timeout on a
+      // recompute that IS running and will finish. Telling the operator "it's running, check back" when
+      // the server actually refused would hide the reason.
+      const m = String(e?.message || '')
+      if (m.includes('already running')) setMsg('⚠️ ' + m)
+      else setMsg('⏳ Recompute is running (the request timed out at the gateway but completes server-side). Check the Rep Commission report for ' + period.trim() + ' in a minute.')
     } finally { setBusy(false) }
   }
   const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || (id ? 'carrier' : 'Any carrier')

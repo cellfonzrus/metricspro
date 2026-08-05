@@ -499,7 +499,12 @@ AC.invalidate()
 R._accessory_config(mclient, ORG_A)
 mclient.store['accessory_config'][0]['departments'] = ['RecalcMustSeeThis']
 _before_gen = AC.cache_generation()
-asyncio.run(R._run_calculation('July 2026', ORG_A))
+# SHAPE-AGNOSTIC (2026-08-05): _run_calculation is a plain `def` now — it has zero awaits and takes
+# minutes, so as an async BackgroundTask Starlette awaited it ON the single event loop and every
+# recompute froze the product. Drive it whichever way it is declared.
+_rc = R._run_calculation('July 2026', ORG_A)
+if inspect.isawaitable(_rc):
+    asyncio.run(_rc)
 check("A8c-ii _run_calculation drops the memo at ENTRY (generation moved)",
       AC.cache_generation() > _before_gen)
 check("A8d-ii …so the recalc's config read is fresh",
