@@ -351,6 +351,31 @@ SUPPRESS_LABELS = {
 
 
 # ── the tenant's ACCESSORY DEFINITION, as a predicate (mig 257) ──────────────────────────────────
+def definition_drives_pay(client, org_id):
+    """Does this tenant's ACCESSORY DEFINITION (mig 257) also decide what the plan engine PAYS?
+    (`accessory_config.definition_drives_pay`, mig 276.)
+
+    DEFAULT FALSE, and FALSE on any error/missing column — so a tenant that has never touched it, and
+    every tenant before migration 276 runs, takes exactly the pre-2026-08-05 engine branch and no
+    payout number moves. Read-only; never raises.
+
+    WHY THIS EXISTS: the owner maps products on /commcalc/accessory-definition, which writes
+    `accessory_definition_map`. The money path's synthetic `accessory` match_field is stamped by
+    `accessory_catalog.AccessoryClassifier`, which reads a DIFFERENT surface (accessory_config's
+    dept/category/keyword lists + the raw_catalog category layer) and has never read the definition —
+    migration 257 states that explicitly. A rule `accessory equals yes` therefore matched ZERO lines
+    for products the owner had mapped, which is the luxelink trans-3207 $0 report of 2026-08-05.
+    This switch is how a tenant closes that gap knowingly."""
+    try:
+        rows = (client.schema("commcalc").table("accessory_config")
+                .select("definition_drives_pay").eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        return False
+    if not rows:
+        return False
+    return bool(rows[0].get("definition_drives_pay"))
+
+
 def accessory_predicate(client, org_id):
     """callable(row) -> bool built from the tenant's OWN accessory definition, or None when the tenant
     has none. NOT a new classifier — it calls `accessory_definition.classify()`, the mapping surface the

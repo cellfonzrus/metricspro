@@ -41,6 +41,13 @@ type DefData = {
   counts: { mappings: number; confirmed: number; proposed: number; classes_confirmed: number }
   sku_coverage?: Sku
   meta: any; ready: boolean; migration: string | null
+  definition_drives_pay?: boolean; pay_switch_ready?: boolean
+}
+type PayImpact = {
+  ready: boolean; period: string; definition_drives_pay?: boolean
+  total_was?: number; total_now?: number; total_delta?: number; reps_changed?: number
+  by_rep?: { rep: string; was: number; now: number; delta: number }[]
+  note?: string
 }
 type Mech = { key: string; label: string; lines: number; ext_price: number; gp: number }
 type Drift = {
@@ -143,6 +150,8 @@ export default function AccessoryDefinitionPage() {
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const [facets, setFacets] = useState<{ periods: string[]; stores: string[]; reps: string[] } | null>(null)
   const [proposalPreview, setProposalPreview] = useState<any>(null)
+  const [payImpact, setPayImpact] = useState<PayImpact | null>(null)
+  const [payBusy, setPayBusy] = useState(false)
 
   const store = (filt.stores || [])[0] || ''
   const rep = (filt.reps || [])[0] || ''
@@ -244,6 +253,28 @@ export default function AccessoryDefinitionPage() {
     } catch (e: any) { setMsg(e.message) }
   }
 
+  // ── THE PAY SWITCH (mig 276) — the ONE money control on this page ──────────────────────────
+  // Turning it on does not move a cent by itself: the stored payout numbers only change when
+  // someone presses Run Commission for a period afterwards. Reading the impact writes nothing.
+  async function checkPayImpact() {
+    setPayImpact(null); setMsg(''); setPayBusy(true)
+    try {
+      setPayImpact(await api(`/api/v1/commcalc/accessory-definition/pay-impact/${encodeURIComponent(period)}?org_id=${ORG_ID}`))
+    } catch (e: any) { setMsg(e.message) } finally { setPayBusy(false) }
+  }
+
+  async function setPaySwitch(on: boolean) {
+    setMsg(''); setPayBusy(true)
+    try {
+      await api(`/api/v1/commcalc/accessory-config?org_id=${ORG_ID}`,
+        { method: 'PUT', body: JSON.stringify({ definition_drives_pay: on }) })
+      setMsg(on
+        ? 'Saved. Your accessory mapping now decides accessory pay — run Commission for the period to apply it.'
+        : 'Saved. Your accessory mapping is back to being a definition only; it decides no pay.')
+      loadDef()
+    } catch (e: any) { setMsg(e.message) } finally { setPayBusy(false) }
+  }
+
   const rows = useMemo(() => {
     const base = (data?.observed?.[field] || []).concat(
       (data?.orphan_mappings || []).filter(o => o.match_field === field))
@@ -270,9 +301,10 @@ export default function AccessoryDefinitionPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>What counts as an accessory</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 940 }}>
-          {period} · <b>read-only with respect to money</b> — nothing here changes what anyone is paid,
-          what the GP report shows or what the P&amp;L books. This is your definition of “accessory”, plus
-          an item-by-item comparison against every classifier the system already uses.
+          {period} · this is your definition of “accessory”, plus an item-by-item comparison against
+          every classifier the system already uses. It changes nothing about the GP report or the
+          P&amp;L. It decides <b>commission pay</b> only if you switch that on below — and even then,
+          nothing moves until you run Commission for a period.
         </p>
       </div>
 
@@ -306,6 +338,81 @@ export default function AccessoryDefinitionPage() {
 
       {tab === 'define' && (
         <>
+          {/* ── ⓪ DOES THIS DECIDE PAY? (mig 276) ────────────────────────────────────────── */}
+          <div className="card" style={{ marginBottom: 14, borderLeft: '4px solid var(--amber)' }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>💰 Does this mapping decide accessory pay?</div>
+            <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px', maxWidth: 940 }}>
+              A commission rule that pays on “accessory = yes” has always read a <b>different</b> list:
+              the accessory <b>Department / Category / product-keyword</b> settings and the product
+              catalog. It has never read the mapping on this page. That is why a product you mapped here
+              could still pay $0. Switch this on to make what you map here count as an accessory for pay
+              as well.
+            </p>
+            <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px', maxWidth: 940 }}>
+              It can only <b>add</b> accessory lines — nothing that is paid today stops being paid — and
+              a set-up fee is never treated as an accessory. It affects commission only: the Sales
+              Report, GP report, P&amp;L and Sales Analyzer accessory numbers do not change.
+            </p>
+            {data?.pay_switch_ready === false && (
+              <div style={{ fontSize: 12, color: 'var(--amber)', marginBottom: 8 }}>
+                Migration <code>276_commission_accessory_definition_pay.sql</code> hasn’t been run yet, so
+                this switch can’t be saved. Nothing is broken — pay simply keeps using the old list.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, fontWeight: 600 }}>
+                <input type="checkbox" checked={!!data?.definition_drives_pay}
+                  disabled={payBusy || data?.pay_switch_ready === false}
+                  onChange={e => setPaySwitch(e.target.checked)} />
+                My accessory mapping decides accessory pay
+              </label>
+              <button className="btn" onClick={checkPayImpact} disabled={payBusy || !period}>
+                {payBusy ? 'Working…' : `Check impact for ${period || '—'}`}
+              </button>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+                Reading the impact changes nothing and pays nobody.
+              </span>
+            </div>
+            {payImpact && payImpact.ready === false && (
+              <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 10 }}>{payImpact.note || 'No commission plans configured yet.'}</div>
+            )}
+            {payImpact?.ready && (
+              <div style={{ marginTop: 10, fontSize: 12.5 }}>
+                <div>
+                  <b>{payImpact.period}</b>: total commission would go from{' '}
+                  <b>${(payImpact.total_was || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</b> to{' '}
+                  <b>${(payImpact.total_now || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</b>{' '}
+                  ({(payImpact.total_delta || 0) >= 0 ? '+' : ''}
+                  ${(payImpact.total_delta || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}),
+                  affecting <b>{payImpact.reps_changed || 0}</b> {payImpact.reps_changed === 1 ? 'person' : 'people'}.
+                </div>
+                {(payImpact.by_rep || []).length > 0 && (
+                  <table style={{ marginTop: 8, fontSize: 12.5, borderCollapse: 'collapse' }}>
+                    <thead><tr>
+                      <th style={{ textAlign: 'left', padding: '3px 12px 3px 0' }}>Person</th>
+                      <th style={{ textAlign: 'right', padding: '3px 12px 3px 0' }}>Now</th>
+                      <th style={{ textAlign: 'right', padding: '3px 12px 3px 0' }}>Would be</th>
+                      <th style={{ textAlign: 'right', padding: '3px 0' }}>Change</th>
+                    </tr></thead>
+                    <tbody>
+                      {(payImpact.by_rep || []).slice(0, 40).map(r => (
+                        <tr key={r.rep}>
+                          <td style={{ padding: '3px 12px 3px 0' }}>{r.rep}</td>
+                          <td style={{ textAlign: 'right', padding: '3px 12px 3px 0' }}>${r.was.toFixed(2)}</td>
+                          <td style={{ textAlign: 'right', padding: '3px 12px 3px 0' }}>${r.now.toFixed(2)}</td>
+                          <td style={{ textAlign: 'right', padding: '3px 0', color: r.delta >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                            {r.delta >= 0 ? '+' : ''}${r.delta.toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                <div style={{ marginTop: 8, color: 'var(--text3)' }}>{payImpact.note}</div>
+              </div>
+            )}
+          </div>
+
           {/* ── ② the field rule ─────────────────────────────────────────────────────────── */}
           <div className="card" style={{ marginBottom: 14 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Rule — “anything whose department or category says accessory”</div>
