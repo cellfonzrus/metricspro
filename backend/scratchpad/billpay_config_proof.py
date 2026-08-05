@@ -25,19 +25,6 @@ WHAT THIS PROVES
 Drives the REAL router functions over an in-memory FakeClient (house style; no DB/network) + the REAL core
 _can_edit_setting. Run:  cd backend && python3 scratchpad/billpay_config_proof.py
 """
-
-
-def run_route(x):
-    """Call a commcalc route handler in EITHER shape.
-
-    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
-    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
-    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
-    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
-    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
-    ever legitimately becomes a coroutine again."""
-    import asyncio as _a
-    return _a.run(x) if _a.iscoroutine(x) else x
 import os, sys, asyncio, calendar as _cal
 from datetime import date as _date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -345,7 +332,7 @@ def run_summary(store):
     _orig = R.sb
     R.sb = lambda: c
     try:
-        summ = run_route(R.get_targets_summary(period=PERIOD, today=TODAY_ISO, org_id=ORG,
+        summ = asyncio.run(R.get_targets_summary(period=PERIOD, today=TODAY_ISO, org_id=ORG,
                                                  include_untargeted=False, stores=None, markets=None, reps=None))
     finally:
         R.sb = _orig

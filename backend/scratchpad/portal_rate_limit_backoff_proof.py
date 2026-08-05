@@ -24,19 +24,6 @@ WHAT THIS FILE PROVES, mechanically and with no portal, no Chromium, no DB and n
 
 Run:  cd backend && python3 scratchpad/portal_rate_limit_backoff_proof.py
 """
-
-
-def run_route(x):
-    """Call a commcalc route handler in EITHER shape.
-
-    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
-    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
-    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
-    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
-    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
-    ever legitimately becomes a coroutine again."""
-    import asyncio as _a
-    return _a.run(x) if _a.iscoroutine(x) else x
 import asyncio
 import io
 import os
@@ -792,11 +779,11 @@ class BT:
 
 
 with Ctx(cli_j2):
-    j5 = run_route(R.data_source_login_start("j2", BT(), org_id=ORG_A))
+    j5 = asyncio.run(R.data_source_login_start("j2", BT(), org_id=ORG_A))
 check("J5 the headless login/start is refused during a cooldown (the most expensive request there is)",
       not started and j5.get("blocked") is True, (started, j5))
 with Ctx(cli_j2):
-    run_route(R.data_source_login_start("j2", BT(), org_id=ORG_A, confirm=True))
+    asyncio.run(R.data_source_login_start("j2", BT(), org_id=ORG_A, confirm=True))
 check("J6 …and ONE confirmed attempt is allowed (cap = 1 per cooldown window: a failure re-arms it)",
       len(started) == 1, started)
 

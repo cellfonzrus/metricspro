@@ -15,19 +15,6 @@ Plus a regression run of the existing device_history_proof.py (must stay green).
 
 Run:  cd backend && python3 scratchpad/device_history_aging_proof.py
 """
-
-
-def run_route(x):
-    """Call a commcalc route handler in EITHER shape.
-
-    ASYNC-SWEEP 2026-08-04: commcalc's zero-`await` route handlers were converted from `async def` to
-    `def` so FastAPI runs them in the threadpool instead of on the single uvicorn event loop (an
-    `async def` doing blocking Supabase I/O froze the whole product for its duration). The only textual
-    change was the keyword. This helper awaits a coroutine when it gets one and passes a plain result
-    straight through, so the proof works against BOTH shapes and needs no further edit if a handler
-    ever legitimately becomes a coroutine again."""
-    import asyncio as _a
-    return _a.run(x) if _a.iscoroutine(x) else x
 import os, sys, asyncio, subprocess
 from datetime import date, timedelta
 
@@ -231,8 +218,8 @@ STORE = {
 }
 R.sb = lambda: FakeClient(STORE)
 
-resA = run_route(R.get_device_history(q=IMEI, authorization="", org_id="A"))
-resB = run_route(R.get_device_history(q=IMEI, authorization="", org_id="B"))
+resA = asyncio.run(R.get_device_history(q=IMEI, authorization="", org_id="A"))
+resB = asyncio.run(R.get_device_history(q=IMEI, authorization="", org_id="B"))
 
 check("A: found via asset_ledger", resA["found"] and resA["aging"]["found"])
 check("A: aging store is A's", resA["aging"]["store"] == "A-STORE")
@@ -258,14 +245,14 @@ STORE["asset_ledger"].append(
      "market": "PA", "device_model": "Pixel 8", "category": "Sold", "status": "Sold",
      "acquired_date": "2026-01-01", "date_sold": "2026-02-20", "payg_date": "2026-01-15",
      "billing_friday": "2026-01-16", "owed_to_vip": 250, "raw_row": {}})
-resSold = run_route(R.get_device_history(q="990000000000001", authorization="", org_id="A"))
+resSold = asyncio.run(R.get_device_history(q="990000000000001", authorization="", org_id="A"))
 check("SOLD: is_sold True + days 50 (acquired→sold)", resSold["aging"]["is_sold"] and resSold["aging"]["days_on_inventory"] == 50)
 check("SOLD: billing PayGo/Friday surfaced", resSold["aging"]["billing"]["payg_date"] == "2026-01-15"
       and resSold["aging"]["billing"]["billing_friday"] == "2026-01-16")
 check("SOLD: owed_to_vip 250 is the purchase price", resSold["purchase_price"]["amount"] == 250.0)
 
 # NO inventory record (unknown IMEI) — honest empty, never a fabricated zero.
-resNone = run_route(R.get_device_history(q="111111111111119", authorization="", org_id="A"))
+resNone = asyncio.run(R.get_device_history(q="111111111111119", authorization="", org_id="A"))
 check("NO-REC: aging.found False + honest note", resNone["aging"]["found"] is False and "No inventory" in resNone["aging"]["note"])
 check("NO-REC: purchase_price.found False (not $0)", resNone["purchase_price"]["found"] is False and resNone["purchase_price"]["amount"] is None)
 
@@ -410,31 +397,31 @@ STORE2 = {
 R.sb = lambda: FakeClient(STORE2)
 
 # ① inventory-aging cost wins (universal POS/SKU), owed_to_vip absent for this tenant.
-rInv = run_route(R.get_device_history(q=IMEI_INV, authorization="", org_id="C"))
+rInv = asyncio.run(R.get_device_history(q=IMEI_INV, authorization="", org_id="C"))
 check("① inv-aging cost 549 chosen + provenance names POS inventory cost",
       rInv["purchase_price"]["amount"] == 549.0 and "POS inventory cost" in rInv["purchase_price"]["label"])
 check("① aging from inventory_aging_device (non-VIP path), current-age 52",
       rInv["aging"]["source"] == "inventory_aging_device" and rInv["aging"]["days_on_inventory"] == 52)
 check("① found True via inventory row", rInv["found"] is True)
 # ORG ISOLATION — C never sees D's 999 for the same imei.
-rInvD = run_route(R.get_device_history(q=IMEI_INV, authorization="", org_id="D"))
+rInvD = asyncio.run(R.get_device_history(q=IMEI_INV, authorization="", org_id="D"))
 check("ISO: D inv cost 999 (its own), C stays 549", rInvD["purchase_price"]["amount"] == 999.0
       and rInv["purchase_price"]["amount"] == 549.0)
 check("ISO: C aging store C-STORE, never D-STORE", rInv["aging"]["store"] == "C-STORE")
 
 # ② at-sale POS cost (ext − GP = 299 − 120 = 179) when there is NO inventory row.
-rPos = run_route(R.get_device_history(q=IMEI_POS, authorization="", org_id="C"))
+rPos = asyncio.run(R.get_device_history(q=IMEI_POS, authorization="", org_id="C"))
 check("② POS at-sale cost 179 (299−120) + provenance 'ext − GP'",
       rPos["purchase_price"]["amount"] == 179.0 and "ext − GP" in rPos["purchase_price"]["label"])
 check("② sold_by_us True + device model from sale", rPos["sold_by_us"] and rPos["device"]["phone_model"] == "Moto G")
 
 # ③ MA marketplace order price (tenant D) — imei → activation_order → order_number → price.
-rMa = run_route(R.get_device_history(q=IMEI_MA, authorization="", org_id="D"))
+rMa = asyncio.run(R.get_device_history(q=IMEI_MA, authorization="", org_id="D"))
 check("③ MA marketplace price 259.5 + provenance names the order",
       rMa["purchase_price"]["amount"] == 259.5 and "MA marketplace order" in rMa["purchase_price"]["label"])
 check("③ found via MA commission row", rMa["found"] is True)
 # ORG ISOLATION of MA — C asking for D's imei sees NOTHING of D's order/price.
-rMaC = run_route(R.get_device_history(q=IMEI_MA, authorization="", org_id="C"))
+rMaC = asyncio.run(R.get_device_history(q=IMEI_MA, authorization="", org_id="C"))
 check("ISO: C never sees D's MA order/price (honest empty for C)",
       rMaC["purchase_price"]["found"] is False and rMaC["found"] is False)
 
@@ -447,9 +434,9 @@ STORE2["asset_ledger"] = [
      "market": "PA", "device_model": "iPhone 13", "category": "On Inventory", "status": "In Stock",
      "acquired_date": "2026-01-01", "owed_to_vip": 275, "raw_row": {}},
 ]
-r4 = run_route(R.get_device_history(q="355777777777777", authorization="", org_id="C"))
+r4 = asyncio.run(R.get_device_history(q="355777777777777", authorization="", org_id="C"))
 check("④ raw_row Device Cost 410 wins over owed 300", r4["purchase_price"]["amount"] == 410.0)
-r5 = run_route(R.get_device_history(q="355888888888888", authorization="", org_id="C"))
+r5 = asyncio.run(R.get_device_history(q="355888888888888", authorization="", org_id="C"))
 check("⑤ owed_to_vip 275 LAST RESORT + relabeled 'VIP billing basis (house...)'",
       r5["purchase_price"]["amount"] == 275.0 and "VIP billing basis" in r5["purchase_price"]["label"])
 
@@ -460,14 +447,14 @@ STORE2["asset_ledger"].append(
 STORE2["inventory_aging_device"].append(
     {"org_id": "C", "imei": "355999999999999", "sku": "APL-15", "item": "iPhone 15", "store": "C-STORE",
      "unit_cost": 500.0, "received_date": "2026-06-01", "as_of_date": "2026-07-01"})
-rPri = run_route(R.get_device_history(q="355999999999999", authorization="", org_id="C"))
+rPri = asyncio.run(R.get_device_history(q="355999999999999", authorization="", org_id="C"))
 check("PRIORITY: inv-aging 500 (①) beats owed_to_vip 800 (⑤) for same device",
       rPri["purchase_price"]["amount"] == 500.0 and rPri["purchase_price"]["source"] == "inventory_aging_device.unit_cost")
 check("PRIORITY: asset_ledger still drives aging when present (house path)",
       rPri["aging"]["source"] == "asset_ledger")
 
 # honest empty across ALL v2 sources — unknown device, no rows anywhere.
-rEmpty = run_route(R.get_device_history(q="000000000000001", authorization="", org_id="C"))
+rEmpty = asyncio.run(R.get_device_history(q="000000000000001", authorization="", org_id="C"))
 check("EMPTY: no source → purchase_price.found False (never $0)", rEmpty["purchase_price"]["found"] is False)
 check("EMPTY: provenance mentions the pending feed", "feed pending" in rEmpty["purchase_price"]["provenance"])
 

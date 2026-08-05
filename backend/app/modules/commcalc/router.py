@@ -2061,7 +2061,7 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
 
 
 @router.get("/upload/history")
-def upload_history(org_id: str = ORG_ID, period: str = "", limit: int = 100):
+async def upload_history(org_id: str = ORG_ID, period: str = "", limit: int = 100):
     """Recent uploads, newest first. Powers the Upload page's 'already
     uploaded' badges and the collapsible history menu. Optionally filter to a
     single period. Degrades to [] if 007_upload_log.sql hasn't been run yet."""
@@ -2468,7 +2468,7 @@ def _vip_fetch(client, org_id, period=None, location=None, status=None, cols="*"
 
 
 @router.get("/vip/filter-options")
-def vip_filter_options(org_id: str = ORG_ID):
+async def vip_filter_options(org_id: str = ORG_ID):
     """Distinct stores / periods / statuses for the VIP page filter bar."""
     require_org(org_id)
     rows = _vip_fetch(sb(), org_id, cols="location,period,period_year,period_month,status")
@@ -2539,7 +2539,7 @@ async def vip_invoices_list(org_id: str = ORG_ID, period: str = "", location: st
 
 
 @router.get("/vip/invoice/{vip_id}")
-def vip_invoice_detail(vip_id: int, org_id: str = ORG_ID):
+async def vip_invoice_detail(vip_id: int, org_id: str = ORG_ID):
     """One invoice's full contents for the click-through preview: header + line items + devices."""
     require_org(org_id)
     client = sb()
@@ -2794,13 +2794,13 @@ def _do_vip_sweep(org_id):
 
 
 @router.get("/vip/sweep/config")
-def vip_sweep_get_config(org_id: str = ORG_ID):
+async def vip_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
     return _vip_public_cfg(_vip_cfg(sb(), org_id))
 
 
 @router.put("/vip/sweep/config")
-def vip_sweep_put_config(body: dict, org_id: str = ORG_ID,
+async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -2827,7 +2827,7 @@ def vip_sweep_put_config(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/vip/sweep/run-now")
-def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+async def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Run now' from the admin page (background task)."""
     require_org(org_id)
     cfg = _vip_cfg(sb(), org_id)
@@ -2838,7 +2838,7 @@ def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
 
 
 @router.post("/vip/sweep/run-due")
-def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+async def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
@@ -7650,7 +7650,7 @@ def accessory_flags_push(body: dict, org_id: str = ORG_ID):
 
 # ── VIP PayGo / asset-lending ledger (read endpoints; data from the sweep, migration 014) ──
 @router.get("/vip/paygo/summary")
-def vip_paygo_summary(org_id: str = ORG_ID):
+async def vip_paygo_summary(org_id: str = ORG_ID):
     """Current week owed + weekly history of the VIP asset-lending (PayGo) billing.
     Degrades to empty if migration 014 hasn't been run yet."""
     require_org(org_id)
@@ -7679,7 +7679,7 @@ def vip_paygo_summary(org_id: str = ORG_ID):
 
 
 @router.get("/vip/paygo/payment/{vip_payment_id}")
-def vip_paygo_payment_detail(vip_payment_id: int, org_id: str = ORG_ID):
+async def vip_paygo_payment_detail(vip_payment_id: int, org_id: str = ORG_ID):
     """One PayGo batch + its invoice numbers (which join vip_invoices.invoice_number)."""
     require_org(org_id)
     client = sb()
@@ -7761,13 +7761,13 @@ def _do_dlar_sweep(org_id):
 
 
 @router.get("/dlar/sweep/config")
-def dlar_sweep_get_config(org_id: str = ORG_ID):
+async def dlar_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
     return _dlar_public_cfg(_dlar_cfg(sb(), org_id))
 
 
 @router.put("/dlar/sweep/config")
-def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID,
+async def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -7793,7 +7793,7 @@ def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/dlar/sweep/run-now")
-def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+async def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Run now' / 'Import DLAR now' (background task)."""
     require_org(org_id)
     cfg = _dlar_cfg(sb(), org_id)
@@ -7804,7 +7804,7 @@ def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
 
 
 @router.post("/dlar/sweep/run-due")
-def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+async def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
@@ -7889,13 +7889,13 @@ def _do_b2b_sweep(org_id):
 
 
 @router.get("/b2b/sweep/config")
-def b2b_sweep_get_config(org_id: str = ORG_ID):
+async def b2b_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
     return _b2b_public_cfg(_b2b_cfg(sb(), org_id))
 
 
 @router.put("/b2b/sweep/config")
-def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
+async def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -7921,7 +7921,7 @@ def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/b2b/sweep/run-now")
-def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+async def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Fetch inventory now' (background task)."""
     require_org(org_id)
     cfg = _b2b_cfg(sb(), org_id)
@@ -7932,7 +7932,7 @@ def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
 
 
 @router.post("/b2b/sweep/run-due")
-def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+async def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
@@ -8028,13 +8028,13 @@ def _do_epay_sweep(org_id):
 
 
 @router.get("/epay/sweep/config")
-def epay_sweep_get_config(org_id: str = ORG_ID):
+async def epay_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
     return _epay_public_cfg(_epay_cfg(sb(), org_id))
 
 
 @router.put("/epay/sweep/config")
-def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
+async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -8070,7 +8070,7 @@ def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/epay/sweep/run-now")
-def epay_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+async def epay_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Run now' (background task)."""
     require_org(org_id)
     cfg = _epay_cfg(sb(), org_id)
@@ -8100,7 +8100,7 @@ async def epay_discover_reports(org_id: str = ORG_ID):
 
 
 @router.post("/epay/sweep/run-due")
-def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
@@ -8246,7 +8246,7 @@ def _calc_busy_message(period, holder):
 
 # ── Calculate endpoint ────────────────────────────────────────
 @router.post("/calculate/{period}")
-def calculate(
+async def calculate(
     period: str,
     background_tasks: BackgroundTasks,
     org_id: str = "00000000-0000-0000-0000-000000000001",
@@ -9471,7 +9471,7 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
     return [c for c in comms if in_keyset(ks, c.get('store'), c.get('store_code'))]
 
 @router.get("/dlar-store/{period}")
-def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Store-level KPIs straight from the Elevate Go Store DLAR (raw_dlar_store) for the
     Store view of the KPI Metrics page. Values are whole-number percents (e.g. 55.0).
 
@@ -9501,14 +9501,14 @@ async def get_flags(period: str, authorization: str = Header(default=""), org_id
     return [f for f in rows if in_keyset(ks, f.get('store_address'), f.get('store_code'))]
 
 @router.get("/config/{period}")
-def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('payout_config').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute()
     if r.data: return r.data[0]
     return {}
 
 @router.put("/config/{period}")
-def save_config(period: str, config: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def save_config(period: str, config: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     config.update({'period': period, 'org_id': org_id})
     r = client.schema('commcalc').table('payout_config').upsert(config, on_conflict='org_id,period').execute()
@@ -9543,7 +9543,7 @@ def _require_commission_admin(authorization, org_id):
 
 
 @router.get("/commission-settings")
-def get_commission_settings(org_id: str = ORG_ID):
+async def get_commission_settings(org_id: str = ORG_ID):
     """Per-tenant commission posture (mig 201): pay_disabled (the R1 refuse-to-pay override) +
     residual_visibility ('all' | 'permissioned'). Code default before mig 201 runs."""
     require_org(org_id)
@@ -9551,7 +9551,7 @@ def get_commission_settings(org_id: str = ORG_ID):
 
 
 @router.put("/commission-settings")
-def put_commission_settings(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_commission_settings(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Sets pay_disabled and/or residual_visibility for the tenant. pay_disabled=true means
     'this tenant INTENTIONALLY pays no commissions' → silences the R1 unconfigured-tenant refusal."""
     require_org(org_id)
@@ -9760,7 +9760,7 @@ def _write_installment_schedule(client, org_id, body, sid, changed_by):
 
 # ── SALE-TRIGGERED installment SCHEDULES (mig 201) — attach to a Commission Plan, triggered by the sale line
 @router.get("/plan-installments")
-def list_plan_installments(org_id: str = ORG_ID):
+async def list_plan_installments(org_id: str = ORG_ID):
     """All sale-triggered installment schedules + their month lines, grouped by plan. [] (not 500) if
     migration 201 isn't applied yet."""
     require_org(org_id)
@@ -9781,7 +9781,7 @@ def list_plan_installments(org_id: str = ORG_ID):
 
 
 @router.post("/plan-installments")
-def save_plan_installment(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def save_plan_installment(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """CREATE a sale-triggered schedule + its month lines (money config → admin-only). Body:
     {id?, plan_id (required), name?, num_months, trigger_match_field?, trigger_match_op?, trigger_match_value?,
      gate_mode?, gate_from_month?, m1_gate?('inherit'|'activation_payment'), clawback_enabled?, effective_from?,
@@ -9803,7 +9803,7 @@ def save_plan_installment(body: dict, authorization: str = Header(default=""), o
 
 
 @router.get("/plan-installments/{sid}/audit")
-def plan_installment_audit(sid: str, org_id: str = ORG_ID):
+async def plan_installment_audit(sid: str, org_id: str = ORG_ID):
     """Edit trail for one schedule (mig 210). [] if the audit table isn't applied yet."""
     require_org(org_id)
     try:
@@ -9815,7 +9815,7 @@ def plan_installment_audit(sid: str, org_id: str = ORG_ID):
 
 
 @router.get("/plan-installments/preview/{period}")
-def preview_plan_installments(period: str, org_id: str = ORG_ID):
+async def preview_plan_installments(period: str, org_id: str = ORG_ID):
     """READ-ONLY preview of what the sale-triggered installment engine WOULD pay for a pay period,
     incl. the paid-gate outcome per line and the two-flag list for sold-but-unpaid lines. Writes nothing."""
     require_org(org_id)
@@ -9826,7 +9826,7 @@ def preview_plan_installments(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/plan-installments/gate-impact/{period}")
-def preview_installment_gate_impact(period: str, org_id: str = ORG_ID):
+async def preview_installment_gate_impact(period: str, org_id: str = ORG_ID):
     """READ-ONLY impact preview for the mig-223 config-driven paid gate (Gate-2 review artifact). Lists every
     installment row that FLIPS withheld_unpaid → payable under the new master-agent gate (vs the legacy
     raw_mi-only gate), with per-rep + total dollars. For a Boost-mode org it returns zero flips (boost_safe=
@@ -9840,7 +9840,7 @@ def preview_installment_gate_impact(period: str, org_id: str = ORG_ID):
 
 # ── ACTIVATION-PAYMENT MATCHER (mig 210): what counts as "payment received at activation" (per-tenant) ─
 @router.get("/plan-installments/activation-matcher")
-def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
+async def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
     """The tenant's 'payment received at activation' matcher used by the month-1 'activation_payment' gate,
     PLUS the distinct raw_sales departments/categories present (pick-don't-type editor). Falls back to the
     engine's seeded default when unset (is_default=true). Read-only."""
@@ -9879,7 +9879,7 @@ def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
 
 
 @router.put("/plan-installments/activation-matcher")
-def put_activation_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_activation_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Save the tenant's activation-payment matcher (mig 210). body: {departments[], categories[],
     product_keywords[], value_field('ext_price'|'gp'), min_amount} — OR {reset:true} to revert to the engine
     default (stored NULL). 500 with a 'run migration 210' hint if the column is absent."""
@@ -9908,7 +9908,7 @@ def put_activation_matcher(body: dict, authorization: str = Header(default=""), 
 
 # ── RATE-PLAN LINE MATCHER (mig 233): which sale line carries the activation's monthly charge ───────
 @router.get("/plan-installments/plan-line-matcher")
-def get_plan_line_matcher(period: str = "", org_id: str = ORG_ID):
+async def get_plan_line_matcher(period: str = "", org_id: str = ORG_ID):
     """The tenant's RATE-PLAN LINE matcher — the money-path answer to "which line of this sale carries the
     monthly charge?" — plus the distinct raw_sales departments/categories present (pick-don't-type editor,
     §3b) and the current installment_mrc_basis. Falls back to the engine's seeded default when unset
@@ -9947,7 +9947,7 @@ def get_plan_line_matcher(period: str = "", org_id: str = ORG_ID):
 
 
 @router.put("/plan-installments/plan-line-matcher")
-def put_plan_line_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_plan_line_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Save the tenant's rate-plan line matcher (mig 233). body: {departments[], categories[],
     product_keywords[]} — OR {reset:true} to revert to the engine default (stored NULL).
 
@@ -9975,7 +9975,7 @@ def put_plan_line_matcher(body: dict, authorization: str = Header(default=""), o
 
 # ── DEVICE-CATEGORY QUALIFICATION (mig 245): which activations qualify for multi-month pay ────────
 @router.get("/plan-installments/category-qualification")
-def get_category_qualification(period: str = "", org_id: str = ORG_ID):
+async def get_category_qualification(period: str = "", org_id: str = ORG_ID):
     """The tenant's multi-month device-category include/exclude set + the classification rules behind it.
 
     Returns the ORG-level qualification (falling back to the engine defaults — everything ON except
@@ -10039,7 +10039,7 @@ def get_category_qualification(period: str = "", org_id: str = ORG_ID):
 
 
 @router.put("/plan-installments/category-qualification")
-def put_category_qualification(body: dict, authorization: str = Header(default=""),
+async def put_category_qualification(body: dict, authorization: str = Header(default=""),
                                      org_id: str = ORG_ID):
     """Admin-only. Save the tenant's multi-month device-category include/exclude set (mig 245).
     body: {qualification:{phone:true,tablet:false,...}} — OR {reset:true} to revert to the engine
@@ -10066,7 +10066,7 @@ def put_category_qualification(body: dict, authorization: str = Header(default="
 
 
 @router.post("/plan-installments/category-rules")
-def save_category_rule(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def save_category_rule(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Add/replace ONE tenant classification rule (mig 245).
     body: {id?, category_key, match_field, match_op, match_value, priority?, is_active?, note?}.
     Tenant rules are evaluated BEFORE the built-ins; the built-ins remain as the fallback tail."""
@@ -10103,7 +10103,7 @@ def save_category_rule(body: dict, authorization: str = Header(default=""), org_
 
 
 @router.delete("/plan-installments/category-rules/{rid}")
-def delete_category_rule(rid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def delete_category_rule(rid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Delete ONE tenant classification rule (the built-in rules cannot be deleted — they are
     the fallback tail; override one with a higher-priority tenant rule instead)."""
     require_org(org_id)
@@ -10117,7 +10117,7 @@ def delete_category_rule(rid: str, authorization: str = Header(default=""), org_
 
 
 @router.get("/plan-installments/category-impact/{period}")
-def category_impact(period: str, org_id: str = ORG_ID):
+async def category_impact(period: str, org_id: str = ORG_ID):
     """READ-ONLY BLAST RADIUS for a pay period: what the current include/exclude set + the device-price
     MRC guard change, per rep, WITHOUT recomputing anything.
 
@@ -10203,7 +10203,7 @@ def category_impact(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/plan-installments/category-payout")
-def get_category_payout(org_id: str = ORG_ID):
+async def get_category_payout(org_id: str = ORG_ID):
     """The tenant's per-category payout MODE (monthly installments vs a one-time flat amount).
 
     Returns the ORG-level config (falling back to the code default — every category on monthly
@@ -10256,7 +10256,7 @@ def get_category_payout(org_id: str = ORG_ID):
 
 
 @router.put("/plan-installments/category-payout")
-def put_category_payout(body: dict, authorization: str = Header(default=""),
+async def put_category_payout(body: dict, authorization: str = Header(default=""),
                               org_id: str = ORG_ID):
     """Admin-only. Save the tenant's per-category payout mode + flat amount (mig 256).
     body: {payout: {home_internet: {mode:'flat_once', amount: 25, pay_month: 1}, ...}}
@@ -10307,7 +10307,7 @@ def put_category_payout(body: dict, authorization: str = Header(default=""),
 
 
 @router.get("/plan-installments/category-payout-impact/{period}")
-def category_payout_impact(period: str, category: str = "", amount: str = "",
+async def category_payout_impact(period: str, category: str = "", amount: str = "",
                                  pay_month: int = 1, org_id: str = ORG_ID):
     """READ-ONLY per-rep delta for the flat-payout switch. Writes nothing; recomputes nothing.
 
@@ -10431,7 +10431,7 @@ def _xc_rows(client, org_id, period):
 
 
 @router.get("/expected-commission/config")
-def get_expected_commission_config(org_id: str = ORG_ID, authorization: str = Header(default="")):
+async def get_expected_commission_config(org_id: str = ORG_ID, authorization: str = Header(default="")):
     """The tenant's expected-commission window + posture, and whether THIS caller may promote.
     Read-only. Degrades to the code defaults (months 2..6) with migration 258 unapplied."""
     require_org(org_id)
@@ -10454,7 +10454,7 @@ def get_expected_commission_config(org_id: str = ORG_ID, authorization: str = He
 
 
 @router.put("/expected-commission/config")
-def put_expected_commission_config(body: dict, authorization: str = Header(default=""),
+async def put_expected_commission_config(body: dict, authorization: str = Header(default=""),
                                          org_id: str = ORG_ID):
     """Admin-only. Save the expected-commission window + posture (mig 258).
     body: {config:{enabled,from_month,to_month,on_expected_change,promote_allow_unidentified}}
@@ -10487,7 +10487,7 @@ def put_expected_commission_config(body: dict, authorization: str = Header(defau
 
 
 @router.get("/expected-commission/promotes")
-def list_expected_commission_promotes(period: str = "", status: str = "",
+async def list_expected_commission_promotes(period: str = "", status: str = "",
                                             org_id: str = ORG_ID):
     """The AUDIT LIST: every promote for the tenant (optionally one period / one status), newest first.
     Revoked rows are KEPT and returned — the audit trail is the point. Read-only."""
@@ -10511,7 +10511,7 @@ def list_expected_commission_promotes(period: str = "", status: str = "",
 
 
 @router.post("/expected-commission/promote")
-def promote_expected_commission(body: dict, authorization: str = Header(default=""),
+async def promote_expected_commission(body: dict, authorization: str = Header(default=""),
                                       org_id: str = ORG_ID):
     """💰 MONEY WRITE — move ONE chain-month's EXPECTED amount into EARNED.
     body: {period, trans_id, mdn, month_index, reason} (`reason` is REQUIRED — this is an audit row).
@@ -10587,7 +10587,7 @@ def promote_expected_commission(body: dict, authorization: str = Header(default=
 
 
 @router.post("/expected-commission/revoke")
-def revoke_expected_commission(body: dict, authorization: str = Header(default=""),
+async def revoke_expected_commission(body: dict, authorization: str = Header(default=""),
                                      org_id: str = ORG_ID):
     """💰 MONEY WRITE — revoke a promote. body: {id, reason?}. The row is KEPT with status='revoked'
     (an audit trail you can delete is not an audit trail); the month reverts to the normal gate on the
@@ -10613,7 +10613,7 @@ def revoke_expected_commission(body: dict, authorization: str = Header(default="
 
 
 @router.get("/expected-commission/{period}")
-def expected_commission_report(period: str, rep: str = "", store: str = "",
+async def expected_commission_report(period: str, rep: str = "", store: str = "",
                                      org_id: str = ORG_ID, authorization: str = Header(default="")):
     """READ-ONLY: EXPECTED vs EARNED per chain-month for one pay period. Writes nothing, recomputes
     nothing, persists nothing.
@@ -10699,7 +10699,7 @@ def expected_commission_report(period: str, rep: str = "", store: str = "",
 # "plan_id is required" — i.e. the mig-210 and mig-233 matcher editors could never be saved from the
 # UI. Every literal /plan-installments/... route must stay ABOVE this block.
 @router.put("/plan-installments/{sid}")
-def update_plan_installment(sid: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def update_plan_installment(sid: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """EDIT an existing sale-triggered schedule + its month lines (money config → admin-only). Same body
     shape as POST (minus id). RECOMPUTE SEMANTICS: the edit takes effect from the NEXT POST /calculate
     onward — it does NOT retroactively rewrite pay. sale_installment_ledger rows already written for PAST
@@ -10724,7 +10724,7 @@ def update_plan_installment(sid: str, body: dict, authorization: str = Header(de
 
 
 @router.delete("/plan-installments/{sid}")
-def delete_plan_installment(sid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def delete_plan_installment(sid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
@@ -10739,7 +10739,7 @@ def delete_plan_installment(sid: str, authorization: str = Header(default=""), o
 
 # ── Classification-first MRC MAPPING (§7b decision 1): classify imported plan lines + prefill $ MRC ──
 @router.get("/mrc-mapping/candidates")
-def mrc_mapping_candidates(period: str, org_id: str = ORG_ID):
+async def mrc_mapping_candidates(period: str, org_id: str = ORG_ID):
     """Scan a period's sale lines for distinct PLAN/product descriptions, AUTO-CLASSIFY each (reusing the
     existing accessory/carrier-category config), AUTO-PREFILL the $ MRC from the description text, and
     cross-reference the product_mrc catalog to show which are already CONFIRMED. Read-only — the user
@@ -10783,7 +10783,7 @@ def mrc_mapping_candidates(period: str, org_id: str = ORG_ID):
 
 
 @router.post("/mrc-mapping/confirm")
-def mrc_mapping_confirm(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def mrc_mapping_confirm(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert user-confirmed product_mrc rows (money config → admin-only). Body: {carrier_id?, match_op?,
     items:[{plan, mrc, classification?}]}. Marks each row confirmed=true. Reuses the existing product_mrc
     table (mig 074) — never a new mapping table."""
@@ -10879,7 +10879,7 @@ def _mrc_crossmenu_conflicts(item_rows, plans, classification):
 
 
 @router.post("/mrc-mapping/bulk-classify")
-def mrc_mapping_bulk_classify(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def mrc_mapping_bulk_classify(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Assign ONE classification to MANY product_mrc mappings in a single round trip (bulk companion to
     /mrc-mapping/confirm). Body: {items:[{plan, mrc?, source_desc?, prefill_mrc?} | str], classification,
     carrier_id?, match_op?, dry_run?}. CROSS-MENU GUARD: every plan is checked against the Item / Model
@@ -10982,7 +10982,7 @@ def mrc_mapping_bulk_classify(body: dict, authorization: str = Header(default=""
 # (unchanged). The engine is READ-ONLY/PREVIEW here — not yet summed into the live calc (see HANDOFF).
 
 @router.get("/payout-schedule")
-def list_payout_schedules(org_id: str = ORG_ID):
+async def list_payout_schedules(org_id: str = ORG_ID):
     """All schedules + their installment lines. [] (not 500) if migration 057 isn't applied yet."""
     client = sb()
     try:
@@ -10999,7 +10999,7 @@ def list_payout_schedules(org_id: str = ORG_ID):
 
 
 @router.post("/payout-schedule")
-def save_payout_schedule(body: dict, org_id: str = ORG_ID):
+async def save_payout_schedule(body: dict, org_id: str = ORG_ID):
     """Create/replace a schedule + its lines. Body: {id?, company_id?, carrier_id?, activation_type?,
     num_months, gate_signal?, bypass_tier?, is_active?, lines:[{month_index, payout_kind, flat_amount?,
     mrc_pct?, mrc_basis?, requires_paid}]}. Replaces the lines for the schedule (delete-then-insert)."""
@@ -11046,7 +11046,7 @@ def save_payout_schedule(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/payout-schedule/{schedule_id}")
-def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
+async def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('payout_schedule_line').delete().eq('org_id', org_id).eq('schedule_id', schedule_id).execute()
     client.schema('commcalc').table('payout_schedule').delete().eq('org_id', org_id).eq('id', schedule_id).execute()
@@ -11054,7 +11054,7 @@ def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
 
 
 @router.get("/payout-schedule/preview")
-def preview_payout_installments(period: str, org_id: str = ORG_ID):
+async def preview_payout_installments(period: str, org_id: str = ORG_ID):
     """READ-ONLY preview: what the configured schedules WOULD pay for `period` (per rep + per-subscriber
     ledger), computed from raw_mi. Writes nothing and does NOT affect the live commission calc — it's
     the safe way to validate a schedule before wiring installments into the payout."""
@@ -11069,7 +11069,7 @@ def preview_payout_installments(period: str, org_id: str = ORG_ID):
 # statement carries no per-subscriber MRC (e.g. Total Wireless). Keyed on raw_mi.customer_plan. Additive:
 # with no rows, the installment engine reads the raw_mi MRC column exactly as before (Boost unaffected).
 @router.get("/product-mrc")
-def list_product_mrc(org_id: str = ORG_ID):
+async def list_product_mrc(org_id: str = ORG_ID):
     """All catalog entries (specific-first). [] (not 500) if migration 074 isn't applied yet."""
     client = sb()
     try:
@@ -11081,7 +11081,7 @@ def list_product_mrc(org_id: str = ORG_ID):
 
 
 @router.post("/product-mrc")
-def save_product_mrc(body: dict, org_id: str = ORG_ID):
+async def save_product_mrc(body: dict, org_id: str = ORG_ID):
     """Create/update one catalog entry. Body: {id?, carrier_id?, plan_pattern, match_op?, mrc, priority?,
     is_active?, note?}. plan_pattern is matched (case-insensitive) against raw_mi.customer_plan."""
     client = sb()
@@ -11112,7 +11112,7 @@ def save_product_mrc(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/product-mrc/{item_id}")
-def delete_product_mrc(item_id: str, org_id: str = ORG_ID):
+async def delete_product_mrc(item_id: str, org_id: str = ORG_ID):
     sb().schema('commcalc').table('product_mrc').delete().eq('id', item_id).eq('org_id', org_id).execute()
     return {"deleted": item_id}
 
@@ -11207,7 +11207,7 @@ async def import_product_mrc(
 
 
 @router.get("/product-mrc/coverage")
-def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
+async def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
     """Distinct raw_mi.customer_plan values (optionally for one period) with row counts + whether the
     catalog resolves an MRC for each — so the user can see which plans still need one. Read-only.
     Unmatched plans sort first, then by count desc."""
@@ -11456,7 +11456,7 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/distributors")
-def list_distributors(org_id: str = ORG_ID):
+async def list_distributors(org_id: str = ORG_ID):
     client = sb()
     try:
         rows = client.schema('commcalc').table('distributors').select('*').eq('org_id', org_id).order('name').execute().data or []
@@ -11466,7 +11466,7 @@ def list_distributors(org_id: str = ORG_ID):
 
 
 @router.post("/distributors")
-def save_distributor(body: dict, org_id: str = ORG_ID):
+async def save_distributor(body: dict, org_id: str = ORG_ID):
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name required")
@@ -11494,14 +11494,14 @@ def save_distributor(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/distributors/{distributor_id}")
-def delete_distributor(distributor_id: str, org_id: str = ORG_ID):
+async def delete_distributor(distributor_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('distributors').delete().eq('org_id', org_id).eq('id', distributor_id).execute()
     return {"deleted": distributor_id}
 
 
 @router.get("/distributor-payments")
-def list_distributor_payments(distributor_id: str = "", org_id: str = ORG_ID):
+async def list_distributor_payments(distributor_id: str = "", org_id: str = ORG_ID):
     """Payment ledger for a distributor (or all), with own-vs-borrowed funding totals."""
     client = sb()
     try:
@@ -11518,7 +11518,7 @@ def list_distributor_payments(distributor_id: str = "", org_id: str = ORG_ID):
 
 
 @router.post("/distributor-payments")
-def add_distributor_payment(body: dict, org_id: str = ORG_ID):
+async def add_distributor_payment(body: dict, org_id: str = ORG_ID):
     row = {
         "org_id": org_id, "distributor_id": body.get("distributor_id") or None,
         "pay_date": body.get("pay_date") or None, "period": body.get("period") or None,
@@ -11536,7 +11536,7 @@ def add_distributor_payment(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/distributor-payments/{payment_id}")
-def delete_distributor_payment(payment_id: str, org_id: str = ORG_ID):
+async def delete_distributor_payment(payment_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('distributor_payments').delete().eq('org_id', org_id).eq('id', payment_id).execute()
     return {"deleted": payment_id}
@@ -11550,7 +11550,7 @@ def delete_distributor_payment(payment_id: str, org_id: str = ORG_ID):
 # (the new system built ALONGSIDE calculator.py; wiring it live is a later, explicit step).
 
 @router.get("/commission-plans")
-def list_commission_plans(org_id: str = ORG_ID):
+async def list_commission_plans(org_id: str = ORG_ID):
     """Plans with nested rules + tiers + assignments. {ready:false} if migration 059 isn't applied."""
     client = sb()
     plans, ready = commission_engine._load_plans(client, org_id)
@@ -11560,7 +11560,7 @@ def list_commission_plans(org_id: str = ORG_ID):
 
 
 @router.post("/commission-plans")
-def save_commission_plan(body: dict, org_id: str = ORG_ID):
+async def save_commission_plan(body: dict, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
     name = (body.get("name") or "").strip()
     if not name:
@@ -11683,7 +11683,7 @@ def save_commission_plan(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/commission-plans/{plan_id}")
-def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
+async def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
     """Delete a plan (children cascade via FK ON DELETE CASCADE)."""
     client = sb()
     client.schema('commcalc').table('commission_plan').delete().eq('org_id', org_id).eq('id', plan_id).execute()
@@ -11751,7 +11751,7 @@ def _rule_scope_cols_present(client):
 
 
 @router.get("/setup-fee/config")
-def get_setup_fee_config(org_id: str = ORG_ID):
+async def get_setup_fee_config(org_id: str = ORG_ID):
     """The tenant's set-up-fee mapping + per-carrier economics. READ-ONLY."""
     require_org(org_id)
     from app.modules.commcalc import setup_fee_pay as sfp
@@ -11781,7 +11781,7 @@ def get_setup_fee_config(org_id: str = ORG_ID):
 
 
 @router.put("/setup-fee/config")
-def save_setup_fee_config(body: dict, org_id: str = ORG_ID):
+async def save_setup_fee_config(body: dict, org_id: str = ORG_ID):
     """Save the per-carrier economics. MONEY-TOUCHING: applies on the next Calculate."""
     require_org(org_id)
     from app.modules.commcalc import setup_fee_pay as sfp
@@ -11811,7 +11811,7 @@ def save_setup_fee_config(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/setup-fee/candidates/{period}")
-def setup_fee_candidates(period: str, org_id: str = ORG_ID):
+async def setup_fee_candidates(period: str, org_id: str = ORG_ID):
     """PICK-DON'T-TYPE (contract RULE THREE): the tenant's own product descriptions that could BE the
     set-up / activation fee, ranked by the money they carry, each flagged with whether the current
     mapping already catches it. READ-ONLY; proposes nothing and auto-selects nothing — naming the fee
@@ -11834,7 +11834,7 @@ def setup_fee_candidates(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/setup-fee/recognition-divergence/{period}")
-def setup_fee_recognition_divergence(period: str, org_id: str = ORG_ID):
+async def setup_fee_recognition_divergence(period: str, org_id: str = ORG_ID):
     """The two historic set-up-fee matchers, MEASURED against each other on this tenant's real data.
 
     The PAY path was a case-SENSITIVE literal; the REPORT path lower-cases both sides. Unifying them is
@@ -11859,7 +11859,7 @@ def setup_fee_recognition_divergence(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/setup-fee/impact/{period}")
-def setup_fee_impact(period: str, employee_pct: str = "", org_id: str = ORG_ID):
+async def setup_fee_impact(period: str, employee_pct: str = "", org_id: str = ORG_ID):
     """READ-ONLY per-rep dollars for the set-up-fee pay item, at a hypothetical percentage.
 
     Drives the REAL `commission_engine.preview` twice — as configured, and with the hypothesis — so a
@@ -11912,7 +11912,7 @@ def setup_fee_impact(period: str, employee_pct: str = "", org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/accessory-basis-impact/{period}")
-def accessory_basis_impact(period: str, enabled: str = "", assumed_margin_pct: str = "",
+async def accessory_basis_impact(period: str, enabled: str = "", assumed_margin_pct: str = "",
                                  clamp_negative: str = "", org_id: str = ORG_ID):
     """READ-ONLY per-rep BEFORE / AFTER for the ACCESSORY %-of-GP BASIS GUARD (mig 260). Writes nothing.
 
@@ -11974,7 +11974,7 @@ def accessory_basis_impact(period: str, enabled: str = "", assumed_margin_pct: s
 
 
 @router.get("/commission-plans/rule-scope-impact/{period}")
-def rule_scope_impact(period: str, rule_id: str = "", scope_kind: str = "",
+async def rule_scope_impact(period: str, rule_id: str = "", scope_kind: str = "",
                             scope_value: str = "", org_id: str = ORG_ID):
     """READ-ONLY: who is collecting a rule TODAY, and who would still collect it if it were scoped.
 
@@ -12040,7 +12040,7 @@ def rule_scope_impact(period: str, rule_id: str = "", scope_kind: str = "",
 
 
 @router.get("/commission-plans/pay-gate")
-def get_pay_gate(org_id: str = ORG_ID):
+async def get_pay_gate(org_id: str = ORG_ID):
     """The tenant's pay-gate configuration + what each setting means. READ-ONLY."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -12059,7 +12059,7 @@ def get_pay_gate(org_id: str = ORG_ID):
 
 
 @router.put("/commission-plans/pay-gate")
-def save_pay_gate(body: dict, org_id: str = ORG_ID):
+async def save_pay_gate(body: dict, org_id: str = ORG_ID):
     """Save the tenant's pay-gate configuration. MONEY-TOUCHING: takes effect on the next Calculate."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -12083,7 +12083,7 @@ def save_pay_gate(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/unit-dedup-impact/{period}")
-def unit_dedup_impact(period: str, org_id: str = ORG_ID):
+async def unit_dedup_impact(period: str, org_id: str = ORG_ID):
     """READ-ONLY per-rep BEFORE / AFTER / DELTA for the pay gate. Writes nothing, recomputes nothing.
 
     Drives the REAL `commission_engine.preview` TWICE in memory: once with `gate_override='off'`
@@ -12118,7 +12118,7 @@ def unit_dedup_impact(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/unit-multiplication-audit/{period}")
-def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
+async def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
     """WHICH $/unit rules pay more than once inside a single transaction — the CLASS question.
 
     Field-agnostic on purpose: it reports every `flat_per_unit` rule that pays two or more times on
@@ -12197,7 +12197,7 @@ def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
 # the schema. Hence a new mapping table, editable per tenant, with ONE code-seeded row.
 
 @router.get("/commission-plans/payout-exclusions")
-def list_payout_exclusions(include_proposed: bool = True, org_id: str = ORG_ID):
+async def list_payout_exclusions(include_proposed: bool = True, org_id: str = ORG_ID):
     """The tenant's exclusion map, with the code seed layered in and labelled `source='seed'`."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -12219,7 +12219,7 @@ def list_payout_exclusions(include_proposed: bool = True, org_id: str = ORG_ID):
 
 
 @router.post("/commission-plans/payout-exclusions")
-def save_payout_exclusion(body: dict, org_id: str = ORG_ID):
+async def save_payout_exclusion(body: dict, org_id: str = ORG_ID):
     """Add or update ONE exclusion mapping. MONEY-TOUCHING: applies on the next Calculate."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -12255,7 +12255,7 @@ def save_payout_exclusion(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/commission-plans/payout-exclusions/{row_id}")
-def delete_payout_exclusion(row_id: str, org_id: str = ORG_ID):
+async def delete_payout_exclusion(row_id: str, org_id: str = ORG_ID):
     """Delete ONE tenant exclusion row. Deleting a row that overrode the code seed restores the seed."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -12270,7 +12270,7 @@ def delete_payout_exclusion(row_id: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/exclusion-impact/{period}")
-def exclusion_impact(period: str, org_id: str = ORG_ID):
+async def exclusion_impact(period: str, org_id: str = ORG_ID):
     """READ-ONLY per-rep BEFORE / AFTER for the exclusion map alone, plus every excluded line.
 
     Runs the REAL engine twice: once with the whole gate off, once with ONLY the exclusions on (the
@@ -12324,7 +12324,7 @@ def _plan_tier_cols_present(client):
 
 
 @router.get("/commission-plans/coverage")
-def commission_plan_coverage(period: str, org_id: str = ORG_ID):
+async def commission_plan_coverage(period: str, org_id: str = ORG_ID):
     """READ-ONLY "is my plan actually paying what I configured?" diagnostic for one period. Writes nothing,
     never triggers a calc, and returns the SAME per-rep numbers the money path computes.
 
@@ -12380,7 +12380,7 @@ def commission_plan_coverage(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/coverage-unmatched")
-def commission_plan_coverage_unmatched(
+async def commission_plan_coverage_unmatched(
         period: str, group_by: str = "category", limit: int = 500,
         rep: list = Query(default=[]), store: list = Query(default=[]),
         market: list = Query(default=[]), department: list = Query(default=[]),
@@ -12419,7 +12419,7 @@ def commission_plan_coverage_unmatched(
 
 
 @router.get("/commission-plans/coverage-excluded")
-def get_coverage_excluded_sellers(org_id: str = ORG_ID):
+async def get_coverage_excluded_sellers(org_id: str = ORG_ID):
     """The tenant's POS-artifact seller list (mig 248) — "sellers" like 'Office, Back' that are a till or
     a back-office login rather than a commissionable person. Read-only, org-scoped.
 
@@ -12437,7 +12437,7 @@ def get_coverage_excluded_sellers(org_id: str = ORG_ID):
 
 
 @router.put("/commission-plans/coverage-excluded")
-def put_coverage_excluded_sellers(body: dict, authorization: str = Header(default=""),
+async def put_coverage_excluded_sellers(body: dict, authorization: str = Header(default=""),
                                         org_id: str = ORG_ID):
     """Admin-only. Sets the tenant's excluded-seller list (and optionally the artifact word list).
     Body: {sellers:[str], artifact_hints?:[str]}.
@@ -12473,7 +12473,7 @@ def put_coverage_excluded_sellers(body: dict, authorization: str = Header(defaul
 
 
 @router.get("/plan-field-options")
-def plan_field_options(months: int = 3, period: str = "", limit: int = 4000,
+async def plan_field_options(months: int = 3, period: str = "", limit: int = 4000,
                              value_limit: int = 400, org_id: str = ORG_ID):
     """PICK-DON'T-TYPE options for the Commission-Plan + installment-schedule editors (RULE THREE §3b).
 
@@ -12574,7 +12574,7 @@ def _validate_rule_overrides(overrides):
 
 
 @router.post("/commission-plans/rule-impact")
-def commission_rule_impact(body: dict, org_id: str = ORG_ID):
+async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
     """READ-ONLY BLAST RADIUS for a proposed commission-rule matcher change. Writes NOTHING and triggers
     no calculation — it runs the real engine twice (as configured, and with the proposed matchers applied
     to an in-memory copy) and returns the difference.
@@ -12611,7 +12611,7 @@ def commission_rule_impact(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/keyword-collisions")
-def commission_keyword_collisions(period: str, org_id: str = ORG_ID):
+async def commission_keyword_collisions(period: str, org_id: str = ORG_ID):
     """READ-ONLY audit of the "a pay-program keyword is also a device MODEL name" bug class.
 
     Lists every rule / installment trigger that matches an item description (or SKU) with `contains`, the
@@ -12629,7 +12629,7 @@ def commission_keyword_collisions(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/pay-warnings")
-def commission_pay_warnings(period: str, org_id: str = ORG_ID):
+async def commission_pay_warnings(period: str, org_id: str = ORG_ID):
     """READ-ONLY: the activations that no commission-plan rule and no multi-month schedule trigger pays,
     computed LIVE (the same payload a calculation stores in calc_status.calc_warnings)."""
     if not str(period or "").strip():
@@ -12645,7 +12645,7 @@ def commission_pay_warnings(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/preview")
-def preview_commission_plan(period: str, plan_id: str = "", org_id: str = ORG_ID):
+async def preview_commission_plan(period: str, plan_id: str = "", org_id: str = ORG_ID):
     """READ-ONLY preview: apply plan rules to a period's raw_sales → per-rep payout + breakdown.
     Writes nothing; does not touch rep_commissions or the live calc. plan_id optional (else per-rep
     via assignment precedence)."""
@@ -12670,7 +12670,7 @@ def _norm_assign(v):
 
 
 @router.get("/commission-plans/roster")
-def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = True):
+async def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = True):
     """People roster for the bulk plan-assignment surface. Returns every org employee with the fields
     the UI needs: display name, ROLE + MARKET (for role-next-to-name + the role/market filter facets),
     the disambiguation email, and the assignment VALUE (epay_salesperson || name) that IS the
@@ -12744,7 +12744,7 @@ def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = True):
 
 
 @router.post("/commission-plans/bulk-assign")
-def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
+async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
     """Assign ONE commission plan to MANY employees in a single action (owner directive 2026-07-23).
 
     Body: {plan_id, people:[<scope_value> | {value}...], replace_existing?:bool}. Additive to single-
@@ -12888,7 +12888,7 @@ def _canonical_market(client, org_id: str, value) -> str:
 
 
 @router.get("/markets")
-def list_markets(org_id: str = ORG_ID):
+async def list_markets(org_id: str = ORG_ID):
     """Options list for the market dropdown: the org's existing markets, distinct + sorted, blanks
     excluded. Read-only, org-scoped; degrades to [] rather than erroring so the editor still renders."""
     require_org(org_id)
@@ -12896,13 +12896,13 @@ def list_markets(org_id: str = ORG_ID):
 
 
 @router.get("/stores")
-def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('store_mapping').select('*').eq('org_id', org_id).order('store_address').execute()
     return r.data or []
 
 @router.put("/stores/{store_id}")
-def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     allowed = {k: v for k, v in body.items() if k in ['market', 'store_code', 'store_address', 'is_active', 'salesforce_id']}
     if not allowed:
@@ -12920,7 +12920,7 @@ def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0000-00
 # file to a canonical store_code, so Daily Targets actuals attach correctly. Additive — does
 # NOT touch store_mapping (which the asset market join depends on). Mirrors rep name aliases.
 @router.get("/store-aliases")
-def list_store_aliases(org_id: str = ORG_ID):
+async def list_store_aliases(org_id: str = ORG_ID):
     require_org(org_id)
     client = sb()
     try:
@@ -12938,7 +12938,7 @@ def list_store_aliases(org_id: str = ORG_ID):
 
 
 @router.get("/store-resolution")
-def store_resolution(period: str = "", org_id: str = ORG_ID):
+async def store_resolution(period: str = "", org_id: str = ORG_ID):
     """Store-Matching UI data: every observed POS/sales store string × its current resolution status
     (explicit / store_mapping / exact-fallback / unresolved) + ranked smart suggestions. Optional `period`
     narrows the observed strings to that month; empty = all of the org's sales/feed data."""
@@ -12947,7 +12947,7 @@ def store_resolution(period: str = "", org_id: str = ORG_ID):
 
 
 @router.post("/store-aliases")
-def add_store_alias(body: dict, org_id: str = ORG_ID):
+async def add_store_alias(body: dict, org_id: str = ORG_ID):
     require_org(org_id)
     alias = (body.get('alias') or '').strip()
     code = (body.get('store_code') or '').strip()
@@ -12981,7 +12981,7 @@ def add_store_alias(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/store-aliases/{alias_id}")
-def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
+async def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
     require_org(org_id)
     sb().schema('commcalc').table('store_aliases').delete() \
         .eq('org_id', org_id).eq('id', alias_id).execute()
@@ -12989,7 +12989,7 @@ def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
 
 
 @router.get("/store-unmatched")
-def store_unmatched(org_id: str = ORG_ID):
+async def store_unmatched(org_id: str = ORG_ID):
     """Diagnose store mismatches for the Store-Matching UI: distinct raw store strings across the
     data sources that do NOT resolve to a canonical commcalc.store_mapping address (after the
     alias / store_code / leading-number chain). These are the stores to map (add an alias) so the
@@ -13206,7 +13206,7 @@ def _trend_shape(kept, by_store, comp, mkt, value_keys):
 
 
 @router.get("/expenses-trend")
-def expenses_trend(months: int = 6, org_id: str = ORG_ID):
+async def expenses_trend(months: int = 6, org_id: str = ORG_ID):
     """Total store expenses per month, per store (+ company total). Cheap (store_expenses only)."""
     require_org(org_id)
     sc = sb().schema('commcalc')
@@ -13230,7 +13230,7 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
 
 
 @router.get("/commission-trend")
-def commission_trend(months: int = 6, org_id: str = ORG_ID):
+async def commission_trend(months: int = 6, org_id: str = ORG_ID):
     """Commission WE PAY (Σ rep_commissions.total_payout) per month, per store (+ company total)."""
     require_org(org_id)
     import re as _re
@@ -13269,7 +13269,7 @@ def commission_trend(months: int = 6, org_id: str = ORG_ID):
 
 
 @router.get("/gp-trend")
-def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
+async def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
     """Revenue + Net Profit per month, per store (+ company total), from the gp_snapshot cache. Computes
     up to `compute_missing` newest un-cached months inline (then caches them) so the hub fills in over a
     few loads without recomputing 40k rows every time; older un-cached months are reported in pending_months."""
@@ -13315,7 +13315,7 @@ def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
 
 # ═══ GP / P&L department → category map (de-hardcode Gross Profit, mig 069) ══════════════════════
 @router.get("/gp-category-map")
-def get_gp_category_map(org_id: str = ORG_ID):
+async def get_gp_category_map(org_id: str = ORG_ID):
     """The tenant's POS department → GP-category overrides. Empty/un-migrated = built-in Boost buckets
     (device = Android/IPHONE/TABLET-XP at ext_price, accessory = Ondigo, blank = plan, else = other)."""
     from app.modules.commcalc.gp_report import DEVICE_DEPTS, ONDIGO_DEPT, GP_CATEGORIES
@@ -13329,7 +13329,7 @@ def get_gp_category_map(org_id: str = ORG_ID):
 
 
 @router.post("/gp-category-map")
-def set_gp_category_map(body: dict, org_id: str = ORG_ID):
+async def set_gp_category_map(body: dict, org_id: str = ORG_ID):
     """Upsert ONE department→category override. body: {department, category}. An empty category REMOVES
     the override (reverts to the built-in default). 400 (not 500) if migration 069 isn't applied."""
     if 'department' not in body:
@@ -13356,7 +13356,7 @@ def set_gp_category_map(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/gp-departments")
-def get_gp_departments(period: str = "", org_id: str = ORG_ID):
+async def get_gp_departments(period: str = "", org_id: str = ORG_ID):
     """Distinct POS department labels in raw_sales (optionally for a period) with their line count and
     CURRENT GP category — so the tenant can see + map every real label. Drives the GP Category Map UI."""
     from collections import Counter
@@ -13511,7 +13511,7 @@ def _leg_blank_period(label):
 
 
 @router.get("/commission-leg-trend")
-def commission_leg_trend(period: str = "", months: int = 12, market: str = "", store: str = "",
+async def commission_leg_trend(period: str = "", months: int = 12, market: str = "", store: str = "",
                                org_id: str = ORG_ID):
     """Month-over-month decomposition of RECEIVED commission into the 1st-month leg vs the M2–M12
     trailing legs, plus the per-month-of-life LADDER that makes the owner's 3MR/6MR question answerable.
@@ -13699,7 +13699,7 @@ def commission_leg_trend(period: str = "", months: int = 12, market: str = "", s
 
 
 @router.get("/commission-leg-labels")
-def commission_leg_labels(period: str = "", months: int = 6, org_id: str = ORG_ID):
+async def commission_leg_labels(period: str = "", months: int = 6, org_id: str = ORG_ID):
     """Every carrier payment/compensation label the org's data actually contains, with the $ behind it,
     how it is CURRENTLY attributed and why — the pick-don't-type source for the Commission Legs admin
     page (§3b: you map a label that exists, you never type one)."""
@@ -13770,7 +13770,7 @@ def commission_leg_labels(period: str = "", months: int = 6, org_id: str = ORG_I
 
 
 @router.post("/commission-leg-labels")
-def set_commission_leg_label(body: dict, org_id: str = ORG_ID):
+async def set_commission_leg_label(body: dict, org_id: str = ORG_ID):
     """Map ONE exact carrier label to a leg bucket. bucket '' REMOVES the override (back to the regex).
     Reporting only — this moves a dollar between two REPORT columns, never between two people."""
     require_org(org_id)
@@ -13799,7 +13799,7 @@ def set_commission_leg_label(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/commission-leg-config")
-def get_commission_leg_config(org_id: str = ORG_ID):
+async def get_commission_leg_config(org_id: str = ORG_ID):
     """The org's resolved leg-attribution rules + the raw config rows behind them."""
     require_org(org_id)
     client = sb(); sc = client.schema('commcalc')
@@ -13820,7 +13820,7 @@ def get_commission_leg_config(org_id: str = ORG_ID):
 
 
 @router.post("/commission-leg-config")
-def set_commission_leg_config(body: dict, org_id: str = ORG_ID):
+async def set_commission_leg_config(body: dict, org_id: str = ORG_ID):
     """Upsert THIS org's mode-default leg-attribution row (carrier_id = nil). Reporting config only."""
     require_org(org_id)
     sc = sb().schema('commcalc')
@@ -13854,7 +13854,7 @@ def set_commission_leg_config(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/chargebacks/{period}")
-def get_chargebacks(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_chargebacks(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('chargeback_items').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('epay_salesperson').execute()
     rows = r.data or []
@@ -13863,7 +13863,7 @@ def get_chargebacks(period: str, authorization: str = Header(default=""), org_id
     return [c for c in rows if in_keyset(ks, c.get('store_code'), c.get('store_address'))]
 
 @router.put("/chargebacks/{item_id}")
-def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     update = {'deduct': bool(body.get('deduct', False)), 'decided_at': 'now()'}
     if body.get('decided_by'):
@@ -13872,7 +13872,7 @@ def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-0000-000
     return r.data[0] if r.data else {}
 
 @router.get("/calc-status/{period}")
-def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('calc_status').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute()
     return r.data[0] if r.data else {'calc_status': 'not_run'}
@@ -13919,7 +13919,7 @@ async def upload_hotsheet(
 
 
 @router.get("/hotsheet")
-def get_hotsheet(org_id: str = ORG_ID):
+async def get_hotsheet(org_id: str = ORG_ID):
     """List all hotsheet uploads grouped by effective_date."""
     client = sb()
     resp = client.schema("commcalc").table("hotsheet")        .select("effective_date,device_model,srp,promo_port_in,promo_non_port,promo_upgrade,promo_aal,boost_protect_fee,notes")        .eq("org_id", org_id)        .order("effective_date", desc=True)        .execute()
@@ -13927,7 +13927,7 @@ def get_hotsheet(org_id: str = ORG_ID):
 
 
 @router.delete("/hotsheet/{effective_date}")
-def delete_hotsheet(effective_date: str, org_id: str = ORG_ID):
+async def delete_hotsheet(effective_date: str, org_id: str = ORG_ID):
     """Delete all hotsheet rows for a given effective_date."""
     client = sb()
     client.schema("commcalc").table("hotsheet")        .delete()        .eq("org_id", org_id)        .eq("effective_date", effective_date)        .execute()
@@ -13939,14 +13939,14 @@ def delete_hotsheet(effective_date: str, org_id: str = ORG_ID):
 # ─────────────────────────────────────────────
 
 @router.get("/comp-rates")
-def get_comp_rates(org_id: str = ORG_ID):
+async def get_comp_rates(org_id: str = ORG_ID):
     client = sb()
     resp = client.schema("commcalc").table("comp_rates")        .select("*")        .eq("org_id", org_id)        .order("comp_type")        .order("effective_date", desc=True)        .execute()
     return resp.data or []
 
 
 @router.post("/comp-rates")
-def upsert_comp_rate(payload: dict, org_id: str = ORG_ID):
+async def upsert_comp_rate(payload: dict, org_id: str = ORG_ID):
     """Add or update a comp rate. Send: comp_type, rate_type, value, effective_date, plan_category, duration_months, notes"""
     client = sb()
     payload["org_id"] = org_id
@@ -13957,7 +13957,7 @@ def upsert_comp_rate(payload: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/comp-rates/{comp_rate_id}")
-def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
+async def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
     client = sb()
     client.schema("commcalc").table("comp_rates")        .delete().eq("org_id", org_id).eq("id", comp_rate_id).execute()
     return {"status": "ok"}
@@ -13967,7 +13967,7 @@ def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
 # SALES REPORT — the actual sales done, all stores, from the imported Sales Transaction Details
 # ─────────────────────────────────────────────
 @router.get("/sales-report")
-def sales_report(period: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def sales_report(period: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Sales actually done, per (store, rep, day), from the imported Sales Transaction Details.
     Reads raw_sales (the authoritative monthly upload) for `period`, FALLING BACK to daily_sales_feed
     (the emailed daily feed) when raw_sales has no rows for that period — so the report works even
@@ -14090,7 +14090,7 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
 
 
 @router.get("/sales-report/detail")
-def sales_report_detail(period: str = "", store: str = "", salesperson: str = "",
+async def sales_report_detail(period: str = "", store: str = "", salesperson: str = "",
                               date: str = "", org_id: str = ORG_ID):
     """Transaction drill-down for one Sales Report cell (store + rep + day): every transaction that
     rolled into that line, each with its line items (product, contract type, price, GP). Same
@@ -14779,7 +14779,7 @@ def accessory_cost_audit(period: str, org_id: str = ORG_ID, c_basis: str = "pric
 # ─────────────────────────────────────────────
 
 @router.get("/sales-recon")
-def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
+async def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
     """Reconcile the authoritative monthly sales upload (raw_sales) against the daily B2B feed
     (daily_sales_feed) for a period. `period` accepts 'June 2026' or '2026-06'. Read-only.
     Returns {} structure with summary + by_store + rows (see sales_recon.run_sales_recon)."""
@@ -14793,7 +14793,7 @@ def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
 
 
 @router.get("/sales-recon/transaction")
-def sales_feed_recon_transaction(period: str, trans_id: str, org_id: str = ORG_ID):
+async def sales_feed_recon_transaction(period: str, trans_id: str, org_id: str = ORG_ID):
     """Line-item drill-down for one transaction — monthly (raw_sales) vs daily (daily_sales_feed)
     lines side by side, so you can see exactly what differs. Powers the recon row click-through."""
     require_org(org_id)
@@ -14838,7 +14838,7 @@ async def sales_recon_sync_flags(period: str = "", notify: bool = False,
 # ─────────────────────────────────────────────
 
 @router.post("/discrepancy/run")
-def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
+async def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
     """Trigger discrepancy detection. Send: { "period": "2026-04" }"""
     period = payload.get("period")
     if not period or len(period) != 7:
@@ -14877,7 +14877,7 @@ async def get_discrepancy_results(period: str, org_id: str = ORG_ID):
 
 
 @router.patch("/discrepancy/{discrepancy_id}")
-def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: str = ORG_ID):
+async def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: str = ORG_ID):
     """Update status of a discrepancy row: open, resolved, disputed"""
     client = sb()
     client.schema("commcalc").table("discrepancy_results")        .update({"status": payload.get("status"), "notes": payload.get("notes")})        .eq("org_id", org_id)        .eq("id", discrepancy_id)        .execute()
@@ -15006,7 +15006,7 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
 
 
 @router.get("/device-history")
-def get_device_history(q: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def get_device_history(q: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """DEVICE HISTORY LOOKUP (commission-16) — employee-portal widget backend. Enter an IMEI OR a phone
     number (one box; the shape is auto-detected but BOTH keys are searched). Returns, org-scoped and
     carrier-agnostic:
@@ -15314,7 +15314,7 @@ def get_device_history(q: str = "", authorization: str = Header(default=""), org
 
 
 @router.get("/sales-analyzer/{period}")
-def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
+async def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
                             authorization: str = Header(default=""), org_id: str = ORG_ID):
     """3-Month Retention (3MR) behavior per rep: each rep's activations from 3 months before
     `period` and which churned (cancelled/ported/suspended/deactivated) before their 3rd bill
@@ -15330,7 +15330,7 @@ def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
 
 
 @router.get("/comp/residual-trend")
-def get_comp_residual_trend(months: int = 6, store: str = "", market: str = "",
+async def get_comp_residual_trend(months: int = 6, store: str = "", market: str = "",
                                   min_drop_pct: float = 20.0, min_drop_amt: float = 1.0,
                                   authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Month-over-month carrier residual (Comprehensive Comp) trend. Returns total residual per
@@ -15348,7 +15348,7 @@ def get_comp_residual_trend(months: int = 6, store: str = "", market: str = "",
 
 
 @router.get("/comp/rep-pay-trend")
-def get_comp_rep_pay_trend(months: int = 6, store: str = "", org_id: str = ORG_ID):
+async def get_comp_rep_pay_trend(months: int = 6, store: str = "", org_id: str = ORG_ID):
     """Per-REP commission trend — the commission WE ACTUALLY PAY each rep (rep_commissions.total_payout)
     month over month. This is the per-rep number the Total Compensation page was missing (its other
     view is account-level carrier comp). One row per rep with each kept month's payout + a total."""
@@ -16794,7 +16794,7 @@ def _require_target_edit(authorization: str, org_id: str, store_code: str = ""):
 
 
 @router.get("/targets/{period}")
-def get_targets(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def get_targets(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """List per-store monthly target config. Stores without a row are SEEDED from the prior month —
     each category carried forward, or +10% stretched when last month's target was met (see
     _carry_forward_map). Accessories still fall back to storeops.stores.monthly_target when there's
@@ -16849,7 +16849,7 @@ def get_targets(period: str, authorization: str = Header(default=""), org_id: st
 
 
 @router.put("/targets/{period}")
-def save_target(period: str, body: dict, authorization: str = Header(default=""),
+async def save_target(period: str, body: dict, authorization: str = Header(default=""),
                       org_id: str = ORG_ID):
     """Upsert one store's monthly target config (Target Settings save, and the DM per-store
     drill-down under My Targets).
@@ -16881,7 +16881,7 @@ def save_target(period: str, body: dict, authorization: str = Header(default="")
 
 
 @router.post("/targets/{period}/roll-forward")
-def roll_forward_targets(period: str, body: dict = None,
+async def roll_forward_targets(period: str, body: dict = None,
                                authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Persist the month-over-month carry-forward into `period`: each store's prior-month target
     carried forward, or +10% where last month's target was met (see _carry_forward_map). By default
@@ -16980,7 +16980,7 @@ def _period_or_400(period, what="period"):
 
 
 @router.get("/targets/{period}/calendar")
-def get_target_calendar(
+async def get_target_calendar(
     period: str, store_code: str, scope: str = "store",
     rep: str = "", today: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID,
 ):
@@ -17137,7 +17137,7 @@ def _as_filter_list(val):
 
 
 @router.get("/targets/{period}/summary")
-def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
+async def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
                               stores: Optional[List[str]] = Query(default=None),
                               markets: Optional[List[str]] = Query(default=None),
                               reps: Optional[List[str]] = Query(default=None),
@@ -17692,7 +17692,7 @@ def _team_snap_invalidate(org_id=None, period=None):
 
 
 @router.get("/team/{period}/snapshot")
-def team_snapshot(period: str, authorization: str = Header(default=""),
+async def team_snapshot(period: str, authorization: str = Header(default=""),
                         unit_id: str = "", today: str = "", refresh: bool = False,
                         org_id: str = ORG_ID):
     """Manager TEAM snapshot for the signed-in caller's span (or a chosen unit_id within it).
@@ -17748,7 +17748,7 @@ def team_snapshot(period: str, authorization: str = Header(default=""),
                           tuple(push_stores) + ('|',) + tuple(push_keys or ()))
     pair = None if refresh else _team_snap_get(ckey)
     if pair is None:
-        summ = get_targets_summary(cperiod, today=today, stores=push_stores or None,
+        summ = await get_targets_summary(cperiod, today=today, stores=push_stores or None,
                                         markets=None, reps=None, org_id=org_id)
         coach = rep_coaching(cperiod, store=push_keys, org_id=org_id)
         _team_snap_put(ckey, [summ, coach])
@@ -19024,7 +19024,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
 
 # ── Rep name mapping / merge (#4 — dedupe same-person variants) ────────────────
 @router.get("/rep-aliases")
-def get_rep_aliases(org_id: str = ORG_ID):
+async def get_rep_aliases(org_id: str = ORG_ID):
     """Existing alias->canonical merges + all distinct rep name-strings seen (shifts +
     DLAR), to drive the merge UI."""
     client = sb()
@@ -19056,7 +19056,7 @@ def get_rep_aliases(org_id: str = ORG_ID):
 
 
 @router.post("/rep-aliases")
-def post_rep_aliases(body: dict, org_id: str = ORG_ID):
+async def post_rep_aliases(body: dict, org_id: str = ORG_ID):
     """Merge rep name-variants into one canonical. Body: {canonical, aliases:[...]}."""
     canonical = (body.get('canonical') or '').strip()
     aliases = body.get('aliases') or []
@@ -19079,7 +19079,7 @@ def post_rep_aliases(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/rep-aliases/{alias}")
-def delete_rep_alias(alias: str, org_id: str = ORG_ID):
+async def delete_rep_alias(alias: str, org_id: str = ORG_ID):
     client = sb()
     try:
         client.schema('commcalc').table('rep_aliases').delete() \
@@ -19100,7 +19100,7 @@ def _exp_period_key(p):
 
 
 @router.get("/expenses/{period}")
-def get_expenses(period: str, org_id: str = ORG_ID):
+async def get_expenses(period: str, org_id: str = ORG_ID):
     """Store expenses for a period. STICKY: if the period has none yet, carry forward the latest
     prior period's expenses (returned pre-filled with carried_from set) so they persist month-to-month
     until changed — the user reviews and Saves to keep them for this period."""
@@ -19191,7 +19191,7 @@ def _system_line_keys(client, org_id, pv):
 
 
 @router.put("/expenses/{period}")
-def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
+async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
     """Replace all MANUAL expenses for the period (matrix save + bulk upload). Body:
     {rows:[{store_code, expense_name, expense_type, amount}]}. Zero/blank rows are dropped.
     AUTO 'system' lines (source_key not null — e.g. the payroll-computed Paid Leave Accumulated) are
@@ -19250,7 +19250,7 @@ def _bulk_apply_expand(cells):
 
 
 @router.post("/expenses/{period}/bulk-apply")
-def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
+async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
     """Idempotent per-CELL upsert of specific (store, expense) cells for a period — powers the
     'copy one column to many stores' and 'multi-store common expense' bulk actions in ONE request
     (never N sequential saves). Body: {cells:[{store_code, expense_name, expense_type, amount}]}.
@@ -19279,7 +19279,7 @@ def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/expenses/{period}/system-line")
-def upsert_expense_system_line(period: str, body: dict, org_id: str = ORG_ID):
+async def upsert_expense_system_line(period: str, body: dict, org_id: str = ORG_ID):
     """RECEIVER for an AUTO-COMPUTED ('system') store-expense line. mod-people's payroll run is the CALLER:
     it computes the per-store cost (e.g. 'Paid Leave Accumulated' / PTO accrual) and POSTs it here to be
     inserted into the Store Expenses matrix. The line coexists with manual expenses and rolls into the SAME
@@ -19407,7 +19407,7 @@ def _apply_to_months_expand(source_cells, target_periods, excluded_tokens=None, 
 
 
 @router.get("/expenses/apply-config")
-def get_expense_apply_config(org_id: str = ORG_ID):
+async def get_expense_apply_config(org_id: str = ORG_ID):
     """The expense-name tokens excluded from 'apply to other months' (commission/salary by default).
     `source` = 'config' when the org has saved its own set, else 'default' (the code fallback)."""
     require_org(org_id)
@@ -19425,7 +19425,7 @@ def get_expense_apply_config(org_id: str = ORG_ID):
 
 
 @router.put("/expenses/apply-config")
-def put_expense_apply_config(body: dict, org_id: str = ORG_ID):
+async def put_expense_apply_config(body: dict, org_id: str = ORG_ID):
     """Replace the org's excluded-expense tokens (the admin-editable protected set). Body {tokens:[...]}.
     Case-insensitively deduped. Degrades gracefully (ok=false + hint) until mig 205 creates the table."""
     require_org(org_id)
@@ -19447,7 +19447,7 @@ def put_expense_apply_config(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/expenses/apply-to-months")
-def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
+async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
     """Copy a SOURCE month's store expenses onto a chosen set of TARGET months — EXCEPT the configured
     protected expenses (commission + salary by default; see GET/PUT /expenses/apply-config). Body:
       { source_period: 'July 2026',
@@ -19509,7 +19509,7 @@ def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/commission-by-store/{period}")
-def commission_by_store(period: str, org_id: str = ORG_ID):
+async def commission_by_store(period: str, org_id: str = ORG_ID):
     """Σ rep_commissions.total_payout per STORE CODE for the period — feeds the Store Expenses
     'Employee Commission' auto-fill (the commission we PAY reps, booked as a store expense).
     rep_commissions.store is an address/label, so it's resolved to a store_code via store_mapping by
@@ -22008,7 +22008,7 @@ def _do_portal_login(sid: str, org_id: str):
 
 
 @router.post("/data-sources/{sid}/login/start")
-def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID,
+async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID,
                                   confirm: bool = False):
     """Phase 1 of the interactive portal login. The Playwright login (slow through a residential proxy)
     runs in the BACKGROUND, so this returns instantly with auth_status='authenticating'; the UI then polls
@@ -23227,7 +23227,7 @@ def custom_report_datasets(authorization: str = Header(default=""), org_id: str 
 
 
 @router.get("/custom-report")
-def custom_report_run(datasets: str = "", period: str = "", date_from: str = "", date_to: str = "",
+async def custom_report_run(datasets: str = "", period: str = "", date_from: str = "", date_to: str = "",
                             stores: str = "", markets: str = "", reps: str = "",
                             group_by: str = "", columns: str = "",
                             authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -25161,7 +25161,7 @@ def _accrual_day_param(v, label="date"):
 
 
 @router.get("/payout/accrued")
-def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: str = None,
+async def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: str = None,
                          store_code: str = None, authorization: str = Header(default="")):
     """Per-employee ACCRUED (expected) commission, cash ADVANCED against it, and the unpaid balance.
 
@@ -25192,7 +25192,7 @@ def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: str = 
 
 
 @router.get("/payout/accrual")
-def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str = None,
+async def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str = None,
                               employee_key: str = None, store_code: str = None,
                               authorization: str = Header(default="")):
     """The per-DAY accrual rows behind /payout/accrued — one row per rep per store per day, each with
@@ -25234,7 +25234,7 @@ def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str = None
 
 
 @router.post("/payout/accrual/run")
-def payout_accrual_run(org_id: str = ORG_ID, date: str = None,
+async def payout_accrual_run(org_id: str = ORG_ID, date: str = None,
                              authorization: str = Header(default="")):
     """Recompute ONE date's accrual for this tenant. IDEMPOTENT — a re-run restates that date.
 
@@ -25249,7 +25249,7 @@ def payout_accrual_run(org_id: str = ORG_ID, date: str = None,
 
 
 @router.get("/payout/accrual/preview")
-def payout_accrual_preview(org_id: str = ORG_ID, date: str = None):
+async def payout_accrual_preview(org_id: str = ORG_ID, date: str = None):
     """What a run for this date WOULD write, without writing it. Pure read — for diagnosing a $0 day
     (usually a missing Commission Plan assignment on a plan-mode tenant, which is correct behaviour,
     or a day whose sales haven't landed yet)."""
@@ -25259,7 +25259,7 @@ def payout_accrual_preview(org_id: str = ORG_ID, date: str = None):
 
 
 @router.post("/payout/record")
-def payout_record(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+async def payout_record(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Record a CASH ADVANCE paid to an employee against accrued commission (normally out of a daily
     closing envelope). org_id is a QUERY param and is what gets stamped — a body-supplied org would
     land the row in the wrong tenant (contract §2).
@@ -25286,7 +25286,7 @@ def payout_record(body: dict, org_id: str = ORG_ID, authorization: str = Header(
 
 
 @router.get("/payout/ledger")
-def payout_ledger(org_id: str = ORG_ID, start: str = None, end: str = None,
+async def payout_ledger(org_id: str = ORG_ID, start: str = None, end: str = None,
                         employee_key: str = None, store_code: str = None,
                         authorization: str = Header(default="")):
     """Org-scoped list of recorded cash advances (the report surface + the audit trail)."""
@@ -25300,7 +25300,7 @@ def payout_ledger(org_id: str = ORG_ID, start: str = None, end: str = None,
 
 
 @router.get("/payout/over-advance")
-def payout_over_advance(org_id: str = ORG_ID, as_of: str = None, lookback_months: int = 3,
+async def payout_over_advance(org_id: str = ORG_ID, as_of: str = None, lookback_months: int = 3,
                               authorization: str = Header(default="")):
     """Review list: where cash advanced has outrun the accrual. FLAG ONLY — no clawback, no netting.
 
@@ -25314,7 +25314,7 @@ def payout_over_advance(org_id: str = ORG_ID, as_of: str = None, lookback_months
 
 
 @router.get("/payout/settlement")
-def payout_settlement(org_id: str = ORG_ID, as_of: str = None,
+async def payout_settlement(org_id: str = ORG_ID, as_of: str = None,
                             authorization: str = Header(default="")):
     """END-OF-CYCLE SETTLEMENT CHECKLIST (owner 2026-08-04, ledger Q19) — per employee, this cycle's
     accrued vs cash advanced vs the remainder to pay or collect, plus every prior cycle that was never
@@ -25337,7 +25337,7 @@ def payout_settlement(org_id: str = ORG_ID, as_of: str = None,
 
 
 @router.get("/payout/accrual/config")
-def get_payout_accrual_config(org_id: str = ORG_ID, as_of: str = None,
+async def get_payout_accrual_config(org_id: str = ORG_ID, as_of: str = None,
                                     authorization: str = Header(default="")):
     """This tenant's accrual settings (mig 267 `commission_org_config.accrual_config`). RULE TWO: the
     tier basis, the tier-recognition day, the over-advance mode, the balance CYCLE, who may record a
@@ -25387,7 +25387,7 @@ def get_payout_accrual_config(org_id: str = ORG_ID, as_of: str = None,
 
 
 @router.put("/payout/accrual/config")
-def put_payout_accrual_config(body: dict, org_id: str = ORG_ID,
+async def put_payout_accrual_config(body: dict, org_id: str = ORG_ID,
                                     authorization: str = Header(default="")):
     """Save this tenant's accrual settings (tier basis, tier recognition, over-advance mode, balance
     cycle, who may record an advance, auto-run window). Admin-only, same gate as the rest of commission
@@ -25404,7 +25404,7 @@ def put_payout_accrual_config(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/payout/accrual/run-due")
-def payout_accrual_run_due(x_notify_secret: str = Header(default="")):
+async def payout_accrual_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint for the daily accrual — the SAME NOTIFY_RUN_SECRET pattern as every other
     commcalc sweep (/sales/promote-due, /dlar/sweep/run-due, /email-sweep/run-due …), so no new env
     var and no new cron infrastructure.
@@ -25482,7 +25482,7 @@ def financing_vendors(org_id: str = ORG_ID):
 
 
 @router.put("/financing/vendors")
-def save_financing_vendor(body: dict, org_id: str = ORG_ID,
+async def save_financing_vendor(body: dict, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Create or update ONE financing vendor (upsert on vendor_key). Admin-gated: a vendor's detection
     decides what the Financing report counts and which target a tiered rule measures against."""
@@ -25506,7 +25506,7 @@ def save_financing_vendor(body: dict, org_id: str = ORG_ID,
 
 
 @router.delete("/financing/vendors/{vendor_key}")
-def delete_financing_vendor(vendor_key: str, org_id: str = ORG_ID,
+async def delete_financing_vendor(vendor_key: str, org_id: str = ORG_ID,
                                   authorization: str = Header(default="")):
     """Remove a vendor row and its carrier assignments / detection rules. A CODE-SEEDED vendor (edge,
     acima) reappears as its seed afterwards — to switch one off, save it with enabled=false instead."""
@@ -25526,7 +25526,7 @@ def delete_financing_vendor(vendor_key: str, org_id: str = ORG_ID,
 
 
 @router.post("/financing/vendors/{vendor_key}/carriers")
-def add_financing_vendor_carrier(vendor_key: str, body: dict, org_id: str = ORG_ID,
+async def add_financing_vendor_carrier(vendor_key: str, body: dict, org_id: str = ORG_ID,
                                        authorization: str = Header(default="")):
     """Assign a vendor to a carrier. A vendor may serve MANY carriers — this is the whole mechanism
     behind "ACIMA could also be added to Total at a later date": one row, no release."""
@@ -25547,7 +25547,7 @@ def add_financing_vendor_carrier(vendor_key: str, body: dict, org_id: str = ORG_
 
 
 @router.delete("/financing/vendors/{vendor_key}/carriers/{row_id}")
-def delete_financing_vendor_carrier(vendor_key: str, row_id: str, org_id: str = ORG_ID,
+async def delete_financing_vendor_carrier(vendor_key: str, row_id: str, org_id: str = ORG_ID,
                                           authorization: str = Header(default="")):
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
@@ -25561,7 +25561,7 @@ def delete_financing_vendor_carrier(vendor_key: str, row_id: str, org_id: str = 
 
 
 @router.post("/financing/vendors/{vendor_key}/detection")
-def add_financing_detection_rule(vendor_key: str, body: dict, org_id: str = ORG_ID,
+async def add_financing_detection_rule(vendor_key: str, body: dict, org_id: str = ORG_ID,
                                        authorization: str = Header(default="")):
     """Add ONE detection rule. The operator picks the field, the operator and — for a tender — the value
     from the tender strings the period's data actually contains (RULE THREE). `word` is the default
@@ -25585,7 +25585,7 @@ def add_financing_detection_rule(vendor_key: str, body: dict, org_id: str = ORG_
 
 
 @router.delete("/financing/detection/{rule_id}")
-def delete_financing_detection_rule(rule_id: str, org_id: str = ORG_ID,
+async def delete_financing_detection_rule(rule_id: str, org_id: str = ORG_ID,
                                           authorization: str = Header(default="")):
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
@@ -25598,7 +25598,7 @@ def delete_financing_detection_rule(rule_id: str, org_id: str = ORG_ID,
 
 
 @router.get("/financing/targets/{period}")
-def get_financing_targets(period: str, authorization: str = Header(default=""),
+async def get_financing_targets(period: str, authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """The assignable per-store financing targets for a period, over the org's own store roster (so the
     Target Settings grid can render a Financing column next to the existing ones). Span-scoped for a
@@ -25655,7 +25655,7 @@ def get_financing_targets(period: str, authorization: str = Header(default=""),
 
 
 @router.put("/financing/targets/{period}")
-def save_financing_target(period: str, body: dict, authorization: str = Header(default=""),
+async def save_financing_target(period: str, body: dict, authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """Set ONE store's monthly financing target (optionally per vendor). Gated on the SAME 'targets'
     settings area + store span as the existing Target Settings save.
