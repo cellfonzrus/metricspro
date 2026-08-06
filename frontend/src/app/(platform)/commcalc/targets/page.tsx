@@ -252,7 +252,17 @@ export default function DailyTargetsPage() {
                         )}
                         <div>
                           <div style={{ fontWeight: 600 }}>{s.address || s.store_code}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{s.store_code}{s.market ? ` · ${s.market}` : ''}{s.reps?.length ? ` · ${s.reps.length} reps` : ''}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text3)' }}>{s.store_code}{s.market ? ` · ${s.market}` : ''}{s.reps?.length ? ` · ${s.reps.length} reps` : ''}
+                            {/* A store switched off in StoreOps is normally not on this page at all; it only
+                                appears for a month where it already had a target or real sales, so the
+                                history reads correctly. `!== false` (never `=== true`) — the flag is nullable. */}
+                            {s.is_active === false && (
+                              <span style={{ color: '#b91c1c', marginLeft: 6, fontWeight: 600 }}
+                                title="This store is switched off in StoreOps. It is shown here because it had a target or sales in this month.">
+                                · closed store
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </td>

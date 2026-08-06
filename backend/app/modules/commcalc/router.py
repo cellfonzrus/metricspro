@@ -13064,12 +13064,45 @@ async def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+# Tables this diagnostic scans, and the column each one spells a store string in. `daily_sales_feed`
+# was MISSING (2026-08-06): the hourly B2B feed is where a store string FIRST enters a tenant, and
+# `_promote_feed_to_raw_sales` then copies it into raw_sales — so the one source that could show an
+# unknown store the moment it arrives was the one source not looked at.
+_UNMATCHED_SRCS = [('raw_sales', 'store'), ('daily_sales_feed', 'store'), ('asset_ledger', 'store'),
+                   ('rep_commissions', 'store'), ('raw_comp_report', 'business_address'),
+                   ('vip_paygo', 'dealer'), ('vip_invoices', 'location')]
+# Rows read per source in ONE request. The scan stays single-shot per source (this endpoint fans out
+# over seven tables; paginating each one would turn a diagnostic into a gateway timeout), but a scan
+# that hits the cap now SAYS SO — see `truncated` below.
+_UNMATCHED_SCAN_LIMIT = 60000
+
+
 @router.get("/store-unmatched")
-async def store_unmatched(org_id: str = ORG_ID):
+async def store_unmatched(period: str = "", org_id: str = ORG_ID):
     """Diagnose store mismatches for the Store-Matching UI: distinct raw store strings across the
     data sources that do NOT resolve to a canonical commcalc.store_mapping address (after the
     alias / store_code / leading-number chain). These are the stores to map (add an alias) so the
-    P&L, Daily Targets and recon all attribute to one canonical store instead of splitting it."""
+    P&L, Daily Targets and recon all attribute to one canonical store instead of splitting it.
+
+    It is also the first place a CROSS-TENANT mis-file shows up: another tenant's store string filed
+    under this org resolves to nothing here, because this org's store_mapping has never heard of it.
+
+    ★ HONEST SCAN (2026-08-06). Two defects made this endpoint quietly under-report, and they cost a
+    real investigation:
+      • the per-source read was `.limit(60000)` with NO ordering. The house org holds well over 60k
+        `raw_sales` rows across its history, so the raw_sales scan was TRUNCATED at an arbitrary,
+        non-repeatable 60k rows — and a leaked store whose rows fell outside that window was reported
+        as coming from `rep_commissions` ONLY, hiding the fact that the SALES BASIS was contaminated
+        too. The read is now ORDERED (repeatable) and every source reports `rows_scanned` +
+        `truncated`, so a partial answer can never again be mistaken for a complete one.
+      • `daily_sales_feed` was not scanned at all (see `_UNMATCHED_SRCS`).
+
+    `period` (optional, either spelling) narrows every period-bearing source to one month. That is the
+    way to get an EXACT, untruncated answer on a big tenant — and the way to ask "which month did this
+    foreign store arrive in". Sources with no `period` column are still scanned whole.
+
+    Read-only and org-scoped. Response keys that existed before are unchanged; `counts`, `per_source`
+    and `scan` are additive."""
     require_org(org_id)
     client = sb()
     from app.modules.account import coa
@@ -13080,31 +13113,60 @@ async def store_unmatched(org_id: str = ORG_ID):
         if a:
             canon[a.lower()] = m
     resolve = coa.store_resolver(client, org_id)
-    # (table, column) carrying a store string in its own spelling
-    srcs = [('raw_sales', 'store'), ('asset_ledger', 'store'), ('rep_commissions', 'store'),
-            ('raw_comp_report', 'business_address'), ('vip_paygo', 'dealer'), ('vip_invoices', 'location')]
-    seen = {}
-    for table, col in srcs:
-        try:
-            rows = (client.schema('commcalc').table(table).select(col)
-                    .eq('org_id', org_id).limit(60000).execute().data) or []
-        except Exception:
-            continue  # table missing org_id / not present → skip that source
+    pv = _pvariants(period) if str(period or '').strip() else None
+    seen, scan = {}, {}
+    for table, col in _UNMATCHED_SRCS:
+        rows, narrowed = None, False
+        if pv:
+            # Try the narrowed read first; a source with no `period` column raises -> scan it whole
+            # rather than dropping it (dropping it would understate the answer, which is the exact
+            # class of defect this docstring is about).
+            try:
+                rows = (client.schema('commcalc').table(table).select(col)
+                        .eq('org_id', org_id).in_('period', pv)
+                        .order('id').limit(_UNMATCHED_SCAN_LIMIT).execute().data) or []
+                narrowed = True
+            except Exception:
+                rows = None
+        if rows is None:
+            try:
+                rows = (client.schema('commcalc').table(table).select(col)
+                        .eq('org_id', org_id).order('id')
+                        .limit(_UNMATCHED_SCAN_LIMIT).execute().data) or []
+            except Exception:
+                try:                      # no `id` column to order by -> unordered, still counted
+                    rows = (client.schema('commcalc').table(table).select(col)
+                            .eq('org_id', org_id).limit(_UNMATCHED_SCAN_LIMIT).execute().data) or []
+                except Exception as e:
+                    scan[table] = {'rows_scanned': 0, 'truncated': False, 'period_narrowed': False,
+                                   'error': str(e)[:200]}
+                    continue              # table missing org_id / not present -> skip that source
+        scan[table] = {'rows_scanned': len(rows),
+                       'truncated': len(rows) >= _UNMATCHED_SCAN_LIMIT,
+                       'period_narrowed': narrowed}
         for r in rows:
             v = (r.get(col) or '').strip()
             if not v:
                 continue
-            e = seen.setdefault(v.lower(), {'raw': v, 'sources': set()})
+            e = seen.setdefault(v.lower(), {'raw': v, 'sources': set(), 'per_source': {}})
             e['sources'].add(table)
+            e['per_source'][table] = e['per_source'].get(table, 0) + 1
     unmatched = []
     for e in seen.values():
         res = resolve(e['raw'])
         if not res or res.lower() not in canon:
-            unmatched.append({'raw': e['raw'], 'sources': sorted(e['sources']), 'guess': res})
+            # `counts`/`per_source` turn "this store is unmapped" into "this store is unmapped and it
+            # is 6 rows in raw_sales" — the difference between a spelling to alias and a mis-filed
+            # tenant to escalate.
+            unmatched.append({'raw': e['raw'], 'sources': sorted(e['sources']), 'guess': res,
+                              'counts': sum(e['per_source'].values()),
+                              'per_source': dict(sorted(e['per_source'].items()))})
     unmatched.sort(key=lambda x: x['raw'].lower())
     return {'unmatched': unmatched, 'unmatched_count': len(unmatched),
             'matched_distinct': len(seen) - len(unmatched),
-            'sources_scanned': [s[0] for s in srcs]}
+            'sources_scanned': [s[0] for s in _UNMATCHED_SRCS],
+            'period': (period or None), 'scan': scan,
+            'scan_truncated': sorted(t for t, d in scan.items() if d.get('truncated'))}
 
 
 def _compute_gp(client, org_id, period, market=""):
@@ -17010,6 +17072,70 @@ def _byod_pct_default(client, period, org_id=ORG_ID):
     return 35.0
 
 
+# ── ACTIVE-STORE ROSTER (owner defect 2026-08-06: "t-902 / 531 etc all t-stores have been disabled
+#    but they still show in time clock, targets etc reports — check and remove") ──────────────────
+# `storeops.stores.is_active` was SELECTED in several places in this module and FILTERED in NONE, so a
+# store the operator disabled kept being SEEDED a fresh monthly target, kept being ROLLED FORWARD into
+# next month, and kept appearing in every store picker / filter dropdown.
+#
+# ★ NULL-SAFE BY CONTRACT. `is_active` is a NULLABLE column whose default is true. storeops already
+# codified the rule in `_inactive_ids_from` (only an EXPLICIT `is_active=false` is inactive; NULL or
+# absent means ACTIVE), and every frontend picker spells it `s.is_active !== false`. A blanket
+# `.eq("is_active", True)` would therefore DROP every row where the flag was never set — i.e. silently
+# empty the store roster of a tenant that never touched it. We express `is_active IS NOT FALSE` in
+# PYTHON rather than as a PostgREST filter for two reasons: (1) it is byte-for-byte the predicate
+# storeops uses, so the two modules cannot drift apart on what "inactive" means; (2) the PostgREST
+# spelling (`or=(is_active.is.null,is_active.eq.true)`) fails CLOSED — on a tenant whose table predates
+# the column the request errors and the roster reads EMPTY, which on a targets page is
+# indistinguishable from "you have no stores". A roster is a few dozen rows, so filtering after the
+# read costs nothing.
+#
+# ★ HISTORY IS NOT ERASED. This helper answers "who is on the roster NOW". Every caller that renders a
+# PAST period passes `keep_codes` = the stores that actually have data for that period (a saved target
+# row, real achieved sales), so a store that was open in June still renders June exactly as before —
+# it just carries `is_active: false` so the UI can label it "(inactive)". What stops is seeding,
+# carrying forward, and offering a dead store as a pickable option.
+def _store_active(s) -> bool:
+    """`is_active IS NOT FALSE` for one storeops.stores row — NULL/absent means ACTIVE."""
+    return (s or {}).get('is_active') is not False
+
+
+_ROSTER_COLS = 'store_code,address,market,monthly_target,is_active'
+
+
+def _storeops_roster(client, org_id, cols=_ROSTER_COLS, include_inactive=False, keep_codes=None):
+    """The org's `storeops.stores` roster, ACTIVE ONLY by default.
+
+    `include_inactive=True` returns everything — the module's OWN established convention, mirroring
+    `GET /storeops/employees` (`include_inactive: bool = False`), not a new one.
+
+    `keep_codes` is a set of store_codes (case-insensitive) that survive the active filter even when
+    disabled: how a caller says "this store has real data in the period I am rendering, so it belongs
+    in this report". That is what keeps a closed store's history intact.
+
+    `is_active` is always requested so the predicate can be evaluated; a tenant whose table predates
+    the column falls back to the caller's own column list and every row is treated as ACTIVE (exactly
+    today's behaviour). Never raises — an unreadable roster returns []."""
+    want = [c.strip() for c in str(cols).split(',') if c.strip()]
+    sel = ','.join(want + (['is_active'] if 'is_active' not in want else []))
+    try:
+        rows = (client.schema('storeops').table('stores').select(sel)
+                .eq('org_id', org_id).execute().data) or []
+    except Exception as e:
+        print(f'WARN _storeops_roster: is_active select failed, falling back ({e})')
+        try:
+            rows = (client.schema('storeops').table('stores').select(','.join(want))
+                    .eq('org_id', org_id).execute().data) or []
+        except Exception as e2:
+            print(f'WARN _storeops_roster: roster unreadable ({e2})')
+            return []
+    if include_inactive:
+        return rows
+    keep = {str(c).strip().upper() for c in (keep_codes or ()) if str(c).strip()}
+    return [s for s in rows
+            if _store_active(s) or str(s.get('store_code') or '').strip().upper() in keep]
+
+
 # ── Month-over-month target carry-forward + stretch ──────────────────────────────────────────────
 # The prior month's target carries forward automatically; a store that HIT a category's target last
 # month gets a 110% STRETCH on it, one that missed carries the same number forward. Evaluated per
@@ -17121,11 +17247,19 @@ def _require_target_edit(authorization: str, org_id: str, store_code: str = ""):
 
 
 @router.get("/targets/{period}")
-async def get_targets(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def get_targets(period: str, include_inactive: bool = False,
+                      authorization: str = Header(default=""), org_id: str = ORG_ID):
     """List per-store monthly target config. Stores without a row are SEEDED from the prior month —
     each category carried forward, or +10% stretched when last month's target was met (see
     _carry_forward_map). Accessories still fall back to storeops.stores.monthly_target when there's
-    no prior; byod_pct from KPI config."""
+    no prior; byod_pct from KPI config.
+
+    DISABLED STORES (owner 2026-08-06): a store with `storeops.stores.is_active = false` is OFF the
+    roster — it is never seeded a target and never offered here. It IS still returned for a period
+    where it already has a SAVED target row, carrying `is_active: false` so the UI can label it
+    "(inactive)": hiding a dead store from next month's planning is right, silently rewriting a month
+    it was open for is not. `include_inactive=1` returns the whole roster (same opt-in shape as
+    `GET /storeops/employees`)."""
     client = sb()
     pm = parse_period(period)
     rows = (client.schema('commcalc').table('targets')
@@ -17133,10 +17267,11 @@ async def get_targets(period: str, authorization: str = Header(default=""), org_
     by_code = {str(r.get('store_code', '')).upper(): r for r in rows}
     byod_def = _byod_pct_default(client, period, org_id)
 
-    stores = (client.schema('storeops').table('stores')
-              .select('store_code,address,market,monthly_target,is_active')
-              .eq('org_id', org_id)
-              .execute().data) or []
+    # keep_codes = the stores that already HAVE a saved target for this period, so a disabled store's
+    # existing history renders unchanged while a disabled store with nothing saved simply drops out
+    # (and is therefore never seeded below).
+    stores = _storeops_roster(client, org_id, include_inactive=include_inactive,
+                              keep_codes=set(by_code))
     # Only pull last month's actuals for the carry-forward when at least one store still needs seeding.
     need_seed = any((str(s.get('store_code', '') or '').strip().upper() or None) not in by_code
                     for s in stores if str(s.get('store_code', '') or '').strip())
@@ -17152,6 +17287,7 @@ async def get_targets(period: str, authorization: str = Header(default=""), org_
             row = dict(existing)
             row['address'] = s.get('address')
             row['market'] = s.get('market')
+            row['is_active'] = _store_active(s)
             row['_seeded'] = False
         else:
             cfrow = cf['by_code'].get(code.upper(), {})
@@ -17164,6 +17300,7 @@ async def get_targets(period: str, authorization: str = Header(default=""), org_
                 'accessories_monthly': acc if acc is not None else safe_float(s.get('monthly_target')),
                 'byod_pct': cfrow.get('byod_pct') or byod_def, 'notes': None,
                 'address': s.get('address'), 'market': s.get('market'),
+                'is_active': _store_active(s),
                 '_seeded': True, '_seed_basis': cfrow.get('basis'), '_prior_period': cf['prior_period'],
             }
         out.append(row)
@@ -17226,9 +17363,11 @@ async def roll_forward_targets(period: str, body: dict = None,
                 for r in ((client.schema('commcalc').table('targets')
                            .select('store_code').eq('org_id', org_id)
                            .in_('period', _pvariants(period)).execute().data) or [])}
-    stores = (client.schema('storeops').table('stores')
-              .select('store_code,address,market,monthly_target,is_active')
-              .eq('org_id', org_id).execute().data) or []
+    # WRITE PATH — no keep_codes: a disabled store must never be CREATED a new target row, for any
+    # period. Reported separately in the response so the skip is visible rather than silent.
+    _roster_all = _storeops_roster(client, org_id, include_inactive=True)
+    stores = [s for s in _roster_all if _store_active(s)]
+    inactive_skipped = len(_roster_all) - len(stores)
     cf = _carry_forward_map(client, org_id, period, stores)
     prior = cf['prior_period']
     written, skipped = [], 0
@@ -17268,7 +17407,8 @@ async def roll_forward_targets(period: str, body: dict = None,
         client.schema('commcalc').table('targets').upsert(row, on_conflict='org_id,store_code,period').execute()
         written.append({'store_code': code, 'basis': cfrow.get('basis')})
     return {'period': period, 'prior_period': prior, 'written': len(written),
-            'skipped': skipped, 'overwrite': overwrite, 'stores': written}
+            'skipped': skipped, 'inactive_skipped': inactive_skipped,
+            'overwrite': overwrite, 'stores': written}
 
 
 # ── SHARED period normalizer for the targets / coaching / exec family ────────────────────────────
@@ -17465,6 +17605,7 @@ def _as_filter_list(val):
 
 @router.get("/targets/{period}/summary")
 async def get_targets_summary(period: str, today: str = "", include_untargeted: bool = False,
+                              include_inactive: bool = False,
                               stores: Optional[List[str]] = Query(default=None),
                               markets: Optional[List[str]] = Query(default=None),
                               reps: Optional[List[str]] = Query(default=None),
@@ -17492,8 +17633,6 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     trows = (client.schema('commcalc').table('targets')
              .select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
     tgt_by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
-    store_rows = (client.schema('storeops').table('stores')
-                  .select('store_code,address,market,monthly_target').eq('org_id', org_id).execute().data) or []
     # A report must NEVER 500. A failure in the shift read or the sales aggregation degrades to "targets
     # render, achieved 0" instead of a blank page — the targets universe below does not depend on either.
     try:
@@ -17506,6 +17645,13 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         print(f"WARN targets summary actuals failed: {e}"); actuals = []
     # Whole-store projected-month-end trending, straight from Executive MTD (one source, moves together).
     trend_by_code, trend_meta = _targets_trending_by_code(client, org_id, cperiod, today=today)
+
+    # ── ACTIVE roster (owner 2026-08-06). Read AFTER the trending pass purely so `keep_codes` can name
+    #    the stores that have real activity in THIS period: a disabled store still renders any month it
+    #    had a saved target or actual sales (carrying is_active:false for the "(inactive)" label), and
+    #    disappears only from months where it did nothing. `include_inactive=1` = full roster.
+    store_rows = _storeops_roster(client, org_id, include_inactive=include_inactive,
+                                  keep_codes=set(tgt_by_code) | set(trend_by_code or {}))
 
     # ── UNIVERSAL store universe: storeops.stores roster UNION every targeted store_code. A tenant can have
     #    Target Settings saved for stores that are NOT in its storeops roster (or whose roster store_codes
@@ -17600,6 +17746,7 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
         trend = trend_by_code.get(code.upper(), {})
         out.append({
             'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
+            'is_active': _store_active(s),
             'scheduled_hours_total': res['scheduled_hours_total'],
             'categories': res['categories'],
             'conversion': store_conv,
@@ -18312,8 +18459,10 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         if rp and rp.lower() != 'admin':
             opt_reps.add(rp)
     try:
-        for s in (client.schema('storeops').table('stores')
-                  .select('address').eq('org_id', org_id).execute().data) or []:
+        # ACTIVE roster only (owner 2026-08-06) — a disabled store is no longer offered as a filter
+        # option. Options harvested from the period's own sales rows above are untouched, so a store
+        # that genuinely sold in the month being viewed stays selectable.
+        for s in _storeops_roster(client, org_id, cols='store_code,address'):
             a = str(s.get('address') or '').strip()
             if a:
                 opt_stores.add(a)
@@ -18785,8 +18934,9 @@ def _prod_gather(client, org_id, period, stores=None, markets=None, reps=None, t
         if rp and rp.lower() != 'admin':
             opt_reps.add(_canon(rp, cmap))
     try:
-        for s in (client.schema('storeops').table('stores').select('address')
-                  .eq('org_id', org_id).execute().data) or []:
+        # ACTIVE roster only (owner 2026-08-06) — see _exec_mtd. Store strings observed in the period's
+        # own data are added above and are NOT filtered, so history stays reachable.
+        for s in _storeops_roster(client, org_id, cols='store_code,address'):
             a = str(s.get('address') or '').strip()
             if a:
                 opt_stores.add(a)
@@ -19161,6 +19311,7 @@ def _acc_flags_by_rep(client, org_id, period):
 
 @router.get("/targets/{period}/action-plan")
 async def get_action_plan(period: str, today: str = "", store_code: str = "", rep: str = "",
+                          include_inactive: bool = False,
                           authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Daily Action Plan — prioritized focus areas per store (per-category catch-up
     + conversion) and per rep (conversion + commission-at-risk). Reuses the SAME
@@ -19174,8 +19325,10 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
     trows = (client.schema('commcalc').table('targets')
              .select('*').eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
     by_code = {str(r.get('store_code', '')).upper(): r for r in trows}
-    stores = (client.schema('storeops').table('stores')
-              .select('store_code,address,market,monthly_target').eq('org_id', org_id).execute().data) or []
+    # ACTIVE roster (owner 2026-08-06) — a disabled store gets no action plan, but one that has a saved
+    # target for the period being viewed still renders it (history intact). include_inactive=1 = all.
+    stores = _storeops_roster(client, org_id, include_inactive=include_inactive,
+                              keep_codes=set(by_code))
     shifts = _fetch_shifts(client, start, end, org_id)
     actuals = _fetch_actuals(client, org_id, period)
     rank = targets_engine.SEV_RANK
@@ -25925,7 +26078,8 @@ async def delete_financing_detection_rule(rule_id: str, org_id: str = ORG_ID,
 
 
 @router.get("/financing/targets/{period}")
-async def get_financing_targets(period: str, authorization: str = Header(default=""),
+async def get_financing_targets(period: str, include_inactive: bool = False,
+                                authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """The assignable per-store financing targets for a period, over the org's own store roster (so the
     Target Settings grid can render a Financing column next to the existing ones). Span-scoped for a
@@ -25952,8 +26106,11 @@ async def get_financing_targets(period: str, authorization: str = Header(default
                  "target_amount": r.get('target_amount')})
         else:
             by_code[code.upper()] = r
-    stores = (client.schema('storeops').table('stores')
-              .select('store_code,address,market,is_active').eq('org_id', org_id).execute().data) or []
+    # ACTIVE roster (owner 2026-08-06): a disabled store is not offered a new financing target, but one
+    # that already has a saved row for the period keeps rendering it. include_inactive=1 = full roster.
+    stores = _storeops_roster(client, org_id, cols='store_code,address,market,is_active',
+                              include_inactive=include_inactive,
+                              keep_codes=set(by_code) | set(per_vendor))
     out = []
     for s in stores:
         code = str(s.get('store_code') or '').strip()
@@ -25961,6 +26118,7 @@ async def get_financing_targets(period: str, authorization: str = Header(default
             continue
         cur = by_code.get(code.upper())
         out.append({'store_code': code, 'address': s.get('address'), 'market': s.get('market'),
+                    'is_active': _store_active(s),
                     'target_units': safe_float((cur or {}).get('target_units')),
                     'target_amount': (cur or {}).get('target_amount'),
                     'notes': (cur or {}).get('notes'),

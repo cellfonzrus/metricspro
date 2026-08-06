@@ -7,6 +7,9 @@ interface TargetRow {
   store_code: string
   address?: string
   market?: string
+  // storeops.stores.is_active. NULLABLE — the universal convention here is `!== false` (NULL/absent
+  // means active), never `=== true`, which would mislabel every store whose flag was never set.
+  is_active?: boolean
   activations_monthly: number
   upgrades_monthly: number
   accessories_monthly: number
@@ -37,19 +40,23 @@ export default function TargetSettingsPage() {
   const [bulkMsg, setBulkMsg] = useState('')
   const [rolling, setRolling] = useState(false)
   const [rollMsg, setRollMsg] = useState('')
+  // Disabled stores are OFF this page by default (owner 2026-08-06). A store that already has a saved
+  // target for the month still shows — flagged "(inactive)" — so a past month is never rewritten.
+  const [showInactive, setShowInactive] = useState(false)
 
-  useEffect(() => { load() }, [period])
+  useEffect(() => { load() }, [period, showInactive])
 
   async function load() {
     setLoading(true)
     try {
-      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+      const inc = showInactive ? '&include_inactive=1' : ''
+      const d = await api(`/api/v1/commcalc/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}${inc}`)
       // The financing target lives in its own table (migration 272). Fetched alongside and merged in;
       // if that migration has not been run the column simply renders as unavailable.
       let finByCode: Record<string, number> = {}
       let finReady = false
       try {
-        const f = await api(`/api/v1/commcalc/financing/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+        const f = await api(`/api/v1/commcalc/financing/targets/${encodeURIComponent(period)}?org_id=${ORG_ID}${inc}`)
         finReady = !!f?.ready
         for (const t of (f?.targets || [])) finByCode[String(t.store_code).toUpperCase()] = Number(t.target_units) || 0
       } catch { finReady = false }
@@ -214,6 +221,11 @@ export default function TargetSettingsPage() {
               {markets.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
             <input className="input" placeholder="Search store…" value={search} onChange={e => setSearch(e.target.value)} style={{ width: 200 }} />
+            <label style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5 }}
+              title="Closed stores are hidden so they never get a target set or carried into next month. Tick to see them.">
+              <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
+              Show closed stores
+            </label>
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>{filtered.length} shown · {selected.size} selected</span>
           </div>
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -256,6 +268,12 @@ export default function TargetSettingsPage() {
                     <div style={{ fontWeight: 600 }}>{r.address || r.store_code}</div>
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>
                       {r.store_code}{r.market ? ` · ${r.market}` : ''}
+                      {r.is_active === false && (
+                        <span style={{ color: '#b91c1c', marginLeft: 6, fontWeight: 600 }}
+                          title="This store is switched off in StoreOps. Its past targets are kept so old months still read correctly, but it is not given a new target and is not carried into next month.">
+                          · closed store
+                        </span>
+                      )}
                       {r._seeded && <span style={{ color: '#b45309', marginLeft: 6 }}>· not yet saved</span>}
                       {r._seeded && r._seed_basis && (
                         Object.values(r._seed_basis).includes('stretch')

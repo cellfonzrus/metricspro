@@ -309,8 +309,12 @@ def store_candidates(client, org_id, link_id):
                 .eq("org_id", link["sub_org_id"]).execute().data) or []
     except Exception:
         rows = []
+    # `is_active` is NULLABLE: `.get("is_active", True)` returns the default only when the KEY is
+    # ABSENT — a row whose column exists but is NULL returned None (falsy) and was WRONGLY dropped.
+    # Same NULL-safe predicate as `_store_active` / storeops' `_inactive_ids_from`: only an EXPLICIT
+    # false is inactive (owner defect 2026-08-06).
     stores = [{"store_id": r.get("id"), "store_code": r.get("store_code"), "store_address": r.get("address"),
-               "market": r.get("market")} for r in rows if r.get("is_active", True)]
+               "market": r.get("market")} for r in rows if r.get("is_active") is not False]
     return {"ok": True, "consented": True, "stores": stores}
 
 
