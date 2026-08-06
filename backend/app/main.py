@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.tenant_middleware import TenantScopeMiddleware
 from app.modules.commcalc.router import router as commcalc_router
 from app.modules.storeops.router import router as storeops_router
@@ -90,6 +91,15 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # SaaS P3 hardening (GATED OFF: enable with env MULTI_TENANT_ENFORCE=1 only AFTER the org_id leak
 # fixes are done + isolation test passes). Derives org_id from the verified token. Default = no-op.
 app.add_middleware(TenantScopeMiddleware)
+
+# H5 (2026-08-05 security audit): cap the request BODY. There was no limit of any kind, so one large
+# POST buffered without bound into `await file.read()` → `pd.read_excel(...)` and took the single-worker
+# container down for every tenant. Added AFTER TenantScope ⇒ OUTER of it, so an oversized body is
+# refused before the middleware does any identity/DB work; INNER of HardeningMiddleware ⇒ the 413 still
+# carries the security headers (and, being inner of CORS, the CORS headers too).
+# Default 64 MB — 9.1x the largest upload this app is documented to ingest (a 7 MB full-month Sales
+# workbook); env `MAX_UPLOAD_MB` tunes it, `MAX_UPLOAD_MB=0` restores the old unbounded behaviour.
+app.add_middleware(BodySizeLimitMiddleware)
 
 # Error masking + security headers — added AFTER tenant/gzip (outer of them, so it catches their
 # exceptions) but BEFORE CORS (inner of CORS, so a masked 500 still gets Access-Control-Allow-Origin).

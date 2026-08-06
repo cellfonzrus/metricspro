@@ -22,6 +22,7 @@ import {
   AUDIENCE_LABEL, MODULE_LABEL, Tour, clearTourDone, fetchTours, groupByModule, startTour, tourDoneAt,
 } from '@/lib/tours'
 import { api } from '@/lib/client'
+import { safeHref } from '@/lib/safe-url'   // H6: start_href is tenant-writable tour config
 
 type Scene = {
   scene: number; page: string; anchor: string
@@ -184,8 +185,8 @@ export default function TrainingCenterPage() {
                             Clear tick
                           </button>
                         )}
-                        {t.start_href && (
-                          <Link href={t.start_href} style={{ fontSize: 12, color: 'var(--text3)', textDecoration: 'none' }}
+                        {safeHref(t.start_href) && (
+                          <Link href={safeHref(t.start_href, '#')} style={{ fontSize: 12, color: 'var(--text3)', textDecoration: 'none' }}
                             title="Open the page without the walk-through">
                             Just open the page →
                           </Link>

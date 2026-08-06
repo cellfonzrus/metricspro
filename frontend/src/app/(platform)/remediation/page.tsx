@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from '@/lib/client'
+import { safeHref } from '@/lib/safe-url'   // H6: never render an unvalidated URL as a link
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -97,7 +98,7 @@ export default function RemediationConsole() {
                 <div style={{ fontSize: 13, marginTop: 4 }}><b>Preview:</b> {result.preview?.summary}</div>
                 <div style={{ fontSize: 13, marginTop: 6 }}>
                   Sent to: {result.notified?.length ? result.notified.join(', ') : 'no channel (use the link)'} ·{' '}
-                  <a href={result.approval_url} style={{ color: '#2563eb' }}>Open approval</a>
+                  <a href={safeHref(result.approval_url)} style={{ color: '#2563eb' }}>Open approval</a>
                 </div>
                 {result.delivery && (
                   <div style={{ fontSize: 12, marginTop: 6, color: 'var(--text3, #888)' }}>

@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
+from app.modules.core.safe_href import safe_href
 
 router = APIRouter(prefix="/whats-new", tags=["Core / What's new"])
 
@@ -80,7 +81,8 @@ def clean_entry(raw: dict) -> dict:
     e["category"] = e.get("category") if e.get("category") in CATEGORIES else "new_feature"
     e["status"] = e.get("status") if e.get("status") in STATUSES else "shipped"
     e["module"] = (str(e["module"]).strip()[:60] or None) if e.get("module") else None
-    e["deep_link"] = (str(e["deep_link"]).strip()[:300] or None) if e.get("deep_link") else None
+    # H6 (2026-08-05): deep_link renders as a <Link> in the admin What's New popup — allow-list it.
+    e["deep_link"] = safe_href((str(e["deep_link"]).strip()[:300] or None) if e.get("deep_link") else None)
     ra = str(e.get("released_at") or "").strip()
     e["released_at"] = ra[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", ra) else datetime.now(timezone.utc).date().isoformat()
     e["is_published"] = bool(e.get("is_published", True))
