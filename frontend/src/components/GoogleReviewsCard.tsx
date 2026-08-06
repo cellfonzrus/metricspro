@@ -9,6 +9,13 @@ import { useAuth } from '@/lib/auth-context'
 // (Phase 1). Renders nothing at all once loaded with zero stores, so a tenant that hasn't turned the
 // integration on sees no new UI.
 //
+// Phase 1.5 (owner directive 2026-08-06, "google reviews everywhere"): optional `employeeId` lets a
+// MANAGER embed this same card for a DIFFERENT employee (GET /storeops/google-reviews/employee/{id}
+// instead of /my — backend enforces span/self access, this component never decides who may view
+// whom). Optional `compact` renders a tighter variant for embedding on another page (a rating chip
+// per store, reviews collapsed behind a toggle) instead of the full self-dashboard card. Neither
+// prop changes the DEFAULT (self, /my, full) rendering when omitted.
+//
 // HONEST LIMITATION (surfaced verbatim from the backend, never hidden): Google Places API returns
 // only Google's own curated "most relevant" review subset (typically ~5), not every review ever left.
 
@@ -29,6 +36,10 @@ interface StoreCard {
 }
 
 const stars = (n?: number) => n == null ? '—' : '★'.repeat(Math.round(n)) + '☆'.repeat(5 - Math.round(n))
+
+const STATUS_LABEL: Record<string, string> = {
+  above: 'Above target', below: 'Below target', unknown: 'No rating yet',
+}
 
 function ActionPlanBox({ storeCode, plan, onChanged }: { storeCode: string; plan: ActionPlan; onChanged: () => void }) {
   const [text, setText] = useState(plan.plan_text || '')
@@ -82,25 +93,107 @@ function ActionPlanBox({ storeCode, plan, onChanged }: { storeCode: string; plan
   return null
 }
 
-export default function GoogleReviewsCard({ token }: { token?: string | null }) {
+// Read-only one-liner for a compact embed — a manager viewing someone ELSE's card sees the plan's
+// status, never the employee's own submit/mark-done controls (those stay self-service, gated
+// server-side anyway, but showing them out of context on someone else's row is confusing UX).
+function ActionPlanChip({ plan }: { plan: ActionPlan }) {
+  const label = plan.status === 'required' ? 'Action plan needed'
+    : plan.status === 'submitted' ? 'Plan submitted — awaiting review'
+    : plan.status === 'pushed_back' ? `Plan due ${plan.due_date || '—'}`
+    : plan.status === 'in_progress' ? (plan.employee_marked_done_at ? 'Marked done — awaiting confirmation' : `In progress — due ${plan.due_date || '—'}`)
+    : null
+  if (!label) return null
+  return (
+    <span style={{ background: '#fff7e6', color: '#92400e', borderRadius: 6, padding: '2px 8px', fontSize: 10.5, fontWeight: 700 }}>
+      📝 {label}
+    </span>
+  )
+}
+
+function CompactStoreRow({ s }: { s: StoreCard }) {
+  const [showReviews, setShowReviews] = useState(false)
+  const above = s.status === 'above'
+  const known = s.status !== 'unknown'
+  const fg = !known ? '#475569' : above ? '#166534' : '#b91c1c'
+  const bg = !known ? '#f1f5f9' : above ? '#e7f6ec' : '#fdeaea'
+  return (
+    <div style={{ borderRadius: 8, border: `1px solid ${fg}22`, padding: '8px 10px', background: bg }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 12.5, color: fg }}>{s.store_code}{s.market ? ` · ${s.market}` : ''}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ color: '#d97706', fontSize: 12 }}>{stars(s.rating ?? undefined)}</span>
+          <span style={{ fontWeight: 800, fontSize: 13, color: fg }}>{s.rating != null ? Number(s.rating).toFixed(1) : '—'}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 10, color: fg, border: `1px solid ${fg}44` }}>
+            {STATUS_LABEL[s.status]}
+          </span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>target {Number(s.target).toFixed(1)} · {s.review_count ?? '—'} reviews</span>
+        {s.action_plan && <ActionPlanChip plan={s.action_plan} />}
+        {s.reviews.length > 0 && (
+          <button onClick={() => setShowReviews(v => !v)} style={{ fontSize: 10.5, color: 'var(--accent,#2563eb)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}>
+            {showReviews ? 'Hide reviews' : `Show ${s.reviews.length} review${s.reviews.length > 1 ? 's' : ''}`}
+          </button>
+        )}
+      </div>
+      {showReviews && (
+        <div style={{ marginTop: 6 }}>
+          {s.reviews.slice(0, 5).map(r => (
+            <div key={r.id} style={{ padding: '4px 0', borderTop: '1px solid var(--border)', fontSize: 11.5 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ color: '#d97706' }}>{stars(r.rating)}</span>
+                <span style={{ color: 'var(--text2)', fontSize: 10.5 }}>{r.author_name || 'Google user'}{r.relative_time ? ` · ${r.relative_time}` : ''}</span>
+                {r.possible_mention && <span style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 6, padding: '1px 5px', fontSize: 9.5, fontWeight: 700 }}>possible mention</span>}
+              </div>
+              {r.review_text && <div style={{ marginTop: 2 }}>{r.review_text}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function GoogleReviewsCard({ token, employeeId, compact, compactTitle }:
+  { token?: string | null; employeeId?: string; compact?: boolean; compactTitle?: string }) {
   const auth = useAuth()
   const tok = token ?? auth?.token
   const [stores, setStores] = useState<StoreCard[] | null>(null)
+  const [employeeName, setEmployeeName] = useState('')
   const [note, setNote] = useState('')
 
   const load = useCallback(() => {
     if (!tok) { setStores(null); return }
-    api('/api/v1/storeops/google-reviews/my', { headers: { Authorization: `Bearer ${tok}` } })
-      .then((r: any) => { setStores(Array.isArray(r?.stores) ? r.stores : []); setNote(r?.note || '') })
+    const path = employeeId
+      ? `/api/v1/storeops/google-reviews/employee/${encodeURIComponent(employeeId)}`
+      : '/api/v1/storeops/google-reviews/my'
+    api(path, { headers: { Authorization: `Bearer ${tok}` } })
+      .then((r: any) => { setStores(Array.isArray(r?.stores) ? r.stores : []); setNote(r?.note || ''); setEmployeeName(r?.employee_name || '') })
       .catch(() => setStores([]))
-  }, [tok])
+  }, [tok, employeeId])
   useEffect(() => { load() }, [load])
 
   if (!stores || stores.length === 0) return null
 
+  if (compact) {
+    return (
+      <div>
+        {compactTitle && <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', marginBottom: 6 }}>{compactTitle}</div>}
+        <div style={{ display: 'grid', gap: 8 }}>
+          {stores.map(s => <CompactStoreRow key={s.store_code} s={s} />)}
+        </div>
+      </div>
+    )
+  }
+
+  const title = employeeId ? `⭐ ${employeeName || 'Employee'}'s Google Reviews` : "⭐ My Store's Google Reviews"
+
   return (
     <div className="card" style={{ marginTop: 14 }}>
-      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>⭐ My Store's Google Reviews</div>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>{title}</div>
       {note && <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>{note}</div>}
       <div style={{ display: 'grid', gap: 12 }}>
         {stores.map(s => {
@@ -136,7 +229,9 @@ export default function GoogleReviewsCard({ token }: { token?: string | null }) 
                     {r.review_text && <div style={{ marginTop: 3 }}>{r.review_text}</div>}
                   </div>
                 ))}
-                {s.action_plan && <ActionPlanBox storeCode={s.store_code} plan={s.action_plan} onChanged={load} />}
+                {s.action_plan && (employeeId
+                  ? <ActionPlanChip plan={s.action_plan} />
+                  : <ActionPlanBox storeCode={s.store_code} plan={s.action_plan} onChanged={load} />)}
               </div>
             </div>
           )

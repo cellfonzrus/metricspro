@@ -5703,13 +5703,21 @@ def put_google_reviews_config(body: dict, authorization: str = Header(default=""
         row["target_default"] = _gr.clamp_target(body["target_default"])
     if "notify_on_new_reviews" in body:
         row["notify_on_new_reviews"] = bool(body["notify_on_new_reviews"])
+    if "lookback_days" in body:
+        # Phase 1.5: how far back an employee's store-set lookup looks for a shift (migration 420).
+        # Pre-migration this key simply doesn't exist on the table yet — the upsert then fails and
+        # the generic except below turns it into a clear 400 naming the migration (same posture as
+        # every other not-yet-run-migration write here); GET always still returns the code default
+        # (30) regardless via google_reviews.get_config's degrade-gracefully shape.
+        row["lookback_days"] = _gr.clamp_lookback_days(body["lookback_days"])
     key = (body.get("api_key") or "").strip()
     if key:
         row["api_key"] = key
     try:
         sb().table("google_review_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
-        raise HTTPException(400, f"Could not save (run migration 411 first?): {str(e)[:160]}")
+        raise HTTPException(400, f"Could not save (run migration 411 first? migration 420 for "
+                                 f"lookback_days?): {str(e)[:160]}")
     return _gr.public_config(_gr.get_config(sb(), org_id))
 
 
@@ -6008,6 +6016,145 @@ def google_review_store_detail(store_code: str, authorization: str = Header(defa
         st = []
     store_row = st[0] if st else {"store_code": store_code}
     return _gr_store_card(client, org_id, store_code, store_row, cfg, employee_id=employee_id)
+
+
+# ── Phase 1.5 (owner directive 2026-08-06): "google reviews everywhere" — one employee's card(s),
+# and a light batched summary for table columns, so a rating can be surfaced next to that employee
+# wherever they're shown (action plans, Performance Management, the commission dashboard, their own
+# dashboard). Response shapes here are an EXACT contract other agents (mod-commission) code against
+# — do not change field names/nesting without updating both sides. ────────────────────────────────
+@router.get("/google-reviews/employee/{employee_id}")
+def google_review_employee_detail(employee_id: str, authorization: str = Header(default=""),
+                                  org_id: str = ORG_ID):
+    """One employee's rating card(s) — home_store UNION any store they're scheduled at within the
+    tenant's configurable lookback window (google_review_config.lookback_days, default 30) through
+    +14 days ahead (same forward window as /google-reviews/my). A manager whose span covers AT LEAST
+    ONE of the employee's stores may view it (unrestricted for an admin/'all'-scope role — same
+    posture as /google-reviews/store/{code}); the employee may always view their OWN card (same
+    self-rule as /google-reviews/my).
+
+    Response (EXACT):
+      {"employee_id", "employee_name", "stores": [<same card shape _gr_store_card returns, with
+      action_plan scoped to THIS employee>], "note"}"""
+    client = sb()
+    employee_id = (employee_id or "").strip()
+    if not employee_id:
+        raise HTTPException(400, "employee_id is required")
+    au = _caller_app_user(authorization, org_id)
+    try:
+        emp_rows = (client.table("employees").select("employee_id,name,home_store")
+                    .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
+    except Exception:
+        emp_rows = []
+    if not emp_rows:
+        raise HTTPException(404, "Unknown employee.")
+    emp = emp_rows[0]
+
+    cfg = _gr.get_config(client, org_id)
+    lookback = _gr.clamp_lookback_days(cfg.get("lookback_days"))
+    store_map = _gr.stores_for_employees(client, org_id, [employee_id], lookback_days=lookback)
+    store_codes = store_map.get(employee_id) or []
+
+    allowed = False
+    if au:
+        role = (au.get("role") or "").strip()
+        if role in {"admin", "market_manager", "store_manager", "district_manager",
+                    "regional_manager", "director", "executive"} or _role_scope(org_id, role) != "self":
+            span = _gr_manager_span(authorization, org_id)
+            if span is None:
+                allowed = True
+            else:
+                keyset = {c.upper() for c in span}
+                allowed = any(c.upper() in keyset for c in store_codes)
+    if not allowed:
+        try:
+            self_org, self_eid = _caller_identity(authorization)
+            if self_org and str(self_eid) == str(employee_id):
+                allowed = True
+                org_id = self_org or org_id
+        except HTTPException:
+            allowed = False
+    if not allowed:
+        raise HTTPException(403, "You don't have access to this employee's reviews.")
+
+    try:
+        all_stores = (client.table("stores").select("store_code,address,market")
+                      .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        all_stores = []
+    store_by_code = {s["store_code"]: s for s in all_stores if s.get("store_code")}
+    cards = [_gr_store_card(client, org_id, sc, store_by_code.get(sc) or {"store_code": sc}, cfg,
+                            employee_id=employee_id)
+             for sc in sorted(c for c in store_codes if c)]
+    return {"employee_id": employee_id, "employee_name": emp.get("name"), "stores": cards,
+           "note": ("Showing Google's highlighted reviews — Google Places returns a curated subset "
+                    "(typically ~5), not every review ever left.")}
+
+
+@router.get("/google-reviews/employee-summary")
+def google_reviews_employee_summary(employee_ids: str = "", authorization: str = Header(default=""),
+                                    org_id: str = ORG_ID):
+    """Batched, LIGHT per-employee rating rows for a ranking/commission TABLE column — one call, not
+    N (never a per-employee round trip). No review text. Same span gating as the rest of this file's
+    manager reads, but an employee OUTSIDE the caller's span is silently DROPPED from the result
+    (a mixed roster on a ranking table is normal) rather than 403-ing the whole call.
+
+    Response (EXACT):
+      {"summaries": {"<employee_id>": [{"store_code","rating","review_count","target","status"}, ...]}}"""
+    u = _require_manager(authorization, org_id)
+    org_id = u.get("org_id") or org_id
+    ids = sorted({e.strip() for e in (employee_ids or "").split(",") if e.strip()})
+    if not ids:
+        return {"summaries": {}}
+    client = sb()
+    span = _gr_manager_span(authorization, org_id)
+    cfg = _gr.get_config(client, org_id)
+    lookback = _gr.clamp_lookback_days(cfg.get("lookback_days"))
+    try:
+        store_rows = (client.table("stores").select("store_code,address,market")
+                      .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        store_rows = []
+    store_map = _gr.stores_for_employees(client, org_id, ids, lookback_days=lookback,
+                                         store_rows=store_rows)
+    if span is not None:
+        keyset = {c.upper() for c in span}
+        store_map = {eid: [c for c in codes if c.upper() in keyset] for eid, codes in store_map.items()}
+    all_codes = sorted({c for codes in store_map.values() for c in codes})
+    overlay: dict = {}
+    latest: dict = {}
+    if all_codes:
+        try:
+            overlay_rows = (client.table("google_review_store").select("store_code,target_override")
+                            .eq("org_id", org_id).in_("store_code", all_codes).execute().data) or []
+        except Exception:
+            overlay_rows = []
+        overlay = {r["store_code"]: r for r in overlay_rows if r.get("store_code")}
+        try:
+            snaps = (client.table("google_review_snapshot")
+                     .select("store_code,rating,review_count,fetched_at")
+                     .eq("org_id", org_id).in_("store_code", all_codes)
+                     .order("fetched_at", desc=True).limit(3000).execute().data) or []
+        except Exception:
+            snaps = []
+        for s in snaps:
+            sc = s.get("store_code")
+            if sc and sc not in latest:
+                latest[sc] = s
+    summaries: dict = {}
+    for eid, codes in store_map.items():
+        if not codes:
+            continue
+        rows = []
+        for sc in codes:
+            ov = overlay.get(sc) or {}
+            target = _gr.effective_target(ov, cfg.get("target_default"))
+            snap = latest.get(sc) or {}
+            rating = snap.get("rating")
+            rows.append({"store_code": sc, "rating": rating, "review_count": snap.get("review_count"),
+                        "target": target, "status": _gr.rating_status(rating, target)})
+        summaries[eid] = rows
+    return {"summaries": summaries}
 
 
 # ── action plans ─────────────────────────────────────────────────────────────────────────────────
