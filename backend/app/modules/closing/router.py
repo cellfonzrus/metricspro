@@ -3913,9 +3913,18 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # Stores that did NOT submit a daily closing (single-date only — ambiguous over a range). Same
     # "closed = has any daily_closing row" definition the missing-closing alert uses. Respects the
     # market scope so a market-scoped DM only sees their own market's stragglers.
+    #
+    # OWNER REQUEST 2026-08-06 ("it should also show the sales rep who worked that day"): a bare
+    # store name told the DM something was missing, not WHO to chase. Attaches the SAME "who actually
+    # worked" signal DM-Verify already computes (`_who_worked_by_store`, clocked-in ∪ B2B-sold) via
+    # the shared `_who_worked_display_by_store` presentation layer — not a second/divergent
+    # classifier. Falls back to who was SCHEDULED (explicitly labeled, never presented as fact) only
+    # when there's zero actual signal, and says "no worked-signal recorded" rather than implying the
+    # store was empty when the sales feed/kiosk just hasn't reported in yet.
     not_closed = []
     if date:
         closed = {(r.get("store_code") or "") for r in rows if r.get("store_code")}
+        _worked_display = _who_worked_display_by_store(client, org_id, date)
         for s in store_rows:
             code = s.get("store_code") or ""
             if not code or code in closed or s.get("is_active") is False:
@@ -3925,7 +3934,9 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             mk = (s.get("market") or "").strip() or sm_market.get(code, "")
             if market_cf and mk and mk.casefold() != market_cf:
                 continue
-            not_closed.append({"store_code": code, "store_name": s.get("address") or code, "market": mk})
+            wd = _worked_display.get(code, {"worked": [], "source": "none", "summary": "no worked-signal recorded"})
+            not_closed.append({"store_code": code, "store_name": s.get("address") or code, "market": mk,
+                               "worked": wd["worked"], "worked_source": wd["source"], "worked_summary": wd["summary"]})
         not_closed.sort(key=lambda s: str(s.get("store_name") or ""))
 
     # OWNER DIRECTIVE 2026-08-04 ("cash on hand needs to be completed along with cash pickup"):
@@ -5307,6 +5318,97 @@ def _who_worked_by_store(client, org_id: str, date: str) -> dict:
     except Exception as e:
         print("who-worked B2B load failed:", e)
 
+    return out
+
+
+def _join_names_and(names: list) -> str:
+    """['Jane Doe'] -> 'Jane Doe'; ['Jane Doe','John Smith'] -> 'Jane Doe and John Smith';
+    ['A','B','C'] -> 'A, B and C'. Plain-English join for the cash-pickup "who worked" line."""
+    names = [n for n in names if n]
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return ", ".join(names[:-1]) + f" and {names[-1]}"
+
+
+def _who_worked_display_by_store(client, org_id: str, date: str) -> dict:
+    """Display-ready "who worked" for every store on `date`, built ON TOP of `_who_worked_by_store`
+    (the SAME clocked-in ∪ B2B-sold definition DM-Verify already uses — no second/divergent
+    classifier here, only presentation). Adds two things `_who_worked_by_store` intentionally doesn't
+    carry: a scheduled-roster FALLBACK for a store with zero actual signal (labeled as such, never
+    presented as fact), and email disambiguation for a name shared by 2+ roster employees (RULE THREE).
+
+    Returns {store_code: {"worked": [{"name","email","tag"}], "source": "actual"|"scheduled"|"none",
+                           "summary": <plain-English line>}}.
+    `tag` (only meaningful for source=="actual") is "clocked", "sold", or "clocked+sold"; for
+    source=="scheduled" every rep is tagged "scheduled".
+    """
+    who = _who_worked_by_store(client, org_id, date)
+
+    # Scheduled fallback — same query shape _closing_summary_for_date uses (storeops.shifts,
+    # is_deleted=False, this exact date), independently gathered here since this helper has no
+    # dependency on that function's org_ctx caching.
+    sched_by_store = {}
+    try:
+        shifts = (client.schema("storeops").table("shifts").select("store_code,employee_name")
+                  .eq("org_id", org_id).eq("is_deleted", False).eq("shift_date", date).execute().data) or []
+        for s in shifts:
+            sc = s.get("store_code")
+            nm = (s.get("employee_name") or "").strip()
+            if sc and nm:
+                sched_by_store.setdefault(sc, set()).add(nm)
+    except Exception as e:
+        print("who-worked-display shifts load failed:", e)
+
+    # Roster name -> email(s), for RULE THREE disambiguation. A name matching 2+ roster employees is
+    # genuinely ambiguous from a name-only signal (clocked_in/sold are both name-keyed) — surfaced
+    # honestly (both emails shown) rather than guessing which one it was.
+    name_to_emails = {}
+    try:
+        emps = (client.schema("storeops").table("employees").select("name,email")
+                .eq("org_id", org_id).execute().data) or []
+        for e in emps:
+            nm = (e.get("name") or "").strip()
+            em = (e.get("email") or "").strip()
+            if nm:
+                name_to_emails.setdefault(nm.casefold(), [])
+                if em and em not in name_to_emails[nm.casefold()]:
+                    name_to_emails[nm.casefold()].append(em)
+    except Exception as e:
+        print("who-worked-display roster load failed:", e)
+
+    def _rep(name, tag):
+        emails = name_to_emails.get(name.casefold(), [])
+        return {"name": name, "email": (emails[0] if len(emails) == 1 else None),
+                "emails": emails if len(emails) > 1 else None, "tag": tag}
+
+    codes = set(who.keys()) | set(sched_by_store.keys())
+    out = {}
+    for code in codes:
+        ww = who.get(code, {})
+        clocked = set(ww.get("clocked_in", set()))
+        sold = set(ww.get("sold", set()))
+        worked_names = sorted(clocked | sold)
+        if worked_names:
+            reps = [_rep(n, "clocked+sold" if (n in clocked and n in sold) else
+                          ("clocked" if n in clocked else "sold")) for n in worked_names]
+            source = "actual"
+            summary = f"{_join_names_and(worked_names)} worked today"
+        else:
+            sched_names = sorted(sched_by_store.get(code, set()))
+            if sched_names:
+                reps = [_rep(n, "scheduled") for n in sched_names]
+                source = "scheduled"
+                verb = "was" if len(sched_names) == 1 else "were"
+                summary = f"{_join_names_and(sched_names)} {verb} scheduled (no punch or sale signal)"
+            else:
+                reps = []
+                source = "none"
+                summary = "no worked-signal recorded"
+        out[code] = {"worked": reps, "source": source, "summary": summary}
     return out
 
 

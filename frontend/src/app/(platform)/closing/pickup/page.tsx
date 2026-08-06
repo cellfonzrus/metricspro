@@ -93,6 +93,20 @@ export default function CashPickupPage() {
   }
 
   function exportPayload(): ExportPayload {
+    // "Stores Not Closed" is single-date only (same restriction as the on-screen card above — a
+    // range has no single day to report "not closed" against) and already reflects whatever
+    // market/store/dm filters are ACTIVE (computed server-side inside GET /closing/pickups off the
+    // same query, RULE FOUR — what you see is what exports).
+    const notClosedSheet = (!rangeMode && date && (data?.not_closed || []).length > 0) ? [{
+      name: 'Stores Not Closed',
+      columns: [
+        { header: 'Store', get: (r: any) => r.store_name || r.store_code },
+        { header: 'Market', get: (r: any) => r.market || '' },
+        { header: 'Who worked', get: (r: any) => r.worked_summary || 'no worked-signal recorded' },
+        { header: 'Signal', get: (r: any) => r.worked_source === 'actual' ? 'clock-in/sale' : r.worked_source === 'scheduled' ? 'scheduled only' : 'none' },
+      ],
+      rows: data?.not_closed || [],
+    }] : []
     return {
       title: `Cash pickup — ${date}`, filename: `cash-pickup-${date}`,
       sheets: [{
@@ -108,7 +122,7 @@ export default function CashPickupPage() {
           { header: 'Status', get: (r: any) => (r.deposit_flagged ? 'FLAGGED' : (r.deposit_matched ? 'matched' : '')) },
         ],
         rows: data?.envelopes || [],
-      }],
+      }, ...notClosedSheet],
     }
   }
 
@@ -304,7 +318,11 @@ export default function CashPickupPage() {
         </div>
       )}
 
-      {/* Stores that did NOT submit a daily closing for the selected day (single-day only — ambiguous over a range) */}
+      {/* Stores that did NOT submit a daily closing for the selected day (single-day only — ambiguous over a range).
+          OWNER REQUEST 2026-08-06 ("it should also show the sales rep who worked that day"): each chip now names
+          who to actually chase — reusing the backend's shared who-worked signal (clocked-in ∪ B2B-sold), the SAME
+          one DM-Verify's missing-rep check uses. `worked_source` distinguishes real signal from a scheduled-only
+          fallback (labeled, never presented as fact) and "no worked-signal recorded" (data gap, not an empty store). */}
       {data && !rangeMode && date && (
         (data.not_closed || []).length > 0 ? (
           <div className="card" style={{ padding: 14, marginBottom: 16, borderLeft: '3px solid #dc2626' }}>
@@ -313,9 +331,22 @@ export default function CashPickupPage() {
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {(data.not_closed as any[]).map(s => (
-                <span key={s.store_code} style={{ fontSize: 12, padding: '4px 9px', borderRadius: 7, background: 'var(--surface2)', border: '1px solid var(--border)' }}>
-                  {s.store_name || s.store_code}{s.market ? <span style={{ color: 'var(--text3)' }}> · {s.market}</span> : null}
-                </span>
+                <div key={s.store_code} style={{ fontSize: 12, padding: '6px 10px', borderRadius: 7, background: 'var(--surface2)', border: '1px solid var(--border)', minWidth: 200, maxWidth: 280 }}>
+                  <div style={{ fontWeight: 600 }}>
+                    {s.store_name || s.store_code}{s.market ? <span style={{ color: 'var(--text3)', fontWeight: 400 }}> · {s.market}</span> : null}
+                  </div>
+                  <div
+                    style={{
+                      marginTop: 3, fontSize: 11,
+                      color: s.worked_source === 'actual' ? 'var(--text2)' : s.worked_source === 'scheduled' ? '#b45309' : 'var(--text3)',
+                      fontStyle: s.worked_source === 'none' ? 'italic' : 'normal',
+                    }}
+                    title={(s.worked || []).map((w: any) => `${w.name}${w.emails ? ` — name shared by: ${w.emails.join(', ')}` : (w.email ? ` (${w.email})` : '')}${w.tag && w.tag !== 'clocked' ? ` [${w.tag}]` : ''}`).join('\n')}
+                  >
+                    {s.worked_source === 'scheduled' && '📅 '}
+                    {s.worked_summary || 'no worked-signal recorded'}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
