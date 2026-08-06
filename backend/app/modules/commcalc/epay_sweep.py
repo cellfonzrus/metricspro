@@ -34,6 +34,17 @@ WAF-protected, so Railway's datacenter IP must be allowed to reach it; if a run 
 """
 from datetime import datetime, timezone
 
+try:
+    from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    import importlib.util as _ilu2
+    import os as _osmod2
+    _ug_spec = _ilu2.spec_from_file_location(
+        "commcalc_url_guard",
+        _osmod2.path.join(_osmod2.path.dirname(_osmod2.path.abspath(__file__)), "url_guard.py"))
+    _url_guard = _ilu2.module_from_spec(_ug_spec)
+    _ug_spec.loader.exec_module(_url_guard)
+
 DEFAULT_URL = "https://ownerportal.epayworldwide.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -431,6 +442,23 @@ def _download_mi_report(page, dest_path):
     _open_and_download(page, MI_REPORT_ID, dest_path)
 
 
+def _safe_base(url):
+    """The epay portal base, VALIDATED at USE time (SSRF finding C4, 2026-08-06).
+
+    `epay_sweep_config.portal_url` is a tenant-editable settings field that was passed to
+    `page.goto()` unchecked — `(url or DEFAULT_URL).rstrip("/")` is not validation, so
+    `file:///app/.env` reached a `--no-sandbox` Chromium here exactly as it did on the VidaPay path.
+    Rows saved before this landed were never validated, which is why the check is here and not only
+    on the settings save. A bad value becomes a NAMED EpayLoginError the sweep status shows."""
+    raw = (url or "").strip()
+    if not raw:
+        return DEFAULT_URL.rstrip("/")
+    try:
+        return _url_guard.assert_safe_url(raw, what="portal address").rstrip("/")
+    except _url_guard.UnsafeUrlError as e:
+        raise EpayLoginError(e.message)
+
+
 def discover_reports(url, user, pw):
     """Log in and enumerate the Commissions report menu → [{id, label}]. MUST run server-side
     (the portal WAF only allows the Railway egress IP). Used to find the report ids of the
@@ -440,11 +468,12 @@ def discover_reports(url, user, pw):
     except Exception:
         raise EpayLoginError(
             "Playwright is not installed in the backend image (add it to backend/Dockerfile).")
-    base_url = (url or DEFAULT_URL).rstrip("/")
+    base_url = _safe_base(url)
     items = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         ctx = browser.new_context(user_agent=UA)
+        _url_guard.install_ssrf_route_guard(ctx)   # C4: re-validate every redirect hop, not just the base
         page = ctx.new_page()
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
@@ -600,12 +629,13 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None):
     import os
 
     keys = [k for k in (reports or ["mi"]) if k in REPORTS] or ["mi"]
-    base_url = (url or DEFAULT_URL).rstrip("/")
+    base_url = _safe_base(url)
     results, errors = [], []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         ctx = browser.new_context(user_agent=UA, accept_downloads=True)
+        _url_guard.install_ssrf_route_guard(ctx)   # C4: re-validate every redirect hop, not just the base
         page = ctx.new_page()
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")

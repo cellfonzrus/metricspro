@@ -548,7 +548,18 @@ class LiveLoginSession:
             self._start_screencast(page)             # low-latency frames from the very first paint
             self._set(phase="login", message="Opening the portal…")
             self._capture(page)
-            base = vp._norm_url(self.url, vp.B2BSOFT_URL if self._is_b2b else vp.DEFAULT_URL)
+            try:
+                # SSRF guard (finding C4, 2026-08-06): vp._norm_url now VALIDATES, and raises
+                # VidaPayLoginError with an operator-friendly reason when the stored portal_url points
+                # at file://, the cloud metadata service, localhost or any other internal address.
+                # Caught here so it lands as a clean phase="error" line the settings page can act on,
+                # not as "Live login crashed: …". This is the LIVE SCREENCAST path — the surface that
+                # streamed the rendered result of that URL back to the caller as JPEG frames.
+                base = vp._norm_url(self.url, vp.B2BSOFT_URL if self._is_b2b else vp.DEFAULT_URL)
+            except Exception as e:
+                self._set(phase="error", message=_clean_err(str(e))[:400])
+                self._capture(page)
+                return
             try:
                 vp._goto_login(page, base)
             except Exception as e:
@@ -764,7 +775,11 @@ class LiveLoginSession:
         try:
             return vp._norm_url(self.url, vp.B2BSOFT_URL if self._is_b2b else vp.DEFAULT_URL)
         except Exception:
-            return self.url
+            # SSRF guard (C4): the old fallback returned the RAW, UNVALIDATED url here — which would
+            # have handed the squid-recovery goto exactly the value the guard just refused. There is
+            # no safe fallback for a URL we have rejected, so return None; _recover_proxy treats a
+            # missing dest as "no direct-goto phase" and still runs the https-twin recovery.
+            return None
 
     def _preauth_loop(self, page, ctx, vp):
         """The HUMAN-DRIVEN pre-auth loop: stream frames fast, forward the operator's input immediately,

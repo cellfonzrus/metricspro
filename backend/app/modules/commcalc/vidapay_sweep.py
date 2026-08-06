@@ -49,6 +49,16 @@ except ImportError:                                     # loaded by path, not as
     _pb = _ilu.module_from_spec(_pb_spec)
     _pb_spec.loader.exec_module(_pb)
     PortalRateLimited = _pb.PortalRateLimited
+try:
+    from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    import importlib.util as _ilu2
+    import os as _osmod2
+    _ug_spec = _ilu2.spec_from_file_location(
+        "commcalc_url_guard",
+        _osmod2.path.join(_osmod2.path.dirname(_osmod2.path.abspath(__file__)), "url_guard.py"))
+    _url_guard = _ilu2.module_from_spec(_ug_spec)
+    _ug_spec.loader.exec_module(_url_guard)
 
 DEFAULT_URL = "https://www.vidapaycrm.com/Main%20Panel.aspx"
 # The observed login host the portal redirects to. Used as a fallback if the configured URL lands
@@ -111,6 +121,15 @@ class VidaPayLoginError(Exception):
     Surfaced to the admin UI; never echoes the password."""
 
 
+class UnsafePortalUrlError(VidaPayLoginError):
+    """The CONFIGURED portal/proxy URL is refused by the SSRF guard (finding C4).
+
+    A SUBCLASS of VidaPayLoginError so every existing `except VidaPayLoginError` keeps working
+    unchanged, but distinguishable — this is a CONFIGURATION error the operator must fix on the
+    settings page, NOT the portal refusing us. Callers use that distinction to avoid arming the
+    portal-block cooldown (mig 244) for what is our own bad config."""
+
+
 class VidaPayAuthError(Exception):
     """The stored session is missing/expired — the operator must (re-)log in + pass 2FA."""
 
@@ -121,17 +140,41 @@ class VidaPayPortalError(Exception):
 
 def _norm_url(u, fallback):
     """Playwright rejects a scheme-less URL ("vidapaycrm.com" -> "Cannot navigate to invalid URL").
-    Operators naturally type the bare host, so add the scheme they omitted."""
+    Operators naturally type the bare host, so add the scheme they omitted.
+
+    SSRF GUARD (finding C4, 2026-08-06). The old body was `if "://" not in u: u = "https://" + u`,
+    which is not validation at all: `file:///app/.env`, `http://169.254.169.254/…` (cloud IMDS) and
+    `http://localhost:8000/…` all contain "://" and sailed through to `page.goto()` in a Chromium
+    launched `--no-sandbox`, whose rendered screen comes straight back to the caller (login
+    screenshot / auth_message / pull diagnostic / live screencast). This is EVERY portal entry
+    point's single choke point — begin_login, begin_login_b2bsoft, complete_2fa,
+    complete_2fa_b2bsoft, run_vidapay_sweep, run_b2bsoft_sweep, plus live_login's base — so the
+    check lives here and runs at USE time, not just when the settings form saved the row (rows
+    stored before this landed were never validated).
+
+    Raises UnsafePortalUrlError (a VidaPayLoginError subclass) so the operator sees the named,
+    plain-English reason on the source row instead of a Playwright trace or a 500."""
     u = (u or "").strip()
     if not u:
         return fallback
-    if "://" not in u:
-        u = "https://" + u.lstrip("/")
-    return u
+    try:
+        return _url_guard.assert_safe_url(u, what="portal address")
+    except _url_guard.UnsafeUrlError as e:
+        raise UnsafePortalUrlError(e.message)
 
 
 def _egress_ip(proxy_url=None, timeout=12):
-    """The public IP a request actually leaves from (through `proxy_url`, or direct). None on failure."""
+    """The public IP a request actually leaves from (through `proxy_url`, or direct). None on failure.
+
+    SSRF guard (C4): this is the one remaining place a STORED proxy_url is used WITHOUT going through
+    _proxy_arg, so an already-poisoned row could still make a request through an internal endpoint
+    here. A refused proxy degrades to the DIRECT probe (this function is a diagnostic hint, never a
+    credential path — the login itself is already refused by _proxy_arg), and never raises."""
+    try:
+        if proxy_url and not _url_guard.is_proxy_safe(proxy_url):
+            proxy_url = None
+    except Exception:
+        proxy_url = None
     try:
         import requests
         px = {"http": proxy_url, "https": proxy_url} if proxy_url else None
@@ -176,6 +219,15 @@ def _proxy_arg(proxy_url):
     u = (proxy_url or "").strip()
     if not u:
         return None
+    # SSRF guard (C4): a "proxy" of http://127.0.0.1:6379 or http://169.254.169.254:80 makes every
+    # portal request an internal probe whose result is rendered back to the operator. Same validator,
+    # socks schemes allowed (Playwright accepts them for a proxy; they are NOT allowed as a portal
+    # address). A rejected proxy is a NAMED login failure, never a silent direct-egress fallback —
+    # silently ignoring it would send credentials out of the wrong IP.
+    try:
+        u = _url_guard.assert_safe_proxy_url(u)
+    except _url_guard.UnsafeUrlError as e:
+        raise UnsafePortalUrlError(e.message)
     try:
         from urllib.parse import urlparse
         if "://" not in u:
@@ -298,6 +350,18 @@ def _new_context(browser, storage_state=None, proxy=None):
                 except Exception:
                     pass
         ctx.route(lambda u: bool(u) and u.lower().startswith("http://"), _https_upgrade_route)
+    except Exception:
+        pass
+    # SSRF ROUTE GUARD (finding C4, 2026-08-06) — the POST-REDIRECT half of the fix. Validating the
+    # configured portal_url up front is defeated by an attacker-controlled host that answers
+    # `302 Location: http://169.254.169.254/latest/meta-data/iam/security-credentials/` — the classic
+    # pre-flight bypass. Chromium reports every redirect hop, sub-frame and sub-resource as its OWN
+    # route event, so re-running the check here is what actually closes it. Registered AFTER the
+    # https-upgrade route ON PURPOSE: Playwright runs matching routes in REVERSE registration order,
+    # so this is consulted first and hands a safe URL on with route.fallback(), leaving the
+    # https-upgrade behaviour byte-identical.
+    try:
+        _url_guard.install_ssrf_route_guard(ctx)
     except Exception:
         pass
     return ctx
