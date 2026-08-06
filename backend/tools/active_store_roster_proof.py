@@ -129,6 +129,49 @@ log = []
 _storeops_roster(_Client(ROWS, log=log), ORG, cols="store_code,address,is_active")
 check("is_active not duplicated when already asked for", log, ["store_code,address,is_active"])
 
+# ── 7. THE SAME TRAP IN THE MONEY PATH: gp_report's store_mapping loop ─────────────────────────
+# `calc_gp_report` adds every MAPPED store to the report even when it had no sales. It used
+# `s.get('is_active', True)`, which returns the default only when the KEY is ABSENT — a row whose
+# column exists but is NULL read falsy and the store vanished from the GP report (and therefore
+# from the P&L store list). Owner approved closing it on 2026-08-06. Proven here as VALUES, and
+# proven to be a NO-OP on today's live shape (every live store_mapping row is is_active=true).
+from app.modules.commcalc import gp_report as _GP  # noqa: E402
+
+_SM = [
+    {"store_address": "1 Alpha St", "store_code": "A1", "market": "M", "is_active": True},
+    {"store_address": "2 Beta St", "store_code": "B2", "market": "M", "is_active": None},   # NULL
+    {"store_address": "3 Gamma St", "store_code": "C3", "market": "M"},                      # absent
+    {"store_address": "4 Delta St", "store_code": "D4", "market": "M", "is_active": False},  # closed
+]
+
+
+def _gp_stores(sm):
+    """Store rows calc_gp_report emits for a mapping list with NO sales at all."""
+    r = _GP.calc_gp_report(sales=[], pay_detail=[], mi_rows=[], rep_commissions=[], expenses=[],
+                           catalog=[], store_mapping=sm, period="July 2026")
+    return sorted(str(x.get("store")) for x in (r.get("store_rows") or []))
+
+
+_old = lambda rows: [x for x in rows if x.get("is_active", True)]     # noqa: E731  the buggy form
+_new = lambda rows: [x for x in rows if x.get("is_active") is not False]      # noqa: E731  the fix
+_addr = lambda rows: [x["store_address"] for x in rows]                       # noqa: E731
+check("gp: OLD form DROPS the NULL-flag store", "2 Beta St" in _addr(_old(_SM)), False)
+check("gp: NEW form KEEPS the NULL-flag store", "2 Beta St" in _addr(_new(_SM)), True)
+check("gp: both forms still drop the EXPLICITLY closed store",
+      ("4 Delta St" in _addr(_old(_SM)), "4 Delta St" in _addr(_new(_SM))), (False, False))
+# THE LIVE CASE: every store_mapping row in both tenants is is_active=true (house 31/31, lux 39/39).
+# On that shape the two forms are identical, so no GP/P&L number can move.
+_LIVE = [dict(x, is_active=True) for x in _SM]
+check("gp: on the LIVE all-true shape the two forms are byte-identical",
+      _addr(_old(_LIVE)) == _addr(_new(_LIVE)) == _addr(_LIVE), True)
+# ...and end-to-end through the real engine:
+_gp = _gp_stores(_SM)
+check("gp engine: NULL-flag store now appears in store_rows", "2 Beta St" in _gp, True)
+check("gp engine: absent-flag store appears", "3 Gamma St" in _gp, True)
+check("gp engine: explicitly-closed store still excluded", "4 Delta St" not in _gp, True)
+check("gp engine: all-true mapping (the LIVE case) yields every store, unchanged",
+      _gp_stores(_LIVE), ["1 Alpha St", "2 Beta St", "3 Gamma St", "4 Delta St"])
+
 for n, g, w in FAIL:
     print(f"FAIL  {n}\n        got  {g!r}\n        want {w!r}")
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

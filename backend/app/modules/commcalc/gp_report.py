@@ -342,7 +342,14 @@ def calc_gp_report(
 
     # ── Include ALL mapped stores even with no sales ─────────────
     for s in store_mapping:
-        if not s.get('is_active', True): continue
+        # NULL-SAFE (owner-approved 2026-08-06). `store_mapping.is_active` is a NULLABLE column:
+        # `.get('is_active', True)` returns the default ONLY when the KEY is ABSENT, so a row whose
+        # column exists but is NULL evaluated falsy and the store was WRONGLY dropped from the GP
+        # report. Same predicate as commcalc's `_store_active` and storeops' `_inactive_ids_from`:
+        # only an EXPLICIT false is inactive. **No-op against today's live data** — store_mapping
+        # is_active is true on 31/31 house rows and 39/39 luxelink rows, so every GP number is
+        # byte-identical; this closes the latent trap, it does not move money.
+        if s.get('is_active') is False: continue
         addr = str(s.get('store_address') or '').strip()
         if not addr: continue
         num = street_num(addr)
