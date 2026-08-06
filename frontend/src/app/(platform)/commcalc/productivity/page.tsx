@@ -5,6 +5,7 @@ import { api, fmt, getActiveOrg } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { MultiSelect } from '@/lib/multiselect'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { GoogleRatingChips, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
 // Productivity · Stack Ranking · Performance Review — mod-commission, NON-money (display/analytics).
 // Feature 1: output per hour worked (StoreOps time-clock) vs the store's own baseline. Feature 2: weighted
@@ -177,9 +178,13 @@ function ProductivityView({ data, period, hasFilter, clearFilters }: any) {
 function RankingView({ data, period }: any) {
   const rows: any[] = data?.rows || []
   const items: any[] = data?.items || []
+  // Google store rating per employee (owner 2026-08-06) — ONE batched call for exactly the employees
+  // the current filters left on screen, so the chips can never disagree with the table or the export.
+  // Display-only; invisible until the Google Reviews endpoints are live (see _lib/googleRatings).
+  const { ratingsFor, hasAny: hasGoogle } = useGoogleRatings(rows.map((r) => r.rep))
   if (rows.length === 0) return <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No ranked employees for {period}. Enable ranking metrics under ⚙️ Config.</div>
   const flat = rows.map((r) => {
-    const o: any = { rank: r.rank, rep: r.rep, score: r.score }
+    const o: any = { rank: r.rank, rep: r.rep, score: r.score, google: ratingsText(ratingsFor(r.rep)) }
     for (const b of (r.breakdown || [])) o[b.item_key] = b.attainment
     return o
   })
@@ -187,6 +192,8 @@ function RankingView({ data, period }: any) {
     { header: 'Rank', field: 'rank', type: 'number', get: (r) => r.rank },
     { header: 'Employee', field: 'rep', role: 'rep', get: (r) => r.rep },
     { header: 'Score', field: 'score', type: 'number', get: (r) => r.score },
+    // RULE FOUR — the rating exports with everything else, and only when it actually has data.
+    ...(hasGoogle ? [{ header: 'Google rating', field: 'google', get: (r: any) => r.google } as ExportColumn] : []),
     ...items.map((it) => ({ header: `${it.label} %`, field: it.item_key, type: 'number' as const, get: (r: any) => r[it.item_key] })),
   ]
   return (
@@ -199,6 +206,7 @@ function RankingView({ data, period }: any) {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
             <th style={th}>#</th><th style={thL}>Employee</th><th style={th}>Score</th>
+            {hasGoogle && <th style={thL} title="Google rating vs target, per store this employee works at">Google</th>}
             {items.map((it) => <th key={it.item_key} style={th} title={`weight ${it.weight}`}>{it.label}</th>)}
           </tr></thead>
           <tbody>
@@ -207,6 +215,7 @@ function RankingView({ data, period }: any) {
                 <td style={{ ...td, fontWeight: 700 }}>{r.rank}</td>
                 <td style={{ ...tdL, fontWeight: 600 }}>{r.rep}{r.market && <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 11 }}> · {r.market}</span>}</td>
                 <td style={{ ...td, fontWeight: 700 }}>{r.score == null ? '—' : r.score.toFixed(1)}</td>
+                {hasGoogle && <td style={tdL}><GoogleRatingChips list={ratingsFor(r.rep)} compact /></td>}
                 {items.map((it) => {
                   const b = (r.breakdown || []).find((x: any) => x.item_key === it.item_key)
                   return <td key={it.item_key} style={{ ...td, color: b?.na ? 'var(--text3)' : b?.met === false ? 'var(--red)' : 'var(--text)' }}
@@ -225,6 +234,8 @@ function RankingView({ data, period }: any) {
 function ReviewView({ data, period }: any) {
   const rows: any[] = data?.rows || []
   const items: any[] = data?.items || []
+  // Same batched Google-rating read as the ranking tab — attached to the FILTERED scorecards on screen.
+  const { ratingsFor, hasAny: hasGoogle } = useGoogleRatings(rows.map((r) => r.rep))
   if (rows.length === 0) return <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No review scorecards for {period}. Enable review items under ⚙️ Config.</div>
   // One export sheet per employee (a printable per-employee review sheet — one per page in PDF) + a summary.
   const itemCols: ExportColumn[] = [
@@ -238,6 +249,8 @@ function ReviewView({ data, period }: any) {
   const summaryCols: ExportColumn[] = [
     { header: 'Employee', field: 'rep', role: 'rep', get: (r) => r.rep },
     { header: 'Review score', field: 'review_score', type: 'number', get: (r) => r.review_score },
+    // RULE FOUR — the scorecard's Google rating rides along in the export (only when populated).
+    ...(hasGoogle ? [{ header: 'Google rating', field: 'google', get: (r: any) => ratingsText(ratingsFor(r.rep)) } as ExportColumn] : []),
   ]
   const sheets = [
     { name: 'Summary', columns: summaryCols, rows },
@@ -253,7 +266,12 @@ function ReviewView({ data, period }: any) {
         {rows.map((r, i) => (
           <div key={i} className="card" style={{ padding: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 12px', background: 'var(--surface2)' }}>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>{r.rep}{r.market && <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 11 }}> · {r.market}</span>}</div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>
+                {r.rep}{r.market && <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 11 }}> · {r.market}</span>}
+                {/* Google store rating for the store(s) this employee works at — renders nothing when
+                    the tenant has no Google Reviews data. Display-only, never part of the score. */}
+                <span style={{ display: 'block', marginTop: 3 }}><GoogleRatingChips list={ratingsFor(r.rep)} compact /></span>
+              </div>
               <div style={{ fontWeight: 800, fontSize: 16, color: r.review_score == null ? 'var(--text3)' : r.review_score >= 100 ? 'var(--green)' : r.review_score >= 70 ? 'var(--amber)' : 'var(--red)' }}>{r.review_score == null ? '—' : r.review_score.toFixed(1)}</div>
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>

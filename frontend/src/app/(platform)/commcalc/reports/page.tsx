@@ -10,6 +10,7 @@ import { carrierMode } from '@/lib/rbac'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
+import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
 interface Rep {
   epay_salesperson: string
@@ -124,6 +125,32 @@ export default function ReportsPage() {
   const filterActive = isStandardFilterActive(filt)
 
   const currentRep = reps.find(r => r.epay_salesperson === selectedRep) || reps[0]
+  // ── GOOGLE STORE RATING (owner 2026-08-06) — display-only, NON-money ───────────────────────────
+  // ONE batched summary call for the reps currently on screen (the FILTERED set + whoever the
+  // Individual tab is showing), never one call per row. Renders nothing at all until mod-people's
+  // google-reviews endpoints are live, so today's page is byte-identical. Chips attach to the same
+  // filtered rows the table and the export use, so all three can never disagree (RULE FIVE/FOUR).
+  const ratingNames = useMemo(
+    () => [...filtered.map(r => r.storeops_name || r.epay_salesperson),
+           ...(currentRep ? [currentRep.storeops_name || currentRep.epay_salesperson] : [])],
+    [filtered, currentRep])
+  const { ratingsFor: googleFor, hasAny: hasGoogle } = useGoogleRatings(ratingNames)
+  const currentRepName = currentRep ? (currentRep.storeops_name || currentRep.epay_salesperson) : ''
+  // repLabel(row) → one export cell. Built ONLY from what is on screen; empty ⇒ the export column
+  // disappears entirely (see commissionExport.ratingCol).
+  const ratingByRep = useMemo(() => {
+    if (!hasGoogle) return undefined
+    const out: Record<string, string> = {}
+    const add = (r?: Rep) => {
+      if (!r) return
+      const label = r.storeops_name || r.epay_salesperson
+      const txt = ratingsText(googleFor(label))
+      if (txt) out[label] = txt
+    }
+    filtered.forEach(add)
+    add(currentRep)
+    return Object.keys(out).length ? out : undefined
+  }, [filtered, currentRep, hasGoogle, googleFor])
   // Show the Installment column only when a rep actually has multi-month / Total-carrier pay (keeps the
   // Boost view unchanged). residual_installment_comm + carrier_statement_comm are already inside Payout.
   const instOf = (r: Rep) => (r.residual_installment_comm || 0) + (r.carrier_statement_comm || 0)
@@ -154,7 +181,7 @@ export default function ReportsPage() {
   // READ-PATH ONLY — no rate, tier, plan rule or stored payout is touched.
   const exportInput = (): CommissionExportInput => ({
     tab: tab as CommissionTab, period, isBoost, reps, filtered, currentRep: currentRep || null,
-    filt, cfg, chargebacks, hasInstallment,
+    filt, cfg, chargebacks, hasInstallment, ratingByRep,
   })
   const buildPayload = (): ExportPayload => buildCommissionExport(exportInput())
   function downloadCSV() {
@@ -321,15 +348,16 @@ export default function ReportsPage() {
                   {hasInstallment && <th style={{ textAlign: 'right' }} title="Multi-month / Total-carrier installment pay (already inside Payout)">Installment</th>}
                   <th style={{ textAlign: 'right' }}>Subtotal</th>
                   <th style={{ textAlign: 'right' }}>Payout</th>
+                  {hasGoogle && <th title="Google rating vs target, per store this rep works at — display only, not part of pay">Google</th>}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={hasInstallment ? 12 : 11} style={{ textAlign: 'center', padding: 40 }}>
+                  <tr><td colSpan={(hasInstallment ? 12 : 11) + (hasGoogle ? 1 : 0)} style={{ textAlign: 'center', padding: 40 }}>
                     <div className="spinner" style={{ margin: '0 auto' }} />
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={hasInstallment ? 12 : 11} style={{ textAlign: 'center', color: 'var(--text3)', padding: 40 }}>
+                  <tr><td colSpan={(hasInstallment ? 12 : 11) + (hasGoogle ? 1 : 0)} style={{ textAlign: 'center', color: 'var(--text3)', padding: 40 }}>
                     No data. Upload files and run calculation.
                   </td></tr>
                 ) : filtered.map((r, i) => (
@@ -360,6 +388,7 @@ export default function ReportsPage() {
                     {hasInstallment && <td style={{ textAlign: 'right', color: instOf(r) ? '#0369a1' : 'var(--text3)' }}>{instOf(r) ? fmt(instOf(r)) : '—'}</td>}
                     <td style={{ textAlign: 'right' }}>{fmt(r.subtotal)}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{fmt(r.total_payout)}</td>
+                    {hasGoogle && <td><GoogleRatingChips list={googleFor(r.storeops_name || r.epay_salesperson)} compact /></td>}
                   </tr>
                 ))}
               </tbody>
@@ -372,6 +401,7 @@ export default function ReportsPage() {
                     <td style={{ textAlign: 'right', color: 'var(--accent)' }}>
                       {fmt(filtered.reduce((s, r) => s + r.total_payout, 0))}
                     </td>
+                    {hasGoogle && <td />}
                   </tr>
                 </tfoot>
               )}
@@ -395,6 +425,9 @@ export default function ReportsPage() {
                 🔬 How was this calculated?
               </a>
             )}
+            {/* This rep's Google store rating(s) — chips sit beside the person, exactly like on the
+                ranking/review scorecards. Renders nothing when there is no rating data. */}
+            <GoogleRatingChips list={googleFor(currentRepName)} />
           </div>
 
           {currentRep ? (
@@ -652,6 +685,15 @@ export default function ReportsPage() {
                   </div>
                 )
               })()}
+
+              {/* GOOGLE STORE RATINGS for this rep — the fuller per-store view (rating vs target, review
+                  count, any open action plan) with Google's recent reviews collapsed behind a toggle.
+                  Sits BELOW the pay statement on purpose: it is context, not compensation, and it changes
+                  no number above it. Renders nothing at all when the tenant has no Google data. */}
+              <div style={{ marginTop: 20 }}>
+                <GoogleRatingDetail repName={currentRepName}
+                  title={`Google store ratings — ${currentRep.storeops_name || currentRep.epay_salesperson}`} />
+              </div>
             </div>
           ) : (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
@@ -677,6 +719,7 @@ export default function ReportsPage() {
                 <th style={{ textAlign: 'right' }}>ACIMA</th>
                 <th style={{ textAlign: 'right' }}>Subtotal</th>
                 <th style={{ textAlign: 'right' }}>Payout</th>
+                {hasGoogle && <th title="Google rating vs target, per store this rep works at — display only, not part of pay">Google</th>}
               </tr>
             </thead>
             <tbody>
@@ -694,6 +737,7 @@ export default function ReportsPage() {
                   </td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.subtotal)}</td>
                   <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--accent)' }}>{fmt(r.total_payout)}</td>
+                  {hasGoogle && <td><GoogleRatingChips list={googleFor(r.storeops_name || r.epay_salesperson)} compact /></td>}
                 </tr>
               ))}
             </tbody>
