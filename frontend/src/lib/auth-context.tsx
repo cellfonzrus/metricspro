@@ -1,7 +1,10 @@
 'use client'
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken,
-         onSessionInvalid, clearSessionInvalid } from './client'
+         onSessionInvalid, clearSessionInvalid,
+         getImpersonation, setImpersonation, setImpersonationReauth, impersonationHeader,
+         onImpersonationInvalid, clearImpersonationInvalid, type ImpersonationState } from './client'
 import { setCacheIdentity } from './cache'
 import type { Permissions, CarrierRef } from './rbac'
 
@@ -40,6 +43,16 @@ export type PasswordPolicy = {
   require_upper: boolean; require_lower: boolean; require_digit: boolean; require_special: boolean
 }
 
+// Admin "view as employee" (owner directive 2026-08-06). `impersonation` is what the BROWSER holds
+// (the server-minted grant + who it is for); `impersonationInfo` is what the SERVER said on /core/me,
+// which is what the banner trusts — so the banner can never be suppressed by editing localStorage.
+export type ImpersonationInfo = {
+  active: boolean; session_id?: string; org_id?: string
+  target_name?: string | null; target_email?: string | null; target_role?: string | null
+  actor_email?: string | null; actor_name?: string | null
+  started_at?: string | null; expires_at?: string | null; reason?: string | null
+}
+
 type AuthState = {
   loading: boolean
   session: any | null
@@ -74,6 +87,13 @@ type AuthState = {
   defaultCc: string                                            // tenant default phone country code ('+1')
   startTwoFactor: (channel?: string) => Promise<any>           // request an OTP over a channel
   verifyTwoFactor: (code: string, remember?: boolean) => Promise<void> // verify + store the marker
+  // Admin "view as employee" (owner directive 2026-08-06):
+  impersonation: ImpersonationState | null      // the grant this browser holds (null = not impersonating)
+  impersonationInfo: ImpersonationInfo | null   // what the SERVER reported on /core/me — drives the banner
+  startImpersonation: (targetAuthId: string, reason?: string) => Promise<void>
+  stopImpersonation: () => Promise<void>
+  /** Verify the EMPLOYEE's own password on a throwaway client → server-side proof → one unlock. */
+  unlockClockPunch: (password: string) => Promise<{ valid_minutes: number }>
   signOut: () => Promise<void>
   refresh: () => Promise<void>
 }
@@ -86,6 +106,9 @@ const Ctx = createContext<AuthState>({
   twofa: { required: false, verified: true }, needs2fa: false, rbacEnabled: null, sessionInvalid: false,
   passwordPolicy: null, defaultCc: '+1',
   startTwoFactor: async () => ({}), verifyTwoFactor: async () => {},
+  impersonation: null, impersonationInfo: null,
+  startImpersonation: async () => {}, stopImpersonation: async () => {},
+  unlockClockPunch: async () => ({ valid_minutes: 0 }),
   signOut: async () => {}, refresh: async () => {},
 })
 
@@ -110,11 +133,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [defaultCc, setDefaultCc] = useState('+1')
   const [rbacEnabled, setRbacEnabled] = useState<boolean | null>(null)
   const [sessionInvalid, setSessionInvalid] = useState(false)
+  const [impersonation, setImpersonationState] = useState<ImpersonationState | null>(null)
+  const [impersonationInfo, setImpersonationInfo] = useState<ImpersonationInfo | null>(null)
 
   const resetProfile = useCallback(() => {
     setUser(null); setPermissions({}); setProvisioned(false); setActive(false)
     setTenant(null); setCarriers([]); setSessionOrgId(null)
     setTwofa({ required: false, verified: true }); setPasswordPolicy(null); setDefaultCc('+1')
+    setImpersonationInfo(null)
   }, [])
 
   // Apply a /core/me-shaped payload to the profile state. Shared by loadMe (the direct fetch) and
@@ -131,12 +157,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setTwofa(d.twofa || { required: false, verified: true })
     setPasswordPolicy(d.password_policy || null)
     setDefaultCc(d.default_cc || '+1')
+    // SERVER-declared impersonation state. The banner reads this, not localStorage, so the "you are
+    // someone else right now" warning cannot be hidden by tampering with the browser.
+    setImpersonationInfo(d.impersonation && d.impersonation.active ? d.impersonation : null)
+    setImpersonationState(getImpersonation())
   }, [resetProfile])
 
-  // Fetch /core/me for the given active tenant and populate the profile state.
+  // Fetch /core/me for the given active tenant and populate the profile state. These two calls are
+  // deliberately raw fetches (they run before/around the api() helper's own bootstrap), so the
+  // impersonation grant has to be attached explicitly here — otherwise /core/me would answer for the
+  // ADMIN while every other call answered for the employee.
   const loadMe = useCallback(async (token: string, orgId: string | null) => {
     try {
-      const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}`,
+                                                ...impersonationHeader('/api/v1/core/me') }
       if (orgId) headers['x-active-org'] = orgId
       const res = await fetch(`${API_URL}/api/v1/core/me`, { headers })
       if (!res.ok) throw new Error(String(res.status))
@@ -155,7 +189,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const tryBootstrap = useCallback(async (token: string): Promise<boolean> => {
     try {
       const stored = getActiveOrg()
-      const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}`,
+                                                ...impersonationHeader('/api/v1/core/bootstrap') }
       if (stored) headers['x-active-org'] = stored
       const t2fa = get2faToken()
       if (t2fa) headers['x-2fa-token'] = t2fa
@@ -300,6 +335,95 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await loadMe(session.access_token, activeOrg)   // re-fetch /core/me → twofa.verified now true
   }, [session, activeOrg, loadMe])
 
+  // ── Admin "view as employee" (owner directive 2026-08-06) ───────────────────────────────────────
+  // The browser never invents an impersonation: it asks the server, which checks the (default-deny)
+  // `impersonate` permission, checks the target is in a tenant the caller administers, writes the
+  // immutable audit row FIRST and only then mints the signed grant. If that audit write fails, no
+  // grant comes back and nothing happens — impersonation fails closed.
+  const startImpersonation = useCallback(async (targetAuthId: string, reason?: string) => {
+    if (!session?.access_token) throw new Error('not signed in')
+    if (getImpersonation()) throw new Error('You are already viewing the app as someone else.')
+    const org = getActiveOrg()
+    const res = await fetch(`${API_URL}/api/v1/core/impersonation/start${org ? `?org_id=${encodeURIComponent(org)}` : ''}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json',
+                 ...(org ? { 'x-active-org': org } : {}) },
+      body: JSON.stringify({ target: targetAuthId, reason: reason || '' }),
+    })
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Could not start the session')
+    const d = await res.json()
+    setImpersonation({
+      grant: d.grant, session_id: d.session?.id, org_id: d.session?.org_id,
+      target_name: d.session?.target_name, target_email: d.session?.target_email,
+      target_role: d.session?.target_role, expires_at: d.session?.expires_at,
+    })
+    // Hard reload: every page, every cached lookup and the whole nav must re-resolve as the employee.
+    // (A soft refresh would leave components holding the admin's data.)
+    if (typeof window !== 'undefined') window.location.href = '/'
+  }, [session])
+
+  // Exit. The grant is dropped LOCALLY FIRST so the very next request is already the admin's own,
+  // then the server-side session is closed (which writes the immutable ended_at). Called WITHOUT the
+  // x-impersonate header — the backend refuses that whole prefix for an impersonated request, which
+  // is exactly what stops a borrowed identity from managing sessions.
+  const stopImpersonation = useCallback(async () => {
+    const imp = getImpersonation()
+    setImpersonation(null); setImpersonationState(null); setImpersonationInfo(null)
+    clearImpersonationInvalid()
+    try {
+      if (imp?.session_id && session?.access_token) {
+        await fetch(`${API_URL}/api/v1/core/impersonation/stop`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: imp.session_id, reason: 'exit' }),
+        })
+      }
+    } catch { /* the local grant is already gone — the server sweep/expiry closes the row regardless */ }
+    if (typeof window !== 'undefined') window.location.href = '/'
+  }, [session])
+
+  // THE OWNER'S CARVE-OUT. Clock in / clock out is the one thing an admin may not do on someone's
+  // behalf without that person's own password. The password is verified on a THROWAWAY anon Supabase
+  // client (persistSession:false + its own storageKey, exactly like the kiosk manager override) so the
+  // admin's live session is untouched; the resulting token is then re-verified SERVER-SIDE and must be
+  // seconds old. The server returns a single-use unlock good for ONE punch.
+  const unlockClockPunch = useCallback(async (password: string) => {
+    const imp = getImpersonation()
+    if (!imp) throw new Error('You are not viewing the app as anyone.')
+    if (!session?.access_token) throw new Error('not signed in')
+    const email = (imp.target_email || '').trim()
+    if (!email) throw new Error('That employee has no email on file, so their password cannot be checked.')
+    const tmp = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { auth: { persistSession: false, autoRefreshToken: false, storageKey: 'mp-impersonation-reauth' } })
+    const { data, error } = await tmp.auth.signInWithPassword({ email, password })
+    if (error || !data?.session?.access_token) throw new Error(error?.message || 'That password did not work.')
+    const empToken = data.session.access_token
+    try {
+      const res = await fetch(`${API_URL}/api/v1/core/impersonation/reauth`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: imp.session_id, token: empToken }),
+      })
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Could not unlock clock in/out')
+      const d = await res.json()
+      setImpersonationReauth({ marker: d.reauth, expires_at: d.expires_at })
+      return { valid_minutes: Number(d.valid_minutes || 5) }
+    } finally {
+      try { await tmp.auth.signOut() } catch { /* throwaway */ }
+    }
+  }, [session])
+
+  // The server ended the session out from under us (expired, exited in another tab, employee
+  // deactivated, tenant turned it off). client.ts already dropped the grant; return to the admin's
+  // own account rather than leaving a banner over a stream of errors.
+  const impHandledRef = useRef(false)
+  useEffect(() => onImpersonationInvalid(() => {
+    if (impHandledRef.current) return
+    impHandledRef.current = true
+    setImpersonationState(null); setImpersonationInfo(null)
+    if (typeof window !== 'undefined') window.location.href = '/'
+  }), [])
+
   useEffect(() => {
     let mounted = true
     supabase.auth.getSession().then(async ({ data }) => {
@@ -355,6 +479,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
     clearSessionInvalid(); handledRef.current = false; setSessionInvalid(false)
+    // Signing out ALWAYS drops any impersonation grant: it is bound to this login, so leaving it in
+    // storage could only ever produce confusing 401s for the next person on this browser.
+    setImpersonation(null); setImpersonationState(null); setImpersonationInfo(null)
+    clearImpersonationInvalid(); impHandledRef.current = false
     setActiveOrg(null); set2faToken(null)
     resetProfile(); setSession(null); setTenants([]); setActiveOrgState(null); setNeedsTenantChoice(false)
     setPendingConnections([]); setDismissed([])
@@ -376,6 +504,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
       dismissPending, twofa, needs2fa, rbacEnabled, sessionInvalid,
       passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
+      impersonation, impersonationInfo, startImpersonation, stopImpersonation, unlockClockPunch,
       signOut, refresh,
     }}>
       {children}

@@ -61,6 +61,28 @@ un-run); only the FINAL, pre-706 `org_id,super_admin` select — which cannot fa
     the pre-2026-08-03 behaviour EXACTLY (membership-read failure -> `[]` -> pass-through), via a
     single Railway env change and no code rollback. Same break-glass posture as REQUIRE_AUTH and
     TWOFA_ENFORCE: a deploy must never be able to strand the operator.
+
+2026-08-06 ADMIN "VIEW AS EMPLOYEE" (impersonation, owner directive) — ONE NEW BRANCH, ENTERED ONLY
+WHEN THE REQUEST CARRIES THE `x-impersonate` HEADER:
+Every request WITHOUT that header takes exactly the code path it took before this change (the header
+is probed with a single cheap scan of the raw header list, before anything else is built), so the
+blast radius on normal traffic is nil. WITH the header, the request is handled by
+`_handle_impersonated`, which:
+  • verifies the server-minted HMAC grant AND binds it to the caller's own verified Supabase token
+    (`app/core/impersonation.resolve_request`) — a hand-forged header gets 401, never a fallback to
+    "act as the admin";
+  • PINS the acting tenant: the grant's org_id overrides both the `org_id` query param AND the
+    `x-active-org` header, and the SUPER-ADMIN no-rewrite bypass is deliberately NOT taken. So an
+    impersonated session cannot wander to another tenant even when the actor is a super-admin;
+  • refuses the privilege-escalation surface outright (`is_forbidden_while_impersonating`);
+  • FAIL-CLOSED journals every MUTATING request to core.impersonation_action BEFORE the handler runs,
+    so anything written while wearing someone else's face is attributable to the real human;
+  • publishes the context that `core.router._uid_from_token` reads to swap the EFFECTIVE identity to
+    the target, and that `require_target_reauth()` reads to gate clock-in / clock-out.
+The 2FA gate is skipped inside an impersonated session by design: the marker belongs to the ACTOR's
+login (already satisfied to obtain the grant), and the target's second factor is not the actor's to
+present. Impersonation is authorized by an explicit, default-deny role permission plus a DB session
+row, not by the target's 2FA.
 """
 import os
 import time
@@ -138,6 +160,92 @@ _TTL = 60.0
 # Header by which the client declares which of its tenants it is acting as. Client-supplied and
 # therefore UNTRUSTED — always verified against the login's membership set before it is honored.
 _ACTIVE_ORG_HEADER = "x-active-org"
+
+# ── Admin "view as employee" (2026-08-06) ───────────────────────────────────────────────────────
+# The impersonation grant + the single-use "the employee just typed their password" marker. Both are
+# server-minted and server-verified; see app/core/impersonation.py for the mechanism + threat model.
+from app.core import impersonation as _imp                       # noqa: E402  (module-level, no cycle)
+
+_IMPERSONATE_HEADER = _imp.IMPERSONATE_HEADER                     # "x-impersonate"
+_REAUTH_HEADER = _imp.REAUTH_HEADER                               # "x-impersonate-reauth"
+
+
+def _raw_header(scope, name: str) -> str:
+    """Cheap single-key probe over the RAW ASGI header list. Used to answer "is this an impersonated
+    request?" without building the full headers dict, so the 100% case (no header) stays byte-identical
+    in cost as well as in behaviour."""
+    want = name.encode()
+    for k, v in (scope.get("headers") or ()):
+        if k.lower() == want:
+            try:
+                return v.decode().strip()
+            except Exception:
+                return ""
+    return ""
+
+
+def _client_ip_from(scope, headers) -> str:
+    fwd = (headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if fwd:
+        return fwd[:64]
+    cl = scope.get("client") or ()
+    return (str(cl[0]) if cl else "")[:64]
+
+
+async def _reject_impersonation(send, reason: str):
+    """A present-but-unusable impersonation grant. ALWAYS a rejection — there is deliberately no
+    "carry on as the admin" outcome, because the UI would still be showing the impersonation banner
+    while the session silently regained admin rights. `code` lets the client exit cleanly."""
+    msg = {
+        "not_actor": "This impersonation session does not belong to your login.",
+        "ended": "That impersonation session has been ended.",
+        "expired": "That impersonation session has expired.",
+        "target_revoked": "That employee's access has been removed, so the session was ended.",
+        "disabled": "Impersonation is turned off for this company.",
+        "unavailable": ("Impersonation could not be verified right now because a backend service is "
+                        "temporarily unavailable. Nothing was changed - please retry in a moment."),
+    }.get(reason, "That impersonation session is no longer valid.")
+    code = "impersonation_unavailable" if reason == "unavailable" else "impersonation_invalid"
+    status = 503 if reason == "unavailable" else 401
+    import json as _json
+    body = _json.dumps({"detail": msg, "code": code}).encode()
+    hdrs = [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
+    if status == 503:
+        hdrs.append((b"retry-after", b"1"))
+    await send({"type": "http.response.start", "status": status, "headers": hdrs})
+    await send({"type": "http.response.body", "body": body})
+
+
+async def _reject_impersonation_forbidden(send, path: str):
+    body = (b'{"detail":"That action is not available while you are viewing the app as another '
+            b'employee. Exit the impersonated session first.","code":"impersonation_forbidden"}')
+    await send({"type": "http.response.start", "status": 403,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+async def _reject_unattributable(send):
+    """The write journal could not be written. A change made while wearing someone else's face that
+    we cannot attribute to the real human must NOT happen — refuse rather than lose the audit."""
+    body = (b'{"detail":"This change was blocked because the impersonation audit record could not be '
+            b'written. Nothing was changed - please retry, or exit the impersonated session.",'
+            b'"code":"impersonation_audit_unavailable"}')
+    await send({"type": "http.response.start", "status": 503,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"retry-after", b"1"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+def _with_active_org(scope, org: str):
+    """Return a scope whose `x-active-org` header is FORCED to `org` (the grant's tenant). The
+    client-supplied value is dropped, not merged: while impersonating, the tenant is not the
+    caller's to choose."""
+    want = _ACTIVE_ORG_HEADER.encode()
+    hdrs = [(k, v) for (k, v) in (scope.get("headers") or ()) if k.lower() != want]
+    hdrs.append((want, str(org).encode()))
+    return {**scope, "headers": hdrs}
 
 
 def _enabled() -> bool:
@@ -448,11 +556,79 @@ class TenantScopeMiddleware:
     def __init__(self, app):
         self.app = app
 
+    async def _handle_impersonated(self, scope, receive, send, path, method, imp_raw):
+        """The ONLY code path an `x-impersonate` request can take. Every exit is a rejection or a
+        fully-pinned, fully-journalled call into the app — never a silent downgrade to admin rights."""
+        headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
+        auth = headers.get("authorization", "")
+        token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
+        # The grant is bound to the ACTOR's login, so a valid Supabase token is mandatory even on a
+        # path that would otherwise be public.
+        try:
+            ok, _sa, _orgs, _def, _info, uid = (
+                (await asyncio.to_thread(_resolve_identity, token)) if token
+                else (False, False, (), None, {}, None))
+        except IdentityBackendUnavailable as exc:
+            await asyncio.to_thread(_log_identity_outage, path, exc)
+            return await _reject_503(send)
+        if not ok or not uid:
+            return await _reject_401(send)
+        ctx, reason = await asyncio.to_thread(
+            _imp.resolve_request, imp_raw, uid, headers.get(_REAUTH_HEADER, ""))
+        if not ctx:
+            return await _reject_impersonation(send, reason)
+        # Privilege-escalation surface: refused outright for a borrowed identity.
+        if _imp.is_forbidden_while_impersonating(path, method):
+            return await _reject_impersonation_forbidden(send, path)
+        org = ctx["org_id"]
+        # PIN the tenant on BOTH channels. Note the deliberate omission: the super-admin
+        # "no rewrite, client org_id is honored" bypass is NOT taken here.
+        qs = parse_qs(scope.get("query_string", b"").decode(), keep_blank_values=True)
+        qs["org_id"] = [org]
+        scope = _with_active_org({**scope, "query_string": urlencode(qs, doseq=True).encode()}, org)
+        # Attribution: pre-write the journal row for every MUTATING request, FAIL CLOSED.
+        journal_id = None
+        if _imp.should_journal(method):
+            try:
+                journal_id = await asyncio.to_thread(
+                    _imp.log_event, kind="write", ctx=ctx, method=method, path=path,
+                    query=scope.get("query_string", b"").decode()[:600],
+                    ip=_client_ip_from(scope, headers),
+                    user_agent=headers.get("user-agent", ""), fail_closed=True)
+            except Exception:
+                return await _reject_unattributable(send)
+        status_holder = [0]
+
+        async def _send(message):
+            if message.get("type") == "http.response.start":
+                status_holder[0] = int(message.get("status") or 0)
+            await send(message)
+
+        ctx_token = _imp.set_current(ctx)
+        try:
+            return await self.app(scope, receive, _send)
+        finally:
+            _imp.reset_current(ctx_token)
+            if journal_id:
+                try:
+                    await asyncio.to_thread(_imp.finish_event, journal_id, status_holder[0])
+                except Exception:
+                    pass
+
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http" or not _enabled():
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         method = (scope.get("method") or "GET").upper()
+        # ── ADMIN "VIEW AS EMPLOYEE" ─────────────────────────────────────────────────────────────
+        # Probed FIRST and with a single cheap raw-header scan: when the header is absent (every
+        # request in normal operation) this is one comparison and the rest of this function runs
+        # exactly as it did before. When it is present the request is handled entirely by
+        # _handle_impersonated — including for allowlisted/public paths such as /core/me, which MUST
+        # resolve as the target or the UI would render the admin's own profile behind the banner.
+        _imp_raw = _raw_header(scope, _IMPERSONATE_HEADER)
+        if _imp_raw:
+            return await self._handle_impersonated(scope, receive, send, path, method, _imp_raw)
         if _is_public(path):
             # Allowlisting skips BOTH the auth requirement and the org_id rewrite, so a path that only
             # needs ONE public method must not hand every method away. `_PUBLIC_METHODS` scopes those:

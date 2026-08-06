@@ -1,0 +1,39 @@
+--- a/backend/app/modules/storeops/router.py
++++ b/backend/app/modules/storeops/router.py
+@@ -2459,7 +2459,19 @@
+ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+     """Record a clock-in (one row). Identity is the SIGNED-IN employee (from the auth token) — a
+     body employee_id is ignored, so you can only punch yourself. Selfie (base64) + GPS + face-match%
+-    are still stored for audit (defense in depth)."""
++    are still stored for audit (defense in depth).
++
++    IMPERSONATION CARVE-OUT (owner directive 2026-08-06, platform-core mig 730). An admin may open
++    the app AS an employee to reproduce a bug, and everything else works normally — but a punch is a
++    payroll-affecting, legally-meaningful record that this person was physically at work, so it can
++    never be manufactured on their behalf. `require_target_reauth` returns instantly when the caller
++    is NOT impersonating (a normal punch is byte-identical and costs nothing); inside an impersonated
++    session it demands a fresh, single-use, server-verified re-authentication AS THE EMPLOYEE and
++    raises 403 otherwise. Imported INSIDE the function on purpose: if platform-core's module is not
++    present yet, this endpoint fails (punch blocked = fail closed) instead of taking the backend down
++    at import time or, worse, silently leaving the gate open."""
++    from app.core.impersonation import require_target_reauth
++    require_target_reauth("timeclock.clock_in")
+     org_id, employee_id = _caller_identity(authorization)
+     # guard: don't open a second concurrent entry
+     open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
+@@ -2725,7 +2737,14 @@
+ @router.post("/timeclock/clock-out")
+ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+     """Close the SIGNED-IN employee's open entry (updates the SAME row) and compute hours. Always
+-    scoped to the caller's own employee_id so one employee can't close another's punch."""
++    scoped to the caller's own employee_id so one employee can't close another's punch.
++
++    IMPERSONATION CARVE-OUT — see the clock-in handler above. Same primitive, same contract: a no-op
++    for every real employee, a hard 403 for an impersonated session with no fresh employee
++    re-authentication. Each unlock is good for exactly ONE punch, so clocking in and clocking out
++    while impersonating requires the employee's password twice."""
++    from app.core.impersonation import require_target_reauth
++    require_target_reauth("timeclock.clock_out")
+     org_id, employee_id = _caller_identity(authorization)
+     entry_id = body.get("entry_id")
+     q = (sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")

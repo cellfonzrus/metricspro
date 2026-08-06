@@ -62,9 +62,103 @@ function SetupBanner() {
   )
 }
 
+// ── Admin "view as employee" banner (owner directive 2026-08-06) ─────────────────────────────────
+// Requirement: it must be IMPOSSIBLE to forget you are inside someone else's session. So this bar is
+// high-contrast, sticky above everything, names the employee, counts down to the hard server-side
+// expiry, and carries a one-click exit. It is driven by `impersonationInfo` — what the SERVER said on
+// /core/me — not by anything the browser stored, so it cannot be dismissed by editing localStorage.
+function ImpersonationBanner() {
+  const { impersonationInfo, impersonation, stopImpersonation, unlockClockPunch } = useAuth()
+  const [unlockOpen, setUnlockOpen] = useState(false)
+  const [pw, setPw] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [ok, setOk] = useState('')
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!impersonationInfo) return
+    const t = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(t)
+  }, [impersonationInfo])
+  if (!impersonationInfo) return null
+  const who = impersonationInfo.target_name || impersonationInfo.target_email
+    || impersonation?.target_name || 'this employee'
+  const expTs = impersonationInfo.expires_at ? Date.parse(impersonationInfo.expires_at) : 0
+  const minsLeft = expTs ? Math.max(0, Math.round((expTs - now) / 60000)) : null
+
+  async function submitUnlock() {
+    setBusy(true); setErr(''); setOk('')
+    try {
+      const r = await unlockClockPunch(pw)
+      setOk(`Unlocked — good for ONE clock in or clock out in the next ${r.valid_minutes} minutes. Open 🕐 Clock in.`)
+      setPw(''); setUnlockOpen(false)
+    } catch (e: any) {
+      setErr(e?.message || 'That password did not work.')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div data-tour-id="impersonation-banner" style={{ position: 'sticky', top: 0, zIndex: 40,
+      background: '#7f1d1d', color: '#fff', borderBottom: '3px solid #fca5a5' }}>
+      <div style={{ padding: '9px 20px', display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 13 }}>
+        <span style={{ fontWeight: 800, letterSpacing: '0.03em' }}>👁️ VIEWING AS</span>
+        <span style={{ fontWeight: 700, background: 'rgba(255,255,255,0.16)', padding: '3px 10px', borderRadius: 999 }}>
+          {who}{impersonationInfo.target_role ? ` · ${impersonationInfo.target_role}` : ''}
+        </span>
+        <span style={{ opacity: 0.85 }}>
+          You are seeing exactly what they see. Anything you change is recorded against
+          {' '}<b>{impersonationInfo.actor_email || 'your account'}</b>.
+        </span>
+        {minsLeft !== null && (
+          <span style={{ opacity: 0.85 }}>Ends automatically in <b>{minsLeft} min</b>.</span>
+        )}
+        <button data-tour-id="impersonation-unlock" onClick={() => { setUnlockOpen(o => !o); setErr(''); setOk('') }}
+          style={{ marginLeft: 'auto', background: 'rgba(255,255,255,0.12)', color: '#fff', fontWeight: 700,
+            border: '1px solid rgba(255,255,255,0.5)', borderRadius: 8, padding: '5px 12px', cursor: 'pointer', fontSize: 13 }}>
+          🔓 Unlock clock in/out
+        </button>
+        <button data-tour-id="impersonation-exit" onClick={() => stopImpersonation()}
+          style={{ background: '#fff', color: '#7f1d1d', fontWeight: 800, border: 'none', borderRadius: 8,
+            padding: '6px 14px', cursor: 'pointer', fontSize: 13 }}>
+          ✕ Exit — back to my account
+        </button>
+      </div>
+      {ok && <div style={{ padding: '0 20px 9px', fontSize: 12.5, color: '#dcfce7' }}>{ok}</div>}
+      {unlockOpen && (
+        <div style={{ padding: '0 20px 12px' }}>
+          <div style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 10, padding: 12, maxWidth: 640 }}>
+            <div style={{ fontSize: 12.5, marginBottom: 8, lineHeight: 1.5 }}>
+              Clocking in or out is the one thing you cannot do on someone&apos;s behalf. A punch is a
+              record that <b>{who}</b> was physically at work, so <b>they</b> must type their own password
+              here — once per punch. Nothing else in the app needs this.
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input value={impersonationInfo.target_email || ''} readOnly aria-label="Employee email"
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.4)',
+                  background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: 13, width: 240 }} />
+              <input type="password" value={pw} autoFocus placeholder="Their password"
+                aria-label="Employee password"
+                onChange={e => setPw(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && pw && !busy) submitUnlock() }}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.4)',
+                  background: 'rgba(255,255,255,0.1)', color: '#fff', fontSize: 13, width: 200 }} />
+              <button disabled={!pw || busy} onClick={submitUnlock}
+                style={{ background: '#fff', color: '#7f1d1d', fontWeight: 800, border: 'none', borderRadius: 8,
+                  padding: '6px 14px', cursor: pw && !busy ? 'pointer' : 'not-allowed', fontSize: 13, opacity: pw && !busy ? 1 : 0.6 }}>
+                {busy ? 'Checking…' : 'Unlock one punch'}
+              </button>
+            </div>
+            {err && <div style={{ marginTop: 8, fontSize: 12.5, color: '#fecaca' }}>{err}</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PlatformShell({ children, open }: { children: React.ReactNode; open: boolean }) {
   const { period, setPeriod, periods } = usePeriod()
-  const { user, permissions, carriers, signOut, tenants, activeOrg } = useAuth()
+  const { user, permissions, carriers, signOut, tenants, activeOrg, impersonationInfo } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [openGroup, setOpenGroup] = useState<string | null>(null)  // accordion: only one group's items shown at a time
   const [menuOpen, setMenuOpen] = useState(false)
@@ -116,7 +210,9 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
     .slice(0, 2).map(s => s[0]?.toUpperCase()).join('') || 'U'
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
+    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)', flexDirection: 'column' }}>
+    <ImpersonationBanner />
+    <div style={{ display: 'flex', flex: 1, minHeight: 0, background: 'var(--bg)' }}>
       <aside style={{ width: collapsed ? 56 : 220, background: 'var(--accent)', flexShrink: 0,
         display: 'flex', flexDirection: 'column', transition: 'width 0.2s', overflow: 'hidden' }}>
         <div style={{ padding: '20px 16px 12px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
@@ -212,8 +308,11 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               </Link>
             )}
             {/* Multi-tenant login switcher (platform-core-9): only for a login that belongs to >1 tenant.
-                Persist the choice + hard-reload so every page refetches under the new active tenant. */}
-            {tenants.length > 1 && (
+                Persist the choice + hard-reload so every page refetches under the new active tenant.
+                HIDDEN while viewing as an employee: the acting tenant is pinned by the impersonation
+                grant (the backend overrides both org_id and x-active-org from it), so offering a
+                switcher there would be a control that visibly does nothing. */}
+            {tenants.length > 1 && !impersonationInfo && (
               <select value={activeOrg || ''} title="Switch company"
                 onChange={e => { setActiveOrg(e.target.value); window.location.reload() }}
                 style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', background: 'white',
@@ -257,6 +356,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
         <SetupBanner />
         <div style={{ flex: 1, padding: 24, minWidth: 0 }}>{children}</div>
       </main>
+    </div>
     </div>
   )
 }

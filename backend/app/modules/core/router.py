@@ -36,6 +36,10 @@ from app.modules.core.membership import (
 # Canonical ACCESS-SCOPE primitives (REPORTING span vs SCHEDULING reach + the ONE market
 # universe that both the grant PICKER and the grant RESOLVER read). See app/core/scope.py.
 from app.core import scope as _scope
+# Admin "view as employee" (owner directive 2026-08-06). Imported for the EFFECTIVE-identity swap in
+# `_uid_from_token` and the "am I impersonating?" checks. app/core/impersonation.py imports nothing
+# from this module (only app.core.database, lazily), so there is no cycle.
+from app.core import impersonation as _impersonation
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -134,10 +138,37 @@ _UID_CACHE_MAX = 1024
 
 
 def _uid_from_token(authorization: str):
+    """The EFFECTIVE auth user id for this request — the identity every gate in the product resolves
+    from (role, permissions, reporting span, tenant). None when the token is missing/invalid.
+
+    NORMALLY this is exactly `_real_uid_from_token` (byte-identical behaviour, same 60s cache).
+
+    ADMIN "VIEW AS EMPLOYEE" (2026-08-06): when tenant_middleware has verified a server-minted
+    impersonation grant for THIS caller, the effective id becomes the TARGET employee's. That single
+    swap is what makes the whole app render and behave as the employee — nothing else had to change
+    in any module, and the session carries the TARGET's permissions ONLY, never a union with the
+    admin's. `effective_uid` re-checks that the grant was minted for the id this very request's token
+    just resolved to, so a context can never apply to the wrong caller.
+
+    Code that needs the REAL human (the impersonation console, the audit trail) calls
+    `_real_uid_from_token` instead — never this."""
+    real = _real_uid_from_token(authorization)
+    if not real:
+        return real
+    try:
+        return _impersonation.effective_uid(real)
+    except Exception:
+        return real          # a fault in the swap must never break authentication
+
+
+def _real_uid_from_token(authorization: str):
     """Validate the Supabase Auth JWT (server-side) and return its auth user id, or None.
     Verified results are cached 60s per token (positive only) — /me, /my-tenants, /bootstrap and
     storeops' caller_scope all verify the SAME token within one page load; without the cache each
-    call paid a full network auth.get_user round trip."""
+    call paid a full network auth.get_user round trip.
+
+    This is the PRE-SWAP resolver: it always answers "whose token is this?", never "whom are they
+    acting as". See `_uid_from_token`."""
     if not isinstance(authorization, str):
         # A route handler called IN-PROCESS (notify's report builders, module-to-module reuse)
         # binds FastAPI's `Header(default="")` SENTINEL OBJECT here instead of a string, and
@@ -323,7 +354,12 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
     # seed_version column, pre-mig-076) => never stale.
     seed_stale = bool(t) and ("seed_version" in t) and (
         t["seed_version"] is None or t["seed_version"] < SEED_VERSION)
-    if bg is not None:
+    # SKIPPED while impersonating: an admin looking at an employee's screen must not stamp that
+    # employee's `last_login` (it would look like the person signed in) nor trigger their tenant's
+    # seed sync. Both are pure side effects — omitting them changes nothing this response returns.
+    if _impersonation.is_impersonating():
+        pass
+    elif bg is not None:
         bg.add_task(_post_login_writes, u["id"], org_id, seed_stale)
     else:
         _post_login_writes(u["id"], org_id, seed_stale)
@@ -354,10 +390,21 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
     twofa = {"required": _twofa_required_for(tw_policy, u.get("role"), u.get("twofa_enabled")),
              "verified": bool(_sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts())),
              "mode": tw_policy["mode"], "user_channels": u.get("twofa_channels") or ["email"]}
+    # Admin "view as employee": the SERVER tells the client it is inside an impersonated session, so
+    # the high-contrast banner is driven by verified server state rather than by anything the browser
+    # stored. Absent/None for every normal request (~100% of traffic) — one extra read only while
+    # impersonating. Best-effort: a failure here degrades to a banner without the name, never a 500.
+    imp = None
+    try:
+        if _impersonation.is_impersonating():
+            imp = _impersonation.session_brief(client, _impersonation.current().get("session_id"))
+    except Exception:
+        imp = {"active": True}
     return {"provisioned": True, "user": u, "permissions": perms,
             "active": bool(u.get("is_active", True)), "tenant": tenant, "carriers": carriers,
             "password_policy": pw_policy, "twofa": twofa,
-            "default_cc": tw_policy.get("default_cc", _sec.DEFAULT_COUNTRY_CODE)}
+            "default_cc": tw_policy.get("default_cc", _sec.DEFAULT_COUNTRY_CODE),
+            "impersonation": imp}
 
 
 @router.get("/bootstrap")
@@ -940,6 +987,11 @@ SETTING_AREAS = [
     # storeops._require_google_reviews_admin has always gated on this key; until it was listed here it
     # could not be granted per-role in the Roles UI, so only a super-admin could save the API key.
     {"key": "google_reviews",    "label": "Google Reviews (API key · rating targets · store place matching · sweep schedule)"},
+    # Registered 2026-08-06 with admin "view as employee". NOTE: this area gates the POLICY + the
+    # AUDIT LOG (session length, unlock window, on/off). It does NOT grant the ability to impersonate
+    # — that is the separate, DEFAULT-DENY `permissions.impersonate` flag, which has no super-admin or
+    # scope-'all' bypass and is not seeded onto any role.
+    {"key": "impersonation",     "label": "Sign in as an employee — policy & audit log (NOT the permission itself)"},
 ]
 
 
@@ -4008,6 +4060,17 @@ router.include_router(_training.router)
 from app.modules.core import whats_new as _whats_new   # noqa: E402  (bottom-of-file mount)
 
 router.include_router(_whats_new.router)
+
+# ── Admin "view as employee" (mig 730, owner directive 2026-08-06) ───────────────────────────────
+# start / stop / re-auth / audit / policy behind the Roles & Access card. Mounted ONTO this router for
+# the same reason as the four above: main.py (SHARED) needs no change and the sub-router's own
+# "/impersonation" prefix resolves its paths to /api/v1/core/impersonation/*. It imports core.router
+# only LAZILY (inside functions), so there is no import cycle. NOT middleware-allowlisted — and in
+# fact the OPPOSITE: tenant_middleware REFUSES every method under this prefix for a request that
+# carries an impersonation grant, so a borrowed identity can neither nest nor manage a session.
+from app.modules.core import impersonation_api as _impersonation_api   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_impersonation_api.router)
 
 # Platform-core's OWN attention providers (tenant provisioning + system-error backlog). Imported purely
 # for the @register_provider side effect — no routes, no gate, no aggregation change. Each of notify /

@@ -18,6 +18,21 @@ export type Permissions = {
   scope?: Scope                       // REPORTING span (whose numbers) — NOT scheduling reach
   scheduling_reach?: SchedulingReach  // SCHEDULING reach (whom you may schedule); default 'org'
   home?: string
+  impersonate?: boolean               // "Sign in as an employee" — DEFAULT-DENY, no bypass (see below)
+}
+// ── Admin "view as employee" (owner directive 2026-08-06) ────────────────────────────────────────
+// MIRROR of backend `app.modules.core.impersonation_api.can_impersonate` — KEEP IN SYNC.
+//
+// This is the ONE permission in the product with NO bypass path. Deliberately:
+//   • `isSuperAdmin` does NOT grant it — a platform super-admin still has to be given it;
+//   • `scope: 'all'` does NOT grant it (unlike DATA_GRANTS / settings areas, which default-open for
+//     company-wide roles);
+//   • nothing seeds it onto any role, and seeded role modules are forward-only anyway.
+// So on the day this ships, nobody can sign in as anybody until an administrator consciously ticks
+// "Sign in as an employee" on a role at /admin/roles. Entering someone else's session is not the kind
+// of capability that should arrive switched on because a role happened to be called "admin".
+export function canImpersonate(perms: Permissions | undefined): boolean {
+  return (perms as any)?.impersonate === true
 }
 // MIRROR of backend app/core/scope.scheduling_reach() — KEEP IN SYNC. Unknown/absent/garbage → 'org',
 // which is byte-identical to today's behaviour for every existing role.
@@ -357,6 +372,14 @@ export const NAV: NavGroup[] = [
     { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
     { href: '/admin/security', label: 'Security Settings', icon: '🛡️', module: 'admin' },
+    // "Sign in as an employee" audit log + policy (mig 730, owner directive 2026-08-06). Tagged
+    // module 'admin' with NO `scopes`, byte-identical in shape to its /admin/security sibling: an
+    // existing admin role already carries modules.admin, so this nav line adds NO new permission
+    // surface and needs no SEED_VERSION bump. The ABILITY to impersonate is a completely separate,
+    // DEFAULT-DENY grant (`permissions.impersonate`, canImpersonate below) that nothing seeds; this
+    // page is only where an admin reads the trail and tunes the session length. Every backend
+    // endpoint behind it gates independently.
+    { href: '/admin/impersonation', label: 'Sign-in-as Audit', icon: '🕵️', module: 'admin' },
     { href: '/admin/org', label: 'Org Structure', icon: '🌳', module: 'admin' },
     { href: '/admin/org-chart', label: 'Employee Org Chart', icon: '👥', module: 'admin' },
     { href: '/admin/labels', label: 'Display Labels', icon: '🏷️', module: 'admin' },
