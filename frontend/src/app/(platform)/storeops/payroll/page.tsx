@@ -20,7 +20,7 @@ interface PayrollRow {
   pay_basis?: PayBasis; pay_amount?: number; salary_period_pay?: number; salary_prorated?: boolean
   salary_note?: string
 }
-interface StoreRow { store_code: string; address?: string; market?: string }
+interface StoreRow { store_code: string; address?: string; market?: string; is_active?: boolean }
 
 const chip: React.CSSProperties = { padding: '5px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 12, background: 'var(--surface)', cursor: 'pointer' }
 
@@ -97,7 +97,10 @@ export default function PayrollPage() {
   }, [rangeReady, filt.period, filt.periodTo])
 
   useEffect(() => {
-    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    // include_inactive=true: this report is a HISTORICAL surface (RULE FIVE filter bar) — a store
+    // closed today may still own past rows in this range, and the market lookup below must still
+    // resolve it. GET /stores now defaults to active-only (2026-08-06 disabled-T-store fix).
+    api('/api/v1/storeops/stores?include_inactive=true').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/storeops/employees').then((r: any) => {
       const m: Record<string, string> = {}
       for (const e of (Array.isArray(r) ? r : [])) if (e.employee_id) m[e.employee_id] = e.email || ''
@@ -112,7 +115,7 @@ export default function PayrollPage() {
   }, [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
-    .map(s => ({ id: s.store_code, label: s.store_code, sublabel: s.address || s.market || undefined }))
+    .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
     Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])

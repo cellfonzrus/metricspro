@@ -94,7 +94,10 @@ export default function SchedulePage() {
     Promise.all([
       api(`/api/v1/storeops/shifts?week_start=${weekStart}&week_end=${weekEnd}`),
       api('/api/v1/storeops/employees'),
-      api('/api/v1/storeops/stores'),
+      // include_inactive=true: this page's OWN "view filter" dropdown deliberately still lists closed
+      // stores (see the comment lower in this file) so historical schedule data stays viewable — the
+      // "add shift" picker already independently filters to is_active!==false client-side.
+      api('/api/v1/storeops/stores?include_inactive=true'),
       api('/api/v1/storeops/time-off').catch(() => []),
       api('/api/v1/storeops/employees?all_company=true').catch(() => []),
     ]).then(([s, e, st, to, ae]) => { setShifts(s || []); setEmployees(e || []); setStores(st || []); setTimeOff(to || []); setAllEmps((ae && ae.length ? ae : e) || []) })
@@ -407,7 +410,7 @@ export default function SchedulePage() {
           </div>
           <select className="select" value={filterStore} onChange={e => setFilterStore(e.target.value)}>
             <option value="">All stores</option>
-            {stores.filter(s => s.store_code && (selMkt.size === 0 || selMkt.has(s.market))).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 26)}</option>)}
+            {stores.filter(s => s.store_code && (selMkt.size === 0 || selMkt.has(s.market))).map(s => <option key={s.store_code} value={s.store_code}>{s.store_code} — {s.address?.substring(0, 26)}{s.is_active === false ? ' (inactive)' : ''}</option>)}
           </select>
           <button className="btn btn-secondary" onClick={prevWeek}>← Prev</button>
           <button className="btn btn-secondary" onClick={() => setWeekStart(workWeekStartOf(wwDow))}>Today</button>

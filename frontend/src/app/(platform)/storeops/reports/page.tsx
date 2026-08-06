@@ -56,7 +56,10 @@ export default function StoreOpsReportsPage() {
     setLoading(true)
     Promise.all([
       api(`/api/v1/storeops/payroll?start=${start}&end=${end}`).catch(() => []),
-      api('/api/v1/storeops/stores').catch(() => []),
+      // include_inactive=true: this is a HISTORICAL report — a closed store may still own rows in
+      // range, and the market lookup below must still resolve it (GET /stores now defaults to
+      // active-only, 2026-08-06 disabled-T-store fix).
+      api('/api/v1/storeops/stores?include_inactive=true').catch(() => []),
     ]).then(([p, s]) => { setRows(p || []); setStores(s || []) })
       .catch(console.error).finally(() => setLoading(false))
     api(`/api/v1/storeops/payroll/over-hours?start=${start}&end=${end}`).then((r: any) => {
@@ -84,7 +87,7 @@ export default function StoreOpsReportsPage() {
 
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
-    .map(s => ({ id: s.store_code, label: s.store_code, sublabel: s.address || s.market || undefined }))
+    .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
     Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])

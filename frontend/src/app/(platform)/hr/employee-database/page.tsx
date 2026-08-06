@@ -80,7 +80,10 @@ export default function EmployeeDatabasePage() {
       const [fr, rr, stores] = await Promise.all([
         api('/api/v1/hr/employee-database/fields'),
         api(`/api/v1/hr/employee-database?include_inactive=${includeInactive ? 'true' : 'false'}`),
-        api('/api/v1/storeops/stores').catch(() => []),
+        // This is an audit/historical roster (defaults to including inactive EMPLOYEES) — the store
+        // filter should be able to reference a since-closed store too, so it always requests the full
+        // set (GET /stores now defaults to active-only, 2026-08-06 disabled-T-store fix).
+        api('/api/v1/storeops/stores?include_inactive=true').catch(() => []),
       ])
       const fields: FieldDef[] = fr?.fields || []
       setFieldsCatalog(fields)
@@ -98,7 +101,8 @@ export default function EmployeeDatabasePage() {
       for (const s of stRows) {
         if (!s.store_code) continue
         s2m[s.store_code] = s.market || ''
-        stOpts.push({ id: s.store_code, label: s.address ? `${s.store_code} — ${String(s.address).slice(0, 28)}` : s.store_code })
+        const inactiveTag = s.is_active === false ? ' (inactive)' : ''
+        stOpts.push({ id: s.store_code, label: (s.address ? `${s.store_code} — ${String(s.address).slice(0, 28)}` : s.store_code) + inactiveTag })
         if (s.market) { const k = s.market.trim().toLowerCase(); if (!mSet.has(k)) mSet.set(k, s.market.trim()) }
       }
       setStoreToMarket(s2m)

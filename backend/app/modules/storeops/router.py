@@ -82,10 +82,47 @@ def _biz_tz_for(org_id: str):
     return _BIZ_TZ
 
 
+# ── Disabled-store leak fix (2026-08-06 owner report, verbatim: "t-902 / 531 etc all t-stores have
+# been disabled but they still show in time clock, targets etc reports - check and remove") ────────
+# ROOT CAUSE: storeops.stores.is_active was correctly set to false for the 6 disabled T-stores (T-531,
+# T-7812, T-902, T-957, T21880, T3560 — confirmed live via the read-only prod probe), but GET /stores
+# (which feeds pickers/dropdowns across the app) and GET /timeclock/stores (the kiosk clock-in picker,
+# whose own docstring falsely claimed "active store list") never filtered the flag at all.
+def _store_is_active(s: dict) -> bool:
+    """NULL-SAFE 'is this store active' check. `storeops.stores.is_active` is a NULLABLE column
+    (`DEFAULT true`, no NOT NULL) — the SAME trap `_inactive_ids_from` (below, ~line 554) was already
+    hard-won on the employee side: NULL/missing MUST read as ACTIVE, matching the column's own default
+    and every frontend picker's established `s.is_active !== false` convention. Only an EXPLICIT
+    `is_active=false` counts as inactive.
+
+    Deliberately a PYTHON-side post-fetch check, not a PostgREST `is_active=not.is.false` query filter.
+    That filter is real (PostgREST's `is` operator negated by a `not.` prefix does mean exactly
+    'IS NOT FALSE' server-side) and was evaluated — but postgrest-py's own `.is_()` only special-cases
+    Python `None` (-> the string "null"); a raw Python `False` passed to `.not_.is_("is_active", False)`
+    f-strings straight into the query as `not.is.False` (CAPITAL F, verified by constructing the actual
+    installed client), which is not one of PostgREST's recognized `true|false|null|unknown` literals —
+    a real footgun in the naive form, avoidable only by passing the literal string `"false"` instead.
+    Given no way to verify the raw wire behavior against live Postgres from this environment (read-only
+    prod probe, no write access) and the blast radius a wrong exclusionary DB filter would have (every
+    picker in the app), filtering here in Python — already fetched, already proven, harness-provable —
+    is the lower-risk choice. See docs/handoffs/people.md for the fuller write-up."""
+    return s.get("is_active") is not False
+
+
+def _active_stores_only(stores_rows):
+    return [s for s in (stores_rows or []) if _store_is_active(s)]
+
+
 @router.get("/stores")
-def get_stores(authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
+def get_stores(include_inactive: bool = False, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
+    """Every store in the caller's org (+ RBAC span). Active-only BY DEFAULT — the SAME convention
+    GET /employees already establishes (`include_inactive: bool = False` opt-in), not a second one.
+    Admin/config surfaces that must still SEE (and re-enable) a disabled store — e.g. StoreOps Admin —
+    pass `include_inactive=true` explicitly."""
     r = sb().table("stores").select("*").eq("org_id", org_id).order("address").execute()
     rows = r.data or []
+    if not include_inactive:
+        rows = _active_stores_only(rows)
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / enforcement off)
     if ks is not None:
         rows = [s for s in rows if in_keyset(ks, s.get("store_code"), s.get("address"))]
@@ -95,9 +132,16 @@ def get_stores(authorization: str = Header(default=""), org_id: str = "00000000-
 def timeclock_stores(org_id: str = ORG_ID):
     """FULL active store list for the kiosk clock-in picker — deliberately UNSCOPED (no RBAC span
     filter, unlike GET /stores) so a visiting/floater rep can pick the store they're physically at
-    and reach the manager-override path, instead of being silently forced into their home store."""
-    rows = sb().table("stores").select("store_code,address,market").eq("org_id", org_id).order("address").execute().data or []
-    return [s for s in rows if s.get("store_code")]
+    and reach the manager-override path, instead of being silently forced into their home store.
+    ALWAYS active-only (no include_inactive escape hatch here — offering a closed store as a clock-in
+    location is never correct) — this docstring claimed "active" long before the filter actually did
+    it; now it does. Response SHAPE is unchanged (store_code/address/market only, is_active fetched
+    only to filter, never returned) — a pure bugfix, not a contract change for existing callers."""
+    rows = (sb().table("stores").select("store_code,address,market,is_active")
+            .eq("org_id", org_id).order("address").execute().data or [])
+    rows = _active_stores_only(rows)
+    return [{"store_code": s.get("store_code"), "address": s.get("address"), "market": s.get("market")}
+            for s in rows if s.get("store_code")]
 
 @router.get("/employees")
 def get_employees(include_inactive: bool = False, all_company: bool = False, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
