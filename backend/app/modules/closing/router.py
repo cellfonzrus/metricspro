@@ -1558,6 +1558,19 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
     body["epay_on_credit"] = _money(payload.get("epay_on_credit") or payload.get("epay_credit"))
     body["epay_on_acima"] = _money(payload.get("epay_on_acima") or payload.get("epay_acima"))
 
+    # ── Envelope-photo-required gate (mig 510, tenant-configurable, OFF by default) ──────────────────
+    #    BUG FIX (owner-reported 2026-08-07): the root cause of the missing-photo bug is a client-side
+    #    upload-reliability issue (fixed in ClosingSubmitForm.tsx — busy-state + downscale + sticky
+    #    error). This is a SEPARATE, opt-in hard gate: a tenant may require that any closing declaring
+    #    cash > 0 carry an envelope photo. Reads the same merged org-default/store-override config as
+    #    the Envelope Config page (/closing/envelope-config). An un-configured tenant (table/column
+    #    missing, or the tenant never opted in) gets require_photo_if_cash=False and this is a total
+    #    no-op — byte-identical to today's unconditional accept. ──
+    if _envelope_config(client, org_id, body.get("store_code")).get("require_photo_if_cash") \
+            and tenders["cash"] > 0 and not body.get("envelope_picture"):
+        raise HTTPException(400, "An envelope photo is required because cash was declared for this "
+                             "closing. Attach a photo of the envelope and resubmit.")
+
     # ── Close gate + 3-TRY flow: cash SHORT or credit OVER vs B2B is a "blocker". The rep is told only
     #    the DIRECTION (never the amount) and may recount up to 3 times; the 3rd try is auto-accepted and
     #    flagged for management review. Every try is logged to closing_attempt. Cash-over / credit-under
@@ -5717,6 +5730,9 @@ _ENVELOPE_CFG_DEFAULT = {
     # Q15 (OWNER DIRECTIVE 2026-08-04): fewest-envelopes stays the objective; this only picks the
     # TIE-BREAK order (see envelope.select_envelopes) — 'oldest_first' | 'newest_first'.
     "order_preference": "oldest_first",
+    # BUG FIX (owner-reported 2026-08-07, mig 510): OFF by default — a tenant opts IN to hard-require
+    # an envelope photo on any closing that declares cash > 0. Enforced in POST /closing/row (create_row).
+    "require_photo_if_cash": False,
 }
 
 
@@ -5758,8 +5774,10 @@ def get_envelope_config(store_code: str = "", org_id: str = ORG_ID):
 def put_envelope_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Body: {store_code: null|"S123", take_commission, take_salary, take_expenses,
     commission_cadence, commission_anchor, commission_anchor_date, salary_cadence, salary_anchor,
-    salary_anchor_date, order_preference('oldest_first'|'newest_first', Q15)}. store_code null/absent
-    saves the ORG DEFAULT row; a real code upserts that store's override."""
+    salary_anchor_date, order_preference('oldest_first'|'newest_first', Q15),
+    require_photo_if_cash (bool, mig 510, default False — hard-require an envelope photo on any
+    closing declaring cash > 0, enforced in POST /closing/row)}. store_code null/absent saves the
+    ORG DEFAULT row; a real code upserts that store's override."""
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing envelope payout configuration is permission-restricted.")
@@ -5775,6 +5793,8 @@ def put_envelope_config(payload: dict, org_id: str = ORG_ID, authorization: str 
            "salary_anchor": payload.get("salary_anchor"),
            "salary_anchor_date": payload.get("salary_anchor_date") or None,
            "order_preference": (payload.get("order_preference") or "oldest_first").strip().lower(),
+           # BUG FIX 2026-08-07 (mig 510) — explicit opt-IN only; default false, never inferred true.
+           "require_photo_if_cash": payload.get("require_photo_if_cash") is True,
            "updated_by": (payload.get("updated_by") or _caller_email(client, authorization) or None),
            "updated_at": _now()}
     if row["commission_cadence"] not in ("daily", "weekly", "biweekly", "monthly"):
@@ -5792,13 +5812,20 @@ def put_envelope_config(payload: dict, org_id: str = ORG_ID, authorization: str 
         try:
             client.schema("commcalc").table("envelope_payout_config").insert(row).execute()
         except Exception:
-            # mig 508 (order_preference column) not yet run -> degrade: save every OTHER field exactly
-            # as before, never fail the whole config save over one not-yet-migrated column (Q15,
-            # additive/degrade-gracefully doctrine).
-            row.pop("order_preference", None)
-            client.schema("commcalc").table("envelope_payout_config").insert(row).execute()
+            # mig 510 (require_photo_if_cash column) not yet run -> drop it first and retry (keeps
+            # order_preference/mig 508 intact if that one already ran) — additive/degrade-gracefully.
+            try:
+                row2 = dict(row); row2.pop("require_photo_if_cash", None)
+                client.schema("commcalc").table("envelope_payout_config").insert(row2).execute()
+                row = row2
+            except Exception:
+                # mig 508 (order_preference) ALSO not yet run -> drop both optional columns and retry;
+                # never fail the whole config save over a not-yet-migrated column (Q15 doctrine).
+                row.pop("order_preference", None)
+                row.pop("require_photo_if_cash", None)
+                client.schema("commcalc").table("envelope_payout_config").insert(row).execute()
     except Exception as e:
-        raise HTTPException(500, f"could not save envelope config (run migration 507?): {e}")
+        raise HTTPException(500, f"could not save envelope config (run migration 507/508/510?): {e}")
     return {"ok": True, "store_code": store_code}
 
 

@@ -19,12 +19,16 @@ type Cfg = {
   // Q15 (OWNER DIRECTIVE 2026-08-04): fewest-envelopes stays the objective; this only picks which
   // envelope wins a TIE on available cash — 'oldest_first' (default) | 'newest_first'.
   order_preference: string
+  // BUG FIX (owner-reported 2026-08-07, mig 510): OFF by default — opt IN to hard-require an
+  // envelope photo on any closing that declares cash > 0. See ClosingSubmitForm + POST /closing/row.
+  require_photo_if_cash: boolean
 }
 const blankCfg = (store_code: string | null = null): Cfg => ({
   store_code, take_commission: true, take_salary: true, take_expenses: true,
   commission_cadence: 'weekly', commission_anchor: '', commission_anchor_date: '',
   salary_cadence: 'weekly', salary_anchor: '', salary_anchor_date: '',
   order_preference: 'oldest_first',
+  require_photo_if_cash: false,
 })
 
 export default function EnvelopeConfigPage() {
@@ -119,6 +123,17 @@ export default function EnvelopeConfigPage() {
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, maxWidth: 480 }}>
             Fewest envelopes is always the objective — this only decides which envelope wins when two or
             more are otherwise an equally-good pick.
+          </div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={cfg.require_photo_if_cash}
+              onChange={e => onChange({ ...cfg, require_photo_if_cash: e.target.checked })} />
+            Require an envelope photo whenever cash &gt; 0 is declared
+          </label>
+          <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, maxWidth: 480 }}>
+            OFF by default. When ON, a closing that declares any cash is blocked from submitting until a
+            photo of the envelope is attached (a $0-cash closing is never affected).
           </div>
         </div>
         <button className="btn btn-primary" disabled={busy} style={{ fontSize: 13 }} onClick={onSave}>💾 Save</button>
