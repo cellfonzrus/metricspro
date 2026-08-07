@@ -20,6 +20,7 @@ from app.modules.commcalc import targets_engine
 from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
+from app.modules.commcalc import url_guard as _url_guard   # SSRF guard for tenant URLs (C4)
 from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_legs as _commission_legs
 from app.modules.commcalc import commission_received as _commission_received
@@ -57,6 +58,7 @@ from uuid import uuid4 as _uuid4
 from datetime import datetime, timezone, timedelta
 import calendar as _calendar
 import threading
+import os as _os
 
 
 router = APIRouter(prefix="/commcalc", tags=["CommCalc"])
@@ -2665,27 +2667,65 @@ def _status_update(client, table, upd, filt):
         {k: v for k, v in row.items() if k not in opt})).execute()
 
 
+def _import_admin_strict():
+    """Break-glass for the 2026-08-06 FAIL-CLOSED import-admin gate (security finding H3).
+
+    Default ON. IMPORT_ADMIN_STRICT=0 restores the pre-2026-08-06 degrade-open behaviour for one
+    deploy if a real lock-out ever appears. Deliberately an ENV VAR, not a silent default — the same
+    never-strand-the-operator posture as REQUIRE_AUTH / IDENTITY_BACKEND_503 / STRICT_MEMBERSHIP in
+    the middleware, and the same shape the privesc package (cad0aa9) used for H2."""
+    return _os.environ.get("IMPORT_ADMIN_STRICT", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def _require_import_admin(authorization, org_id):
     """Editing an IMPORT CHANNEL (portal credentials, mailbox rules, schedules) is a settings action.
 
     Gated on core's registered 'import_health' settings area, so an owner can grant it to one role in the
-    Roles UI instead of it being open to everyone with the page. Degrades OPEN when the caller cannot be
-    resolved (no token / RBAC off) — the same posture as _require_commission_admin, so the house org and
-    any existing automation are never locked out. Never 500s a settings save."""
+    Roles UI instead of it being open to everyone with the page.
+
+    FAIL-CLOSED (finding H3, 2026-08-06). This used to `return` — i.e. ALLOW — whenever the caller
+    could not be resolved, and its bare `except Exception: return` turned ANY error (an import
+    failure, a membership-store outage, a bad JWT round trip) into an ALLOW as well. That made these
+    ten endpoints — portal credentials, mailbox rules, FTP creds, schedules — effectively ungated for
+    an unauthenticated request, which is exactly the credential set the C4 SSRF abuses: write a
+    portal_url, then read the rendered result back. It now follows the posture the privesc package
+    (cad0aa9) established for the identity/RBAC gates:
+
+      no/invalid token          -> 401  (was: ALLOW)
+      token valid, no membership-> 403  (was: ALLOW)
+      membership store errored  -> 503  (was: ALLOW)   — honest "can't tell", never a silent yes
+      resolved, lacks the right -> 403  (unchanged)
+
+    Verified before flipping: none of the ten gated handlers is ever called IN-PROCESS (which would
+    bind FastAPI's Header sentinel and look like "no token"), so no existing automation loses access;
+    every caller is a real HTTP request from the settings UI carrying the operator's bearer token.
+    Break-glass if that turns out to be wrong anywhere: IMPORT_ADMIN_STRICT=0."""
     try:
         from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
-        uid = _uid_from_token(authorization)
-        caller = _resolve_caller(sb(), uid) if uid else None
-        if caller is None:
-            return
-        if caller.get("super_admin") or _can_edit_setting(caller, "import_health"):
-            return
-        raise HTTPException(403, "You don't have permission to change import connections. Ask an "
-                                 "administrator to grant your role the 'Import Health' setting.")
-    except HTTPException:
-        raise
     except Exception:
-        return
+        if not _import_admin_strict():
+            return
+        raise HTTPException(503, "Permissions are temporarily unavailable — try again in a moment.")
+    uid = _uid_from_token(authorization)
+    if not uid:
+        if not _import_admin_strict():
+            return
+        raise HTTPException(401, "Sign in to change import connections.")
+    try:
+        caller = _resolve_caller(sb(), uid)
+    except Exception:
+        if not _import_admin_strict():
+            return
+        raise HTTPException(503, "Permissions are temporarily unavailable — try again in a moment.")
+    if caller is None:
+        if not _import_admin_strict():
+            return
+        raise HTTPException(403, "This login isn't attached to a tenant, so it can't change import "
+                                 "connections. Ask an administrator to add you.")
+    if caller.get("super_admin") or _can_edit_setting(caller, "import_health"):
+        return caller
+    raise HTTPException(403, "You don't have permission to change import connections. Ask an "
+                             "administrator to grant your role the 'Import Health' setting.")
 
 
 def _sweep_set_status(client, table, org_id, status, detail, mark_run=False, success=None):
@@ -6147,6 +6187,21 @@ def list_connectors(org_id: str = ORG_ID):
              'reports': by_conn.get(c['id'], [])} for c in conns]
 
 
+def _safe_portal_url(raw):
+    """Validate an OPTIONAL, possibly-blank connector portal_url. Blank stays blank.
+
+    connector_instances.portal_url is a display/deep-link field today, but it is the SAME operator
+    field as the one the scrapers navigate (the b2bsoft connector is seeded with the wsreports URL),
+    and the Connectors page renders it as a clickable link — so an unvalidated `javascript:` value
+    here is also the stored-XSS sink the register logged as H6. One validator, both problems."""
+    if not (raw or "").strip():
+        return raw
+    try:
+        return _url_guard.assert_safe_url(raw, what="portal address")
+    except _url_guard.UnsafeUrlError as e:
+        raise HTTPException(400, e.message)
+
+
 @router.post("/connectors")
 def create_connector(body: dict, org_id: str = ORG_ID):
     """Onboard a new vendor connector to the registry (no SQL). Upsert by vendor_name."""
@@ -6155,7 +6210,8 @@ def create_connector(body: dict, org_id: str = ORG_ID):
     if not name:
         raise HTTPException(400, "vendor_name required")
     row = {'org_id': org_id, 'vendor_name': name, 'label': body.get('label'),
-           'sweep_kind': (body.get('sweep_kind') or 'manual').strip(), 'portal_url': body.get('portal_url'),
+           'sweep_kind': (body.get('sweep_kind') or 'manual').strip(),
+           'portal_url': _safe_portal_url(body.get('portal_url')),
            'auth_type': body.get('auth_type') or 'form', 'twofa_method': body.get('twofa_method') or 'none',
            'twofa_status': body.get('twofa_status') or 'needs_setup',
            'automatable': body.get('automatable', True) is not False, 'enabled': True,
@@ -6174,6 +6230,8 @@ def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
     allow = ('label', 'enabled', 'automatable', 'twofa_method', 'twofa_status', 'portal_url', 'sort_order', 'notes',
              'account_id', 'login_username')
     row = {k: body[k] for k in allow if k in body}
+    if 'portal_url' in row:
+        row['portal_url'] = _safe_portal_url(row['portal_url'])
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     sb().schema('commcalc').table('connector_instances').update(row).eq('org_id', org_id).eq('id', cid).execute()
     return {"ok": True}
@@ -8123,6 +8181,15 @@ async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
               'enabled', 'portal_user', 'portal_url', 'sweep_mi', 'sweep_comp', 'sweep_payment'):
         if k in body and body[k] is not None:
             row[k] = body[k]
+    # SSRF GUARD (C4): epay_sweep_config.portal_url is handed to page.goto() in a --no-sandbox
+    # Chromium exactly like the data_source one. epay_sweep._safe_base re-checks at USE time (rows
+    # saved before this landed were never validated); this is the same check at SAVE time so the
+    # settings form can show the reason inline instead of failing later inside a sweep.
+    if (row.get('portal_url') or '').strip():
+        try:
+            row['portal_url'] = _url_guard.assert_safe_url(row['portal_url'], what="portal address")
+        except _url_guard.UnsafeUrlError as e:
+            raise HTTPException(400, e.message)
     pw = (body.get('portal_pass') or '').strip()
     if pw:
         row['portal_pass'] = pw
@@ -21600,10 +21667,23 @@ def save_data_source(body: dict, org_id: str = ORG_ID, authorization: str = Head
             row[k] = None
     if "password" in row and not (row.get("password") or "").strip():
         row.pop("password")   # blank password on the form = keep the saved one
-    if (row.get("portal_url") or "").strip():
-        # a scheme-less host crashes the Playwright login ("Cannot navigate to invalid URL")
-        pu = row["portal_url"].strip()
-        row["portal_url"] = pu if "://" in pu else "https://" + pu.lstrip("/")
+    # SSRF GUARD (finding C4, 2026-08-06). The line that used to live here —
+    #     row["portal_url"] = pu if "://" in pu else "https://" + pu.lstrip("/")
+    # — only ever ADDED a missing scheme (Playwright rejects a bare host with "Cannot navigate to
+    # invalid URL"); it validated nothing. `file:///app/.env`, `http://169.254.169.254/…` (cloud
+    # IMDS) and `http://localhost:8000/…` all contain "://", so all three were stored verbatim and
+    # later rendered by a --no-sandbox Chromium whose screen is returned to the caller (login
+    # screenshot / auth_message / pull diagnostic / live screencast). assert_safe_url keeps the
+    # scheme-adding convenience EXACTLY and adds the scheme allow-list, the credentials check and the
+    # resolve-then-reject-internal-addresses check. 400 (not 500) so the settings form shows why.
+    for _fld, _check, _label in (("portal_url", _url_guard.assert_safe_url, "portal address"),
+                                 ("proxy_url", _url_guard.assert_safe_proxy_url, "proxy address")):
+        if (row.get(_fld) or "").strip():
+            try:
+                row[_fld] = (_check(row[_fld], what=_label) if _fld == "portal_url"
+                             else _check(row[_fld]))
+            except _url_guard.UnsafeUrlError as e:
+                raise HTTPException(400, e.message)
     client = sb()
     try:
         if body.get("id"):
@@ -21634,6 +21714,15 @@ def test_proxy(body: dict, org_id: str = ORG_ID):
     proxy_url = (body.get("proxy_url") or "").strip()
     if not proxy_url:
         raise HTTPException(400, "enter a proxy_url first (http://user:pass@host:port)")
+    # SSRF GUARD (C4): this endpoint makes a request THROUGH the caller-supplied proxy and returns the
+    # outcome, so an unvalidated proxy_url is a general-purpose internal port-scan / banner-grab
+    # primitive (http://127.0.0.1:6379, http://169.254.169.254:80 …) — no portal credentials or DB
+    # row required. Validated as a proxy endpoint: socks schemes stay allowed, embedded credentials
+    # stay allowed (that IS proxy auth), only INTERNAL destinations are refused.
+    try:
+        proxy_url = _url_guard.assert_safe_proxy_url(proxy_url)
+    except _url_guard.UnsafeUrlError as e:
+        raise HTTPException(400, e.message)
     import time, requests
 
     def _probe(px):
@@ -21695,7 +21784,7 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
                   f"Data Imports upload (ma_commission / ma_daily_tx / ma_fulfillment) today")
         _source_stamp(client, sid, org_id, {"last_status": status}, success=False)
         return {"ok": False, "error": status}
-    from app.modules.commcalc.vidapay_sweep import VidaPayAuthError
+    from app.modules.commcalc.vidapay_sweep import VidaPayAuthError, UnsafePortalUrlError
     # PREFER THE LIVE AUTHENTICATED BROWSER. T-CETRA/VidaPay re-challenges the cold storage_state restore
     # (a fresh browser + a new egress IP + a new server session is not the trusted device → it lands on
     # the 2FA screen and the cold path raises "session expired"; owner repro 2026-07-16). If a 🔴 Live
@@ -21718,6 +21807,13 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
         res = await handler(org_id, src_row)
         delivered = _record_pull_result(client, sid, org_id, res)
         return {"ok": True, "delivered": delivered, **(res or {})}
+    except UnsafePortalUrlError as e:
+        # SSRF guard (C4): the STORED portal/proxy URL is refused. Deliberately handled BEFORE the
+        # generic handler so it does NOT arm the portal-block cooldown (mig 244) — the portal never
+        # rate-limited us, our own configuration is wrong, and a cooldown would just hide the fix.
+        _source_stamp(client, sid, org_id,
+                      {"last_status": f"blocked by the URL safety check: {str(e)[:180]}"}, success=False)
+        return {"ok": False, "error": str(e), "config_error": True}
     except VidaPayAuthError as e:
         # Session expired / never authenticated — not a hard failure; prompt the operator to log in.
         # Do NOT null session_state here: a transient nav/validity blip would otherwise DESTROY a good
@@ -22298,6 +22394,14 @@ def _do_portal_login(sid: str, org_id: str):
     try:
         res = _login_fn(s.get("portal_url"), s.get("account_id"), s.get("username"),
                         s.get("password"), s.get("proxy_url"))
+    except vp.UnsafePortalUrlError as e:
+        # SSRF guard (C4). Caught BEFORE VidaPayLoginError (its parent) so a bad CONFIGURED url does
+        # not arm the portal-block cooldown — the portal never answered at all. Stamped plainly so the
+        # settings page shows exactly what to fix.
+        _source_stamp(client, sid, org_id,
+                      {"auth_status": "error", "auth_message": str(e)[:400],
+                       "last_run_at": now.isoformat()}, success=False)
+        return
     except vp.VidaPayLoginError as e:
         msg = str(e)
         if "egress" in msg.lower() or "waf" in msg.lower():
@@ -22408,6 +22512,11 @@ async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
     try:
         res = await run_in_threadpool(_verify_fn, s.get("portal_url"), s.get("pending_state"),
                                       code, s.get("proxy_url"))
+    except vp.UnsafePortalUrlError as e:
+        # SSRF guard (C4): the STORED portal/proxy URL is not safe to open. That is a settings
+        # problem, not a bad code — a plain 400 the page shows, never a 500 and never a wasted 2FA
+        # retry loop.
+        raise HTTPException(400, str(e))
     except vp.VidaPayAuthError as e:
         client.schema("commcalc").table("data_source").update(
             {"auth_status": "needs_2fa", "auth_message": str(e)[:400]})\
