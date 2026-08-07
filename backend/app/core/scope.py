@@ -64,6 +64,14 @@ UNION *where they actually worked* (shifts / time logs at a store inside the spa
 home store alone is what made a borrowed rep invisible to the DM whose store they covered — the
 other half of why the operator over-granted.
 
+STORE SYNONYMS MUST BIND TOO (2026-08-07)
+─────────────────────────────────────────
+A third vocabulary exists: `commcalc.store_aliases` — the explicit "this POS/sales-file spelling IS
+this store" map that the Store-Matching UI writes and that every ATTRIBUTION path already honours.
+The SPAN path did not, so a scoped manager silently lost every sales row whose store string was a
+synonym rather than the canonical address. `widen_codes_to_keys()` now folds a store's synonyms into
+its keyset — see the full argument (and the proof it cannot widen out of span) in that function.
+
 MULTI-TENANT: every read here is `.eq("org_id", org_id)`. Nothing in this module writes.
 """
 
@@ -114,21 +122,29 @@ def _up(v) -> str:
     return _norm(v).upper()
 
 
-def build_market_index(store_rows, mapping_rows) -> dict:
+def build_market_index(store_rows, mapping_rows, alias_rows=None) -> dict:
     """PURE: fold the two market vocabularies into one index. Kept separate from I/O so it is unit
     provable.
 
     `store_rows`   — storeops.stores rows: store_code / address / market
     `mapping_rows` — commcalc.store_mapping rows: store_code / store_address / market
+    `alias_rows`   — commcalc.store_aliases rows: alias / store_code  (OPTIONAL; None/[] reproduces
+                     the pre-2026-08-07 index byte-for-byte apart from an empty "alias_keys")
 
     Returns {"markets": [canonical names, sorted case-insensitively],
              "by_market": {market_lower: {"market": canonical,
                                           "codes": {UPPER store_code, …},
                                           "keys":  {UPPER store_code + UPPER address, …}}},
-             "stores": [{"store_code", "address", "market"} …]}
+             "stores": [{"store_code", "address", "market"} …],
+             "alias_keys": {UPPER store_code: {UPPER alias, …}}}
 
     Canonical casing = the most-common spelling seen (ties → alphabetically first), matching
-    `storeops._collect_markets` exactly so the picker and the resolver can never disagree."""
+    `storeops._collect_markets` exactly so the picker and the resolver can never disagree.
+
+    ALIASES ARE NOT STORES. `alias_rows` is folded into `alias_keys` ONLY — deliberately never
+    through `add()`. An alias must never invent a store, join a market, appear in `stores` (which
+    feeds the `/core/markets` grant picker), or change a market's canonical spelling. It is a pure
+    ROW-MATCHING synonym for a store_code that already exists, and nothing else."""
     variants: dict[str, Counter] = {}
     by_market: dict[str, dict] = {}
     stores: dict[str, dict] = {}   # UPPER store_code (or UPPER address when codeless) → row
@@ -164,11 +180,22 @@ def build_market_index(store_rows, mapping_rows) -> dict:
     for r in (mapping_rows or []):
         add(r.get("store_code"), r.get("store_address") or r.get("address"), r.get("market"))
 
+    # store_code -> its sales/POS synonyms. commcalc.store_aliases is UNIQUE on
+    # (org_id, LOWER(TRIM(alias))), so one alias string can belong to AT MOST ONE store_code — two
+    # stores can never both claim the same synonym, which is what makes it safe to fold a synonym
+    # into a span (see widen_codes_to_keys).
+    alias_keys: dict[str, set] = {}
+    for r in (alias_rows or []):
+        code, alias = _up(r.get("store_code")), _up(r.get("alias"))
+        if code and alias:
+            alias_keys.setdefault(code, set()).add(alias)
+
     for lk, counts in variants.items():
         by_market[lk]["market"] = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
     markets = sorted((b["market"] for b in by_market.values()), key=lambda s: s.lower())
     store_list = sorted(stores.values(), key=lambda s: (s.get("store_code") or s.get("address") or ""))
-    return {"markets": markets, "by_market": by_market, "stores": store_list}
+    return {"markets": markets, "by_market": by_market, "stores": store_list,
+            "alias_keys": alias_keys}
 
 
 def market_index(client, org_id: str, *, fresh: bool = False) -> dict:
@@ -180,7 +207,7 @@ def market_index(client, org_id: str, *, fresh: bool = False) -> dict:
         hit = _market_cache.get(org_id)
         if hit and (now - hit[0]) < _MARKET_TTL_S:
             return hit[1]
-    store_rows, mapping_rows = [], []
+    store_rows, mapping_rows, alias_rows = [], [], []
     try:
         store_rows = (client.schema("storeops").table("stores")
                       .select("store_code,address,market").eq("org_id", org_id)
@@ -193,7 +220,18 @@ def market_index(client, org_id: str, *, fresh: bool = False) -> dict:
                         .limit(5000).execute().data) or []
     except Exception as e:                                          # pragma: no cover - I/O guard
         print(f"WARN core.scope market_index commcalc.store_mapping read failed: {e}")
-    idx = build_market_index(store_rows, mapping_rows)
+    try:
+        # Store SYNONYMS (the Store-Matching UI's explicit map). Folded in here — same cache, same
+        # TTL, same org key — rather than as a per-request scan, because widen_codes_to_keys() runs
+        # on EVERY scoped request. A missing/unreadable table degrades to no aliases, which is
+        # exactly the pre-2026-08-07 behaviour. Truncation at the limit can only DROP a synonym
+        # (narrow), never invent one, so the failure direction is fail-safe.
+        alias_rows = (client.schema("commcalc").table("store_aliases")
+                      .select("alias,store_code").eq("org_id", org_id)
+                      .limit(20000).execute().data) or []
+    except Exception as e:                                          # pragma: no cover - I/O guard
+        print(f"WARN core.scope market_index commcalc.store_aliases read failed: {e}")
+    idx = build_market_index(store_rows, mapping_rows, alias_rows)
     _market_cache[org_id] = (now, idx)
     return idx
 
@@ -219,7 +257,11 @@ def market_store_codes(client, org_id: str, market) -> set:
 def market_store_keys(client, org_id: str, market) -> set:
     """Like `market_store_codes` but ALSO the store addresses — rows across this codebase key their
     store column on either a code or an address, which is exactly why `scope_keyset` widens codes
-    into keys before matching."""
+    into keys before matching.
+
+    NOTE: this helper has no production caller today (the span path is `widen_codes_to_keys`) and is
+    deliberately left SYNONYM-FREE — a market is a property of a store, not of a POS spelling. Any
+    future caller that needs to match sales-file store strings must use `widen_codes_to_keys`."""
     lk = _norm(market).lower()
     if not lk:
         return set()
@@ -274,18 +316,53 @@ def reporting_span_codes(client, org_id: str, app_user, role_scope: str, org_uni
 
 
 def widen_codes_to_keys(client, org_id: str, codes) -> set:
-    """UPPER store_codes + their addresses, so a row whose store column holds EITHER form matches.
-    Same contract as `storeops.scope_keyset`'s widening step, but served off the cached index
-    (no extra `stores` scan per request)."""
+    """UPPER store_codes + their addresses + their SALES-FILE SYNONYMS, so a row whose store column
+    holds ANY of the three forms matches. Same contract as `storeops.scope_keyset`'s widening step,
+    but served off the cached index (no extra scan per request).
+
+    THE SYNONYM HOLE (fixed 2026-08-07 — owner-reported, class-wide)
+    ────────────────────────────────────────────────────────────────
+    ~60 `in_keyset(...)` call sites across commcalc/closing/storeops/hr match a row's store STRING,
+    and for sales-derived rows that string is whatever the POS/B2B export wrote — which is NOT
+    always the store's canonical address. The house's B2B export writes "3 Palisade Ave Yonkers"
+    where storeops/store_mapping/asset all say "3 Palisade Ave" (store_code B-3PL). The org already
+    records exactly that fact in `commcalc.store_aliases` (the Store-Matching UI), and every
+    ATTRIBUTION path already honours it (`_store_code_resolver`, `daily_sales_actuals`,
+    `coa.store_resolver`). Only this SPAN path did not — so a DM whose span contains B-3PL had a
+    keyset of {"B-3PL", "3 PALISADE AVE"} and every one of that store's sales rows was silently
+    dropped from her report, while a super-admin (keyset None) saw them fine. Symptom: DM "Rana"
+    could not see 3 Palisade on the Sales Report under market NYC; "2778 Ephraim Ave" (-> B-1598,
+    PA) was loaded with the identical bug for any PA-scoped manager.
+
+    SCOPING NOW FOLLOWS ATTRIBUTION: if the org says string S IS store C, and C is in the span,
+    then S's rows are in the span. That is the invariant this restores.
+
+    WHY THIS CANNOT WIDEN TO AN OUT-OF-SPAN STORE
+    ─────────────────────────────────────────────
+    * A synonym is admitted ONLY when its `store_code` is in `span_codes` — the caller's own code
+      set, frozen BEFORE any widening, so a synonym can never be reached transitively through an
+      address or through another synonym. No fixpoint, one pass, one hop.
+    * `store_aliases` is UNIQUE on (org_id, LOWER(TRIM(alias))): a given synonym maps to at most
+      ONE store_code, so admitting it can never simultaneously admit another store's synonym.
+    * The read is `.eq("org_id", org_id)` on the middleware-rewritten org, so a synonym from
+      another tenant is unreachable by construction.
+    * `codes` is empty -> we return immediately, unchanged: this never turns an empty (deny-all)
+      keyset into a non-empty one, and it never turns any keyset into None (unrestricted).
+    * No aliases (or an unreadable table) -> `alias_keys` is empty -> byte-identical to before."""
     keys = {_up(c) for c in (codes or []) if _norm(c)}
     if not keys:
         return keys
-    for s in (market_index(client, org_id).get("stores") or []):
+    span_codes = frozenset(keys)     # FROZEN pre-widening: the synonym hop is anchored on CODES only
+    idx = market_index(client, org_id)
+    for s in (idx.get("stores") or []):
         sc = _up(s.get("store_code"))
         if sc and sc in keys:
             ad = _up(s.get("address"))
             if ad:
                 keys.add(ad)
+    for code, aliases in (idx.get("alias_keys") or {}).items():
+        if code in span_codes:
+            keys |= aliases
     return keys
 
 
