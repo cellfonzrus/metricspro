@@ -559,9 +559,14 @@ def sweep_org(client, org_id: str, only_store_codes: list[str] | None = None) ->
         return {"ok": False, "skipped": True, "reason": "not enabled / no API key", "stores": []}
     try:
         stores = (client.table("stores").select("store_code,address,market,is_active")
-                  .eq("org_id", org_id).eq("is_active", True).limit(2000).execute().data) or []
+                  .eq("org_id", org_id).limit(2000).execute().data) or []
     except Exception:
         stores = []
+    # NULL-SAFE active filter, done here in Python rather than a `.eq("is_active", True)` query filter
+    # — is_active is NULLABLE (DEFAULT true), so a blanket `.eq(True)` would silently drop any store
+    # whose flag was never explicitly set, same class of trap storeops/router.py's `_store_is_active`
+    # fixed for the store pickers (2026-08-06). Only an EXPLICIT is_active=false is excluded here.
+    stores = [s for s in stores if s.get("is_active") is not False]
     if only_store_codes:
         wanted = {str(s).upper() for s in only_store_codes}
         stores = [s for s in stores if (s.get("store_code") or "").upper() in wanted]

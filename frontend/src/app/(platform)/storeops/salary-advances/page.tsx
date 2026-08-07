@@ -73,7 +73,10 @@ export default function SalaryAdvancesPage() {
   }, [])
 
   useEffect(() => {
-    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    // include_inactive=true: this report is a HISTORICAL surface (RULE FIVE filter bar) — a store
+    // closed today may still own past rows in this range, and the market lookup below must still
+    // resolve it. GET /stores now defaults to active-only (2026-08-06 disabled-T-store fix).
+    api('/api/v1/storeops/stores?include_inactive=true').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/storeops/employees').then((r: any) => setEmployees(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])
 
@@ -113,7 +116,7 @@ export default function SalaryAdvancesPage() {
   }, [stores])
   const storeOptions = useMemo(() => stores
     .filter(s => s.store_code)
-    .map(s => ({ id: s.store_code, label: s.store_code, sublabel: s.address || s.market || undefined }))
+    .map(s => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), sublabel: s.address || s.market || undefined }))
     .sort((a, b) => a.label.localeCompare(b.label)), [stores])
   const marketOptions = useMemo(() =>
     Array.from(new Set(stores.map(s => s.market).filter(Boolean) as string[])).sort(), [stores])

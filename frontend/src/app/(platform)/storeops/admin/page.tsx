@@ -77,7 +77,9 @@ export default function StoreOpsAdminPage() {
     try {
       const [e, s, mk] = await Promise.all([
         api('/api/v1/storeops/employees?include_inactive=true').catch(() => []),
-        api('/api/v1/storeops/stores').catch(() => []),
+        // 2026-08-06: GET /stores now defaults to active-only (the disabled-T-store picker-leak fix)
+        // — this page manages/re-enables stores, so it MUST keep seeing inactive ones.
+        api('/api/v1/storeops/stores?include_inactive=true').catch(() => []),
         api('/api/v1/storeops/markets').catch(() => ({ markets: [] })),
       ])
       const eList = (e || []).map((x: any) => ({ ...x }))
