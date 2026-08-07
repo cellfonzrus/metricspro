@@ -1447,3 +1447,44 @@ def import_rows(entity: str, body: dict, org_id: str = ORG_ID):
 
     return {"inserted": inserted, "skipped": skipped, "errors": errors,
             "total": len(rows)}
+
+
+# ── CommCalc feed: built-in POS stream + tenant POS-source setup (mig 727) ────────────────────────
+# Design: SAAS_FRAMEWORK.md §8 (streams never merge). The module writes its own
+# commcalc.pos_builtin_* tables; promotion into daily_sales_feed/raw_sales happens ONLY for
+# tenants whose core.tenant_pos_setup.builtin_role = 'primary'.
+from app.modules.pos import commcalc_feed as _feed
+
+
+@router.get("/commcalc/setup")
+def get_commcalc_setup(org_id: str = ORG_ID):
+    return {"setup": _feed.get_pos_setup(org_id)}
+
+
+@router.put("/commcalc/setup")
+def put_commcalc_setup(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    upd = {k: body[k] for k in ("builtin_role", "external_role", "secondary_mode",
+                                "separate_registers", "notes") if k in body}
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    if upd.get("builtin_role") == "primary" and upd.get("external_role") == "primary":
+        raise HTTPException(400, "only one POS can be primary")
+    upd["updated_at"] = "now()"
+    r = (sb().schema("core").table("tenant_pos_setup").update(upd)
+         .eq("org_id", org_id).execute())
+    if not r.data:
+        ins = {"org_id": org_id, **{k: v for k, v in upd.items() if k != "updated_at"}}
+        r = sb().schema("core").table("tenant_pos_setup").insert(ins).execute()
+    return {"setup": (r.data or [{}])[0]}
+
+
+@router.post("/commcalc/sync")
+def commcalc_sync(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    return _feed.sync_period(org_id, body.get("mode") or "daily", body.get("period"))
+
+
+@router.get("/commcalc/status")
+def commcalc_status(org_id: str = ORG_ID):
+    return _feed.feed_status(org_id)
