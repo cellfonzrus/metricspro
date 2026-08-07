@@ -64,6 +64,21 @@ UNION *where they actually worked* (shifts / time logs at a store inside the spa
 home store alone is what made a borrowed rep invisible to the DM whose store they covered — the
 other half of why the operator over-granted.
 
+A STORE HAS MORE THAN ONE ADDRESS SPELLING (2026-08-07)
+──────────────────────────────────────────────────────
+The two vocabularies do not just disagree about MARKETS — they disagree about ADDRESSES. The same
+store_code can carry `storeops.stores.address = "4801 Armitage Chicago"` and
+`commcalc.store_mapping.store_address = "4801 W Armitage Ave"`. `build_market_index` folds a store
+into ONE row keeping the FIRST non-empty value per field, and `storeops.stores` is read first — so
+the store_mapping spelling was silently DISCARDED from `stores[…]["address"]`, and therefore never
+reached a span keyset. Sales rows carrying that spelling were invisible to the very manager who owns
+the store. `by_market[…]["keys"]` already accumulated BOTH spellings; only the `stores` list was
+lossy, and `widen_codes_to_keys` walks the `stores` list.
+
+`alias_keys`-style sibling map `addr_keys` fixes it WITHOUT changing the shape of `stores` (which is
+returned verbatim by `GET /core/markets` and feeds the roles/config grant picker). See
+`widen_codes_to_keys` for the proof that this cannot widen to a store outside the span.
+
 MULTI-TENANT: every read here is `.eq("org_id", org_id)`. Nothing in this module writes.
 """
 
@@ -125,16 +140,28 @@ def build_market_index(store_rows, mapping_rows) -> dict:
              "by_market": {market_lower: {"market": canonical,
                                           "codes": {UPPER store_code, …},
                                           "keys":  {UPPER store_code + UPPER address, …}}},
-             "stores": [{"store_code", "address", "market"} …]}
+             "stores": [{"store_code", "address", "market"} …],
+             "addr_keys": {UPPER store_code: {UPPER address, …}}}
 
     Canonical casing = the most-common spelling seen (ties → alphabetically first), matching
-    `storeops._collect_markets` exactly so the picker and the resolver can never disagree."""
+    `storeops._collect_markets` exactly so the picker and the resolver can never disagree.
+
+    `stores` is UNCHANGED — still exactly one row per store with ONE display `address` (first
+    non-empty wins), because it is returned verbatim by `GET /core/markets` to the roles/config
+    grant picker and used as a display address by `storeops._dm_target_rows`. The NEW `addr_keys`
+    is a SIBLING map that keeps EVERY spelling seen for a code, for matching only. Nothing that
+    reads `stores`, `markets` or `by_market` changes shape or content."""
     variants: dict[str, Counter] = {}
     by_market: dict[str, dict] = {}
     stores: dict[str, dict] = {}   # UPPER store_code (or UPPER address when codeless) → row
+    addr_keys: dict[str, set] = {}  # UPPER store_code → EVERY UPPER address spelling seen for it
 
     def add(code, address, market):
         code, address, market = _norm(code), _norm(address), _norm(market)
+        # EVERY spelling, not just the one that wins the `stores` merge. Requires a real code:
+        # the keyset is looked up BY CODE, so a codeless row can never be reached anyway.
+        if code and address:
+            addr_keys.setdefault(_up(code), set()).add(_up(address))
         skey = _up(code) or _up(address)
         if skey:
             cur = stores.get(skey)
@@ -168,7 +195,8 @@ def build_market_index(store_rows, mapping_rows) -> dict:
         by_market[lk]["market"] = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
     markets = sorted((b["market"] for b in by_market.values()), key=lambda s: s.lower())
     store_list = sorted(stores.values(), key=lambda s: (s.get("store_code") or s.get("address") or ""))
-    return {"markets": markets, "by_market": by_market, "stores": store_list}
+    return {"markets": markets, "by_market": by_market, "stores": store_list,
+            "addr_keys": addr_keys}
 
 
 def market_index(client, org_id: str, *, fresh: bool = False) -> dict:
@@ -274,18 +302,58 @@ def reporting_span_codes(client, org_id: str, app_user, role_scope: str, org_uni
 
 
 def widen_codes_to_keys(client, org_id: str, codes) -> set:
-    """UPPER store_codes + their addresses, so a row whose store column holds EITHER form matches.
-    Same contract as `storeops.scope_keyset`'s widening step, but served off the cached index
-    (no extra `stores` scan per request)."""
+    """UPPER store_codes + **every** address spelling recorded for them, so a row whose store column
+    holds ANY known form matches. Same contract as `storeops.scope_keyset`'s widening step, but
+    served off the cached index (no extra scan per request).
+
+    THE DISCARDED-SPELLING HOLE (fixed 2026-08-07)
+    ──────────────────────────────────────────────
+    `stores[…]["address"]` keeps only the FIRST non-empty address per code and `storeops.stores` is
+    read before `commcalc.store_mapping`, so when the two diverge the store_mapping spelling was
+    thrown away before the keyset was ever built. Live Luxelink: **18 of the 20 store_codes present
+    in BOTH vocabularies diverge** (code `Armitage` → storeops "4801 Armitage Chicago" vs
+    store_mapping "4801 W Armitage Ave"; `Cicero` → "2317 Cicero Cicero" vs "2317 S Cicero Ave STE
+    A"; `QV` → "21880 Hempstead Ave" vs "218-80 Hempstead Avenue"). The POS/B2B sales rows carry the
+    store_mapping spelling, so a scope-'market' Luxelink manager silently lost them — 680 of the 710
+    rows (95.8%) on their live July-2026 Sales Report. Only `Utica` (both spellings identical) was
+    unaffected. Super-admins never saw it because `ks is None` short-circuits the filter.
+
+    This is the GENERAL case; `commcalc.store_aliases` (the separate `scope-alias-span` branch) is
+    the SPECIAL case where the sales spelling is in NEITHER stores table (house's "3 Palisade Ave
+    Yonkers"). Neither branch subsumes the other.
+
+    WHY THIS CANNOT WIDEN TO AN OUT-OF-SPAN STORE
+    ─────────────────────────────────────────────
+    * An address is admitted ONLY under a `store_code` that is in `span_codes` — the caller's own
+      code set, frozen BEFORE any widening — so it is one hop from a code the caller already holds.
+      No transitive reach: an address never becomes a lookup key for another address.
+    * `addr_keys` is built ONLY from rows that carry a non-empty `store_code`, and the address is
+      filed under THAT row's own code. A spelling can therefore never migrate to a different store.
+      (Two stores that genuinely share an address string both get it — that is the source data
+      asserting they are the same address, and it is already true of `by_market[…]["keys"]`.)
+    * Both source reads are `.eq("org_id", org_id)` on the middleware-rewritten org, so a spelling
+      from another tenant is unreachable by construction.
+    * `codes` empty → returns immediately, unchanged: a deny-all keyset never becomes non-empty, and
+      the result is never `None` (`ks is None` alone still means unrestricted, so super-admin /
+      scope-'all' / rbac-off never execute this at all).
+    * Single-vocabulary tenant, or two vocabularies that AGREE → `addr_keys[code]` is exactly the
+      one address the old code already added → byte-identical keyset.
+    * The original `stores` loop below is left EXACTLY as it was, so the result is a provable
+      SUPERSET of today's — this can only reveal rows that were wrongly hidden, never hide one."""
     keys = {_up(c) for c in (codes or []) if _norm(c)}
     if not keys:
         return keys
-    for s in (market_index(client, org_id).get("stores") or []):
+    span_codes = frozenset(keys)     # FROZEN pre-widening: address hops are anchored on CODES only
+    idx = market_index(client, org_id)
+    for s in (idx.get("stores") or []):
         sc = _up(s.get("store_code"))
         if sc and sc in keys:
             ad = _up(s.get("address"))
             if ad:
                 keys.add(ad)
+    for code, addrs in (idx.get("addr_keys") or {}).items():
+        if code in span_codes:
+            keys |= addrs
     return keys
 
 

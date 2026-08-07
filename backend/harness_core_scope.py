@@ -15,6 +15,13 @@ Proves, WITHOUT a database:
   F. reporting_employee_ids() includes a BORROWED rep (home store outside the span) who actually
      worked a shift inside the span — the "employees move around" hole.
   G. A market-only grant genuinely CONSTRAINS (does not silently become unrestricted).
+  K. DIVERGENT ADDRESS SPELLINGS both match (2026-08-07). storeops.stores.address and
+     commcalc.store_mapping.store_address disagree for the SAME store_code; `stores[…]["address"]`
+     keeps only the first non-empty (storeops is read first), so the store_mapping spelling was
+     discarded before the keyset was built and its sales rows were invisible to that store's own
+     manager. WITH the negative controls: an out-of-span store's address is still rejected, a
+     single-vocabulary tenant is byte-identical to today, and a code that exists ONLY in
+     commcalc.store_mapping still resolves (it always did — verified live, 19/19).
 
 Run: python3 backend/harness_core_scope.py
 """
@@ -280,6 +287,114 @@ c2 = FakeClient({"storeops": {"stores": [{"org_id": OTHER, "store_code": "Z999",
 ok("a DIFFERENT org is not served the first org's cache",
    S.canonical_markets(c2, OTHER) == ["PA"])
 ok("first org's cache intact", S.canonical_markets(c1, ORG) == ["NJ", "NY", "PA"])
+
+print("\n── K. DIVERGENT address spellings (2026-08-07 Luxelink general case) ─────────────")
+# Same org, but the two vocabularies spell the SAME stores differently — the live Luxelink shape.
+# D101 diverges (both vocabularies, different spellings)   -> the bug
+# D102 agrees   (both vocabularies, identical spelling)    -> the no-regression control ("Utica")
+# D103 exists ONLY in commcalc.store_mapping               -> must still resolve (it always did)
+# D104 exists ONLY in storeops.stores                      -> must still resolve
+DIVERGENT = {
+    "storeops": {
+        "stores": [
+            {"org_id": ORG, "store_code": "D101", "address": "4801 Armitage Chicago", "market": "CHI"},
+            {"org_id": ORG, "store_code": "D102", "address": "531 Utica Ave", "market": "CHI"},
+            {"org_id": ORG, "store_code": "D104", "address": "9 Storeops Only Rd", "market": "CHI"},
+            {"org_id": ORG, "store_code": "OUT1", "address": "77 Outside Ave", "market": "NJ"},
+            {"org_id": OTHER, "store_code": "D101", "address": "OTHER TENANT SPELLING", "market": "CHI"},
+        ],
+    },
+    "commcalc": {
+        "store_mapping": [
+            {"org_id": ORG, "store_code": "D101", "store_address": "4801 W Armitage Ave", "market": "CHI"},
+            {"org_id": ORG, "store_code": "D102", "store_address": "531 Utica Ave", "market": "CHI"},
+            {"org_id": ORG, "store_code": "D103", "store_address": "2317 S Cicero Ave STE A", "market": "CHI"},
+            {"org_id": ORG, "store_code": "OUT1", "store_address": "77 Outside Avenue Ext", "market": "NJ"},
+            {"org_id": OTHER, "store_code": "D101", "store_address": "OTHER TENANT ADDR", "market": "CHI"},
+        ],
+    },
+}
+
+
+def divergent_client():
+    S.invalidate_market_index()
+    return FakeClient(DIVERGENT)
+
+
+# ── K1. THE BUG: both spellings of an in-span store must match ─────────────────────────────────
+c = divergent_client()
+ks = S.widen_codes_to_keys(c, ORG, {"D101"})
+ok("THE BUG — the DISCARDED store_mapping spelling now matches",
+   S.in_keyset(ks, "4801 W Armitage Ave") is True, ks)
+ok("the storeops spelling still matches", S.in_keyset(ks, "4801 Armitage Chicago") is True)
+ok("the store_code still matches", S.in_keyset(ks, "d101") is True)
+ok("keyset = code + BOTH spellings, nothing more",
+   ks == {"D101", "4801 ARMITAGE CHICAGO", "4801 W ARMITAGE AVE"}, ks)
+ok("a MARKET grant carries both spellings too",
+   S.in_keyset(S.widen_codes_to_keys(c, ORG, S.market_store_codes(c, ORG, "CHI")),
+               "4801 W Armitage Ave") is True)
+
+# ── K2. store_mapping-ONLY code (verified live: 19/19 already worked, must STAY working) ───────
+ks103 = S.widen_codes_to_keys(divergent_client(), ORG, {"D103"})
+ok("store_mapping-ONLY code resolves to its address (was ALREADY true, still true)",
+   S.in_keyset(ks103, "2317 S Cicero Ave STE A") is True, ks103)
+ok("store_mapping-ONLY keyset is exactly code + its one address",
+   ks103 == {"D103", "2317 S CICERO AVE STE A"}, ks103)
+ok("store_mapping-ONLY code is reachable by a market grant",
+   "D103" in S.market_store_codes(divergent_client(), ORG, "CHI"))
+ks104 = S.widen_codes_to_keys(divergent_client(), ORG, {"D104"})
+ok("storeops-ONLY code still resolves", ks104 == {"D104", "9 STOREOPS ONLY RD"}, ks104)
+
+# ── K3. NEGATIVE CONTROLS: no path to a store outside the span ─────────────────────────────────
+ok("out-of-span store's storeops address rejected", S.in_keyset(ks, "77 Outside Ave") is False)
+ok("out-of-span store's store_mapping address ALSO rejected",
+   S.in_keyset(ks, "77 Outside Avenue Ext") is False)
+ok("out-of-span store_code rejected", S.in_keyset(ks, "OUT1") is False)
+ok("another store's divergent spelling never leaks in", S.in_keyset(ks, "531 Utica Ave") is False)
+ok("CROSS-TENANT spelling for the SAME store_code never admitted",
+   S.in_keyset(ks, "OTHER TENANT SPELLING") is False and S.in_keyset(ks, "OTHER TENANT ADDR") is False, ks)
+ok("empty span STAYS empty", S.widen_codes_to_keys(divergent_client(), ORG, set()) == set())
+ok("never returns None (unrestricted)",
+   S.widen_codes_to_keys(divergent_client(), ORG, {"D101"}) is not None)
+ok("no transitive hop — an admitted ADDRESS is not itself a lookup key",
+   S.in_keyset(S.widen_codes_to_keys(divergent_client(), ORG, {"4801 W ARMITAGE AVE"}),
+               "4801 Armitage Chicago") is False)
+
+# ── K4. AGREEING / SINGLE-VOCABULARY tenants are BYTE-IDENTICAL ────────────────────────────────
+ks102 = S.widen_codes_to_keys(divergent_client(), ORG, {"D102"})
+ok("agreeing spellings ('Utica' control) → exactly code + the one address",
+   ks102 == {"D102", "531 UTICA AVE"}, ks102)
+base_two = S.widen_codes_to_keys(client(), ORG, {"B101", "J201"})
+ok("single-vocabulary org (sections A–I data) → EXACTLY today's keyset",
+   base_two == {"B101", "J201", "100 BROADWAY", "10 NEWARK AVE"}, base_two)
+S.invalidate_market_index()
+so_only = FakeClient({"storeops": DIVERGENT["storeops"]})
+ok("storeops-only tenant (no commcalc schema) unchanged, no raise",
+   S.widen_codes_to_keys(so_only, ORG, {"D101"}) == {"D101", "4801 ARMITAGE CHICAGO"})
+S.invalidate_market_index()
+sm_only = FakeClient({"commcalc": DIVERGENT["commcalc"]})
+ok("store_mapping-only tenant (no storeops schema) unchanged, no raise",
+   S.widen_codes_to_keys(sm_only, ORG, {"D101"}) == {"D101", "4801 W ARMITAGE AVE"})
+
+# ── K5. THE PUBLIC SHAPE OF `stores` / `/core/markets` IS UNTOUCHED ────────────────────────────
+c = divergent_client()
+idx = S.market_index(c, ORG)
+ok("`stores` still has ONE row per store_code",
+   len([s for s in idx["stores"] if s["store_code"] == "D101"]) == 1, idx["stores"])
+ok("`stores` display address is still first-non-empty (storeops wins) — picker unchanged",
+   next(s for s in idx["stores"] if s["store_code"] == "D101")["address"] == "4801 Armitage Chicago")
+ok("`stores` row keys unchanged (no new key leaks into /core/markets)",
+   all(set(s.keys()) == {"store_code", "address", "market"} for s in idx["stores"]),
+   [set(s.keys()) for s in idx["stores"]])
+ok("markets unchanged", idx["markets"] == ["CHI", "NJ"], idx["markets"])
+ok("addr_keys carries BOTH spellings for the divergent code",
+   idx["addr_keys"].get("D101") == {"4801 ARMITAGE CHICAGO", "4801 W ARMITAGE AVE"}, idx["addr_keys"])
+ok("addr_keys is org-scoped (no other tenant's spelling)",
+   "OTHER TENANT SPELLING" not in idx["addr_keys"].get("D101", set()))
+ok("codeless rows contribute no addr_keys entry",
+   S.build_market_index([{"store_code": "", "address": "NO CODE RD", "market": "X"}], [])["addr_keys"] == {})
+ok("build_market_index tolerates garbage rows",
+   S.build_market_index([], [{"nope": 1}])["addr_keys"] == {})
 
 print(f"\n{'='*72}\n  RESULT: {PASS} passed, {FAIL} failed\n{'='*72}")
 sys.exit(1 if FAIL else 0)
