@@ -1,9 +1,11 @@
 'use client'
-// POS module — Phase 1: POS Settings (ported from the standalone pos-system app's
-// /settings page: config engine + Sales Tax + Receipt Template). Skipped from the
-// source: dealer codes, carrier portals, receipt sample upload (storage bucket not
-// ported), and the client-side permission gate — RBAC is enforced server-side via
-// the `pos_settings` permission and 403s surface inline in each section.
+// POS module — POS Settings (ported from the standalone pos-system app's /settings
+// page). Phase 1: config engine + Sales Tax + Receipt Template. Phase 2: Dealer
+// Codes, Carrier Portals, and Service Plans (the plans CRUD is new — the standalone
+// app had no UI for its empty service_plans catalog). Still skipped from the source:
+// receipt sample upload (storage bucket not ported) and the client-side permission
+// gate — RBAC is enforced server-side via the `pos_settings` permission and 403s
+// surface inline in each section.
 //
 // The page owns the pos_settings rows so the config engine's inheritance badges and
 // the Sales Tax rule (the `tax_applied_on` key) always read the same data.
@@ -13,6 +15,9 @@ import type { PosSettingRow } from '@/lib/pos-config'
 import PosConfigSection, { type PosStore } from '@/components/pos/PosConfigSection'
 import TaxCodesSection from '@/components/pos/TaxCodesSection'
 import ReceiptTemplateSection from '@/components/pos/ReceiptTemplateSection'
+import DealerCodesSection from '@/components/pos/DealerCodesSection'
+import CarrierPortalsSection from '@/components/pos/CarrierPortalsSection'
+import ServicePlansSection from '@/components/pos/ServicePlansSection'
 
 export default function PosSettingsPage() {
   const [stores, setStores] = useState<PosStore[]>([])
@@ -53,6 +58,9 @@ export default function PosSettingsPage() {
       <PosConfigSection stores={stores} rows={rows} loading={loading} loadError={loadError} reload={reloadSettings} />
       <TaxCodesSection stores={stores} rows={rows} onSettingsChanged={reloadSettings} />
       <ReceiptTemplateSection />
+      <DealerCodesSection stores={stores} />
+      <CarrierPortalsSection />
+      <ServicePlansSection />
     </div>
   )
 }

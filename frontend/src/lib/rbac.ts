@@ -252,6 +252,10 @@ export const NAV: NavGroup[] = [
     { href: '/pos/customers', label: 'Customers', icon: '👤', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/activations', label: 'Activations', icon: '📱', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'] },
+    { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
+    { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
     { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'] },
   ]},
   { group: 'Workforce', module: 'storeops', items: [

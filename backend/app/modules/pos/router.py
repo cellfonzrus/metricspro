@@ -643,3 +643,807 @@ def register_drawer_cash(session_id: str, org_id: str = ORG_ID):
                 .limit(2000).execute().data) or []
         cash = sum(float(p.get("amount") or 0) for p in pays)
     return {"cash": float(s.get("opening_float") or 0) + cash}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# Phase 2 — activations, vendors, purchase orders, transfers, reports, import (mig 726)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+ACTIVATION_FIELDS = ("sale_id", "customer_id", "store_code", "carrier", "activation_date",
+                     "service_plan_date", "service_plan_id", "plan_code", "plan_description",
+                     "monthly_fee", "included_minutes", "service_area", "contract_type",
+                     "contract_terms", "dealer_code", "cell_number", "phone_serial", "phone_model",
+                     "sim_card", "mobile_phone", "account_number", "deposit_amount", "memo",
+                     "description", "promotion_offered", "trade_in_credit", "special_promo",
+                     "status")
+VENDOR_FIELDS = ("ban", "legal_name", "short_name", "business_type", "street_one", "street_two",
+                 "city", "state", "zip", "country", "tax_id", "contact_name", "phone", "fax",
+                 "email", "website", "is_active")
+SERVICE_PLAN_FIELDS = ("carrier", "plan_code", "plan_name", "plan_description", "monthly_fee",
+                       "included_minutes", "service_area", "contract_type", "contract_terms",
+                       "dealer_code", "status")
+
+
+def _require_any_pos_perm(authorization: str, org_id: str, keys):
+    """403 unless the caller's role grants at least one of `keys` (org-wide scope passes)."""
+    perms = _caller_perms(authorization, org_id)
+    if (perms.get("scope") or "all") == "all":
+        return
+    if any(perms.get(k) is True for k in keys):
+        return
+    raise HTTPException(403, f"your role does not allow this action ({' / '.join(keys)})")
+
+
+def _employee_names(org_id: str) -> dict:
+    """employee_id -> display name, from the platform roster."""
+    rows = (sb().table("employees").select("employee_id,name")
+            .eq("org_id", org_id).limit(2000).execute().data) or []
+    return {(r.get("employee_id") or "").strip(): r.get("name")
+            for r in rows if (r.get("employee_id") or "").strip()}
+
+
+def _customer_names(org_id: str, ids) -> dict:
+    out = {}
+    ids = sorted({i for i in ids if i})
+    if not ids:
+        return out
+    for c in (sb().schema("pos").table("customers")
+              .select("id,first_name,last_name,company_name,cust_number")
+              .eq("org_id", org_id).in_("id", ids).execute().data or []):
+        out[c["id"]] = {
+            "name": (f"{c.get('first_name') or ''} {c.get('last_name') or ''}".strip()
+                     or c.get("company_name") or ""),
+            "cust_number": c.get("cust_number"),
+        }
+    return out
+
+
+def _clean_nullable(d: dict, keys) -> dict:
+    for k in keys:
+        if k in d and d[k] in ("", "null"):
+            d[k] = None
+    return d
+
+
+# ── Activations ────────────────────────────────────────────────────────────────────────────────────
+@router.get("/activations")
+def list_activations(date_from: str = "", date_to: str = "", store_code: str = "",
+                     carrier: str = "", status: str = "", org_id: str = ORG_ID):
+    q = sb().schema("pos").table("activations").select("*").eq("org_id", org_id)
+    if date_from:
+        q = q.gte("activation_date", date_from)
+    if date_to:
+        q = q.lte("activation_date", date_to)
+    if store_code:
+        q = q.eq("store_code", store_code)
+    if carrier:
+        q = q.eq("carrier", carrier)
+    if status:
+        q = q.eq("status", status)
+    rows = q.order("created_at", desc=True).limit(300).execute().data or []
+    cust = _customer_names(org_id, [r.get("customer_id") for r in rows])
+    for r in rows:
+        c = cust.get(r.get("customer_id")) or {}
+        r["customer_name"] = c.get("name")
+        r["customer_cust_number"] = c.get("cust_number")
+    return {"activations": rows}
+
+
+@router.get("/activations/{act_id}")
+def get_activation(act_id: str, org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("activations").select("*")
+            .eq("org_id", org_id).eq("id", act_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    act = rows[0]
+    ti = (sb().schema("pos").table("trade_ins").select("*")
+          .eq("org_id", org_id).eq("activation_id", act_id).limit(1).execute().data) or []
+    act["trade_in"] = ti[0] if ti else None
+    if act.get("sale_id"):
+        s = (sb().schema("pos").table("sales").select("id,transaction_id")
+             .eq("id", act["sale_id"]).limit(1).execute().data) or []
+        act["sale_transaction_id"] = s[0]["transaction_id"] if s else None
+    return {"activation": act}
+
+
+def _clean_activation(body: dict) -> dict:
+    upd = {k: body[k] for k in ACTIVATION_FIELDS if k in body}
+    _clean_nullable(upd, ("sale_id", "customer_id", "service_plan_id", "activation_date",
+                          "service_plan_date", "store_code"))
+    # cell == mobile: one field, write both (owner decision from the standalone app)
+    if "cell_number" in upd and "mobile_phone" not in upd:
+        upd["mobile_phone"] = upd["cell_number"] or None
+    if upd.get("status") and upd["status"] not in ("active", "cancelled", "transferred"):
+        raise HTTPException(400, "invalid status")
+    return upd
+
+
+@router.post("/activations")
+def create_activation(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    ins = _clean_activation(body)
+    eid = _caller_employee(authorization, org_id)
+    if not eid:
+        raise HTTPException(403, "your login isn't linked to an employee record — "
+                                 "ask an admin to set your Employee ID in Roles & Access")
+    ins["employee_id"] = eid
+    ins["org_id"] = org_id
+    if ins.get("status") == "cancelled":
+        _require_pos_perm(authorization, org_id, "pos_activations_cancel")
+    r = sb().schema("pos").table("activations").insert(ins).execute()
+    return {"activation": (r.data or [{}])[0]}
+
+
+@router.patch("/activations/{act_id}")
+def update_activation(act_id: str, body: dict, authorization: str = Header(default=""),
+                      org_id: str = ORG_ID):
+    upd = _clean_activation(body)   # employee_id NOT writable: attribution is preserved on edits
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    if upd.get("status") == "cancelled":
+        cur = (sb().schema("pos").table("activations").select("status")
+               .eq("org_id", org_id).eq("id", act_id).limit(1).execute().data) or []
+        if cur and cur[0].get("status") != "cancelled":
+            _require_pos_perm(authorization, org_id, "pos_activations_cancel")
+    upd["updated_at"] = "now()"
+    r = (sb().schema("pos").table("activations").update(upd)
+         .eq("org_id", org_id).eq("id", act_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    return {"activation": r.data[0]}
+
+
+@router.get("/activations/{act_id}/notes")
+def list_activation_notes(act_id: str, org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("activation_notes").select("*")
+            .eq("org_id", org_id).eq("activation_id", act_id)
+            .order("created_at", desc=True).limit(200).execute().data) or []
+    return {"notes": rows}
+
+
+@router.post("/activations/{act_id}/notes")
+def add_activation_note(act_id: str, body: dict, authorization: str = Header(default=""),
+                        org_id: str = ORG_ID):
+    note = (body.get("note") or "").strip()
+    if not note:
+        raise HTTPException(400, "note text required")
+    severity = body.get("severity") or "normal"
+    if severity not in ("normal", "important", "urgent"):
+        severity = "normal"
+    r = sb().schema("pos").table("activation_notes").insert({
+        "org_id": org_id, "activation_id": act_id, "note": note, "severity": severity,
+        "employee_id": _caller_employee(authorization, org_id) or None,
+    }).execute()
+    return {"note": (r.data or [{}])[0]}
+
+
+# One trade-in per activation, upserted; credit removal zeroes the amount, never deletes
+# (parity with the standalone app).
+@router.put("/activations/{act_id}/trade-in")
+def upsert_trade_in(act_id: str, body: dict, org_id: str = ORG_ID):
+    payload = {k: body.get(k) or None for k in ("device_description", "serial_number", "imei",
+                                                "notes", "customer_id", "sale_id")}
+    payload["credit_amount"] = float(body.get("credit_amount") or 0)
+    existing = (sb().schema("pos").table("trade_ins").select("id")
+                .eq("org_id", org_id).eq("activation_id", act_id).limit(1).execute().data) or []
+    if existing:
+        r = (sb().schema("pos").table("trade_ins").update(payload)
+             .eq("id", existing[0]["id"]).execute())
+        return {"trade_in": (r.data or [{}])[0]}
+    if not (payload.get("device_description") or "").strip():
+        raise HTTPException(400, "device_description required")
+    payload.update({"org_id": org_id, "activation_id": act_id})
+    r = sb().schema("pos").table("trade_ins").insert(payload).execute()
+    return {"trade_in": (r.data or [{}])[0]}
+
+
+@router.patch("/trade-ins/{ti_id}")
+def update_trade_in_status(ti_id: str, body: dict, authorization: str = Header(default=""),
+                           org_id: str = ORG_ID):
+    _require_any_pos_perm(authorization, org_id, ("pos_settings", "pos_inventory_adjust"))
+    status = body.get("status")
+    if status not in ("received", "sent_back", "written_off"):
+        raise HTTPException(400, "invalid status")
+    upd = {"status": status}
+    if status == "sent_back":
+        upd["sent_back_at"] = "now()"
+    r = (sb().schema("pos").table("trade_ins").update(upd)
+         .eq("org_id", org_id).eq("id", ti_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    return {"trade_in": r.data[0]}
+
+
+# ── Catalogs: service plans, dealer codes, carrier portals ─────────────────────────────────────────
+@router.get("/service-plans")
+def list_service_plans(include_inactive: bool = False, org_id: str = ORG_ID):
+    q = sb().schema("pos").table("service_plans").select("*").eq("org_id", org_id)
+    if not include_inactive:   # the activation dropdown wants active-or-null only
+        q = q.or_("status.eq.active,status.is.null")
+    rows = q.order("carrier").order("plan_name").limit(500).execute().data or []
+    return {"service_plans": rows}
+
+
+@router.post("/service-plans")
+def create_service_plan(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    ins = {k: body[k] for k in SERVICE_PLAN_FIELDS if k in body}
+    if not (ins.get("carrier") or "").strip() or not (ins.get("plan_name") or "").strip():
+        raise HTTPException(400, "carrier and plan_name required")
+    ins["org_id"] = org_id
+    r = sb().schema("pos").table("service_plans").insert(ins).execute()
+    return {"service_plan": (r.data or [{}])[0]}
+
+
+@router.patch("/service-plans/{plan_id}")
+def update_service_plan(plan_id: str, body: dict, authorization: str = Header(default=""),
+                        org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    upd = {k: body[k] for k in SERVICE_PLAN_FIELDS if k in body}
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (sb().schema("pos").table("service_plans").update(upd)
+         .eq("org_id", org_id).eq("id", plan_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    return {"service_plan": r.data[0]}
+
+
+@router.get("/dealer-codes")
+def list_dealer_codes(org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("dealer_codes").select("*").eq("org_id", org_id)
+            .order("code").limit(200).execute().data) or []
+    return {"dealer_codes": rows}
+
+
+@router.post("/dealer-codes")
+def create_dealer_code(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    code = (body.get("code") or "").strip()
+    if not code:
+        raise HTTPException(400, "code required")
+    r = sb().schema("pos").table("dealer_codes").insert({
+        "org_id": org_id, "code": code, "carrier": (body.get("carrier") or "").strip() or None,
+        "store_code": (body.get("store_code") or "").strip() or None,
+    }).execute()
+    return {"dealer_code": (r.data or [{}])[0]}
+
+
+@router.patch("/dealer-codes/{code_id}")
+def update_dealer_code(code_id: str, body: dict, authorization: str = Header(default=""),
+                       org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    upd = {k: body[k] for k in ("code", "carrier", "store_code", "is_active") if k in body}
+    _clean_nullable(upd, ("carrier", "store_code"))
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (sb().schema("pos").table("dealer_codes").update(upd)
+         .eq("org_id", org_id).eq("id", code_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    return {"dealer_code": r.data[0]}
+
+
+@router.get("/carrier-portals")
+def list_carrier_portals(org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("carrier_portals").select("*").eq("org_id", org_id)
+            .order("sort_order").order("carrier").limit(100).execute().data) or []
+    return {"carrier_portals": rows}
+
+
+@router.post("/carrier-portals")
+def create_carrier_portal(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    carrier = (body.get("carrier") or "").strip()
+    url = (body.get("url") or "").strip()
+    if not carrier or not url:
+        raise HTTPException(400, "carrier and url required")
+    r = sb().schema("pos").table("carrier_portals").insert({
+        "org_id": org_id, "carrier": carrier, "url": url,
+        "sort_order": int(body.get("sort_order") or 0),
+    }).execute()
+    return {"carrier_portal": (r.data or [{}])[0]}
+
+
+@router.patch("/carrier-portals/{portal_id}")
+def update_carrier_portal(portal_id: str, body: dict, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    upd = {k: body[k] for k in ("carrier", "url", "is_active", "sort_order") if k in body}
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (sb().schema("pos").table("carrier_portals").update(upd)
+         .eq("org_id", org_id).eq("id", portal_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    return {"carrier_portal": r.data[0]}
+
+
+@router.delete("/carrier-portals/{portal_id}")
+def delete_carrier_portal(portal_id: str, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    sb().schema("pos").table("carrier_portals").delete() \
+        .eq("org_id", org_id).eq("id", portal_id).execute()
+    return {"ok": True}
+
+
+# ── Vendors ────────────────────────────────────────────────────────────────────────────────────────
+@router.get("/vendors")
+def list_vendors(search: str = "", search_by: str = "legal_name", business_type: str = "",
+                 active_only: bool = True, org_id: str = ORG_ID):
+    q = sb().schema("pos").table("vendors").select("*").eq("org_id", org_id)
+    if active_only:
+        q = q.eq("is_active", True)
+    if business_type:
+        q = q.eq("business_type", business_type)
+    s = search.strip().replace("%", "").replace(",", " ")
+    if s:
+        if search_by == "legal_name":
+            q = q.or_(f"legal_name.ilike.%{s}%,short_name.ilike.%{s}%")
+        elif search_by in ("contact_name", "phone", "email"):
+            q = q.ilike(search_by, f"%{s}%")
+    rows = q.order("legal_name").limit(300).execute().data or []
+    return {"vendors": rows}
+
+
+@router.post("/vendors")
+def create_vendor(body: dict, org_id: str = ORG_ID):
+    ins = {k: body[k] for k in VENDOR_FIELDS if k in body}
+    if not (ins.get("legal_name") or "").strip():
+        raise HTTPException(400, "legal_name required")
+    ins["org_id"] = org_id
+    r = sb().schema("pos").table("vendors").insert(ins).execute()
+    return {"vendor": (r.data or [{}])[0]}
+
+
+@router.patch("/vendors/{vendor_id}")
+def update_vendor(vendor_id: str, body: dict, org_id: str = ORG_ID):
+    upd = {k: body[k] for k in VENDOR_FIELDS if k in body}
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (sb().schema("pos").table("vendors").update(upd)
+         .eq("org_id", org_id).eq("id", vendor_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    return {"vendor": r.data[0]}
+
+
+# ── Purchase orders (header-only, matching the standalone UI) ──────────────────────────────────────
+@router.get("/purchase-orders")
+def list_purchase_orders(org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("purchase_orders").select("*").eq("org_id", org_id)
+            .order("created_at", desc=True).limit(100).execute().data) or []
+    vendor_ids = sorted({r["vendor_id"] for r in rows if r.get("vendor_id")})
+    names = {}
+    if vendor_ids:
+        for v in (sb().schema("pos").table("vendors").select("id,legal_name")
+                  .eq("org_id", org_id).in_("id", vendor_ids).execute().data or []):
+            names[v["id"]] = v.get("legal_name")
+    for r in rows:
+        r["vendor_name"] = names.get(r.get("vendor_id"))
+    return {"purchase_orders": rows}
+
+
+@router.post("/purchase-orders")
+def create_purchase_order(body: dict, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    if not body.get("vendor_id"):
+        raise HTTPException(400, "vendor_id required")
+    import time as _time
+    ins = {
+        "org_id": org_id,
+        "po_number": (body.get("po_number") or "").strip() or f"PO-{int(_time.time() * 1000)}",
+        "vendor_id": body["vendor_id"],
+        "store_code": (body.get("store_code") or "").strip() or None,
+        "created_by": _caller_employee(authorization, org_id) or None,
+        "status": "draft",
+        "order_date": body.get("order_date") or None,
+        "expected_date": body.get("expected_date") or None,
+        "notes": (body.get("notes") or "").strip() or None,
+    }
+    r = sb().schema("pos").table("purchase_orders").insert(ins).execute()
+    return {"purchase_order": (r.data or [{}])[0]}
+
+
+# ── Store transfers ────────────────────────────────────────────────────────────────────────────────
+@router.get("/transfers")
+def list_transfers(org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("store_transfers").select("*").eq("org_id", org_id)
+            .order("created_at", desc=True).limit(200).execute().data) or []
+    items = (sb().schema("pos").table("store_transfer_items").select("transfer_id")
+             .eq("org_id", org_id).limit(5000).execute().data) or []
+    counts = {}
+    for it in items:
+        counts[it["transfer_id"]] = counts.get(it["transfer_id"], 0) + 1
+    for r in rows:
+        r["item_count"] = counts.get(r["id"], 0)
+    return {"transfers": rows}
+
+
+@router.get("/transfers/{transfer_id}")
+def get_transfer(transfer_id: str, org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("store_transfers").select("*")
+            .eq("org_id", org_id).eq("id", transfer_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    t = rows[0]
+    items = (sb().schema("pos").table("store_transfer_items").select("*")
+             .eq("transfer_id", transfer_id).order("created_at").execute().data) or []
+    prods = {p["id"]: p for p in (sb().schema("pos").table("products")
+             .select("id,short_name,product_code").eq("org_id", org_id)
+             .limit(2000).execute().data or [])}
+    for it in items:
+        p = prods.get(it.get("product_id")) or {}
+        it["product_name"] = p.get("short_name")
+        it["product_code"] = p.get("product_code")
+    t["items"] = items
+    return {"transfer": t}
+
+
+@router.post("/transfers")
+def create_transfer(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    items = body.get("items") or []
+    if not items:
+        raise HTTPException(400, "a transfer needs at least one item")
+    import secrets as _secrets
+    from datetime import datetime as _dt, timezone as _tz
+    alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"   # Crockford-ish, same idea as the old app
+    number = ("ST-" + _dt.now(_tz.utc).strftime("%y%m%d") + "-"
+              + "".join(_secrets.choice(alphabet) for _ in range(4)))
+    header = {
+        "transfer_number": (body.get("transfer_number") or "").strip() or number,
+        "from_store_code": body.get("from_store_code"),
+        "to_store_code": body.get("to_store_code"),
+        "created_by": _caller_employee(authorization, org_id) or None,
+        "notes": body.get("notes") or "",
+    }
+    try:
+        r = sb().schema("pos").rpc("create_transfer", {
+            "p_org": org_id, "p_header": header, "p_items": items,
+        }).execute()
+    except Exception as e:
+        raise HTTPException(400, f"create failed: {e}")
+    return {"transfer": r.data}
+
+
+@router.post("/transfers/{transfer_id}/ship")
+def ship_transfer(transfer_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_inventory_adjust")
+    try:
+        r = sb().schema("pos").rpc("ship_transfer",
+                                   {"p_org": org_id, "p_transfer": transfer_id}).execute()
+    except Exception as e:
+        raise HTTPException(400, f"ship failed: {e}")
+    return {"transfer": r.data}
+
+
+@router.post("/transfers/{transfer_id}/receive")
+def receive_transfer(transfer_id: str, authorization: str = Header(default=""),
+                     org_id: str = ORG_ID):
+    _require_pos_perm(authorization, org_id, "pos_inventory_receive")
+    try:
+        r = sb().schema("pos").rpc("receive_transfer",
+                                   {"p_org": org_id, "p_transfer": transfer_id}).execute()
+    except Exception as e:
+        raise HTTPException(400, f"receive failed: {e}")
+    return {"transfer": r.data}
+
+
+@router.post("/transfers/{transfer_id}/cancel")
+def cancel_transfer(transfer_id: str, authorization: str = Header(default=""),
+                    org_id: str = ORG_ID):
+    """Guarded status flip — no inventory moved while pending, so nothing to restore."""
+    _require_pos_perm(authorization, org_id, "pos_inventory_adjust")
+    r = (sb().schema("pos").table("store_transfers").update({"status": "cancelled"})
+         .eq("org_id", org_id).eq("id", transfer_id).eq("status", "pending").execute())
+    if not r.data:
+        raise HTTPException(409, "only pending transfers can be cancelled "
+                                 "(it may have just been shipped)")
+    return {"transfer": r.data[0]}
+
+
+# ── Reports ────────────────────────────────────────────────────────────────────────────────────────
+@router.get("/reports/kpis")
+def report_kpis(org_id: str = ORG_ID):
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    now = _dt.now(_tz.utc)
+    today = now.strftime("%Y-%m-%dT00:00:00")
+    week = (now - _td(days=7)).isoformat()
+    month = now.strftime("%Y-%m-01T00:00:00")
+    out = {}
+    for key, since in (("today", today), ("week", week), ("month", month)):
+        rows = (sb().schema("pos").table("sales").select("total")
+                .eq("org_id", org_id).eq("status", "completed")
+                .gte("created_at", since).limit(5000).execute().data) or []
+        out[key] = {"count": len(rows), "total": sum(float(r.get("total") or 0) for r in rows)}
+    out["customers"] = len((sb().schema("pos").table("customers").select("id")
+                            .eq("org_id", org_id).eq("is_active", True)
+                            .limit(10000).execute().data) or [])
+    out["products"] = len((sb().schema("pos").table("products").select("id")
+                           .eq("org_id", org_id).eq("is_active", True)
+                           .limit(10000).execute().data) or [])
+    out["in_stock_units"] = len((sb().schema("pos").table("inventory_serial").select("id")
+                                 .eq("org_id", org_id).eq("status", "in_stock")
+                                 .limit(10000).execute().data) or [])
+    return out
+
+
+@router.get("/reports/sales")
+def report_sales(date_from: str = "", date_to: str = "", store_code: str = "",
+                 employee_id: str = "", kind: str = "daily", org_id: str = ORG_ID):
+    q = (sb().schema("pos").table("sales")
+         .select("id,transaction_id,created_at,total,discount_total,receipt_type,status,"
+                 "voided_at,customer_id,employee_id,store_code")
+         .eq("org_id", org_id))
+    if date_from:
+        q = q.gte("created_at", date_from)
+    if date_to:
+        q = q.lte("created_at", date_to + "T23:59:59")
+    if store_code:
+        q = q.eq("store_code", store_code)
+    if employee_id:
+        q = q.eq("employee_id", employee_id)
+    if kind == "voids":
+        q = q.or_("status.eq.voided,voided_at.not.is.null")
+    elif kind == "discounts":
+        q = q.gt("discount_total", 0)
+    rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    cust = _customer_names(org_id, [r.get("customer_id") for r in rows])
+    emp = _employee_names(org_id)
+    for r in rows:
+        r["customer_name"] = (cust.get(r.get("customer_id")) or {}).get("name")
+        r["employee_name"] = emp.get((r.get("employee_id") or "").strip())
+    return {"rows": rows}
+
+
+@router.get("/reports/activations")
+def report_activations(date_from: str = "", date_to: str = "", store_code: str = "",
+                       employee_id: str = "", org_id: str = ORG_ID):
+    q = (sb().schema("pos").table("activations")
+         .select("id,activation_number,carrier,activation_date,monthly_fee,cell_number,"
+                 "mobile_phone,status,customer_id,employee_id,store_code")
+         .eq("org_id", org_id))
+    if date_from:
+        q = q.gte("activation_date", date_from)
+    if date_to:
+        q = q.lte("activation_date", date_to)
+    if store_code:
+        q = q.eq("store_code", store_code)
+    if employee_id:
+        q = q.eq("employee_id", employee_id)
+    rows = q.order("activation_date", desc=True).limit(500).execute().data or []
+    cust = _customer_names(org_id, [r.get("customer_id") for r in rows])
+    emp = _employee_names(org_id)
+    for r in rows:
+        r["customer_name"] = (cust.get(r.get("customer_id")) or {}).get("name")
+        r["employee_name"] = emp.get((r.get("employee_id") or "").strip())
+    return {"rows": rows}
+
+
+@router.get("/reports/trade-ins")
+def report_trade_ins(date_from: str = "", date_to: str = "", employee_id: str = "",
+                     status: str = "", org_id: str = ORG_ID):
+    q = sb().schema("pos").table("trade_ins").select("*").eq("org_id", org_id)
+    if date_from:
+        q = q.gte("received_at", date_from)
+    if date_to:
+        q = q.lte("received_at", date_to + "T23:59:59")
+    if status:
+        q = q.eq("status", status)
+    rows = q.order("received_at", desc=True).limit(500).execute().data or []
+    act_ids = sorted({r["activation_id"] for r in rows if r.get("activation_id")})
+    acts = {}
+    if act_ids:
+        for a in (sb().schema("pos").table("activations")
+                  .select("id,activation_number,employee_id")
+                  .eq("org_id", org_id).in_("id", act_ids).execute().data or []):
+            acts[a["id"]] = a
+    if employee_id:
+        rows = [r for r in rows
+                if (acts.get(r.get("activation_id")) or {}).get("employee_id") == employee_id]
+    cust = _customer_names(org_id, [r.get("customer_id") for r in rows])
+    for r in rows:
+        a = acts.get(r.get("activation_id")) or {}
+        r["activation_number"] = a.get("activation_number")
+        r["customer_name"] = (cust.get(r.get("customer_id")) or {}).get("name")
+    return {"rows": rows}
+
+
+# ── CSV import (server side: dedupe + batched insert with per-row error attribution) ──────────────
+# The page does parsing/coercion/column mapping; rows arrive here as ready-to-insert dicts.
+# Duplicates (against the DB and within the batch) are SKIPPED, never overwritten — parity with
+# the standalone importer. Stores/locations are NOT importable (storeops owns stores).
+
+def _digits(s) -> str:
+    return "".join(ch for ch in str(s or "") if ch.isdigit())
+
+
+def _fetch_all(table: str, cols: str, org_id: str):
+    out, page = [], 0
+    while True:
+        rows = (sb().schema("pos").table(table).select(cols).eq("org_id", org_id)
+                .range(page * 1000, page * 1000 + 999).execute().data) or []
+        out.extend(rows)
+        if len(rows) < 1000:
+            return out
+        page += 1
+
+
+def _batch_insert(table: str, rows: list, org_id: str):
+    """Insert in batches of 100; on batch failure retry row-by-row so errors attribute to
+    exact rows. Returns (inserted_count, errors=[{index, message}]). `rows` items are
+    (original_index, payload) pairs."""
+    inserted, errors = 0, []
+    for i in range(0, len(rows), 100):
+        chunk = rows[i:i + 100]
+        payloads = [{**p, "org_id": org_id} for _, p in chunk]
+        try:
+            sb().schema("pos").table(table).insert(payloads).execute()
+            inserted += len(chunk)
+        except Exception:
+            for idx, p in chunk:
+                try:
+                    sb().schema("pos").table(table).insert({**p, "org_id": org_id}).execute()
+                    inserted += 1
+                except Exception as e:
+                    errors.append({"index": idx, "message": str(e)[:300]})
+    return inserted, errors
+
+
+@router.post("/import/{entity}")
+def import_rows(entity: str, body: dict, org_id: str = ORG_ID):
+    rows = body.get("rows") or []
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "rows required")
+    if len(rows) > 5000:
+        raise HTTPException(400, "max 5000 rows per import request")
+    skipped, to_insert = [], []
+
+    if entity == "customers":
+        existing = _fetch_all("customers", "phone_primary,email", org_id)
+        seen = {k for r in existing for k in
+                (_digits(r.get("phone_primary")), (r.get("email") or "").strip().lower()) if k}
+        for i, row in enumerate(rows):
+            p = _clean_customer(row)
+            key = _digits(p.get("phone_primary")) or (p.get("email") or "").strip().lower()
+            if key and key in seen:
+                skipped.append({"index": i, "message": "duplicate (phone/email already exists)"})
+                continue
+            if key:
+                seen.add(key)
+            to_insert.append((i, p))
+        inserted, errors = _batch_insert("customers", to_insert, org_id)
+
+    elif entity == "vendors":
+        existing = _fetch_all("vendors", "legal_name", org_id)
+        seen = {(r.get("legal_name") or "").strip().lower() for r in existing}
+        for i, row in enumerate(rows):
+            p = {k: row[k] for k in VENDOR_FIELDS if k in row}
+            key = (p.get("legal_name") or "").strip().lower()
+            if not key:
+                skipped.append({"index": i, "message": "legal_name required"})
+                continue
+            if key in seen:
+                skipped.append({"index": i, "message": "duplicate (legal_name already exists)"})
+                continue
+            seen.add(key)
+            to_insert.append((i, p))
+        inserted, errors = _batch_insert("vendors", to_insert, org_id)
+
+    elif entity == "products":
+        existing = _fetch_all("products", "upc", org_id)
+        seen = {(r.get("upc") or "").strip() for r in existing if (r.get("upc") or "").strip()}
+        cat = catalog(org_id)
+        dmap = {d["short_name"].strip().lower(): d["id"] for d in cat["departments"]}
+        cmap = {c["name"].strip().lower(): c["id"] for c in cat["categories"]}
+        for i, row in enumerate(rows):
+            p = _clean(row)
+            dname = (row.get("department") or "").strip()
+            cname = (row.get("category") or "").strip()
+            if dname:
+                did = dmap.get(dname.lower())
+                if not did:
+                    d = sb().schema("pos").table("departments").insert(
+                        {"org_id": org_id, "short_name": dname, "full_name": dname}
+                    ).execute().data
+                    did = d[0]["id"] if d else None
+                    if did:
+                        dmap[dname.lower()] = did
+                p["department_id"] = did
+            if cname:
+                cid = cmap.get(cname.lower())
+                if not cid:
+                    c = sb().schema("pos").table("categories").insert(
+                        {"org_id": org_id, "name": cname,
+                         "department_id": p.get("department_id")}
+                    ).execute().data
+                    cid = c[0]["id"] if c else None
+                    if cid:
+                        cmap[cname.lower()] = cid
+                p["category_id"] = cid
+            upc = (p.get("upc") or "").strip()
+            if upc and upc in seen:
+                skipped.append({"index": i, "message": "duplicate (UPC already exists)"})
+                continue
+            if upc:
+                seen.add(upc)
+            to_insert.append((i, p))
+        inserted, errors = _batch_insert("products", to_insert, org_id)
+
+    elif entity == "inventory":
+        prods = _fetch_all("products", "id,upc,short_name", org_id)
+        by_upc = {(p.get("upc") or "").strip(): p["id"] for p in prods if (p.get("upc") or "").strip()}
+        by_name = {(p.get("short_name") or "").strip().lower(): p["id"] for p in prods}
+        existing = _fetch_all("inventory_standard", "product_id,store_code", org_id)
+        seen = {f"{r['product_id']}|{r['store_code']}" for r in existing}
+        for i, row in enumerate(rows):
+            pid = by_upc.get((row.get("upc") or "").strip()) \
+                or by_name.get((row.get("product_name") or "").strip().lower())
+            if not pid:
+                skipped.append({"index": i, "message": "product not found (by UPC or name)"})
+                continue
+            store = (row.get("store_code") or "").strip()
+            if not store:
+                skipped.append({"index": i, "message": "store_code required"})
+                continue
+            key = f"{pid}|{store}"
+            if key in seen:
+                skipped.append({"index": i, "message": "duplicate (product already counted at store)"})
+                continue
+            seen.add(key)
+            p = {"product_id": pid, "store_code": store,
+                 "qty_on_hand": int(row.get("qty_on_hand") or 0),
+                 "qty_on_order": int(row.get("qty_on_order") or 0),
+                 "qty_reserved": int(row.get("qty_reserved") or 0),
+                 "bin_location": (row.get("bin_location") or "").strip() or None}
+            to_insert.append((i, p))
+        inserted, errors = _batch_insert("inventory_standard", to_insert, org_id)
+
+    elif entity == "activations":
+        existing = _fetch_all("activations", "cell_number,activation_date", org_id)
+        seen = {f"{_digits(r.get('cell_number'))}|{r.get('activation_date') or ''}"
+                for r in existing if _digits(r.get("cell_number"))}
+        custs = _fetch_all("customers",
+                           "id,phone_primary,email,first_name,last_name,company_name", org_id)
+        by_phone, by_email, by_name = {}, {}, {}
+        for c in custs:
+            ph = _digits(c.get("phone_primary"))
+            if ph:
+                by_phone.setdefault(ph, []).append(c["id"])
+            em = (c.get("email") or "").strip().lower()
+            if em:
+                by_email.setdefault(em, []).append(c["id"])
+            nm = (f"{c.get('first_name') or ''} {c.get('last_name') or ''}".strip()
+                  or (c.get("company_name") or "").strip()).lower()
+            if nm:
+                by_name.setdefault(nm, []).append(c["id"])
+        for i, row in enumerate(rows):
+            p = _clean_activation({k: v for k, v in row.items() if k in ACTIVATION_FIELDS})
+            if row.get("notes"):
+                p["notes"] = row["notes"]
+            key = f"{_digits(p.get('cell_number'))}|{p.get('activation_date') or ''}"
+            if _digits(p.get("cell_number")) and key in seen:
+                skipped.append({"index": i, "message": "duplicate (cell number + date)"})
+                continue
+            matches = (by_phone.get(_digits(row.get("customer_phone"))) if row.get("customer_phone") else None) \
+                or (by_email.get((row.get("customer_email") or "").strip().lower()) if row.get("customer_email") else None) \
+                or (by_name.get((row.get("customer_name") or "").strip().lower()) if row.get("customer_name") else None)
+            if row.get("customer_phone") or row.get("customer_email") or row.get("customer_name"):
+                if not matches:
+                    skipped.append({"index": i, "message": "customer not found"})
+                    continue
+                if len(matches) > 1:
+                    skipped.append({"index": i, "message": "ambiguous customer match"})
+                    continue
+                p["customer_id"] = matches[0]
+            if _digits(p.get("cell_number")):
+                seen.add(key)
+            to_insert.append((i, p))
+        inserted, errors = _batch_insert("activations", to_insert, org_id)
+
+    else:
+        raise HTTPException(400, f"unknown entity '{entity}' "
+                                 "(importable: customers, products, vendors, inventory, activations)")
+
+    return {"inserted": inserted, "skipped": skipped, "errors": errors,
+            "total": len(rows)}
