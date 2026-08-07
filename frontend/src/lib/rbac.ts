@@ -245,10 +245,14 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'], cap: 'asset_lending' },
     { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
   ]},
-  // POS module (mig 724) — the point-of-sale port (Phase 0: product catalog). Grows a register,
-  // customers, inventory, and activations in later phases; see pos-system INTEGRATION_PLAN.md.
+  // POS module (mig 724/725) — the point-of-sale port (Phase 1: register, customers, inventory,
+  // settings). Activations/vendors/POs/reports arrive in Phase 2; see pos-system INTEGRATION_PLAN.md.
   { group: 'Point of Sale', module: 'pos', items: [
+    { href: '/pos/sales', label: 'Register', icon: '🛒', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/customers', label: 'Customers', icon: '👤', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'] },
   ]},
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
