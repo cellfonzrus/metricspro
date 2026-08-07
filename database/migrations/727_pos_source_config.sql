@@ -45,11 +45,14 @@ CREATE TABLE IF NOT EXISTS core.tenant_pos_setup (
   CHECK (NOT (builtin_role = 'primary' AND external_role = 'primary'))
 );
 
+-- Backend-only access (mig-722 posture — NOT the legacy open_all pattern): RLS on with no
+-- policies, anon/authenticated revoked, service_role only. This table decides whose data
+-- lands in the commission ledger; a browser must never be able to touch it.
 DO $$ BEGIN
   EXECUTE 'ALTER TABLE core.tenant_pos_setup ENABLE ROW LEVEL SECURITY';
   EXECUTE 'DROP POLICY IF EXISTS open_all ON core.tenant_pos_setup';
-  EXECUTE 'CREATE POLICY open_all ON core.tenant_pos_setup FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)';
-  EXECUTE 'GRANT ALL ON core.tenant_pos_setup TO anon, authenticated, service_role';
+  EXECUTE 'REVOKE ALL ON core.tenant_pos_setup FROM anon, authenticated';
+  EXECUTE 'GRANT ALL ON core.tenant_pos_setup TO service_role';
 END $$;
 
 -- Every existing tenant gets today's behavior spelled out: external primary, built-in off.
@@ -111,16 +114,86 @@ CREATE TABLE IF NOT EXISTS commcalc.pos_builtin_sales (
 CREATE INDEX IF NOT EXISTS pos_builtin_sales_period ON commcalc.pos_builtin_sales (org_id, period);
 CREATE INDEX IF NOT EXISTS pos_builtin_sales_trans  ON commcalc.pos_builtin_sales (org_id, trans_id);
 
+-- Backend-only access for the sales streams too (mig-722 posture): cross-tenant sales data
+-- (rep names, customer emails, GP) must not be readable with the public anon key.
 DO $$
 DECLARE t TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY['commcalc.pos_builtin_daily_sales','commcalc.pos_builtin_sales'] LOOP
     EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS open_all ON %s', t);
-    EXECUTE format('CREATE POLICY open_all ON %s FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)', t);
-    EXECUTE format('GRANT ALL ON %s TO anon, authenticated, service_role', t);
+    EXECUTE format('REVOKE ALL ON %s FROM anon, authenticated', t);
+    EXECUTE format('GRANT ALL ON %s TO service_role', t);
   END LOOP;
 END $$;
+
+-- ── 3. Atomic primary promotion ────────────────────────────────────────────────────────────────────
+-- One transaction: replace the target period in daily_sales_feed / raw_sales from the
+-- already-written built-in stream. The non-atomic alternative (delete via one HTTP call,
+-- insert via others) could leave the LIVE ledger period wiped or half-written on a failure.
+-- Guards baked in: refuses when the tenant's builtin_role isn't 'primary', when the external
+-- POS isn't 'off' (its feed lands in these same tables — promotion would wipe it, violating
+-- the never-merge rule), and when the stream period is empty (empty-abort).
+CREATE OR REPLACE FUNCTION commcalc.pos_promote_period(p_org UUID, p_period TEXT, p_mode TEXT)
+RETURNS INT
+LANGUAGE plpgsql
+SET search_path = commcalc, core, pg_temp
+AS $$
+DECLARE
+  v_setup core.tenant_pos_setup;
+  v_count INT;
+BEGIN
+  IF p_mode NOT IN ('daily','monthly') THEN
+    RAISE EXCEPTION 'mode must be daily or monthly';
+  END IF;
+  SELECT * INTO v_setup FROM core.tenant_pos_setup WHERE org_id = p_org;
+  IF v_setup.org_id IS NULL OR v_setup.builtin_role IS DISTINCT FROM 'primary' THEN
+    RAISE EXCEPTION 'promotion requires builtin_role = primary in tenant POS setup';
+  END IF;
+  IF v_setup.external_role IS DISTINCT FROM 'off' THEN
+    RAISE EXCEPTION 'promotion is blocked while an external POS is configured (%) — its feed '
+                    'lands in the same ledger tables and would be wiped (never-merge rule, '
+                    'SAAS_FRAMEWORK §8)', v_setup.external_role;
+  END IF;
+
+  IF p_mode = 'daily' THEN
+    SELECT COUNT(*) INTO v_count FROM commcalc.pos_builtin_daily_sales
+     WHERE org_id = p_org AND period = p_period;
+    IF v_count = 0 THEN
+      RAISE EXCEPTION 'built-in stream has no rows for % — aborting so the ledger period is not wiped', p_period;
+    END IF;
+    DELETE FROM commcalc.daily_sales_feed WHERE org_id = p_org AND period = p_period;
+    INSERT INTO commcalc.daily_sales_feed
+      (org_id, period, period_month, period_year, store, salesperson, user_login, contract_type,
+       department, category, product_desc, product_id, gp, ext_price, trans_id, trans_date,
+       mdn, serial_1, register, tender_type, voided, trans_type, customer, email, customer_no)
+    SELECT org_id, period, period_month, period_year, store, salesperson, user_login, contract_type,
+           department, category, product_desc, product_id, gp, ext_price, trans_id, trans_date,
+           mdn, serial_1, register, tender_type, voided, trans_type, customer, email, customer_no
+    FROM commcalc.pos_builtin_daily_sales
+    WHERE org_id = p_org AND period = p_period;
+  ELSE
+    SELECT COUNT(*) INTO v_count FROM commcalc.pos_builtin_sales
+     WHERE org_id = p_org AND period = p_period;
+    IF v_count = 0 THEN
+      RAISE EXCEPTION 'built-in stream has no rows for % — aborting so the ledger period is not wiped', p_period;
+    END IF;
+    DELETE FROM commcalc.raw_sales WHERE org_id = p_org AND period = p_period;
+    INSERT INTO commcalc.raw_sales
+      (org_id, period, period_month, period_year, store, salesperson, user_login, department,
+       category, product_desc, product_id, gp, ext_price, trans_id, trans_date, contract_type,
+       mdn, serial_1, register, tender_type, voided, trans_type, sku)
+    SELECT org_id, period, period_month, period_year, store, salesperson, user_login, department,
+           category, product_desc, product_id, gp, ext_price, trans_id, trans_date, contract_type,
+           mdn, serial_1, register, tender_type, voided, trans_type, sku
+    FROM commcalc.pos_builtin_sales
+    WHERE org_id = p_org AND period = p_period;
+  END IF;
+  RETURN v_count;
+END;
+$$;
+REVOKE ALL ON FUNCTION commcalc.pos_promote_period(UUID, TEXT, TEXT) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION commcalc.pos_promote_period(UUID, TEXT, TEXT) TO service_role;
 
 COMMENT ON TABLE commcalc.pos_builtin_daily_sales IS
   'Built-in POS module daily sales stream (POS 2 when secondary). NEVER merged with the external feed — SAAS_FRAMEWORK.md §8. Promotion to daily_sales_feed only when core.tenant_pos_setup.builtin_role = primary.';

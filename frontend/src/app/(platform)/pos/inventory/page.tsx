@@ -6,7 +6,7 @@
 // (header-only list + Enter Order form, matching the standalone UI). The source's Receiving/Adjustment
 // form was a mock (alert-only) and is intentionally not ported.
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/client'
+import { api, localToday } from '@/lib/client'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { useAuth } from '@/lib/auth-context'
 
@@ -65,7 +65,7 @@ const CONDITIONS = ['new', 'refurbished', 'used', 'damaged']
 const emptySerialForm = {
   product_id: '', serial_number: '', imei: '', sim_card: '',
   color: '', storage: '', condition: 'new', status: 'in_stock',
-  cost: 0, date_received: new Date().toISOString().split('T')[0], po_number: '',
+  cost: 0, date_received: localToday(), po_number: '',
 }
 
 const input: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', color: 'var(--text)', width: '100%', outline: 'none' }
@@ -146,7 +146,7 @@ export default function PosInventoryPage() {
   const [showPOForm, setShowPOForm] = useState(false)
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [poForm, setPoForm] = useState({
-    vendor_id: '', order_date: new Date().toISOString().split('T')[0], expected_date: '', notes: '',
+    vendor_id: '', order_date: localToday(), expected_date: '', notes: '',
   })
 
   const storeLabel = (code: string | null | undefined) => {
@@ -480,7 +480,7 @@ export default function PosInventoryPage() {
         }),
       })
       setShowPOForm(false)
-      setPoForm({ vendor_id: '', order_date: new Date().toISOString().split('T')[0], expected_date: '', notes: '' })
+      setPoForm({ vendor_id: '', order_date: localToday(), expected_date: '', notes: '' })
       await loadPurchaseOrders()
     } catch (err: any) { alert('Could not create PO: ' + (err?.message || err)) }
     setSaving(false)

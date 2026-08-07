@@ -265,8 +265,24 @@ def sync_period(org_id: str, mode: str, period=None):
     if role == "primary":
         # Promotion: the built-in stream IS this tenant's POS-1 ledger — land it exactly
         # where the external feed would. Secondary streams NEVER take this path (§8).
-        promo_payloads = [{k: v for k, v in p.items()} for p in payloads]
-        _replace_period(promo_table, org_id, period_label, promo_payloads)
+        # One ATOMIC transaction via commcalc.pos_promote_period (mig 727): a failure can't
+        # leave the live ledger period wiped/half-written. The function re-checks the tenant
+        # roles server-side and refuses while an external POS is configured (its feed lands
+        # in the same tables and would be destroyed).
+        if (setup.get("external_role") or "off") != "off":
+            raise HTTPException(409, "promotion is blocked while an external POS is configured "
+                                     "for this tenant — its feed lands in the same ledger tables "
+                                     "(never-merge rule, SAAS_FRAMEWORK §8). Set external_role "
+                                     "to 'off' or run the built-in POS as secondary.")
+        try:
+            sb().schema("commcalc").rpc("pos_promote_period", {
+                "p_org": org_id, "p_period": period_label, "p_mode": mode,
+            }).execute()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(400, f"promotion failed (stream table is written; ledger "
+                                     f"unchanged or rolled back): {e}")
         promoted = True
 
     _ensure_registrations(org_id)

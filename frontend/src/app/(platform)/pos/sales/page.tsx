@@ -12,7 +12,7 @@
 //     sale's employee_id from the login (never trusted from the client).
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '@/lib/client'
+import { api, addDays, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import RegisterDrawer, { RegisterSession } from '@/components/pos/RegisterDrawer'
 import RegisterLock from '@/components/pos/RegisterLock'
@@ -43,6 +43,9 @@ interface CartItem {
   tax_rate: number      // FRACTION (e.g. 0.08875)
   tax_value: number     // PER-UNIT tax; × qty at checkout
   extended_price: number
+  // Stamped from the product at add time so re-taxing (store/tax-code changes) doesn't
+  // depend on the item still being present in the default 500-row catalog list.
+  is_taxable?: boolean
 }
 
 interface Customer {
@@ -112,6 +115,11 @@ const panel: React.CSSProperties = { background: 'var(--surface2)', borderRadius
 const modalOverlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }
 const thStyle: React.CSSProperties = { padding: '8px 10px', textAlign: 'left', color: 'var(--text2)', fontWeight: 600, whiteSpace: 'nowrap', fontSize: 11, textTransform: 'uppercase' }
 
+// Local calendar day (YYYY-MM-DD) → real instants, so filters compare correctly
+// against UTC created_at timestamps.
+const dayStartIso = (ymd: string) => { const [y, m, d] = ymd.split('-').map(Number); return new Date(y, m - 1, d).toISOString() }
+const dayEndIso = (ymd: string) => { const [y, m, d] = ymd.split('-').map(Number); return new Date(y, m - 1, d, 23, 59, 59).toISOString() }
+
 export default function PosSalesPage() {
   const { user, loading: authLoading } = useAuth()
 
@@ -143,8 +151,8 @@ export default function PosSalesPage() {
   const [voiding, setVoiding] = useState(false)
 
   // Sale Log filters
-  const [slDateFrom, setSlDateFrom] = useState(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0])
-  const [slDateTo, setSlDateTo] = useState(new Date().toISOString().split('T')[0])
+  const [slDateFrom, setSlDateFrom] = useState(addDays(localToday(), -30))
+  const [slDateTo, setSlDateTo] = useState(localToday())
   const [slStore, setSlStore] = useState('')
   const [slCustomerSearch, setSlCustomerSearch] = useState('')
   const [slSerial, setSlSerial] = useState('')
@@ -279,6 +287,10 @@ export default function PosSalesPage() {
     // receipt_coupon_in_retail_price (POS Configuration): fold the line discount into the printed
     // unit price — no separate −$x amounts and no Discounts subtotal row.
     const foldDiscount = cfg.receipt_coupon_in_retail_price === true
+    // r.subtotal is NET of line discounts. When a separate Discounts row prints, the Subtotal
+    // line must show the GROSS amount so Subtotal − Discounts + Tax = TOTAL adds up exactly.
+    const showDiscountRow = !foldDiscount && showDiscounts && r.discountTotal > 0
+    const displaySubtotal = showDiscountRow ? r.subtotal + r.discountTotal : r.subtotal
     // Receipt branding (POS Configuration): a configured company name replaces
     // the store name; address lines + license/tax IDs print under it.
     const brandName = String(cfg.brand_company_name || '').trim()
@@ -324,8 +336,8 @@ export default function PosSalesPage() {
       </div>
       <hr><table>${rows}</table><hr>
       <table>
-        <tr><td>Subtotal</td><td class="r">$${r.subtotal.toFixed(2)}</td></tr>
-        ${!foldDiscount && showDiscounts && r.discountTotal > 0 ? `<tr><td>Discounts</td><td class="r">−$${r.discountTotal.toFixed(2)}</td></tr>` : ''}
+        <tr><td>Subtotal</td><td class="r">$${displaySubtotal.toFixed(2)}</td></tr>
+        ${showDiscountRow ? `<tr><td>Discounts</td><td class="r">−$${r.discountTotal.toFixed(2)}</td></tr>` : ''}
         ${showTax ? `<tr><td>Tax</td><td class="r">$${r.taxTotal.toFixed(2)}</td></tr>` : ''}
         <tr class="grand"><td>TOTAL</td><td class="r">$${r.total.toFixed(2)}</td></tr>
       </table><hr>
@@ -439,8 +451,8 @@ export default function PosSalesPage() {
     setLoading(true)
     try {
       const params = new URLSearchParams()
-      params.set('date_from', slDateFrom)
-      params.set('date_to', slDateTo + 'T23:59:59')
+      if (slDateFrom) params.set('date_from', dayStartIso(slDateFrom))
+      if (slDateTo) params.set('date_to', dayEndIso(slDateTo))
       if (slStore) params.set('store_code', slStore)
       const r = await api(`/api/v1/pos/sales?${params}`)
       let rows: Sale[] = r.sales || []
@@ -531,8 +543,11 @@ export default function PosSalesPage() {
   // Non-taxable products stay at 0.
   useEffect(() => {
     setCart(prev => prev.length === 0 ? prev : prev.map(it => {
-      const p = products.find(pp => pp.id === it.product_id)
-      const taxable = p ? p.is_taxable : it.tax_rate > 0
+      // is_taxable is stamped on the item at add time; the catalog lookup is only a
+      // fallback for items that somehow predate the stamp.
+      const taxable = it.is_taxable !== undefined
+        ? it.is_taxable
+        : (products.find(pp => pp.id === it.product_id)?.is_taxable ?? it.tax_rate > 0)
       return recalcItem({ ...it, tax_rate: taxable ? (activeTaxRate ?? 0) : 0 })
     }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -551,6 +566,7 @@ export default function PosSalesPage() {
       tax_rate: product.is_taxable ? (activeTaxRate ?? 0) : 0,
       tax_value: 0,
       extended_price: 0,
+      is_taxable: product.is_taxable,
     })
     setCart(prev => {
       if (!serial) {
@@ -635,8 +651,26 @@ export default function PosSalesPage() {
       setBlockIssues(blockers)
       return
     }
-    setSaving(true)
     const saleTotal = parseFloat(total.toFixed(2))
+
+    // Cash tender: a blank amount means exact payment; an amount below the total blocks the
+    // sale. The resolved tendered/change land on the receipt snapshot (never 0/0 for cash).
+    let cashTendered: number | null = null
+    let cashChange = 0
+    if (paymentMethod === 'cash') {
+      const raw = amountTendered.trim()
+      const parsed = raw === '' ? NaN : parseFloat(raw)
+      if (!Number.isFinite(parsed)) {
+        cashTendered = saleTotal // exact payment
+      } else if (parsed < saleTotal) {
+        alert(`Amount tendered ($${parsed.toFixed(2)}) is less than the total ($${saleTotal.toFixed(2)}).`)
+        return
+      } else {
+        cashTendered = parsed
+        cashChange = parseFloat((parsed - saleTotal).toFixed(2))
+      }
+    }
+    setSaving(true)
 
     // Drawer cash limit (POS Configuration): with an open session and a cash payment, block the
     // sale if float + cash taken since open + this sale would exceed the configured maximum
@@ -680,8 +714,8 @@ export default function PosSalesPage() {
       taxTotal: parseFloat(taxTotal.toFixed(2)),
       total: saleTotal,
       method: paymentMethod,
-      tendered: paymentMethod === 'cash' ? parseFloat(amountTendered || '0') : null,
-      change: paymentMethod === 'cash' ? Math.max(0, change) : 0,
+      tendered: paymentMethod === 'cash' ? cashTendered : null,
+      change: paymentMethod === 'cash' ? cashChange : 0,
     }
 
     // ONE atomic call: sale + items + payments commit or roll back together. A stock block
@@ -945,7 +979,9 @@ export default function PosSalesPage() {
               </div>
 
               {[
-                { label: 'Subtotal', value: `$${subtotal.toFixed(2)}`, red: false },
+                // `subtotal` is NET of line discounts — show the GROSS amount next to the
+                // Discount row so Subtotal − Discount + Tax = TOTAL adds up exactly.
+                { label: 'Subtotal', value: `$${(subtotal + discountTotal).toFixed(2)}`, red: false },
                 { label: 'Discount', value: discountTotal > 0 ? `-$${discountTotal.toFixed(2)}` : '$0.00', red: discountTotal > 0 },
                 { label: `Tax (${((activeTaxRate ?? 0) * 100).toFixed(3).replace(/\.?0+$/, '')}%)`, value: `$${taxTotal.toFixed(2)}`, red: false },
               ].map(row => (

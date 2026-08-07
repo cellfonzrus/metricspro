@@ -138,6 +138,12 @@ const ymd = (d: Date) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+// Local calendar day (YYYY-MM-DD) → real instants, so the sales report filters compare
+// correctly against UTC created_at timestamps. Activation/trade-in filters stay bare dates
+// (activation_date is a DATE column; trade_ins received_at gets the backend's day-bound handling).
+const dayStartIso = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).toISOString() }
+const dayEndIso = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d, 23, 59, 59).toISOString() }
+
 export default function PosReportsPage() {
   const [activeCategory, setActiveCategory] = useState('Sales')
   const [activeReport, setActiveReport] = useState('Daily Sales Summary')
@@ -214,7 +220,7 @@ export default function PosReportsPage() {
     setReportError(''); setReportInfo('')
     try {
       if (SALES_REPORTS.includes(activeReport)) {
-        const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo })
+        const params = new URLSearchParams({ date_from: dayStartIso(dateFrom), date_to: dayEndIso(dateTo) })
         if (storeFilter) params.set('store_code', storeFilter)
         if (employeeFilter) params.set('employee_id', employeeFilter)
         params.set('kind', activeReport === 'Void Report' ? 'voids' : activeReport === 'Discount Report' ? 'discounts' : 'daily')

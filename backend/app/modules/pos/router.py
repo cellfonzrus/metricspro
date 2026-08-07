@@ -184,30 +184,72 @@ def _caller_employee(authorization: str, org_id: str) -> str:
     return ((rows[0].get("employee_id") if rows else "") or "").strip()
 
 
-def _caller_perms(authorization: str, org_id: str) -> dict:
-    """roles.permissions jsonb for the caller's role ({} when unresolvable)."""
+def _caller_perms(authorization: str, org_id: str):
+    """roles.permissions jsonb for the caller's role, or None when the caller is UNRESOLVABLE
+    (no/invalid token, no app_users membership, or a role name with no roles row). Callers must
+    treat None as deny — an unresolvable caller is never granted anything (fail closed)."""
     from app.modules.core.router import _uid_from_token
     uid = _uid_from_token(authorization)
     if not uid:
-        return {}
+        return None
     rows = (sb().table("app_users").select("role")
             .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
+    if not rows:
+        return None
     role = ((rows[0].get("role") if rows else "") or "").strip()
     if not role:
-        return {}
+        return None
     rr = (sb().table("roles").select("permissions")
           .eq("org_id", org_id).eq("name", role).limit(1).execute().data) or []
-    return (rr[0].get("permissions") or {}) if rr else {}
+    if not rr:
+        return None
+    return rr[0].get("permissions") or {}
 
 
 def _require_pos_perm(authorization: str, org_id: str, key: str):
-    """403 unless the caller's role grants `key` (permissions jsonb) or has org-wide scope."""
+    """403 unless the caller RESOLVES to a role that grants `key`, or that role has org-wide
+    scope (a roles row with no 'scope' key means org-wide, matching _role_scope's platform
+    semantic). Unresolvable callers are DENIED — this gate fails closed."""
     perms = _caller_perms(authorization, org_id)
+    if perms is None:
+        raise HTTPException(401, "sign in to perform this action")
     if perms.get(key) is True:
         return
     if (perms.get("scope") or "all") == "all":
         return
     raise HTTPException(403, f"your role does not allow this action ({key})")
+
+
+def _require_member(authorization: str, org_id: str) -> str:
+    """401 unless the caller is a signed-in member of this org; returns their auth uid."""
+    from app.modules.core.router import _uid_from_token
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "sign in to perform this action")
+    rows = (sb().table("app_users").select("id")
+            .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(403, "your login is not a member of this organization")
+    return uid
+
+
+def _caller_store_keyset(authorization: str, org_id: str):
+    """The caller's REPORTING span as a keyset (None = unrestricted), via the platform's
+    canonical scope machinery — the same store-scoping every sibling module applies to reads."""
+    try:
+        from app.modules.storeops.router import scope_keyset
+        return scope_keyset(authorization, org_id)
+    except Exception:
+        return None
+
+
+def _span_filter(rows, keyset, field="store_code"):
+    """Keep rows whose store is inside the caller's span (rows with no store pass — they are
+    org-level records, not another store's)."""
+    if keyset is None:
+        return rows
+    from app.core.scope import in_keyset
+    return [r for r in rows if not r.get(field) or in_keyset(keyset, r.get(field))]
 
 
 # ── Customers ──────────────────────────────────────────────────────────────────────────────────────
@@ -226,6 +268,17 @@ def list_customers(search: str = "", active_only: bool = True, org_id: str = ORG
         q = q.or_(ors)
     rows = q.order("created_at", desc=True).limit(300).execute().data or []
     return {"customers": rows}
+
+
+@router.get("/customers/{customer_id}")
+def get_customer(customer_id: str, org_id: str = ORG_ID):
+    """Single-customer fetch — deep links (?customer= / ?sale= prefills) must not depend on
+    the list endpoint's newest-300 page."""
+    rows = (sb().schema("pos").table("customers").select("*")
+            .eq("org_id", org_id).eq("id", customer_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    return {"customer": rows[0]}
 
 
 @router.post("/customers")
@@ -279,7 +332,9 @@ def add_customer_note(customer_id: str, body: dict,
 # pos_view_pii permission — same asymmetry as the standalone app (a compromised cashier session
 # can overwrite one customer's SSN but cannot exfiltrate the customer book).
 @router.get("/customers/{customer_id}/pii-last4")
-def customer_pii_last4(customer_id: str, org_id: str = ORG_ID):
+def customer_pii_last4(customer_id: str, authorization: str = Header(default=""),
+                       org_id: str = ORG_ID):
+    _require_member(authorization, org_id)
     rows = sb().schema("pos").rpc("customer_pii_last4",
                                   {"p_org": org_id, "p_customer": customer_id}).execute().data or []
     return rows[0] if rows else {"ssn_last4": None, "dl_last4": None}
@@ -295,7 +350,9 @@ def customer_pii_get(customer_id: str, authorization: str = Header(default=""),
 
 
 @router.post("/customers/{customer_id}/pii")
-def customer_pii_set(customer_id: str, body: dict, org_id: str = ORG_ID):
+def customer_pii_set(customer_id: str, body: dict, authorization: str = Header(default=""),
+                     org_id: str = ORG_ID):
+    _require_member(authorization, org_id)
     sb().schema("pos").rpc("customer_pii_set", {
         "p_org": org_id, "p_customer": customer_id,
         "p_ssn": body.get("ssn") or None,
@@ -305,9 +362,24 @@ def customer_pii_set(customer_id: str, body: dict, org_id: str = ORG_ID):
 
 
 # ── Inventory ──────────────────────────────────────────────────────────────────────────────────────
+def _product_names(org_id: str, ids, extra_cols=""):
+    """product_id -> {short_name, product_code, ...} for JUST the ids on the page."""
+    ids = sorted({i for i in ids if i})
+    if not ids:
+        return {}
+    cols = "id,short_name,product_code" + ("," + extra_cols if extra_cols else "")
+    out = {}
+    for i in range(0, len(ids), 100):
+        for p in (sb().schema("pos").table("products").select(cols)
+                  .eq("org_id", org_id).in_("id", ids[i:i + 100]).execute().data or []):
+            out[p["id"]] = p
+    return out
+
+
 @router.get("/inventory/serial")
 def list_inventory_serial(search: str = "", store_code: str = "", status: str = "",
-                          product_id: str = "", org_id: str = ORG_ID):
+                          product_id: str = "", authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
     q = sb().schema("pos").table("inventory_serial").select("*").eq("org_id", org_id)
     if store_code:
         q = q.eq("store_code", store_code)
@@ -319,9 +391,8 @@ def list_inventory_serial(search: str = "", store_code: str = "", status: str = 
     if s:
         q = q.or_(f"serial_number.ilike.%{s}%,imei.ilike.%{s}%,sim_card.ilike.%{s}%")
     rows = q.order("created_at", desc=True).limit(500).execute().data or []
-    prods = {p["id"]: p for p in (sb().schema("pos").table("products")
-             .select("id,short_name,product_code").eq("org_id", org_id)
-             .limit(2000).execute().data or [])}
+    rows = _span_filter(rows, _caller_store_keyset(authorization, org_id))
+    prods = _product_names(org_id, [r.get("product_id") for r in rows])
     for r in rows:
         p = prods.get(r.get("product_id")) or {}
         r["product_name"] = p.get("short_name")
@@ -357,14 +428,15 @@ def update_inventory_serial(unit_id: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/inventory/standard")
-def list_inventory_standard(store_code: str = "", org_id: str = ORG_ID):
+def list_inventory_standard(store_code: str = "", authorization: str = Header(default=""),
+                            org_id: str = ORG_ID):
     q = sb().schema("pos").table("inventory_standard").select("*").eq("org_id", org_id)
     if store_code:
         q = q.eq("store_code", store_code)
     rows = q.order("updated_at", desc=True).limit(1000).execute().data or []
-    prods = {p["id"]: p for p in (sb().schema("pos").table("products")
-             .select("id,short_name,product_code,retail_price").eq("org_id", org_id)
-             .limit(2000).execute().data or [])}
+    rows = _span_filter(rows, _caller_store_keyset(authorization, org_id))
+    prods = _product_names(org_id, [r.get("product_id") for r in rows],
+                           extra_cols="retail_price")
     for r in rows:
         p = prods.get(r.get("product_id")) or {}
         r["product_name"] = p.get("short_name")
@@ -422,15 +494,24 @@ def update_tax_code(code_id: str, body: dict, authorization: str = Header(defaul
     return {"tax_code": r.data[0]}
 
 
+def _date_bound(v: str, end: bool) -> str:
+    """Accept either a bare local date (legacy: treated as a UTC calendar day) or a full ISO
+    instant (what the pages now send, computed from the store's local midnight)."""
+    if len(v) == 10:
+        return v + ("T23:59:59" if end else "T00:00:00")
+    return v
+
+
 # ── Sales ──────────────────────────────────────────────────────────────────────────────────────────
 @router.get("/sales")
 def list_sales(date_from: str = "", date_to: str = "", store_code: str = "",
-               employee_id: str = "", status: str = "", org_id: str = ORG_ID):
+               employee_id: str = "", status: str = "",
+               authorization: str = Header(default=""), org_id: str = ORG_ID):
     q = sb().schema("pos").table("sales").select("*").eq("org_id", org_id)
     if date_from:
-        q = q.gte("created_at", date_from)
+        q = q.gte("created_at", _date_bound(date_from, end=False))
     if date_to:
-        q = q.lte("created_at", date_to)
+        q = q.lte("created_at", _date_bound(date_to, end=True))
     if store_code:
         q = q.eq("store_code", store_code)
     if employee_id:
@@ -438,6 +519,7 @@ def list_sales(date_from: str = "", date_to: str = "", store_code: str = "",
     if status:
         q = q.eq("status", status)
     rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    rows = _span_filter(rows, _caller_store_keyset(authorization, org_id))
     cust_ids = sorted({r["customer_id"] for r in rows if r.get("customer_id")})
     names = {}
     if cust_ids:
@@ -476,11 +558,11 @@ def checkout(body: dict, authorization: str = Header(default=""), org_id: str = 
     if not items:
         raise HTTPException(400, "a sale needs at least one item")
     eid = _caller_employee(authorization, org_id)
-    if eid:
-        sale["employee_id"] = eid   # never trust a body-supplied rep on the money path
-    elif not (sale.get("employee_id") or "").strip():
+    if not eid:
+        # no body fallback, ever: an unlinked login cannot attribute a sale to anyone
         raise HTTPException(403, "your login isn't linked to an employee record — "
                                  "ask an admin to set your Employee ID in Roles & Access")
+    sale["employee_id"] = eid   # never trust a body-supplied rep on the money path
     try:
         r = sb().schema("pos").rpc("checkout", {
             "p_org": org_id, "p_sale": sale, "p_items": items, "p_payments": payments,
@@ -614,6 +696,8 @@ def update_receipt_template(template_id: str, body: dict,
     upd = {k: body[k] for k in RECEIPT_TEMPLATE_FIELDS if k in body}
     if not upd:
         raise HTTPException(400, "nothing to update")
+    if "footer_text" in upd and upd["footer_text"] is None:
+        upd["footer_text"] = ""   # column is NOT NULL; a cleared footer means empty
     upd["updated_at"] = "now()"
     r = (sb().schema("pos").table("receipt_templates").update(upd)
          .eq("org_id", org_id).eq("id", template_id).execute())
@@ -665,8 +749,11 @@ SERVICE_PLAN_FIELDS = ("carrier", "plan_code", "plan_name", "plan_description", 
 
 
 def _require_any_pos_perm(authorization: str, org_id: str, keys):
-    """403 unless the caller's role grants at least one of `keys` (org-wide scope passes)."""
+    """403 unless the caller RESOLVES to a role granting at least one of `keys` (org-wide
+    scope passes). Unresolvable callers are DENIED — fails closed like _require_pos_perm."""
     perms = _caller_perms(authorization, org_id)
+    if perms is None:
+        raise HTTPException(401, "sign in to perform this action")
     if (perms.get("scope") or "all") == "all":
         return
     if any(perms.get(k) is True for k in keys):
@@ -708,7 +795,8 @@ def _clean_nullable(d: dict, keys) -> dict:
 # ── Activations ────────────────────────────────────────────────────────────────────────────────────
 @router.get("/activations")
 def list_activations(date_from: str = "", date_to: str = "", store_code: str = "",
-                     carrier: str = "", status: str = "", org_id: str = ORG_ID):
+                     carrier: str = "", status: str = "",
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
     q = sb().schema("pos").table("activations").select("*").eq("org_id", org_id)
     if date_from:
         q = q.gte("activation_date", date_from)
@@ -721,6 +809,7 @@ def list_activations(date_from: str = "", date_to: str = "", store_code: str = "
     if status:
         q = q.eq("status", status)
     rows = q.order("created_at", desc=True).limit(300).execute().data or []
+    rows = _span_filter(rows, _caller_store_keyset(authorization, org_id))
     cust = _customer_names(org_id, [r.get("customer_id") for r in rows])
     for r in rows:
         c = cust.get(r.get("customer_id")) or {}
@@ -753,8 +842,10 @@ def _clean_activation(body: dict) -> dict:
     # cell == mobile: one field, write both (owner decision from the standalone app)
     if "cell_number" in upd and "mobile_phone" not in upd:
         upd["mobile_phone"] = upd["cell_number"] or None
-    if upd.get("status") and upd["status"] not in ("active", "cancelled", "transferred"):
-        raise HTTPException(400, "invalid status")
+    if upd.get("status"):
+        upd["status"] = str(upd["status"]).strip().lower()   # CSV exports write 'Active'
+        if upd["status"] not in ("active", "cancelled", "transferred"):
+            raise HTTPException(400, "invalid status")
     return upd
 
 
@@ -904,6 +995,7 @@ def create_dealer_code(body: dict, authorization: str = Header(default=""), org_
     r = sb().schema("pos").table("dealer_codes").insert({
         "org_id": org_id, "code": code, "carrier": (body.get("carrier") or "").strip() or None,
         "store_code": (body.get("store_code") or "").strip() or None,
+        "is_active": bool(body.get("is_active", True)),
     }).execute()
     return {"dealer_code": (r.data or [{}])[0]}
 
@@ -940,6 +1032,7 @@ def create_carrier_portal(body: dict, authorization: str = Header(default=""), o
     r = sb().schema("pos").table("carrier_portals").insert({
         "org_id": org_id, "carrier": carrier, "url": url,
         "sort_order": int(body.get("sort_order") or 0),
+        "is_active": bool(body.get("is_active", True)),
     }).execute()
     return {"carrier_portal": (r.data or [{}])[0]}
 
@@ -1047,9 +1140,15 @@ def create_purchase_order(body: dict, authorization: str = Header(default=""),
 
 # ── Store transfers ────────────────────────────────────────────────────────────────────────────────
 @router.get("/transfers")
-def list_transfers(org_id: str = ORG_ID):
+def list_transfers(authorization: str = Header(default=""), org_id: str = ORG_ID):
     rows = (sb().schema("pos").table("store_transfers").select("*").eq("org_id", org_id)
             .order("created_at", desc=True).limit(200).execute().data) or []
+    ks = _caller_store_keyset(authorization, org_id)
+    if ks is not None:
+        # a transfer is visible when EITHER endpoint store is in the caller's span
+        from app.core.scope import in_keyset
+        rows = [r for r in rows
+                if in_keyset(ks, r.get("from_store_code")) or in_keyset(ks, r.get("to_store_code"))]
     items = (sb().schema("pos").table("store_transfer_items").select("transfer_id")
              .eq("org_id", org_id).limit(5000).execute().data) or []
     counts = {}
@@ -1145,11 +1244,16 @@ def cancel_transfer(transfer_id: str, authorization: str = Header(default=""),
 # ── Reports ────────────────────────────────────────────────────────────────────────────────────────
 @router.get("/reports/kpis")
 def report_kpis(org_id: str = ORG_ID):
+    # Day/month boundaries in BUSINESS_TZ (America/New_York) like the commcalc feed — a 9pm ET
+    # sale belongs to today's KPI, not tomorrow's UTC date.
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    now = _dt.now(_tz.utc)
-    today = now.strftime("%Y-%m-%dT00:00:00")
-    week = (now - _td(days=7)).isoformat()
-    month = now.strftime("%Y-%m-01T00:00:00")
+    from app.modules.pos.commcalc_feed import BUSINESS_TZ
+    now_local = _dt.now(BUSINESS_TZ)
+    today = now_local.replace(hour=0, minute=0, second=0, microsecond=0) \
+        .astimezone(_tz.utc).isoformat()
+    week = (_dt.now(_tz.utc) - _td(days=7)).isoformat()
+    month = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0) \
+        .astimezone(_tz.utc).isoformat()
     out = {}
     for key, since in (("today", today), ("week", week), ("month", month)):
         rows = (sb().schema("pos").table("sales").select("total")
@@ -1170,15 +1274,16 @@ def report_kpis(org_id: str = ORG_ID):
 
 @router.get("/reports/sales")
 def report_sales(date_from: str = "", date_to: str = "", store_code: str = "",
-                 employee_id: str = "", kind: str = "daily", org_id: str = ORG_ID):
+                 employee_id: str = "", kind: str = "daily",
+                 authorization: str = Header(default=""), org_id: str = ORG_ID):
     q = (sb().schema("pos").table("sales")
          .select("id,transaction_id,created_at,total,discount_total,receipt_type,status,"
                  "voided_at,customer_id,employee_id,store_code")
          .eq("org_id", org_id))
     if date_from:
-        q = q.gte("created_at", date_from)
+        q = q.gte("created_at", _date_bound(date_from, end=False))
     if date_to:
-        q = q.lte("created_at", date_to + "T23:59:59")
+        q = q.lte("created_at", _date_bound(date_to, end=True))
     if store_code:
         q = q.eq("store_code", store_code)
     if employee_id:
@@ -1188,6 +1293,7 @@ def report_sales(date_from: str = "", date_to: str = "", store_code: str = "",
     elif kind == "discounts":
         q = q.gt("discount_total", 0)
     rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    rows = _span_filter(rows, _caller_store_keyset(authorization, org_id))
     cust = _customer_names(org_id, [r.get("customer_id") for r in rows])
     emp = _employee_names(org_id)
     for r in rows:
@@ -1198,7 +1304,8 @@ def report_sales(date_from: str = "", date_to: str = "", store_code: str = "",
 
 @router.get("/reports/activations")
 def report_activations(date_from: str = "", date_to: str = "", store_code: str = "",
-                       employee_id: str = "", org_id: str = ORG_ID):
+                       employee_id: str = "", authorization: str = Header(default=""),
+                       org_id: str = ORG_ID):
     q = (sb().schema("pos").table("activations")
          .select("id,activation_number,carrier,activation_date,monthly_fee,cell_number,"
                  "mobile_phone,status,customer_id,employee_id,store_code")
@@ -1212,6 +1319,7 @@ def report_activations(date_from: str = "", date_to: str = "", store_code: str =
     if employee_id:
         q = q.eq("employee_id", employee_id)
     rows = q.order("activation_date", desc=True).limit(500).execute().data or []
+    rows = _span_filter(rows, _caller_store_keyset(authorization, org_id))
     cust = _customer_names(org_id, [r.get("customer_id") for r in rows])
     emp = _employee_names(org_id)
     for r in rows:
@@ -1418,7 +1526,12 @@ def import_rows(entity: str, body: dict, org_id: str = ORG_ID):
             if nm:
                 by_name.setdefault(nm, []).append(c["id"])
         for i, row in enumerate(rows):
-            p = _clean_activation({k: v for k, v in row.items() if k in ACTIVATION_FIELDS})
+            try:
+                p = _clean_activation({k: v for k, v in row.items() if k in ACTIVATION_FIELDS})
+            except HTTPException as e:
+                # one bad row must not abort the whole import — per-row attribution contract
+                skipped.append({"index": i, "message": str(e.detail)})
+                continue
             if row.get("notes"):
                 p["notes"] = row["notes"]
             key = f"{_digits(p.get('cell_number'))}|{p.get('activation_date') or ''}"

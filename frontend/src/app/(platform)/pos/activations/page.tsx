@@ -14,7 +14,7 @@
 //   * The server mirrors cell_number → mobile_phone and coerces empty uuid/date strings to null.
 
 import { useEffect, useState } from 'react'
-import { api } from '@/lib/client'
+import { api, addDays, localToday } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig } from '@/lib/pos-config'
@@ -73,7 +73,7 @@ const FORM_TABS = ['Service Plan & Equipment', 'Plan Options', 'Promotions & Tra
 // Function (not a module-level constant) so the default dates are fresh each
 // time the form opens instead of frozen at first page load.
 function makeEmptyForm() {
-  const today = new Date().toISOString().split('T')[0]
+  const today = localToday()
   return {
     carrier: 'Verizon', activation_date: today, service_plan_date: today, dealer_code: '',
     contract_type: '', contract_terms: '', monthly_fee: 0, included_minutes: 0,
@@ -111,6 +111,10 @@ export default function PosActivationsPage() {
   const [custSearch, setCustSearch] = useState('')
   const [showCustPicker, setShowCustPicker] = useState(false)
   const [selectedCust, setSelectedCust] = useState<Customer | null>(null)
+  // The customer_id the activation had when the edit form opened. Preserved on save unless the
+  // user explicitly attaches a different customer or explicitly removes it — a list row whose
+  // customer_name failed to resolve (deleted/missing customer) must NOT silently detach.
+  const [editingOriginalCustomerId, setEditingOriginalCustomerId] = useState<string | null>(null)
   const [filterCarrier, setFilterCarrier] = useState('')
   // Initialized empty and filled on mount so server render and client
   // hydration produce identical markup (no new Date() during initial render).
@@ -140,8 +144,8 @@ export default function PosActivationsPage() {
   const [tradeIn, setTradeIn] = useState({ ...EMPTY_TRADE_IN })
 
   useEffect(() => {
-    const from = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-    const to = new Date().toISOString().split('T')[0]
+    const from = addDays(localToday(), -30)
+    const to = localToday()
     setDateFrom(from); setDateTo(to)
     load(from, to)
     setActiveStoreState(getActiveStore())
@@ -225,14 +229,16 @@ export default function PosActivationsPage() {
   function resetFormExtras() {
     setNotes([]); setNotesError(''); setNoteText(''); setNoteSeverity('normal')
     setSaleId(null); setSaleTxn(null)
+    setEditingOriginalCustomerId(null)
     setHadTradeIn(false); setTradeIn({ ...EMPTY_TRADE_IN })
   }
 
-  // Deep-link customer attach: the router has no GET-by-id, so pull the list and match client-side.
+  // Deep-link customer attach: single-customer fetch (404s when missing) — the list endpoint
+  // caps at the newest 300 rows, which silently missed older customers.
   async function findCustomerById(id: string): Promise<Customer | null> {
     try {
-      const r = await api('/api/v1/pos/customers?active_only=false')
-      return ((r.customers || []) as Customer[]).find(c => c.id === id) || null
+      const r = await api(`/api/v1/pos/customers/${id}`)
+      return (r.customer as Customer) || null
     } catch { return null }
   }
 
@@ -317,6 +323,7 @@ export default function PosActivationsPage() {
       first_name: a.customer_name, last_name: null, company_name: null,
     } : null)
     resetFormExtras()
+    setEditingOriginalCustomerId(a.customer_id || null)
     setSaleId(a.sale_id || null)
     setFormTab('Service Plan & Equipment')
     setShowForm(true)
@@ -382,10 +389,13 @@ export default function PosActivationsPage() {
       if (!confirm('No dealer code is selected for this activation — commissions may not attribute correctly. Save anyway?')) return
     }
     setSaving(true)
+    // Customer linkage: an unresolved selectedCust (e.g. the list row's customer_name came back
+    // null) must not detach the original customer — only an explicit attach/remove changes it.
+    const resolvedCustomerId = selectedCust?.id ?? editingOriginalCustomerId ?? null
     // The server coerces empty uuid/date strings to null and mirrors cell_number → mobile_phone.
     const payload: Record<string, unknown> = {
       ...formData,
-      customer_id: selectedCust?.id || null,
+      customer_id: resolvedCustomerId,
       sale_id: saleId,
     }
     if (!editingId) payload.store_code = activeStore
@@ -418,7 +428,7 @@ export default function PosActivationsPage() {
             imei: tradeIn.imei.trim() || null,
             notes: tradeIn.notes.trim() || null,
             credit_amount: credit > 0 ? credit : 0,
-            customer_id: selectedCust?.id || null,
+            customer_id: resolvedCustomerId,
             sale_id: saleId,
           }),
         })
@@ -603,7 +613,8 @@ export default function PosActivationsPage() {
               {selectedCust ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 600 }}>{custName(selectedCust)}{selectedCust.cust_number ? ` (#${selectedCust.cust_number})` : ''}</span>
-                  <button onClick={() => setSelectedCust(null)} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer' }}>×</button>
+                  {/* Explicit remove: clears the preserved original too, so save() really detaches */}
+                  <button onClick={() => { setSelectedCust(null); setEditingOriginalCustomerId(null) }} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer' }}>×</button>
                 </div>
               ) : (
                 <button className="btn btn-secondary" style={{ color: '#3498db' }} onClick={() => setShowCustPicker(true)}>+ Select Customer</button>

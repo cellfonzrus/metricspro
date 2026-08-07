@@ -100,8 +100,12 @@ CREATE TABLE IF NOT EXISTS pos.activations (
   UNIQUE (org_id, activation_number)
 );
 CREATE INDEX IF NOT EXISTS pos_activations_org_date ON pos.activations(org_id, activation_date DESC);
+-- the default list view orders by created_at DESC with no date filter
+CREATE INDEX IF NOT EXISTS pos_activations_org_created ON pos.activations(org_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS pos_activations_customer ON pos.activations(customer_id);
 CREATE INDEX IF NOT EXISTS pos_activations_cell ON pos.activations(org_id, cell_number);
+-- inventory list: filter by store, newest first
+CREATE INDEX IF NOT EXISTS pos_inv_serial_store ON pos.inventory_serial(org_id, store_code, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS pos.activation_notes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
