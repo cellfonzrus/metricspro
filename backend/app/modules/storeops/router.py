@@ -1908,10 +1908,41 @@ def list_markets(org_id: str = ORG_ID):
     return {"markets": _collect_markets(org_id)}
 
 
+def _norm_addr(x) -> str:
+    """Same normalization bar `_norm_store` already uses for store_code matching in this file
+    (`.strip().upper()`) — deliberately simple, not a fuzzy/punctuation-stripping matcher (that risk
+    trade-off belongs to a dedicated store-matching feature, not a dedupe guard); see
+    _sync_store_mapping's docstring for why this specific bar was chosen here."""
+    return str(x or "").strip().upper()
+
+
 def _sync_store_mapping(org_id, stores):
     """Mirror StoreOps-created stores into commcalc.store_mapping so a new store PROPAGATES everywhere
-    that reads the mapping (Daily Closing, Assets, Targets, recons, …). Insert-if-absent by store_code.
-    Best-effort — a mapping failure must never break store creation."""
+    that reads the mapping (Daily Closing, Assets, Targets, recons, …). Insert-if-absent.
+    Best-effort — a mapping failure must never break store creation.
+
+    2026-08-06 dedupe-widening fix (mod-commission escalation, live Luxelink defect: 19 of 20 stores
+    DUPLICATED in commcalc.store_mapping — two bulk syncs 47 minutes apart on 2026-08-05 under two
+    DIFFERENT store_code naming schemes for the SAME physical stores, e.g. a `LUX-<CITY>-<NAME>` set
+    and the plain storeops roster codes). ROOT CAUSE: the old "already have it?" check was
+    `.in_("store_code", ...)` — every commcalc.store_mapping CONSUMER actually keys on
+    `store_address` (the real identity), so a second sync under a different code for the SAME address
+    was invisible to that check and inserted a second row — actively splitting attribution (one code
+    scheme answers commission-by-store, a different one is what store_expenses was keyed under).
+
+    FIX: "already have it?" is now the UNION of a store_code match OR a normalized store_address
+    match — a second sync under ANY new code for an address that already has a mapping row is
+    correctly recognized as a duplicate and skipped, regardless of which naming scheme either sync
+    used. Deliberately NOT a DB-level `.upsert(on_conflict=...)` — commcalc.store_mapping's own
+    identity columns are NULLABLE (the exact trap that already bit prod once, 2026-08-04: an
+    ON CONFLICT target against a nullable unique column silently seeds duplicates; PostgREST upsert
+    also cannot target an expression/COALESCE index). This keeps the original SELECT-existing-then-
+    INSERT-only-new shape (an app-level 'WHERE NOT EXISTS'), just widened to check the address too —
+    no new migration, no constraint change, no upsert.
+
+    Does NOT touch the 19 already-duplicated Luxelink rows — that cleanup is mod-commission's own
+    SELECT-first/quarantine/DELETE Block B, owner-approved separately. This is the code fix so a
+    THIRD sync (under yet another naming scheme) cannot create a 20th."""
     try:
         c = get_supabase()
         want = {}
@@ -1923,10 +1954,23 @@ def _sync_store_mapping(org_id, stores):
                               "market": s.get("market")}
         if not want:
             return
-        have = {str(m.get("store_code") or "").strip() for m in
-                (c.schema("commcalc").table("store_mapping").select("store_code")
-                 .eq("org_id", org_id).in_("store_code", list(want)).execute().data or [])}
-        new = [v for code, v in want.items() if code not in have]
+        # Fetch existing mapping rows for the org ONCE (both identity columns — code AND address —
+        # not a per-store_code-only lookup) and dedupe against BOTH, union-style.
+        existing_rows = (c.schema("commcalc").table("store_mapping").select("store_code,store_address")
+                         .eq("org_id", org_id).execute().data or [])
+        have_codes = {str(m.get("store_code") or "").strip() for m in existing_rows}
+        have_addrs = {_norm_addr(m.get("store_address")) for m in existing_rows if m.get("store_address")}
+        new = []
+        for code, v in want.items():
+            if code in have_codes:
+                continue                                   # exact code already mapped (unchanged rule)
+            addr_key = _norm_addr(v.get("store_address"))
+            if addr_key and addr_key in have_addrs:
+                continue                                   # THE FIX — same address, different code
+            new.append(v)
+            have_codes.add(code)                            # guard within THIS batch too (two new rows
+            if addr_key:                                    # for the same address in one call never
+                have_addrs.add(addr_key)                    # both slip through)
         for i in range(0, len(new), 500):
             c.schema("commcalc").table("store_mapping").insert(new[i:i + 500]).execute()
     except Exception as e:
