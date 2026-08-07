@@ -74,6 +74,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
+from app.modules.core.safe_href import safe_href
 
 # NO prefix: this sub-router is mounted ONTO core/router.py's `router` (which already carries
 # "/core"), so main.py — a SHARED file — needs no change at all. Final paths: /api/v1/core/…
@@ -1223,7 +1224,8 @@ def create_import_feed(body: dict, org_id: str = ORG_ID, authorization: str = He
         "cadence_hours": cad,
         "grace_hours": float(body.get("grace_hours") if body.get("grace_hours") is not None
                              else default_grace(cad)),
-        "deep_link": (body.get("deep_link") or "/commcalc/upload")[:300],
+        # H6 (2026-08-05): rendered as the "Fix / Upload →" link on /admin/import-health.
+        "deep_link": safe_href((body.get("deep_link") or "/commcalc/upload")[:300], "/commcalc/upload"),
         "evidence": body.get("evidence") or [],
         "enabled": bool(body.get("enabled", True)),
         "auto_derived": False, "derived_from": None,

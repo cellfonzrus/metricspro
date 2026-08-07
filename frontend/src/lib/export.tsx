@@ -4,6 +4,8 @@
 // report exports identically. Libs are dynamically imported on click to keep them
 // out of the initial bundle and the SSR path.
 import { useState } from 'react'
+import { pinSheetCellTypes } from '@/lib/cell-safety'
+import { isSafeMediaSrc } from '@/lib/safe-url'
 
 export type ExportColumn = {
   header: string
@@ -57,6 +59,11 @@ async function buildWorkbook(p: ExportPayload) {
     const aoa: (string | number)[][] = [sheet.columns.map(c => c.header)]
     for (const row of sheet.rows) aoa.push(sheet.columns.map(c => rawCell(c, row)))
     const ws = XLSX.utils.aoa_to_sheet(aoa)
+    // H7 (2026-08-05 audit): guarantee no exported cell is a FORMULA. xlsx@0.18.5 already writes
+    // every string as t:'s', so this changes nothing today — it stops a lib upgrade/swap from
+    // silently re-opening the hole, and it keeps this path identical to the server renderer
+    // (notify/render.py), which HAD a live openpyxl formula bug. Values are never rewritten.
+    pinSheetCellTypes(ws)
     // Column widths + money number format
     ws['!cols'] = sheet.columns.map(c => ({ wch: Math.max(c.header.length + 2, c.money ? 12 : 16) }))
     for (let ci = 0; ci < sheet.columns.length; ci++) {
@@ -176,7 +183,8 @@ export function printReport(p: ExportPayload) {
       @media print{body{margin:10mm}}
     </style></head><body>
     <h1>${esc(p.title)}</h1>${p.subtitle ? `<p class="sub">${esc(p.subtitle)}</p>` : ''}
-    ${[p.chartImage, ...(p.chartImages || [])].filter(Boolean).map(src => `<img class="chart" src="${src}"/>`).join('')}
+    ${[p.chartImage, ...(p.chartImages || [])].filter(Boolean).filter(isSafeMediaSrc)
+      .map(src => `<img class="chart" src="${esc(src)}"/>`).join('')}
     ${tables}
     <script>window.onload=function(){window.print()}</script>
     </body></html>`)

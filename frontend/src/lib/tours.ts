@@ -12,6 +12,7 @@
 // GET /api/v1/core/training/tours (explicit /api/v1 prefix — a bare path 404s silently in the UI).
 // Nothing about a tour's content lives in this file.
 import { api } from '@/lib/client'
+import { safeHref } from '@/lib/safe-url'
 
 export type TourStep = {
   id?: string
@@ -157,9 +158,24 @@ export async function fetchTours(opts?: { path?: string; module?: string }):
   if (opts?.module) qs.set('module', opts.module)
   try {
     const r = await api(`/api/v1/core/training/tours${qs.toString() ? '?' + qs : ''}`)
-    return { tours: r?.tours || [], ready: !!r?.ready, can_edit: !!r?.can_edit, hint: r?.hint }
+    // H6: the Training Center renders `start_href` as a <Link> — scrub on arrival (see below).
+    const tours: Tour[] = (r?.tours || []).map((t: Tour) => ({ ...t, start_href: safeHref(t.start_href) ?? null }))
+    return { tours, ready: !!r?.ready, can_edit: !!r?.can_edit, hint: r?.hint }
   } catch {
     return { tours: [], ready: false, can_edit: false }   // FAIL-SILENT: help never breaks a page
+  }
+}
+
+// H6 (2026-08-05 audit): tour hrefs are TENANT-WRITABLE config that the runner follows
+// AUTOMATICALLY (`?tour=<slug>` needs no click), so an unsafe value is scrubbed the moment it
+// arrives — one choke point for every consumer (the runner, the Training Center, the help panel).
+// A scrubbed step keeps its title/body and simply renders where the user already is, which is the
+// engine's existing 'anchor did not resolve' degrade. The write side rejects it too
+// (app/modules/core/safe_href.py); this also covers rows written before that shipped.
+export function sanitizeTourHrefs(t: { tour: Tour; steps: TourStep[] }): { tour: Tour; steps: TourStep[] } {
+  return {
+    tour: { ...t.tour, start_href: safeHref(t.tour.start_href) ?? null },
+    steps: (t.steps || []).map(s => ({ ...s, page_href: safeHref(s.page_href) ?? null })),
   }
 }
 
@@ -167,7 +183,7 @@ export async function fetchTour(slug: string): Promise<{ tour: Tour; steps: Tour
   try {
     const r = await api(`/api/v1/core/training/tours/${encodeURIComponent(slug)}`)
     if (!r?.tour || !Array.isArray(r?.steps) || !r.steps.length) return null
-    return { tour: r.tour, steps: r.steps }
+    return sanitizeTourHrefs({ tour: r.tour, steps: r.steps })
   } catch {
     return null
   }

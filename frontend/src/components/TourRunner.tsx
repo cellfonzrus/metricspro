@@ -21,6 +21,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import {
   TOUR_START_EVENT, Tour, TourStep, fetchTour, markTourDone, resolveAnchor, samePage,
 } from '@/lib/tours'
+import { isSafeHref } from '@/lib/safe-url'
 
 type Rect = { top: number; left: number; width: number; height: number }
 const PAD = 6                 // spotlight padding around the anchor
@@ -95,6 +96,13 @@ export default function TourRunner() {
   // ── Navigate to the step's page when it isn't the page we're on ────────────────────────────────
   useEffect(() => {
     if (!step?.page_href) return
+    // H6 (2026-08-05 audit): `page_href` is TENANT-WRITABLE config and this navigation is
+    // AUTOMATIC — `?tour=<slug>` on any page launches the tour with no click, so a stored
+    // `javascript:` value self-fires and steals the localStorage JWT + 2FA marker. Router.push of
+    // an off-origin URL degrades to a location assignment, which executes it. Refuse to navigate;
+    // the step still renders (as a centered card), matching every other 'anchor did not resolve'
+    // degrade in this component. Sanitised on the write side too (core/safe_href.py).
+    if (!isSafeHref(step.page_href)) return
     // EXACT page comparison, not a prefix: stepping BACK from /commcalc/daily-commission to a
     // /commcalc step must navigate back, which a prefix match would swallow.
     if (samePage(step.page_href, pathname)) return

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import { myPortalReports, PortalCfg } from '@/lib/reports'
+import { safeHref } from '@/lib/safe-url'   // H6: portal_reports.href is tenant-writable
 
 // The reports an employee may see in their portal — admin-enabled (Report Center) + their role's
 // clearance. Links open the real report page (auto-scoped to them by the Phase 5 span when enforced).
@@ -25,8 +26,8 @@ export default function PortalReports({ compact }: { compact?: boolean }) {
         <div key={g.category} className="card" style={{ padding: compact ? 12 : 14 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text3)', marginBottom: 8 }}>{g.category}</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {g.reports.map(r => (
-              <Link key={r.href} href={r.href} style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
+            {g.reports.filter(r => safeHref(r.href)).map(r => (
+              <Link key={r.href} href={safeHref(r.href, '#')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6,
                 padding: '8px 12px', borderRadius: 9, border: '1px solid var(--border)', background: 'var(--surface)',
                 color: 'var(--text)', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>
                 📊 {r.label} <span style={{ color: 'var(--text3)' }}>→</span>

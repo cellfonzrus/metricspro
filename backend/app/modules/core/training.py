@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
+from app.modules.core.safe_href import safe_href
 
 # NO prefix of its own beyond /training: mounted onto the core router (see module docstring).
 router = APIRouter(prefix="/training", tags=["Core / Training"])
@@ -122,7 +123,9 @@ def clean_step(raw, order):
     s["title"] = str(s.get("title") or "").strip()[:300]
     s["body"] = str(s.get("body") or "").strip()[:4000]
     s["target"] = (str(s["target"]).strip()[:400] or None) if s.get("target") else None
-    s["page_href"] = (str(s["page_href"]).strip()[:300] or None) if s.get("page_href") else None
+    # H6 (2026-08-05): a step's page_href is followed AUTOMATICALLY by TourRunner (?tour=<slug>),
+    # so a stored `javascript:` payload self-fires — allow-list it before it can be persisted.
+    s["page_href"] = safe_href((str(s["page_href"]).strip()[:300] or None) if s.get("page_href") else None)
     s["placement"] = s.get("placement") if s.get("placement") in _PLACEMENTS else "auto"
     s["target_fragile"] = bool(s.get("target_fragile"))
     for k in ("narration", "action_hint"):
@@ -138,7 +141,7 @@ def clean_tour(raw):
     t["module"] = (str(t["module"]).strip()[:60] or None) if t.get("module") else None
     t["description"] = (str(t["description"])[:1000] if t.get("description") else None)
     t["audience"] = t.get("audience") if t.get("audience") in _AUDIENCES else "all"
-    t["start_href"] = (str(t["start_href"]).strip()[:300] or None) if t.get("start_href") else None
+    t["start_href"] = safe_href((str(t["start_href"]).strip()[:300] or None) if t.get("start_href") else None)  # H6
     try:
         t["sort_order"] = int(t.get("sort_order")) if t.get("sort_order") is not None else 100
     except Exception:

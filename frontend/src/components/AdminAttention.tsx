@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth-context'
 import { getActiveOrg } from '@/lib/client'
 import { apiCached } from '@/lib/cache'
 import { canSeeAttention } from '@/lib/rbac'
+import { safeHref } from '@/lib/safe-url'   // H6: deep_link is tenant-writable config
 import {
   CATEGORY_ICON, CATEGORY_LABEL, ReleaseNote, WhatsNewPayload, EMPTY_PAYLOAD,
   fetchWhatsNew, lastSeen, markSeen,
@@ -323,8 +324,8 @@ export default function AdminAttention() {
                       <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>{n.released_at}</span>
                     </div>
                     {n.body && <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 3, lineHeight: 1.55 }}>{n.body}</div>}
-                    {n.deep_link && n.status !== 'in_progress' && (
-                      <Link href={n.deep_link} onClick={() => setOpen(false)}
+                    {safeHref(n.deep_link) && n.status !== 'in_progress' && (
+                      <Link href={safeHref(n.deep_link, '#')} onClick={() => setOpen(false)}
                         style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent)', textDecoration: 'none',
                           display: 'inline-block', marginTop: 6 }}>
                         Take a look →
@@ -357,8 +358,8 @@ export default function AdminAttention() {
                           <div style={{ fontSize: 13.5, fontWeight: 700, color: s.color }}>{it.label}</div>
                           <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 2 }}>{it.detail}</div>
                         </div>
-                        {it.deep_link && (
-                          <Link href={it.deep_link} onClick={() => setOpen(false)}
+                        {safeHref(it.deep_link) && (
+                          <Link href={safeHref(it.deep_link, '#')} onClick={() => setOpen(false)}
                             style={{ alignSelf: 'center', whiteSpace: 'nowrap', fontSize: 12.5, fontWeight: 700,
                               textDecoration: 'none', color: 'white', background: s.color,
                               borderRadius: 8, padding: '6px 11px' }}>

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { safeHref } from '@/lib/safe-url'   // H6: deep_link is tenant-editable on this very page
 
 // IMPORT HEALTH (owner directive 2026-07-25, mig 717) — the universal registry of every import this
 // tenant expects, its EXPECTED CADENCE, when it last actually delivered, and the page an admin fixes it
@@ -163,7 +164,7 @@ export default function ImportHealthPage() {
                       fontSize: 10, letterSpacing: '0.05em', color: 'var(--text3)' }}>{i.group}</span>
                     <span style={{ fontWeight: 600 }}>{i.label}</span>
                     <span style={{ color: 'var(--text2)', minWidth: 0, flex: 1 }}>{i.detail}</span>
-                    {i.deep_link && <Link href={i.deep_link} style={{ whiteSpace: 'nowrap', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none' }}>{i.deep_link_label || 'Fix'} →</Link>}
+                    {safeHref(i.deep_link) && <Link href={safeHref(i.deep_link, '#')} style={{ whiteSpace: 'nowrap', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none' }}>{i.deep_link_label || 'Fix'} →</Link>}
                   </div>
                 ))}
               </div>
@@ -251,8 +252,8 @@ export default function ImportHealthPage() {
                     )}
                   </td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', textAlign: 'right' }}>
-                    {f.deep_link && (
-                      <Link href={f.deep_link} style={{ fontWeight: 700, color: 'var(--accent)', textDecoration: 'none', marginRight: 10 }}>Fix / Upload →</Link>
+                    {safeHref(f.deep_link) && (
+                      <Link href={safeHref(f.deep_link, '#')} style={{ fontWeight: 700, color: 'var(--accent)', textDecoration: 'none', marginRight: 10 }}>Fix / Upload →</Link>
                     )}
                     {canEdit && (
                       <>

@@ -26,6 +26,7 @@ from app.modules.core.entitlements import (
 # Auth-hardening (2026-07-17): PURE password-policy / OTP / 2FA-marker helpers (unit-proven) + the
 # delivery bridge that reuses notify's Resend/WhatsApp creds logic (no duplication).
 from app.modules.core import auth_security as _sec
+from app.modules.core.safe_href import is_safe_href
 from app.modules.core import auth_notify as _anotify
 # Canonical tenant-membership primitives — the ONE rule for "which tenant is this login acting as",
 # shared so every module (e.g. storeops._caller_identity) resolves it identically (no drift).
@@ -108,6 +109,9 @@ def set_portal_report(body: dict, org_id: str = ORG_ID, authorization: str = Hea
     href = (body.get("href") or "").strip()
     if not href:
         raise HTTPException(400, "href required")
+    # H6 (2026-08-05): this href is rendered as a <Link> on the employee portal + /employee.
+    if not is_safe_href(href):
+        raise HTTPException(400, "href must be a site path (e.g. /commcalc/reports) or an http(s) URL")
     row = {"org_id": org_id, "href": href,
            "enabled": bool(body.get("enabled", True)),
            "roles": body.get("roles") or [],
