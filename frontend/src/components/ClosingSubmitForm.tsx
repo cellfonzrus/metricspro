@@ -61,6 +61,15 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [msg, setMsg] = useState('')
   const [retry, setRetry] = useState<{ message: string } | null>(null)
   const [envPreview, setEnvPreview] = useState('')
+  // BUG FIX (owner-reported 2026-08-07): photoUploading/photoError track the envelope-photo upload
+  // SEPARATELY from `busy`/`msg` (the closing submission itself). Before this fix a rep could submit
+  // while the photo was still uploading in the background (thumbnail painted instantly from the local
+  // FileReader, so it LOOKED done) — the row saved with envelope_picture=NULL and the submit-success
+  // message overwrote/hid any upload error a second later. See ClosingSubmitForm history + the
+  // retail-ops handoff for the full mechanism.
+  const [photoUploading, setPhotoUploading] = useState(false)
+  const [photoError, setPhotoError] = useState('')
+  const [envCfg, setEnvCfg] = useState<{ require_photo_if_cash?: boolean }>({})
   const [ocrCash, setOcrCash] = useState('')
   const [ocrAmounts, setOcrAmounts] = useState<number[]>([])
   const [ocrBusy, setOcrBusy] = useState(false)
@@ -79,15 +88,55 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const ocrMismatch = ocrCash !== '' && Math.abs(ocrNum - enteredCash) > 1
 
   async function onPickPhoto(file: File) {
+    setPhotoUploading(true)
+    setPhotoError('')
+    set({ envelope_picture: '' })   // a re-pick invalidates whatever path (if any) was uploaded before
     const reader = new FileReader()
     reader.onload = async () => {
-      const dataUrl = reader.result as string
+      const rawDataUrl = reader.result as string
+      // Downscale BEFORE upload: a raw phone-camera JPEG is 4-12 MB over store LTE — resize to a
+      // 1600px longest edge / JPEG q=0.8 (typically 200-400 KB) so the upload actually completes
+      // quickly and reliably. Best-effort: if canvas decode fails for any reason, fall back to the
+      // original full-size image rather than losing the photo entirely.
+      let dataUrl = rawDataUrl
+      try { dataUrl = await downscaleImage(rawDataUrl) } catch { /* keep rawDataUrl */ }
       setEnvPreview(dataUrl)
-      try { const u: any = await api('/api/v1/closing/envelope-photo', { method: 'POST', body: JSON.stringify({ image: dataUrl }) }); set({ envelope_picture: u.path }) }
-      catch (e: any) { setMsg('Photo upload failed: ' + (e?.message || e)) }
-      runOcr(dataUrl)
+      try {
+        const u: any = await api('/api/v1/closing/envelope-photo', { method: 'POST', body: JSON.stringify({ image: dataUrl }) })
+        set({ envelope_picture: u.path })
+      } catch (e: any) {
+        // Sticky + visible: this error is NOT `msg` (the submit-result message), so a later
+        // "✅ Closing submitted…" can never silently clobber it — see submit()'s reset.
+        setPhotoError('📷 Photo upload failed: ' + (e?.message || e) + ' — tap "Take / choose photo" again before submitting.')
+      } finally {
+        setPhotoUploading(false)
+      }
+      runOcr(dataUrl)   // same downscaled image → OCR runs faster too
     }
+    reader.onerror = () => { setPhotoUploading(false); setPhotoError('📷 Could not read the selected photo — please try again.') }
     reader.readAsDataURL(file)
+  }
+  // Canvas resize to a max 1600px longest edge, re-encoded as JPEG q=0.8. Never upscales (scale is
+  // capped at 1). Falls back to the original data URL if decode/encode fails for any reason.
+  function downscaleImage(dataUrl: string, maxDim = 1600, quality = 0.8): Promise<string> {
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height))
+          const w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale))
+          const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale))
+          const canvas = document.createElement('canvas')
+          canvas.width = w; canvas.height = h
+          const ctx = canvas.getContext('2d')
+          if (!ctx) { resolve(dataUrl); return }
+          ctx.drawImage(img, 0, 0, w, h)
+          resolve(canvas.toDataURL('image/jpeg', quality))
+        } catch { resolve(dataUrl) }
+      }
+      img.onerror = () => resolve(dataUrl)
+      img.src = dataUrl
+    })
   }
   async function runOcr(dataUrl: string) {
     setOcrBusy(true); setOcrAmounts([])
@@ -113,6 +162,13 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   useEffect(() => { api('/api/v1/storeops/employees?all_company=true').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
   // Expense categories (mig 506, EEP) — lazy-seeded 5 presets on first call.
   useEffect(() => { api('/api/v1/closing/expense-categories').then((d: any) => setCats(d?.categories || [])).catch(() => setCats([])) }, [])
+  // Envelope config (mig 507/510) — org default merged with this store's override, re-fetched whenever
+  // the picked store changes. `require_photo_if_cash` is OFF unless a tenant explicitly opted in (or
+  // the migration hasn't run yet) — see submit()'s gate below.
+  useEffect(() => {
+    api(`/api/v1/closing/envelope-config${f.store_code ? `?store_code=${encodeURIComponent(f.store_code)}` : ''}`)
+      .then((d: any) => setEnvCfg(d?.effective || {})).catch(() => setEnvCfg({}))
+  }, [f.store_code])
   // Prefill from the logged-in user's own name — but ONLY once the roster has loaded and it's an
   // EXACT (case-insensitive) match to a real roster entry. allowCreate is false on this picker, so a
   // default that doesn't match anything must NOT be silently carried in state (it would look blank in
@@ -139,6 +195,16 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     if (!f.close_date) { setMsg('❌ Pick a date.'); return }
     if (!f.sfid && !f.store_code) { setMsg('❌ Pick your store.'); return }
     if (!f.employee_name.trim()) { setMsg('❌ Enter your name.'); return }
+    // BUG FIX (owner-reported 2026-08-07): never let a submit race the photo upload — the button is
+    // already disabled while photoUploading, this is the belt-and-suspenders guard.
+    if (photoUploading) { setMsg('❌ Please wait for the envelope photo to finish uploading, then submit.'); return }
+    // Tenant-configurable hard gate (mig 510, OFF by default — see /closing/envelope-config): require
+    // an envelope photo whenever cash > 0 is declared. Mirrors the server-side gate in create_row so
+    // the rep gets an immediate, specific message instead of a generic 400.
+    if (envCfg.require_photo_if_cash && enteredCash > 0 && !f.envelope_picture) {
+      setMsg('❌ An envelope photo is required because cash was declared. Attach one before submitting.')
+      return
+    }
     // Categorized expense lines (mig 506) — client-side mirror of the server's _validate_expense_line
     // so a rep gets an immediate, specific message instead of a generic submit failure.
     const activeLines = expLines.filter(l => (parseFloat(l.amount) || 0) > 0 || l.description.trim() || l.category_id)
@@ -208,7 +274,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
       setF(p => ({ ...p, t_cash: '', t_credit: '', t_ext_cc: '', t_gift: '', t_store_acct: '', t_zelle: '', t_acima: '', epay_on_cash: '', epay_on_credit: '', epay_on_acima: '', acc_sale: '',
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
       setTv({}); setCv({}); setExpLines([])
-      setEnvPreview(''); setOcrCash(''); setOcrAmounts([])
+      setEnvPreview(''); setOcrCash(''); setOcrAmounts([]); setPhotoError('')
       loadRecent()
       onSubmitted?.()
     } catch (e: any) { setMsg('🚫 ' + (e?.message || e)) }
@@ -352,15 +418,31 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
         <SectionLabel>Envelope photo & remarks</SectionLabel>
         <Row>
-          <Field label="Envelope photo" wide>
+          <Field label={envCfg.require_photo_if_cash && enteredCash > 0 ? 'Envelope photo (required — cash declared)' : 'Envelope photo'} wide>
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <label className="btn btn-secondary" style={{ fontSize: 13, cursor: 'pointer' }}>
                 📷 Take / choose photo
                 <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) onPickPhoto(file) }} />
               </label>
-              {envPreview && <img src={envPreview} alt="envelope" style={{ height: 70, borderRadius: 8, border: '1px solid var(--border)' }} />}
+              {envPreview && (
+                <div style={{ position: 'relative', display: 'inline-block' }}>
+                  <img src={envPreview} alt="envelope" style={{
+                    height: 70, borderRadius: 8,
+                    border: photoError ? '2px solid #b42318' : '1px solid var(--border)',
+                    opacity: photoUploading ? 0.5 : 1,
+                  }} />
+                  {photoUploading && <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>📤</span>}
+                  {!photoUploading && photoError && <span title="Not uploaded — tap the photo button to retry" style={{ position: 'absolute', top: -6, right: -6, fontSize: 14, background: '#fff', borderRadius: '50%' }}>⚠️</span>}
+                </div>
+              )}
+              {photoUploading && <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>📤 Uploading photo…</span>}
               {ocrBusy && <span style={{ fontSize: 13, color: 'var(--text3)' }}>🔍 Reading envelope…</span>}
             </div>
+            {photoError && (
+              <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: '#fdeaea', border: '1px solid #f3b4b4', fontSize: 13, color: '#b42318', fontWeight: 600 }}>
+                {photoError}
+              </div>
+            )}
             {(ocrCash !== '' || ocrAmounts.length > 0) && (
               <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: ocrMismatch ? '#fdeaea' : '#e7f6ec', fontSize: 13 }}>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -385,7 +467,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         )}
 
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 16 }}>
-          <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy} onClick={submit}>{busy ? '⏳ Submitting…' : retry ? '🔁 Re-submit count' : '✅ Submit closing'}</button>
+          <button className="btn btn-primary" style={{ fontSize: 14 }} disabled={busy || photoUploading} onClick={submit}>
+            {busy ? '⏳ Submitting…' : photoUploading ? '📤 Uploading photo…' : retry ? '🔁 Re-submit count' : '✅ Submit closing'}
+          </button>
           {msg && <span style={{ fontSize: 13 }}>{msg}</span>}
         </div>
         <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
