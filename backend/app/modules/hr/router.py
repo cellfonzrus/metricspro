@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.core import crypto
-from app.modules.storeops.router import scope_keyset, in_keyset, _tenant_pp_settings, _employees_with_pay_fields
+from app.modules.storeops.router import scope_emp_ids, _tenant_pp_settings, _employees_with_pay_fields
 from app.modules.storeops import payroll_salary
 
 router = APIRouter(prefix="/hr", tags=["HR"])
@@ -196,12 +196,24 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
     so, cc = _so(), _cc()
     emps = _employees_with_pay_fields(org_id, "employee_id,name,home_store,pay_rate,is_active,epay_salesperson")
     emps = [e for e in emps if e.get("is_active") is True]   # matches the prior .eq("is_active", True)
-    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / enforcement off)
-    if ks is not None:
-        emps = [e for e in emps if in_keyset(ks, e.get("home_store"))]
 
     # Wages — sum the month's shift hours (actual, falling back to scheduled) × pay_rate.
     start, nxt = _month_range(period)
+    # Span scoping (owner directive 2026-08-07 — "employees could be at any store whether it is
+    # their home store or not") — resolve by HOME STORE **union WHERE THEY ACTUALLY WORKED** this
+    # period, via storeops.scope_emp_ids -> app.core.scope.reporting_employee_ids, NOT home_store
+    # alone. A rep borrowed into a DM's span all month must show up on that DM's Total Compensation
+    # report; a rep homed in-span but working elsewhere all month must not. Bounded to THIS report's
+    # own period (since=start, until=last day of the period, i.e. the day before `nxt`) so the
+    # "worked at" resolution never scans full shift/timelog history — same discipline
+    # `_emp_ids_window_from_rows` established for the other scope_emp_ids call sites in
+    # storeops/router.py. `eids is None` = unrestricted (admin / enforcement off) — unchanged from
+    # before this fix, byte-identical for those callers (no extra reads, no filtering).
+    period_until = (_date.fromisoformat(nxt) - timedelta(days=1)).isoformat() if start else None
+    eids = scope_emp_ids(authorization, org_id, since=start or None, until=period_until)
+    if eids is not None:
+        emps = [e for e in emps if str(e.get("employee_id")) in eids]
+
     # Salary pay-basis (2026-07-27) — resolved ONCE for the whole period, reused per employee below.
     # Degrades to weekly-Monday defaults on any tenant-settings read failure (payroll_salary never
     # raises past this call).
