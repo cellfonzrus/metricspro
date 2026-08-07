@@ -9574,7 +9574,11 @@ async def get_flags(period: str, authorization: str = Header(default=""), org_id
     rows = r.data or []
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
-    return [f for f in rows if in_keyset(ks, f.get('store_address'), f.get('store_code'))]
+    # commcalc.flags has store_address but NO store_code, so the second arg was always None —
+    # kept out rather than left in, so this reads as the deliberate single-key match it is.
+    # NOTE: 27,428 of 31,037 house rows carry a BLANK store_address and therefore match no
+    # keyset at all; routing those through a DM is a separate, larger piece of work.
+    return [f for f in rows if in_keyset(ks, f.get('store_address'))]
 
 @router.get("/config/{period}")
 async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
@@ -14179,7 +14183,11 @@ async def get_chargebacks(period: str, authorization: str = Header(default=""), 
     rows = r.data or []
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
-    return [c for c in rows if in_keyset(ks, c.get('store_code'), c.get('store_address'))]
+    # chargeback_items' store column is `store` — it has NEITHER store_code NOR store_address.
+    # Filtering on those two meant in_keyset() saw None/None on every row and returned False for
+    # every scoped caller, so the whole page read "$0" to every DM and store manager while
+    # super-admins (ks is None) saw all of it. Match `store`, which holds the POS store string.
+    return [c for c in rows if in_keyset(ks, c.get('store'))]
 
 @router.put("/chargebacks/{item_id}")
 async def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
