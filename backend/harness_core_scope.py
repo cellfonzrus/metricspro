@@ -15,6 +15,12 @@ Proves, WITHOUT a database:
   F. reporting_employee_ids() includes a BORROWED rep (home store outside the span) who actually
      worked a shift inside the span — the "employees move around" hole.
   G. A market-only grant genuinely CONSTRAINS (does not silently become unrestricted).
+  J. STORE SYNONYMS (commcalc.store_aliases) bind to the span — the 2026-08-07 owner-reported bug
+     where a scoped DM lost every sales row whose store STRING was a synonym ("3 Palisade Ave
+     Yonkers") rather than the canonical address ("3 Palisade Ave") — WITH the negative controls
+     that prove the widening can never reach a store outside the span (out-of-span synonym,
+     orphan code, transitive hop via an address, cross-tenant row) and that an org with no
+     synonyms keeps EXACTLY today's keyset.
 
 Run: python3 backend/harness_core_scope.py
 """
@@ -134,8 +140,42 @@ DATA = {
             {"org_id": ORG, "store_code": "P302", "store_address": "2 PENN AVE", "market": "PA"},
             {"org_id": OTHER, "store_code": "Z999", "store_address": "OTHER TENANT", "market": "PA"},
         ],
+        # Present but EMPTY on purpose: sections A–I then run against an org with NO synonyms, so
+        # every one of their assertions is literally unchanged from before the 2026-08-07 fix —
+        # that IS the "no aliases → exactly today's keyset" proof, restated 67 times.
+        "store_aliases": [],
     },
 }
+
+# The org's explicit POS/sales-string → store map (the Store-Matching UI). Section J only.
+ALIAS_ROWS = [
+    # THE REAL HOUSE CASE: the B2B export appends a suffix the canonical address does not carry.
+    # (live row: alias "3 Palisade Ave Yonkers" -> store_code "B-3PL")
+    {"org_id": ORG, "alias": "100 Broadway Yonkers", "store_code": "B101"},
+    # sloppy casing/whitespace on BOTH columns must still bind
+    {"org_id": ORG, "alias": "  10 newark ave suite 2 ", "store_code": " j201 "},
+    # NEGATIVE: a synonym for a store OUTSIDE an NY manager's span
+    {"org_id": ORG, "alias": "1 Penn Ave Extension", "store_code": "P301"},
+    # NEGATIVE: junk rows must be dropped, never crash
+    {"org_id": ORG, "alias": "", "store_code": "B102"},
+    {"org_id": ORG, "alias": "NO CODE", "store_code": ""},
+    {"org_id": ORG, "alias": None, "store_code": None},
+    # NEGATIVE: points at a store_code that exists nowhere → unreachable by any span
+    {"org_id": ORG, "alias": "ORPHAN STRING", "store_code": "NOSUCH"},
+    # NEGATIVE (transitive hop): store_code column mis-entered as an ADDRESS. "100 BROADWAY" IS in
+    # an NY manager's WIDENED keyset, so resolving synonyms against the widened keys instead of the
+    # FROZEN code set would admit this. It must not.
+    {"org_id": ORG, "alias": "HOP VIA ADDRESS", "store_code": "100 BROADWAY"},
+    # NEGATIVE (cross-tenant): another tenant's row naming OUR store_code.
+    {"org_id": OTHER, "alias": "CROSS TENANT STRING", "store_code": "B101"},
+]
+
+
+def aliased_client():
+    """Same org, same stores — plus the explicit synonym map."""
+    S.invalidate_market_index()
+    return FakeClient({"storeops": DATA["storeops"],
+                       "commcalc": dict(DATA["commcalc"], store_aliases=ALIAS_ROWS)})
 
 
 def client():
@@ -169,8 +209,10 @@ ok("other tenant's PA store not in index",
    all(s.get("store_code") != "Z999" for s in idx["stores"]), idx["stores"])
 ok("every read was org-scoped",
    all(r["filters"].get("org_id") == ORG for r in c.log if "org_id" in r["filters"]))
-ok("read both vocabularies",
-   {(r["schema"], r["table"]) for r in c.log} == {("storeops", "stores"), ("commcalc", "store_mapping")})
+ok("read all THREE vocabularies (stores + mapping + synonyms)",
+   {(r["schema"], r["table"]) for r in c.log} ==
+   {("storeops", "stores"), ("commcalc", "store_mapping"), ("commcalc", "store_aliases")},
+   {(r["schema"], r["table"]) for r in c.log})
 
 print("\n── C. market grants BIND (incl. a store_mapping-only market) ─────────────────────")
 c = client()
@@ -280,6 +322,94 @@ c2 = FakeClient({"storeops": {"stores": [{"org_id": OTHER, "store_code": "Z999",
 ok("a DIFFERENT org is not served the first org's cache",
    S.canonical_markets(c2, OTHER) == ["PA"])
 ok("first org's cache intact", S.canonical_markets(c1, ORG) == ["NJ", "NY", "PA"])
+
+print("\n── J. STORE SYNONYMS bind to the span (2026-08-07 owner-reported bug) ────────────")
+# ── J1. THE BUG: an in-span store's sales-file synonym must match ──────────────────────────────
+c = aliased_client()
+ks_ny = S.widen_codes_to_keys(c, ORG, {"B101"})
+ok("THE BUG — in-span store's sales-file synonym now matches",
+   S.in_keyset(ks_ny, "100 Broadway Yonkers") is True, ks_ny)
+ok("canonical address still matches", S.in_keyset(ks_ny, "100 broadway") is True)
+ok("store_code still matches", S.in_keyset(ks_ny, "b101") is True)
+ok("keyset = code + address + ONLY that store's synonyms",
+   ks_ny == {"B101", "100 BROADWAY", "100 BROADWAY YONKERS"}, ks_ny)
+ok("synonym match is case/space tolerant on BOTH columns",
+   S.in_keyset(S.widen_codes_to_keys(c, ORG, {"J201"}), " 10 NEWARK AVE Suite 2 ") is True)
+
+# ── J2. NEGATIVE CONTROLS: no path to a store outside the span ─────────────────────────────────
+ok("OUT-of-span store's synonym does NOT match", S.in_keyset(ks_ny, "1 Penn Ave Extension") is False)
+ok("out-of-span store itself still excluded (code)", S.in_keyset(ks_ny, "P301") is False)
+ok("out-of-span store itself still excluded (address)", S.in_keyset(ks_ny, "1 Penn Ave") is False)
+ok("orphan synonym (store_code exists nowhere) never admitted",
+   S.in_keyset(ks_ny, "ORPHAN STRING") is False)
+ok("NO TRANSITIVE HOP — synonym keyed on an ADDRESS is not admitted",
+   S.in_keyset(ks_ny, "HOP VIA ADDRESS") is False, ks_ny)
+ok("CROSS-TENANT synonym naming our own store_code never admitted",
+   S.in_keyset(ks_ny, "CROSS TENANT STRING") is False, ks_ny)
+ok("blank alias / blank code / None rows dropped, no crash",
+   "" not in ks_ny and "NO CODE" not in ks_ny)
+ok("empty span STAYS empty (deny-all never becomes allow-something)",
+   S.widen_codes_to_keys(aliased_client(), ORG, set()) == set())
+ok("a keyset is never turned into None (unrestricted)",
+   S.widen_codes_to_keys(aliased_client(), ORG, {"B101"}) is not None)
+pa_ks = S.widen_codes_to_keys(aliased_client(), ORG, {"P301"})
+ok("the PA manager DOES get the PA synonym (symmetry, not favouritism)",
+   S.in_keyset(pa_ks, "1 Penn Ave Extension") is True, pa_ks)
+ok("...and still not the NY synonym", S.in_keyset(pa_ks, "100 Broadway Yonkers") is False)
+
+# ── J3. AN ORG WITH NO SYNONYMS IS BYTE-IDENTICAL ──────────────────────────────────────────────
+base_keys = S.widen_codes_to_keys(client(), ORG, {"B101", "J201"})
+al_keys = S.widen_codes_to_keys(aliased_client(), ORG, {"B101", "J201"})
+ok("no synonyms → EXACTLY today's keyset",
+   base_keys == {"B101", "J201", "100 BROADWAY", "10 NEWARK AVE"}, base_keys)
+ok("synonyms only ADD synonyms of IN-SPAN stores (nothing else moves)",
+   al_keys - base_keys == {"100 BROADWAY YONKERS", "10 NEWARK AVE SUITE 2"}, al_keys - base_keys)
+ok("synonyms never REMOVE a key (strict superset)", base_keys < al_keys)
+S.invalidate_market_index()
+no_tbl = FakeClient({"storeops": DATA["storeops"],
+                     "commcalc": {"store_mapping": DATA["commcalc"]["store_mapping"]}})
+ok("store_aliases table ABSENT (mig 023 unrun) → no raise, today's keyset",
+   S.widen_codes_to_keys(no_tbl, ORG, {"B101", "J201"}) == base_keys)
+
+# ── J4. A SYNONYM IS NOT A STORE ───────────────────────────────────────────────────────────────
+S.invalidate_market_index()
+plain = FakeClient(DATA)
+idx_p = S.market_index(plain, ORG)
+markets_p, stores_p = list(idx_p["markets"]), [dict(s) for s in idx_p["stores"]]
+ca = aliased_client()
+idx_a = S.market_index(ca, ORG)
+ok("synonyms never create a store (the /core/markets grant picker is unchanged)",
+   [dict(s) for s in idx_a["stores"]] == stores_p, idx_a["stores"])
+ok("synonyms never create or rename a market", list(idx_a["markets"]) == markets_p, idx_a["markets"])
+ok("alias_keys is keyed on UPPER store_code",
+   idx_a["alias_keys"].get("B101") == {"100 BROADWAY YONKERS"}, idx_a["alias_keys"])
+ok("cross-tenant synonym absent from the index entirely",
+   all("CROSS TENANT STRING" not in v for v in idx_a["alias_keys"].values()), idx_a["alias_keys"])
+ok("store_aliases read was org-scoped",
+   any(r["table"] == "store_aliases" and r["filters"].get("org_id") == ORG for r in ca.log), ca.log)
+ok("market_store_keys stays synonym-free (documented, no prod caller)",
+   S.market_store_keys(ca, ORG, "NY") ==
+   {"B101", "B102", "B103", "100 BROADWAY", "200 BROADWAY", "300 BROADWAY"},
+   S.market_store_keys(ca, ORG, "NY"))
+pure_omitted = S.build_market_index(DATA["storeops"]["stores"], DATA["commcalc"]["store_mapping"])
+ok("build_market_index() with alias_rows OMITTED → empty alias_keys",
+   pure_omitted["alias_keys"] == {}, pure_omitted["alias_keys"])
+ok("explicit alias_rows=None is identical to omitting it",
+   S.build_market_index(DATA["storeops"]["stores"], DATA["commcalc"]["store_mapping"], None)
+   == pure_omitted)
+ok("build_market_index never raises on garbage alias rows",
+   S.build_market_index([], [], [{"nope": 1}, {"alias": "X"}])["alias_keys"] == {})
+
+# ── J5. END-TO-END through the reporting span (a market grant, as Rana has) ────────────────────
+c = aliased_client()
+span = S.reporting_span_codes(c, ORG, {"market": "NY"}, "market")
+ks = S.widen_codes_to_keys(c, ORG, span)
+ok("market-granted DM sees the aliased store's SALES-FILE string",
+   S.in_keyset(ks, "100 Broadway Yonkers") is True, ks)
+ok("...and still not a PA store's rows", S.in_keyset(ks, "1 PENN AVE") is False)
+ok("...and still not the PA store's synonym", S.in_keyset(ks, "1 Penn Ave Extension") is False)
+ok("employee resolution unaffected by synonyms",
+   S.reporting_employee_ids(c, ORG, ks) >= {"E1", "E3"})
 
 print(f"\n{'='*72}\n  RESULT: {PASS} passed, {FAIL} failed\n{'='*72}")
 sys.exit(1 if FAIL else 0)
