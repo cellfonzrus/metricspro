@@ -23,6 +23,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'vip', label: 'Distributors' },
   { key: 'accounts', label: 'Accounts' },
   { key: 'storeops', label: 'StoreOps' },
+  { key: 'pos', label: 'Point of Sale' },
   { key: 'hr', label: 'HR (salary + comp)' },
   { key: 'notify', label: 'Notify' },
   { key: 'helpdesk', label: 'Helpdesk' },
