@@ -11,11 +11,19 @@ const SEVERITY_COLORS: Record<string, string> = {
 
 // The flag row shape the table + exports read (the endpoint returns more; these are the used fields).
 interface Flag {
+  id?: string
   flag_type?: string; severity?: string; days_active?: number | null
   epay_salesperson?: string; store_address?: string; store_code?: string; mdn?: string; imei?: string
   phone_model?: string; customer_plan?: string
   activation_date?: string; transaction_date?: string
-  amount?: number; description?: string
+  amount?: number; description?: string; coaching_note?: string
+  // mig 287 — the district manager's decision, and the flag's lifecycle
+  status?: string; resolved_at?: string | null; resolved_reason?: string | null
+  reviewed_by?: string | null; reviewed_at?: string | null; action_taken?: string | null
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  open: 'Open', resolved: 'Cleared', superseded: 'Replaced',
 }
 
 const WINDOWS = [
@@ -40,14 +48,41 @@ export default function FlagsPage() {
   const [sortKey, setSortKey] = useState('days_active')
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
   const [showMatrix, setShowMatrix] = useState(false)
+  // mig 287 — a flag whose condition has cleared is RETIRED, not deleted, so it is hidden by default
+  // and can still be read back for the audit trail.
+  const [showRetired, setShowRetired] = useState(false)
+  const [fReview, setFReview] = useState('')          // '' | 'todo' | 'done'
+  const [reviewing, setReviewing] = useState<Flag | null>(null)
+  const [reviewNote, setReviewNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [reload, setReload] = useState(0)
 
   useEffect(() => {
     setLoading(true)
-    api(`/api/v1/commcalc/flags/${encodeURIComponent(period)}?org_id=${ORG_ID}`)
+    api(`/api/v1/commcalc/flags/${encodeURIComponent(period)}?org_id=${ORG_ID}`
+        + (showRetired ? '&include_resolved=true' : ''))
       .then(d => setFlags(d || []))
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [period])
+  }, [period, showRetired, reload])
+
+  // The DM's decision. It is written on the FLAG, and — since migration 287 — it survives the nightly
+  // recalculation instead of being wiped with the rest of the period's flags.
+  async function saveReview(f: Flag, clear = false) {
+    if (!f.id) return
+    setSaving(true)
+    try {
+      await api(`/api/v1/commcalc/flags/${f.id}/review?org_id=${ORG_ID}`, {
+        method: 'POST',
+        body: JSON.stringify(clear ? { clear: true } : { action_taken: reviewNote.trim() }),
+      })
+      setReviewing(null); setReviewNote(''); setReload(r => r + 1)
+    } catch (e: any) {
+      alert(e?.message || 'Could not save the review')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   // ONE store label for the whole page. `store_address` is the free-text spelling the producing
   // report wrote and is BLANK on most MI-derived rows; `store_code` (mig 285) is the RESOLVED store
@@ -65,6 +100,8 @@ export default function FlagsPage() {
       if (fType && f.flag_type !== fType) return false
       if (fRep && f.epay_salesperson !== fRep) return false
       if (fStore && storeOf(f) !== fStore) return false
+      if (fReview === 'todo' && f.reviewed_by) return false
+      if (fReview === 'done' && !f.reviewed_by) return false
       if (fModel && !(f.phone_model || '').toLowerCase().includes(fModel.toLowerCase())) return false
       if (fActMonth && String(f.activation_date || f.transaction_date || '').slice(0, 7) !== fActMonth) return false
       if (fSearch) {
@@ -95,7 +132,10 @@ export default function FlagsPage() {
       return 0
     })
     return rows
-  }, [flags, fType, fRep, fStore, fModel, fSearch, fWindow, fActMonth, sortKey, sortDir])
+  }, [flags, fType, fRep, fStore, fModel, fSearch, fWindow, fActMonth, fReview, sortKey, sortDir])
+
+  const pendingReview = useMemo(
+    () => filtered.filter(f => (f.status || 'open') === 'open' && !f.reviewed_by).length, [filtered])
 
   const totalAtRisk = filtered.reduce((s, f) => s + Math.abs(f.amount || 0), 0)
 
@@ -115,13 +155,16 @@ export default function FlagsPage() {
   }
 
   function exportCSV() {
-    const head = 'Flag Type,Severity,Days Active,Rep,Store,MDN,IMEI,Phone Model,Plan,Activated,Amount,Description'
+    const head = 'Flag Type,Severity,Days Active,Rep,Store,MDN,IMEI,Phone Model,Plan,Activated,Amount,Description,Status,Reviewed By,Reviewed At,Action Taken'
     const rows = filtered.map(f => [
       f.flag_type, f.severity, f.days_active ?? '', f.epay_salesperson || '',
       `"${storeOf(f).replace(/"/g,'')}"`, f.mdn || '', f.imei || '',
       `"${(f.phone_model||'').replace(/"/g,'')}"`, `"${(f.customer_plan||'').replace(/"/g,'')}"`,
       String(f.activation_date||f.transaction_date||'').slice(0,10),
       f.amount || '', `"${(f.description||'').replace(/"/g,'').replace(/\n/g,' ')}"`,
+      STATUS_LABEL[f.status || 'open'] || (f.status || 'Open'),
+      `"${(f.reviewed_by||'').replace(/"/g,'')}"`, String(f.reviewed_at||'').slice(0,10),
+      `"${(f.action_taken||'').replace(/"/g,'').replace(/\n/g,' ')}"`,
     ].join(','))
     const a = document.createElement('a')
     a.href = 'data:text/csv,' + encodeURIComponent([head, ...rows].join('\n'))
@@ -136,6 +179,8 @@ export default function FlagsPage() {
     fType && `type: ${fType}`, fRep && `rep: ${fRep}`, fStore && `store: ${fStore}`,
     fModel && `model: ${fModel}`, fWindow && `window: ${WINDOWS.find(w => w.id === fWindow)?.label || fWindow}`,
     fActMonth && `activated: ${fActMonth}`, fSearch && `search: “${fSearch}”`,
+    fReview === 'todo' && 'awaiting DM review', fReview === 'done' && 'reviewed',
+    showRetired && 'including cleared/replaced flags',
   ].filter(Boolean).join(' · ')
 
   function buildPayload(): ExportPayload {
@@ -157,6 +202,12 @@ export default function FlagsPage() {
         { header: 'Activated', get: (f: Flag) => String(f.activation_date || f.transaction_date || '').slice(0, 10) },
         { header: 'Amount', get: (f: Flag) => Math.abs(f.amount || 0), money: true },
         { header: 'Description', get: (f: Flag) => f.description || '' },
+        // RULE FOUR (what you see is what exports): the DM's decision and the flag's lifecycle are
+        // now part of the record, so they travel with every Excel / PDF / email / WhatsApp export.
+        { header: 'Status', get: (f: Flag) => STATUS_LABEL[f.status || 'open'] || (f.status || 'Open') },
+        { header: 'Reviewed By', get: (f: Flag) => f.reviewed_by || '' },
+        { header: 'Reviewed At', get: (f: Flag) => String(f.reviewed_at || '').slice(0, 10) },
+        { header: 'Action Taken', get: (f: Flag) => f.action_taken || '' },
       ] }],
     }
   }
@@ -177,6 +228,7 @@ export default function FlagsPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Flags & Compliance</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {period} · {filtered.length} of {flags.length} flags · At risk: <strong style={{ color: 'var(--red)' }}>{fmt(totalAtRisk)}</strong>
+            {pendingReview > 0 && <> · <strong style={{ color: '#d97706' }}>{pendingReview} awaiting review</strong></>}
           </p>
         </div>
         <div style={{ display: 'inline-flex', gap: 6 }}>
@@ -211,8 +263,19 @@ export default function FlagsPage() {
           onChange={e => setFSearch(e.target.value)} style={{ width: 160 }} />
         <input className="input" placeholder="Phone model…" value={fModel}
           onChange={e => setFModel(e.target.value)} style={{ width: 140 }} />
-        {(fType||fRep||fStore||fWindow||fSearch||fModel||fActMonth) && (
-          <button className="btn btn-secondary" onClick={() => { setFType('');setFRep('');setFStore('');setFWindow('');setFSearch('');setFModel('');setFActMonth('') }}>✕ Clear</button>
+        <select className="select" value={fReview} onChange={e => setFReview(e.target.value)}
+          title="A flag is meant to reach the district manager, be decided, and stay decided">
+          <option value="">Reviewed or not</option>
+          <option value="todo">Awaiting DM review</option>
+          <option value="done">Reviewed</option>
+        </select>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text2)' }}
+          title="A flag whose condition has cleared is kept for the audit trail instead of being deleted, so the review on it is never lost.">
+          <input type="checkbox" checked={showRetired} onChange={e => setShowRetired(e.target.checked)} />
+          Show cleared / replaced
+        </label>
+        {(fType||fRep||fStore||fWindow||fSearch||fModel||fActMonth||fReview) && (
+          <button className="btn btn-secondary" onClick={() => { setFType('');setFRep('');setFStore('');setFWindow('');setFSearch('');setFModel('');setFActMonth('');setFReview('') }}>✕ Clear</button>
         )}
       </div>
 
@@ -299,15 +362,20 @@ export default function FlagsPage() {
                 <TH k="customer_plan" label="Plan" />
                 <TH k="activation_date" label="Activated" />
                 <TH k="amount" label="Amount" align="right" />
+                <TH k="reviewed_by" label="DM Review" />
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={11} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
+                <tr><td colSpan={12} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
                   {flags.length === 0 ? 'No flags — run calculation to generate' : 'No flags match filters'}
                 </td></tr>
               ) : filtered.map((f, i) => (
-                <tr key={i} style={{ background: i % 2 ? '#fafbfc' : 'white', borderBottom: '1px solid var(--border)' }}>
+                <tr key={f.id || i} style={{
+                  background: (f.status && f.status !== 'open') ? '#f8fafc' : i % 2 ? '#fafbfc' : 'white',
+                  borderBottom: '1px solid var(--border)',
+                  opacity: (f.status && f.status !== 'open') ? 0.62 : 1,
+                }}>
                   <td style={{ padding: '8px 10px', fontSize: 12, fontWeight: 600 }}>{f.flag_type?.replace(/_/g,' ')}</td>
                   <td style={{ padding: '8px 10px' }}>
                     <span style={{ fontSize: 10, fontWeight: 700, color: SEVERITY_COLORS[f.severity] || '#64748b',
@@ -327,10 +395,73 @@ export default function FlagsPage() {
                   <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text3)' }}>{(f.customer_plan||'—').substring(0,25)}</td>
                   <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text3)' }}>{String(f.activation_date||f.transaction_date||'—').substring(0,10)}</td>
                   <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 600 }} title={f.flag_type==='CHARGEBACK'?'Rebate lost':''}>{f.amount ? fmt(Math.abs(f.amount)) : '—'}</td>
+                  {/* The DM's decision. Since mig 287 it survives the nightly recalculation. */}
+                  <td style={{ padding: '8px 10px', fontSize: 11, whiteSpace: 'nowrap' }}>
+                    {f.status && f.status !== 'open' && (
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#475569' }}
+                        title={f.resolved_reason || ''}>
+                        {STATUS_LABEL[f.status] || f.status}
+                        {f.resolved_at ? ` ${String(f.resolved_at).slice(0, 10)}` : ''}
+                      </div>
+                    )}
+                    {f.reviewed_by ? (
+                      <button onClick={() => { setReviewing(f); setReviewNote(f.action_taken || '') }}
+                        title={`${f.action_taken || 'Reviewed'} — ${String(f.reviewed_at || '').slice(0, 10)}`}
+                        style={{ border: 'none', background: 'transparent', padding: 0, cursor: 'pointer',
+                                 textAlign: 'left', color: '#15803d', fontWeight: 700, fontSize: 11 }}>
+                        ✓ {String(f.reviewed_by).split('@')[0]}
+                      </button>
+                    ) : (
+                      <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }}
+                        onClick={() => { setReviewing(f); setReviewNote('') }}>Review</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── DM review ────────────────────────────────────────────────────────────────────────── */}
+      {reviewing && (
+        <div onClick={() => !saving && setReviewing(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', display: 'flex',
+                   alignItems: 'center', justifyContent: 'center', zIndex: 60, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} className="card"
+            style={{ width: 520, maxWidth: '100%', padding: 20, background: 'white' }}>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>Review flag</h3>
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--text2)' }}>
+              {(reviewing.flag_type || '').replace(/_/g, ' ')} · {reviewing.epay_salesperson || 'no rep'} ·{' '}
+              {storeOf(reviewing) || 'no store'}
+            </p>
+            <p style={{ margin: '8px 0 0', fontSize: 13 }}>{reviewing.description}</p>
+            {reviewing.coaching_note && (
+              <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--text3)' }}>{reviewing.coaching_note}</p>
+            )}
+            <label style={{ display: 'block', marginTop: 14, fontSize: 12, fontWeight: 600 }}>
+              What did you decide?
+            </label>
+            <textarea className="input" rows={3} value={reviewNote} autoFocus
+              onChange={e => setReviewNote(e.target.value)}
+              placeholder="e.g. Coached the rep — not chargeable"
+              style={{ width: '100%', marginTop: 4, resize: 'vertical' }} />
+            <p style={{ margin: '8px 0 0', fontSize: 11, color: 'var(--text3)' }}>
+              Your decision stays on this flag. It is no longer wiped when commissions are recalculated,
+              and it is kept even if the flag later clears.
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 14 }}>
+              {reviewing.reviewed_by && (
+                <button className="btn btn-secondary" disabled={saving}
+                  onClick={() => saveReview(reviewing, true)}>Clear review</button>
+              )}
+              <button className="btn btn-secondary" disabled={saving}
+                onClick={() => setReviewing(null)}>Cancel</button>
+              <button className="btn" disabled={saving} onClick={() => saveReview(reviewing)}>
+                {saving ? 'Saving…' : 'Save review'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

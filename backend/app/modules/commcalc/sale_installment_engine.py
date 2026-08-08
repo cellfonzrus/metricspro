@@ -1703,6 +1703,10 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 base = {"period": pay_period, "period_month": pm.get("month"),
                         "period_year": pm.get("year"), "epay_salesperson": rep,
                         "store_address": store, "mdn": mdn, "imei": serial,
+                        # mig 287 identity: the transaction + which installment month it is. Lets the
+                        # flag be re-found on the next recalculation so the DM's review survives, and
+                        # keeps two installments of the SAME line in one pay period distinct.
+                        "source_ref": f"{str(line.get('trans_id') or '').strip()}|m{month_index}",
                         "amount": round(safe_float(amount), 2)}
                 if gate_kind == "activation_payment":
                     desc1 = (f"Month {month_index} installment ${safe_float(amount):,.2f} WITHHELD — no "

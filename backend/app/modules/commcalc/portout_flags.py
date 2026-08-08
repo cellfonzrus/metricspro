@@ -87,6 +87,13 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
         # sales answer is absent, so nothing that already attributed correctly changes.
         door_code = None if store else sf_to_code.get(str(m.get('salesforce_id') or '').strip().upper())
 
+        # STABLE IDENTITY (mig 287, owner 2026-08-08 "DM review should not be erased"): the flag must
+        # be re-findable on the next recalculation or the DM's review is lost. 17,662 of the house
+        # org's MI flags carry NO MDN and NO IMEI because the MI row itself carries neither — but
+        # 100% of those rows DO carry `subscriber_id`, so that is the identity we persist. Identity
+        # only: it is not displayed, not summed and pays nobody.
+        sub_id = str(m.get('subscriber_id') or '').strip()
+
         # ── PORT-OUT (customer left Boost) ───────────────────────
         if status == 'PORTED-OUT':
             end_date = tout or deact
@@ -102,7 +109,7 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
             flags.append({**base,
                 'flag_type': ft, 'source': 'mi_report', 'severity': sev,
                 'store_address': store, 'store_code': door_code, 'epay_salesperson': rep,
-                'mdn': phone, 'imei': imei, 'amount': mrc,
+                'mdn': phone, 'imei': imei, 'subscriber_id': sub_id, 'amount': mrc,
                 'days_active': d, 'phone_model': model_by_imei.get(imei,''), 'customer_plan': plan,
                 'description': f"Ported out{f' after {d} days' if d is not None else ''} — plan {plan}, MRC ${mrc:.2f}",
                 'coaching_note': 'Port-out within 60 days is a loss. Review at user discretion for chargeback.' if (d is not None and d <= 60) else 'Port-out 3rd month onward — reporting only.',
@@ -114,7 +121,7 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
             flags.append({**base,
                 'flag_type': 'RESIDUAL_TRANSFER_OUT', 'source': 'mi_report', 'severity': 'MEDIUM',
                 'store_address': store, 'store_code': door_code, 'epay_salesperson': rep,
-                'mdn': phone, 'imei': imei, 'amount': mrc,
+                'mdn': phone, 'imei': imei, 'subscriber_id': sub_id, 'amount': mrc,
                 'days_active': d, 'phone_model': model_by_imei.get(imei,''), 'customer_plan': plan,
                 'description': f"Active customer's residual transferred out{f' after {d} days' if d is not None else ''} — upgraded at another store",
                 'coaching_note': 'Customer stayed with the Carrier but upgraded elsewhere. Retention/CS follow-up.',
@@ -126,7 +133,7 @@ def calc_portout_flags(mi_rows, sales, store_mapping, period, period_month, peri
             flags.append({**base,
                 'flag_type': 'INVOLUNTARY_SUSPENDED', 'source': 'mi_report', 'severity': 'MEDIUM',
                 'store_address': store, 'store_code': door_code, 'epay_salesperson': rep,
-                'mdn': phone, 'imei': imei, 'amount': mrc,
+                'mdn': phone, 'imei': imei, 'subscriber_id': sub_id, 'amount': mrc,
                 'days_active': ds, 'phone_model': model_by_imei.get(imei,''), 'customer_plan': plan,
                 'description': f"Involuntary suspended (non-payment) — plan {plan}, MRC ${mrc:.2f}",
                 'coaching_note': 'Non-payment affects 3MR. Reporting only — rep may follow up with customer.',

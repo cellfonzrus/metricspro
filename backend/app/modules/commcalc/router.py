@@ -15,6 +15,7 @@ from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_V
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
 from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a flag's store for DM routing
+from app.modules.commcalc import flag_persist          # mig 287 — ADDITIVE flag writes (DM review survives)
 from app.modules.commcalc.hotsheet_parser import parse_hotsheet
 from app.modules.commcalc.discrepancy_engine import run_discrepancy
 from app.modules.commcalc import targets_engine
@@ -8284,8 +8285,9 @@ async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret:
 
 
 # ── RECOMPUTE SINGLE-FLIGHT GUARD (mig 275) ───────────────────
-# A recompute is a DELETE-then-INSERT over rep_commissions / flags / chargeback_items with no database
-# lock. Until now nothing stopped two of them running at once for the same (org, period): the endpoint
+# A recompute is a DELETE-then-INSERT over rep_commissions / chargeback_items with no database lock
+# (flags became an ADDITIVE merge in mig 287, but the race below is unchanged for the money tables).
+# Until now nothing stopped two of them running at once for the same (org, period): the endpoint
 # WROTE calc_status='running' but no code ever READ it. It was accidentally serialised only because
 # _run_calculation was an `async def` background task, so Starlette awaited it ON the single event loop
 # (which is also why every recompute froze the entire product for its 300s+ duration). Moving it to the
@@ -8827,6 +8829,18 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
         return comms
 
 
+# The `source` values the MAIN flag pass owns — everything `calc_flags()` and `calc_portout_flags()`
+# can emit. It is a STATIC registry on purpose: the retire step (mig 287) must still cover a source
+# that produced ZERO flags this run — that is precisely the case where every flag of that source has
+# cleared and must leave the active queue. Deriving it only from the computed rows would leave those
+# flags open forever. The union of this and the run's observed sources is what gets scoped.
+#
+# It is also the boundary that stops a commcalc recalculation from touching the four OTHER modules
+# that write this table (asset, payables, closing, account). The wholesale per-period DELETE it
+# replaces did not have that boundary and wiped their flags too.
+_CALC_FLAG_SOURCES = ('payment_detail', 'sales', 'dlar_store', 'mi_report')
+
+
 def _run_calculation(period: str, org_id: str, force: bool = False, guard_token: str = None):
     """Background calculation task. force=True bypasses the zero-wipe guard.
 
@@ -9062,20 +9076,46 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             except Exception as fe:                       # never let routing break a recalculation
                 save_errors.append(f'flag_store_code: {fe}')
 
-            client.schema('commcalc').table('flags').delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
-            if flag_list:
-                for row in flag_list:
-                    row['org_id'] = org_id
-                for i in range(0, len(flag_list), 500):
-                    client.schema('commcalc').table('flags').insert(flag_list[i:i+500]).execute()
+            # ADDITIVE WRITE (mig 287). OWNER 2026-08-08: "DM review should not be erased and teh
+            # new data should only add the missing data if any." This pass used to DELETE every flag
+            # for the period and re-insert the set — and `_do_dlar_sweep` recalculates Boost DAILY, so
+            # a district manager's review was erased within 24 hours. Now: insert what is missing,
+            # refresh the amount/description/severity of what exists, and RETIRE (never delete) what
+            # the run no longer produces. `reviewed_by` / `reviewed_at` / `action_taken` are not in the
+            # merge payload at all.
+            #
+            # Scoped to the SOURCES this pass owns, so it can no longer wipe the asset / payables /
+            # closing / account flags that share this table — the old wholesale per-period DELETE did.
+            _MAIN_FLAG_SOURCES = sorted({str(f.get('source') or '').strip()
+                                         for f in (flag_list or [])} - {''}
+                                        | set(_CALC_FLAG_SOURCES))
+            try:
+                _fp = flag_persist.sync(
+                    client, org_id, flag_list or [],
+                    periods=_pvariants(period), sources=_MAIN_FLAG_SOURCES,
+                    reason=f"not present in the {period} recalculation")
+                print(f"INFO flags additive org={org_id} period={period} "
+                      f"{ {k: v for k, v in _fp.items() if k != 'run_id'} }")
+            except flag_persist.FlagPersistUnavailable as _fe:
+                # Migration 287 has not been applied yet — degrade to the previous behaviour rather
+                # than write nothing (contract §5). Review state is not preserved on this path; that
+                # is exactly the state prod is in today.
+                save_errors.append(f'flags additive unavailable (run migration 287): {_fe}')
+                client.schema('commcalc').table('flags').delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
+                if flag_list:
+                    for row in flag_list:
+                        row['org_id'] = org_id
+                    for i in range(0, len(flag_list), 500):
+                        client.schema('commcalc').table('flags').insert(flag_list[i:i+500]).execute()
         except Exception as e:
             save_errors.append(f'flags: {e}')
 
         # SALE-TRIGGERED INSTALLMENT flags (mig 201 / doctrine §7b decision 2): a sold line whose paid
         # gate FAILED (line not active / not receiving residual) emits TWO flags — 'commission_rebate_tracking'
-        # + 'employee_miss'. Written AFTER the full-period flags wipe above (so they survive) with the
-        # delete-first-BY-SOURCE pattern (like the asset flag sync), so they're idempotent on recalc and
-        # never touch the other flag sources. No-op for Boost (no schedules → engine returns no flags).
+        # + 'employee_miss'. It used to run AFTER the full-period wipe above specifically so its rows
+        # would survive it; since mig 287 there IS no wipe, and both passes are additive and scoped to
+        # their own `source` values, so neither can disturb the other (or any other module's flags).
+        # No-op for Boost (no schedules → engine returns no flags).
         try:
             si_flags = (sale_installment_engine.compute_sale_installments(client, org_id, period, persist=False)
                         .get('flags') or [])
@@ -9086,13 +9126,25 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
                 flag_store_resolver.stamp_flags(client, org_id, si_flags)
             except Exception as fe:
                 save_errors.append(f'installment_flag_store_code: {fe}')
-            (client.schema('commcalc').table('flags').delete().eq('org_id', org_id)
-             .in_('period', _pvariants(period)).in_('source', _INSTALLMENT_FLAG_SOURCES).execute())
-            if si_flags:
-                for row in si_flags:
-                    row['org_id'] = org_id
-                for i in range(0, len(si_flags), 500):
-                    client.schema('commcalc').table('flags').insert(si_flags[i:i+500]).execute()
+            # ADDITIVE (mig 287) — same reasoning as the main pass. The delete-first-BY-SOURCE this
+            # replaces was already narrower than the wholesale wipe, but it still erased the DM's
+            # review on every recalculation.
+            try:
+                _fpi = flag_persist.sync(
+                    client, org_id, si_flags,
+                    periods=_pvariants(period), sources=_INSTALLMENT_FLAG_SOURCES,
+                    reason=f"the sold line is no longer gated in the {period} recalculation")
+                print(f"INFO installment flags additive org={org_id} period={period} "
+                      f"{ {k: v for k, v in _fpi.items() if k != 'run_id'} }")
+            except flag_persist.FlagPersistUnavailable as _fe:
+                save_errors.append(f'installment flags additive unavailable (run migration 287): {_fe}')
+                (client.schema('commcalc').table('flags').delete().eq('org_id', org_id)
+                 .in_('period', _pvariants(period)).in_('source', _INSTALLMENT_FLAG_SOURCES).execute())
+                if si_flags:
+                    for row in si_flags:
+                        row['org_id'] = org_id
+                    for i in range(0, len(si_flags), 500):
+                        client.schema('commcalc').table('flags').insert(si_flags[i:i+500]).execute()
         except Exception as e:
             save_errors.append(f'installment_flags: {e}')
 
@@ -9674,10 +9726,24 @@ async def get_dlar_store_kpis(period: str, authorization: str = Header(default="
 
 
 @router.get("/flags/{period}")
-async def get_flags(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
+async def get_flags(period: str, authorization: str = Header(default=""),
+                    include_resolved: bool = False,
+                    org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    r = client.schema('commcalc').table('flags').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('severity').execute()
-    rows = r.data or []
+    q = client.schema('commcalc').table('flags').select('*').eq('org_id', org_id).in_('period', _pvariants(period))
+    # THE ACTIVE QUEUE (mig 287). A flag whose condition has cleared is RETIRED, not deleted — status
+    # leaves 'open' and it drops out of here by default, so "only ever add" cannot turn into a queue
+    # that only grows or a stale accusation that follows a rep forever. `?include_resolved=1` shows the
+    # full audit trail. Degrades to the unfiltered read before migration 287 (contract §5).
+    if not include_resolved:
+        try:
+            rows = q.eq('status', flag_persist.STATUS_OPEN).order('severity').execute().data or []
+        except Exception as _se:
+            print(f"WARN flags status filter degraded (run migration 287?): {_se}")
+            rows = (client.schema('commcalc').table('flags').select('*').eq('org_id', org_id)
+                    .in_('period', _pvariants(period)).order('severity').execute().data) or []
+    else:
+        rows = q.order('severity').execute().data or []
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
     # `store_code` (mig 285) is the RESOLVED store — the key a manager's span is actually built from.
@@ -9707,8 +9773,11 @@ async def get_flags_unrouted(period: str, authorization: str = Header(default=""
     if ks is not None:
         return {"period": period, "visible": False, "count": 0, "rows": [], "by_reason": {}}
     try:
+        # Only OPEN flags (mig 287) — a retired flag reaches nobody by design and does not belong in
+        # a queue whose whole purpose is "this needs a district manager".
         rows = (client.schema('commcalc').table('flags').select('*')
                 .eq('org_id', org_id).in_('period', _pvariants(period))
+                .eq('status', flag_persist.STATUS_OPEN)
                 .is_('store_code', 'null').order('severity').execute().data) or []
     except Exception as e:
         print(f"WARN flags-unrouted degraded (run migration 285?): {e}")
@@ -9725,6 +9794,104 @@ async def get_flags_unrouted(period: str, authorization: str = Header(default=""
         by_reason[reason] = by_reason.get(reason, 0) + 1
     return {"period": period, "visible": True, "count": len(rows), "rows": rows,
             "by_reason": by_reason}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# DM REVIEW (mig 287) — the decision that must survive the nightly recalculation
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# Owner 2026-08-07: "all flags need to be fed thru the dm, so yes route it thru the dm and then visible
+# to the scoped user." Owner 2026-08-08: "DM review should not be erased and teh new data should only
+# add the missing data if any." `commcalc.flags` has carried reviewed_by / reviewed_at / action_taken
+# since the beginning and NOTHING has ever written them — every one of the 31,766 live rows has
+# reviewed_by NULL. This is the write path, and migration 287 is what makes it survive the sweep.
+#
+# 💰 Moves no money: it writes three review columns on a visibility record. No amount, rate, tier,
+# plan, schedule or paid/earned column is reachable from here.
+def _flag_reviewer_name(authorization, fallback=""):
+    """Who is reviewing — resolved from the caller's token, never from the request body (a body-supplied
+    reviewer is unauditable). Falls back to the supplied label when RBAC is off / the token is absent."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        if caller:
+            return (caller.get("email") or caller.get("full_name")
+                    or caller.get("employee_id") or str(uid))
+    except Exception:
+        pass
+    return (fallback or "").strip() or "admin"
+
+
+@router.post("/flags/{flag_id}/review")
+async def review_flag(flag_id: str, payload: dict = {}, authorization: str = Header(default=""),
+                      org_id: str = ORG_ID):
+    """Record (or clear) a district manager's review of one flag.
+
+    Span-enforced: a scoped manager may only review a flag their own span can see, matched on the SAME
+    two keys `get_flags` filters on (`store_code` from mig 285, then the raw `store_address`). An
+    unrestricted caller (super-admin / RBAC off) may review anything."""
+    require_org(org_id)
+    client = sb()
+    cur = (client.schema('commcalc').table('flags').select('*')
+           .eq('org_id', org_id).eq('id', flag_id).limit(1).execute().data) or []
+    if not cur:
+        raise HTTPException(404, "flag not found")
+    f = cur[0]
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if not in_keyset(ks, f.get('store_code'), f.get('store_address')):
+        raise HTTPException(403, "this flag is outside your span")
+
+    clear = bool((payload or {}).get('clear'))
+    if clear:
+        body = {'reviewed_by': None, 'reviewed_at': None, 'action_taken': None}
+    else:
+        body = {
+            'reviewed_by': _flag_reviewer_name(authorization, (payload or {}).get('reviewed_by')),
+            'reviewed_at': datetime.now(timezone.utc).isoformat(),
+            'action_taken': (str((payload or {}).get('action_taken') or '').strip() or 'Reviewed')[:500],
+        }
+    client.schema('commcalc').table('flags').update(body).eq('org_id', org_id).eq('id', flag_id).execute()
+    return {"ok": True, "id": flag_id, **body}
+
+
+@router.get("/flags-key-health/{period}")
+async def flags_key_health(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """How many flags in this period have a STABLE identity — i.e. how many will keep their review
+    across the next recalculation, and how many will not.
+
+    `key_basis` records which identifier the flag_key rests on. 'none' is the honest category: the row
+    carried no imei, no mdn, no subscriber_id, no source_ref, no rep and no store, so its key is only
+    an ordinal inside its flag_type/source group and is reproducible only from an unchanged source
+    multiset. Those rows are counted here rather than quietly presented as durable.
+
+    Admin-only, like the unrouted queue — a scoped manager is not entitled to org-wide counts."""
+    require_org(org_id)
+    from app.modules.storeops.router import scope_keyset
+    if scope_keyset(authorization, org_id) is not None:
+        return {"period": period, "visible": False}
+    client = sb()
+    try:
+        rows = (client.schema('commcalc').table('flags')
+                .select('key_basis,status,source,reviewed_by')
+                .eq('org_id', org_id).in_('period', _pvariants(period)).limit(200000).execute().data) or []
+    except Exception as e:
+        return {"period": period, "visible": True, "degraded": str(e),
+                "total": 0, "stable": 0, "unstable": 0, "by_basis": {}, "by_status": {}}
+    by_basis, by_status = {}, {}
+    reviewed = 0
+    for r in rows:
+        b = str(r.get('key_basis') or 'unkeyed')
+        s = str(r.get('status') or 'open')
+        by_basis[b] = by_basis.get(b, 0) + 1
+        by_status[s] = by_status.get(s, 0) + 1
+        if r.get('reviewed_by'):
+            reviewed += 1
+    unstable = by_basis.get('none', 0) + by_basis.get('unkeyed', 0)
+    return {"period": period, "visible": True, "total": len(rows),
+            "stable": len(rows) - unstable, "unstable": unstable,
+            "reviewed": reviewed, "by_basis": by_basis, "by_status": by_status}
+
 
 @router.get("/config/{period}")
 async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
@@ -18287,8 +18454,15 @@ def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
     cb = (client.schema('commcalc').table('chargeback_items')
           .select('epay_salesperson,amount,deduct').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
     ops_lines_by = _ops_chargeback_deductions(client, org_id, cperiod)
-    flags = (client.schema('commcalc').table('flags')
-             .select('epay_salesperson,severity,description,coaching_note').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
+    # OPEN only (mig 287): a flag whose condition has cleared must stop counting against the rep.
+    try:
+        flags = (client.schema('commcalc').table('flags')
+                 .select('epay_salesperson,severity,description,coaching_note')
+                 .eq('org_id', org_id).in_('period', _pvariants(cperiod))
+                 .eq('status', flag_persist.STATUS_OPEN).execute().data) or []
+    except Exception:                              # before migration 287
+        flags = (client.schema('commcalc').table('flags')
+                 .select('epay_salesperson,severity,description,coaching_note').eq('org_id', org_id).in_('period', _pvariants(cperiod)).execute().data) or []
     stores = (client.schema('storeops').table('stores').select('store_code,address,market').eq('org_id', org_id).execute().data) or []
     mkt_by = {}
     for s in stores:
@@ -24034,10 +24208,17 @@ def _cr_resolve_chargebacks(client, org_id, period, ctx):
 
 
 def _cr_resolve_flags(client, org_id, period, ctx):
-    """commcalc.flags — the SAME read `get_flags` serves."""
+    """commcalc.flags — the SAME read `get_flags` serves, including its OPEN-only default (mig 287):
+    a report and the page it mirrors must not disagree about whether a retired flag still counts."""
     market_for = ctx["market_for"]
-    rows = (client.schema("commcalc").table("flags").select("*")
-            .eq("org_id", org_id).in_("period", _pvariants(period)).order("severity").execute().data) or []
+    try:
+        rows = (client.schema("commcalc").table("flags").select("*")
+                .eq("org_id", org_id).in_("period", _pvariants(period))
+                .eq("status", flag_persist.STATUS_OPEN).order("severity").execute().data) or []
+    except Exception as _se:                       # before migration 287
+        print(f"WARN custom-report flags status filter degraded: {_se}")
+        rows = (client.schema("commcalc").table("flags").select("*")
+                .eq("org_id", org_id).in_("period", _pvariants(period)).order("severity").execute().data) or []
     for r in rows:
         # Resolved store_code first (mig 285): it is the key `market_for` indexes on, so an MI-derived
         # flag with a blank store_address now lands in the right market instead of a blank one.
