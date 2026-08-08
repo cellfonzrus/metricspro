@@ -614,13 +614,23 @@ BEGIN
     RAISE EXCEPTION 'customer not found';
   END IF;
   k := pos.pii_key();
+  -- PER-COLUMN semantics (owner constraint 2026-08-08: nothing may delete what it did not
+  -- write). Previously BOTH columns were rewritten on every call, so saving only a driver
+  -- licence NULLed the SSN ciphertext — and the plaintext exists nowhere else, so that loss
+  -- was irreversible. Now:
+  --   p_* IS NULL       ⇒ field omitted by the caller ⇒ leave the stored value untouched
+  --   p_* = '' (blank)  ⇒ caller explicitly cleared the field ⇒ set NULL
+  --   otherwise         ⇒ encrypt and store
+  -- The omission case is the common one, so it is the one that must be safe by default.
   UPDATE pos.customers c
      SET ssn_enc = CASE
-                     WHEN NULLIF(btrim(COALESCE(p_ssn, '')), '') IS NULL THEN NULL
+                     WHEN p_ssn IS NULL THEN c.ssn_enc
+                     WHEN btrim(p_ssn) = '' THEN NULL
                      ELSE extensions.pgp_sym_encrypt(btrim(p_ssn), k)
                    END,
          driver_license_enc = CASE
-                     WHEN NULLIF(btrim(COALESCE(p_driver_license, '')), '') IS NULL THEN NULL
+                     WHEN p_driver_license IS NULL THEN c.driver_license_enc
+                     WHEN btrim(p_driver_license) = '' THEN NULL
                      ELSE extensions.pgp_sym_encrypt(btrim(p_driver_license), k)
                    END,
          updated_at = NOW()

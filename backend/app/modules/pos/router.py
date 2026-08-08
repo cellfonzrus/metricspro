@@ -353,10 +353,17 @@ def customer_pii_get(customer_id: str, authorization: str = Header(default=""),
 def customer_pii_set(customer_id: str, body: dict, authorization: str = Header(default=""),
                      org_id: str = ORG_ID):
     _require_member(authorization, org_id)
+    # An ABSENT key must not erase a stored value: it maps to SQL NULL, which the RPC reads as
+    # "leave this column alone". Only an explicitly supplied empty string clears a field. The
+    # old `body.get(k) or None` collapsed omitted and cleared into the same NULL, so saving one
+    # field destroyed the other's ciphertext irreversibly.
+    def _pii_arg(key: str):
+        v = body.get(key)
+        return None if v is None else str(v)
     sb().schema("pos").rpc("customer_pii_set", {
         "p_org": org_id, "p_customer": customer_id,
-        "p_ssn": body.get("ssn") or None,
-        "p_driver_license": body.get("driver_license") or None,
+        "p_ssn": _pii_arg("ssn"),
+        "p_driver_license": _pii_arg("driver_license"),
     }).execute()
     return {"ok": True}
 
