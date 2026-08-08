@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { carrierMode } from '@/lib/rbac'
+import { GoogleRatingChips, useGoogleRatings } from './_lib/googleRatings'
 
 interface RepRow {
   epay_salesperson: string
@@ -70,6 +71,12 @@ export default function CommCalcDashboard() {
     }
     setLoading(false)
   }
+
+  // Google store rating chips for the Top Earners list (owner 2026-08-06) — ONE batched call for the
+  // ten rows shown, display-only, and completely invisible until the Google Reviews endpoints exist.
+  const topReps = reps.slice(0, 10)
+  const { ratingsFor: googleFor } = useGoogleRatings(
+    topReps.map(r => (r as any).storeops_name || r.epay_salesperson))
 
   const totalPayout = reps.reduce((s, r) => s + (r.total_payout || 0), 0)
   const totalActs   = reps.reduce((s, r) => s + (r.premium_acts || 0) + (r.byod_acts || 0), 0)
@@ -257,9 +264,14 @@ export default function CommCalcDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {reps.slice(0, 10).map((r, i) => (
+                  {topReps.map((r, i) => (
                     <tr key={i}>
-                      <td style={{ fontWeight: 500 }}>{r.epay_salesperson}</td>
+                      <td style={{ fontWeight: 500 }}>
+                        {r.epay_salesperson}
+                        <span style={{ display: 'block', marginTop: 2 }}>
+                          <GoogleRatingChips list={googleFor((r as any).storeops_name || r.epay_salesperson)} compact />
+                        </span>
+                      </td>
                       <td style={{ color: 'var(--text3)', fontSize: 12 }}>
                         {r.store?.substring(0, 25)}{r.store?.length > 25 ? '…' : ''}
                       </td>

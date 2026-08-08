@@ -4,6 +4,7 @@ import { api, fmt } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
 // Rep coaching — which KPIs each rep met vs missed + WHY they're losing money (commission at risk
 // below tier + chargebacks) + flags. Sorted by money left on the table. Admin/DM (market-scoped).
@@ -66,6 +67,14 @@ export default function RepCoachingPage() {
     (!repF || r.rep === repF) &&
     (!q || (r.rep || '').toLowerCase().includes(q.toLowerCase()) || (r.store || '').toLowerCase().includes(q.toLowerCase())))
 
+  // Google store rating per rep (owner 2026-08-06) — ONE batched call for the reps the current filters
+  // leave on screen. Display-only: it is context for the coaching conversation and is never part of the
+  // "money on the table" arithmetic. Renders nothing until the Google Reviews endpoints are live.
+  const { ratingsFor: googleFor, hasAny: hasGoogle } = useGoogleRatings(reps.map(r => r.rep))
+  const exportCols: ExportColumn[] = hasGoogle
+    ? [...cols, { header: 'Google rating', field: 'google_rating', get: (r: any) => ratingsText(googleFor(r.rep)) }]
+    : cols
+
   // tiles reflect the current filter (recomputed client-side from the visible reps)
   const s = {
     reps: reps.length,
@@ -104,7 +113,7 @@ export default function RepCoachingPage() {
         {(markets.length > 0 || storeF || repF || q) &&
           <button className="btn btn-sm" onClick={() => { setMarkets([]); setStoreF(''); setRepF(''); setQ('') }}>Clear</button>}
         <div style={{ flex: 1 }} />
-        {reps.length > 0 && <ReportExportBar title={`Rep Coaching ${period}`} filename={`rep_coaching_${String(period).replace(/\s+/g, '_')}`} columns={cols} rows={reps} />}
+        {reps.length > 0 && <ReportExportBar title={`Rep Coaching ${period}`} filename={`rep_coaching_${String(period).replace(/\s+/g, '_')}`} columns={exportCols} rows={reps} />}
       </div>
 
       {loading ? (
@@ -133,7 +142,10 @@ export default function RepCoachingPage() {
                   return (
                     <>
                       <tr key={k} style={{ cursor: 'pointer' }} onClick={() => setOpen(o => ({ ...o, [k]: !o[k] }))}>
-                        <td style={{ ...tdL, fontWeight: 600 }}>{open[k] ? '▾ ' : '▸ '}{r.rep}</td>
+                        <td style={{ ...tdL, fontWeight: 600 }}>
+                          {open[k] ? '▾ ' : '▸ '}{r.rep}
+                          <span style={{ display: 'block', marginTop: 2 }}><GoogleRatingChips list={googleFor(r.rep)} compact /></span>
+                        </td>
                         <td style={tdL}>{r.store || '—'}</td>
                         <td style={{ ...td, color: r.tier < 1 ? '#b45309' : 'var(--green, #16794a)', fontWeight: 600 }}>{Math.round(r.tier * 100)}%</td>
                         <td style={td}>{r.kpis_met}/{r.total_kpis}</td>
@@ -181,6 +193,10 @@ export default function RepCoachingPage() {
                                 {r.coaching_notes.map((n: string, i: number) => <li key={i}>{n}</li>)}
                               </ul>
                             )}
+                            {/* The rep's Google store rating(s) in full — rating vs target per store, any
+                                open action plan, and Google's recent reviews behind a toggle. Coaching
+                                context only; it moves no number in this row. */}
+                            <GoogleRatingDetail repName={r.rep} title={`Google store ratings — ${r.rep}`} />
                           </td>
                         </tr>
                       )}

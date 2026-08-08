@@ -7,6 +7,7 @@ import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
+import { GoogleRatingChips, GoogleRatingDetail, useGoogleRatings } from '../_lib/googleRatings'
 
 // "How was this commission calculated" — READ-ONLY per-rep drill-down. Shows the two engines that can
 // pay a non-Boost (Total/Luxelink) rep: the Commission PLAN component (which plan attached, via which
@@ -89,6 +90,12 @@ export default function CommissionExplainPage() {
   const repChoices = useMemo(() =>
     [...new Map(filteredReps.map(r => [r.storeops_name || r.epay_salesperson, r])).values()], [filteredReps])
 
+  // Google store rating for the rep being explained (owner 2026-08-06). ONE batched summary call for the
+  // reps in the picker, so switching reps never re-queries. Display-only — this page explains PAY, and the
+  // rating changes nothing on it. Invisible until mod-people's google-reviews endpoints are live.
+  const ratingNames = useMemo(() => repChoices.map(r => r.storeops_name || r.epay_salesperson), [repChoices])
+  const { ratingsFor: googleFor } = useGoogleRatings(ratingNames)
+
   // if the bar selects exactly one rep, drive the explain from it
   useEffect(() => {
     if (filt.reps && filt.reps.length === 1) setRep(filt.reps[0])
@@ -168,6 +175,10 @@ export default function CommissionExplainPage() {
           <button className="btn btn-secondary" onClick={searchImei}>🔍 Device story</button>
         </div>
       </div>
+
+      {/* This rep's Google store rating(s) — chips next to the person, full per-store detail below the
+          pay explanation. Renders nothing when the tenant has no Google Reviews data. */}
+      {rep && <div style={{ margin: '-8px 0 12px' }}><GoogleRatingChips list={googleFor(rep)} /></div>}
 
       {/* DEVICE STORY (IMEI search) */}
       {dev && (
@@ -280,6 +291,11 @@ export default function CommissionExplainPage() {
                 </div>
               </div>
             )}
+
+            {/* GOOGLE STORE RATINGS for this rep — per store they work at, with Google's recent reviews
+                collapsed behind a toggle. Context for the coaching conversation; it explains no dollar on
+                this page and is excluded from every number above. */}
+            <GoogleRatingDetail repName={rep} title={`Google store ratings — ${data.rep || rep}`} />
           </div>
         )}
     </div>

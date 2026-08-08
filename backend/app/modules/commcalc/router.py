@@ -19196,6 +19196,60 @@ def get_productivity_kpi_values(period: str, org_id: str = ORG_ID,
             "resolve these keys AND the owner recalcs."}
 
 
+@router.get("/rep-employee-map")
+def rep_employee_map(org_id: str = ORG_ID):
+    """NON-MONEY / READ-ONLY — resolve a commcalc REP DISPLAY NAME to the StoreOps business
+    `employees.employee_id`, so per-employee display widgets on the commission surfaces (the Google
+    store-rating chips) can batch-fetch by id instead of every page re-deriving the name mapping.
+
+    WHY IT LIVES HERE: commcalc is the module that OWNS the rep-name mapping (commcalc.name_map +
+    commcalc.rep_aliases). A rep is displayed on these pages as `storeops_name || epay_salesperson`,
+    and the sales files carry a third spelling ("LAST, FIRST"); only this module knows all three point
+    at one person. Returning the alias set lets the caller match whichever spelling it is holding.
+
+    Touches NO payout number, no rate, no plan, no tier — it returns identifiers only. Org-scoped on
+    every read; degrades to {"people": []} (⇒ the widgets render nothing) if any read fails.
+    """
+    require_org(org_id)
+    client = sb()
+    try:
+        emps = (client.schema("storeops").table("employees")
+                .select("id,employee_id,name,epay_salesperson,home_store,is_active")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception as e:
+        print(f"WARN rep-employee-map roster read failed: {e}")
+        return {"people": [], "ready": False}
+    try:
+        cmap = _rep_canon_map(client, org_id)      # alias(UPPER) -> canonical rep name
+    except Exception:
+        cmap = {}
+    aliases_by_canon = {}
+    for alias, canon in (cmap or {}).items():
+        aliases_by_canon.setdefault((canon or "").strip().upper(), set()).add(alias)
+    people = []
+    for e in emps:
+        eid = str(e.get("employee_id") or "").strip()
+        name = str(e.get("name") or "").strip()
+        if not eid or not name:
+            continue
+        al = {name}
+        ep = str(e.get("epay_salesperson") or "").strip()
+        if ep:
+            al.add(ep)
+        al |= set(aliases_by_canon.get(name.upper(), set()))
+        people.append({
+            "employee_id": eid,
+            # the NUMERIC employees.id too: StoreOps carries both spellings of "who" (see
+            # storeops.router._emp_id_variants) and a consumer may need the other one.
+            "id": (str(e.get("id")) if e.get("id") is not None else None),
+            "name": name,
+            "aliases": sorted(a for a in al if a),
+            "home_store": str(e.get("home_store") or "").strip(),
+            "is_active": bool(e.get("is_active", True)),
+        })
+    return {"people": people, "ready": True}
+
+
 def _acc_flags_by_rep(client, org_id, period):
     """Lightweight per-rep accessory-flag counts (over/under threshold) for the action plan — ONE read of
     raw_sales via the configurable accessory classifier. NO item_mapping load/write (unlike the full

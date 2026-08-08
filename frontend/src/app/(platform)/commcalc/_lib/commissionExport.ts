@@ -78,6 +78,11 @@ export type CommissionExportInput = {
   chargebacks: ChargebackItem[]
   /** mirrors the on-screen Installment column, which only appears when someone has installment pay */
   hasInstallment: boolean
+  /** OPTIONAL, display-only (owner 2026-08-06): repLabel(row) → the rep's Google store rating(s) as
+   *  ONE cell ("S123 4.6/4.7 · S200 4.8/4.7"). Present only when the page actually rendered chips, so
+   *  the export stays WYSIWYG; absent ⇒ every payload is byte-identical to before this field existed.
+   *  Carries NO money and is never summed. */
+  ratingByRep?: Record<string, string>
 }
 
 // identical to lib/client's `fmt` — duplicated (2 lines) so this module stays import-free & testable
@@ -94,7 +99,13 @@ export function filterDesc(filt: StandardFilterValue): string {
   return p.join(' · ')
 }
 
-function breakdownCols(hasInstallment: boolean): ExportColumn[] {
+/** The Google-rating column, appended only when the page has ratings to show (see ratingByRep). */
+function ratingCol(ratingByRep?: Record<string, string>): ExportColumn[] {
+  if (!ratingByRep || Object.keys(ratingByRep).length === 0) return []
+  return [{ header: 'Google rating', get: (r: CommissionRow) => ratingByRep[repLabel(r)] || '' }]
+}
+
+function breakdownCols(hasInstallment: boolean, ratingByRep?: Record<string, string>): ExportColumn[] {
   return [
     { header: 'Rep', get: (r: CommissionRow) => repLabel(r) },
     { header: 'Salesperson', get: (r: CommissionRow) => r.epay_salesperson },
@@ -109,10 +120,11 @@ function breakdownCols(hasInstallment: boolean): ExportColumn[] {
     ...(hasInstallment ? [{ header: 'Installment', get: (r: CommissionRow) => instOf(r), money: true } as ExportColumn] : []),
     { header: 'Subtotal', get: (r: CommissionRow) => r.subtotal, money: true },
     { header: 'Payout', get: (r: CommissionRow) => r.total_payout, money: true },
+    ...ratingCol(ratingByRep),
   ]
 }
 
-function compensationCols(): ExportColumn[] {
+function compensationCols(ratingByRep?: Record<string, string>): ExportColumn[] {
   return [
     { header: 'Rep', get: (r: CommissionRow) => repLabel(r) },
     { header: 'Premium', get: (r: CommissionRow) => r.premium_comm, money: true },
@@ -124,6 +136,7 @@ function compensationCols(): ExportColumn[] {
     { header: 'ACIMA', get: (r: CommissionRow) => r.acima_comm, money: true },
     { header: 'Subtotal', get: (r: CommissionRow) => r.subtotal, money: true },
     { header: 'Payout', get: (r: CommissionRow) => r.total_payout, money: true },
+    ...ratingCol(ratingByRep),
   ]
 }
 
@@ -140,6 +153,7 @@ export function repChargebacks(r: CommissionRow, chargebacks: ChargebackItem[]) 
  *  reachable from here, which is the property the proof harness asserts. */
 function individualSheets(r: CommissionRow, i: CommissionExportInput): ExportPayload['sheets'] {
   const { isBoost, cfg, period, chargebacks } = i
+  const rating = i.ratingByRep?.[repLabel(r)] || ''
   const cb = repChargebacks(r, chargebacks)
   const sheets: ExportPayload['sheets'] = []
   const kv: ExportColumn[] = [
@@ -151,6 +165,7 @@ function individualSheets(r: CommissionRow, i: CommissionExportInput): ExportPay
       { k: 'Rep', v: repLabel(r) },
       { k: 'Salesperson', v: r.epay_salesperson },
       { k: 'Store', v: r.store || '' },
+      ...(rating ? [{ k: 'Google store rating', v: rating }] : []),
       { k: 'Period', v: period },
       ...(isBoost
         ? [{ k: 'Tier multiplier', v: `${Math.round((r.tier || 0) * 100)}%` },
@@ -243,7 +258,7 @@ export function buildCommissionExport(i: CommissionExportInput): ExportPayload {
     filename: `commissions-${isComp ? 'by-line-' : ''}${slug(i.period)}${active ? '-filtered' : ''}`,
     sheets: [{
       name: isComp ? 'Compensation by Line' : 'Rep Payouts',
-      columns: isComp ? compensationCols() : breakdownCols(i.hasInstallment),
+      columns: isComp ? compensationCols(i.ratingByRep) : breakdownCols(i.hasInstallment, i.ratingByRep),
       rows: i.filtered,
     }],
   }
