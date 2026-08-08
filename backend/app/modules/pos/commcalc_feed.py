@@ -85,6 +85,20 @@ def _chunked(seq, n):
         yield seq[i:i + n]
 
 
+def _fetch_paged(build, page_size: int = 1000):
+    """Drain a PostgREST query in pages. PostgREST caps rows per response and gives NO truncation
+    signal — a short read is indistinguishable from a complete one — so any child fetch whose size
+    is driven by data volume must page or it silently returns a partial set. `build(lo, hi)` must
+    return the query with .range(lo, hi) applied over a deterministic .order()."""
+    out, page = [], 0
+    while True:
+        rows = (build(page * page_size, page * page_size + page_size - 1).execute().data) or []
+        out.extend(rows)
+        if len(rows) < page_size:
+            return out
+        page += 1
+
+
 def get_pos_setup(org_id: str) -> dict:
     """The tenant's POS-source config; defaults (external primary, built-in off) when the
     row is missing (mig 727 unrun or a brand-new tenant)."""
@@ -119,10 +133,19 @@ def _fetch_sale_rows(org_id: str, utc_start: str, utc_end: str):
     sale_ids = [s["id"] for s in sales]
     items, payments = [], {}
     for chunk in _chunked(sale_ids, 100):
-        items.extend((client.schema("pos").table("sale_items").select("*")
-                      .in_("sale_id", chunk).execute().data) or [])
-        for p in (client.schema("pos").table("sale_payments").select("sale_id,payment_method")
-                  .in_("sale_id", chunk).order("created_at").execute().data) or []:
+        # These MUST page. The parent `sales` fetch above already does; these did not, and a chunk
+        # of 100 sales exceeds PostgREST's 1000-row cap as soon as it averages >10 line items.
+        # The failure was silent and destructive in combination with _replace_period: the period
+        # gets deleted, then re-inserted from a TRUNCATED read, and the empty-abort guard never
+        # fires because it only tests for zero rows. Result would be a quiet undercount in the
+        # commission ledger for a builtin-primary tenant.
+        items.extend(_fetch_paged(
+            lambda lo, hi, c=chunk: client.schema("pos").table("sale_items").select("*")
+            .in_("sale_id", c).order("id").range(lo, hi)))
+        for p in _fetch_paged(
+                lambda lo, hi, c=chunk: client.schema("pos").table("sale_payments")
+                .select("sale_id,payment_method").in_("sale_id", c)
+                .order("sale_id").order("created_at").range(lo, hi)):
             payments.setdefault(p["sale_id"], p.get("payment_method"))
 
     prods = {p["id"]: p for p in (client.schema("pos").table("products")

@@ -264,30 +264,45 @@ export default function PosCustomersPage() {
     setShowForm(true)
   }
 
-  function openEdit() {
+  async function openEdit() {
     if (!selected) return
+    // The list endpoint no longer returns `password` (the carrier account PIN), so the row in
+    // `selected` does not carry it. Fetch the single record, which does. This MUST fail closed:
+    // the PATCH turns an empty password into NULL, so opening the form with a blank field and
+    // saving would silently wipe a real PIN — the same overwrite-by-omission bug class fixed in
+    // customer_pii_set. If we cannot read the current value, we do not open the form at all.
+    let full: Customer
+    try {
+      const r = await api(`/api/v1/pos/customers/${selected.id}`)
+      if (!r?.customer) throw new Error('empty response')
+      full = r.customer
+    } catch {
+      alert('Could not load this customer for editing. Please retry — editing was cancelled so '
+            + 'that saving cannot overwrite stored details with blanks.')
+      return
+    }
     setFormData({
-      account_type: selected.account_type || 'Personal',
-      company_name: selected.company_name || '',
-      first_name: selected.first_name || '',
-      last_name: selected.last_name || '',
-      middle_initial: selected.middle_initial || '',
-      dob: selected.dob || '',
-      driver_license_state: selected.driver_license_state || '',
-      primary_account_no: selected.primary_account_no || '',
-      password: selected.password || '',
-      email: selected.email || '',
-      phone_primary: selected.phone_primary || '',
-      phone_secondary: selected.phone_secondary || '',
-      address_1: selected.address_1 || '',
-      address_2: selected.address_2 || '',
-      city: selected.city || '',
-      state: selected.state || 'NY',
-      zip: selected.zip || '',
-      referral_source: selected.referral_source || 'None',
-      credit_limit: selected.credit_limit || 100000,
-      accept_checks: selected.accept_checks,
-      is_active: selected.is_active,
+      account_type: full.account_type || 'Personal',
+      company_name: full.company_name || '',
+      first_name: full.first_name || '',
+      last_name: full.last_name || '',
+      middle_initial: full.middle_initial || '',
+      dob: full.dob || '',
+      driver_license_state: full.driver_license_state || '',
+      primary_account_no: full.primary_account_no || '',
+      password: full.password || '',
+      email: full.email || '',
+      phone_primary: full.phone_primary || '',
+      phone_secondary: full.phone_secondary || '',
+      address_1: full.address_1 || '',
+      address_2: full.address_2 || '',
+      city: full.city || '',
+      state: full.state || 'NY',
+      zip: full.zip || '',
+      referral_source: full.referral_source || 'None',
+      credit_limit: full.credit_limit || 100000,
+      accept_checks: full.accept_checks,
+      is_active: full.is_active,
     })
     // Never prefill real PII — inputs stay blank with masked last-4 placeholders
     setPiiForm({ ssn: '', driver_license_num: '' })

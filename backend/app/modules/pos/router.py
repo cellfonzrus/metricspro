@@ -10,13 +10,36 @@ pos.* schema. Later phases add activations, vendors/POs, transfers, reports, imp
 Gated actions (PII reveal, void, settings/tax writes) use fine-grained keys in the caller role's
 permissions JSONB — `pos_view_pii`, `pos_void`, `pos_settings` — with role scope 'all' (org-wide
 admin) implying all three, so existing admin roles work before the roles UI grows checkboxes.
+
+NOT YET ENFORCED: a `modules.pos` entitlement gate. Earlier revisions of this docstring claimed
+one existed; no code read `modules`, so POS visibility was enforced only client-side in rbac.ts.
+Adding it server-side has to land together with seeding `pos` into MODULE_CATALOG and the roles
+UI, or every existing role — none of which carries a `pos` key — would be locked out at once.
 """
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.core.database import get_supabase
 
-router = APIRouter(prefix="/pos", tags=["pos"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def _require_pos_access(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Router-wide gate: every POS endpoint requires a signed-in member of the org.
+
+    Applied as an APIRouter dependency rather than per-endpoint on purpose. 34 of this module's
+    endpoints had no `authorization` parameter at all — so no check was even possible at the
+    handler — including POST /import/{entity}, which bulk-inserts up to 5000 rows, and which
+    rbac.ts restricted to scope 'all' in the UI only. A router-level dependency cannot be
+    forgotten when endpoint 35 is added, which is the property that actually matters here: the
+    per-endpoint convention had already been forgotten 34 times.
+
+    Finer-grained rights (PII reveal, void, settings writes, inventory adjust/receive, activation
+    cancel) still gate individually on top of this via _require_pos_perm."""
+    _require_member(authorization, org_id)
+
+
+router = APIRouter(prefix="/pos", tags=["pos"],
+                   dependencies=[Depends(_require_pos_access)])
 
 PRODUCT_FIELDS = ("upc", "short_name", "full_name", "department_id", "category_id",
                   "system_category", "inventory_type", "manufacturer", "cost", "retail_price",
@@ -184,15 +207,15 @@ def _caller_employee(authorization: str, org_id: str) -> str:
     return ((rows[0].get("employee_id") if rows else "") or "").strip()
 
 
-def _caller_perms(authorization: str, org_id: str):
-    """roles.permissions jsonb for the caller's role, or None when the caller is UNRESOLVABLE
-    (no/invalid token, no app_users membership, or a role name with no roles row). Callers must
-    treat None as deny — an unresolvable caller is never granted anything (fail closed)."""
+def _caller_ctx(authorization: str, org_id: str):
+    """The caller's RBAC context — {'perms', 'role', 'super_admin'} — or None when the caller is
+    UNRESOLVABLE (no/invalid token, no app_users membership, or a role name with no roles row).
+    Callers must treat None as deny — an unresolvable caller is never granted anything."""
     from app.modules.core.router import _uid_from_token
     uid = _uid_from_token(authorization)
     if not uid:
         return None
-    rows = (sb().table("app_users").select("role")
+    rows = (sb().table("app_users").select("role, super_admin")
             .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
     if not rows:
         return None
@@ -203,19 +226,42 @@ def _caller_perms(authorization: str, org_id: str):
           .eq("org_id", org_id).eq("name", role).limit(1).execute().data) or []
     if not rr:
         return None
-    return rr[0].get("permissions") or {}
+    return {"perms": rr[0].get("permissions") or {}, "role": role,
+            "super_admin": bool(rows[0].get("super_admin"))}
+
+
+def _pos_grant(ctx, key: str) -> bool:
+    """Whether `ctx` holds POS permission `key`. Mirrors core._can_edit_setting's precedence, which
+    is the platform's canonical semantic:
+      1. super_admin                -> always yes
+      2. explicit grant OR DENY     -> wins even over an admin, so an owner can revoke one POS
+                                       right from an otherwise-full role
+      3. default                    -> a full-scope admin (scope == 'all', or the 'admin' role)
+
+    Two deliberate corrections to the previous implementation, both security fixes:
+      * `scope` is now compared STRICTLY to 'all'. It read `(perms.get('scope') or 'all')`, so a
+        role whose JSONB merely LACKED a 'scope' key was silently granted everything — PII reveal
+        included. Every seeded role carries an explicit scope, so strictness costs nothing.
+      * the key is looked up in the platform's NESTED bags (permissions.data / permissions.settings)
+        as well as flat. Reading only flat made the explicit-grant branch dead code, because the
+        Roles UI writes nested — which collapsed the whole gate to "scope is all, or absent"."""
+    if not ctx:
+        return False
+    if ctx.get("super_admin"):
+        return True
+    perms = ctx.get("perms") or {}
+    for bag in (perms.get("data") or {}, perms.get("settings") or {}, perms):
+        if isinstance(bag, dict) and key in bag and isinstance(bag.get(key), bool):
+            return bag[key]
+    return (perms.get("scope") == "all") or ((ctx.get("role") or "").lower() == "admin")
 
 
 def _require_pos_perm(authorization: str, org_id: str, key: str):
-    """403 unless the caller RESOLVES to a role that grants `key`, or that role has org-wide
-    scope (a roles row with no 'scope' key means org-wide, matching _role_scope's platform
-    semantic). Unresolvable callers are DENIED — this gate fails closed."""
-    perms = _caller_perms(authorization, org_id)
-    if perms is None:
+    """403 unless the caller holds `key`. Unresolvable callers are DENIED — fails closed."""
+    ctx = _caller_ctx(authorization, org_id)
+    if ctx is None:
         raise HTTPException(401, "sign in to perform this action")
-    if perms.get(key) is True:
-        return
-    if (perms.get("scope") or "all") == "all":
+    if _pos_grant(ctx, key):
         return
     raise HTTPException(403, f"your role does not allow this action ({key})")
 
@@ -239,23 +285,55 @@ def _caller_store_keyset(authorization: str, org_id: str):
     try:
         from app.modules.storeops.router import scope_keyset
         return scope_keyset(authorization, org_id)
-    except Exception:
-        return None
+    except Exception as e:
+        # FAIL CLOSED. `None` is the UNRESTRICTED sentinel, so swallowing the error here used to
+        # hand a store-scoped caller the whole org whenever scope resolution hiccupped — the one
+        # place this module chose "allow" on error. A visible 403 is the correct outcome: it is
+        # recoverable and obvious, where silent org-wide exposure is neither.
+        raise HTTPException(403, f"could not resolve your store scope, so access is denied: {e}")
 
 
-def _span_filter(rows, keyset, field="store_code"):
-    """Keep rows whose store is inside the caller's span (rows with no store pass — they are
-    org-level records, not another store's)."""
+def _span_filter(rows, keyset, field="store_code", allow_null=False):
+    """Keep rows whose store is inside the caller's span.
+
+    `allow_null` controls what happens to rows with NO store, and defaults to EXCLUDING them.
+    It previously let every such row through on the theory that they are "org-level records".
+    That holds for genuinely org-level tables (tax codes, settings) but NOT for the tables this
+    is actually applied to — pos.sales, pos.activations and pos.inventory_serial all have a
+    NULLABLE store_code, and pos.checkout writes NULL whenever the caller omits it. So the
+    writer, not the reader's role, decided who could see a record: post a sale with no
+    store_code and every store-scoped manager in the tenant sees it. Pass allow_null=True only
+    for a table where a NULL store genuinely means org-wide."""
     if keyset is None:
         return rows
     from app.core.scope import in_keyset
-    return [r for r in rows if not r.get(field) or in_keyset(keyset, r.get(field))]
+    return [r for r in rows
+            if (allow_null if not r.get(field) else in_keyset(keyset, r.get(field)))]
 
 
 # ── Customers ──────────────────────────────────────────────────────────────────────────────────────
+# Explicit column lists, never select('*'). pos.customers carries two things that must not ride
+# along on a bulk read: `password` — the carrier ACCOUNT PIN, i.e. the credential used for
+# SIM-swap and account takeover — and the ssn/driver-licence CIPHERTEXT. select('*') handed all
+# three back for up to 300 customers at a time, which contradicted this module's own threat model
+# ("a compromised cashier session cannot exfiltrate the customer book"). The ciphertext columns are
+# read by nothing — plaintext access goes through pos.customer_pii_get, which is separately gated
+# on pos_view_pii — so they are dropped from both reads. `password` survives only on the
+# single-record fetch, where the edit form genuinely needs it.
+CUSTOMER_READ_COLS = (
+    "id,org_id,cust_number,account_type,company_name,first_name,last_name,middle_initial,dob,"
+    "driver_license_state,primary_account_no,email,phone_primary,phone_secondary,address_1,"
+    "address_2,city,state,zip,referral_source,credit_limit,accept_checks,is_active,"
+    "created_at,updated_at"
+)
+CUSTOMER_DETAIL_COLS = CUSTOMER_READ_COLS + ",password"
+
+
 @router.get("/customers")
-def list_customers(search: str = "", active_only: bool = True, org_id: str = ORG_ID):
-    q = sb().schema("pos").table("customers").select("*").eq("org_id", org_id)
+def list_customers(search: str = "", active_only: bool = True, org_id: str = ORG_ID,
+                   authorization: str = Header(default="")):
+    _require_member(authorization, org_id)
+    q = sb().schema("pos").table("customers").select(CUSTOMER_READ_COLS).eq("org_id", org_id)
     if active_only:
         q = q.eq("is_active", True)
     s = search.strip().replace("%", "").replace(",", " ")
@@ -271,10 +349,14 @@ def list_customers(search: str = "", active_only: bool = True, org_id: str = ORG
 
 
 @router.get("/customers/{customer_id}")
-def get_customer(customer_id: str, org_id: str = ORG_ID):
+def get_customer(customer_id: str, org_id: str = ORG_ID,
+                 authorization: str = Header(default="")):
     """Single-customer fetch — deep links (?customer= / ?sale= prefills) must not depend on
-    the list endpoint's newest-300 page."""
-    rows = (sb().schema("pos").table("customers").select("*")
+    the list endpoint's newest-300 page. This is also the ONLY read that returns `password`,
+    because the edit form has to round-trip it; one record at a time is a very different
+    exposure from the whole book."""
+    _require_member(authorization, org_id)
+    rows = (sb().schema("pos").table("customers").select(CUSTOMER_DETAIL_COLS)
             .eq("org_id", org_id).eq("id", customer_id).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(404, "not found")
@@ -756,14 +838,13 @@ SERVICE_PLAN_FIELDS = ("carrier", "plan_code", "plan_name", "plan_description", 
 
 
 def _require_any_pos_perm(authorization: str, org_id: str, keys):
-    """403 unless the caller RESOLVES to a role granting at least one of `keys` (org-wide
-    scope passes). Unresolvable callers are DENIED — fails closed like _require_pos_perm."""
-    perms = _caller_perms(authorization, org_id)
-    if perms is None:
+    """403 unless the caller holds at least one of `keys`. Shares _pos_grant's precedence, so an
+    explicit deny on one key still lets another key grant access. Unresolvable callers are
+    DENIED — fails closed like _require_pos_perm."""
+    ctx = _caller_ctx(authorization, org_id)
+    if ctx is None:
         raise HTTPException(401, "sign in to perform this action")
-    if (perms.get("scope") or "all") == "all":
-        return
-    if any(perms.get(k) is True for k in keys):
+    if any(_pos_grant(ctx, k) for k in keys):
         return
     raise HTTPException(403, f"your role does not allow this action ({' / '.join(keys)})")
 
@@ -917,16 +998,26 @@ def add_activation_note(act_id: str, body: dict, authorization: str = Header(def
 # One trade-in per activation, upserted; credit removal zeroes the amount, never deletes
 # (parity with the standalone app).
 @router.put("/activations/{act_id}/trade-in")
-def upsert_trade_in(act_id: str, body: dict, org_id: str = ORG_ID):
-    payload = {k: body.get(k) or None for k in ("device_description", "serial_number", "imei",
-                                                "notes", "customer_id", "sale_id")}
-    payload["credit_amount"] = float(body.get("credit_amount") or 0)
+def upsert_trade_in(act_id: str, body: dict, org_id: str = ORG_ID,
+                    authorization: str = Header(default="")):
+    _require_member(authorization, org_id)
+    TI_FIELDS = ("device_description", "serial_number", "imei", "notes", "customer_id", "sale_id")
     existing = (sb().schema("pos").table("trade_ins").select("id")
                 .eq("org_id", org_id).eq("activation_id", act_id).limit(1).execute().data) or []
     if existing:
-        r = (sb().schema("pos").table("trade_ins").update(payload)
-             .eq("id", existing[0]["id"]).execute())
+        # PATCH semantics: write only the keys the caller actually sent. Building the update from
+        # a fixed field list meant a one-field request NULLed serial_number, imei and notes and
+        # zeroed credit_amount — overwrite-by-omission, the same bug class as customer_pii_set.
+        upd = {k: (body.get(k) or None) for k in TI_FIELDS if k in body}
+        if "credit_amount" in body:
+            upd["credit_amount"] = float(body.get("credit_amount") or 0)
+        if not upd:
+            raise HTTPException(400, "nothing to update")
+        r = (sb().schema("pos").table("trade_ins").update(upd)
+             .eq("org_id", org_id).eq("id", existing[0]["id"]).execute())
         return {"trade_in": (r.data or [{}])[0]}
+    payload = {k: body.get(k) or None for k in TI_FIELDS}
+    payload["credit_amount"] = float(body.get("credit_amount") or 0)
     if not (payload.get("device_description") or "").strip():
         raise HTTPException(400, "device_description required")
     payload.update({"org_id": org_id, "activation_id": act_id})
@@ -1250,7 +1341,12 @@ def cancel_transfer(transfer_id: str, authorization: str = Header(default=""),
 
 # ── Reports ────────────────────────────────────────────────────────────────────────────────────────
 @router.get("/reports/kpis")
-def report_kpis(org_id: str = ORG_ID):
+def report_kpis(org_id: str = ORG_ID, authorization: str = Header(default="")):
+    # Store-scoped. Without this a single-store manager was shown ORG-WIDE revenue for today,
+    # the week and the month, plus the org's whole in-stock unit count. Customer and product
+    # counts stay org-wide deliberately: both catalogs are org-level, with no store dimension
+    # to filter on.
+    ks = _caller_store_keyset(authorization, org_id)
     # Day/month boundaries in BUSINESS_TZ (America/New_York) like the commcalc feed — a 9pm ET
     # sale belongs to today's KPI, not tomorrow's UTC date.
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
@@ -1263,9 +1359,10 @@ def report_kpis(org_id: str = ORG_ID):
         .astimezone(_tz.utc).isoformat()
     out = {}
     for key, since in (("today", today), ("week", week), ("month", month)):
-        rows = (sb().schema("pos").table("sales").select("total")
+        rows = (sb().schema("pos").table("sales").select("total,store_code")
                 .eq("org_id", org_id).eq("status", "completed")
                 .gte("created_at", since).limit(5000).execute().data) or []
+        rows = _span_filter(rows, ks)
         out[key] = {"count": len(rows), "total": sum(float(r.get("total") or 0) for r in rows)}
     out["customers"] = len((sb().schema("pos").table("customers").select("id")
                             .eq("org_id", org_id).eq("is_active", True)
@@ -1273,9 +1370,10 @@ def report_kpis(org_id: str = ORG_ID):
     out["products"] = len((sb().schema("pos").table("products").select("id")
                            .eq("org_id", org_id).eq("is_active", True)
                            .limit(10000).execute().data) or [])
-    out["in_stock_units"] = len((sb().schema("pos").table("inventory_serial").select("id")
-                                 .eq("org_id", org_id).eq("status", "in_stock")
-                                 .limit(10000).execute().data) or [])
+    out["in_stock_units"] = len(_span_filter(
+        (sb().schema("pos").table("inventory_serial").select("id,store_code")
+         .eq("org_id", org_id).eq("status", "in_stock")
+         .limit(10000).execute().data) or [], ks))
     return out
 
 
@@ -1337,7 +1435,9 @@ def report_activations(date_from: str = "", date_to: str = "", store_code: str =
 
 @router.get("/reports/trade-ins")
 def report_trade_ins(date_from: str = "", date_to: str = "", employee_id: str = "",
-                     status: str = "", org_id: str = ORG_ID):
+                     status: str = "", org_id: str = ORG_ID,
+                     authorization: str = Header(default="")):
+    ks = _caller_store_keyset(authorization, org_id)
     q = sb().schema("pos").table("trade_ins").select("*").eq("org_id", org_id)
     if date_from:
         q = q.gte("received_at", date_from)
@@ -1350,9 +1450,16 @@ def report_trade_ins(date_from: str = "", date_to: str = "", employee_id: str = 
     acts = {}
     if act_ids:
         for a in (sb().schema("pos").table("activations")
-                  .select("id,activation_number,employee_id")
+                  .select("id,activation_number,employee_id,store_code")
                   .eq("org_id", org_id).in_("id", act_ids).execute().data or []):
             acts[a["id"]] = a
+    # trade_ins carries no store of its own, so the span is resolved through the parent
+    # activation. Without this, every trade-in org-wide — device, serial, IMEI, credit amount and
+    # customer name — was returned to a single-store manager.
+    if ks is not None:
+        from app.core.scope import in_keyset
+        rows = [r for r in rows
+                if in_keyset(ks, (acts.get(r.get("activation_id")) or {}).get("store_code"))]
     if employee_id:
         rows = [r for r in rows
                 if (acts.get(r.get("activation_id")) or {}).get("employee_id") == employee_id]
