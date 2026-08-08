@@ -47,6 +47,7 @@ from app.modules.storeops.lunch_deduction import (
 )
 from app.modules.storeops import salary_owed as _owed
 from app.modules.storeops import target_attribution as _dmta
+from app.modules.storeops import attendance_exceptions as _attn
 
 try:
     from zoneinfo import ZoneInfo
@@ -2927,6 +2928,121 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
         except Exception:
             pass   # never let the lunch-deduction overlay break the punches list itself
     return rows
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# ATTENDANCE EXCEPTIONS (owner directive 2026-08-06, verbatim): "time clock should show who were
+# scheduled and didn't clock in and also if somebody else clocked in instead of the scheduled".
+# All the classification logic (no_show/covered_by_other/unscheduled/late/left_early + the
+# approved-time-off EXCUSED label) is PURE and lives in attendance_exceptions.py — see that module's
+# docstring for the full correctness writeup (timezone, multi-session, don't-flag-the-future, store
+# matching). This handler is I/O only: fetch shifts/timelog/time_off_requests for the range,
+# canonicalize employee_id to the BUSINESS id across all three (the exact same numeric-vs-business
+# mismatch payroll_identity.py documents for /payroll — a Schedule-page shift's numeric employee_id
+# would otherwise never match a punch's business employee_id, producing a false no-show for EVERY
+# scheduled employee), resolve the tenant's config (RULE TWO, migration 421, graceful pre-migration
+# default), call the pure engine, then apply the SAME RBAC store-span narrowing every sibling
+# timeclock endpoint already applies.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/timeclock/attendance-exceptions")
+def attendance_exceptions(start: str = "", end: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Attendance Exceptions for [start, end] (inclusive both ends, matching /timeclock/list's own
+    convention — `shift_date`/`work_date` are already business-local, per BUSINESS_TZ at write time).
+
+    RULE FIVE: only the date range triggers this fetch — store/market/rep/exception-type filtering is
+    client-side over this already org+span-scoped response, the SAME established pattern the Time
+    Clock page itself already uses (see that page's own 2026-07-27 race-fix writeup)."""
+    if not (start and end):
+        raise HTTPException(400, "start and end are required")
+    client = sb()
+    FETCH_LIMIT = 20000
+    shifts = (client.table("shifts").select(
+        "id,employee_id,employee_name,store_code,shift_date,start_time,end_time,is_deleted")
+        .eq("org_id", org_id).eq("is_deleted", False)
+        .gte("shift_date", start).lte("shift_date", end).limit(FETCH_LIMIT).execute().data) or []
+    punches = (client.table("timelog").select(
+        "id,employee_id,employee_name,store_code,work_date,clock_in,clock_out")
+        .eq("org_id", org_id).gte("work_date", start).lte("work_date", end).limit(FETCH_LIMIT).execute().data) or []
+    # HONESTY (no-silent-caps doctrine, same convention as lunch_deduction.period_lunch_deduction):
+    # hitting the cap is a strong signal (not proof — PostgREST gives no total count without a
+    # separate query) that the range/tenant is too big for this window to be a complete picture.
+    # Surfaced to the frontend rather than silently under-reporting exceptions for a huge range.
+    limit_hit = len(shifts) >= FETCH_LIMIT or len(punches) >= FETCH_LIMIT
+    try:
+        timeoff = (client.table("time_off_requests").select(
+            "employee_id,start_date,end_date,status,type,notes")
+            .eq("org_id", org_id).eq("status", "approved")
+            .lte("start_date", end).gte("end_date", start).limit(5000).execute().data) or []
+    except Exception:
+        timeoff = []
+
+    # Canonicalize employee_id -> the BUSINESS id across all three sources before joining (see banner
+    # comment above). `employees` is fetched once; a lookup failure just means no aliasing happens
+    # (rows pass through with their raw ids) rather than a 500 — the classifier still runs, it just
+    # may under-match a numeric-vs-business mismatch until the employees read succeeds again.
+    try:
+        employees = (client.table("employees").select("id,employee_id").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        employees = []
+    alias = _business_id_alias_map(employees)
+
+    def _canon(rows):
+        out = []
+        for r in rows:
+            raw = r.get("employee_id")
+            if raw in (None, ""):
+                out.append(r)
+                continue
+            canon = alias.get(str(raw), raw)
+            out.append({**r, "employee_id": canon} if canon != raw else r)
+        return out
+
+    shifts, punches, timeoff = _canon(shifts), _canon(punches), _canon(timeoff)
+
+    cfg, available = _attn.get_tenant_attendance_config(org_id, client)
+    tz = _biz_tz_for(org_id)
+    now = datetime.now(timezone.utc)
+    rows = _attn.compute_attendance_exceptions(shifts, punches, timeoff, cfg, now, tz)
+
+    # RBAC store-span narrowing — same posture/keyset as GET /shifts, GET /stores, GET /timeclock/list.
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+
+    counts: dict = {}
+    for r in rows:
+        counts[r["exception_type"]] = counts.get(r["exception_type"], 0) + 1
+    return {"available": available, "config": cfg, "rows": rows, "counts": counts, "limit_hit": limit_hit}
+
+
+# ── tenant-level thresholds for the report above (RULE TWO admin UI) ──────────────────────────────
+@router.get("/timeclock/attendance-config")
+def get_attendance_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Current org thresholds for Attendance Exceptions, always a full usable config (defaults when
+    migration 421 hasn't run yet — see attendance_exceptions.get_tenant_attendance_config)."""
+    cfg, available = _attn.get_tenant_attendance_config(org_id, sb())
+    return {"config": cfg, "available": available}
+
+
+@router.put("/timeclock/attendance-config")
+def set_attendance_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only. Persists the 5 attendance-exception thresholds (RULE TWO). Values are
+    clamped the same way `attendance_exceptions.resolve_config` clamps them (never negative, mode
+    restricted to label/suppress) before being written, so a bad payload can't corrupt the config row."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    cfg = _attn.resolve_config(body)
+    try:
+        sb().table("tenants").update({
+            "attendance_late_grace_min": cfg["late_grace_min"],
+            "attendance_early_leave_grace_min": cfg["early_leave_grace_min"],
+            "attendance_noshow_grace_min": cfg["noshow_grace_min"],
+            "attendance_coverage_overlap_min": cfg["coverage_overlap_min"],
+            "attendance_timeoff_mode": cfg["timeoff_mode"],
+        }).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the setting — is migration 421 applied?")
+    return {"ok": True, "config": cfg}
 
 
 _CHARGEBACK_REASON_LABELS = {

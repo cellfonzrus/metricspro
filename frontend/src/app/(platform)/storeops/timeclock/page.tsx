@@ -246,6 +246,8 @@ export default function TimeClockAdminPage() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowLunchSettings(s => !s)}>⚙ Lunch Break Settings</button>
+          {/* 2026-08-06 owner directive: who was scheduled and didn't clock in / who covered instead. */}
+          <a href="/storeops/attendance" className="btn" style={{ fontSize: 13 }}>🚨 Attendance Exceptions</a>
           <a href="/storeops/payroll-change-log" className="btn" style={{ fontSize: 13 }}>📜 Payroll Change Log</a>
         </div>
       </div>
