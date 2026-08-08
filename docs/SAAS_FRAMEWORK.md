@@ -192,3 +192,42 @@ VIP/b2bsoft surprise** (login that silently fails post-2FA from a datacenter IP)
 
 **Guiding rule (the standing directive):** _everything user-mappable + user-configurable — config
 tables + admin UIs, never hardcoded or one-off SQL._
+
+---
+
+## 8. Dual-POS rule — streams never merge (owner directive 2026-08-07)
+
+A tenant may run the **built-in POS module** (`pos.*` schema) and/or an **external POS**
+(b2bsoft et al., via the existing sales-feed pipeline). Which, and in what roles, is a
+tenant-setup decision stored in `core.tenant_pos_setup` (mig 727): `builtin_role` /
+`external_role` ∈ {off, primary, secondary}, `secondary_mode` ∈ {add, parallel},
+`separate_registers` boolean.
+
+**THE RULE: numbers from the primary POS and a secondary POS are NEVER merged.** Every
+category of reporting shows them separately — "sales under POS 1 and POS 2".
+
+Consequences, in force everywhere:
+
+1. **The external feed pipeline is untouchable.** Mailbox sweeps, parsers, uploads,
+   `raw_sales` / `daily_sales_feed`, and their consumers keep working byte-identically for
+   external-primary tenants.
+2. **The built-in POS writes only its own stream** (`commcalc.pos_builtin_daily_sales`,
+   `commcalc.pos_builtin_sales`, same grain as the external tables). Promotion into
+   `daily_sales_feed` / `raw_sales` (column-for-column, delete-by-period + empty-abort)
+   happens exclusively when `builtin_role = 'primary'` — that is the tenant's POS-1 ledger
+   landing where every existing consumer already looks, exactly like an external feed does.
+3. **Secondary in `add` mode:** the secondary stream counts toward end-of-day sales totals
+   and flows into the discrepancy report, P&L and other reporting **as its own separately
+   labeled stream** — and its qualifying sales DO pay commission ("the rep did their job"),
+   computed on the secondary stream, never blended into primary figures.
+4. **Secondary in `parallel` mode:** comparison-only figures; excluded from EOD totals,
+   discrepancy, P&L and commissions.
+5. **Reconciliation for dual-POS tenants:** both POS totals are shown and reconciled
+   against the **combined** end-of-day total — unless `separate_registers` is set, in which
+   case each POS reconciles independently as its own register. Per-tenant, dynamic, never a
+   static behavior.
+
+Status: config table + built-in stream + primary promotion are implemented
+(`pos/commcalc_feed.py`, mig 727). The secondary-stream consumers (EOD/discrepancy/P&L
+labeling, the POS-2 commission pass, dual-register recon UI) are the follow-up wave — the
+commission piece is gated on the still-missing commissions requirements doc.
