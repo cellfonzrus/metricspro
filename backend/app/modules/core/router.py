@@ -1004,8 +1004,21 @@ def _resolve_caller(client, uid, active_org=None):
     `active_org` is the (untrusted) x-active-org header — it selects which membership row when the
     login belongs to >1 tenant, and is honored only if it names one of the memberships. A
     single-membership login resolves to its one row regardless (today's behaviour). perms is the
-    role's permissions JSONB (scope / modules / settings / ...). None if the login has no tenant."""
-    u = _pick_membership(_memberships(client, uid), (active_org or "").strip() or None)
+    role's permissions JSONB (scope / modules / settings / ...). None if the login has no tenant.
+
+    `super_admin` is a LOGIN-LEVEL key, NOT a per-tenant grant: true when the flag is set on ANY of
+    the login's memberships. That is the SAME rule as `_require_super_admin` (this module, ~line 448)
+    and `app.core.tenant_middleware._resolve_identity` (which bypasses the org rewrite on
+    `any(r.get("super_admin") ...)`). Reading it off the single ACTING row was a DRIFT, fixed
+    2026-08-06: a genuine super-admin whose flag sits on a different membership row than the acting
+    one — the ordinary case, since the flag is stamped on the house-org row while the operator acts
+    as (or defaults to) another tenant — was denied by every `_can_edit_setting` consumer. Live
+    symptom: the owner, signed in as super-admin, got the read-only "ask an administrator" banner on
+    the Google Reviews settings page. org_id / role / perms KEEP acting-row semantics, untouched: the
+    membership list is resolved once and the acting row still decides which tenant this request is
+    for. A login with no super_admin flag anywhere is byte-identical to before."""
+    rows = _memberships(client, uid)
+    u = _pick_membership(rows, (active_org or "").strip() or None)
     if not u:
         return None
     org_id = u.get("org_id") or ORG_ID
@@ -1015,7 +1028,8 @@ def _resolve_caller(client, uid, active_org=None):
               .eq("org_id", org_id).eq("name", u["role"]).limit(1).execute().data) or []
         if rr:
             perms = rr[0].get("permissions") or {}
-    return {"org_id": org_id, "role": u.get("role"), "super_admin": bool(u.get("super_admin")), "perms": perms}
+    return {"org_id": org_id, "role": u.get("role"),
+            "super_admin": any(r.get("super_admin") for r in rows), "perms": perms}
 
 
 def _can_edit_setting(caller, area):
