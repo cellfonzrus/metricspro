@@ -156,7 +156,7 @@ def _fetch_sale_rows(org_id: str, utc_start: str, utc_end: str):
     cnames = {c["id"]: c.get("name") for c in (client.schema("pos").table("categories")
               .select("id,name").eq("org_id", org_id).limit(1000).execute().data or [])}
     emp_names = {(e.get("employee_id") or "").strip(): e.get("name")
-                 for e in (client.table("employees").select("employee_id,name")
+                 for e in (client.schema("storeops").table("employees").select("employee_id,name")
                            .eq("org_id", org_id).limit(2000).execute().data or [])}
 
     cust_ids = sorted({s["customer_id"] for s in sales if s.get("customer_id")})
