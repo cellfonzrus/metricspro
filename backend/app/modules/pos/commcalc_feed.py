@@ -17,9 +17,20 @@ decision in core.tenant_pos_setup:
     follow-up work gated on the commissions requirements doc.
   * builtin_role='off' → sync refuses (tenant doesn't use the built-in POS).
 
-Both the own-stream write and the promotion are delete-by-period + insert (idempotent
-re-runs) with the EMPTY-ABORT guard (BUG_AUDIT Theme 1): zero source rows abort the sync
-instead of wiping a period.
+Both the own-stream write and the promotion are replace-then-insert (idempotent re-runs)
+with the EMPTY-ABORT guard (BUG_AUDIT Theme 1): zero source rows abort the sync instead of
+wiping a period. The two replaces have VERY different blast radii, and the difference is
+the whole safety story:
+
+  * OWN STREAM (_replace_period below) deletes by (org_id, period) from
+    pos_builtin_daily_sales / pos_builtin_sales. Those tables are created empty by mig 727
+    and this module is their ONLY writer, so it can only ever remove rows it wrote itself.
+  * PROMOTION (commcalc.pos_promote_period, mig 727) touches the LIVE SHARED LEDGER. Owner
+    constraint 2026-08-08 — "can't delete anything" — so its DELETE is scoped to
+    source = 'pos_builtin'. Anything written by the external feed, a historical import, a
+    manual upload or a backfill carries source NULL and is outside the DELETE's reach.
+    And because inserting beside foreign rows would double-count instead, the function
+    REFUSES outright when the target period already holds non-'pos_builtin' rows.
 
 Row-shape conventions (matching the b2bsoft Sales-Transaction-Details grain, one row per
 sale item): period '%B %Y' stamped in BUSINESS_TZ America/New_York; store = store_code;
@@ -269,6 +280,10 @@ def sync_period(org_id: str, mode: str, period=None):
         # leave the live ledger period wiped/half-written. The function re-checks the tenant
         # roles server-side and refuses while an external POS is configured (its feed lands
         # in the same tables and would be destroyed).
+        # Its DELETE is scoped to source='pos_builtin', so it can only remove rows a previous
+        # promotion wrote; and it refuses outright if the period already holds foreign rows,
+        # since inserting beside them would double-count. Nothing this module did not write
+        # can be deleted by this path.
         if (setup.get("external_role") or "off") != "off":
             raise HTTPException(409, "promotion is blocked while an external POS is configured "
                                      "for this tenant — its feed lands in the same ledger tables "

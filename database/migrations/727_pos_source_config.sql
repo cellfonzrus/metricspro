@@ -127,6 +127,26 @@ BEGIN
   END LOOP;
 END $$;
 
+-- ── 2b. Ledger provenance column (owner constraint 2026-08-08: "can't delete anything") ───────────
+-- commcalc.daily_sales_feed / raw_sales (mig 047) had NO way to tell who wrote a row, so the
+-- only safe idempotent re-sync was "delete the whole period", which would also destroy
+-- historical imports, manual uploads and backfills sitting in that period. Adding `source`
+-- lets promotion delete ONLY the rows it previously wrote.
+-- Existing rows stay NULL on purpose: NULL is never equal to 'pos_builtin', so every row that
+-- predates this migration becomes permanently un-deletable by the promotion path. No backfill,
+-- no UPDATE against the live ledger — adding a nullable column is metadata-only in PG11+.
+ALTER TABLE commcalc.daily_sales_feed ADD COLUMN IF NOT EXISTS source TEXT;
+ALTER TABLE commcalc.raw_sales        ADD COLUMN IF NOT EXISTS source TEXT;
+COMMENT ON COLUMN commcalc.daily_sales_feed.source IS
+  'Writer provenance. NULL = pre-existing/external feed (never touched by POS promotion). ''pos_builtin'' = written by commcalc.pos_promote_period.';
+COMMENT ON COLUMN commcalc.raw_sales.source IS
+  'Writer provenance. NULL = pre-existing/external feed (never touched by POS promotion). ''pos_builtin'' = written by commcalc.pos_promote_period.';
+-- Makes the scoped delete and the foreign-row guard index-only rather than a period scan.
+CREATE INDEX IF NOT EXISTS daily_sales_feed_org_period_source_idx
+  ON commcalc.daily_sales_feed (org_id, period, source);
+CREATE INDEX IF NOT EXISTS raw_sales_org_period_source_idx
+  ON commcalc.raw_sales (org_id, period, source);
+
 -- ── 3. Atomic primary promotion ────────────────────────────────────────────────────────────────────
 -- One transaction: replace the target period in daily_sales_feed / raw_sales from the
 -- already-written built-in stream. The non-atomic alternative (delete via one HTTP call,
@@ -134,14 +154,23 @@ END $$;
 -- Guards baked in: refuses when the tenant's builtin_role isn't 'primary', when the external
 -- POS isn't 'off' (its feed lands in these same tables — promotion would wipe it, violating
 -- the never-merge rule), and when the stream period is empty (empty-abort).
+-- NON-DESTRUCTIVE (owner constraint 2026-08-08): the DELETE is scoped to source='pos_builtin',
+-- so it can only remove rows a previous promotion wrote. Rows written by anything else — the
+-- external feed, historical imports, manual uploads, backfills — carry source NULL and are
+-- physically outside the DELETE's reach.
+-- The mirror-image failure is double-counting: if we insert alongside foreign rows for the same
+-- period, totals silently double. So promotion REFUSES when the target period already holds
+-- non-'pos_builtin' rows. Refusing is the only option that neither deletes nor double-counts;
+-- resolving the overlap is a human decision, not something this function should guess at.
 CREATE OR REPLACE FUNCTION commcalc.pos_promote_period(p_org UUID, p_period TEXT, p_mode TEXT)
 RETURNS INT
 LANGUAGE plpgsql
 SET search_path = commcalc, core, pg_temp
 AS $$
 DECLARE
-  v_setup core.tenant_pos_setup;
-  v_count INT;
+  v_setup   core.tenant_pos_setup;
+  v_count   INT;
+  v_foreign INT;
 BEGIN
   IF p_mode NOT IN ('daily','monthly') THEN
     RAISE EXCEPTION 'mode must be daily or monthly';
@@ -162,14 +191,25 @@ BEGIN
     IF v_count = 0 THEN
       RAISE EXCEPTION 'built-in stream has no rows for % — aborting so the ledger period is not wiped', p_period;
     END IF;
-    DELETE FROM commcalc.daily_sales_feed WHERE org_id = p_org AND period = p_period;
+    SELECT COUNT(*) INTO v_foreign FROM commcalc.daily_sales_feed
+     WHERE org_id = p_org AND period = p_period AND source IS DISTINCT FROM 'pos_builtin';
+    IF v_foreign > 0 THEN
+      RAISE EXCEPTION 'daily_sales_feed already holds % row(s) for % this module did not write '
+                      '(source IS NULL — external feed, historical import or manual upload). '
+                      'Promotion refuses: deleting them would lose data, inserting beside them '
+                      'would double-count. Resolve the overlap before promoting.', v_foreign, p_period;
+    END IF;
+    DELETE FROM commcalc.daily_sales_feed
+     WHERE org_id = p_org AND period = p_period AND source = 'pos_builtin';
     INSERT INTO commcalc.daily_sales_feed
       (org_id, period, period_month, period_year, store, salesperson, user_login, contract_type,
        department, category, product_desc, product_id, gp, ext_price, trans_id, trans_date,
-       mdn, serial_1, register, tender_type, voided, trans_type, customer, email, customer_no)
+       mdn, serial_1, register, tender_type, voided, trans_type, customer, email, customer_no,
+       source)
     SELECT org_id, period, period_month, period_year, store, salesperson, user_login, contract_type,
            department, category, product_desc, product_id, gp, ext_price, trans_id, trans_date,
-           mdn, serial_1, register, tender_type, voided, trans_type, customer, email, customer_no
+           mdn, serial_1, register, tender_type, voided, trans_type, customer, email, customer_no,
+           'pos_builtin'
     FROM commcalc.pos_builtin_daily_sales
     WHERE org_id = p_org AND period = p_period;
   ELSE
@@ -178,14 +218,23 @@ BEGIN
     IF v_count = 0 THEN
       RAISE EXCEPTION 'built-in stream has no rows for % — aborting so the ledger period is not wiped', p_period;
     END IF;
-    DELETE FROM commcalc.raw_sales WHERE org_id = p_org AND period = p_period;
+    SELECT COUNT(*) INTO v_foreign FROM commcalc.raw_sales
+     WHERE org_id = p_org AND period = p_period AND source IS DISTINCT FROM 'pos_builtin';
+    IF v_foreign > 0 THEN
+      RAISE EXCEPTION 'raw_sales already holds % row(s) for % this module did not write '
+                      '(source IS NULL — external feed, historical import or manual upload). '
+                      'Promotion refuses: deleting them would lose data, inserting beside them '
+                      'would double-count. Resolve the overlap before promoting.', v_foreign, p_period;
+    END IF;
+    DELETE FROM commcalc.raw_sales
+     WHERE org_id = p_org AND period = p_period AND source = 'pos_builtin';
     INSERT INTO commcalc.raw_sales
       (org_id, period, period_month, period_year, store, salesperson, user_login, department,
        category, product_desc, product_id, gp, ext_price, trans_id, trans_date, contract_type,
-       mdn, serial_1, register, tender_type, voided, trans_type, sku)
+       mdn, serial_1, register, tender_type, voided, trans_type, sku, source)
     SELECT org_id, period, period_month, period_year, store, salesperson, user_login, department,
            category, product_desc, product_id, gp, ext_price, trans_id, trans_date, contract_type,
-           mdn, serial_1, register, tender_type, voided, trans_type, sku
+           mdn, serial_1, register, tender_type, voided, trans_type, sku, 'pos_builtin'
     FROM commcalc.pos_builtin_sales
     WHERE org_id = p_org AND period = p_period;
   END IF;
