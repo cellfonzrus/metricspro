@@ -2072,10 +2072,23 @@ def grant_universe(org_id: str = ORG_ID):
     to see, and an admin assigning a DM to 3 markets must be able to see all of the tenant's markets.
     Org isolation (the real boundary) is enforced by tenant_middleware rewriting org_id.
 
-    Returns {"markets": [canonical names], "stores": [{store_code, address, market}]}. Best-effort
-    per source — a missing table degrades that half to empty, never a 500."""
+    Returns {"markets": [canonical names], "stores": [{store_code, address, market}],
+             "store_groups": {CODE: [every code naming the same physical store]}}. Best-effort
+    per source — a missing table degrades that half to empty, never a 500.
+
+    `store_groups` is ADDITIVE (ruling #5). A tenant can carry two code vocabularies for one store —
+    live Luxelink: `Diversey` (storeops.stores) and `LUX-CHI-DIVERSEY` (commcalc.store_mapping), the
+    same address — and 19 of that tenant's 39 store options are such duplicates. A picker that offers
+    one store twice is a pick-don't-type failure of its own: whichever spelling the operator happens
+    to click decides which rows the grant binds. The picker collapses a group to ONE option using
+    this map; `stores` itself is unchanged, so every existing consumer is byte-identical."""
     idx = _scope.market_index(sb(), org_id)
-    return {"markets": idx.get("markets") or [], "stores": idx.get("stores") or []}
+    groups = {}
+    for code, grp in (idx.get("code_groups") or {}).items():
+        if len(grp) > 1:
+            groups[code] = sorted(grp)
+    return {"markets": idx.get("markets") or [], "stores": idx.get("stores") or [],
+            "store_groups": groups, "roster_codes": sorted(idx.get("roster_codes") or set())}
 
 
 @router.get("/scope-preview")
@@ -2139,6 +2152,33 @@ def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
         codes = _scope.reporting_span_codes(client, org_id, app_user, scope, org_unit_codes=unit_codes)
         reporting = {"unrestricted": False, "stores": sorted(codes),
                      "why": f"role scope = {scope}"}
+    # ── GRANT SEPARATION (ruling #6) + OWN STORE (ruling #7) ────────────────────────────────────
+    # ADDITIVE fields. `grants` answers "which half of this person's grant produced which stores",
+    # so an administrator can see — without logging in as anyone — that a store-scoped manager is
+    # actually spanning their whole market, and can then remove ONE half without disturbing the
+    # other. `own_store` answers "what does this rep's own-store scope resolve to", which is the
+    # only honest way to check ruling #7 from the admin side.
+    brk = _scope.login_grant_breakdown(client, org_id, app_user)
+    own_store, own_note = [], ""
+    if scope == "self":
+        hs = _scope.employee_home_store(client, org_id, eid) if eid else ""
+        own_store = sorted(_scope.self_store_codes(client, org_id, app_user, employee_home_store=hs))
+        own_note = ("their own store only — market grants are deliberately NOT used for a "
+                    "self-scoped person" if own_store
+                    else "NO resolvable store — this person's own-store scope is empty; pick their "
+                         "store in the Store column")
+    grants = {
+        "market": {"granted": brk["market"]["granted"],
+                   "codes": sorted(brk["market"]["codes"]),
+                   "unresolved": brk["market"]["unresolved"],
+                   "per_market": {m: sorted(c) for m, c in brk["market"]["resolved"].items()}},
+        "store": {"granted": brk["store"]["granted"],
+                  "codes": sorted(brk["store"]["codes"]),
+                  "unresolved": brk["store"]["unresolved"]},
+        "market_widens_beyond_store_scope": bool(
+            scope in ("store", "self") and brk["market"]["codes"]),
+        "own_store": own_store, "own_store_why": own_note,
+    }
     return {
         "role": role or None, "email": email or None, "scope": scope,
         "granted_markets": granted, "unresolved_markets": unresolved,
@@ -2146,6 +2186,7 @@ def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
         "pinned_stores": sorted({c for c in ([(app_user or {}).get("store_code")] +
                                              list((app_user or {}).get("store_codes") or []))
                                  if c and str(c).strip()}),
+        "grants": grants,
         "reporting": reporting,
         "scheduling": {"reach": _scope.scheduling_reach(perms),
                        "roster_span_exempt": _scope.roster_span_exempt(perms),
@@ -2157,11 +2198,45 @@ def scope_preview(role: str = "", email: str = "", org_id: str = ORG_ID,
     }
 
 
+# ── GRANT WRITE BOUNDARY (owner ruling #5, 2026-08-08) ──────────────────────────────────────────
+# "clean the bad vlaues and make it drop down with option to select many instead of free text".
+#
+# The picker is the UX half; THIS is the half that makes it stick. A grant value is a permission, and
+# the UI is not the boundary — a stale tab, an employee-sheet upload or a curl can post anything, and
+# whatever it posts becomes somebody's access. Every store/market value written to
+# `storeops.app_users` now resolves against the tenant's REAL roster (code, Store-Matching synonym or
+# address, in that order) and is stored in its canonical spelling. A value that names no real store
+# is REJECTED with the closest real options, never silently kept — that is exactly how
+# `3738 26th Street`, `3248 Lawarance`, `3560 Norstand Ave`, `B - 2612` and `Floating` got in.
+def _normalize_grant_write(client, org_id: str, body: dict, *, strict: bool = True) -> dict:
+    """-> {"market", "store_code", "store_codes", "rejected"[]}. `strict` raises 400 on a rejected
+    value (interactive path); the bulk path collects the error per row instead."""
+    norm = _scope.normalize_grants(
+        client, org_id,
+        market=body.get("market") if "market" in body else None,
+        store_code=body.get("store_code") if "store_code" in body else None,
+        store_codes=body.get("store_codes") if "store_codes" in body else None)
+    if strict and norm["rejected"]:
+        opts = _scope.market_index(client, org_id)
+        bad = norm["rejected"][0]
+        if bad["kind"] == "market":
+            near = ", ".join((opts.get("markets") or [])[:8]) or "none configured"
+            raise HTTPException(400, f"{bad['value']!r} is not one of this company's markets. "
+                                     f"Pick from: {near}")
+        near = ", ".join(sorted({str(s.get("store_code")) for s in (opts.get("stores") or [])
+                                 if s.get("store_code")})[:8]) or "none configured"
+        raise HTTPException(400, f"{bad['value']!r} is not one of this company's stores. "
+                                 f"Pick a store from the list (e.g. {near}).")
+    return norm
+
+
 @router.post("/users/assign")
 async def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Upsert a core.users row (assign role + scope). Keyed on (org_id, email). Does NOT create
-    the auth login — call /users/create-login (or bulk-provision) for that."""
+    the auth login — call /users/create-login (or bulk-provision) for that.
+
+    Store/market grants are normalised + validated here (ruling #5) — see _normalize_grant_write."""
     _require_setting(authorization, x_active_org, "security")
     email = (body.get("email") or "").strip().lower()
     if not email:
@@ -2170,13 +2245,14 @@ async def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Hea
     client = sb()
     cur = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
         .eq("email", email).limit(1).execute().data or []
+    grant = _normalize_grant_write(client, org_id, body)
     row = {
         "org_id": org_id, "email": email,
         "full_name": body.get("full_name") or (cur[0].get("full_name") if cur else None),
         "role": role or (cur[0].get("role") if cur else "sales_rep"),
-        "market": body.get("market"),
-        "store_code": body.get("store_code"),
-        "store_codes": body.get("store_codes"),
+        "market": grant["market"],
+        "store_code": grant["store_code"],
+        "store_codes": grant["store_codes"],
         "employee_id": body.get("employee_id") or (cur[0].get("employee_id") if cur else None),
         "is_active": body.get("is_active", True if not cur else cur[0].get("is_active")),
     }
@@ -2216,12 +2292,22 @@ def bulk_assign(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
         if role and role not in valid:
             errors.append({"row": i + 1, "email": email, "error": f"unknown role '{role}'"})
             continue
+        # Same grant boundary as the interactive path (ruling #5). NON-strict: an unresolvable
+        # store/market fails ITS OWN row with a readable reason and the rest of the sheet still
+        # applies — a spreadsheet upload is exactly how a hand-typed store name used to become a
+        # permission for the whole roster at once.
+        grant = _normalize_grant_write(client, org_id, u, strict=False)
+        if grant["rejected"]:
+            bad = "; ".join(f"{r['kind']} {r['value']!r} is not in this company's roster"
+                            for r in grant["rejected"][:3])
+            errors.append({"row": i + 1, "email": email, "error": bad})
+            continue
         row = {
             "org_id": org_id, "email": email,
             "full_name": (u.get("full_name") or None),
             "role": role or "sales_rep",
-            "market": (u.get("market") or None),
-            "store_code": (u.get("store_code") or None),
+            "market": grant["market"],
+            "store_code": grant["store_code"],
             "is_active": True,
         }
         try:
