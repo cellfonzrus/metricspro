@@ -5762,7 +5762,8 @@ def _do_google_reviews_sweep(org_id, store_codes=None):
 
 # ── config ───────────────────────────────────────────────────────────────────────────────────────
 @router.get("/google-reviews/config")
-def get_google_reviews_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+def get_google_reviews_config(authorization: str = Header(default=""),
+                              x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     """Masked org config for the admin page — the api_key is NEVER returned raw (has_api_key +
     a trailing-4-char hint only). Any manager may view; `can_edit` tells the page whether THIS
     caller may Save (see _require_google_reviews_admin)."""
@@ -5771,7 +5772,7 @@ def get_google_reviews_config(authorization: str = Header(default=""), org_id: s
     cfg = _gr.get_config(sb(), org_id)
     out = _gr.public_config(cfg)
     try:
-        _require_google_reviews_admin(authorization, "", org_id)
+        _require_google_reviews_admin(authorization, x_active_org, org_id)
         out["can_edit"] = True
     except HTTPException:
         out["can_edit"] = False
