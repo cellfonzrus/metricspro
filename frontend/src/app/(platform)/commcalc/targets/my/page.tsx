@@ -33,6 +33,10 @@ export default function MyTargetsPage() {
   // keyset (scope_keyset), never guessed here from the length of a list.
   const [collective, setCollective] = useState<any>(null)
   const [scope, setScope] = useState<any>(null)
+  // Server-side "configure X" hints (`setup_hint`), already on this payload and already rendered by
+  // the Targets overview page — this page never read them, so a rep whose login has no store got a
+  // silent empty picker with nothing to click. Same channel, same wording style, no new mechanism.
+  const [setupHint, setSetupHint] = useState<string[]>([])
   const [filterOpts, setFilterOpts] = useState<any>({ stores: [], markets: [], reps: [] })
   const [sel, setSel] = useState<StandardFilterValue>(emptyStandardFilter())
   const [reload, setReload] = useState(0)
@@ -54,6 +58,7 @@ export default function MyTargetsPage() {
         setStores(d.stores || [])
         setCollective(d.collective || null)
         setScope(d.scope || null)
+        setSetupHint(Array.isArray(d.setup_hint) ? d.setup_hint : [])
         if (d.filters) setFilterOpts(d.filters)
         if (d.stores?.length && !storeCode) setStoreCode(d.stores[0].store_code)
       }).catch(console.error)
@@ -163,6 +168,27 @@ export default function MyTargetsPage() {
         />
       )}
 
+      {/* NO STORE ON THIS LOGIN. The server says it cannot place this rep in any store, so the picker
+          below would be empty and every card blank with no explanation. Show the server's plain-English
+          setup hint and stop — this is the visible half of the 2026-08-08 fix that stopped a store-less
+          rep from being handed every store in the tenant. */}
+      {scope?.no_store_assigned ? (
+        <div className="card" style={{ padding: 28, maxWidth: 620 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>⚙️ No store assigned yet</div>
+          <div style={{ fontSize: 13.5, color: 'var(--text2)', lineHeight: 1.55 }}>
+            {setupHint.length > 0
+              ? setupHint.map((h, i) => <div key={i} style={{ marginBottom: 6 }}>{h}</div>)
+              : <div>No store is assigned to your login yet, so there are no targets to show. Ask your manager to set your store on your employee record.</div>}
+          </div>
+        </div>
+      ) : (
+      <>
+      {setupHint.length > 0 && (
+        <div style={{ background: 'var(--warning-bg, #fff7ed)', border: '1px solid var(--warning, #f59e0b)', borderRadius: 10, padding: '9px 12px', marginBottom: 14, fontSize: 12.5, color: 'var(--text2)' }}>
+          {setupHint.map((h, i) => <div key={i}>⚙️ {h}</div>)}
+        </div>
+      )}
+
       <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '8px 14px', marginBottom: 18, fontSize: 12, color: '#92400e' }}>
         ⓘ Until logins are enabled, pick your store and name below. This view will be locked to you automatically once sign-in is live.
       </div>
@@ -265,6 +291,8 @@ export default function MyTargetsPage() {
             </div>
           )}
         </>
+      )}
+      </>
       )}
     </div>
   )

@@ -1,0 +1,3747 @@
+{
+ "_pulled": "2026-08-08 read-only via tools/sbsql.py; emails reduced to their local part; auth ids omitted",
+ "app_users": [
+  {
+   "auth_id": "uid-00000000-abdul.kakar178-0",
+   "employee_id": "E011",
+   "label": "abdul.kakar178",
+   "market": "LI, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-11634",
+   "store_codes": [
+    "B-11634"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-abid.akhter-1",
+   "employee_id": "E012",
+   "label": "abid.akhter",
+   "market": "LI, NJ, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "district_manager",
+   "store_code": "B-509",
+   "store_codes": [
+    "B-509"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-amirkamalkhan0348-2",
+   "employee_id": "E026",
+   "label": "amirkamalkhan0348",
+   "market": "LI, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-418",
+   "store_codes": [
+    "B-418"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-anjalisharma-3",
+   "employee_id": "Anjali",
+   "label": "anjalisharma",
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-1800",
+   "store_codes": [
+    "B-1800"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-anthonycastellanos1030-4",
+   "employee_id": "E227",
+   "label": "anthonycastellanos1030",
+   "market": null,
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": null,
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-00000000-asadumar086-5",
+   "employee_id": "E008",
+   "label": "asadumar086",
+   "market": "NYC, LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-103",
+   "store_codes": [
+    "B-103"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-avramos2005-6",
+   "employee_id": "E021",
+   "label": "avramos2005",
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-5135",
+   "store_codes": [
+    "B-5135"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-cellfonzrus-7",
+   "employee_id": "E002",
+   "label": "cellfonzrus",
+   "market": null,
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-509",
+   "store_codes": [
+    "B-509"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-danial743-8",
+   "employee_id": "E002",
+   "label": "danial743",
+   "market": "LI, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-509",
+   "store_codes": [
+    "B-509"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-david.caba00-9",
+   "employee_id": "E003",
+   "label": "david.caba00",
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-418",
+   "store_codes": [
+    "B-418"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-dc-10",
+   "employee_id": "E127",
+   "label": "dc",
+   "market": "LI, NJ, NYC, TT",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "admin",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-00000000-dixit.chauhan-11",
+   "employee_id": null,
+   "label": "dixit.chauhan",
+   "market": "LI, NJ, NYC, TT",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "admin",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-00000000-edgarmeletz-12",
+   "employee_id": "E014",
+   "label": "edgarmeletz",
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-5135",
+   "store_codes": [
+    "B-5135"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-escobarangelicaa-13",
+   "employee_id": "E232",
+   "label": "escobarangelicaa",
+   "market": null,
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-1800",
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-00000000-garapatirohit86-14",
+   "employee_id": "E001",
+   "label": "garapatirohit86",
+   "market": "NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-117",
+   "store_codes": [
+    "B-117"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-gaurav.joshi-15",
+   "employee_id": "E128",
+   "label": "gaurav.joshi",
+   "market": "NJ, LI, NYC, TT",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "admin",
+   "store_code": "B-5135",
+   "store_codes": [
+    "B-5135"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-hhchauhan7-16",
+   "employee_id": "E025",
+   "label": "hhchauhan7",
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-2509",
+   "store_codes": [
+    "B-2509"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-imkhaled1993-17",
+   "employee_id": "E006",
+   "label": "imkhaled1993",
+   "market": null,
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": null,
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-00000000-ismaeelkhan2229-18",
+   "employee_id": "E007",
+   "label": "ismaeelkhan2229",
+   "market": "LI, NJ, NYC, TT",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "district_manager",
+   "store_code": "B-2612",
+   "store_codes": [
+    "B-2612"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-jazib375-19",
+   "employee_id": "E027",
+   "label": "jazib375",
+   "market": "NYC, LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-2612",
+   "store_codes": [
+    "B-2612"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-kashif_m_mehmood-20",
+   "employee_id": "E010",
+   "label": "kashif_m_mehmood",
+   "market": "LI, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-11634",
+   "store_codes": [
+    "B-11634"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-l2127martinez-21",
+   "employee_id": "E170",
+   "label": "l2127martinez",
+   "market": null,
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": null,
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-00000000-mohdusa5366-22",
+   "employee_id": "E029",
+   "label": "mohdusa5366",
+   "market": "15, NYC, LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-2612",
+   "store_codes": [
+    "B-2612"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-mryasirnawazkhan-23",
+   "employee_id": null,
+   "label": "mryasirnawazkhan",
+   "market": "TT",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "T-531",
+   "store_codes": [
+    "T-531"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-ngvexclusive2-24",
+   "employee_id": "E022",
+   "label": "ngvexclusive2",
+   "market": "LI, NJ, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "market_manager",
+   "store_code": "B-5135",
+   "store_codes": [
+    "B-5135"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-pw2022llc-25",
+   "employee_id": null,
+   "label": "pw2022llc",
+   "market": "LI, NJ, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "district_manager",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-00000000-rajiv.jaggi-26",
+   "employee_id": "E130",
+   "label": "rajiv.jaggi",
+   "market": "LI, NJ, NYC, TT",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "admin",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-00000000-rajiv.jaggi-27",
+   "employee_id": null,
+   "label": "rajiv.jaggi",
+   "market": "LI, NJ, NYC, TT",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "admin",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-00000000-ramosbonilla19-28",
+   "employee_id": "E015",
+   "label": "ramosbonilla19",
+   "market": "NYC, NJ, LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-3565",
+   "store_codes": [
+    "B-3565"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-riyash487-29",
+   "employee_id": "E017",
+   "label": "riyash487",
+   "market": "NJ, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-559",
+   "store_codes": [
+    "B-559"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-sanjot-30",
+   "employee_id": null,
+   "label": "sanjot",
+   "market": null,
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "admin",
+   "store_code": null,
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-00000000-simarjyot05-31",
+   "employee_id": "E043",
+   "label": "simarjyot05",
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-1750",
+   "store_codes": [
+    "B-1750"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-ss-32",
+   "employee_id": "E039",
+   "label": "ss",
+   "market": "<li>, LI, NJ, NYC, PA, TT",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "admin",
+   "store_code": "B-103",
+   "store_codes": [
+    "B-103"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-ssunethri3-33",
+   "employee_id": "E018",
+   "label": "ssunethri3",
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-559",
+   "store_codes": [
+    "B-559"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-suannyhidalgo-34",
+   "employee_id": "E224",
+   "label": "suannyhidalgo",
+   "market": null,
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": null,
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-00000000-suarezmelanie1808-35",
+   "employee_id": "E045",
+   "label": "suarezmelanie1808",
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-2509",
+   "store_codes": [
+    "B-2509"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-sumaytasnim-36",
+   "employee_id": "E126",
+   "label": "sumaytasnim",
+   "market": "NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-4712",
+   "store_codes": [
+    "B-4712"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-syedahemd1208-37",
+   "employee_id": "E009",
+   "label": "syedahemd1208",
+   "market": "NYC, LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-117",
+   "store_codes": [
+    "B-117"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-tamar.zaman00-38",
+   "employee_id": "E037",
+   "label": "tamar.zaman00",
+   "market": null,
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-2612",
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-00000000-theyesi93-39",
+   "employee_id": "E013",
+   "label": "theyesi93",
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-6011",
+   "store_codes": [
+    "B-6011"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-udhairajsree24-40",
+   "employee_id": "E024",
+   "label": "udhairajsree24",
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-652",
+   "store_codes": [
+    "B-652"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-waleedasghar0001-41",
+   "employee_id": "E005",
+   "label": "waleedasghar0001",
+   "market": "LI, NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-11634",
+   "store_codes": [
+    "B-11634"
+   ]
+  },
+  {
+   "auth_id": "uid-00000000-wolf.ullf-42",
+   "employee_id": "E020",
+   "label": "wolf.ullf",
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "role": "sales_rep",
+   "store_code": "B-196",
+   "store_codes": [
+    "B-196"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-alejandro.galarza-43",
+   "employee_id": "E176",
+   "label": "alejandro.galarza",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Irving Park",
+   "store_codes": [
+    "Irving Park"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-alondra.navarro-44",
+   "employee_id": "E177",
+   "label": "alondra.navarro",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "3738 26th Street",
+   "store_codes": [
+    "3738 26th Street"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-angelica.chacon-45",
+   "employee_id": "E178",
+   "label": "angelica.chacon",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "lawrence",
+   "store_codes": [
+    "lawrence"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-antonio.chavez-46",
+   "employee_id": "E179",
+   "label": "antonio.chavez",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "Chicago heights",
+   "store_codes": [
+    "Chicago heights"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-atg3515-47",
+   "employee_id": "E218",
+   "label": "atg3515",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Nostrand",
+   "store_codes": [
+    "Nostrand"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-brenda.romero-48",
+   "employee_id": "E180",
+   "label": "brenda.romero",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "market_manager",
+   "store_code": "Diversey",
+   "store_codes": [
+    "Diversey"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-brendaliz.aviles-49",
+   "employee_id": "E181",
+   "label": "brendaliz.aviles",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Narragansett",
+   "store_codes": [
+    "Narragansett"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-carolina.espinoza-50",
+   "employee_id": "E182",
+   "label": "carolina.espinoza",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Diversey",
+   "store_codes": [
+    "Diversey"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-christopher.romero-51",
+   "employee_id": "E183",
+   "label": "christopher.romero",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "Belmont",
+   "store_codes": [
+    "Belmont"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-daisy.brito-52",
+   "employee_id": "E184",
+   "label": "daisy.brito",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Cermark",
+   "store_codes": [
+    "Cermark"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-dc-53",
+   "employee_id": "E173",
+   "label": "dc",
+   "market": "Chicago, NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "admin",
+   "store_code": "Ave U",
+   "store_codes": [
+    "Ave U"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-diana.antunez-54",
+   "employee_id": "E186",
+   "label": "diana.antunez",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "Diversey",
+   "store_codes": [
+    "Diversey"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-eduardo.brito-55",
+   "employee_id": "E151",
+   "label": "eduardo.brito",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "market_manager",
+   "store_code": "Grand",
+   "store_codes": [
+    "Grand"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-emily.olvera-56",
+   "employee_id": "E187",
+   "label": "emily.olvera",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Belmont",
+   "store_codes": [
+    "Belmont"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-emonk0758-57",
+   "employee_id": "E212",
+   "label": "emonk0758",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Nostrand",
+   "store_codes": [
+    "Nostrand"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-fshaknoza-58",
+   "employee_id": "E217",
+   "label": "fshaknoza",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Ave U",
+   "store_codes": [
+    "Ave U"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-genvieve.montijo-59",
+   "employee_id": "E188",
+   "label": "genvieve.montijo",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "lawrence",
+   "store_codes": [
+    "lawrence"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-gj-60",
+   "employee_id": "E172",
+   "label": "gj",
+   "market": "Chicago, NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "admin",
+   "store_code": "7812",
+   "store_codes": [
+    "7812"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-janet.garibay-61",
+   "employee_id": "E189",
+   "label": "janet.garibay",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "3352 26th",
+   "store_codes": [
+    "3352 26th"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-jocelyn.hernandez-62",
+   "employee_id": "E190",
+   "label": "jocelyn.hernandez",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Belmont",
+   "store_codes": [
+    "Belmont"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-jose.utrera-63",
+   "employee_id": "E223",
+   "label": "jose.utrera",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "market_manager",
+   "store_code": "3352 26th",
+   "store_codes": [
+    "3352 26th",
+    "3735 26th",
+    "7812",
+    "957",
+    "Armitage",
+    "Belmont",
+    "Cermark",
+    "Chicago heights",
+    "Cicero",
+    "Diversey",
+    "Grand",
+    "Irving Park",
+    "kedzie",
+    "lawrence",
+    "Narragansett",
+    "Ave U",
+    "Nostrand",
+    "QV",
+    "Utica"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-kallol.salman-64",
+   "employee_id": "E235",
+   "label": "kallol.salman",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Lefferts",
+   "store_codes": [
+    "Lefferts"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-lcricocareer37-65",
+   "employee_id": "E230",
+   "label": "lcricocareer37",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": null,
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-854f6d7b-liset.jacobo-66",
+   "employee_id": "E191",
+   "label": "liset.jacobo",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "3735 26th",
+   "store_codes": [
+    "3735 26th"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-luis.martinez-67",
+   "employee_id": "E192",
+   "label": "luis.martinez",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "3735 26th",
+   "store_codes": [
+    "3735 26th"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-maria.gutierrez-68",
+   "employee_id": null,
+   "label": "maria.gutierrez",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-854f6d7b-marukh1asghar-69",
+   "employee_id": "E213",
+   "label": "marukh1asghar",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Nostrand",
+   "store_codes": [
+    "Nostrand"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-mea.collins-70",
+   "employee_id": "E193",
+   "label": "mea.collins",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "kedzie",
+   "store_codes": [
+    "kedzie"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-melennie.perez-71",
+   "employee_id": "E194",
+   "label": "melennie.perez",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "kedzie",
+   "store_codes": [
+    "kedzie"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-mryasirnawazkhan-72",
+   "employee_id": "E219",
+   "label": "mryasirnawazkhan",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "957",
+   "store_codes": [
+    "957"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-naimanooren-73",
+   "employee_id": "E214",
+   "label": "naimanooren",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "7812",
+   "store_codes": [
+    "7812"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-nallely.espinoza-74",
+   "employee_id": "E142",
+   "label": "nallely.espinoza",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "Cermark",
+   "store_codes": [
+    "Cermark"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-nancy.espinoza-75",
+   "employee_id": "E141",
+   "label": "nancy.espinoza",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "Cermark",
+   "store_codes": [
+    "Cermark"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-natalie.chico-76",
+   "employee_id": "E165",
+   "label": "natalie.chico",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Irving Park",
+   "store_codes": [
+    "Irving Park"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-natalie.mendoza-77",
+   "employee_id": "E197",
+   "label": "natalie.mendoza",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Chicago heights",
+   "store_codes": [
+    "Chicago heights"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-natasha.cabrera-78",
+   "employee_id": "E206",
+   "label": "natasha.cabrera",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Narragansett",
+   "store_codes": [
+    "Narragansett"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-nicolas.navarrete-79",
+   "employee_id": "E198",
+   "label": "nicolas.navarrete",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "3352 26th",
+   "store_codes": [
+    "3352 26th"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-nivasgalahad2025-80",
+   "employee_id": "E215",
+   "label": "nivasgalahad2025",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Ave U",
+   "store_codes": [
+    "Ave U"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-no.thanks.my.way-81",
+   "employee_id": "E236",
+   "label": "no.thanks.my.way",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Ave U",
+   "store_codes": [
+    "Ave U"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-oneydaartiles-82",
+   "employee_id": "E234",
+   "label": "oneydaartiles",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "7812",
+   "store_codes": [
+    "7812"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-payroll-83",
+   "employee_id": "E226",
+   "label": "payroll",
+   "market": "Chicago, NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "accountant",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-854f6d7b-potatomato97-84",
+   "employee_id": "E216",
+   "label": "potatomato97",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "QV",
+   "store_codes": [
+    "QV"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-rajiv.jaggi-85",
+   "employee_id": null,
+   "label": "rajiv.jaggi",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "admin",
+   "store_code": null,
+   "store_codes": null
+  },
+  {
+   "auth_id": "uid-854f6d7b-ramosbonilla19-86",
+   "employee_id": "E228",
+   "label": "ramosbonilla19",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "7812 bergenline ave",
+   "store_codes": [
+    "7812 bergenline ave"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-rj-87",
+   "employee_id": "E171",
+   "label": "rj",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "admin",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-854f6d7b-ruby.ortiz-88",
+   "employee_id": "E207",
+   "label": "ruby.ortiz",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Grand",
+   "store_codes": [
+    "Grand"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-satyasreshta1411-89",
+   "employee_id": "E229",
+   "label": "satyasreshta1411",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Nostrand",
+   "store_codes": [
+    "Nostrand"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-silvia.nava-90",
+   "employee_id": "E199",
+   "label": "silvia.nava",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "store_manager",
+   "store_code": "Armitage",
+   "store_codes": [
+    "Armitage"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-ss-91",
+   "employee_id": null,
+   "label": "ss",
+   "market": "Chicago, NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "admin",
+   "store_code": null,
+   "store_codes": []
+  },
+  {
+   "auth_id": "uid-854f6d7b-ss-92",
+   "employee_id": "E174",
+   "label": "ss",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "3352 26th",
+   "store_codes": [
+    "3352 26th",
+    "3735 26th",
+    "7812",
+    "957",
+    "Armitage",
+    "Ave U",
+    "Belmont",
+    "Cermark",
+    "Chicago heights",
+    "Cicero",
+    "Diversey",
+    "Grand",
+    "Irving Park",
+    "kedzie",
+    "lawrence",
+    "Narragansett",
+    "Nostrand",
+    "QV",
+    "Utica"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-syedazfatima11-93",
+   "employee_id": "E220",
+   "label": "syedazfatima11",
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Utica",
+   "store_codes": [
+    "Utica"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-tatiana.vergara-94",
+   "employee_id": "E153",
+   "label": "tatiana.vergara",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Grand",
+   "store_codes": [
+    "Grand"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-terry.pitre-95",
+   "employee_id": "E201",
+   "label": "terry.pitre",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Cicero",
+   "store_codes": [
+    "Cicero"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-vanessa.jacobo-96",
+   "employee_id": "E204",
+   "label": "vanessa.jacobo",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Floating",
+   "store_codes": [
+    "Floating"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-yesica.perez-97",
+   "employee_id": "E203",
+   "label": "yesica.perez",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Cermark",
+   "store_codes": [
+    "Cermark"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-yuvia.esparza-98",
+   "employee_id": "E202",
+   "label": "yuvia.esparza",
+   "market": null,
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "Grand",
+   "store_codes": [
+    "Grand"
+   ]
+  },
+  {
+   "auth_id": "uid-854f6d7b-zuleicka.lopez-99",
+   "employee_id": "E154",
+   "label": "zuleicka.lopez",
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "role": "sales_rep",
+   "store_code": "3352 26th",
+   "store_codes": [
+    "3352 26th"
+   ]
+  }
+ ],
+ "employees": [
+  {
+   "employee_id": "Anjali",
+   "home_store": "B-1800",
+   "is_active": true,
+   "name": "Anjali Sharma",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E001",
+   "home_store": "B-151",
+   "is_active": true,
+   "name": "Rohit",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E002",
+   "home_store": "B-509",
+   "is_active": true,
+   "name": "Daniel",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E003",
+   "home_store": "B-418",
+   "is_active": true,
+   "name": "David Caba",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E005",
+   "home_store": "B-11634",
+   "is_active": true,
+   "name": "Waleed",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E006",
+   "home_store": "B-3PL",
+   "is_active": true,
+   "name": "Ali",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E007",
+   "home_store": "B-2612",
+   "is_active": true,
+   "name": "Ismail",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E008",
+   "home_store": "B-103",
+   "is_active": true,
+   "name": "Asad Umar",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E009",
+   "home_store": "B-117",
+   "is_active": true,
+   "name": "Syed 117",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E010",
+   "home_store": "B-11634",
+   "is_active": true,
+   "name": "Kashif",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E011",
+   "home_store": "B-11634",
+   "is_active": true,
+   "name": "Abdul K",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E012",
+   "home_store": "B-509",
+   "is_active": true,
+   "name": "Rana",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E013",
+   "home_store": "B-6011",
+   "is_active": true,
+   "name": "Yessica",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E014",
+   "home_store": "B-5135",
+   "is_active": true,
+   "name": "Edgar",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E015",
+   "home_store": "B-3565",
+   "is_active": false,
+   "name": "Paola",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E017",
+   "home_store": "B-559",
+   "is_active": true,
+   "name": "Radhika",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E018",
+   "home_store": "B-559",
+   "is_active": true,
+   "name": "Sunethri",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E020",
+   "home_store": "B-196",
+   "is_active": true,
+   "name": "Abdullah",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E021",
+   "home_store": "B-1750",
+   "is_active": true,
+   "name": "Angie Ramos",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E022",
+   "home_store": "B-5135",
+   "is_active": true,
+   "name": "Gerardo",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E024",
+   "home_store": "B-652",
+   "is_active": true,
+   "name": "Daniel Udhai",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E025",
+   "home_store": "B-2509",
+   "is_active": true,
+   "name": "Harsh Shah",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E026",
+   "home_store": "B-418",
+   "is_active": true,
+   "name": "Amir Khan",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E027",
+   "home_store": "B-2612",
+   "is_active": true,
+   "name": "Jazib Bajwa",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E029",
+   "home_store": "B-2612",
+   "is_active": true,
+   "name": "Mohammed Sami",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E037",
+   "home_store": "B-2612",
+   "is_active": true,
+   "name": "Tamar",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E039",
+   "home_store": "B-103",
+   "is_active": true,
+   "name": "SS",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E043",
+   "home_store": "B-1750",
+   "is_active": true,
+   "name": "Simarjyot Singh",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E045",
+   "home_store": "B-2509",
+   "is_active": true,
+   "name": "Melanie Suarez",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E126",
+   "home_store": "B-4712",
+   "is_active": true,
+   "name": "Sumay Tasnim",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E127",
+   "home_store": null,
+   "is_active": true,
+   "name": "Dixit Chauhan",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E128",
+   "home_store": "B-5135",
+   "is_active": true,
+   "name": "Gaurav Joshi",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E130",
+   "home_store": null,
+   "is_active": true,
+   "name": "Rajiv",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E133",
+   "home_store": "",
+   "is_active": true,
+   "name": "Sanjot",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E136",
+   "home_store": null,
+   "is_active": true,
+   "name": "rajiv",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E170",
+   "home_store": "B-1800",
+   "is_active": true,
+   "name": "Leslie Martinez",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E221",
+   "home_store": null,
+   "is_active": true,
+   "name": "yaseer",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E224",
+   "home_store": "B-151",
+   "is_active": true,
+   "name": "Suanny Hidalgo",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E227",
+   "home_store": "B-5135",
+   "is_active": true,
+   "name": "Anthony Castellanos",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E232",
+   "home_store": "B-1800",
+   "is_active": true,
+   "name": "Angelica Escobar",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E233",
+   "home_store": null,
+   "is_active": true,
+   "name": "test DM",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": null,
+   "home_store": "B-509",
+   "is_active": false,
+   "name": "Daniel",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": null,
+   "home_store": null,
+   "is_active": true,
+   "name": "Dixit Chauhan",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "employee_id": "E141",
+   "home_store": "Cermark",
+   "is_active": true,
+   "name": "Nancy Espinoza",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E142",
+   "home_store": "Cermark",
+   "is_active": true,
+   "name": "Nallely Espinoza",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E151",
+   "home_store": "Grand",
+   "is_active": true,
+   "name": "Eduardo Brito",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E153",
+   "home_store": "Grand",
+   "is_active": true,
+   "name": "Tatiana Vergara",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E154",
+   "home_store": "3352 26th",
+   "is_active": true,
+   "name": "Zuliecka Lopez",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E165",
+   "home_store": "Irving Park",
+   "is_active": true,
+   "name": "Natalie Chico",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E168",
+   "home_store": null,
+   "is_active": true,
+   "name": "Rajiv",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E171",
+   "home_store": null,
+   "is_active": true,
+   "name": "Rajiv",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E172",
+   "home_store": "7812",
+   "is_active": true,
+   "name": "GJ",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E173",
+   "home_store": null,
+   "is_active": true,
+   "name": "Dixit Chauhan",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E174",
+   "home_store": null,
+   "is_active": true,
+   "name": "test",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E176",
+   "home_store": "Irving Park",
+   "is_active": true,
+   "name": "Alejandro Galarza",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E177",
+   "home_store": "3738 26th Street",
+   "is_active": true,
+   "name": "Alondra Navarro",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E178",
+   "home_store": "lawrence",
+   "is_active": true,
+   "name": "Angelica Chacon",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E179",
+   "home_store": "Chicago heights",
+   "is_active": true,
+   "name": "Antonio Chavez",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E180",
+   "home_store": "Diversey",
+   "is_active": true,
+   "name": "Brenda Romero",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E181",
+   "home_store": "Narragansett",
+   "is_active": true,
+   "name": "Brendaliz Aviles",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E182",
+   "home_store": "Diversey",
+   "is_active": true,
+   "name": "Carolina Espinoza",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E183",
+   "home_store": "Belmont",
+   "is_active": true,
+   "name": "Christopher Romero",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E184",
+   "home_store": "Cermark",
+   "is_active": true,
+   "name": "Daisy Brito",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E186",
+   "home_store": "Diversey",
+   "is_active": true,
+   "name": "Diana Antunez",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E187",
+   "home_store": "Belmont",
+   "is_active": true,
+   "name": "Emily Olvera",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E188",
+   "home_store": "lawrence",
+   "is_active": true,
+   "name": "Genevieve Montijo",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E189",
+   "home_store": "3352 26th",
+   "is_active": true,
+   "name": "Janet Garibay",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E190",
+   "home_store": "Belmont",
+   "is_active": true,
+   "name": "Jocelyn Hernandez",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E191",
+   "home_store": "3735 26th",
+   "is_active": true,
+   "name": "Liset Jacobo",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E192",
+   "home_store": "3735 26th",
+   "is_active": true,
+   "name": "Luis Martinez",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E193",
+   "home_store": "kedzie",
+   "is_active": true,
+   "name": "Mea Collins",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E194",
+   "home_store": "kedzie",
+   "is_active": true,
+   "name": "Melennie Perez",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E197",
+   "home_store": "Chicago heights",
+   "is_active": true,
+   "name": "Nathalie Mendoza",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E198",
+   "home_store": "3352 26th",
+   "is_active": true,
+   "name": "Nicolas Navarrete",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E199",
+   "home_store": "Armitage",
+   "is_active": true,
+   "name": "Silvia Nava",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E201",
+   "home_store": "Cicero",
+   "is_active": true,
+   "name": "Terry Pitre",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E202",
+   "home_store": "Grand",
+   "is_active": true,
+   "name": "Yuvia Esparza",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E203",
+   "home_store": "Cermark",
+   "is_active": true,
+   "name": "Yesica Perez",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E204",
+   "home_store": "Floating",
+   "is_active": true,
+   "name": "Vanessa Jacobo",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E206",
+   "home_store": "Narragansett",
+   "is_active": true,
+   "name": "Natasha Nicole Cabrera",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E207",
+   "home_store": "Grand",
+   "is_active": true,
+   "name": "Ruby Ortiz",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E211",
+   "home_store": null,
+   "is_active": true,
+   "name": "Maria Gutierrez",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E212",
+   "home_store": "Nostrand",
+   "is_active": true,
+   "name": "arif",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E213",
+   "home_store": "Nostrand",
+   "is_active": true,
+   "name": "Marukh",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E214",
+   "home_store": "7812",
+   "is_active": true,
+   "name": "Naima",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E215",
+   "home_store": "Ave U",
+   "is_active": true,
+   "name": "Nivas",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E216",
+   "home_store": "QV",
+   "is_active": true,
+   "name": "Rashid",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E217",
+   "home_store": "Ave U",
+   "is_active": true,
+   "name": "Shaknoza",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E218",
+   "home_store": "Nostrand",
+   "is_active": true,
+   "name": "Syed",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E219",
+   "home_store": "957",
+   "is_active": true,
+   "name": "Yasir",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E220",
+   "home_store": "Utica",
+   "is_active": true,
+   "name": "Zainab",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E223",
+   "home_store": null,
+   "is_active": true,
+   "name": "Jose Utrera",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E225",
+   "home_store": null,
+   "is_active": true,
+   "name": "ss",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E226",
+   "home_store": null,
+   "is_active": true,
+   "name": "lalit lhanna",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E228",
+   "home_store": "7812 bergenline ave",
+   "is_active": false,
+   "name": "PAOLA RAMOS",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E229",
+   "home_store": "Nostrand",
+   "is_active": true,
+   "name": "Satya sai",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E230",
+   "home_store": "Diversey",
+   "is_active": true,
+   "name": "Laura Rico",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E234",
+   "home_store": "7812",
+   "is_active": true,
+   "name": "Oneyda",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E235",
+   "home_store": "Lefferts",
+   "is_active": true,
+   "name": "Salman",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  },
+  {
+   "employee_id": "E236",
+   "home_store": "Ave U",
+   "is_active": true,
+   "name": "Naima Akter",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c"
+  }
+ ],
+ "org_spans": [
+  {
+   "codes": [
+    "B-103",
+    "B-1115",
+    "B-11634",
+    "B-117",
+    "B-151",
+    "B-1750",
+    "B-1800",
+    "B-196",
+    "B-2509",
+    "B-2612",
+    "B-3565",
+    "B-3PL",
+    "B-418",
+    "B-4712",
+    "B-509",
+    "B-5135",
+    "B-559",
+    "B-6011",
+    "B-652"
+   ],
+   "employee_id": "E007",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "codes": [
+    "B-103",
+    "B-1115",
+    "B-11634",
+    "B-117",
+    "B-151",
+    "B-1750",
+    "B-1800",
+    "B-196",
+    "B-2509",
+    "B-2612",
+    "B-3565",
+    "B-3PL",
+    "B-418",
+    "B-4712",
+    "B-509",
+    "B-5135",
+    "B-559",
+    "B-6011",
+    "B-652"
+   ],
+   "employee_id": "E012",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "codes": [
+    "B-103",
+    "B-1115",
+    "B-11634",
+    "B-117",
+    "B-151",
+    "B-1750",
+    "B-1800",
+    "B-196",
+    "B-2509",
+    "B-2612",
+    "B-3565",
+    "B-3PL",
+    "B-418",
+    "B-4712",
+    "B-509",
+    "B-5135",
+    "B-559",
+    "B-6011",
+    "B-652"
+   ],
+   "employee_id": "E022",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "codes": [
+    "B-103",
+    "B-1115",
+    "B-11634",
+    "B-117",
+    "B-151",
+    "B-1750",
+    "B-1800",
+    "B-196",
+    "B-2509",
+    "B-2612",
+    "B-3565",
+    "B-3PL",
+    "B-418",
+    "B-4712",
+    "B-509",
+    "B-5135",
+    "B-559",
+    "B-6011",
+    "B-652",
+    "T-531",
+    "T-7812",
+    "T-902",
+    "T-957",
+    "T21880",
+    "T3560"
+   ],
+   "employee_id": "E039",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  },
+  {
+   "codes": [
+    "B-103",
+    "B-1115",
+    "B-11634",
+    "B-117",
+    "B-151",
+    "B-1750",
+    "B-1800",
+    "B-196",
+    "B-2509",
+    "B-2612",
+    "B-3565",
+    "B-3PL",
+    "B-418",
+    "B-4712",
+    "B-509",
+    "B-5135",
+    "B-559",
+    "B-6011",
+    "B-652",
+    "T-531",
+    "T-7812",
+    "T-902",
+    "T-957",
+    "T21880",
+    "T3560"
+   ],
+   "employee_id": "E128",
+   "org_id": "00000000-0000-0000-0000-000000000001"
+  }
+ ],
+ "roles": [
+  {
+   "name": "admin",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/commcalc/targets",
+    "modules": {
+     "accounts": true,
+     "admin": true,
+     "asset": true,
+     "commissions": true,
+     "helpdesk": true,
+     "hr": true,
+     "notify": true,
+     "storeops": true,
+     "support": true,
+     "targets": true,
+     "vip": true
+    },
+    "pages": {
+     "/closing": true,
+     "/closing/imports": true,
+     "/closing/pickup": true,
+     "/closing/recon": true,
+     "/closing/submit": true,
+     "/closing/verify": true,
+     "/helpdesk": true,
+     "/helpdesk/dashboard": true,
+     "/helpdesk/new": true,
+     "/helpdesk/settings": true,
+     "/hr": true
+    },
+    "scope": "all"
+   }
+  },
+  {
+   "name": "director",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/commcalc",
+    "modules": {
+     "admin": false,
+     "asset": true,
+     "commissions": true,
+     "notify": true,
+     "storeops": true,
+     "targets": true,
+     "vip": true
+    },
+    "scope": "all"
+   }
+  },
+  {
+   "name": "district_manager",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/commcalc/targets",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "commissions": false,
+     "notify": false,
+     "storeops": true,
+     "targets": true,
+     "vip": false
+    },
+    "pages": {
+     "/closing": true,
+     "/closing/pickup": true,
+     "/closing/recon": true,
+     "/closing/submit": true,
+     "/closing/tender-recon-3way": true,
+     "/closing/verify": true,
+     "/commcalc/accessory-flags": true,
+     "/commcalc/asset/aging": true,
+     "/commcalc/coaching": true,
+     "/commcalc/exec/mtd": false,
+     "/commcalc/kpi": true,
+     "/commcalc/productivity": true,
+     "/commcalc/sales-report": true,
+     "/commcalc/targets/rep-map": false,
+     "/commcalc/targets/settings": false,
+     "/commcalc/whatif": true,
+     "/helpdesk": true,
+     "/helpdesk/dashboard": true,
+     "/helpdesk/new": true,
+     "/helpdesk/settings": true,
+     "/storeops/admin": false,
+     "/storeops/employees": false
+    },
+    "scope": "market"
+   }
+  },
+  {
+   "name": "executive",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/commcalc",
+    "modules": {
+     "accounts": true,
+     "admin": true,
+     "asset": true,
+     "commissions": true,
+     "helpdesk": true,
+     "notify": true,
+     "storeops": true,
+     "targets": true,
+     "vip": true
+    },
+    "scope": "all"
+   }
+  },
+  {
+   "name": "market_manager",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "employee_widgets": {
+     "commission": true,
+     "commission_tracking": true,
+     "hours": true,
+     "report_card": true
+    },
+    "home": "/commcalc/targets",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "closing": true,
+     "commissions": false,
+     "helpdesk": true,
+     "notify": false,
+     "storeops": true,
+     "targets": true,
+     "vip": false
+    },
+    "pages": {
+     "/closing": true,
+     "/closing/pickup": true,
+     "/closing/recon": true,
+     "/closing/submit": true,
+     "/closing/tender-recon-3way": true,
+     "/closing/verify": true,
+     "/commcalc/accessory-flags": true,
+     "/commcalc/asset/aging": true,
+     "/commcalc/exec/mtd": true,
+     "/commcalc/flags": true,
+     "/commcalc/kpi": true,
+     "/commcalc/productivity": true,
+     "/commcalc/sales-analyzer": true,
+     "/commcalc/sales-report": true,
+     "/commcalc/targets/rep-map": false,
+     "/helpdesk/settings": false,
+     "/notify": false,
+     "/notify/report-recipients": false,
+     "/storeops/admin": false
+    },
+    "reports": {
+     "accounts": false,
+     "asset": false,
+     "closing": true,
+     "commissions": false,
+     "storeops": false,
+     "vip": false
+    },
+    "scope": "market"
+   }
+  },
+  {
+   "name": "regional_manager",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/commcalc/targets",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "commissions": false,
+     "notify": true,
+     "storeops": true,
+     "targets": true,
+     "vip": false
+    },
+    "pages": {
+     "/closing": true,
+     "/closing/pickup": true,
+     "/closing/recon": true,
+     "/closing/submit": true,
+     "/closing/tender-recon-3way": true,
+     "/closing/verify": true,
+     "/commcalc/asset/aging": true,
+     "/helpdesk": true,
+     "/helpdesk/dashboard": true,
+     "/helpdesk/new": true,
+     "/helpdesk/settings": true,
+     "/storeops/admin": false
+    },
+    "scope": "market"
+   }
+  },
+  {
+   "name": "sales_consultant",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/commcalc/targets/my",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "commissions": false,
+     "notify": false,
+     "storeops": false,
+     "targets": true,
+     "vip": false
+    },
+    "scope": "self"
+   }
+  },
+  {
+   "name": "sales_rep",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/commcalc/targets/my",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "commissions": false,
+     "notify": false,
+     "storeops": true,
+     "targets": true,
+     "vip": false
+    },
+    "pages": {
+     "/closing": false,
+     "/closing/submit": true,
+     "/commcalc/asset/aging": true,
+     "/commcalc/carrier-mapping": false,
+     "/commcalc/column-mapping": false,
+     "/commcalc/connectors": false,
+     "/commcalc/expenses": false,
+     "/commcalc/ftp-imports": false,
+     "/commcalc/implementation": false,
+     "/commcalc/item-mapping": false,
+     "/commcalc/mapping": false,
+     "/commcalc/onboarding": false,
+     "/commcalc/rep-aliases": false,
+     "/commcalc/settings": false,
+     "/commcalc/store-match": false,
+     "/commcalc/targets/rep-map": false,
+     "/commcalc/targets/settings": false,
+     "/commcalc/upload": false,
+     "/commcalc/upload/wizard": false,
+     "/helpdesk": true,
+     "/helpdesk/dashboard": true,
+     "/helpdesk/new": true,
+     "/storeops/admin": false
+    },
+    "scope": "self"
+   }
+  },
+  {
+   "name": "store_manager",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/commcalc/targets",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "commissions": true,
+     "notify": false,
+     "storeops": true,
+     "targets": true,
+     "vip": false
+    },
+    "pages": {
+     "/commcalc/carrier-mapping": false,
+     "/commcalc/column-mapping": false,
+     "/commcalc/connectors": false,
+     "/commcalc/expenses": false,
+     "/commcalc/ftp-imports": false,
+     "/commcalc/implementation": false,
+     "/commcalc/item-mapping": false,
+     "/commcalc/mapping": false,
+     "/commcalc/onboarding": false,
+     "/commcalc/rep-aliases": false,
+     "/commcalc/settings": false,
+     "/commcalc/store-match": false,
+     "/commcalc/targets/rep-map": false,
+     "/commcalc/targets/settings": false,
+     "/commcalc/upload": false,
+     "/commcalc/upload/wizard": false,
+     "/helpdesk": true,
+     "/helpdesk/dashboard": true,
+     "/helpdesk/new": true,
+     "/helpdesk/settings": false,
+     "/storeops/admin": false
+    },
+    "scope": "store"
+   }
+  },
+  {
+   "name": "support_agent",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "permissions": {
+    "home": "/admin/support",
+    "modules": {
+     "helpdesk": true,
+     "notify": true,
+     "support": true
+    },
+    "scope": "all"
+   }
+  },
+  {
+   "name": "accountant",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "permissions": {
+    "data": {
+     "device_commission": false
+    },
+    "employee_widgets": {
+     "chargebacks": false,
+     "commission": false,
+     "commission_tracking": false,
+     "device_history": false,
+     "flags": false,
+     "report_card": false,
+     "schedule": false,
+     "targets": false,
+     "timeoff": false
+    },
+    "modules": {},
+    "pages": {
+     "/accounts": true,
+     "/accounts/balance-sheet": true,
+     "/accounts/companies": true,
+     "/accounts/inventory": true,
+     "/accounts/journal": true,
+     "/accounts/pl": true,
+     "/accounts/recon": true,
+     "/accounts/residual-per-sub": false,
+     "/accounts/trends": true,
+     "/commcalc/expenses": true,
+     "/commcalc/gp": true,
+     "/commcalc/tax-collected": true,
+     "/hr": true,
+     "/hr/compliance": true,
+     "/hr/onboarding": true,
+     "/storeops/payroll": true,
+     "/storeops/payroll-tax": true
+    },
+    "reports": {
+     "accounts": true,
+     "asset": true,
+     "closing": false,
+     "commissions": true,
+     "storeops": true,
+     "vip": true
+    },
+    "scope": "all",
+    "settings": {
+     "carriers": false,
+     "closing": false,
+     "commission_plans": false,
+     "commission_rates": false,
+     "expenses": true,
+     "failures": false,
+     "kpi": false,
+     "labels": false,
+     "menu": false,
+     "pay_period": false,
+     "targets": false
+    }
+   }
+  },
+  {
+   "name": "admin",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "permissions": {
+    "home": "/commcalc",
+    "modules": {
+     "accounts": true,
+     "admin": true,
+     "asset": true,
+     "commissions": true,
+     "helpdesk": true,
+     "hr": true,
+     "notify": true,
+     "storeops": true,
+     "support": true,
+     "targets": true,
+     "vip": true
+    },
+    "pages": {
+     "/hr/people": true,
+     "/reports": true
+    },
+    "scope": "all"
+   }
+  },
+  {
+   "name": "company",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "permissions": {
+    "home": "/commcalc",
+    "modules": {
+     "admin": false,
+     "asset": true,
+     "commissions": true,
+     "hr": true,
+     "notify": true,
+     "storeops": true,
+     "targets": true,
+     "vip": true
+    },
+    "reports": {
+     "accounts": true,
+     "asset": true,
+     "closing": true,
+     "commissions": true,
+     "storeops": true,
+     "vip": true
+    },
+    "scope": "all"
+   }
+  },
+  {
+   "name": "market",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "permissions": {
+    "home": "/commcalc",
+    "modules": {
+     "admin": false,
+     "asset": true,
+     "commissions": true,
+     "hr": true,
+     "notify": true,
+     "storeops": true,
+     "targets": true,
+     "vip": true
+    },
+    "reports": {
+     "accounts": true,
+     "asset": true,
+     "closing": true,
+     "commissions": true,
+     "storeops": true,
+     "vip": true
+    },
+    "scope": "all"
+   }
+  },
+  {
+   "name": "market_manager",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "permissions": {
+    "data": {
+     "carrier_residual": false
+    },
+    "home": "/commcalc/targets",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "commissions": true,
+     "helpdesk": true,
+     "notify": true,
+     "storeops": true,
+     "support": true,
+     "targets": true,
+     "vip": false
+    },
+    "pages": {
+     "/closing": true,
+     "/closing/imports": true,
+     "/closing/pickup": true,
+     "/closing/recon": true,
+     "/closing/submit": true,
+     "/closing/tender-recon": true,
+     "/closing/verify": true,
+     "/commcalc/accessory-flags": true,
+     "/commcalc/carrier-comm-file": false,
+     "/commcalc/carrier-mapping": false,
+     "/commcalc/chargebacks": true,
+     "/commcalc/coaching": true,
+     "/commcalc/column-mapping": false,
+     "/commcalc/commission-category-map": false,
+     "/commcalc/commission-import": false,
+     "/commcalc/commission-ledger": false,
+     "/commcalc/commission-plans": false,
+     "/commcalc/connectors": false,
+     "/commcalc/dlar/sweep": false,
+     "/commcalc/email-imports": false,
+     "/commcalc/epay/sweep": false,
+     "/commcalc/expenses": false,
+     "/commcalc/ftp-imports": false,
+     "/commcalc/gp-category-map": false,
+     "/commcalc/implementation": false,
+     "/commcalc/item-mapping": false,
+     "/commcalc/kpi": true,
+     "/commcalc/mapping": false,
+     "/commcalc/onboarding": false,
+     "/commcalc/payout-schedules": false,
+     "/commcalc/plan-installments": false,
+     "/commcalc/recovery": false,
+     "/commcalc/rep-aliases": true,
+     "/commcalc/sales-analyzer": true,
+     "/commcalc/settings": false,
+     "/commcalc/store-match": true,
+     "/commcalc/target-fields": false,
+     "/commcalc/upload": false,
+     "/commcalc/upload/wizard": false,
+     "/hr/people": false,
+     "/storeops": true,
+     "/storeops/employees": true,
+     "/storeops/reports": true,
+     "/storeops/schedule": true,
+     "/storeops/swaps": true,
+     "/storeops/team": true,
+     "/storeops/timeclock": true,
+     "/storeops/timeoff": true,
+     "/storeops/visits": true,
+     "/storeops/visits/settings": true
+    },
+    "reports": {
+     "accounts": false,
+     "asset": false,
+     "closing": true,
+     "commissions": false,
+     "storeops": false,
+     "vip": false
+    },
+    "scope": "all",
+    "settings": {
+     "agency": false,
+     "carriers": true,
+     "commission_plans": false,
+     "commission_rates": true,
+     "expenses": false,
+     "failures": false,
+     "import_health": false,
+     "labels": false,
+     "menu": false,
+     "notify_policy": false
+    }
+   }
+  },
+  {
+   "name": "sales_rep",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "permissions": {
+    "home": "/commcalc/targets/my",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "commissions": false,
+     "helpdesk": true,
+     "notify": false,
+     "storeops": false,
+     "support": true,
+     "targets": true,
+     "vip": false
+    },
+    "pages": {
+     "/commcalc/targets/settings": false,
+     "/commcalc/whatif": true
+    },
+    "scope": "self"
+   }
+  },
+  {
+   "name": "store_manager",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "permissions": {
+    "home": "/commcalc/targets",
+    "modules": {
+     "admin": false,
+     "asset": false,
+     "commissions": false,
+     "helpdesk": true,
+     "notify": false,
+     "storeops": true,
+     "targets": true,
+     "vip": false
+    },
+    "pages": {
+     "/closing": true,
+     "/closing/submit": true,
+     "/closing/verify": false,
+     "/commcalc/chargebacks": false,
+     "/commcalc/coaching": true,
+     "/commcalc/flags": false,
+     "/commcalc/kpi": true,
+     "/commcalc/sales-analyzer": true,
+     "/commcalc/targets/settings": false,
+     "/notify": true,
+     "/notify/report-recipients": true,
+     "/storeops/employees": true,
+     "/storeops/visits": false,
+     "/storeops/visits/settings": false
+    },
+    "scope": "store"
+   }
+  }
+ ],
+ "store_aliases": [
+  {
+   "alias": "1800 Great Neck rd",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-1800"
+  },
+  {
+   "alias": "2509 Bergenline Ave Ste A",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-2509"
+  },
+  {
+   "alias": "2778 Ephraim Ave",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-1598"
+  },
+  {
+   "alias": "2778 Mount Ephraim Ave",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-1598"
+  },
+  {
+   "alias": "3 Palisade Ave Yonkers",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-3PL"
+  },
+  {
+   "alias": "586 Main Ave",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "<2022>"
+  },
+  {
+   "alias": "18226 Kedzie Ave",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "kedzie"
+  },
+  {
+   "alias": "218-80 Hempstead Avenue",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "QV"
+  },
+  {
+   "alias": "2317 S Cicero Ave STE A",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Cicero"
+  },
+  {
+   "alias": "2414 W Cermak Rd",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Cermark"
+  },
+  {
+   "alias": "2640 Narragansett",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Narragansett"
+  },
+  {
+   "alias": "3248 W Lawrence Ave",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "lawrence"
+  },
+  {
+   "alias": "3352 W 26th St",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "3352 26th"
+  },
+  {
+   "alias": "3560 Nostrand Avenue",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Nostrand"
+  },
+  {
+   "alias": "3735 W 26th St",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "3735 26th"
+  },
+  {
+   "alias": "3966 W Grand Ave",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Grand"
+  },
+  {
+   "alias": "4640-A W Diversey Ave",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Diversey"
+  },
+  {
+   "alias": "4801 W Armitage Ave",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Armitage"
+  },
+  {
+   "alias": "531 Utica Ave",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Utica"
+  },
+  {
+   "alias": "5601 W Belmont Ave",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Belmont"
+  },
+  {
+   "alias": "639 W Lincoln Hwy",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Chicago heights"
+  },
+  {
+   "alias": "6500 W Irving Park Rd",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Irving Park"
+  },
+  {
+   "alias": "7812 Bergenline Ave",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "7812"
+  },
+  {
+   "alias": "902 Avenue U",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Ave U"
+  },
+  {
+   "alias": "957 Pennsylvania Avenue",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "957"
+  }
+ ],
+ "store_mapping": [
+  {
+   "market": "<li>",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "228 N Wood Ave, Syosset, NY 11791",
+   "store_code": "<2022>"
+  },
+  {
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "1800 Great Neck Rd",
+   "store_code": "1800GreatNeckRd"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "1 S 60th street",
+   "store_code": "B-1"
+  },
+  {
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "103 Fulton Ave",
+   "store_code": "B-103"
+  },
+  {
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "11636 Springfield Blvd",
+   "store_code": "B-11634"
+  },
+  {
+   "market": "NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "117 E Burnside Ave",
+   "store_code": "B-117"
+  },
+  {
+   "market": "NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "151 E 170th St",
+   "store_code": "B-151"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "1598 Mount Ephraim Ave",
+   "store_code": "B-1598"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "1710 W 4th St",
+   "store_code": "B-1710"
+  },
+  {
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "1750 5th Ave",
+   "store_code": "B-1750"
+  },
+  {
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "B-1800",
+   "store_code": "B-1800"
+  },
+  {
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "196 Martin Luther King Jr Dr",
+   "store_code": "B-196"
+  },
+  {
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "2509 Bergenline Ave",
+   "store_code": "B-2509"
+  },
+  {
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "2612 Pitkin Ave",
+   "store_code": "B-2612"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "2701 Germantown ave",
+   "store_code": "B-2701"
+  },
+  {
+   "market": "NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "3565 Broadway",
+   "store_code": "B-3565"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "3605 Germantown Ave",
+   "store_code": "B-3605"
+  },
+  {
+   "market": "NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "3 Palisade Ave",
+   "store_code": "B-3PL"
+  },
+  {
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "418 Uniondale Ave",
+   "store_code": "B-418"
+  },
+  {
+   "market": "NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "4712 White Plains Rd",
+   "store_code": "B-4712"
+  },
+  {
+   "market": "NYC",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "509 Nostrand Ave",
+   "store_code": "B-509"
+  },
+  {
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "5135 Bergenline",
+   "store_code": "B-5135"
+  },
+  {
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "559 Broadway",
+   "store_code": "B-559"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "5619 N. Broad St.",
+   "store_code": "B-5619"
+  },
+  {
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "6011 Bergenline Ave",
+   "store_code": "B-6011"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "6149 Woodland Ave",
+   "store_code": "B-6149"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "6507 Castor Avenue",
+   "store_code": "B-6507"
+  },
+  {
+   "market": "NJ",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "652 Communipaw Avenue",
+   "store_code": "B-652"
+  },
+  {
+   "market": "PA",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "723 N Market St",
+   "store_code": "B-723"
+  },
+  {
+   "market": "",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "Cellular Services",
+   "store_code": "Cellular Services"
+  },
+  {
+   "market": "LI",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_address": "Cellular Services Dot net LLC (228 N Wood Ave, Syosset, New York, 11791)",
+   "store_code": null
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3352 W 26th St",
+   "store_code": "3352 26th"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3735 W 26th St",
+   "store_code": "3735 26th"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "7812 Bergenline Ave",
+   "store_code": "7812"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "957 Pennsylvania Avenue",
+   "store_code": "957"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "4801 W Armitage Ave",
+   "store_code": "Armitage"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "902 Avenue U",
+   "store_code": "Ave U"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "5601 W Belmont Ave",
+   "store_code": "Belmont"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "2414 W Cermak Rd",
+   "store_code": "Cermark"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "639 W Lincoln Hwy",
+   "store_code": "Chicago heights"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "2317 S Cicero Ave STE A",
+   "store_code": "Cicero"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "4640-A W Diversey Ave",
+   "store_code": "Diversey"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3966 W Grand Ave",
+   "store_code": "Grand"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "6500 W Irving Park Rd",
+   "store_code": "Irving Park"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "18226 Kedzie Ave",
+   "store_code": "kedzie"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3248 W Lawrence Ave",
+   "store_code": "lawrence"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "104-08 Lefferts Blvd",
+   "store_code": "Lefferts"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3352 W 26th St",
+   "store_code": "LUX-CHI-26TH-3352"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3735 W 26th St",
+   "store_code": "LUX-CHI-26TH-3735"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "4801 W Armitage Ave",
+   "store_code": "LUX-CHI-ARMITAGE"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "5601 W Belmont Ave",
+   "store_code": "LUX-CHI-BELMONT"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "2414 W Cermak Rd",
+   "store_code": "LUX-CHI-CERMAK"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "2317 S Cicero Ave STE A",
+   "store_code": "LUX-CHI-CICERO"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "4640-A W Diversey Ave",
+   "store_code": "LUX-CHI-DIVERSEY"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3966 W Grand Ave",
+   "store_code": "LUX-CHI-GRAND"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "6500 W Irving Park Rd",
+   "store_code": "LUX-CHI-IRVING"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "18226 Kedzie Ave",
+   "store_code": "LUX-CHI-KEDZIE"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3248 W Lawrence Ave",
+   "store_code": "LUX-CHI-LAWRENCE"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "639 W Lincoln Hwy",
+   "store_code": "LUX-CHI-LINCOLN"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "2640 Narragansett",
+   "store_code": "LUX-CHI-NARRAGAN"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "902 Avenue U",
+   "store_code": "LUX-NY-AVENUEU"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "7812 Bergenline Ave",
+   "store_code": "LUX-NY-BERGENLINE"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "218-80 Hempstead Avenue",
+   "store_code": "LUX-NY-HEMPSTEAD"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3560 Nostrand Avenue",
+   "store_code": "LUX-NY-NOSTRAND"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "957 Pennsylvania Avenue",
+   "store_code": "LUX-NY-PENN"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "531 Utica Ave",
+   "store_code": "LUX-NY-UTICA"
+  },
+  {
+   "market": "Chicago",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "2640 Narragansett",
+   "store_code": "Narragansett"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "3560 Nostrand Avenue",
+   "store_code": "Nostrand"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "218-80 Hempstead Avenue",
+   "store_code": "QV"
+  },
+  {
+   "market": "NY",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_address": "531 Utica Ave",
+   "store_code": "Utica"
+  }
+ ],
+ "stores": [
+  {
+   "address": null,
+   "is_active": true,
+   "market": "LI",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-103"
+  },
+  {
+   "address": "1115 Liberty Ave",
+   "is_active": true,
+   "market": "LI",
+   "monthly_target": "10000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-1115"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "LI",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-11634"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NYC",
+   "monthly_target": "14000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-117"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NYC",
+   "monthly_target": "10000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-151"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "LI",
+   "monthly_target": "4000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-1750"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "LI",
+   "monthly_target": "8000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-1800"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NJ",
+   "monthly_target": "8000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-196"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NJ",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-2509"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "LI",
+   "monthly_target": "10000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-2612"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NYC",
+   "monthly_target": "8000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-3565"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NYC",
+   "monthly_target": "17000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-3PL"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "LI",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-418"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NYC",
+   "monthly_target": "9000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-4712"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NYC",
+   "monthly_target": "12000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-509"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NJ",
+   "monthly_target": "6500",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-5135"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NJ",
+   "monthly_target": "8000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-559"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NJ",
+   "monthly_target": "6500",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-6011"
+  },
+  {
+   "address": null,
+   "is_active": true,
+   "market": "NJ",
+   "monthly_target": "8000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-652"
+  },
+  {
+   "address": "",
+   "is_active": true,
+   "market": "",
+   "monthly_target": "0",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "Cellular Services"
+  },
+  {
+   "address": null,
+   "is_active": false,
+   "market": "TT",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T-531"
+  },
+  {
+   "address": null,
+   "is_active": false,
+   "market": "TT",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T-7812"
+  },
+  {
+   "address": null,
+   "is_active": false,
+   "market": "TT",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T-902"
+  },
+  {
+   "address": null,
+   "is_active": false,
+   "market": "TT",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T-957"
+  },
+  {
+   "address": null,
+   "is_active": false,
+   "market": "TT",
+   "monthly_target": "6000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T21880"
+  },
+  {
+   "address": null,
+   "is_active": false,
+   "market": "TT",
+   "monthly_target": "5000",
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T3560"
+  },
+  {
+   "address": "3352 26th Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "7000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "3352 26th"
+  },
+  {
+   "address": "3735 26th Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "7000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "3735 26th"
+  },
+  {
+   "address": "7812 Bergenline",
+   "is_active": true,
+   "market": "NY",
+   "monthly_target": "6000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "7812"
+  },
+  {
+   "address": "957 Pennsylvania Ave",
+   "is_active": true,
+   "market": "NY",
+   "monthly_target": "10000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "957"
+  },
+  {
+   "address": "4801 Armitage Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "5000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Armitage"
+  },
+  {
+   "address": "902 Ave U",
+   "is_active": true,
+   "market": "NY",
+   "monthly_target": "6000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Ave U"
+  },
+  {
+   "address": "5601 Belmont Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "7000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Belmont"
+  },
+  {
+   "address": "2414 Cermak Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "5000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Cermark"
+  },
+  {
+   "address": "639 Lincoln Chicago Heights",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "5000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Chicago heights"
+  },
+  {
+   "address": "2317 Cicero Cicero",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "5000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Cicero"
+  },
+  {
+   "address": "4640 Diversey Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "7000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Diversey"
+  },
+  {
+   "address": "3966 Grand Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "7000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Grand"
+  },
+  {
+   "address": "6500 Irving Park Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "5000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Irving Park"
+  },
+  {
+   "address": "18226 Kedzie Hazel Crest",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "5000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "kedzie"
+  },
+  {
+   "address": "3248 Lawrence Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "5000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "lawrence"
+  },
+  {
+   "address": "104-08 Lefferts Blvd",
+   "is_active": true,
+   "market": "NY",
+   "monthly_target": "6000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Lefferts"
+  },
+  {
+   "address": "2640 Narragansett Chicago",
+   "is_active": true,
+   "market": "Chicago",
+   "monthly_target": "5000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Narragansett"
+  },
+  {
+   "address": "3560 Nostrand Ave",
+   "is_active": true,
+   "market": "NY",
+   "monthly_target": "6000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Nostrand"
+  },
+  {
+   "address": "21880 Hempstead Ave",
+   "is_active": true,
+   "market": "NY",
+   "monthly_target": "6000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "QV"
+  },
+  {
+   "address": "531 Utica Ave",
+   "is_active": true,
+   "market": "NY",
+   "monthly_target": "6000",
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Utica"
+  }
+ ],
+ "target_codes": [
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-103"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "b-1115"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-11634"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-117"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-151"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-1750"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-1800"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-196"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-2509"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-2612"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-3565"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-3PL"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-418"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-4712"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-509"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-5135"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-559"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-6011"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "B-652"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T-531"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T-7812"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T-902"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T-957"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T21880"
+  },
+  {
+   "org_id": "00000000-0000-0000-0000-000000000001",
+   "store_code": "T3560"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "3352 26th"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "3735 26th"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "7812"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "957"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Armitage"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Ave U"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Belmont"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Cermark"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Chicago heights"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Cicero"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Diversey"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Grand"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Irving Park"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "kedzie"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "lawrence"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Lefferts"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Narragansett"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Nostrand"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "QV"
+  },
+  {
+   "org_id": "854f6d7b-6590-4e4d-88ab-646f560d4f4c",
+   "store_code": "Utica"
+  }
+ ]
+}
