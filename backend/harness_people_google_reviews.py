@@ -1,4 +1,5 @@
-"""Offline proof harness for the Google Reviews module (Phase 1) — owner directive 2026-07-27.
+"""Offline proof harness for the Google Reviews module — Phase 1 (owner directive 2026-07-27) AND
+Phase 1.5 "google reviews everywhere" (owner directive 2026-08-06). Covers
 backend/app/modules/storeops/google_reviews.py (pure + DB-touching logic) and the endpoints added to
 backend/app/modules/storeops/router.py, plus the two new admin-attention providers in
 backend/app/modules/storeops/attention.py. No database, no network, no live Google API key.
@@ -6,7 +7,8 @@ backend/app/modules/storeops/attention.py. No database, no network, no live Goog
 Run:  cd backend && python3 harness_people_google_reviews.py
 
 Sections:
-  A. Pure helpers — clamp_target / effective_target / rating_status / review_hash.
+  A. Pure helpers — clamp_target / effective_target / rating_status / review_hash / Phase 1.5's
+     clamp_lookback_days + get_config/public_config's lookback_days degrade-gracefully shape.
   B. Name matching — positives, "First L" disambiguation, short-name guard, substring guard, and
      the genuinely-ambiguous (2+ candidates) case left unmatched with a note.
   C. Action-plan state-machine pure decision helpers (can_submit / can_push_back / …).
@@ -36,6 +38,17 @@ Sections:
          second store outside their span never appears.
   G. Attention providers — the two new ones (review_action_plan_stale / _overdue), registered
      through the REAL register_provider() decorator, org isolation, group='other'.
+  H. Phase 1.5 — google_reviews.stores_for_employees (batched, inverse-of-employees_for_store):
+     home_store as a bare code vs. a free-text address (case-insensitive), a deleted shift never
+     counts, past/future lookback+forward window boundaries individually isolated per employee,
+     unknown ids present with an empty list (never omitted), org isolation, lookback_days actually
+     honored as a parameter, and the store_rows override is proven USED (not just harmless) via a
+     roster that could only resolve correctly through the override, never the real client's table.
+  I. Phase 1.5 router integration — GET /google-reviews/employee/{id} (self-rule OR manager-span,
+     unknown id 404s) and the batched GET /google-reviews/employee-summary (manager-only; an
+     employee OUTSIDE the caller's span is silently dropped, never a whole-call 403; exact response
+     shape; no review text; a real batching proof — the tables that would scale with the employee
+     count in a naive per-employee implementation are queried EXACTLY once for 2 employees).
 """
 import sys
 from datetime import datetime, timezone, timedelta, date
@@ -100,6 +113,22 @@ def section_pure():
     h4 = gr.review_hash(None, "Jane", "terrible store", "2026-01-01T00:00:00Z")
     ok("A13 content-hash is stable for identical input", h2 == h3)
     ok("A14 content-hash differs for different text", h2 != h4)
+
+    # Phase 1.5 (owner directive 2026-08-06): lookback_days — tenant-tunable window, migration 420.
+    ok("A15 clamp_lookback_days clamps below range", gr.clamp_lookback_days(0) == gr.LOOKBACK_MIN)
+    ok("A16 clamp_lookback_days clamps above range", gr.clamp_lookback_days(9999) == gr.LOOKBACK_MAX)
+    ok("A17 clamp_lookback_days passes a valid value through", gr.clamp_lookback_days(45) == 45)
+    ok("A18 clamp_lookback_days falls back to default on garbage",
+       gr.clamp_lookback_days("abc") == gr.DEFAULT_LOOKBACK_DAYS)
+    ok("A19 clamp_lookback_days accepts a numeric string (form input)", gr.clamp_lookback_days("60") == 60)
+    ok("A20 get_config's code-default shape (no row / no table) includes lookback_days=30",
+       gr.get_config(_SchemaClient({}, "storeops"), "no-such-org").get("lookback_days")
+       == gr.DEFAULT_LOOKBACK_DAYS)
+    pc_full = gr.public_config({"enabled": True, "api_key": "x" * 20, "lookback_days": 45})
+    ok("A21 public_config surfaces a real lookback_days value", pc_full["lookback_days"] == 45, pc_full)
+    pc_missing_col = gr.public_config({"enabled": True, "api_key": "x" * 20})  # migration 420 not run
+    ok("A22 public_config degrades to 30 when the column doesn't exist yet on the row",
+       pc_missing_col["lookback_days"] == gr.DEFAULT_LOOKBACK_DAYS, pc_missing_col)
 
     print("\n-- B. name matching (conservative, 'possible mention' only) --")
     cands = [{"employee_id": "E1", "name": "Ali Khan"}, {"employee_id": "E2", "name": "Sara Lee"}]
@@ -474,6 +503,92 @@ def section_logic():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+# H. stores_for_employees — Phase 1.5 ("google reviews everywhere", owner directive 2026-08-06). The
+# batched, inverse-of-employees_for_store lookup that powers GET /google-reviews/employee/{id} and
+# the batched GET /google-reviews/employee-summary. No FastAPI here — direct calls against the same
+# fake Supabase client convention as section E.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def section_stores_for_employees():
+    print("\n-- H. stores_for_employees (batched employee -> store-set lookup) --")
+    store = make_store()
+    client = _SchemaClient(store, "storeops")
+    today = NOW.date()
+
+    store["storeops.stores"] = [
+        {"org_id": ORG_A, "store_code": "S1", "address": "1 Main St"},
+        {"org_id": ORG_A, "store_code": "S2", "address": "2 Main St"},
+    ]
+    store["storeops.employees"] = [
+        {"org_id": ORG_A, "employee_id": "E1", "home_store": "S1"},        # bare store_code
+        {"org_id": ORG_A, "employee_id": "E2", "home_store": "1 MAIN ST"},  # free-text ADDRESS, mixed case
+        {"org_id": ORG_A, "employee_id": "E3", "home_store": None},        # no home store at all
+        {"org_id": ORG_A, "employee_id": "E4", "home_store": None},
+        {"org_id": ORG_A, "employee_id": "E5", "home_store": None},
+        {"org_id": ORG_A, "employee_id": "E6", "home_store": None},
+        # different org — must never leak into an ORG_A lookup even if the id string collides
+        {"org_id": ORG_B, "employee_id": "E1", "home_store": "SB1"},
+    ]
+    store["storeops.shifts"] = [
+        # E2: a DELETED shift must never count (E2's only store should be the home-address match)
+        {"org_id": ORG_A, "employee_id": "E2", "store_code": "S2", "is_deleted": True,
+         "shift_date": today.isoformat()},
+        # E3: shift-only, 5 days back — inside BOTH the default (30d) and a custom 10-day lookback,
+        # OUTSIDE a custom 3-day lookback (H11/H12 boundary)
+        {"org_id": ORG_A, "employee_id": "E3", "store_code": "S2", "is_deleted": False,
+         "shift_date": (today - timedelta(days=5)).isoformat()},
+        # E4: shift-only, 40 days back — OUTSIDE the default 30-day lookback
+        {"org_id": ORG_A, "employee_id": "E4", "store_code": "S2", "is_deleted": False,
+         "shift_date": (today - timedelta(days=40)).isoformat()},
+        # E5: shift-only, 20 days AHEAD — OUTSIDE the (non-configurable) 14-day forward window
+        {"org_id": ORG_A, "employee_id": "E5", "store_code": "S2", "is_deleted": False,
+         "shift_date": (today + timedelta(days=20)).isoformat()},
+        # E6: shift-only, 10 days AHEAD — INSIDE the 14-day forward window
+        {"org_id": ORG_A, "employee_id": "E6", "store_code": "S2", "is_deleted": False,
+         "shift_date": (today + timedelta(days=10)).isoformat()},
+    ]
+
+    out = gr.stores_for_employees(client, ORG_A, ["E1", "E2", "E3", "E4", "E5", "E6", "E9-unknown"])
+    ok("H1 home_store as a bare store_code resolves directly", out.get("E1") == ["S1"], out.get("E1"))
+    ok("H2 home_store as a free-text ADDRESS resolves via the roster (case-insensitive), and a "
+       "DELETED shift at a DIFFERENT store never counts", out.get("E2") == ["S1"], out.get("E2"))
+    ok("H3 a past shift inside the default 30-day lookback IS included (shift-only, no home_store)",
+       out.get("E3") == ["S2"], out.get("E3"))
+    ok("H4 a past shift OUTSIDE the default 30-day lookback (40 days back) is excluded",
+       out.get("E4") == [], out.get("E4"))
+    ok("H5 a future shift OUTSIDE the 14-day forward window (20 days ahead) is excluded",
+       out.get("E5") == [], out.get("E5"))
+    ok("H6 a future shift INSIDE the 14-day forward window (10 days ahead) is included",
+       out.get("E6") == ["S2"], out.get("E6"))
+    ok("H7 an unknown employee_id is present with an EMPTY list, never omitted, never raises",
+       out.get("E9-unknown") == [], out)
+    ok("H8 org isolation: ORG_B's E1 (home SB1) never leaks into the ORG_A result",
+       "SB1" not in out.get("E1", []), out["E1"])
+
+    out_empty = gr.stores_for_employees(client, ORG_A, [])
+    ok("H9 an empty id list returns {} immediately", out_empty == {}, out_empty)
+
+    # lookback_days is an actual PARAMETER, not just defaulted — toggle it around E3's 5-day-old shift
+    out_short = gr.stores_for_employees(client, ORG_A, ["E3"], lookback_days=3)
+    ok("H10 lookback_days is honored: E3's 5-day-old shift excluded under a 3-day window",
+       out_short.get("E3") == [], out_short)
+    out_wide = gr.stores_for_employees(client, ORG_A, ["E3"], lookback_days=10)
+    ok("H11 ...but included once lookback_days is widened past 5", out_wide.get("E3") == ["S2"], out_wide)
+
+    # ── store_rows override: pass a DELIBERATELY WRONG roster to prove the passed-in `store_rows`
+    #    is actually used instead of re-querying `stores` (a real efficiency claim, not just "it still
+    #    happens to work") ─────────────────────────────────────────────────────────────────────────
+    # E1's home_store is the bare code "S1" — force it through the ADDRESS-match branch of a
+    # DELIBERATELY WRONG override roster (whose 'address' field is literally the string "S1") so a
+    # match can ONLY happen via the passed-in `store_rows`, never the real client's `stores` table
+    # (which has no such address/code pairing at all).
+    wrong_rows = [{"store_code": "ZZZ", "address": "S1"}]
+    out_override = gr.stores_for_employees(client, ORG_A, ["E1"], store_rows=wrong_rows)
+    ok("H12 store_rows override is actually used (E1's home 'S1' resolves via the OVERRIDE roster's "
+       "address match to ZZZ, impossible from the real client's stores table alone)",
+       out_override.get("E1") == ["ZZZ"], out_override)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
 # F. Router INTEGRATION — the real endpoint functions
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 def section_router():
@@ -699,6 +814,166 @@ def section_router():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+# I. Phase 1.5 router integration — GET /google-reviews/employee/{id} + the batched
+#    GET /google-reviews/employee-summary (owner directive 2026-08-06, "google reviews everywhere").
+#    Same fake-client convention as section F, fresh org/fixtures.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+class _CountingSchema:
+    """Wraps a real _SchemaClient; records how many times .table(name) is called per name — proves
+    the batch endpoint queries each table ONCE for N employees, never N times (AGENT_CONTRACT
+    'aggregate in Postgres, never N round-trips')."""
+    def __init__(self, inner):
+        self._inner = inner
+        self.calls: dict = {}
+
+    def table(self, name):
+        self.calls[name] = self.calls.get(name, 0) + 1
+        return self._inner.table(name)
+
+    def schema(self, name):
+        return self
+
+
+def section_phase15_router():
+    print("\n-- I. router.py integration — GET /google-reviews/employee/{id} + /employee-summary --")
+    import app.modules.storeops.router as router_mod
+    import app.modules.core.router as core_router_mod
+
+    store = {}
+    fake_client = FakeClient(store)
+    real_get_supabase = router_mod.get_supabase
+    real_uid = core_router_mod._uid_from_token
+    router_mod.get_supabase = lambda: fake_client
+    core_router_mod._uid_from_token = lambda auth: {
+        "Bearer admin": "admin-uid", "Bearer mgr": "mgr-uid",
+        "Bearer rep-ali": "ali-uid", "Bearer rep-sara": "sara-uid",
+    }.get(auth)
+
+    ORG = "ORGY"
+    store["storeops.app_users"] = [
+        {"auth_id": "admin-uid", "org_id": ORG, "email": "admin@y.com", "role": "admin", "employee_id": "MGR0"},
+        {"auth_id": "mgr-uid", "org_id": ORG, "email": "mgr@y.com", "role": "market_manager",
+         "employee_id": "MGR1", "store_codes": ["S1"]},
+        {"auth_id": "ali-uid", "org_id": ORG, "email": "ali@y.com", "role": "rep", "employee_id": "E1"},
+        {"auth_id": "sara-uid", "org_id": ORG, "email": "sara@y.com", "role": "rep", "employee_id": "E2"},
+    ]
+    store["storeops.roles"] = [
+        {"org_id": ORG, "name": "rep", "permissions": {"scope": "self"}},
+        {"org_id": ORG, "name": "market_manager", "permissions": {"scope": "market"}},
+    ]
+    store["storeops.employees"] = [
+        {"org_id": ORG, "employee_id": "E1", "name": "Ali Khan", "email": "ali@y.com", "home_store": "S1", "is_active": True},
+        {"org_id": ORG, "employee_id": "E2", "name": "Sara Lee", "email": "sara@y.com", "home_store": "S2", "is_active": True},
+    ]
+    store["storeops.stores"] = [
+        {"org_id": ORG, "store_code": "S1", "address": "1 Main St", "market": "NY", "is_active": True},
+        {"org_id": ORG, "store_code": "S2", "address": "2 Main St", "market": "NY", "is_active": True},
+    ]
+    store["storeops.shifts"] = []
+    store["storeops.google_review_config"] = []       # no row yet -> code default (30-day lookback)
+    store["storeops.google_review_store"] = []
+    store["storeops.google_review_snapshot"] = [
+        {"org_id": ORG, "store_code": "S1", "rating": 4.2, "review_count": 50, "fetched_at": "2026-08-01T00:00:00Z"},
+        {"org_id": ORG, "store_code": "S2", "rating": 4.9, "review_count": 30, "fetched_at": "2026-08-01T00:00:00Z"},
+    ]
+    store["storeops.google_review_item"] = []
+    store["storeops.action_plan"] = []
+
+    try:
+        # ── GET /google-reviews/employee/{id} ───────────────────────────────────────────────────
+        d1 = router_mod.google_review_employee_detail("E1", authorization="Bearer rep-ali", org_id=ORG)
+        ok("I1 an employee viewing their OWN card gets it (self-rule, same as /my)",
+           d1["employee_id"] == "E1" and d1["employee_name"] == "Ali Khan"
+           and any(s["store_code"] == "S1" for s in d1["stores"]), d1)
+
+        try:
+            router_mod.google_review_employee_detail("E1", authorization="Bearer rep-sara", org_id=ORG)
+            ok("I2 a non-manager rep cannot view a DIFFERENT employee's card", False, "no exception")
+        except Exception as e:
+            ok("I2 a non-manager rep cannot view a DIFFERENT employee's card (403)",
+               getattr(e, "status_code", None) == 403, e)
+
+        d2 = router_mod.google_review_employee_detail("E1", authorization="Bearer mgr", org_id=ORG)
+        ok("I3 a market manager pinned to S1 CAN view E1 (home S1, in span)",
+           d2["employee_id"] == "E1" and any(s["store_code"] == "S1" for s in d2["stores"]), d2)
+
+        try:
+            router_mod.google_review_employee_detail("E2", authorization="Bearer mgr", org_id=ORG)
+            ok("I4 the SAME manager cannot view E2 (home S2, outside their span)", False, "no exception")
+        except Exception as e:
+            ok("I4 the same manager cannot view E2 (home S2, outside their span) (403)",
+               getattr(e, "status_code", None) == 403, e)
+
+        d3 = router_mod.google_review_employee_detail("E2", authorization="Bearer admin", org_id=ORG)
+        ok("I5 an admin (unrestricted span) CAN view E2", d3["employee_id"] == "E2", d3)
+
+        try:
+            router_mod.google_review_employee_detail("NOPE", authorization="Bearer admin", org_id=ORG)
+            ok("I6 an unknown employee_id 404s", False, "no exception")
+        except Exception as e:
+            ok("I6 an unknown employee_id 404s", getattr(e, "status_code", None) == 404, e)
+
+        ok("I6b the response 'note' matches the same honest-limitation text /my uses",
+           "curated subset" in (d1.get("note") or ""), d1)
+
+        # ── GET /google-reviews/employee-summary (batched) ─────────────────────────────────────
+        try:
+            router_mod.google_reviews_employee_summary(employee_ids="E1,E2", authorization="Bearer rep-ali", org_id=ORG)
+            ok("I7 a non-manager cannot call the batch summary endpoint", False, "no exception")
+        except Exception as e:
+            ok("I7 a non-manager cannot call the batch summary endpoint (403)",
+               getattr(e, "status_code", None) == 403, e)
+
+        s1 = router_mod.google_reviews_employee_summary(employee_ids="E1,E2", authorization="Bearer mgr", org_id=ORG)
+        ok("I8 manager pinned to S1: E1 (home S1) present in the summary", "E1" in s1["summaries"], s1)
+        ok("I9 ...but E2 (home S2, outside span) is SILENTLY DROPPED, not a whole-call 403",
+           "E2" not in s1["summaries"], s1)
+        e1_rows = s1["summaries"]["E1"]
+        ok("I10 the summary row shape is EXACT: store_code/rating/review_count/target/status only",
+           set(e1_rows[0].keys()) == {"store_code", "rating", "review_count", "target", "status"}, e1_rows)
+        ok("I11 the summary carries the real snapshot rating (4.2) for S1", e1_rows[0]["rating"] == 4.2, e1_rows)
+        ok("I12 no review TEXT anywhere in the summary payload (light, table-column shape)",
+           "reviews" not in str(e1_rows), e1_rows)
+
+        s2 = router_mod.google_reviews_employee_summary(employee_ids="E1,E2", authorization="Bearer admin", org_id=ORG)
+        ok("I13 an admin (unrestricted span) sees BOTH E1 and E2 in the batch summary",
+           "E1" in s2["summaries"] and "E2" in s2["summaries"], s2)
+
+        s_unknown = router_mod.google_reviews_employee_summary(employee_ids="E1,NOPE", authorization="Bearer admin", org_id=ORG)
+        ok("I14 an unknown id in the csv is silently dropped (no crash, no key)",
+           "E1" in s_unknown["summaries"] and "NOPE" not in s_unknown["summaries"], s_unknown)
+
+        s_empty = router_mod.google_reviews_employee_summary(employee_ids="", authorization="Bearer admin", org_id=ORG)
+        ok("I15 an empty employee_ids param returns {'summaries': {}} without erroring",
+           s_empty == {"summaries": {}}, s_empty)
+
+        # ── batching proof: the tables whose query cost would scale with the NUMBER OF EMPLOYEES in
+        #    a naive per-employee implementation (stores/employees/shifts/overlay/snapshot) are each
+        #    queried EXACTLY ONCE for 2 employees, not once per employee. app_users/roles are a
+        #    fixed, employee-count-INDEPENDENT auth/span-resolution cost (same for 1 or 1000
+        #    employee_ids) and are deliberately excluded from this check. ─────────────────────────
+        counting = _CountingSchema(FakeClient(store).schema("storeops"))
+        router_mod.get_supabase = lambda: counting
+        try:
+            router_mod.google_reviews_employee_summary(employee_ids="E1,E2", authorization="Bearer admin", org_id=ORG)
+        finally:
+            router_mod.get_supabase = lambda: fake_client
+        batched_tables = ("stores", "employees", "shifts", "google_review_store", "google_review_snapshot")
+        over_queried = {t: counting.calls.get(t, 0) for t in batched_tables if counting.calls.get(t, 0) != 1}
+        ok("I16 every N-employee-scaling table is queried EXACTLY once for 2 employees "
+           "(batched, never N round-trips)", not over_queried, counting.calls)
+
+        # ── config degrade: no google_review_config row at all -> the employee endpoint still
+        #    works with the code-default 30-day lookback (migration 420 not yet run) ─────────────
+        d_degrade = router_mod.google_review_employee_detail("E1", authorization="Bearer rep-ali", org_id=ORG)
+        ok("I17 GET /google-reviews/employee/{id} works with zero config rows (pre-migration-411 AND "
+           "pre-migration-420 degrade)", d_degrade["employee_id"] == "E1", d_degrade)
+    finally:
+        router_mod.get_supabase = real_get_supabase
+        core_router_mod._uid_from_token = real_uid
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
 # G. Attention providers (real register_provider(), same fixture convention as
 #    harness_people_attention.py)
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -788,7 +1063,9 @@ def section_attention():
 def main():
     section_pure()
     section_logic()
+    section_stores_for_employees()
     section_router()
+    section_phase15_router()
     section_attention()
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     if FAIL:

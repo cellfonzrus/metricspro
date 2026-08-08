@@ -17,7 +17,7 @@ const FREQ_OPTIONS = [{ id: 'daily', label: 'Daily' }, { id: 'weekly', label: 'W
 const DOW_OPTIONS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d, i) => ({ id: String(i), label: d }))
 
 interface Cfg {
-  enabled: boolean; target_default: number; notify_on_new_reviews: boolean
+  enabled: boolean; target_default: number; notify_on_new_reviews: boolean; lookback_days: number
   has_api_key: boolean; api_key_hint: string | null; can_edit: boolean; updated_at?: string
 }
 interface SweepCfg {
@@ -51,7 +51,8 @@ export default function GoogleReviewsConfigPage() {
   const saveConfig = useCallback(() => {
     if (!cfg) return
     setBusy(true); setMsg('')
-    const body: any = { enabled: cfg.enabled, target_default: cfg.target_default, notify_on_new_reviews: cfg.notify_on_new_reviews }
+    const body: any = { enabled: cfg.enabled, target_default: cfg.target_default,
+      notify_on_new_reviews: cfg.notify_on_new_reviews, lookback_days: cfg.lookback_days }
     if (apiKey.trim()) body.api_key = apiKey.trim()
     api('/api/v1/storeops/google-reviews/config', { method: 'PUT', body: JSON.stringify(body) })
       .then((r: any) => { setCfg(r); setApiKey(''); setMsg('✅ Saved') })
@@ -134,6 +135,16 @@ export default function GoogleReviewsConfigPage() {
               <input type="checkbox" checked={cfg.notify_on_new_reviews} onChange={e => setCfg({ ...cfg, notify_on_new_reviews: e.target.checked })} disabled={readOnly} />
               Email on new/relevant reviews
             </label>
+          </div>
+          <div>
+            <label style={label}>Lookback window (days)</label>
+            <input style={{ ...inp, width: '100%' }} type="number" step="1" min={1} max={365} value={cfg.lookback_days}
+              onChange={e => setCfg({ ...cfg, lookback_days: Number(e.target.value) })} disabled={readOnly} />
+            <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3 }}>
+              How far back to look for a PAST shift when deciding which store(s)' ratings show for an
+              employee (an employee's rating card, action plans, and any performance table). Forward
+              window stays 14 days.
+            </div>
           </div>
         </div>
         <button className="btn btn-primary" style={{ marginTop: 12 }} disabled={busy || readOnly} onClick={saveConfig}>Save</button>

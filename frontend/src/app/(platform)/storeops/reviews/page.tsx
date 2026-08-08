@@ -14,6 +14,11 @@ interface ActionPlan {
   id: string; employee_id: string; employee_name?: string; store_code: string
   status: string; plan_text?: string; dm_comments?: string; due_date?: string
   employee_marked_done_at?: string | null; created_at?: string
+  // stamped client-side from the owning store card (_rating/_target/_status/_reviewCount) — see
+  // `allPlans` below. A DM reviewing plans across MANY stores otherwise has to scroll away from the
+  // queue to find the store's rating context for the plan they're looking at (Gate-1-class gap,
+  // owner directive 2026-08-06 item 5).
+  _rating?: number | null; _target?: number; _status?: string; _reviewCount?: number | null
 }
 interface StoreCard {
   store_code: string; address?: string; market?: string; is_active?: boolean
@@ -55,12 +60,21 @@ function PlanRow({ plan, onChanged }: { plan: ActionPlan; onChanged: () => void 
       .then(() => onChanged()).catch((e: any) => setMsg('❌ ' + (e?.message || e))).finally(() => setBusy(false))
   }, [plan.id, onChanged])
 
+  const known = plan._status && plan._status !== 'unknown'
+  const ratingFg = !known ? '#475569' : plan._status === 'above' ? '#166534' : '#b91c1c'
+
   return (
     <div style={{ padding: 10, borderRadius: 8, border: '1px solid var(--border)', marginBottom: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
         <div style={{ fontWeight: 700, fontSize: 12.5 }}>{plan.employee_name || plan.employee_id} — {plan.store_code}</div>
         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)' }}>{STATUS_LABEL[plan.status] || plan.status}</span>
       </div>
+      {plan._target != null && (
+        <div style={{ fontSize: 11.5, color: ratingFg, marginTop: 2, display: 'flex', gap: 6, alignItems: 'center' }}>
+          <span>⭐ {plan._rating != null ? Number(plan._rating).toFixed(1) : '—'} / target {plan._target.toFixed(1)}</span>
+          <span style={{ color: 'var(--text3)' }}>· {plan._reviewCount ?? '—'} reviews</span>
+        </div>
+      )}
       {plan.plan_text && <div style={{ fontSize: 12.5, marginTop: 4 }}><b>Plan:</b> {plan.plan_text}</div>}
       {plan.dm_comments && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}><b>Your notes:</b> {plan.dm_comments}</div>}
       {plan.due_date && <div style={{ fontSize: 11.5, color: 'var(--text2)', marginTop: 2 }}>Due {plan.due_date}</div>}
@@ -110,8 +124,13 @@ export default function GoogleReviewsDashboardPage() {
     return stores.filter(s => s.store_code.toLowerCase().includes(needle) || (s.market || '').toLowerCase().includes(needle))
   }, [stores, q])
 
+  // Gate-1-class gap fix (owner directive 2026-08-06, item 5): stamp each plan with its OWN store's
+  // rating context so the review queue never makes a DM scroll away to find it.
   const allPlans = useMemo(() =>
-    filtered.flatMap(s => (s.action_plans || []).map(p => ({ ...p, _store: s.store_code })))
+    filtered.flatMap(s => (s.action_plans || []).map(p => ({
+      ...p, _store: s.store_code, _rating: s.rating, _target: s.target, _status: s.status,
+      _reviewCount: s.review_count,
+    })))
       .filter(p => p.status !== 'completed')
       .sort((a, b) => (a.status === 'submitted' ? -1 : 1) - (b.status === 'submitted' ? -1 : 1)),
     [filtered])

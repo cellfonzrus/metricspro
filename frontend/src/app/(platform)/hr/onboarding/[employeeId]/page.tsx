@@ -5,6 +5,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { api, apiUpload } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 import EntityPicker, { US_STATES } from '@/components/EntityPicker'
+import GoogleReviewsCard from '@/components/GoogleReviewsCard'
 
 // HR · Employee Onboarding — one new hire's checklist. HR verifies items, views/uploads documents, sets
 // the work state (so the right state tax form appears), and generates the credential-less QR a pre-start
@@ -219,6 +220,11 @@ export default function EmployeeOnboardingPage() {
       <a href="/hr/people" style={{ fontSize: 12, color: 'var(--accent,#2563eb)' }}>← HR · People</a>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 2px' }}>🧩 Onboarding — {d?.employee_name || employeeId}</h1>
       {msg && <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13, margin: '8px 0' }}>{msg}</div>}
+
+      {/* Phase 1.5 (owner directive 2026-08-06): this hire's Google rating(s) for the store(s) they
+          work — compact embed, renders nothing at all (title included) when the integration is
+          off/empty for this tenant or this employee has no resolvable store yet (pre-provision). */}
+      <GoogleReviewsCard employeeId={String(employeeId)} compact compactTitle="⭐ Google Reviews" />
 
       {d && !d.ready && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, margin: '10px 0' }}>
         Run migration <b>073_hr_onboarding.sql</b> to activate onboarding.

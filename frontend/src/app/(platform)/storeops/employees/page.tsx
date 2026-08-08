@@ -1,7 +1,8 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import GoogleReviewsCard from '@/components/GoogleReviewsCard'
 
 interface Employee {
   id: number; employee_id: string | null; name: string; home_store: string | null
@@ -19,6 +20,10 @@ export default function EmployeesPage() {
   const [showInactive, setShowInactive] = useState(false)
   const [msg, setMsg] = useState('')
   const [saving, setSaving] = useState<number | null>(null)
+  // Phase 1.5 (owner directive 2026-08-06): expand one row to show that employee's Google rating(s)
+  // for the store(s) they work — compact embed, GoogleReviewsCard fetches its own data off
+  // employee_id and renders nothing if the integration is off/empty for this tenant.
+  const [expanded, setExpanded] = useState<number | null>(null)
 
   async function load() {
     setLoading(true)
@@ -127,32 +132,50 @@ export default function EmployeesPage() {
         <div className="table-wrapper" style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
-              {['Name', 'Emp ID', 'Home store', 'Email', 'Phone', 'ePay login', 'ePay salesperson', 'Active', ''].map(h =>
-                <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
+              {['', 'Name', 'Emp ID', 'Home store', 'Email', 'Phone', 'ePay login', 'ePay salesperson', 'Active', ''].map((h, i) =>
+                <th key={h + i} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
             </tr></thead>
             <tbody>
               {filtered.map(e => (
-                <tr key={e.id} style={{ opacity: e.is_active ? 1 : 0.5 }}>
-                  <td style={cell}><input style={{ ...sel, width: 150 }} value={e.name || ''} onChange={ev => setEmp(e.id, { name: ev.target.value })} /></td>
-                  <td style={cell}><input style={{ ...sel, width: 90 }} value={e.employee_id || ''} placeholder="—" onChange={ev => setEmp(e.id, { employee_id: ev.target.value })} /></td>
-                  <td style={cell}><input style={{ ...sel, width: 100 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></td>
-                  <td style={cell}><input style={{ ...sel, width: 180 }} type="email" value={e.email || ''} placeholder="add email…" onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
-                  <td style={cell}><input style={{ ...sel, width: 120 }} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
-                  <td style={cell}><input style={{ ...sel, width: 120 }} value={e.epay_login || ''} onChange={ev => setEmp(e.id, { epay_login: ev.target.value })} /></td>
-                  <td style={cell}><input style={{ ...sel, width: 150 }} value={e.epay_salesperson || ''} onChange={ev => setEmp(e.id, { epay_salesperson: ev.target.value })} /></td>
-                  <td style={cell}><input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} /></td>
-                  <td style={cell}>
-                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                      <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 8px' }} disabled={saving === e.id} onClick={() => saveEmp(e)} title="Save">{saving === e.id ? '…' : '💾'}</button>
-                      {e.is_active && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => deactivateEmp(e)} title="Deactivate + revoke login">🚫</button>}
-                      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: '#dc2626' }} onClick={() => deleteEmp(e)} title="Delete employee (removes login too)">🗑</button>
-                      <select style={{ ...sel, width: 80 }} value="" title="Merge this duplicate INTO another employee" onChange={ev => { mergeEmp(e, ev.target.value); ev.target.value = '' }}>
-                        <option value="">merge→</option>
-                        {employees.filter(o => o.id !== e.id).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                      </select>
-                    </div>
-                  </td>
-                </tr>
+                <Fragment key={e.id}>
+                  <tr style={{ opacity: e.is_active ? 1 : 0.5 }}>
+                    <td style={cell}>
+                      {e.employee_id && (
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 6px' }}
+                          onClick={() => setExpanded(x => x === e.id ? null : e.id)}
+                          title="Show Google rating(s) for this employee's store(s)">
+                          {expanded === e.id ? '▾' : '▸'} ⭐
+                        </button>
+                      )}
+                    </td>
+                    <td style={cell}><input style={{ ...sel, width: 150 }} value={e.name || ''} onChange={ev => setEmp(e.id, { name: ev.target.value })} /></td>
+                    <td style={cell}><input style={{ ...sel, width: 90 }} value={e.employee_id || ''} placeholder="—" onChange={ev => setEmp(e.id, { employee_id: ev.target.value })} /></td>
+                    <td style={cell}><input style={{ ...sel, width: 100 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></td>
+                    <td style={cell}><input style={{ ...sel, width: 180 }} type="email" value={e.email || ''} placeholder="add email…" onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
+                    <td style={cell}><input style={{ ...sel, width: 120 }} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
+                    <td style={cell}><input style={{ ...sel, width: 120 }} value={e.epay_login || ''} onChange={ev => setEmp(e.id, { epay_login: ev.target.value })} /></td>
+                    <td style={cell}><input style={{ ...sel, width: 150 }} value={e.epay_salesperson || ''} onChange={ev => setEmp(e.id, { epay_salesperson: ev.target.value })} /></td>
+                    <td style={cell}><input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} /></td>
+                    <td style={cell}>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 8px' }} disabled={saving === e.id} onClick={() => saveEmp(e)} title="Save">{saving === e.id ? '…' : '💾'}</button>
+                        {e.is_active && <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px' }} onClick={() => deactivateEmp(e)} title="Deactivate + revoke login">🚫</button>}
+                        <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 8px', color: '#dc2626' }} onClick={() => deleteEmp(e)} title="Delete employee (removes login too)">🗑</button>
+                        <select style={{ ...sel, width: 80 }} value="" title="Merge this duplicate INTO another employee" onChange={ev => { mergeEmp(e, ev.target.value); ev.target.value = '' }}>
+                          <option value="">merge→</option>
+                          {employees.filter(o => o.id !== e.id).map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
+                        </select>
+                      </div>
+                    </td>
+                  </tr>
+                  {expanded === e.id && e.employee_id && (
+                    <tr>
+                      <td colSpan={10} style={{ padding: '4px 8px 12px 34px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                        <GoogleReviewsCard employeeId={e.employee_id} compact compactTitle={`⭐ Google Reviews — ${e.name}'s store(s)`} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
               {filtered.length === 0 && (
                 <tr><td colSpan={11} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>No employees found</td></tr>

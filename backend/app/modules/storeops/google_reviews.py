@@ -39,6 +39,15 @@ MIN_FIRST_NAME_LEN = 3          # names shorter than this are skipped entirely �
 DEFAULT_AREA_KEY = "google_reviews"
 ACTION_PLAN_STATUSES = ("required", "submitted", "pushed_back", "in_progress", "completed")
 
+# Phase 1.5 (owner directive 2026-08-06, "google reviews everywhere"): how far back a per-EMPLOYEE
+# store-set lookup looks for a shift, before today, when deciding which store(s)' ratings to show
+# for that employee (home_store is always included regardless). RULE TWO — tenant-tunable
+# (storeops.google_review_config.lookback_days, migration 420), never a bare constant. The forward
+# window stays the existing hard-coded 14 days (same as /google-reviews/my — not reopened here).
+DEFAULT_LOOKBACK_DAYS = 30
+LOOKBACK_MIN, LOOKBACK_MAX = 1, 365
+DEFAULT_FORWARD_DAYS = 14
+
 PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 PLACES_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 
@@ -63,6 +72,17 @@ def clamp_target(v, default=DEFAULT_TARGET) -> float:
     except (TypeError, ValueError):
         return default
     return max(TARGET_MIN, min(TARGET_MAX, f))
+
+
+def clamp_lookback_days(v, default=DEFAULT_LOOKBACK_DAYS) -> int:
+    """Always a valid 1-365 integer (RULE TWO: a tunable window with a sane default, never a crash
+    and never unbounded). Garbage/missing -> `default` (which callers pass as the code default,
+    30 — see get_config's degrade-gracefully shape when migration 420 hasn't run)."""
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return default
+    return max(LOOKBACK_MIN, min(LOOKBACK_MAX, n))
 
 
 def effective_target(store_row: dict | None, org_target_default) -> float:
@@ -204,6 +224,69 @@ def employees_for_store(client, org_id: str, store_code: str, address: str | Non
     return list(out.values())
 
 
+# ── stores for a batch of employees (Phase 1.5, "google reviews everywhere") — the inverse of
+# employees_for_store: given employee id(s), which store(s)' ratings should show for them. Powers
+# GET /google-reviews/employee/{id} AND the batched GET /google-reviews/employee-summary — both
+# call this ONCE with the whole id list (2 queries total: employees + shifts), never per-employee,
+# per AGENT_CONTRACT's "aggregate in Postgres/batch, never N round-trips" rule. ─────────────────
+def stores_for_employees(client, org_id: str, employee_ids: list[str],
+                          lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+                          forward_days: int = DEFAULT_FORWARD_DAYS,
+                          store_rows: list[dict] | None = None) -> dict[str, list[str]]:
+    """{employee_id: [store_code, ...]} for EVERY id in `employee_ids` (an id with no resolvable
+    store maps to an empty list — never omitted, never raises). Store set = home_store UNION any
+    (non-deleted) shift's store_code in [today-lookback_days, today+forward_days].
+
+    `home_store` on the employee row may hold either a real store_code OR a free-text address
+    (legacy data) — resolved against the org's store roster the SAME way /google-reviews/my already
+    does (by store_code OR address, case-insensitive), never trusted as a bare code. Pass
+    `store_rows` (already-fetched `[{'store_code','address',...}, ...]`) to skip a duplicate stores
+    query when the caller already has the roster loaded (the batch summary endpoint does)."""
+    ids = sorted({str(e).strip() for e in (employee_ids or []) if str(e).strip()})
+    out: dict[str, set] = {i: set() for i in ids}
+    if not ids:
+        return {}
+    if store_rows is None:
+        try:
+            store_rows = (client.table("stores").select("store_code,address")
+                          .eq("org_id", org_id).execute().data) or []
+        except Exception:
+            store_rows = []
+    by_code = {(s.get("store_code") or "").strip().upper(): s["store_code"]
+               for s in store_rows if s.get("store_code")}
+    by_addr = {(s.get("address") or "").strip().upper(): s["store_code"]
+               for s in store_rows if s.get("address") and s.get("store_code")}
+    try:
+        emps = (client.table("employees").select("employee_id,home_store")
+                .eq("org_id", org_id).in_("employee_id", ids).execute().data) or []
+    except Exception:
+        emps = []
+    for e in emps:
+        eid = str(e.get("employee_id") or "").strip()
+        hs = (e.get("home_store") or "").strip()
+        if eid not in out or not hs:
+            continue
+        matched = by_code.get(hs.upper()) or by_addr.get(hs.upper())
+        if matched:
+            out[eid].add(matched)
+    today = datetime.now(timezone.utc).date()
+    since = (today - timedelta(days=lookback_days)).isoformat()
+    upto = (today + timedelta(days=forward_days)).isoformat()
+    try:
+        shifts = (client.table("shifts").select("employee_id,store_code")
+                  .eq("org_id", org_id).in_("employee_id", ids).eq("is_deleted", False)
+                  .gte("shift_date", since).lte("shift_date", upto)
+                  .limit(5000).execute().data) or []
+    except Exception:
+        shifts = []
+    for s in shifts:
+        eid = str(s.get("employee_id") or "").strip()
+        sc = (s.get("store_code") or "").strip()
+        if eid in out and sc:
+            out[eid].add(sc)
+    return {eid: sorted(codes) for eid, codes in out.items()}
+
+
 # ── Google Places API (New) — pure HTTP calls, mockable by monkeypatching these two names ──────
 def text_search_place(address: str, api_key: str, timeout: int = 15) -> dict:
     """Text Search -> the best-matching place_id for a store address. Raises RuntimeError on any
@@ -296,13 +379,14 @@ def get_config(client, org_id: str) -> dict:
     except Exception:
         pass
     return {"org_id": org_id, "api_key": None, "enabled": False, "target_default": DEFAULT_TARGET,
-            "notify_on_new_reviews": True}
+            "notify_on_new_reviews": True, "lookback_days": DEFAULT_LOOKBACK_DAYS}
 
 
 def public_config(cfg: dict) -> dict:
     """Never includes the raw api_key."""
     return {"enabled": bool(cfg.get("enabled")), "target_default": clamp_target(cfg.get("target_default")),
             "notify_on_new_reviews": cfg.get("notify_on_new_reviews", True),
+            "lookback_days": clamp_lookback_days(cfg.get("lookback_days")),
             "has_api_key": bool(cfg.get("api_key")), "api_key_hint": mask_api_key(cfg.get("api_key")),
             "updated_at": cfg.get("updated_at")}
 
