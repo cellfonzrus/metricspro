@@ -261,6 +261,15 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
                                 f"${(r.get('daily_total') or 0):,.2f} (Δ ${(r.get('delta') or 0):,.2f})."),
             })
 
+    # Resolve each flag's store into `store_code` (mig 285) so it can reach the district manager whose
+    # span covers it — a recon leak written with a POS spelling the span keyset doesn't know matches no
+    # manager at all. Visibility only; nothing here changes an amount or a store_address.
+    try:
+        from app.modules.commcalc import flag_store_resolver
+        flag_store_resolver.stamp_flags(client, org_id, flags)
+    except Exception as e:                                  # never fail a recon on a routing lookup
+        print(f"WARN sync_recon_flags store_code stamping skipped: {e}")
+
     (client.schema("commcalc").table("flags").delete()
      .eq("org_id", org_id).eq("period", plabel).eq("source", "sales_recon").execute())
     if flags:

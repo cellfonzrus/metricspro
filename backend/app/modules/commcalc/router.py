@@ -14,6 +14,7 @@ from app.modules.commcalc.gp_report import (calc_gp_report, VOID_TOKENS as _GP_V
                                              is_voided as _gp_is_voided)
 from app.modules.commcalc.flags import calc_flags
 from app.modules.commcalc.portout_flags import calc_portout_flags
+from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a flag's store for DM routing
 from app.modules.commcalc.hotsheet_parser import parse_hotsheet
 from app.modules.commcalc.discrepancy_engine import run_discrepancy
 from app.modules.commcalc import targets_engine
@@ -9049,6 +9050,18 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             except Exception as pe:
                 save_errors.append(f'portout: {pe}')
 
+            # RESOLVE THE STORE ON WRITE (mig 285, owner 2026-08-08 "flags - go with option a") so the
+            # flag can reach a district manager. `store_address` is a free-text report spelling and is
+            # BLANK on most MI-derived rows, which is why 88% of the house org's flags used to match no
+            # span keyset at all. `mi_rows` is passed so a port-out/suspension flag with no sales match
+            # can still fall back to the dealer door that owns the line (salesforce_id → store_mapping).
+            # Visibility only — nothing here writes store_address, an amount, or any pay field.
+            try:
+                _fsr_counts = flag_store_resolver.stamp_flags(client, org_id, flag_list, mi_rows=mi_rows)
+                print(f"INFO flags store_code org={org_id} period={period} {_fsr_counts}")
+            except Exception as fe:                       # never let routing break a recalculation
+                save_errors.append(f'flag_store_code: {fe}')
+
             client.schema('commcalc').table('flags').delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
             if flag_list:
                 for row in flag_list:
@@ -9067,6 +9080,12 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             si_flags = (sale_installment_engine.compute_sale_installments(client, org_id, period, persist=False)
                         .get('flags') or [])
             _INSTALLMENT_FLAG_SOURCES = ['commission_rebate_tracking', 'employee_miss']
+            # Same DM routing as the main flag pass (mig 285). No MI fallback here: an installment flag
+            # is raised from a SALE, so it always carries that sale's store string.
+            try:
+                flag_store_resolver.stamp_flags(client, org_id, si_flags)
+            except Exception as fe:
+                save_errors.append(f'installment_flag_store_code: {fe}')
             (client.schema('commcalc').table('flags').delete().eq('org_id', org_id)
              .in_('period', _pvariants(period)).in_('source', _INSTALLMENT_FLAG_SOURCES).execute())
             if si_flags:
@@ -9661,11 +9680,51 @@ async def get_flags(period: str, authorization: str = Header(default=""), org_id
     rows = r.data or []
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
-    # commcalc.flags has store_address but NO store_code, so the second arg was always None —
-    # kept out rather than left in, so this reads as the deliberate single-key match it is.
-    # NOTE: 27,428 of 31,037 house rows carry a BLANK store_address and therefore match no
-    # keyset at all; routing those through a DM is a separate, larger piece of work.
-    return [f for f in rows if in_keyset(ks, f.get('store_address'))]
+    # `store_code` (mig 285) is the RESOLVED store — the key a manager's span is actually built from.
+    # `store_address` stays as a second key so this is a strict SUPERSET of the old filter: a row that
+    # matched before still matches, and a row whose free-text spelling the org never recorded is not
+    # newly hidden. A row with NEITHER key in the span is not lost — it stays admin-visible and is
+    # listed by `/flags-unrouted/{period}` below (owner 2026-08-07: flags route through the DM).
+    return [f for f in rows if in_keyset(ks, f.get('store_code'), f.get('store_address'))]
+
+
+@router.get("/flags-unrouted/{period}")
+async def get_flags_unrouted(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Flags that reach NOBODY — the ones no district manager's span can match.
+
+    A flag with no resolvable store must never be silently dropped, so it lands here instead: an
+    explicit, countable queue an administrator can work through (add the missing `store_aliases`
+    spelling in Store Matching, or recalculate the period once the write path can resolve it).
+
+    Only an UNRESTRICTED caller (super-admin / scope 'all' / RBAC off) sees the rows — a scoped
+    manager is not entitled to out-of-span data, so they get `visible: false` and no rows. Never 500s:
+    before migration 285 the `store_code` column does not exist, and the endpoint degrades to an empty
+    queue rather than breaking the Flags page (contract §5)."""
+    require_org(org_id)
+    client = sb()
+    from app.modules.storeops.router import scope_keyset
+    ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
+    if ks is not None:
+        return {"period": period, "visible": False, "count": 0, "rows": [], "by_reason": {}}
+    try:
+        rows = (client.schema('commcalc').table('flags').select('*')
+                .eq('org_id', org_id).in_('period', _pvariants(period))
+                .is_('store_code', 'null').order('severity').execute().data) or []
+    except Exception as e:
+        print(f"WARN flags-unrouted degraded (run migration 285?): {e}")
+        return {"period": period, "visible": True, "count": 0, "rows": [], "by_reason": {},
+                "degraded": str(e)}
+    by_reason: dict = {}
+    for f in rows:
+        if str(f.get('store_address') or '').strip():
+            reason = 'store spelling not recorded — add a Store Matching alias'
+        elif str(f.get('mdn') or '').strip() or str(f.get('imei') or '').strip():
+            reason = 'no store on the row — recalculate the period to resolve it from the MI door'
+        else:
+            reason = 'the source row carried no store and no identifier'
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+    return {"period": period, "visible": True, "count": len(rows), "rows": rows,
+            "by_reason": by_reason}
 
 @router.get("/config/{period}")
 async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
@@ -23980,7 +24039,9 @@ def _cr_resolve_flags(client, org_id, period, ctx):
     rows = (client.schema("commcalc").table("flags").select("*")
             .eq("org_id", org_id).in_("period", _pvariants(period)).order("severity").execute().data) or []
     for r in rows:
-        r["market"] = market_for(r.get("store_address"))
+        # Resolved store_code first (mig 285): it is the key `market_for` indexes on, so an MI-derived
+        # flag with a blank store_address now lands in the right market instead of a blank one.
+        r["market"] = market_for(r.get("store_code")) or market_for(r.get("store_address"))
     return rows
 
 
@@ -24127,9 +24188,13 @@ async def custom_report_run(datasets: str = "", period: str = "", date_from: str
             continue
         # Span-scope filter on the dataset's store field (when it has one) — a store-scoped user never sees
         # out-of-scope rows, matching every other report.
+        # `span_extra` lets a dataset name ADDITIONAL keys the caller's keyset may match (the Flags
+        # dataset carries both a free-text `store_address` and the resolved `store_code` from mig 285).
+        # Superset-only: with no `span_extra` this is byte-identical to the single-field match.
         f_store = d["field_map"].get("store")
-        if ks is not None and f_store and in_keyset:
-            raw = [r for r in raw if in_keyset(ks, r.get(f_store))]
+        span_fields = [f for f in ([f_store] + list(d.get("span_extra") or [])) if f]
+        if ks is not None and span_fields and in_keyset:
+            raw = [r for r in raw if in_keyset(ks, *[r.get(f) for f in span_fields])]
         opt_src.append((d, raw))   # pick-don't-type options come from PRE-RULE-FIVE (post-scope) rows
         # mig-210 categories interface: expose master/kpi category columns WHEN the rows carry them
         # (loose coupling — hidden silently until mig 210 populates them).

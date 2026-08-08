@@ -12,7 +12,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 // The flag row shape the table + exports read (the endpoint returns more; these are the used fields).
 interface Flag {
   flag_type?: string; severity?: string; days_active?: number | null
-  epay_salesperson?: string; store_address?: string; mdn?: string; imei?: string
+  epay_salesperson?: string; store_address?: string; store_code?: string; mdn?: string; imei?: string
   phone_model?: string; customer_plan?: string
   activation_date?: string; transaction_date?: string
   amount?: number; description?: string
@@ -49,16 +49,22 @@ export default function FlagsPage() {
       .finally(() => setLoading(false))
   }, [period])
 
+  // ONE store label for the whole page. `store_address` is the free-text spelling the producing
+  // report wrote and is BLANK on most MI-derived rows; `store_code` (mig 285) is the RESOLVED store
+  // those rows are routed to. Falling back to it is what makes a newly-visible flag readable — and it
+  // keeps the RULE FIVE store filter, the store matrix and every export agreeing on one value.
+  const storeOf = (f: Flag) => (f.store_address || '').trim() || (f.store_code || '').trim()
+
   const types  = useMemo(() => [...new Set(flags.map(f => f.flag_type).filter(Boolean))].sort(), [flags])
   const reps   = useMemo(() => [...new Set(flags.map(f => f.epay_salesperson).filter(Boolean))].sort(), [flags])
-  const stores = useMemo(() => [...new Set(flags.map(f => f.store_address).filter(Boolean))].sort(), [flags])
+  const stores = useMemo(() => [...new Set(flags.map(storeOf).filter(Boolean))].sort(), [flags])
   const actMonths = useMemo(() => [...new Set(flags.map(f => String(f.activation_date || f.transaction_date || '').slice(0, 7)).filter(Boolean))].sort().reverse(), [flags])
 
   const filtered = useMemo(() => {
     let rows = flags.filter(f => {
       if (fType && f.flag_type !== fType) return false
       if (fRep && f.epay_salesperson !== fRep) return false
-      if (fStore && f.store_address !== fStore) return false
+      if (fStore && storeOf(f) !== fStore) return false
       if (fModel && !(f.phone_model || '').toLowerCase().includes(fModel.toLowerCase())) return false
       if (fActMonth && String(f.activation_date || f.transaction_date || '').slice(0, 7) !== fActMonth) return false
       if (fSearch) {
@@ -77,7 +83,10 @@ export default function FlagsPage() {
       return true
     })
     rows.sort((a, b) => {
-      let av = a[sortKey], bv = b[sortKey]
+      // Sorting the Store column follows what the column DISPLAYS (storeOf), otherwise every
+      // resolved-but-address-less row sorts into one blank block at the end.
+      const pick = (f: any) => sortKey === 'store_address' ? storeOf(f) : f[sortKey]
+      let av = pick(a), bv = pick(b)
       if (av == null) av = sortDir === 'asc' ? Infinity : -Infinity
       if (bv == null) bv = sortDir === 'asc' ? Infinity : -Infinity
       if (typeof av === 'string') { av = av.toLowerCase(); bv = (bv||'').toLowerCase() }
@@ -109,7 +118,7 @@ export default function FlagsPage() {
     const head = 'Flag Type,Severity,Days Active,Rep,Store,MDN,IMEI,Phone Model,Plan,Activated,Amount,Description'
     const rows = filtered.map(f => [
       f.flag_type, f.severity, f.days_active ?? '', f.epay_salesperson || '',
-      `"${(f.store_address||'').replace(/"/g,'')}"`, f.mdn || '', f.imei || '',
+      `"${storeOf(f).replace(/"/g,'')}"`, f.mdn || '', f.imei || '',
       `"${(f.phone_model||'').replace(/"/g,'')}"`, `"${(f.customer_plan||'').replace(/"/g,'')}"`,
       String(f.activation_date||f.transaction_date||'').slice(0,10),
       f.amount || '', `"${(f.description||'').replace(/"/g,'').replace(/\n/g,' ')}"`,
@@ -140,7 +149,7 @@ export default function FlagsPage() {
         { header: 'Severity', get: (f: Flag) => f.severity },
         { header: 'Days Active', get: (f: Flag) => (f.days_active ?? ''), align: 'right' },
         { header: 'Rep', get: (f: Flag) => f.epay_salesperson || '' },
-        { header: 'Store', get: (f: Flag) => f.store_address || '' },
+        { header: 'Store', get: (f: Flag) => storeOf(f) },
         { header: 'MDN', get: (f: Flag) => f.mdn || '' },
         { header: 'IMEI', get: (f: Flag) => f.imei || '' },
         { header: 'Phone Model', get: (f: Flag) => f.phone_model || '' },
@@ -211,7 +220,7 @@ export default function FlagsPage() {
       {(() => {
         const storeRows: Record<string, Record<string, number>> = {}
         flags.forEach(f => {
-          const st = f.store_address || 'Unknown'
+          const st = storeOf(f) || 'Unrouted (no store resolved)'
           if (!storeRows[st]) storeRows[st] = {}
           storeRows[st][f.flag_type] = (storeRows[st][f.flag_type] || 0) + 1
         })
@@ -311,7 +320,7 @@ export default function FlagsPage() {
                     {f.days_active != null ? f.days_active : '—'}
                   </td>
                   <td style={{ padding: '8px 10px', fontSize: 12 }}>{f.epay_salesperson || '—'}</td>
-                  <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text3)' }}>{(f.store_address||'—').substring(0,28)}</td>
+                  <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text3)' }}>{(storeOf(f)||'—').substring(0,28)}</td>
                   <td style={{ padding: '8px 10px', fontSize: 11 }}>{f.mdn || '—'}</td>
                   <td style={{ padding: '8px 10px', fontSize: 11, fontFamily: 'monospace' }}>{f.imei || '—'}</td>
                   <td style={{ padding: '8px 10px', fontSize: 11 }}>{(f.phone_model||'—').substring(0,30)}</td>
