@@ -24,7 +24,8 @@ const GROUPS: Group[] = [
     title: 'Access & Roles',
     desc: 'Logins, roles and employees.',
     items: [
-      { href: '/admin/roles', icon: '🔐', label: 'Roles & Access', desc: 'Roles, per-module permissions (incl. AI Assistant), employee add/edit, logins, login enforcement.' },
+      { href: '/admin/roles', icon: '🔐', label: 'Roles & Access', desc: 'Roles, per-module permissions (incl. AI Assistant), employee add/edit, logins, login enforcement. Also where you open the app AS an employee to reproduce a problem they reported.' },
+      { href: '/admin/impersonation', icon: '🕵️', label: 'Sign-in-as Audit', desc: 'Every time an admin viewed the app as an employee: who, whom, how long, and every change they made. Plus how long a session lasts before it ends itself.' },
     ],
   },
   {

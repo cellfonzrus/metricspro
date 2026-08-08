@@ -3,8 +3,11 @@ import { useState, useEffect, Fragment } from 'react'
 import { apiCached, CONFIG, LOOKUP } from '@/lib/cache'
 import { api } from '@/lib/client'
 import { REPORT_AREAS, DATA_GRANTS, NAV, reportAreaForPath, canSeeItem, navBlockReason,
-         schedulingReach, type Permissions } from '@/lib/rbac'
+         schedulingReach, canImpersonate, type Permissions } from '@/lib/rbac'
 import { ExportButtons } from '@/lib/export'
+import { useAuth } from '@/lib/auth-context'
+import EntityPicker from '@/components/EntityPicker'
+import Link from 'next/link'
 
 // One-click templates for the roles most tenants need but the base 4 don't include.
 const ROLE_TEMPLATES: { name: string; display: string; permissions: any }[] = [
@@ -48,6 +51,68 @@ const EMP_WIDGETS = [
   { k: 'commission_tracking', label: 'Commission tracking' }, { k: 'flags', label: 'Flags' },
   { k: 'chargebacks', label: 'Chargebacks' }, { k: 'device_history', label: 'Device history' },
 ]
+
+// ── Admin "view as employee" card (owner directive 2026-08-06) ───────────────────────────────────
+// "the admin should have the option to login the app with an employees login directly from the roles
+//  and config menu incase needed to replicate an issue they are facing"
+// Renders ONLY for a role that holds the (default-deny) `impersonate` permission — everyone else sees
+// nothing at all, and the backend refuses them independently. RULE THREE: the employee is chosen from
+// a typeahead over the org's REAL roster of people who have a login (EntityPicker, "First Last",
+// auto-disambiguated by email when two people share a name); never a free-text box.
+function ViewAsEmployeeCard() {
+  const { permissions, startImpersonation } = useAuth()
+  const [targets, setTargets] = useState<{ id: string; label: string; sublabel?: string }[]>([])
+  const [pick, setPick] = useState<string | null>(null)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const allowed = canImpersonate(permissions as Permissions)
+  useEffect(() => {
+    if (!allowed) return
+    api('/api/v1/core/impersonation/targets')
+      .then((d: any) => setTargets(d?.targets || []))
+      .catch(() => setTargets([]))
+  }, [allowed])
+  if (!allowed) return null
+  return (
+    <div className="card" data-tour-id="roles-view-as" style={{ padding: 16, marginBottom: 18,
+      borderLeft: '5px solid #7f1d1d', background: '#fef2f2' }}>
+      <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>👁️ View the app as an employee</div>
+      <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10, maxWidth: 780, lineHeight: 1.55 }}>
+        Open the app exactly as this person sees it, so you can reproduce a problem they reported instead
+        of guessing from a screenshot. Everything works normally — <b>except clocking in and clocking
+        out, which needs their own password</b>, because a punch is a record that they were physically at
+        work. Every session and every change you make is logged against you and is visible on the{' '}
+        <Link href="/admin/impersonation" style={{ fontWeight: 600 }}>Sign-in-as Audit</Link> page.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <EntityPicker options={targets} value={pick} onChange={setPick} width={300}
+          ariaLabel="Employee to view the app as" placeholder="Employee…" />
+        <input value={reason} onChange={e => setReason(e.target.value)} style={{ padding: '6px 10px',
+          borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, width: 300 }}
+          placeholder="What are you reproducing? (optional, saved in the log)" />
+        <button className="btn" disabled={!pick || busy}
+          onClick={async () => {
+            if (!pick) return
+            setBusy(true); setErr('')
+            try { await startImpersonation(pick, reason) }
+            catch (e: any) { setErr(e?.message || 'Could not start'); setBusy(false) }
+          }}
+          style={{ background: '#7f1d1d', color: '#fff', fontWeight: 700,
+            cursor: pick && !busy ? 'pointer' : 'not-allowed', opacity: pick && !busy ? 1 : 0.6 }}>
+          {busy ? 'Starting…' : '👁️ View as this employee'}
+        </button>
+      </div>
+      {targets.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 8 }}>
+          Nobody here can be viewed as yet — people need a login first (create one below). Platform
+          super-admins and other roles that can themselves sign in as others are deliberately excluded.
+        </div>
+      )}
+      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 8 }}>{err}</div>}
+    </div>
+  )
+}
 
 // ── Access state: role-assigned vs login-exists, at a glance (auth-ux hardening 2026-08-03) ───────
 // Creating a login and assigning a role are TWO separate steps on this page, and the grid used to
@@ -525,6 +590,8 @@ export default function RolesAdminPage() {
         </button>
       </div>
 
+      <ViewAsEmployeeCard />
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
         {(['people', 'roles'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{ padding: '7px 16px', borderRadius: 8,
@@ -689,6 +756,23 @@ export default function RolesAdminPage() {
                         )
                       })}
                       {settingAreas.length === 0 && <span style={{ fontSize: 12, color: 'var(--text3)' }}>—</span>}
+                    </div>
+                    {/* Admin "view as employee" — the ONE permission with no default and no bypass.
+                        Deliberately NOT folded into "Data visibility" or "Settings editing": both of
+                        those default-open for a company-wide role, and signing in as another human is
+                        not something that should ever arrive switched on. */}
+                    <div data-tour-id="roles-impersonate-toggle" style={{ marginTop: 14, padding: 10, borderRadius: 8,
+                      border: '1px solid #fecaca', background: '#fef2f2' }}>
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 13, fontWeight: 600 }}>
+                        <input type="checkbox" checked={p.impersonate === true}
+                          onChange={ev => setPerm(r.id, pp => ({ ...pp, impersonate: ev.target.checked }))} />
+                        <span>Sign in as an employee</span>
+                      </label>
+                      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6, maxWidth: 240, lineHeight: 1.5 }}>
+                        Lets this role open the app AS another employee to reproduce a problem. <b>Off for
+                        every role until you turn it on</b> — including admins and super-admins. Clock in /
+                        clock out still needs the employee&apos;s own password. Every session is logged.
+                      </div>
                     </div>
                   </div>
                 </div>

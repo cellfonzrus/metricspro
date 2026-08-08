@@ -34,8 +34,16 @@ function scopeOrg(path: string): string {
 // not the authority.
 const ACTIVE_ORG_KEY = 'mp_active_org'
 export function getActiveOrg(): string | null {
-  try { return typeof window !== 'undefined' ? (window.localStorage.getItem(ACTIVE_ORG_KEY) || null) : null }
-  catch { return null }
+  try {
+    if (typeof window === 'undefined') return null
+    // While viewing the app as an employee the acting tenant is the one PINNED IN THE GRANT, not the
+    // admin's own switcher choice. The backend enforces this regardless (it overrides both the org_id
+    // query param and x-active-org from the grant); mirroring it here keeps the client-side cache
+    // namespace and any org-less URL pointing at the same tenant the server will use.
+    const imp = getImpersonation()
+    if (imp?.org_id) return imp.org_id
+    return window.localStorage.getItem(ACTIVE_ORG_KEY) || null
+  } catch { return null }
 }
 export function setActiveOrg(id: string | null | undefined) {
   try {
@@ -47,6 +55,97 @@ export function setActiveOrg(id: string | null | undefined) {
 export function activeOrgHeader(): Record<string, string> {
   const o = getActiveOrg()
   return o ? { 'x-active-org': o } : {}
+}
+
+// ── Admin "view as employee" (impersonation, owner directive 2026-08-06) ─────────────────────────
+// An admin with the (default-deny) `impersonate` role permission can enter the app AS an employee to
+// reproduce a bug. What the browser holds is NOT a "pretend" flag: it is a SERVER-MINTED, HMAC-signed,
+// DB-anchored grant (see backend app/core/impersonation.py). It is worthless on its own — the backend
+// re-verifies the signature, the expiry, the DB session row AND that the request's own Supabase token
+// belongs to the admin the grant was issued to, on every single request. Editing this localStorage
+// entry by hand buys nothing; deleting it simply exits.
+//
+//   x-impersonate         — the grant. Sent on EVERY api()/apiUpload() call while a session is open…
+//   x-impersonate-reauth  — …plus the single-use unlock the EMPLOYEE's own password produced, which
+//                           the backend consumes on a clock-in / clock-out.
+//
+// EXEMPT PREFIX: never sent to /api/v1/core/impersonation/*. That console (stop / reauth / status /
+// audit) must run as the REAL admin, and the backend refuses the whole prefix for an impersonated
+// request — so attaching the header there would lock the admin out of their own exit button.
+export type ImpersonationState = {
+  grant: string; session_id: string; org_id: string
+  target_name?: string | null; target_email?: string | null; target_role?: string | null
+  expires_at?: string | null
+}
+const IMP_KEY = 'mp_impersonation'
+const IMP_REAUTH_KEY = 'mp_impersonation_reauth'
+const IMP_EXEMPT_RE = /^\/api\/v1\/core\/impersonation(\/|$|\?)/
+
+export function getImpersonation(): ImpersonationState | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const raw = window.localStorage.getItem(IMP_KEY)
+    if (!raw) return null
+    const v = JSON.parse(raw)
+    return v && v.grant && v.session_id ? v as ImpersonationState : null
+  } catch { return null }
+}
+export function setImpersonation(v: ImpersonationState | null) {
+  try {
+    if (typeof window === 'undefined') return
+    if (v) window.localStorage.setItem(IMP_KEY, JSON.stringify(v))
+    else { window.localStorage.removeItem(IMP_KEY); window.localStorage.removeItem(IMP_REAUTH_KEY) }
+  } catch { /* ignore */ }
+}
+/** The single-use "the employee just typed their password" unlock, if one is outstanding. */
+export function getImpersonationReauth(): { marker: string; expires_at?: string } | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const raw = window.localStorage.getItem(IMP_REAUTH_KEY)
+    if (!raw) return null
+    const v = JSON.parse(raw)
+    if (!v?.marker) return null
+    if (v.expires_at && Date.parse(v.expires_at) <= Date.now()) return null   // expired → gone
+    return v
+  } catch { return null }
+}
+export function setImpersonationReauth(v: { marker: string; expires_at?: string } | null) {
+  try {
+    if (typeof window === 'undefined') return
+    if (v) window.localStorage.setItem(IMP_REAUTH_KEY, JSON.stringify(v))
+    else window.localStorage.removeItem(IMP_REAUTH_KEY)
+  } catch { /* ignore */ }
+}
+export function impersonationHeader(path?: string): Record<string, string> {
+  if (path && IMP_EXEMPT_RE.test(path)) return {}
+  const imp = getImpersonation()
+  if (!imp) return {}
+  const h: Record<string, string> = { 'x-impersonate': imp.grant }
+  const ra = getImpersonationReauth()
+  if (ra) h['x-impersonate-reauth'] = ra.marker
+  return h
+}
+
+// The impersonated session died server-side (exited elsewhere, expired, employee deactivated, the
+// tenant switched it off). The backend answers 401 with code `impersonation_invalid`. Detect it at
+// the ONE choke point, drop the local grant and notify the shell so it returns the admin to their own
+// account instead of showing a page full of red errors. Single-shot latch, same shape as the
+// dead-session detector above.
+let _impInvalid = false
+const _impInvalidCbs = new Set<() => void>()
+export function onImpersonationInvalid(cb: () => void): () => void {
+  _impInvalidCbs.add(cb)
+  if (_impInvalid) { try { cb() } catch { /* never break a request */ } }
+  return () => { _impInvalidCbs.delete(cb) }
+}
+export function clearImpersonationInvalid() { _impInvalid = false }
+function markImpersonationInvalid(err: any) {
+  const code = err?.code
+  if (code !== 'impersonation_invalid') return      // `impersonation_unavailable` (503) = retryable
+  setImpersonation(null)
+  if (_impInvalid) return
+  _impInvalid = true
+  for (const cb of Array.from(_impInvalidCbs)) { try { cb() } catch { /* ignore */ } }
 }
 
 // ── 2FA verified-session marker (auth-hardening) ───────────────────────────────────────────────────
@@ -226,12 +325,14 @@ export async function api(path: string, opts: RequestInit = {}) {
   const authHeader = await bearer()
   const res = await fetch(`${API_URL}${withOrgScope(path)}`, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...opts.headers },
+    headers: { 'Content-Type': 'application/json', ...authHeader, ...activeOrgHeader(), ...twofaHeader(),
+               ...impersonationHeader(path), ...opts.headers },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     // Detect-only: never changes what is thrown (see DEAD CLIENT SESSION block above).
     if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)
+    if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
     throw new Error(errMsg(err, res.status))
   }
   return res.json()
@@ -243,10 +344,11 @@ export async function api(path: string, opts: RequestInit = {}) {
 export async function apiUpload(path: string, form: FormData) {
   const authHeader = await bearer()
   const res = await fetch(`${API_URL}${withOrgScope(path)}`, { method: 'POST', body: form,
-    headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader() } })
+    headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...impersonationHeader(path) } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)
+    if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
     throw new Error(errMsg(err, res.status))
   }
   return res.json()
