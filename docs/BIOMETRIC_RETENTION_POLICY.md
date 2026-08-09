@@ -1,10 +1,22 @@
 # Biometric Data (Face Descriptor) Collection, Retention & Destruction Policy
 
-**Applies to:** MetricsPro's StoreOps time-clock face-recognition feature, all tenants.
-**Effective:** 2026-08-09. **Owner:** MetricsPro (Cellfonz R Us / "the Company"), as data controller for
-each tenant's own employee data. **Status of face recognition today:** OFF for every tenant by default
-(migration 420, 2026-08-09); this policy governs the data that is already on file from before that
-change, and any future re-enablement.
+**Issued by:** **Cellfonz R Us** ("the Company"), operator of the MetricsPro platform.
+**Applies to:** the StoreOps time-clock face-recognition feature, and to each company that uses it
+through MetricsPro. As of the effective date those are **Cellfonz R Us**, **Luxelink Wireless LLC**, and
+**Vzone**. Each of these is a separate employer and adopts this schedule as its own written policy for
+its own employees; where this document says "the Company," a reader should understand it to mean the
+employing company whose employee's data is in question. A company added to the platform later adopts
+this policy on the date it enables the feature.
+**Effective:** 2026-08-09. **Next review:** on any change to the retention schedule, the collection
+method, or applicable law — and in any event within 12 months.
+**Status of face recognition today:** OFF for every company on the platform (migration 420,
+2026-08-09). This policy governs the descriptors already on file from before that change, and any
+future re-enablement.
+
+> **No employee action is required, and none is being requested, by the adoption of this policy.**
+> Publishing this schedule does not itself notify, email, prompt, or change what any employee sees.
+> The consent process described in §3 applies only when a company re-enables face recognition; until
+> then it is a statement of what will happen, not something in motion.
 
 This document is the written retention schedule required by biometric privacy law (most notably the
 Illinois Biometric Information Privacy Act, 740 ILCS 14/1 et seq., "BIPA") and is intended to be read
@@ -107,10 +119,17 @@ archive/cold-storage move. Once destroyed, the vector cannot be recovered by the
 employee, or by any support process; re-enabling face recognition for that person afterward requires a
 fresh enrollment (a new photo, producing a new descriptor).
 
-A scheduled, automated process evaluates every enrolled descriptor across every tenant, daily, against
-the §4 schedule, and destroys whatever is due. The same evaluation logic backs an on-demand "preview"
-that an administrator can run at any time to see, before anything is destroyed, exactly which
-descriptors are currently due and why (which of the four triggers applies to each).
+Two paths carry out the same schedule, using the same evaluation logic:
+
+- **On demand.** An administrator can, at any time, run a **preview** that lists exactly which
+  descriptors are currently due and under which of the four triggers — and then apply it. Destruction
+  is always preceded by that preview; nothing is destroyed by a single unconfirmed click.
+- **On a daily schedule.** An automated sweep evaluates every enrolled descriptor, for every company,
+  against the §4 schedule and destroys whatever is due. **This sweep is built and is enabled by the
+  platform operator; as of the effective date of this policy the daily schedule has not yet been
+  switched on**, and destruction is therefore carried out by an administrator on demand. This
+  document will be updated on the date the automated schedule begins. No descriptor is currently due
+  under any of the four triggers, so nothing is pending destruction at the time of writing.
 
 *Engineering reference (not part of the policy commitment itself): the schedule is implemented in
 `backend/app/modules/storeops/face_retention.py`, the per-tenant configuration in migration
@@ -149,11 +168,22 @@ specific, dated, auditable answer rather than an assertion.
 
 ## 9. Questions or requests
 
-An employee who wants to know what biometric data the Company holds about them, or who wants to
-exercise the destruction right described in §5, should contact their HR representative or store manager,
-who will process the request through the Company's HR system per §5–7 above.
+An employee who wants to know what biometric data is held about them, or who wants to exercise the
+destruction right described in §5, should contact their HR representative or store manager, who will
+process the request through the HR system per §5–7 above. Employees of **Cellfonz R Us** may also
+direct questions to the Company at the contact details on file with HR.
 
 ---
 
-*This policy is reviewed whenever the retention schedule, the collection method, or applicable law
-changes. Last updated 2026-08-09 alongside the deletion job that enforces it.*
+**Issued by:** Cellfonz R Us, operator of the MetricsPro platform, on behalf of itself and each
+company that adopts this schedule (§ header).
+**Effective date:** 2026-08-09 · **Last updated:** 2026-08-09, alongside the deletion job that
+enforces it · **Next review:** within 12 months, or immediately upon any change to the retention
+schedule, the collection method, or applicable law.
+
+*Adopting company (complete on adoption):* ______________________________
+*Authorized signature / title:* ______________________________  *Date:* ____________
+
+*This policy is a statement of the Company's practice; it is not legal advice. It should be reviewed
+by an employment/privacy attorney before being relied upon, particularly for any company with
+employees in Illinois, Texas, Washington, or another jurisdiction with a biometric privacy statute.*
