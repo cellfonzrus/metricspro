@@ -15335,7 +15335,17 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
     # Activation-classification VISIBILITY (mig 213/224): surface blank / unrecognized contract types so a
     # tenant whose activations read 0 sees WHY and where to map them — never a silent 0 again. Pure; safe.
     try:
-        _cls_gaps = _classification_gaps(rows, acfg)
+        # The tenant's OWN payout-exclusion map (plan_pay_gate ②, seeded with the owner's 2026-08-01 RTR
+        # rule) tells the gap counter which lines are bill payments / non-commissionable, so an
+        # accessory-or-refill-only receipt is not reported as an unclassified activation. Degrades to
+        # None (= old behaviour) if the module or table is unavailable.
+        from app.modules.commcalc import plan_pay_gate as _ppg
+        _exc_rules, _ = _ppg.load_exclusions(client, org_id)
+        _is_exc = (lambda _r: _ppg.exclusion_hit(_r, _exc_rules) is not None) if _exc_rules else None
+    except Exception:
+        _is_exc = None
+    try:
+        _cls_gaps = _classification_gaps(rows, acfg, is_excluded=_is_exc)
     except Exception:
         _cls_gaps = {'note': None}
     return {"period": period, "source": source, "org_id": org_id, "rows": out, "totals": totals,
@@ -17245,13 +17255,59 @@ def _blank_ct_bucket_map(rows, ct_map, rules):
     return out
 
 
-def _classification_gaps(rows, acfg):
+def _txn_activation_candidate(lines, acfg, is_excluded=None):
+    """Could this blank-contract-type transaction PLAUSIBLY have been an activation? True when >=1 of its
+    lines is neither EXCLUDED nor an ACCESSORY — i.e. something was sold that a contract type could have
+    described. Pure; never raises.
+
+    WHY THIS EXISTS (2026-08-09). A blank Contract Type is the NORMAL state for a transaction that was
+    never an activation: a bill payment / airtime refill, or an accessory-only receipt. Counting those as
+    "unclassified activations" told the Total Wireless tenant that 1009 of its 1303 August transactions
+    needed mapping "so they count as activations" — when 930 of them were RTR bill payments, which the
+    owner has ruled NEVER pay (2026-08-01, the payout_exclusion_map seed), and 78 more were accessory-only
+    receipts. Acting on that note would have invented an activation rule that swept every bill payment
+    into the activation count. The note has to earn its alarm, or it trains the owner to ignore it.
+
+    NOTHING IS HARD-CODED HERE. All three tests are the tenant's own config, already curated elsewhere in
+    this same page: `is_excluded` is the payout_exclusion_map predicate (the RTR rule is a seeded, editable,
+    WORD-anchored config row — not a branch), the bill-payment list is `billpay_products`, and the accessory
+    test is `_is_accessory`, the very classifier the report aggregates accessory revenue with. A tenant with
+    none of them configured gets `is_excluded=None` + an empty accessory config, every line reads
+    activation-capable, and the count is byte-identical to the old behaviour.
+
+    An exclusion rule keyed on a column the DISPLAY projection does not carry (sku / tender_type) simply
+    never hits — `exclusion_hit` skips a blank value — so this can only ever UNDER-suppress, never
+    wrongly hide a real gap."""
+    bp = (acfg or {}).get('billpay_products') or set()
+    for l in lines or ():
+        try:
+            if is_excluded is not None and is_excluded(l):
+                continue
+            # The tenant's BILL-PAYMENT list, matched exactly as _sales_cell_agg matches it (explicit
+            # picked products when configured, else the default tokens) so the note and the report's own
+            # conversion metric can never disagree about what a walk-in recharge is.
+            _p = str(l.get('product_desc') or '').strip().lower()
+            if _p and (_p in bp if bp else any(_t in _p for _t in _BILLPAY_DEFAULT_TOKENS)):
+                continue
+            if _is_accessory(l.get('department'), l.get('category'), l.get('product_desc'), acfg):
+                continue
+        except Exception:
+            return True   # a classifier error must SHOW the gap, never silently swallow it
+        return True
+    return False
+
+
+def _classification_gaps(rows, acfg, is_excluded=None):
     """Report-level VISIBILITY into activation-classification gaps so a tenant's activations never silently
     read 0 again. Over the (voided/Return-skipped) rows already in memory, returns:
       unrecognized_contract_types : [{contract_type, lines, transactions}] for NON-blank ct values that
         resolve to None (not activation/upgrade/byod, not a swap) -> map them in the ct-map.
       blank_ct_transactions : distinct tids with a blank-ct line and NO ct-based activation on any line.
-      blank_ct_unrecovered  : of those, how many the per-org activation_rules did NOT rescue (still 0).
+      blank_ct_non_activation : of those, how many could not have been an activation at all — every line
+        is either tenant-EXCLUDED (the RTR / bill-payment map) or an ACCESSORY. Reported, never alarmed
+        on: mapping these would count bill payments as activations. See _txn_activation_candidate.
+      blank_ct_unrecovered  : of those, how many are activation-CAPABLE, were not rescued by the per-org
+        activation_rules, and therefore really are unclassified (still 0).
       rescued_by_rules      : how many blank-ct tids the activation_rules DID classify.
       note                  : a human sentence (or None) telling the owner exactly where to map them.
     DISPLAY ONLY. Pure; never raises. Empty everything (house/Boost, no blank/unknown labels) -> note None."""
@@ -17261,6 +17317,7 @@ def _classification_gaps(rows, acfg):
     blank_bucket = _blank_ct_bucket_map(rows, ct_map, rules)
     unrec_lines, unrec_txn = Counter(), {}
     txn_blank, txn_classed = set(), set()
+    lines_by_tid = {}
     for r in rows:
         if str(r.get('voided') or '').strip().lower() in _VOID_TOKENS:
             continue
@@ -17268,6 +17325,8 @@ def _classification_gaps(rows, acfg):
             continue
         tid = str(r.get('trans_id') or '').strip()
         ct = str(r.get('contract_type') or '').strip()
+        if tid:
+            lines_by_tid.setdefault(tid, []).append(r)
         cls = _resolve_ct_bucket(ct, ct_map)
         if cls:
             if tid:
@@ -17280,7 +17339,11 @@ def _classification_gaps(rows, acfg):
         elif tid:
             txn_blank.add(tid)
     txn_blank -= txn_classed
-    unrecovered = sorted(t for t in txn_blank if t not in blank_bucket)
+    # A transaction that could never have BEEN an activation (bill-payment / accessory-only) is not a
+    # mapping gap — see _txn_activation_candidate. Counted and returned, but never alarmed on.
+    non_act = {t for t in txn_blank
+               if not _txn_activation_candidate(lines_by_tid.get(t), acfg, is_excluded)}
+    unrecovered = sorted(t for t in txn_blank if t not in blank_bucket and t not in non_act)
     unrecognized = sorted(
         [{'contract_type': ct, 'lines': n, 'transactions': len(unrec_txn.get(ct, set()))}
          for ct, n in unrec_lines.items()], key=lambda x: -x['lines'])
@@ -17296,6 +17359,7 @@ def _classification_gaps(rows, acfg):
                 'blank-contract-type activation rules) so they count as activations.')
     return {'unrecognized_contract_types': unrecognized,
             'blank_ct_transactions': len(txn_blank),
+            'blank_ct_non_activation': len(non_act),
             'blank_ct_unrecovered': len(unrecovered),
             'rescued_by_rules': len(blank_bucket),
             'note': note}
