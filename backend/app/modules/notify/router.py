@@ -283,8 +283,8 @@ def _resolve_targets(client_notify, org_id, body) -> tuple[list, list]:
     """Return (emails, phones) from explicit lists + saved recipient_ids.
 
     Phones are country-code-normalized to canonical E.164 '+<cc>...' using the tenant's default_cc.
-    This is also the SEND-TIME rescue for pre-existing bare-10-digit stored rows (e.g. '5162330422'):
-    they normalize to '+15162330422' here even without a data backfill. The WhatsApp transport layer
+    This is also the SEND-TIME rescue for pre-existing bare-10-digit stored rows (e.g. '2125550123'):
+    they normalize to '+12125550123' here even without a data backfill. The WhatsApp transport layer
     (whatsapp_meta._to_number) strips the '+' to digits for Meta — byte-compatible with the prior send
     format — so this changes storage/dedup canonicalization, not what Meta receives for existing rows."""
     cc = _tenant_default_cc(org_id)

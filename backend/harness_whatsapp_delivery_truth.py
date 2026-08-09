@@ -201,7 +201,7 @@ def run_send(doc_header, window_open, responder, data=b"PDFBYTES"):
     try:
         try:
             res = asyncio.run(W.send_document_detailed(
-                "+15162330422", data, "application/pdf", "report.pdf",
+                "+12125550123", data, "application/pdf", "report.pdf",
                 "Sales Report — https://api.example/api/v1/notify/dl/tok", window_open=window_open))
         except Exception as e:
             res = e
@@ -260,18 +260,18 @@ ok("C8 send_document wrapper still returns a bare message-id string (callers unc
 _old = W.settings.WHATSAPP_FREEFORM_WHEN_UNKNOWN
 W.settings.WHATSAPP_FREEFORM_WHEN_UNKNOWN = True
 ok("C9 break-glass WHATSAPP_FREEFORM_WHEN_UNKNOWN=1 forces the window open",
-   asyncio.run(W.resolve_window_open("+15162330422")) is True)
+   asyncio.run(W.resolve_window_open("+12125550123")) is True)
 W.settings.WHATSAPP_FREEFORM_WHEN_UNKNOWN = _old
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════
 sec("D. whatsapp_window — pure logic + FAIL-CLOSED degradation")
 
-ok("D digits(): bare 10-digit gets the US country code", WW.digits("516-233-0422") == "15162330422")
-ok("D digits(): already-E.164 is preserved", WW.digits("+1 (516) 233-0422") == "15162330422")
+ok("D digits(): bare 10-digit gets the US country code", WW.digits("212-555-0123") == "12125550123")
+ok("D digits(): already-E.164 is preserved", WW.digits("+1 (212) 555-0123") == "12125550123")
 ok("D digits(): matches whatsapp_meta._to_number exactly",
-   WW.digits("5162330422") == W._to_number("5162330422")
-   and WW.digits("+15162330422") == W._to_number("+15162330422"))
+   WW.digits("2125550123") == W._to_number("2125550123")
+   and WW.digits("+12125550123") == W._to_number("+12125550123"))
 ok("D digits(): empty → ''", WW.digits(None) == "" and WW.digits("") == "")
 
 ok("D window OPEN 1h ago", WW.window_open_at((NOW - timedelta(hours=1)).isoformat(), now=NOW) is True)
@@ -299,14 +299,14 @@ class Boom:
 
 
 use_sb(lambda: Boom())
-ok("D un-run migration: is_window_open → False (fail CLOSED)", WW.is_window_open("15162330422") is False)
-ok("D un-run migration: last_inbound_at → None", WW.last_inbound_at("15162330422") is None)
-ok("D un-run migration: record_inbound → False, never raises", WW.record_inbound("15162330422") is False)
+ok("D un-run migration: is_window_open → False (fail CLOSED)", WW.is_window_open("12125550123") is False)
+ok("D un-run migration: last_inbound_at → None", WW.last_inbound_at("12125550123") is None)
+ok("D un-run migration: record_inbound → False, never raises", WW.record_inbound("12125550123") is False)
 ok("D un-run migration: tracking_available → False", WW.tracking_available(force=True) is False)
 ok("D tracking_available caches its answer (health is called on every modal open)",
    WW._TRACKING_CACHE["value"] is False and WW._TRACKING_CACHE["at"] > 0)
 ok("D fail-closed window ⇒ the cold-recipient plan (approved template)",
-   W.plan_delivery(False, True, WW.is_window_open("15162330422")) == ["template_link"])
+   W.plan_delivery(False, True, WW.is_window_open("12125550123")) == ["template_link"])
 use_sb(_REAL_SB)
 
 
@@ -362,19 +362,19 @@ class FakeSB:
 store = {"rows": [], "upserts": [], "updates": []}
 use_sb(lambda: FakeSB(store))
 W.settings.WHATSAPP_PHONE_NUMBER_ID = "PNID123"
-ok("D record_inbound writes a row", WW.record_inbound("+1 516-233-0422", at=NOW) is True)
+ok("D record_inbound writes a row", WW.record_inbound("+1 212-555-0123", at=NOW) is True)
 ok("D the row is keyed by (our phone_number_id, recipient digits)",
-   store["rows"][0]["phone_number_id"] == "PNID123" and store["rows"][0]["wa_id"] == "15162330422")
+   store["rows"][0]["phone_number_id"] == "PNID123" and store["rows"][0]["wa_id"] == "12125550123")
 ok("D ON CONFLICT names BOTH NOT-NULL primary-key columns (no nullable-column trap)",
    store["upserts"][0][1] == "phone_number_id,wa_id")
 ok("D the row carries NO tenant/org field (account-wide by design)",
    not any(k for k in store["rows"][0] if "org" in k.lower()))
-ok("D is_window_open now TRUE for that number", WW.is_window_open("5162330422", now=NOW) is True)
+ok("D is_window_open now TRUE for that number", WW.is_window_open("2125550123", now=NOW) is True)
 ok("D is_window_open FALSE for a DIFFERENT number", WW.is_window_open("15550001111", now=NOW) is False)
-ok("D re-recording is idempotent (still one row)", WW.record_inbound("15162330422", at=NOW)
+ok("D re-recording is idempotent (still one row)", WW.record_inbound("12125550123", at=NOW)
    and len(store["rows"]) == 1)
 ok("D window expires: same row read 30h later → CLOSED",
-   WW.is_window_open("15162330422", now=NOW + timedelta(hours=30)) is False)
+   WW.is_window_open("12125550123", now=NOW + timedelta(hours=30)) is False)
 use_sb(_REAL_SB)
 
 
@@ -591,21 +591,21 @@ sec("G. INBOUND → window opens → the attachment path becomes safe again")
 store2 = {"rows": [], "upserts": [], "updates": []}
 use_sb(lambda: FakeSB(store2))
 W.settings.WHATSAPP_PHONE_NUMBER_ID = "PNID123"
-ok("G before any inbound the window is CLOSED", WW.is_window_open("15162330422") is False)
+ok("G before any inbound the window is CLOSED", WW.is_window_open("12125550123") is False)
 ok("G ⇒ the plan is the approved template",
-   W.plan_delivery(False, True, WW.is_window_open("15162330422")) == ["template_link"])
+   W.plan_delivery(False, True, WW.is_window_open("12125550123")) == ["template_link"])
 
 R.settings.WHATSAPP_APP_SECRET, R.settings.WHATSAPP_WEBHOOK_REQUIRE_SIGNATURE = SECRET, True
 inbound = json.dumps({"object": "whatsapp_business_account", "entry": [{"changes": [{"value": {
-    "messages": [{"from": "15162330422", "type": "text", "text": {"body": "hi"}}]}}]}]}).encode()
+    "messages": [{"from": "12125550123", "type": "text", "text": {"body": "hi"}}]}}]}]}).encode()
 sig = "sha256=" + hmac.new(SECRET.encode(), inbound, hashlib.sha256).hexdigest()
 r = post_webhook(inbound, sig)
 ok("G a signed inbound POST returns 200", r == {"ok": True})
 ok("G the inbound was RECORDED as window evidence",
-   any(row["wa_id"] == "15162330422" for row in store2["rows"]))
-ok("G the window is now OPEN", WW.is_window_open("15162330422") is True)
+   any(row["wa_id"] == "12125550123" for row in store2["rows"]))
+ok("G the window is now OPEN", WW.is_window_open("12125550123") is True)
 ok("G ⇒ the plan now ATTACHES the real file",
-   W.plan_delivery(False, True, WW.is_window_open("15162330422")) == ["freeform_doc", "template_link"])
+   W.plan_delivery(False, True, WW.is_window_open("12125550123")) == ["freeform_doc", "template_link"])
 
 # an inbound of a type we cannot act on (image) still counts as window evidence
 inbound2 = json.dumps({"entry": [{"changes": [{"value": {

@@ -95,7 +95,7 @@ export default function StoreOpsAdminPage() {
   }
   useEffect(() => { loadAll() }, [])
 
-  const PHONE_EG = 'Enter a 10-digit number or include country code — e.g. 5162330422 or +1 516 233 0422'
+  const PHONE_EG = 'Enter a 10-digit number or include country code — e.g. 2125550123 or +1 212 555 0123'
   function cleanPhone(raw: any): string | null {
     const s = String(raw ?? '').trim()
     if (!s) return ''                          // empty allowed
@@ -268,7 +268,7 @@ export default function StoreOpsAdminPage() {
   async function downloadEmpTemplate() {
     const XLSX = await import('xlsx')
     const aoa = [['name', 'employee_id', 'home_store', 'email', 'phone'],
-      ['Jane Doe', 'E1001', 'STORE01', 'jane@example.com', '5162330422']]
+      ['Jane Doe', 'E1001', 'STORE01', 'jane@example.com', '2125550123']]
     const ws = XLSX.utils.aoa_to_sheet(aoa)
     ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 24 }, { wch: 16 }]
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Employees')
@@ -299,7 +299,7 @@ export default function StoreOpsAdminPage() {
   async function downloadStoreTemplate() {
     const XLSX = await import('xlsx')
     const aoa = [['store_code', 'address', 'market', 'monthly_target', 'phone'],
-      ['STORE01', '123 Main St, City, ST', 'North', '', '5162330422']]
+      ['STORE01', '123 Main St, City, ST', 'North', '', '2125550123']]
     const ws = XLSX.utils.aoa_to_sheet(aoa)
     ws['!cols'] = [{ wch: 12 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 16 }]
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Stores')
@@ -358,7 +358,7 @@ export default function StoreOpsAdminPage() {
               <input style={{ ...sel, width: 110 }} placeholder="Emp ID" value={newEmp.employee_id} onChange={e => setNewEmp({ ...newEmp, employee_id: e.target.value })} />
               <input style={{ ...sel, width: 110 }} placeholder="Home store" value={newEmp.home_store} onChange={e => setNewEmp({ ...newEmp, home_store: e.target.value })} />
               <input style={{ ...sel, width: 170 }} placeholder="Email" value={newEmp.email} onChange={e => setNewEmp({ ...newEmp, email: e.target.value })} />
-              <input style={{ ...sel, width: 150 }} placeholder="Phone e.g. 5162330422" title={PHONE_EG} value={newEmp.phone} onChange={e => setNewEmp({ ...newEmp, phone: e.target.value })} />
+              <input style={{ ...sel, width: 150 }} placeholder="Phone e.g. 2125550123" title={PHONE_EG} value={newEmp.phone} onChange={e => setNewEmp({ ...newEmp, phone: e.target.value })} />
               <button className="btn btn-primary" onClick={addEmp}>➕ Add</button>
             </div>
           </div>
@@ -402,7 +402,7 @@ export default function StoreOpsAdminPage() {
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.employee_id || ''} onChange={ev => setEmp(e.id, { employee_id: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 160 }} value={e.email || ''} onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
-                    <td style={cell}><input style={{ ...sel, width: 130 }} placeholder="5162330422" title={PHONE_EG} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
+                    <td style={cell}><input style={{ ...sel, width: 130 }} placeholder="2125550123" title={PHONE_EG} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
                     <td style={cell}>
                       <input type="checkbox" checked={!!e.is_active} disabled={!!rowBusy[key]}
                         onChange={ev => toggleEmpActive(e, ev.target.checked)} title="Auto-saves immediately" />

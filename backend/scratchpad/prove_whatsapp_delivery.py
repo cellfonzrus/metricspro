@@ -134,9 +134,9 @@ ok("G: all attempts fail → None (surfaces as a failed send_log row)",
    walk(True, True, lambda s: (400, '{"error":{"code":131030}}')) is None)
 
 # ── transport byte-compat (regression guard vs the pre-phone-cc notify send format) ──
-ok("_to_number bare-10-digit → 1+digits", W._to_number("5162330422") == "15162330422")
-ok("_to_number +E.164 → digits only", W._to_number("+15162330422") == "15162330422")
-ok("_to_number formatted → digits only", W._to_number("(516) 233-0422") == "15162330422")
+ok("_to_number bare-10-digit → 1+digits", W._to_number("2125550123") == "12125550123")
+ok("_to_number +E.164 → digits only", W._to_number("+12125550123") == "12125550123")
+ok("_to_number formatted → digits only", W._to_number("(212) 555-0123") == "12125550123")
 ok("_to_number intl kept", W._to_number("+447911123456") == "447911123456")
 
 
@@ -161,8 +161,8 @@ def _has_doc_header(msg):
                for c in msg["template"]["components"])
 
 
-rung1 = W._template_msg("+15162330422", "june.pdf", "MEDIA123", BODY, True)   # doc-header rung
-rung3 = W._template_msg("+15162330422", "june.pdf", "", BODY, False)          # link-fallback rung
+rung1 = W._template_msg("+12125550123", "june.pdf", "MEDIA123", BODY, True)   # doc-header rung
+rung3 = W._template_msg("+12125550123", "june.pdf", "", BODY, False)          # link-fallback rung
 
 ok("rung-1 attaches the document header", _has_doc_header(rung1) is True)
 ok("rung-1 body carries NO url (crawler bait removed)", "http" not in _body_text(rung1).lower())

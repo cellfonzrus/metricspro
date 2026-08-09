@@ -1,7 +1,7 @@
 'use client'
 // Shared phone entry with country-code auto-correct (OWNER DIRECTIVE 2026-07-17).
 // A compact country-code <select> (default = the tenant's default_cc, common codes + free "Other…"
-// entry per RULE THREE) + a national-number field that live-formats (e.g. (516) 233-0422) and EMITS
+// entry per RULE THREE) + a national-number field that live-formats (e.g. (212) 555-0123) and EMITS
 // the full normalized "+<cc><digits>" string via onChange. The backend (core.auth_security.normalize_phone)
 // is authoritative and re-normalizes on save; this component makes the common 10-digit case correct by
 // construction. Pure helpers live in lib/phone-format.ts (single source of truth, offline-proven).

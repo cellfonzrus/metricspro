@@ -216,7 +216,7 @@ export default function SecuritySettingsPage() {
             <div style={{ borderTop: '1px solid var(--border)', margin: '4px 0 12px' }} />
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 4 }}>Default country code</div>
             <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>
-              Applied when someone enters a 10-digit phone number (2FA phones, report recipients) — e.g. 5162330422 → {normCcClient(tw.default_cc)}5162330422.
+              Applied when someone enters a 10-digit phone number (2FA phones, report recipients) — e.g. 2125550123 → {normCcClient(tw.default_cc)}2125550123.
             </div>
             <div style={{ marginBottom: 12 }}>
               <CcPicker value={tw.default_cc || '+1'} disabled={!canEdit} onChange={cc => setTw({ ...tw, default_cc: cc })} />
