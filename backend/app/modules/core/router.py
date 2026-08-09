@@ -996,6 +996,11 @@ SETTING_AREAS = [
     # — that is the separate, DEFAULT-DENY `permissions.impersonate` flag, which has no super-admin or
     # scope-'all' bypass and is not seeded onto any role.
     {"key": "impersonation",     "label": "Sign in as an employee — policy & audit log (NOT the permission itself)"},
+    # Registered 2026-08-09 with the POS onboarding wizard (mig 733). Gates the SETUP actions —
+    # skipping a step, and running an import-from-existing that writes to the pos.* tables. READING
+    # the wizard is open to any member on purpose: a rep who lands on POS before it is configured
+    # should be told why, not shown a 403.
+    {"key": "pos_onboarding",    "label": "POS onboarding (setup wizard steps · import-from-existing)"},
 ]
 
 
@@ -4094,3 +4099,13 @@ router.include_router(_impersonation_api.router)
 # for the @register_provider side effect — no routes, no gate, no aggregation change. Each of notify /
 # helpdesk registers its own providers from its own module file the same way (see their routers' tails).
 from app.modules.core import platform_attention as _platform_attention   # noqa: E402,F401
+
+# ── Module onboarding wizard (mig 733, owner directive 2026-08-09) ────────────────────────────────
+# "As soon as the user clicks on the POS button they should be tasked with completing the pending
+# onboarding tasks." Config-driven task registry + downloadable templates + import-from-what-
+# MetricsPro-already-knows. Mounted ONTO this router for the same reason as the five above: main.py
+# (SHARED) needs no change, and the sub-router's own "/onboarding" prefix resolves its paths to
+# /api/v1/core/onboarding/*. It imports core.router only LAZILY (inside functions), so no cycle.
+from app.modules.core import onboarding as _onboarding   # noqa: E402  (bottom-of-file mount)
+
+router.include_router(_onboarding.router)
