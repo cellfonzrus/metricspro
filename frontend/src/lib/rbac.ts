@@ -172,7 +172,16 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/ma-commission', label: 'Total Processor', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/ma-overview-recon', label: 'MA Overview cross-check', icon: '🧾', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/commission-legs', label: 'Commission Legs (M1 / M2–M12)', icon: '🧩', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions' },
+    // DM GATE — OWNER DIRECTIVE 2026-08-07, verbatim: "all flags need to be fed thru the dm, so yes
+    // route it thru the dm and then visible to the scoped user." Flags now carries the SAME scope gate
+    // its Chargebacks & Fraud sibling below has always had (admin 'all' + DM 'market'), so a flag
+    // reaches a store/self-scoped user THROUGH their DM instead of straight off the raw list. Until
+    // now Flags was the only review-queue row in this group with no `scopes`, and its only backstop
+    // was the soft `commissions` REPORT-AREA gate — which an admin defeats the moment they tick
+    // "Commission reports" for a store role, silently handing that role the un-reviewed queue.
+    // Shape byte-identical to the chargebacks row: an EXACT per-function grant still lifts it, exactly
+    // as it lifts chargebacks (that override is an admin's deliberate act, not the default posture).
+    { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', icon: '🔻', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/accessory-cost-audit', label: 'Accessory Cost Audit', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },

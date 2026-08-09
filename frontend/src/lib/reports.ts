@@ -15,7 +15,13 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/coaching', label: 'Rep Coaching', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', module: 'commissions', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/comp-trend', label: 'Total Compensation', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/flags', label: 'Flags', module: 'commissions' },
+    // DM GATE — mirrors the rbac.ts NAV row 1:1 (owner directive 2026-08-07). This catalog is the
+    // SECOND door to the same page (Report Center /reports + the employee portal), and clearedFor()
+    // gates it with canSeeItem() on THIS object — so without the same `scopes` a store-scoped user
+    // would still be shown a Flags link here that the layout Guard (canAccessPath, which reads NAV)
+    // then bounces: the "the tab is there but clicking it does nothing" class. Chargebacks already
+    // carries the pair; Flags now matches it on both surfaces.
+    { href: '/commcalc/flags', label: 'Flags', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', module: 'commissions' },
