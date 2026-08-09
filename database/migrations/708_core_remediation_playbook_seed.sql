@@ -117,7 +117,11 @@ BEGIN
 END;
 $fn$;
 
-GRANT EXECUTE ON FUNCTION commcalc.seed_tenant_defaults(uuid) TO anon, authenticated, service_role;
+-- 2026-08-09 (mig 724): the web roles were REMOVED from this grant. A function granted to
+-- anon is callable by anyone holding the public anon key, and SECURITY DEFINER means it runs
+-- as the owner with RLS bypassed. The backend uses the SERVICE ROLE, so service_role alone is
+-- correct. See docs/PLAN_REVIEW_2026-08-09.md finding F1.
+GRANT EXECUTE ON FUNCTION commcalc.seed_tenant_defaults(uuid) TO service_role;
 
 -- ── Back-fill EVERY existing tenant now (idempotent) ─────────────────────────────────────────────
 DO $backfill$

@@ -1,4 +1,5 @@
 """MetricsPro Platform API — FastAPI main entry point"""
+import os
 import secrets
 import traceback
 
@@ -106,9 +107,33 @@ app.add_middleware(BodySizeLimitMiddleware)
 # exceptions) but BEFORE CORS (inner of CORS, so a masked 500 still gets Access-Control-Allow-Origin).
 app.add_middleware(HardeningMiddleware)
 
+# CORS (security-plan step 7.4, finding F2 in docs/PLAN_REVIEW_2026-08-09.md). This was
+# `allow_origins=["*"]` together with `allow_credentials=True` — and because a browser will not accept
+# a literal `*` alongside credentials, Starlette REFLECTS whatever Origin the request carries. The
+# effective policy was therefore "every website on the internet is an allowed origin".
+#
+# Honest severity: LOW in practice, because this API authenticates with an `Authorization: Bearer`
+# token read from localStorage, not with cookies — a malicious page has nothing the browser would
+# attach on its behalf, so it cannot ride an existing session. But "low" is not "none", it costs
+# nothing to name the origins we actually serve, and it removes the whole class before someone
+# later adds cookie auth and turns it into a real one.
+#
+# `CORS_ORIGINS` (comma-separated) overrides the list and `CORS_ORIGIN_REGEX` the pattern, so a new
+# domain is an env change, not a deploy. The default regex deliberately covers Vercel PREVIEW
+# deployments (metricspro-<hash>.vercel.app) — those are real and would otherwise break on every
+# branch deploy, which is exactly the kind of breakage that gets "fixed" by putting `*` back.
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+CORS_ORIGINS = _cors_origins or [
+    "https://metricspro-five.vercel.app",   # the ONLY production app URL (metricspro.tech is email-only)
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+CORS_ORIGIN_REGEX = os.environ.get("CORS_ORIGIN_REGEX", r"https://metricspro[a-z0-9\-]*\.vercel\.app")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
