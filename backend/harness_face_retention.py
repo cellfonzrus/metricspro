@@ -171,8 +171,9 @@ def tenant(org=ORG, retention_days=90, purge_on_disable=False, face_recognition_
     return row
 
 
-def emp(eid, org=ORG, name=None, termination_date=None):
-    return {"org_id": org, "employee_id": eid, "name": name or eid, "termination_date": termination_date}
+def emp(eid, org=ORG, name=None, termination_date=None, is_active=True):
+    return {"org_id": org, "employee_id": eid, "name": name or eid,
+            "termination_date": termination_date, "is_active": is_active}
 
 
 def desc(eid, org=ORG, registered=None, updated=None, did=None):
@@ -385,6 +386,83 @@ check("a raising client also degrades cleanly (compute_due)",
       R.compute_due(ORG, BoomClient(), today=TODAY)["available"] is False)
 check("a raising client on destroy_one_employee_request returns ok=False, never raises",
       R.destroy_one_employee_request(ORG, "X", "X", BoomClient())["ok"] is False)
+
+
+# ── DERIVED LAST DAY (2026-08-09) ────────────────────────────────────────────────────────────────
+# Live that day: termination_date was populated for ZERO of 103 employees, three of whom were already
+# flagged inactive. The 90-day clock keys off that field, so for a real leaver it never started and
+# only the 3-year backstop could fire — later than BIPA's "whichever occurs first" permits. These
+# cases cover deriving the last day from timekeeping instead.
+print("\n(10) DERIVED last day — inactive employee, no termination_date, last punch 100 days ago")
+c10 = FakeClient(
+    tenants=[tenant(retention_days=90)],
+    employees=[emp("E1", termination_date=None, is_active=False)],
+    face_descriptors=[desc("E1", registered=dt_iso(TODAY - timedelta(days=200)))],
+    timelog=[{"org_id": ORG, "employee_id": "E1", "clock_in": dt_iso(TODAY - timedelta(days=100))}],
+)
+r10 = R.compute_due(ORG, c10, today=TODAY)
+check("10a. the leaver is now due", len(r10["items"]) == 1)
+check("10b. trigger is purpose_satisfied_DERIVED, not the 3-year backstop",
+      r10["items"] and r10["items"][0]["trigger"] == R.TRIGGER_PURPOSE_DERIVED)
+check("10c. the derived date is flagged as derived",
+      r10["items"] and r10["items"][0]["termination_date_derived"] is True)
+check("10d. the derived date is the last punch",
+      r10["items"] and r10["items"][0]["termination_date"] == iso(TODAY - timedelta(days=100)))
+
+print("\n(10e) NOT due — inactive, but the last punch was only 10 days ago")
+c10e = FakeClient(
+    tenants=[tenant(retention_days=90)],
+    employees=[emp("E1", termination_date=None, is_active=False)],
+    face_descriptors=[desc("E1", registered=dt_iso(TODAY - timedelta(days=200)))],
+    timelog=[{"org_id": ORG, "employee_id": "E1", "clock_in": dt_iso(TODAY - timedelta(days=10))}],
+)
+check("10e. a recent leaver is NOT destroyed early", len(R.compute_due(ORG, c10e, today=TODAY)["items"]) == 0)
+
+print("\n(10f) an ACTIVE employee is never derived — the whole rule hangs on having left")
+c10f = FakeClient(
+    tenants=[tenant(retention_days=90)],
+    employees=[emp("E1", termination_date=None, is_active=True)],
+    face_descriptors=[desc("E1", registered=dt_iso(TODAY - timedelta(days=200)))],
+    timelog=[{"org_id": ORG, "employee_id": "E1", "clock_in": dt_iso(TODAY - timedelta(days=300))}],
+)
+_r = R.compute_due(ORG, c10f, today=TODAY)
+check("10f. an active employee with an old punch is NOT due under the derived rule",
+      all(i["trigger"] != R.TRIGGER_PURPOSE_DERIVED for i in _r["items"]))
+
+print("\n(10g) a RECORDED termination_date always beats the derived one")
+c10g = FakeClient(
+    tenants=[tenant(retention_days=90)],
+    employees=[emp("E1", termination_date=iso(TODAY - timedelta(days=200)), is_active=False)],
+    face_descriptors=[desc("E1", registered=dt_iso(TODAY - timedelta(days=300)))],
+    timelog=[{"org_id": ORG, "employee_id": "E1", "clock_in": dt_iso(TODAY - timedelta(days=100))}],
+)
+r10g = R.compute_due(ORG, c10g, today=TODAY)
+check("10g. HR's recorded date wins", r10g["items"][0]["trigger"] == R.TRIGGER_PURPOSE)
+check("10h. …and is not flagged derived", r10g["items"][0]["termination_date_derived"] is False)
+
+print("\n(10i) inactive with NO punches at all — nothing to derive, leave it alone")
+c10i = FakeClient(
+    tenants=[tenant(retention_days=90)],
+    employees=[emp("E1", termination_date=None, is_active=False)],
+    face_descriptors=[desc("E1", registered=dt_iso(TODAY - timedelta(days=30)))],
+    timelog=[],
+)
+check("10i. no derivable date → not destroyed on a guess",
+      all(i["trigger"] != R.TRIGGER_PURPOSE_DERIVED for i in R.compute_due(ORG, c10i, today=TODAY)["items"]))
+
+print("\n(11) ORPHANS — a descriptor whose employee_id matches no roster row (live: 7 of them)")
+c11 = FakeClient(
+    tenants=[tenant(retention_days=90)],
+    employees=[emp("E1")],
+    face_descriptors=[desc("E1"), desc("GHOST", registered=dt_iso(TODAY - timedelta(days=500)))],
+    timelog=[],
+)
+r11 = R.compute_due(ORG, c11, today=TODAY)
+check("11a. the orphan is REPORTED", any(u["employee_id"] == "GHOST" for u in r11.get("unmatched", [])))
+check("11b. a matched employee is not reported as an orphan",
+      all(u["employee_id"] != "E1" for u in r11.get("unmatched", [])))
+check("11c. the orphan is NOT auto-destroyed — irreversible, and as likely a broken join as a leaver",
+      all(i["employee_id"] != "GHOST" for i in r11["items"]))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
