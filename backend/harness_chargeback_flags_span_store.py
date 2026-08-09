@@ -94,9 +94,12 @@ def cb(store, amount=10.0, rep="Jane Rep"):
             "epay_salesperson": rep, "deduct": False, "decided_at": None, "source": "vip"}
 
 
-def flag(store_address, sev="warning"):
+def flag(store_address, sev="warning", status="open"):
+    # `status` models migration 287: the real column is NOT NULL DEFAULT 'open', and `get_flags` now
+    # serves the OPEN queue by default (a flag whose condition cleared is RETIRED, not deleted). A
+    # fixture without it would not be a flag row this system can produce.
     return {"org_id": HOUSE, "period": PERIOD, "store_address": store_address,
-            "severity": sev, "flag_type": "missing_1st_mrc", "amount": 5.0}
+            "severity": sev, "flag_type": "missing_1st_mrc", "amount": 5.0, "status": status}
 
 
 def run(coro):
@@ -191,6 +194,19 @@ check("flags: BLANK store_address still matches nothing — 27,428 of 31,037 hou
 
 admin = run(cc.get_flags(PERIOD, authorization=AUTH_ADMIN, org_id=HOUSE))
 check("flags: super-admin still sees all three", len(admin) == 3, f"got {len(admin)}")
+
+# mig 287 — the retired flag must leave the active queue WITHOUT leaving the table
+store = {"flags": [flag("117 E Burnside Ave"),
+                   flag("117 E Burnside Ave", status="resolved"),
+                   flag("117 E Burnside Ave", status="superseded")]}
+wire(store)
+scoped(["B-117", "117 E BURNSIDE AVE"])
+got = run(cc.get_flags(PERIOD, authorization=AUTH_DM, org_id=HOUSE))
+check("flags: a CLEARED/REPLACED flag is out of the active queue by default (mig 287)",
+      len(got) == 1 and got[0]["status"] == "open", f"got {[f['status'] for f in got]}")
+got = run(cc.get_flags(PERIOD, authorization=AUTH_DM, include_resolved=True, org_id=HOUSE))
+check("flags: ...and is still THERE — retire is a status change, never a DELETE",
+      len(got) == 3, f"got {len(got)}")
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # 6. MULTI-TENANT — org_id is still enforced ahead of the span filter

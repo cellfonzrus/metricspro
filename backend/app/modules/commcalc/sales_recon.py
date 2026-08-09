@@ -213,6 +213,32 @@ def transaction_detail(period: str, trans_id: str, org_id: str = ORG_ID):
             "in_monthly": len(monthly) > 0, "in_daily": len(daily) > 0}
 
 
+def _period_my_any(p):
+    """(month, year) from EITHER spelling — 'June 2026' or '2026-06'; (None, None) otherwise.
+
+    mig 287: the retire step bounds itself on `period = any(...)`, so it must be handed every spelling
+    the table might hold or a row stored the other way is silently never retired. `_period_my` below
+    only parses the month-name form, which is the recurring period-spelling bug class in this module."""
+    s = (p or "").strip()
+    if len(s) >= 7 and s[:4].isdigit() and s[4] == "-" and s[5:7].isdigit():
+        m, y = int(s[5:7]), int(s[:4])
+        return (m, y) if 1 <= m <= 12 else (None, None)
+    return _period_my(s)
+
+
+def _pvariants_recon(p):
+    """Both spellings of a month-period, deduped; [p] when it is not a month-period."""
+    import calendar as _c
+    m, y = _period_my_any(p)
+    if not m or not y:
+        return [x for x in [str(p or "").strip()] if x]
+    out = []
+    for v in (str(p or "").strip(), f"{y:04d}-{m:02d}", f"{_c.month_name[m]} {y}"):
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
 def _period_my(plabel: str):
     """('June 2026') -> (6, 2026); best-effort, (None, None) on failure."""
     parts = (plabel or "").strip().split()
@@ -244,6 +270,9 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
                 "period": plabel, "period_month": pm, "period_year": py,
                 "flag_type": "sales_leak", "source": "sales_recon", "severity": "critical",
                 "store_address": r["store"], "epay_salesperson": r.get("salesperson") or "",
+                # mig 287 identity — the leaking transaction. The description carries dollar totals
+                # that move between runs, so it can never be the key.
+                "source_ref": str(r.get("trans_id") or "").strip(),
                 "amount": r.get("daily_total"),
                 "description": (f"Trans {r['trans_id']} is in the daily B2B feed "
                                 f"(${(r.get('daily_total') or 0):,.2f}, {r.get('trans_date') or 'n/a'}) "
@@ -255,19 +284,46 @@ def sync_recon_flags(period: str, include_mismatch: bool = True, org_id: str = O
                 "period": plabel, "period_month": pm, "period_year": py,
                 "flag_type": "sales_amount_mismatch", "source": "sales_recon", "severity": "warning",
                 "store_address": r["store"], "epay_salesperson": r.get("salesperson") or "",
+                "source_ref": str(r.get("trans_id") or "").strip(),
                 "amount": r.get("delta"),
                 "description": (f"Trans {r['trans_id']} totals differ: monthly "
                                 f"${(r.get('monthly_total') or 0):,.2f} vs daily "
                                 f"${(r.get('daily_total') or 0):,.2f} (Δ ${(r.get('delta') or 0):,.2f})."),
             })
 
-    (client.schema("commcalc").table("flags").delete()
-     .eq("org_id", org_id).eq("period", plabel).eq("source", "sales_recon").execute())
-    if flags:
-        for f in flags:
-            f["org_id"] = org_id
-        for i in range(0, len(flags), 500):
-            client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
+    # Resolve each flag's store into `store_code` (mig 285) so it can reach the district manager whose
+    # span covers it — a recon leak written with a POS spelling the span keyset doesn't know matches no
+    # manager at all. Visibility only; nothing here changes an amount or a store_address.
+    try:
+        from app.modules.commcalc import flag_store_resolver
+        flag_store_resolver.stamp_flags(client, org_id, flags)
+    except Exception as e:                                  # never fail a recon on a routing lookup
+        print(f"WARN sync_recon_flags store_code stamping skipped: {e}")
+
+    # ADDITIVE (mig 287, owner 2026-08-08 "DM review should not be erased and teh new data should only
+    # add the missing data if any"). The delete-first-by-source this replaces re-created every recon
+    # flag on each sweep, so a district manager's review of a leak lasted until the next sweep. Now a
+    # leak that is still leaking keeps its row (and its review) with a refreshed dollar delta, a leak
+    # that has since been reconciled is RETIRED with a reason instead of vanishing, and a new one is
+    # inserted. Both period spellings are passed because raw_sales stores 'June 2026' while the caller
+    # may pass '2026-06'.
+    _periods = _pvariants_recon(plabel)
+    try:
+        from app.modules.commcalc import flag_persist
+        _fp = flag_persist.sync(client, org_id, flags,
+                                periods=_periods, sources=["sales_recon"],
+                                reason=f"the {plabel} transaction reconciles in the latest sweep")
+        print(f"INFO sales_recon flags additive org={org_id} period={plabel} "
+              f"{ {k: v for k, v in _fp.items() if k != 'run_id'} }")
+    except Exception as e:                          # incl. FlagPersistUnavailable before migration 287
+        print(f"WARN sales_recon additive flag write unavailable, using legacy path: {e}")
+        (client.schema("commcalc").table("flags").delete()
+         .eq("org_id", org_id).eq("period", plabel).eq("source", "sales_recon").execute())
+        if flags:
+            for f in flags:
+                f["org_id"] = org_id
+            for i in range(0, len(flags), 500):
+                client.schema("commcalc").table("flags").insert(flags[i:i + 500]).execute()
 
     return {
         "period": plabel, "has_feed": res["has_feed"], "flagged": len(flags),

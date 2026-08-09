@@ -159,6 +159,11 @@ DATASETS = [
     {
         "key": "flags", "name": "Flags", "resolver": "flags", "sort_order": 70,
         "field_map": {"store": "store_address", "rep": "epay_salesperson", "market": "market", "day": None},
+        # The span filter matches the RESOLVED store too (mig 285). `field_map.store` stays
+        # `store_address` — that is the human-facing store column RULE FIVE filters and groups on —
+        # while `span_extra` adds the key the manager's keyset is actually built from. Strict superset:
+        # a row that matched before still matches.
+        "span_extra": ["store_code"],
         "backing_tables": ["flags"], "gate": None,
         "columns": [
             _col("period", "Period", "text", group=True),
@@ -166,6 +171,7 @@ DATASETS = [
             _col("flag_type", "Type", "text", group=True),
             _col("source", "Source", "text", group=True),
             _col("store_address", "Store", "text", group=True),
+            _col("store_code", "Store Code", "text", group=True),
             _col("market", "Market", "text", group=True),
             _col("epay_salesperson", "Rep", "text", group=True),
             _col("description", "Description", "text"),

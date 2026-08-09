@@ -96,6 +96,9 @@ def calc_flags(
                     'store_address': r.get('business_address', ''),
                     'epay_salesperson': r.get('rep_username', ''),
                     'mdn': r.get('mdn', ''), 'imei': imei,
+                    # mig 287 identity fallback: a chargeback row with neither IMEI nor MDN still has
+                    # a payment type + date, which is what makes it re-findable on the next run.
+                    'source_ref': f"{str(r.get('payment_type') or '').strip()}|{txn}",
                     'amount': round(disp, 2),
                     'rebate_lost': round(rebate, 2) if a else None,
                     'phone_model': model, 'days_active': _days_since(acq),
@@ -118,6 +121,9 @@ def calc_flags(
         flags.append({**base,
             'flag_type': 'UNMAPPED_PAYMENT_TYPE', 'source': 'payment_detail',
             'severity': 'LOW',
+            # mig 287: the payment type IS this flag's identity. It cannot come from `description`,
+            # which embeds a row count and a dollar total that change on every run.
+            'source_ref': pt,
             'amount': total,
             'description': f"Payment type '{pt}' not in category master ({len(rows)} rows, ${total:.2f})",
             'coaching_note': 'Add this payment type to Commission Categories in Management > Settings.',
