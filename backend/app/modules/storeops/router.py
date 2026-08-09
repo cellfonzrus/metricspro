@@ -3244,8 +3244,27 @@ def set_employee_face_config(emp_id: str, body: dict, authorization: str = Heade
                 raise HTTPException(400, f"consent must be one of {list(_face.CONSENT_STATUSES)} or null")
             who = (_who_for_log(authorization, org_id) or {}).get("email")
             src = _face.CONSENT_SOURCE_MANUAL if c == _face.CONSENT_SIGNED else _face.CONSENT_DECLINED
+            # `consent_at` lets an admin record the date the employee ACTUALLY signed, rather than the
+            # date somebody typed it in. This matters more than it looks: back-filling a real paper
+            # release with today's timestamp would make the record show consent obtained AFTER the
+            # template was collected — manufacturing the appearance of the exact 15(b) violation the
+            # paperwork disproves. A future date is refused for the same reason, from the other side.
+            _at = body.get("consent_at")
+            if _at:
+                try:
+                    _parsed = datetime.fromisoformat(str(_at).replace("Z", "+00:00"))
+                    if _parsed.tzinfo is None:
+                        _parsed = _parsed.replace(tzinfo=timezone.utc)
+                except Exception:
+                    raise HTTPException(400, "consent_at must be a date or timestamp (e.g. 2026-07-01)")
+                if _parsed > datetime.now(timezone.utc):
+                    raise HTTPException(400, "consent_at cannot be in the future - consent has to "
+                                             "precede the collection it authorizes")
+                _when = _parsed.isoformat()
+            else:
+                _when = datetime.now(timezone.utc).isoformat()
             row.update({"face_consent_status": c,
-                        "face_consent_at": datetime.now(timezone.utc).isoformat(),
+                        "face_consent_at": _when,
                         "face_consent_source": (f"{src}:{who}"[:120] if who else src)})
     if not row:
         raise HTTPException(400, "no valid fields to update")
@@ -3508,6 +3527,41 @@ def get_face(authorization: str = Header(default=""), action: str = "", org_id: 
     return {"registered": True, "register_count": rows[0].get("register_count"), **_face_flags(gate)}
 
 
+def _face_consent_ok(org_id: str, employee_id: str):
+    """(ok, message). A face template may be stored only for an employee whose written release is on
+    file and DATED AT OR BEFORE this moment — "we have consent now" is not evidence that consent
+    preceded collection, and preceding is the whole of what 15(b) requires.
+
+    Fails CLOSED on a read error or an un-run migration 420: if we cannot prove consent exists, we do
+    not collect. That is the opposite of this codebase's usual degrade-open posture and it is
+    deliberate — see the note at the call site."""
+    try:
+        rows = (sb().table("employees")
+                .select("face_consent_status,face_consent_at")
+                .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
+    except Exception:
+        return (False, "Face enrollment is unavailable right now because your consent record could "
+                       "not be read. Nothing was saved - please try again in a moment.")
+    row = rows[0] if rows else {}
+    if row.get("face_consent_status") != _face.CONSENT_SIGNED:
+        return (False, "A signed biometric consent form must be on file before a face template can be "
+                       "stored. Ask your manager to record your written release first.")
+    at = row.get("face_consent_at")
+    if not at:
+        return (False, "Your consent record has no date on file, so it cannot show that consent came "
+                       "before enrollment. Ask your manager to record the date you signed.")
+    try:
+        signed_at = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+        if signed_at.tzinfo is None:
+            signed_at = signed_at.replace(tzinfo=timezone.utc)
+        if signed_at > datetime.now(timezone.utc):
+            return (False, "Your consent record is dated in the future, so it cannot show that consent "
+                           "came before enrollment. Ask your manager to correct the date.")
+    except Exception:
+        return (False, "Your consent record has an unreadable date. Ask your manager to re-record it.")
+    return (True, "")
+
+
 @router.post("/timeclock/face")
 def save_face(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Save (or re-register) an averaged 128-float descriptor for the SIGNED-IN employee — identity
@@ -3519,6 +3573,18 @@ def save_face(body: dict, authorization: str = Header(default=""), org_id: str =
     gate = _face_gate(org_id, employee_id)
     if not gate["enabled"]:
         raise HTTPException(403, _FACE_OFF_MSG)
+    # CONSENT BEFORE COLLECTION (migration 424, BIPA 740 ILCS 14/15(b)). The feature being ON for this
+    # employee is NOT consent. Until now the only consent-shaped check was `declined` (via
+    # face_recognition.resolve_employee_face); an employee with NO consent record at all enrolled
+    # freely — which is how all 77 descriptors on file as of 2026-08-09 came to have none.
+    #
+    # This is the readable half of the guarantee; migration 424's trigger is the half that actually
+    # holds, because it binds every write path rather than this one endpoint. Both fail CLOSED: the
+    # cost of a wrong refusal is one retry at a kiosk, the cost of a wrong acceptance is a per-person
+    # statutory exposure that deleting the row afterwards does not undo.
+    _consent_ok, _consent_why = _face_consent_ok(org_id, employee_id)
+    if not _consent_ok:
+        raise HTTPException(403, _consent_why)
     descriptor = body.get("descriptor")
     if not isinstance(descriptor, list) or len(descriptor) != 128:
         raise HTTPException(400, "a 128-float descriptor is required")
