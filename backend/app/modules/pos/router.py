@@ -556,6 +556,81 @@ def list_tax_codes(org_id: str = ORG_ID):
     return {"tax_codes": rows}
 
 
+def _resolve_tax(codes, store_code, market):
+    """THE tax precedence, in one place: store_code > market > org-wide. Inactive rows never win.
+
+    pos.checkout does not compute tax — it stores the tax_total it is given — so every caller must
+    reach a rate through here. Reimplementing this ordering anywhere else is how one screen charges
+    8.875% and another charges 0% for the same store."""
+    live = [c for c in (codes or []) if c.get("is_active") is not False]
+    sc = (store_code or "").strip()
+    mk = (market or "").strip().lower()
+    if sc:
+        hit = next((c for c in live if (c.get("store_code") or "").strip() == sc), None)
+        if hit:
+            return hit, "store"
+    if mk:
+        hit = next((c for c in live if (c.get("market") or "").strip().lower() == mk), None)
+        if hit:
+            return hit, "market"
+    hit = next((c for c in live
+                if not (c.get("store_code") or "").strip() and not (c.get("market") or "").strip()), None)
+    return (hit, "org") if hit else (None, "none")
+
+
+@router.get("/tax-codes/resolve")
+def resolve_tax_code(store_code: str = "", org_id: str = ORG_ID):
+    """The rate that applies at ONE store, and WHY. The register's single source of truth.
+
+    `scope` says which rung won (store / market / org / none) so a cashier screen can show
+    "inherited from market" instead of a bare number, and `none` is explicit rather than a silent 0 —
+    a taxable sale with no rate charges nothing, and that is not recoverable after the customer leaves."""
+    # org_id arrives already rewritten by the tenant middleware; the sibling read endpoints in this
+    # module (list_tax_codes, store-grid) gate the same way — reads are org-scoped, writes carry
+    # _require_pos_perm.
+    client = sb()
+    codes = (client.schema("pos").table("tax_codes").select("*")
+             .eq("org_id", org_id).limit(1000).execute().data) or []
+    market = ""
+    sc = (store_code or "").strip()
+    if sc:
+        try:
+            st = (client.schema("storeops").table("stores").select("market")
+                  .eq("org_id", org_id).eq("store_code", sc).limit(1).execute().data) or []
+            market = (st[0].get("market") or "") if st else ""
+        except Exception:
+            market = ""
+    hit, scope = _resolve_tax(codes, sc, market)
+    return {"store_code": sc or None, "market": market or None, "scope": scope,
+            "rate": (hit or {}).get("rate"), "tax_code": hit,
+            "warning": ("No tax rate applies to this store — a taxable sale would charge $0."
+                        if scope == "none" else None)}
+
+
+@router.get("/tax-codes/markets")
+def tax_code_markets(org_id: str = ORG_ID):
+    """Distinct markets with their store counts — the market dropdown, pick-don't-type."""
+    client = sb()
+    try:
+        rows = (client.schema("storeops").table("stores").select("market,store_code,is_active")
+                .eq("org_id", org_id).limit(2000).execute().data) or []
+    except Exception:
+        rows = []
+    agg = {}
+    for s in rows:
+        if s.get("is_active") is False:
+            continue
+        m = (s.get("market") or "").strip()
+        if m:
+            agg[m] = agg.get(m, 0) + 1
+    codes = (client.schema("pos").table("tax_codes").select("market,rate")
+             .eq("org_id", org_id).limit(1000).execute().data) or []
+    rate_by_market = {(c.get("market") or "").strip(): c.get("rate")
+                      for c in codes if (c.get("market") or "").strip()}
+    return {"markets": [{"market": m, "stores": n, "rate": rate_by_market.get(m)}
+                        for m, n in sorted(agg.items())]}
+
+
 @router.get("/tax-codes/store-grid")
 def tax_code_store_grid(org_id: str = ORG_ID):
     """Every CONFIGURED store with the rate it currently has — the owner's dropdown (2026-08-09).
@@ -580,14 +655,19 @@ def tax_code_store_grid(org_id: str = ORG_ID):
              .eq("org_id", org_id).limit(1000).execute().data) or []
     by_store = {(c.get("store_code") or "").strip(): c for c in codes if (c.get("store_code") or "").strip()}
     org_wide = next((c for c in codes if not (c.get("store_code") or "").strip()), None)
-    rows = [{
-        "store_code": s.get("store_code"),
-        "address": s.get("address"), "market": s.get("market"),
-        "rate": (by_store.get(s.get("store_code")) or {}).get("rate"),
-        "tax_code_id": (by_store.get(s.get("store_code")) or {}).get("id"),
-        "name": (by_store.get(s.get("store_code")) or {}).get("name"),
-        "inherits_org_rate": s.get("store_code") not in by_store,
-    } for s in stores]
+    rows = []
+    for s in stores:
+        hit, scope = _resolve_tax(codes, s.get("store_code"), s.get("market"))
+        own = by_store.get(s.get("store_code")) or {}
+        rows.append({
+            "store_code": s.get("store_code"),
+            "address": s.get("address"), "market": s.get("market"),
+            "rate": own.get("rate"),                       # a rate set ON this store, if any
+            "effective_rate": (hit or {}).get("rate"),      # what it would actually charge
+            "effective_scope": scope,                       # store | market | org | none
+            "tax_code_id": own.get("id"), "name": own.get("name"),
+            "inherits_org_rate": scope != "store",
+        })
     return {"mode": "stores" if rows else "blank", "stores": rows,
             "org_wide": org_wide, "store_count": len(rows),
             "configured": sum(1 for r in rows if r["rate"] is not None)}
@@ -602,9 +682,37 @@ def bulk_set_tax_codes(body: dict, authorization: str = Header(default=""), org_
     An empty/absent rate on an entry means "leave this store alone", so a half-filled grid is safe
     to save; send is_active=false to retire a rate instead."""
     _require_pos_perm(authorization, org_id, "pos_settings")
-    entries = body.get("entries") or []
+    entries = list(body.get("entries") or [])
+    # MARKET + MULTI-STORE (owner 2026-08-09). `market` writes ONE market-scoped row rather than
+    # fanning out per store, so changing that market's rate later is one edit and cannot drift.
+    # `store_codes` applies the same rate to several stores in one action.
+    mk = str(body.get("market") or "").strip()
+    rate_for_many = body.get("rate")
+    if mk:
+        try:
+            mrate = float(rate_for_many)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "rate must be a number (percent) when assigning a market")
+        if not (0 <= mrate <= 30):
+            raise HTTPException(400, "rate must be 0-30 (percent)")
+        client0 = sb()
+        cur = (client0.schema("pos").table("tax_codes").select("id")
+               .eq("org_id", org_id).eq("market", mk).limit(1).execute().data) or []
+        nm = str(body.get("name") or "").strip() or f"{mk} sales tax"
+        if cur:
+            (client0.schema("pos").table("tax_codes").update({"rate": mrate, "name": nm})
+             .eq("org_id", org_id).eq("id", cur[0]["id"]).execute())
+        else:
+            client0.schema("pos").table("tax_codes").insert({
+                "org_id": org_id, "name": nm, "rate": mrate,
+                "market": mk, "store_code": None}).execute()
+        if not entries and not body.get("store_codes"):
+            return {"created": 0 if cur else 1, "updated": 1 if cur else 0,
+                    "market": mk, "skipped": [], "total": 0}
+    for scode in (body.get("store_codes") or []):
+        entries.append({"store_code": scode, "rate": rate_for_many, "name": body.get("name")})
     if not isinstance(entries, list) or not entries:
-        raise HTTPException(400, "entries required")
+        raise HTTPException(400, "entries, store_codes or market required")
     if len(entries) > 1000:
         raise HTTPException(400, "max 1000 entries per request")
     client = sb()
