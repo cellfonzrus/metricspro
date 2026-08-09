@@ -284,6 +284,42 @@ export function onSessionInvalid(cb: () => void): () => void {
   return () => { _sessionInvalidCbs.delete(cb) }
 }
 
+// ── AMBIGUOUS TENANT (2026-08-09) ───────────────────────────────────────────────────────────────
+// A login belonging to >1 company that has not said which one it is acting in gets 409
+// `tenant_choice_required` from tenant_middleware._reject_tenant_choice, instead of the old silent
+// answer-as-the-oldest-tenant. This latch mirrors the dead-session one directly below: DETECT ONLY —
+// it never changes what api() throws — and it fires once, not once per in-flight request.
+// The session is NOT dead here, so the session-invalid latch is deliberately left alone: the fix is to
+// pick a company, not to sign out.
+const TENANT_CHOICE_CODE = 'tenant_choice_required'
+let _tenantChoiceRequired = false
+const _tenantChoiceCbs = new Set<() => void>()
+
+export function isTenantChoiceRequired(): boolean { return _tenantChoiceRequired }
+
+/** Cleared by AuthProvider once a company has actually been chosen. */
+export function clearTenantChoiceRequired() { _tenantChoiceRequired = false }
+
+/** Subscribe to "this login must pick a company". Fires immediately if it already happened, so a
+ *  component mounting after the fact still sees it. Returns an unsubscribe fn. */
+export function onTenantChoiceRequired(cb: () => void): () => void {
+  _tenantChoiceCbs.add(cb)
+  if (_tenantChoiceRequired) { try { cb() } catch { /* a listener must never break a request */ } }
+  return () => { _tenantChoiceCbs.delete(cb) }
+}
+
+function markTenantChoiceRequired(err: unknown) {
+  if ((err as any)?.code !== TENANT_CHOICE_CODE) return
+  // A stale saved choice is exactly how this state is reached (the header named a company this login
+  // no longer belongs to, or none was saved at all). Drop it so the picker starts clean.
+  setActiveOrg(null)
+  if (_tenantChoiceRequired) return                                // latch: notify once, not N times
+  _tenantChoiceRequired = true
+  for (const cb of Array.from(_tenantChoiceCbs)) {
+    try { cb() } catch { /* never let a listener break the failing request */ }
+  }
+}
+
 function markSessionInvalid(path: string, detail: unknown, hadToken: boolean) {
   if (!hadToken) return                                            // no session believed → not our case
   if (typeof detail !== 'string') return
@@ -333,6 +369,7 @@ export async function api(path: string, opts: RequestInit = {}) {
     // Detect-only: never changes what is thrown (see DEAD CLIENT SESSION block above).
     if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)
     if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
+    if (res.status === 409) markTenantChoiceRequired(err)
     throw new Error(errMsg(err, res.status))
   }
   return res.json()
@@ -349,6 +386,7 @@ export async function apiUpload(path: string, form: FormData) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)
     if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
+    if (res.status === 409) markTenantChoiceRequired(err)
     throw new Error(errMsg(err, res.status))
   }
   return res.json()
