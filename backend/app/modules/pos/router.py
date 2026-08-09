@@ -218,7 +218,20 @@ def _caller_ctx(authorization: str, org_id: str):
     rows = (sb().schema("storeops").table("app_users").select("role, super_admin")
             .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
     if not rows:
-        return None
+        # SUPER-ADMIN ADMINISTERING A TENANT THEY DO NOT BELONG TO (owner report 2026-08-09: "the POS
+        # set up wizard ... is not letting me update the sales tax"). Cross-tenant administration is
+        # intentional platform-wide -- tenant_middleware skips the org rewrite entirely for a
+        # super-admin -- but this gate resolved membership in the ACTING org and returned None, which
+        # _require_pos_perm turns into a 401 before _pos_grant's super_admin branch can run. The
+        # wizard therefore LOADED (GETs carry no gate) and silently refused every save.
+        # Since app_users.auth_id is globally unique, super-admin standing is a property of the LOGIN,
+        # not of one membership: look it up without the org filter and, if present, grant it here.
+        # A non-super-admin with no membership still returns None and is still denied.
+        sa = (sb().schema("storeops").table("app_users").select("super_admin")
+              .eq("auth_id", uid).eq("super_admin", True).limit(1).execute().data) or []
+        if not sa:
+            return None
+        return {"perms": {}, "role": "super_admin", "super_admin": True}
     role = ((rows[0].get("role") if rows else "") or "").strip()
     if not role:
         return None
@@ -1082,6 +1095,76 @@ def list_dealer_codes(org_id: str = ORG_ID):
     rows = (sb().schema("pos").table("dealer_codes").select("*").eq("org_id", org_id)
             .order("code").limit(200).execute().data) or []
     return {"dealer_codes": rows}
+
+
+@router.get("/dealer-codes/sync-preview")
+def dealer_codes_sync_preview(org_id: str = ORG_ID):
+    """What a sync WOULD import, without writing. Same resolution as the sync below."""
+    return _dealer_sync(org_id, commit=False)
+
+
+@router.post("/dealer-codes/sync-from-reports")
+def dealer_codes_sync(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Harvest dealer codes out of the carrier's own report data (owner directive 2026-08-09).
+
+    The dealer code is a PER-CARRIER concept with a per-carrier name — "Salesforce ID" for Boost,
+    "Account ID" for Total — so which table/column to read is config on commcalc.carrier (mig 293),
+    never a branch here. A carrier nobody has mapped yet is reported as unconfigured and skipped
+    rather than guessed at: seeding a tenant's POS with the wrong identifier is worse than seeding
+    nothing.
+
+    ADDITIVE. Existing rows are left exactly as they are (an operator may have corrected a
+    store_code or deactivated a code by hand); only codes not already present are inserted."""
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    return _dealer_sync(org_id, commit=True)
+
+
+def _dealer_sync(org_id: str, commit: bool):
+    client = sb()
+    try:
+        carriers = (client.schema("commcalc").table("carrier")
+                    .select("id,name,dealer_code_label,dealer_code_source_table,"
+                            "dealer_code_source_column,dealer_code_name_column")
+                    .eq("org_id", org_id).execute().data) or []
+    except Exception as e:
+        raise HTTPException(400, f"carrier mapping unavailable (run migration 293?): {e}")
+    existing = {(r.get("code") or "").strip().upper()
+                for r in ((client.schema("pos").table("dealer_codes").select("code")
+                           .eq("org_id", org_id).limit(5000).execute().data) or [])}
+    out, inserted_total = [], 0
+    for c in carriers:
+        tbl, col = (c.get("dealer_code_source_table") or ""), (c.get("dealer_code_source_column") or "")
+        namecol = (c.get("dealer_code_name_column") or "").strip()
+        if not tbl or not col:
+            out.append({"carrier": c.get("name"), "configured": False,
+                        "hint": "Set this carrier's dealer-code source on the Carriers page."})
+            continue
+        sel = col + (("," + namecol) if namecol else "")
+        try:
+            rows = (client.schema("commcalc").table(tbl).select(sel)
+                    .eq("org_id", org_id).limit(50000).execute().data) or []
+        except Exception as e:
+            out.append({"carrier": c.get("name"), "configured": True, "error": str(e)[:160]})
+            continue
+        seen = {}
+        for r in rows:
+            code = str(r.get(col) or "").strip()
+            if not code or code.lower() in ("nan", "none", "null"):
+                continue
+            seen.setdefault(code.upper(), (code, str(r.get(namecol) or "").strip() if namecol else ""))
+        fresh = [v for k, v in seen.items() if k not in existing]
+        if commit and fresh:
+            payload = [{"org_id": org_id, "code": code, "carrier": c.get("name"),
+                        "store_code": None, "is_active": True} for code, _nm in fresh]
+            for i in range(0, len(payload), 500):
+                client.schema("pos").table("dealer_codes").insert(payload[i:i + 500]).execute()
+            existing |= {code.upper() for code, _ in fresh}
+            inserted_total += len(fresh)
+        out.append({"carrier": c.get("name"), "configured": True,
+                    "label": c.get("dealer_code_label"), "source": f"{tbl}.{col}",
+                    "found": len(seen), "new": len(fresh),
+                    "sample": [code for code, _ in fresh[:5]]})
+    return {"carriers": out, "inserted": inserted_total if commit else 0, "committed": commit}
 
 
 @router.post("/dealer-codes")

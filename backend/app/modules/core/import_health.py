@@ -856,6 +856,46 @@ def _uncovered_stores(stores, mapping, aliases, norm=None):
     return out
 
 
+@register_provider("upload_duty", label="Daily uploads owed / unassigned", group="import", cost="cheap")
+def _p_upload_duty(client, org_id, ctx):
+    """Daily-upload duties that need an ADMIN's attention (owner directive 2026-08-09).
+
+    Deliberately narrow: the assignee's own to-do list is NOT surfaced here — this feed is
+    admin-gated, and a rep who owes today's MA upload would never see it. They get it from
+    /commcalc/upload-duties?mine=1 on login. What an admin needs to know is the two things only they
+    can fix: a duty nobody owns, and an auto-pull that FAILED and has therefore fallen back to a
+    human — the owner's "the user will not be able to handle the error ... communicate it to the
+    designated person"."""
+    try:
+        from app.modules.commcalc.router import _duty_rows
+        duties = _duty_rows(client, org_id)
+    except Exception:
+        return []
+    out = []
+    for d in duties:
+        if d.get("urgent"):
+            who = d.get("assignee") or "nobody (unassigned)"
+            rng = d.get("date_range") or {}
+            span = f" for {rng.get('start')} → {rng.get('end')}" if rng.get("start") else ""
+            out.append({
+                "severity": "error", "group": "import",
+                "label": f"Automatic pull failed — {d.get('label')}",
+                "detail": (f"Needs a manual upload{span}. Assigned to {who}. "
+                           f"Portal said: {(d.get('auto_error') or 'no detail')[:160]}"),
+                "count": 1, "deep_link": d.get("upload_endpoint") or "/commcalc/upload",
+                "deep_link_label": "Upload it",
+            })
+        elif d.get("unassigned"):
+            out.append({
+                "severity": "warning", "group": "import",
+                "label": f"Daily upload has no owner — {d.get('label')}",
+                "detail": "Nobody is assigned, so no one is prompted or reminded for it.",
+                "count": 1, "deep_link": "/commcalc/connectors",
+                "deep_link_label": "Assign someone",
+            })
+    return out
+
+
 @register_provider("unmapped_stores", label="Stores the system can't resolve",
                    group="mapping", cost="cheap")
 def _p_unmapped_stores(client, org_id, ctx):

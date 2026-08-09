@@ -6346,6 +6346,147 @@ def _connector_creds(client, org_id, cfg_table):
     return {'has_user': bool(u), 'has_pass': has_pass, 'user_hint': hint}
 
 
+# ── DAILY UPLOAD DUTY (mig 292, owner directive 2026-08-09) ─────────────────────────────────────
+_DUTY_DATE_COL = {          # newest-row column per target table, for deriving the missing range
+    'raw_ma_commission': 'created_at', 'raw_ma_fulfillment': 'created_at',
+    'raw_ma_daily_tx': 'created_at', 'raw_mi': 'created_at',
+    'raw_comp_report': 'begin_date', 'raw_payment_detail': 'payment_date',
+    'raw_sales': 'trans_date', 'daily_sales_feed': 'trans_date',
+}
+
+
+def _duty_defaults(client, org_id):
+    try:
+        rows = (client.schema('commcalc').table('report_upload_defaults').select('*')
+                .eq('org_id', org_id).limit(1).execute().data) or []
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+def _duty_last_loaded(client, tbl, org_id):
+    """Newest data date already in the target table, or None. Read-only and best-effort: a table the
+    tenant has never loaded simply yields None, which the caller renders as "no data yet"."""
+    col = _DUTY_DATE_COL.get(tbl, 'created_at')
+    try:
+        rows = (client.schema('commcalc').table(tbl).select(col)
+                .eq('org_id', org_id).order(col, desc=True).limit(1).execute().data) or []
+    except Exception:
+        return None
+    v = (rows[0].get(col) if rows else None)
+    return str(v)[:10] if v else None
+
+
+def _duty_rows(client, org_id, assignee_email=None):
+    """Every daily-upload duty for this tenant, with the EXACT range still owed.
+
+    A duty is raised when the report is flagged `daily_upload`, and it is URGENT when the report is
+    also `auto` and its last sweep failed — that is the owner's "if an auto update fails, prompt the
+    designated user" case, and the portal's own error travels with it so the assignee is told what
+    happened rather than being left to discover it."""
+    try:
+        defs = (client.schema('commcalc').table('report_definitions')
+                .select('report_key,label,target_table,upload_endpoint,daily_upload,upload_assignee,'
+                        'upload_instructions,reminder_hour,reminder_minute,auto,sweep_last_status,'
+                        'sweep_last_detail,carrier_id')
+                .eq('org_id', org_id).eq('daily_upload', True).execute().data) or []
+    except Exception:
+        return []
+    dflt = _duty_defaults(client, org_id)
+    carriers = _tenant_carriers(client, org_id)
+    today = _datetime.now(_timezone.utc).date().isoformat()
+    out = []
+    for d in defs:
+        if not _carrier_visible(d, carriers):
+            continue
+        who = (d.get('upload_assignee') or dflt.get('default_assignee') or '').strip()
+        if assignee_email and who.lower() != assignee_email.strip().lower():
+            continue
+        tbl = (d.get('target_table') or '').strip()
+        last = _duty_last_loaded(client, tbl, org_id) if tbl else None
+        # The range still owed: the day AFTER the newest row, through today. No data yet ⇒ the
+        # assignee is told to pull the full history they have rather than a bogus one-day window.
+        if last:
+            try:
+                nxt = (_datetime.fromisoformat(last).date() + _timedelta(days=1)).isoformat()
+            except Exception:
+                nxt = last
+            start = min(nxt, today)
+        else:
+            start = None
+        failed = bool(d.get('auto')) and str(d.get('sweep_last_status') or '').lower() in ('error', 'partial')
+        out.append({
+            'report_key': d.get('report_key'), 'label': d.get('label') or d.get('report_key'),
+            'assignee': who or None,
+            'unassigned': not who,
+            'instructions': d.get('upload_instructions') or '',
+            'upload_endpoint': d.get('upload_endpoint') or '/commcalc/upload',
+            'last_loaded': last,
+            'date_range': {'start': start, 'end': today} if start else None,
+            'up_to_date': bool(last) and last >= today,
+            'urgent': failed,
+            'auto': bool(d.get('auto')),
+            'auto_error': (d.get('sweep_last_detail') or '')[:300] if failed else None,
+            'reminder_hour': d.get('reminder_hour') if d.get('reminder_hour') is not None
+                             else dflt.get('reminder_hour'),
+            'reminder_minute': d.get('reminder_minute') if d.get('reminder_minute') is not None
+                               else dflt.get('reminder_minute'),
+            'timezone': dflt.get('timezone') or 'America/New_York',
+        })
+    return out
+
+
+@router.get("/upload-duties")
+def upload_duties(mine: int = 0, org_id: str = ORG_ID, authorization: str = Header(default="")):
+    """The daily uploads owed right now — the login prompt's source (owner directive 2026-08-09).
+
+    `mine=1` narrows to the signed-in caller, which is what the prompt uses: a rep is shown only what
+    THEY are responsible for, and never an ingest error they could not action anyway. Unassigned
+    duties are returned to admins with `unassigned: true` so nobody's daily upload can sit
+    permanently owned by no one."""
+    require_org(org_id)
+    client = sb()
+    email = None
+    if mine:
+        try:
+            from app.modules.core.router import _uid_from_token
+            from app.core.tenant_middleware import caller_app_user
+            uid = _uid_from_token(authorization)
+            row = caller_app_user(uid, 'org_id,email') if uid else None
+            email = (row or {}).get('email')
+        except Exception:
+            email = None
+        if not email:
+            return {'duties': [], 'reason': 'caller not resolved'}
+    duties = _duty_rows(client, org_id, assignee_email=email)
+    owed = [d for d in duties if not d['up_to_date']]
+    return {'duties': duties, 'owed': len(owed),
+            'urgent': len([d for d in duties if d['urgent']]),
+            'unassigned': len([d for d in duties if d['unassigned']])}
+
+
+@router.get("/upload-duty-config")
+def upload_duty_config(org_id: str = ORG_ID):
+    """Tenant defaults + every daily-upload report, for the Imports settings screen."""
+    require_org(org_id)
+    client = sb()
+    return {'defaults': _duty_defaults(client, org_id), 'duties': _duty_rows(client, org_id)}
+
+
+@router.put("/upload-duty-config")
+def set_upload_duty_config(body: dict, org_id: str = ORG_ID):
+    """Set the tenant default assignee + reminder time (the owner's "one person" model)."""
+    require_org(org_id)
+    row = {'org_id': org_id,
+           'default_assignee': (body.get('default_assignee') or '').strip() or None,
+           'reminder_hour': int(body.get('reminder_hour', 9) or 0),
+           'reminder_minute': int(body.get('reminder_minute', 0) or 0),
+           'timezone': (body.get('timezone') or 'America/New_York').strip(),
+           'updated_at': _datetime.now(_timezone.utc).isoformat()}
+    sb().schema('commcalc').table('report_upload_defaults').upsert(row, on_conflict='org_id').execute()
+    return {'ok': True, 'defaults': row}
+
+
 def _tenant_carriers(client, org_id):
     """{carrier_id: name} for the carriers THIS tenant runs. commcalc.carrier is already per-org.
     Empty dict when the table is missing/unreadable, which the callers read as "do not filter" —
