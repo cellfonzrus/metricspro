@@ -71,6 +71,36 @@ def safe_float(v) -> float:
     try: return float(v or 0)
     except: return 0.0
 
+
+def safe_int(v):
+    """Parse a report cell into a Python int, for a column typed INTEGER in Postgres.
+
+    WHY THIS EXISTS (2026-08-09). Every mapper reached for safe_float, which returns a FLOAT even
+    for a whole number ('1' -> 1.0). PostgREST serialises that as `1.0`, and Postgres rejects it
+    against an integer column:
+        invalid input syntax for type integer: "1.0"   (SQLSTATE 22P02)
+    That killed the comp upload on ROW 0 — i.e. every row, not a data oddity — the moment the real
+    comp mapper was wired into the manual upload path.
+
+    Returns None for blank/unparseable input rather than 0, because on these reports an ABSENT
+    quantity is not a quantity of zero, and the columns are nullable. Accepts the Excel float
+    spellings the exports actually produce ('1', '1.0', 1.0, ' 2 '). A genuinely fractional value
+    is NOT silently truncated — it returns None so the row lands with a NULL you can find, instead
+    of quietly rounding a number somebody may later multiply by a rate.
+    """
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or s.lower() in ("nan", "none", "nat", "null"):
+        return None
+    try:
+        f = float(s.replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    i = int(f)
+    return i if i == f else None
+
+
 def calc_rep_commissions(
     sales: list[dict],
     pay_detail: list[dict], 

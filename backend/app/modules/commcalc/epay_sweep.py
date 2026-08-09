@@ -164,7 +164,9 @@ def _comp_ref(row):
 
 
 def map_comp_report_row(r, base):
-    from app.modules.commcalc.calculator import safe_float
+    # quantity is an INTEGER column — safe_float would hand PostgREST '1.0' and Postgres would
+    # reject the whole batch with 22P02 on row 0. See calculator.safe_int.
+    from app.modules.commcalc.calculator import safe_float, safe_int
     row = {
         **base,
         "begin_date": str(_comp_get(r, "Begin Date", "BeginDate"))[:10] or None,
@@ -178,7 +180,7 @@ def map_comp_report_row(r, base):
         "compensation_type": _comp_get(r, "Compensation Type", "CompensationType"),
         "brand": _comp_get(r, "Brand"),
         "salesforce_id": _comp_get(r, "SalesForce ID", "Salesforce ID", "SalesForceID"),
-        "quantity": safe_float(_comp_get(r, "Quantity")),
+        "quantity": safe_int(_comp_get(r, "Quantity")),
         "payment_amount": safe_float(_comp_get(r, "Payment Amount", "PaymentAmount")),
         "external_reference_id": _comp_get(r, "ExternalReferenceID", "External Reference ID"),
         "has_payment_detail": _comp_get(r, "HasPaymentDetail", "Has Payment Detail"),
@@ -223,6 +225,35 @@ REPORTS = {
                     # are guarded, and the period comes from the rows' Begin Date so it's never mislabeled.
                     "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
 }
+
+
+def comp_month_spread(records):
+    """[(period, row_count), ...] newest-first for EVERY month present in a comp file.
+
+    The manual upload stamps ONE operator-selected period onto every row, so a file spanning more
+    than one month silently files (say) June and August rows under July and replaces July with all
+    three. The dominant-month guard cannot see that — it only compares the winner. This exposes the
+    whole spread so the upload can refuse a multi-month file and say which months it found."""
+    import calendar as _cal
+    from collections import Counter
+    c = Counter()
+    for r in records:
+        bd = _comp_get(r, "Begin Date", "BeginDate")
+        mo = yr = None
+        if len(bd) >= 10 and bd[2] == "/" and bd[5] == "/":
+            try:
+                mo, yr = int(bd[0:2]), int(bd[6:10])
+            except ValueError:
+                pass
+        elif len(bd) >= 7 and bd[4] == "-":
+            try:
+                yr, mo = int(bd[0:4]), int(bd[5:7])
+            except ValueError:
+                pass
+        if mo and yr and 1 <= mo <= 12:
+            c[(mo, yr)] += 1
+    return [(f"{_cal.month_name[m]} {y}", n)
+            for (m, y), n in sorted(c.items(), key=lambda kv: (kv[0][1], kv[0][0]), reverse=True)]
 
 
 def comp_period_from_records(records):
@@ -558,15 +589,17 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None):
                 "mode": "skipped_guard", "existing": existing, "pulled": len(rows),
                 "note": f"kept {existing} existing rows — pull had only {len(rows)} (suspect/partial)"}
 
-    # REPLACE the period: delete it, then insert the fresh pull (the cumulative MTD snapshot for an
-    # open month; an idempotent re-pull for a frozen closed month). Other periods are untouched.
-    saved = 0
-    client.schema("commcalc").table(spec["table"]).delete() \
-        .eq("org_id", org_id).eq("period", period).execute()
-    for i in range(0, len(rows), 500):
-        batch = rows[i:i + 500]
-        client.schema("commcalc").table(spec["table"]).insert(batch).execute()
-        saved += len(batch)
+    # REPLACE the period — insert the fresh pull FIRST, retire the previous load only once it has
+    # all landed. This used to delete the period and then insert; a failure part-way through left
+    # the period EMPTY (the failure mode that destroyed raw_comp_report April 2026 on the manual
+    # upload path). safe_replace makes a failed pull a no-op instead. Other periods are untouched.
+    from app.modules.commcalc.safe_replace import safe_replace as _safe_replace
+    res = _safe_replace(client, spec["table"], rows,
+                        lambda q: q.eq("org_id", org_id).eq("period", period),
+                        label=f"{key} {period}")
+    saved = res["saved"]
+    if res.get("warning"):
+        print(f"WARN epay sweep {key} {period}: {res['warning']}")
 
     # best-effort: record it on the Upload page's history (never fail the sweep on this)
     try:
