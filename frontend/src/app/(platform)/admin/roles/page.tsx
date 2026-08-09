@@ -214,9 +214,35 @@ export default function RolesAdminPage() {
         // that union, and it is THE SAME source the backend uses to RESOLVE a market grant into its
         // member stores, so this picker can never offer a market the resolver cannot bind.
         setMarkets((gu?.markets || []) as string[])
+        // ── RULING #5: ONE OPTION PER PHYSICAL STORE ────────────────────────────────────────────
+        // A tenant can carry two code vocabularies for the same store (live Luxelink: `Diversey`
+        // from the StoreOps roster and `LUX-CHI-DIVERSEY` from Store Matching — same address; 19 of
+        // that tenant's 39 options are such duplicates). Offering both is a pick-don't-type failure
+        // in its own right: whichever spelling the operator happens to click decides which rows the
+        // grant binds. `store_groups` (additive on /core/markets) says which codes are one store;
+        // the OPERATIONAL code (`roster_codes`, i.e. what shifts / timelog / home_store speak) wins,
+        // and the alternate spelling is shown on the option so nothing is hidden.
+        const groups = (gu?.store_groups || {}) as Record<string, string[]>
+        const rosterCodes = new Set(((gu?.roster_codes || []) as string[]).map(c => c.toUpperCase()))
+        const seen = new Set<string>()
         setStores(((gu?.stores || []) as any[])
-          .map((s: any) => ({ code: String(s.store_code || '').trim(), label: `${s.store_code}${s.address ? ' — ' + String(s.address).substring(0, 26) : ''}` }))
+          .map((s: any) => ({ code: String(s.store_code || '').trim(), address: String(s.address || ''),
+                              grp: (groups[String(s.store_code || '').trim().toUpperCase()] || []) }))
           .filter((s: any) => s.code)
+          .filter((s: any) => {
+            const grp = s.grp as string[]
+            if (!grp.length) return true
+            const key = grp.slice().sort().join('|')
+            if (seen.has(key)) return false
+            const pref = grp.filter(g => rosterCodes.has(g.toUpperCase())).sort()
+            const winner = pref[0] || grp.slice().sort()[0]
+            if (winner !== s.code.toUpperCase() && winner !== s.code) return false
+            seen.add(key)
+            return true
+          })
+          .map((s: any) => ({ code: s.code,
+            label: `${s.code}${s.address ? ' — ' + s.address.substring(0, 26) : ''}`
+                   + ((s.grp as string[]).length > 1 ? ` (also: ${(s.grp as string[]).filter((g: string) => g.toUpperCase() !== s.code.toUpperCase()).join(', ')})` : '') }))
           .sort((a: any, b: any) => a.code.localeCompare(b.code)))
       }
       if (sa) setSettingAreas(sa.areas || [])
@@ -239,6 +265,22 @@ export default function RolesAdminPage() {
   }
 
   const loginCount = emps.filter(e => e.has_login).length
+
+  // ── RULING #5 — does this value name something real? ─────────────────────────────────────────
+  // Mirrors the backend resolver's FIRST rule only (exact code, case/punctuation-insensitive) —
+  // deliberately not the address/synonym rules, because the picker offers CODES. A value that is
+  // already on the record and fails this is flagged, never rewritten: the operator decides.
+  const storeSet = new Set(stores.map(s => s.code.toUpperCase().replace(/[^A-Z0-9]/g, '')))
+  const marketSet = new Set(markets.map(m => m.trim().toLowerCase()))
+  const storeExists = (v: string | null | undefined) =>
+    !v || storeSet.has(String(v).toUpperCase().replace(/[^A-Z0-9]/g, ''))
+  const marketsOf = (v: string | null | undefined) =>
+    String(v || '').split(',').map(s => s.trim()).filter(Boolean)
+  const deadMarkets = (v: string | null | undefined) =>
+    marketsOf(v).filter(m => !marketSet.has(m.toLowerCase()))
+  // The role's REPORTING scope tier — what decides whether a market grant is doing the widening.
+  const scopeOf = (roleName: string | null) =>
+    ((roles.find(r => r.name === roleName)?.permissions || {}).scope || 'all') as string
 
   // ---- roles editing ----
   function setPerm(rid: number, fn: (p: any) => any) {
@@ -337,15 +379,22 @@ export default function RolesAdminPage() {
         setMsg(`⚠️ ${e.name} needs an email before a role can be assigned — enter one in the Email column, then Save.${e.app_role ? ` (role "${e.app_role}" not yet applied)` : ''}`)
         return
       }
-      // Floaters cover several stores: send the full set (store_codes) + a primary (store_code).
+      // ── RULING #5, 2026-08-08: the STORE GRANT COMES FROM THE PICKER, FULL STOP ──────────────
+      // This used to fall back to `e.home_store` — a free-typed StoreOps text box — whenever the
+      // store picker was left empty, in TWO places (the set, and the primary pin). That fallback is
+      // how `3738 26th Street`, `3248 Lawarance`, `3560 Norstand Ave`, `B - 2612` and `Floating`
+      // became live PERMISSION values in `app_users.store_code`. A hand-typed string is not a grant;
+      // it is a guess about a grant, and a store name that matches nothing silently grants nothing.
+      // Empty picker now means EMPTY GRANT — which the Store column states plainly — and the backend
+      // rejects anything that does not name a real store (core.normalize_grants).
       const codes = (e.app_store_codes && e.app_store_codes.length)
         ? e.app_store_codes
-        : (e.app_store ? [e.app_store] : (e.home_store ? [e.home_store] : []))
+        : (e.app_store ? [e.app_store] : [])
       await api('/api/v1/core/users/assign', { method: 'POST', body: JSON.stringify({
         email: e.email, full_name: e.name, role: e.app_role || 'sales_rep',
         market: e.app_market || null,
-        store_code: codes[0] || e.home_store || null,   // primary store (unchanged contract)
-        store_codes: codes,                             // full set for floaters
+        store_code: codes[0] || null,   // primary store — always the first of the picked set
+        store_codes: codes,             // full set: a person may hold several stores (#5)
         employee_id: e.employee_id,
       }) })
       // Reflect the server-side default back into the grid so the Role column and the access chip
@@ -946,15 +995,44 @@ export default function RolesAdminPage() {
                           {roles.map(r => <option key={r.id} value={r.name}>{r.display_name}</option>)}
                         </select>
                       </td>
+                      {/* ── RULING #6: the MARKET grant and the STORE grant are TWO grants ────────
+                          "if it is slected then it is granted of not then separate them and let the
+                          managers assign it as required." Both columns stay independently editable
+                          and independently clearable; nothing here strips a market. What is new is
+                          that when a role whose scope is "their store" (or "only their own data")
+                          ALSO holds a market, the page SAYS so — with the number of stores the
+                          market actually opens up — so narrowing that person is a deliberate click
+                          by whoever owns the decision, not an invisible default. Live today: all 13
+                          Luxelink store managers are in exactly this state. */}
                       <td style={{ padding: '8px 12px' }}>
-                        <MarketPicker value={e.app_market || ''} markets={markets} onChange={v => setEmp(e.id, { app_market: v })} />
+                        <MarketPicker value={e.app_market || ''} markets={markets}
+                          invalid={deadMarkets(e.app_market).length > 0}
+                          onChange={v => setEmp(e.id, { app_market: v })} />
+                        {(() => {
+                          const sc = scopeOf(e.app_role)
+                          const mk = marketsOf(e.app_market)
+                          if (!mk.length || !(sc === 'store' || sc === 'self')) return null
+                          return (
+                            <div style={{ fontSize: 10.5, color: '#b45309', marginTop: 3, maxWidth: 150, lineHeight: 1.35 }}
+                              title={`This role's reporting scope is "${sc === 'self' ? 'only their own data' : 'their store'}", but the market grant above opens every store in ${mk.join(' + ')}. Clear the market if they should only see their store.`}>
+                              ⚠ market grant widens past “{sc === 'self' ? 'own data' : 'their store'}”
+                            </div>
+                          )
+                        })()}
                       </td>
                       <td style={{ padding: '8px 12px' }}>
                         <StorePicker
                           value={(e.app_store_codes && e.app_store_codes.length) ? e.app_store_codes : (e.app_store ? [e.app_store] : [])}
                           stores={stores}
-                          placeholder={e.home_store || 'Store(s)…'}
+                          placeholder="Store(s)…"
+                          invalid={((e.app_store_codes && e.app_store_codes.length) ? e.app_store_codes : (e.app_store ? [e.app_store] : [])).some(c => !storeExists(c))}
                           onChange={codes => setEmp(e.id, { app_store_codes: codes, app_store: codes[0] || null })} />
+                        {!(e.app_store_codes && e.app_store_codes.length) && !e.app_store && (
+                          <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3 }}
+                            title="Nothing is granted until a store is picked. This used to fall back to the free-typed Home store, which is how store names that match nothing became permissions.">
+                            no store granted
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding: '8px 12px', fontSize: 12 }}>
                         {/* Access = role-assigned AND login-exists in ONE chip (auth-ux hardening).
@@ -1004,6 +1082,46 @@ export default function RolesAdminPage() {
                                   ? 'ANY employee in the company'
                                   : 'only employees in the stores above'}
                               </div>
+                              {/* ── RULING #6: WHICH grant produced which stores ────────────────
+                                  The whole point of separating them. "I gave this store manager one
+                                  store, why do they see the market?" is answerable here without
+                                  logging in as anyone, and each half can then be cleared on its own
+                                  in the columns above. */}
+                              {sp.grants && (
+                                <div style={{ display: 'grid', gap: 3, padding: '6px 8px', background: '#fff', borderRadius: 6, border: '1px solid var(--border)' }}>
+                                  <div><strong>Market grant</strong> —{' '}
+                                    {(sp.grants.market?.granted || []).length
+                                      ? <>{sp.grants.market.granted.join(', ')} → <strong>{(sp.grants.market.codes || []).length}</strong> store(s)</>
+                                      : <span style={{ color: 'var(--text3)' }}>none</span>}
+                                  </div>
+                                  <div><strong>Store grant</strong> —{' '}
+                                    {(sp.grants.store?.granted || []).length
+                                      ? <>{sp.grants.store.granted.join(', ')} → <strong>{(sp.grants.store.codes || []).length}</strong> store key(s)</>
+                                      : <span style={{ color: 'var(--text3)' }}>none</span>}
+                                  </div>
+                                  {sp.grants.market_widens_beyond_store_scope && (
+                                    <div style={{ color: '#b45309', fontWeight: 600 }}>
+                                      ⚠ This role&apos;s scope is “{sp.scope === 'self' ? 'only their own data' : 'their store'}”, but the
+                                      MARKET grant above is what they actually see. Clear the market to hold them to their store —
+                                      the store grant is untouched by that.
+                                    </div>
+                                  )}
+                                  {(sp.grants.store?.unresolved || []).length > 0 && (
+                                    <div style={{ color: '#b91c1c', fontWeight: 600 }}>
+                                      ⚠ Not a real store, grants nothing: {sp.grants.store.unresolved.join(', ')} — pick the store in the Store column.
+                                    </div>
+                                  )}
+                                  {sp.scope === 'self' && (
+                                    <div>
+                                      <strong>Their own store</strong> —{' '}
+                                      {(sp.grants.own_store || []).length
+                                        ? <>{sp.grants.own_store.join(', ')}</>
+                                        : <span style={{ color: '#b91c1c', fontWeight: 600 }}>none resolvable</span>}
+                                      <span style={{ color: 'var(--text3)' }}> · {sp.grants.own_store_why}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                               <div style={{ color: 'var(--text3)' }}>
                                 Markets granted: {(sp.granted_markets || []).join(', ') || '—'}
                                 {(sp.pinned_stores || []).length > 0 && <> · Stores pinned: {sp.pinned_stores.join(', ')}</>}
@@ -1077,7 +1195,17 @@ export default function RolesAdminPage() {
                               <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Edit {e.name}</div>
                               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10 }}>
                                 <label style={lbl}>Full name<input style={{ ...sel, width: 160 }} value={e.name || ''} onChange={ev => setEmp(e.id, { name: ev.target.value })} /></label>
-                                <label style={lbl}>Home store<input style={{ ...sel, width: 120 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></label>
+                                {/* RULING #5 — home store is PICKED, never typed. This box was one of
+                                    the two free-text doors that put `3738 26th Street`, `3248 Lawarance`
+                                    and `Floating` into the roster, and this page then copied the value
+                                    straight into a permission. A value that is already on the record but
+                                    names no real store is shown as-is (red) so it can be seen and fixed —
+                                    it is never silently rewritten. */}
+                                <label style={lbl}>Home store
+                                  <StorePicker value={e.home_store ? [e.home_store] : []} stores={stores} single
+                                    placeholder="Home store…" invalid={!!e.home_store && !storeExists(e.home_store)}
+                                    onChange={codes => setEmp(e.id, { home_store: codes[0] || null })} />
+                                </label>
                                 <label style={lbl}>Job title<input style={{ ...sel, width: 130 }} value={e.role || ''} placeholder="Sales Rep" onChange={ev => setEmp(e.id, { role: ev.target.value })} /></label>
                                 <label style={lbl}>Pay $/hr<input type="number" style={{ ...sel, width: 80 }} value={e.pay_rate ?? ''} onChange={ev => setEmp(e.id, { pay_rate: ev.target.value === '' ? null : (ev.target.value as any) })} /></label>
                                 <label style={lbl}>Phone<input style={{ ...sel, width: 150 }} value={e.phone || ''} placeholder="2125550123" onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></label>
@@ -1114,36 +1242,64 @@ export default function RolesAdminPage() {
   )
 }
 
-// Multi-select store picker — assign one or many stores to a rep (floaters cover several).
-// Emits a string[] of store_codes (what app_users.store_codes + the span resolver read), and
-// is a real dropdown of valid stores so a wrong/typo store can't be entered.
-function StorePicker({ value, stores, placeholder, onChange }:
-  { value: string[]; stores: { code: string; label: string }[]; placeholder?: string; onChange: (v: string[]) => void }) {
+// Multi-select store picker — assign one or many stores (a person may hold several: ruling #5,
+// "make it drop down with option to select many instead of free text"). Emits a string[] of
+// store_codes (what app_users.store_codes + the span resolver read), and is a real dropdown of
+// valid stores so a wrong/typo store can't be entered.
+//
+// `single`  — one-of behaviour for a field that holds exactly one store (home store). Still the same
+//             picker, so there is ONE store-entry control on this page and no free-text door left.
+// `invalid` — the value already on the record names no real store. It is DISPLAYED (red) rather
+//             than dropped: silently rewriting somebody's permission is how the bad values got in.
+// A typeahead filters long rosters — the biggest tenant here has ~39 options today, but a picker
+// that forces scrolling is the reason people reach for a text box in the first place.
+function StorePicker({ value, stores, placeholder, single, invalid, onChange }:
+  { value: string[]; stores: { code: string; label: string }[]; placeholder?: string
+    single?: boolean; invalid?: boolean; onChange: (v: string[]) => void }) {
   const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
   const chosen = new Set(value || [])
   const toggle = (code: string) => {
+    if (single) { onChange(chosen.has(code) ? [] : [code]); setOpen(false); return }
     const next = new Set(chosen); next.has(code) ? next.delete(code) : next.add(code)
     onChange(Array.from(next))
   }
   const label = chosen.size === 0 ? (placeholder || 'Store(s)…')
     : chosen.size === 1 ? Array.from(chosen)[0] : `${chosen.size} stores`
-  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
+  const shown = q.trim()
+    ? stores.filter(s => s.label.toLowerCase().includes(q.trim().toLowerCase()))
+    : stores
+  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid ' + (invalid ? '#dc2626' : 'var(--border)'), fontSize: 13, background: invalid ? '#fef2f2' : 'var(--surface)', color: invalid ? '#b91c1c' : undefined, cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
-      <button type="button" onClick={() => setOpen(o => !o)} style={btn}>
-        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 130 }}>{label}</span>
+      <button type="button" onClick={() => setOpen(o => !o)} style={btn}
+        title={invalid ? `"${Array.from(chosen)[0]}" is not one of this company's stores — pick the real one` : undefined}>
+        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 130 }}>{invalid ? '⚠ ' : ''}{label}</span>
         <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
       </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 220, maxHeight: 320, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 260, maxHeight: 340, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+            <input autoFocus value={q} onChange={ev => setQ(ev.target.value)} placeholder="Type to filter…"
+              style={{ width: '100%', padding: '5px 8px', marginBottom: 6, borderRadius: 6, border: '1px solid var(--border)', fontSize: 12.5 }} />
+            {invalid && (
+              <div style={{ fontSize: 11.5, color: '#b91c1c', padding: '2px 6px 6px' }}>
+                Currently set to <b>{Array.from(chosen)[0]}</b>, which is not a store in this company.
+                Pick the real one below.
+              </div>
+            )}
             {stores.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)', padding: 4 }}>No stores found</div>}
-            {stores.map(s => (
+            {stores.length > 0 && shown.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)', padding: 4 }}>No store matches “{q}”</div>}
+            {shown.map(s => (
               <label key={s.code} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', fontSize: 13, cursor: 'pointer' }}>
-                <input type="checkbox" checked={chosen.has(s.code)} onChange={() => toggle(s.code)} /> {s.label}
+                <input type={single ? 'radio' : 'checkbox'} checked={chosen.has(s.code)} onChange={() => toggle(s.code)} /> {s.label}
               </label>
             ))}
+            {chosen.size > 0 && (
+              <button type="button" className="btn" style={{ fontSize: 11.5, padding: '3px 8px', marginTop: 6 }}
+                onClick={() => { onChange([]); setOpen(false) }}>✕ Clear store grant</button>
+            )}
           </div>
         </>
       )}
@@ -1153,31 +1309,49 @@ function StorePicker({ value, stores, placeholder, onChange }:
 
 // Checkbox market picker — assign one or many markets to a manager without touching the org tree.
 // Stores the selection as a comma-separated string (what the span resolver already reads).
-function MarketPicker({ value, markets, onChange }: { value: string; markets: string[]; onChange: (v: string) => void }) {
+// `invalid` flags a market already on the record that is in neither market vocabulary and therefore
+// grants NOTHING (live: the `15` in one house user's `market = "15, NYC, LI"`). Shown, never
+// silently dropped. "Clear market grant" is the one-click half of ruling #6 — removing the market
+// leaves the store grant completely untouched.
+function MarketPicker({ value, markets, invalid, onChange }:
+  { value: string; markets: string[]; invalid?: boolean; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false)
   const chosen = new Set((value || '').split(',').map(s => s.trim()).filter(Boolean))
+  const known = new Set(markets.map(m => m.toLowerCase()))
+  const dead = Array.from(chosen).filter(m => !known.has(m.toLowerCase()))
   const toggle = (m: string) => {
     const next = new Set(chosen); next.has(m) ? next.delete(m) : next.add(m)
     onChange(Array.from(next).join(', '))
   }
   const label = chosen.size === 0 ? 'Market(s)…' : chosen.size === 1 ? Array.from(chosen)[0] : `${chosen.size} markets`
-  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
+  const btn: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid ' + (invalid ? '#dc2626' : 'var(--border)'), fontSize: 13, background: invalid ? '#fef2f2' : 'var(--surface)', color: invalid ? '#b91c1c' : undefined, cursor: 'pointer', minWidth: 120, display: 'inline-flex', justifyContent: 'space-between', gap: 6, alignItems: 'center' }
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
-      <button type="button" onClick={() => setOpen(o => !o)} style={btn}>
-        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 130 }}>{label}</span>
+      <button type="button" onClick={() => setOpen(o => !o)} style={btn}
+        title={dead.length ? `${dead.join(', ')} — not a market in this company, grants nothing` : undefined}>
+        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 130 }}>{invalid ? '⚠ ' : ''}{label}</span>
         <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
       </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 180, maxHeight: 300, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+          <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 41, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 8, minWidth: 200, maxHeight: 300, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+            {dead.length > 0 && (
+              <div style={{ fontSize: 11.5, color: '#b91c1c', padding: '2px 6px 6px' }}>
+                <b>{dead.join(', ')}</b> {dead.length > 1 ? 'are' : 'is'} not a market in this company and
+                grant{dead.length > 1 ? '' : 's'} nothing. Tick the real market, then save.
+              </div>
+            )}
             {markets.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)', padding: 4 }}>No markets found</div>}
             {markets.map(m => (
               <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', fontSize: 13, cursor: 'pointer' }}>
                 <input type="checkbox" checked={chosen.has(m)} onChange={() => toggle(m)} /> {m}
               </label>
             ))}
+            {chosen.size > 0 && (
+              <button type="button" className="btn" style={{ fontSize: 11.5, padding: '3px 8px', marginTop: 6 }}
+                onClick={() => { onChange(''); setOpen(false) }}>✕ Clear market grant</button>
+            )}
           </div>
         </>
       )}

@@ -45,6 +45,67 @@ export function rosterSpanExempt(perms: Permissions | undefined): boolean {
   return schedulingReach(perms) === 'org'
 }
 
+// ── THE GRANT MODEL (owner rulings #5 / #6 / #7, 2026-08-08) ─────────────────────────────────────
+// MIRROR of backend app/core/scope.py — KEEP IN SYNC.
+//
+// A person's REPORTING span comes from TWO independent grants that used to be fused into one
+// undifferentiated set:
+//
+//   'market' — storeops.app_users.market   → every store in those markets
+//   'store'  — storeops.app_users.store_code / .store_codes → those stores
+//
+// #6, verbatim: "if it is slected then it is granted of not then separate them and let the managers
+// assign it as required". A market on a manager's record IS a market grant — it was selected, so it
+// is granted, and nothing here strips it. What was wrong is that the two were welded: with one set
+// coming out, nobody could see WHICH grant produced WHICH store. Live today: all 13 Luxelink
+// `store_manager` logins (a scope-'store' role) also carry `market = Chicago`/`NY`, so each spans
+// their whole market — 26 store codes against a store grant of 1. `grantWidening()` is what lets the
+// Roles page SAY that out loud, so narrowing a person stays a deliberate click by the owner.
+export type GrantKind = 'market' | 'store'
+export const GRANT_KINDS: GrantKind[] = ['market', 'store']
+export type GrantBreakdown = {
+  market?: { granted?: string[]; codes?: string[]; unresolved?: string[]; per_market?: Record<string, string[]> }
+  store?: { granted?: string[]; codes?: string[]; unresolved?: string[] }
+  market_widens_beyond_store_scope?: boolean
+  own_store?: string[]
+  own_store_why?: string
+}
+// Does this person's MARKET grant reach past what their role's scope tier is for? Returns null when
+// there is nothing to say. Advisory only — it never changes access, it explains it.
+export function grantWidening(scope: Scope | undefined, g: GrantBreakdown | undefined):
+  { markets: string[]; marketStores: number; ownStores: number } | null {
+  if (!g) return null
+  const s = scope || 'all'
+  const markets = g.market?.granted || []
+  const marketStores = (g.market?.codes || []).length
+  if (!(s === 'store' || s === 'self') || !markets.length || !marketStores) return null
+  return { markets, marketStores, ownStores: (g.store?.codes || []).length }
+}
+// A grant value that names nothing real. Ruling #5: these are shown, never silently honoured —
+// live examples are `Floating`, `3738 26th Street` and the `15` fragment in `market = "15, NYC, LI"`.
+export function deadGrants(g: GrantBreakdown | undefined): string[] {
+  return [...(g?.market?.unresolved || []), ...(g?.store?.unresolved || [])]
+}
+
+// ── #7 "they shoudl see their own store" — the ADOPTION REGISTRY, not a widening ─────────────────
+// A scope-'self' person resolves to an EMPTY store keyset, which every span-filtered read treats as
+// deny-all. Ruling #7 says a rep must resolve to their OWN store instead. That resolution is
+// deliberately OPT-IN PER SURFACE on the backend (`reporting_span_codes(..., self_own_store=True)`),
+// because ~54 reads share the same primitive and a global flip would hand every rep the payroll,
+// hours and colleagues' commission at their store.
+//
+// THE PAIRED RULE, and it is not optional: a surface listed here shows STORE-LEVEL data. If it also
+// carries a per-employee pay / commission / compensation / PII column, that column is filtered to
+// the caller's own employee_id (`self_employee_ids()`), so a rep sees their own row and nobody
+// else's. Adding a surface to this list without that filter is a payroll leak between colleagues.
+export const SELF_OWN_STORE_SURFACES: { path: string; note: string }[] = [
+  { path: '/commcalc/targets/my', note: 'My Targets — store-level target vs achieved for the rep\'s own store. Per-rep rows are their own only.' },
+  { path: '/commcalc/commissions', note: 'My Commission — already self-bypassed by rep name; the rep\'s own rows only.' },
+]
+export function selfSurfaceAdopted(path: string): boolean {
+  return SELF_OWN_STORE_SURFACES.some(s => path === s.path || path.startsWith(s.path + '/'))
+}
+
 // Report (analytical) pages are gated by a per-area `reports` permission that is SEPARATE from the
 // operational module, so e.g. a market manager can run schedules/targets but see no reports.
 // Operational pages (targets entry, schedule, My Team, time clock…) are NOT listed here.

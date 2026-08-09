@@ -87,11 +87,42 @@ lossy, and `widen_codes_to_keys` walks the `stores` list.
 returned verbatim by `GET /core/markets` and feeds the roles/config grant picker). See
 `widen_codes_to_keys` for the proof that this cannot widen to a store outside the span.
 
+THE GRANT MODEL (owner rulings #5 / #6 / #7, 2026-08-08)
+───────────────────────────────────────────────────────
+Three rulings that are ONE change, because they are three faces of the same object — "what does a
+person's grant actually name?".
+
+  #5  "clean the bad vlaues and make it drop down with option to select many instead of free text"
+      A grant value is a REFERENCE to an existing entity, so it is picked, never typed (RULE THREE)
+      — and the highest-stakes possible place to break that rule, because the value is a PERMISSION.
+      `resolve_store_grant()` / `resolve_market_grant()` are the canonical resolvers: they take any
+      spelling a human or an old free-text box could have produced and return the ONE real store /
+      market it names, or None. `None` is an answer, not a fallback — an unresolvable permission
+      value is never silently kept as itself at a WRITE boundary.
+
+  #6  "if it is slected then it is granted of not then separate them and let the managers assign it
+      as required"
+      A market on a manager's record IS a market grant. The defect is that the market half and the
+      store half were fused into one undifferentiated set, so nobody — not the admin UI, not the
+      operator, not this module — could say WHICH grant produced WHICH store. `login_grant_breakdown()`
+      answers per-kind; `login_grant_codes()` still returns the identical union, so NOTHING is
+      narrowed here. Narrowing a live person is the owner's call through the UI.
+
+  #7  "they shoudl see their own store"
+      `reporting_span_codes()` returns the EMPTY set for scope 'self', and an empty keyset means
+      deny-all at ~54 `in_keyset()` call sites — a rep's own store included. `self_store_codes()`
+      resolves the rep's OWN store instead. It is deliberately **opt-in** (`self_own_store=True`):
+      flipping it on globally would hand every rep their store's PAYROLL, HOURS and colleagues'
+      COMMISSION on the ~54 employee-keyed surfaces that share this primitive. `self_employee_ids()`
+      is the paired guard — a self caller resolves to exactly ONE employee id, their own — and a
+      surface that mixes store-level rows with per-employee pay MUST apply both.
+
 MULTI-TENANT: every read here is `.eq("org_id", org_id)`. Nothing in this module writes.
 """
 
 from __future__ import annotations
 
+import re
 import time
 from collections import Counter
 
@@ -135,6 +166,26 @@ def _norm(v) -> str:
 
 def _up(v) -> str:
     return _norm(v).upper()
+
+
+_SQUASH_RE = re.compile(r"[^A-Z0-9]")
+
+
+def _squash(v) -> str:
+    """Comparison form for a GRANT VALUE: upper-cased, every non-alphanumeric character dropped.
+
+    Deliberately narrow. It exists so `"B - 2612"` (a live house value) compares equal to the real
+    store code `"B-2612"`, and `"ave u"` to `"Ave U"` — i.e. so PUNCTUATION AND CASE DRIFT in a
+    hand-typed permission value cannot make it name a different store than the operator meant. It is
+    NOT fuzzy matching: nothing here does prefix, edit-distance or token-overlap resolution, because
+    a permission value must never be GUESSED at runtime. (The one-time cleanup of the historic
+    free-text values used stronger, human-reviewed rules — see migration 740 — precisely because
+    those decisions were reviewed by a person and are not safe as code.)
+
+    Collision safety is a property of the tenant's roster, not of this function, so every caller
+    that resolves through `_squash` treats a squash that lands on more than ONE physical store as
+    UNRESOLVED (see `resolve_store_grant`)."""
+    return _SQUASH_RE.sub("", str(v or "").upper())
 
 
 def build_market_index(store_rows, mapping_rows, alias_rows=None) -> dict:
@@ -221,8 +272,53 @@ def build_market_index(store_rows, mapping_rows, alias_rows=None) -> dict:
         by_market[lk]["market"] = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
     markets = sorted((b["market"] for b in by_market.values()), key=lambda s: s.lower())
     store_list = sorted(stores.values(), key=lambda s: (s.get("store_code") or s.get("address") or ""))
+
+    # ── GRANT RESOLUTION SIBLINGS (2026-08-08, ruling #5) ───────────────────────────────────────
+    # THREE new TOP-LEVEL keys. `markets`, `by_market`, `stores`, `alias_keys` and `addr_keys` are
+    # untouched in shape and content — `GET /core/markets` returns only `markets` + `stores`, so the
+    # grant picker's payload is byte-identical and every existing reader is unaffected.
+    #
+    #   roster_codes — UPPER codes that came from the OPERATIONAL roster (storeops.stores). This is
+    #                  the vocabulary shifts / timelog / employees.home_store actually speak, so it
+    #                  is the one a normalised grant should land in.
+    #   key_index    — SQUASHED spelling (code | address | alias) -> {UPPER codes that own it}. The
+    #                  single lookup behind resolve_store_grant.
+    #   code_groups  — UPPER code -> {every UPPER code naming the SAME PHYSICAL STORE}. A tenant can
+    #                  carry two code vocabularies for one store (live Luxelink: `Diversey` in
+    #                  storeops.stores and `LUX-CHI-DIVERSEY` in commcalc.store_mapping, same
+    #                  address) — 19 of that tenant's 39 mapping rows are such duplicates. Two codes
+    #                  sharing an address are ONE store, and a resolver that treats them as two makes
+    #                  a picker offer the same store twice (pick the wrong one and the grant binds
+    #                  only half the data).
+    roster_codes = {_up(r.get("store_code")) for r in (store_rows or []) if _norm(r.get("store_code"))}
+    by_addr: dict[str, set] = {}
+    for code, addrs in addr_keys.items():
+        for a in addrs:
+            sq = _squash(a)
+            if sq:
+                by_addr.setdefault(sq, set()).add(code)
+    code_groups: dict[str, set] = {}
+    for codes in by_addr.values():
+        merged = set(codes)
+        for c in codes:
+            merged |= code_groups.get(c, set())
+        for c in merged:
+            code_groups[c] = merged
+    for c in (_up(s.get("store_code")) for s in store_list if _norm(s.get("store_code"))):
+        code_groups.setdefault(c, {c})
+    key_index: dict[str, set] = {}
+    for c in code_groups:
+        key_index.setdefault(_squash(c), set()).add(c)
+    for sq, codes in by_addr.items():
+        key_index.setdefault(sq, set()).update(codes)
+    for code, aliases in alias_keys.items():
+        for a in aliases:
+            sq = _squash(a)
+            if sq:
+                key_index.setdefault(sq, set()).add(code)
     return {"markets": markets, "by_market": by_market, "stores": store_list,
-            "alias_keys": alias_keys, "addr_keys": addr_keys}
+            "alias_keys": alias_keys, "addr_keys": addr_keys,
+            "roster_codes": roster_codes, "key_index": key_index, "code_groups": code_groups}
 
 
 def market_index(client, org_id: str, *, fresh: bool = False) -> dict:
@@ -304,42 +400,326 @@ def invalidate_market_index(org_id: str = None) -> None:
         _market_cache.pop(org_id, None)
 
 
+# ── GRANT RESOLUTION — a permission value names a REAL entity or it names nothing (ruling #5) ────
+# `RESOLVED` / `AMBIGUOUS` / `UNKNOWN` / `EMPTY` are the four honest answers. Every caller must
+# handle AMBIGUOUS and UNKNOWN explicitly; neither may be silently coerced into "keep what was
+# typed", which is exactly how `3738 26th Street`, `3248 Lawarance`, `3560 Norstand Ave`,
+# `B - 2612` and `Floating` became live permission values.
+GRANT_EMPTY = "empty"
+GRANT_RESOLVED = "resolved"
+GRANT_AMBIGUOUS = "ambiguous"
+GRANT_UNKNOWN = "unknown"
+
+
+def resolve_store_grant(client, org_id: str, value) -> tuple:
+    """Resolve ANY spelling of a store into the ONE real store it names.
+
+    Returns `(code|None, status, detail)` where status is one of the GRANT_* constants and `code`
+    is the tenant's OPERATIONAL store code (storeops.stores vocabulary preferred, because that is
+    what shifts / timelog / employees.home_store speak).
+
+    Accepts, in this order and NOTHING else:
+      1. the store CODE itself (case- and punctuation-insensitive: `"b-418"`, `"B - 2612"`),
+      2. a POS/sales SYNONYM from `commcalc.store_aliases` (the Store-Matching UI's own map),
+      3. an ADDRESS spelling from EITHER vocabulary (`storeops.stores.address` or
+         `commcalc.store_mapping.store_address`).
+
+    There is NO prefix, no edit-distance and no token-overlap rule here, on purpose: this function
+    decides who may read a store's numbers, so it may never GUESS. `"3738 26th Street"` returns
+    (None, UNKNOWN, …) even though a human can see it was meant to be `3735 26th` — that judgement
+    belongs to the owner in the UI, not to a matcher at runtime.
+
+    AMBIGUOUS is returned when a spelling names more than one PHYSICAL store. Two codes that share
+    an address are the same store (`code_groups`), so a tenant carrying two code vocabularies for
+    one store resolves cleanly rather than being rejected."""
+    v = _norm(value)
+    if not v:
+        return None, GRANT_EMPTY, ""
+    idx = market_index(client, org_id)
+    hits = (idx.get("key_index") or {}).get(_squash(v)) or set()
+    if not hits:
+        return None, GRANT_UNKNOWN, f"{v!r} is not a store code, synonym or address in this org"
+    groups = idx.get("code_groups") or {}
+    physical = set()
+    for c in hits:
+        physical |= (groups.get(c) or {c})
+    for c in hits:
+        if not (groups.get(c) or {c}) >= hits:
+            return None, GRANT_AMBIGUOUS, f"{v!r} names more than one store: {sorted(hits)}"
+    roster = idx.get("roster_codes") or set()
+    display = {_up(s.get("store_code")): _norm(s.get("store_code"))
+               for s in (idx.get("stores") or []) if _norm(s.get("store_code"))}
+    preferred = sorted(physical & roster) or sorted(physical)
+    code = display.get(preferred[0], preferred[0])
+    return code, GRANT_RESOLVED, f"{v!r} -> {code!r}"
+
+
+def resolve_market_grant(client, org_id: str, value) -> tuple:
+    """Resolve a market grant against the canonical market union (the SAME vocabulary
+    `market_store_codes` binds, so the picker can never offer what the resolver cannot bind).
+
+    Returns `(canonical|None, status, detail)`. A market that exists but currently contains NO
+    store still RESOLVES — it is a real market that happens to be empty, which is a roster problem,
+    not a bad permission value. A spelling that is in neither vocabulary is UNKNOWN (live: the `15`
+    fragment in one house user's `market = "15, NYC, LI"`)."""
+    v = _norm(value)
+    if not v:
+        return None, GRANT_EMPTY, ""
+    b = (market_index(client, org_id).get("by_market") or {}).get(v.lower())
+    if not b:
+        return None, GRANT_UNKNOWN, f"{v!r} is not a market in this org"
+    return b["market"], GRANT_RESOLVED, f"{v!r} -> {b['market']!r}"
+
+
+def normalize_grants(client, org_id: str, *, market=None, store_code=None, store_codes=None) -> dict:
+    """Normalise a WRITE of a person's grants (the `/core/users/assign` boundary).
+
+    Returns
+      {"market": "NYC, LI" | None,        canonical spellings, order preserved, de-duplicated
+       "store_code": "B-418" | None,      the PRIMARY pin (first of store_codes)
+       "store_codes": ["B-418", …],
+       "rejected": [{"kind": "store"|"market", "value": …, "status": …, "detail": …}, …]}
+
+    RULE THREE at the SERVER, not just in the picker. The admin UI can only offer real stores and
+    real markets, but the UI is not the boundary — a stale tab, a bulk sheet upload or a curl can
+    still post anything, and the values it posts become permissions. Anything that does not resolve
+    is REJECTED and reported back; nothing unresolvable is ever written.
+
+    `market=None` / `store_codes=None` mean "not supplied, leave alone" and are passed straight
+    through, so a caller that only edits one half never clears the other."""
+    out = {"market": market, "store_code": store_code, "store_codes": store_codes, "rejected": []}
+    if market is not None:
+        canon, seen = [], set()
+        for part in str(market or "").split(","):
+            p = _norm(part)
+            if not p:
+                continue
+            c, status, detail = resolve_market_grant(client, org_id, p)
+            if c is None:
+                out["rejected"].append({"kind": "market", "value": p, "status": status, "detail": detail})
+                continue
+            if c.lower() not in seen:
+                seen.add(c.lower())
+                canon.append(c)
+        out["market"] = ", ".join(canon) if canon else None
+    if store_codes is not None or store_code is not None:
+        raw = list(store_codes) if store_codes is not None else []
+        if store_code is not None and _norm(store_code) and not raw:
+            raw = [store_code]
+        canon, seen = [], set()
+        for sc in raw:
+            c, status, detail = resolve_store_grant(client, org_id, sc)
+            if c is None:
+                out["rejected"].append({"kind": "store", "value": _norm(sc), "status": status,
+                                        "detail": detail})
+                continue
+            if c.upper() not in seen:
+                seen.add(c.upper())
+                canon.append(c)
+        if store_codes is not None:
+            out["store_codes"] = canon
+        # The PRIMARY pin stays the first of the set, so "one store" and "several stores" are the
+        # same shape and `store_code` can never disagree with `store_codes` again.
+        out["store_code"] = canon[0] if canon else None
+    return out
+
+
 # ── REPORTING span ──────────────────────────────────────────────────────────────────────────────
+GRANT_KIND_MARKET = "market"
+GRANT_KIND_STORE = "store"
+GRANT_KINDS = (GRANT_KIND_MARKET, GRANT_KIND_STORE)
+
+
+def login_grant_breakdown(client, org_id: str, app_user) -> dict:
+    """The SAME grants `login_grant_codes` returns, but ATTRIBUTED to the grant that produced them
+    (owner ruling #6, 2026-08-08).
+
+    Returns
+      {"market":  {"granted": ["Chicago", …],       what is written on the record
+                   "resolved": {"Chicago": {codes}} what each market actually binds
+                   "unresolved": ["15"],            markets that bind NOTHING (grant a no-op)
+                   "codes": {…}},                   the market half of the span
+       "store":   {"granted": ["Diversey", …], "codes": {…},
+                   "unresolved": ["Floating"]},     store values that name no real store
+       "codes": {…}}                                the UNION — identical to login_grant_codes()
+
+    WHY THIS EXISTS. Store scope and market scope were fused: one undifferentiated set came out and
+    nothing could say which half produced which store. Live consequence — all 13 Luxelink
+    `store_manager` logins (a scope-'store' role) also carry `market = Chicago` or `NY`, so each one
+    silently spans their whole market. The owner's ruling is that the market IS a grant (it was
+    selected, so it is granted) and that the two must be **separately assignable**, so that removing
+    one does not disturb the other and an administrator can SEE which one is doing the widening.
+
+    THIS FUNCTION NARROWS NOBODY. `codes` is the same union as before, byte for byte. Deciding that
+    a particular manager should no longer hold their market is the owner's call, made in the UI."""
+    # Built explicitly, NOT from a shared template: a shallow copy would alias the `granted` /
+    # `unresolved` lists between the two kinds and re-weld the very halves this function separates.
+    out = {
+        GRANT_KIND_MARKET: {"granted": [], "resolved": {}, "unresolved": [], "codes": set()},
+        GRANT_KIND_STORE: {"granted": [], "resolved": {}, "unresolved": [], "codes": set()},
+        "codes": set(),
+    }
+    if not app_user:
+        return out
+    for mkt in _norm(app_user.get("market")).split(","):
+        m = _norm(mkt)
+        if not m:
+            continue
+        out[GRANT_KIND_MARKET]["granted"].append(m)
+        codes = market_store_codes(client, org_id, m)
+        out[GRANT_KIND_MARKET]["resolved"][m] = codes
+        if codes:
+            out[GRANT_KIND_MARKET]["codes"] |= codes
+        else:
+            out[GRANT_KIND_MARKET]["unresolved"].append(m)
+    pinned = []
+    if app_user.get("store_code"):
+        pinned.append(_norm(app_user["store_code"]))
+    for sc in (app_user.get("store_codes") or []):
+        if _norm(sc) and _norm(sc) not in pinned:
+            pinned.append(_norm(sc))
+    for p in pinned:
+        out[GRANT_KIND_STORE]["granted"].append(p)
+        # The RAW value is always kept — this must not narrow a live span even by one row. The
+        # RESOLVED code is added alongside it when the value names a real store in a non-canonical
+        # spelling, which widens the keyset to that SAME store's other spellings (widen_codes_to_keys
+        # is code-anchored, so a raw address matches only itself). Live: 34 grants on 33 of the 98
+        # active logins hold an address/synonym rather than the code.
+        out[GRANT_KIND_STORE]["codes"].add(p)
+        code, status, _detail = resolve_store_grant(client, org_id, p)
+        if code:
+            out[GRANT_KIND_STORE]["codes"].add(code)
+        elif status in (GRANT_UNKNOWN, GRANT_AMBIGUOUS):
+            out[GRANT_KIND_STORE]["unresolved"].append(p)
+    out["codes"] = {c for c in (out[GRANT_KIND_MARKET]["codes"] | out[GRANT_KIND_STORE]["codes"]) if c}
+    return out
+
+
 def login_grant_codes(client, org_id: str, app_user) -> set:
     """store_codes implied by an app_user's REPORTING grants: their market(s) + pinned store(s).
     Org-tree independent, so a market/store manager scopes correctly before the org units are wired.
 
     Drop-in replacement for `storeops._login_extra_codes` — same inputs, same output type, same
     comma-splitting of the `market` column — but the market half now resolves through the canonical
-    union, and it costs ONE table read total instead of one per market."""
-    codes: set = set()
-    if not app_user:
-        return codes
-    for mkt in _norm(app_user.get("market")).split(","):
-        codes |= market_store_codes(client, org_id, mkt)
-    if app_user.get("store_code"):
-        codes.add(_norm(app_user["store_code"]))
-    for sc in (app_user.get("store_codes") or []):
-        if _norm(sc):
-            codes.add(_norm(sc))
-    return {c for c in codes if c}
+    union, and it costs ONE table read total instead of one per market.
+
+    2026-08-08: delegates to `login_grant_breakdown` (the attributed form). The returned SET is the
+    same union it always was, PLUS — for a pinned store written in a non-canonical spelling — that
+    store's own canonical code. That addition can only ever name the SAME PHYSICAL STORE the grant
+    already named (`resolve_store_grant` refuses anything ambiguous), and it is what makes a grant
+    of `"4640 Diversey Chicago"` match rows keyed on `Diversey` / `4640-A W Diversey Ave` instead of
+    only the one spelling that happened to be typed. It never removes a code."""
+    return login_grant_breakdown(client, org_id, app_user)["codes"]
 
 
-def reporting_span_codes(client, org_id: str, app_user, role_scope: str, org_unit_codes=None) -> set:
+def reporting_span_codes(client, org_id: str, app_user, role_scope: str, org_unit_codes=None,
+                         *, self_own_store: bool = False, employee_home_store=None) -> set:
     """The store_codes whose NUMBERS this login may see.
 
-    `role_scope`     — roles.permissions.scope ('all' | 'market' | 'store' | 'self').
-    `org_unit_codes` — codes from the org-unit subtree(s) the caller manages (pass the result of the
-                       `org_span_for_manager` RPC; kept as a parameter so this function stays I/O-
-                       thin and unit-provable).
+    `role_scope`      — roles.permissions.scope ('all' | 'market' | 'store' | 'self').
+    `org_unit_codes`  — codes from the org-unit subtree(s) the caller manages (pass the result of the
+                        `org_span_for_manager` RPC; kept as a parameter so this function stays I/O-
+                        thin and unit-provable).
+    `self_own_store`  — OPT-IN (default False = byte-identical to every previous caller). When True a
+                        scope-'self' caller resolves to their OWN store instead of the empty set —
+                        owner ruling #7, "they shoudl see their own store". See `self_store_codes`
+                        for why this is opt-in per surface and never a global flip.
+    `employee_home_store` — the caller's `storeops.employees.home_store`, when the call site already
+                        has it; used only for the 'self' resolution.
 
-    Mirrors `storeops.caller_scope` exactly, including the rule that a 'self' rep gets no login-grant
-    widening (reps are pinned to their own store by the frontend). 'all' is handled by the CALLER
-    (it means UNRESTRICTED / None, not "every code")."""
+    Mirrors `storeops.caller_scope`, including the rule that a 'self' rep gets no login-grant
+    widening (their market grants are NEVER consulted). 'all' is handled by the CALLER (it means
+    UNRESTRICTED / None, not "every code")."""
     span: set = set(org_unit_codes or [])
     if _norm(role_scope).lower() != "self":
         span |= login_grant_codes(client, org_id, app_user)
+    elif self_own_store:
+        span |= self_store_codes(client, org_id, app_user, employee_home_store=employee_home_store)
     return {c for c in span if c}
+
+
+# ── SELF scope — "they shoudl see their own store" (owner ruling #7, 2026-08-08) ─────────────────
+def self_store_codes(client, org_id: str, app_user, *, employee_home_store=None) -> set:
+    """The store(s) a SELF-scoped person actually works at.
+
+    Sources, all of them "where this person is", NONE of them "what area they cover":
+      • `app_users.store_code`  — the primary pin,
+      • `app_users.store_codes` — the rest of the pins (a floater legitimately covers several; the
+        multi-select picker of ruling #5 exists for exactly this),
+      • `employees.home_store`  — the roster's answer, so a rep whose login was created without a
+        store pin still resolves (live: 8 of the 65 active reps across both tenants).
+    Each value goes through `resolve_store_grant`, and BOTH the raw value and the resolved code are
+    returned, so a legacy free-text spelling still matches its own rows.
+
+    **MARKET GRANTS ARE NEVER CONSULTED HERE.** 53 of the 65 active reps carry a market on their
+    record (a rep at one Chicago store carries `market = Chicago`, which binds 14 stores). Under
+    ruling #6 that market is a real grant — but it is a grant for a scope that can USE a market, and
+    "their own store" is not it. Reading the market here would turn one ruling into a 14× widening
+    of another.
+
+    WHY THIS IS OPT-IN AND NOT A GLOBAL FLIP. The empty 'self' keyset is currently load-bearing:
+    ~54 `in_keyset()` call sites share it, and a good number of them are employee-keyed — payroll,
+    hours, time-off, other people's commission. Making 'self' resolve globally would hand every rep
+    their colleagues' pay, which is precisely what the ruling's guardrail forbids. A surface adopts
+    this deliberately, and any surface that mixes store-level rows with per-employee pay must ALSO
+    pin the employee dimension with `self_employee_ids()`."""
+    codes: set = set()
+    if not app_user and not _norm(employee_home_store):
+        return codes
+    raw = []
+    if (app_user or {}).get("store_code"):
+        raw.append(_norm(app_user["store_code"]))
+    for sc in ((app_user or {}).get("store_codes") or []):
+        if _norm(sc):
+            raw.append(_norm(sc))
+    if _norm(employee_home_store):
+        raw.append(_norm(employee_home_store))
+    for v in raw:
+        codes.add(v)
+        code, _status, _detail = resolve_store_grant(client, org_id, v)
+        if code:
+            codes.add(code)
+    return {c for c in codes if c}
+
+
+def self_scope_keyset(client, org_id: str, app_user, *, employee_home_store=None) -> set:
+    """`self_store_codes` widened to matchable keys (codes + every address spelling + synonyms).
+
+    Returns a SET — possibly EMPTY, never None. Empty means "this rep has no resolvable store", and
+    it must stay a deny-all: `None` is the unrestricted sentinel and handing it back for a rep with
+    a blank store pin would open the whole tenant. (`commcalc._caller_self_keyset` returns
+    `(True, None)` in that case today — see the cross-module note in the handoff.)"""
+    return widen_codes_to_keys(client, org_id,
+                               self_store_codes(client, org_id, app_user,
+                                                employee_home_store=employee_home_store))
+
+
+def self_employee_ids(app_user) -> set:
+    """The employee dimension for a SELF-scoped caller: EXACTLY their own employee_id.
+
+    The guard that makes ruling #7 safe. "Sees their own store" means the store's OWN numbers — it
+    does not mean the store's people. Any surface that widens a rep to store level and also carries
+    a per-employee pay/commission/PII column filters that column with THIS set, so the rep sees
+    their own row and nobody else's. Never derived from the keyset: deriving it would return every
+    employee at the store, which is the payroll leak this exists to prevent. Empty set = deny-all
+    (an unidentifiable caller gets nothing), never None."""
+    eid = _norm((app_user or {}).get("employee_id"))
+    return {eid} if eid else set()
+
+
+def employee_home_store(client, org_id: str, employee_id) -> str:
+    """`storeops.employees.home_store` for an employee_id, or "" — best-effort, never raises
+    (contract §5: a missing table/column degrades, it does not 500 an unrelated page)."""
+    eid = _norm(employee_id)
+    if not eid:
+        return ""
+    try:
+        rows = (client.schema("storeops").table("employees").select("home_store")
+                .eq("org_id", org_id).eq("employee_id", eid).limit(1).execute().data) or []
+        return _norm(rows[0].get("home_store")) if rows else ""
+    except Exception as e:                                              # pragma: no cover - I/O guard
+        print(f"WARN core.scope employee_home_store read failed: {e}")
+        return ""
 
 
 def widen_codes_to_keys(client, org_id: str, codes) -> set:
