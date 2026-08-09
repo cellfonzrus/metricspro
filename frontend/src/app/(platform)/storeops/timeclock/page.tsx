@@ -78,6 +78,8 @@ export default function TimeClockAdminPage() {
   const [changeLogAvailable, setChangeLogAvailable] = useState(true)
   const [lunchCfg, setLunchCfg] = useState<any>(null)
   const [showLunchSettings, setShowLunchSettings] = useState(false)
+  const [faceCfg, setFaceCfg] = useState<any>(null)
+  const [showFaceSettings, setShowFaceSettings] = useState(false)
   const [mh, setMh] = useState({ employee_id: '', work_date: iso(today), hours: '', reason: '' })
   const [msg, setMsg] = useState('')
   const [loading, setLoading] = useState(true)
@@ -89,6 +91,7 @@ export default function TimeClockAdminPage() {
     // resolve it. GET /stores now defaults to active-only (2026-08-06 disabled-T-store fix).
     api('/api/v1/storeops/stores?include_inactive=true').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/storeops/timeclock/lunch-config').then(setLunchCfg).catch(() => setLunchCfg(null))
+    api('/api/v1/storeops/timeclock/face-config').then(setFaceCfg).catch(() => setFaceCfg(null))
   }, [])
 
   // Deep-link from the Payroll Change Log (Deliverable 2, reverse direction): ?employee_id=&start=&end=
@@ -245,12 +248,20 @@ export default function TimeClockAdminPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowFaceSettings(s => !s)}>
+            ⚙ Face Recognition{faceCfg?.tenant && faceCfg.tenant.enabled === false ? ' · OFF' : ''}
+          </button>
           <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowLunchSettings(s => !s)}>⚙ Lunch Break Settings</button>
           {/* 2026-08-06 owner directive: who was scheduled and didn't clock in / who covered instead. */}
           <a href="/storeops/attendance" className="btn" style={{ fontSize: 13 }}>🚨 Attendance Exceptions</a>
           <a href="/storeops/payroll-change-log" className="btn" style={{ fontSize: 13 }}>📜 Payroll Change Log</a>
         </div>
       </div>
+
+      {showFaceSettings && (
+        <FaceSettingsPanel cfg={faceCfg} onClose={() => setShowFaceSettings(false)}
+          onSaved={(t: any, stamped: number | null) => setFaceCfg((prev: any) => ({ ...prev, tenant: t, last_stamped: stamped }))} />
+      )}
 
       {showLunchSettings && (
         <LunchSettingsPanel cfg={lunchCfg} onSaved={c => setLunchCfg((prev: any) => ({ ...prev, tenant: c }))} onClose={() => setShowLunchSettings(false)} />
@@ -361,6 +372,90 @@ export default function TimeClockAdminPage() {
             {visibleManual.length === 0 && <tr><td colSpan={6} style={{ textAlign: 'center', padding: 18, color: 'var(--text3)', fontSize: 13 }}>No adjustments in range.</td></tr>}
           </tbody>
         </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Face-recognition settings panel (owner directive 2026-08-09, migration 420) ───────────────────
+// The tenant MASTER switch. Shipped OFF for every tenant; turning it back on is a one-click decision
+// that lives here, not a code change. Per-employee assignment lives on the HR "Employees & Pay" tab
+// (same place as the lunch override), because "assigned per employee" is a roster operation.
+//
+// Turning the switch ON also stamps the owner's "consent signed by all employees" across the roster
+// (backend PUT /timeclock/face-config -> stamp_assumed_consent_for_all): every employee with NO
+// consent record gets a dated 'signed' row sourced 'assumed_on_enable'. Anyone already recorded as
+// 'declined' keeps that refusal. The panel says this out loud BEFORE you flip it, because for
+// regulated biometric data the admin should know exactly what the click records.
+function FaceSettingsPanel({ cfg, onSaved, onClose }: { cfg: any; onSaved: (t: any, stamped: number | null) => void; onClose: () => void }) {
+  const [enabled, setEnabled] = useState(false)
+  const [dflt, setDflt] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  useEffect(() => {
+    if (cfg?.tenant) { setEnabled(!!cfg.tenant.enabled); setDflt(cfg.tenant.default_for_employees !== false) }
+  }, [cfg])
+  const turningOn = enabled && cfg?.tenant?.enabled === false
+  async function save() {
+    setBusy(true); setMsg('')
+    try {
+      const r = await api('/api/v1/storeops/timeclock/face-config', { method: 'PUT', body: JSON.stringify({ enabled, default_for_employees: dflt }) })
+      onSaved(r.tenant, r.consent_stamped ?? null)
+      setMsg(r.consent_stamped != null && r.consent_stamped > 0
+        ? `✅ Saved. Consent recorded for ${r.consent_stamped} employee(s) with no prior record.`
+        : r.consent_stamped === null && turningOn ? '✅ Saved — but the consent stamp did not run; re-open this panel to check.'
+          : '✅ Saved.')
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setBusy(false)
+  }
+  const s = cfg?.summary || {}
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>⚙ Face Recognition — tenant master switch</div>
+        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onClose}>✕</button>
+      </div>
+      {cfg && !cfg.available && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
+          ℹ️ Migration 420 hasn&apos;t run on this tenant yet. Face recognition is OFF regardless (the
+          kiosk fails closed), but the switch below can&apos;t be saved until it runs.
+        </div>
+      )}
+      <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
+        Off: the kiosk never loads the face models and clock-in just takes a photo for the record —
+        punches, GPS and the selfie audit all keep working exactly as they do now. On: employees verify
+        by face at clock-in again. Face geometry is regulated biometric data (Illinois BIPA covers the
+        Chicago-area stores), so this is a deliberate, dated decision rather than a default.
+        Already-enrolled templates ({cfg?.enrolled_templates ?? '—'}) are kept while it&apos;s off, so
+        turning it back on needs no re-enrollment.
+      </p>
+      <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600 }}>
+          <input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} /> Face recognition enabled
+        </label>
+        <label style={{ fontSize: 13, opacity: enabled ? 1 : 0.5 }} title="What an employee with no explicit assignment inherits">
+          When on, apply to{' '}
+          <select value={dflt ? 'all' : 'assigned'} disabled={!enabled} style={sel} onChange={e => setDflt(e.target.value === 'all')}>
+            <option value="all">every employee by default</option>
+            <option value="assigned">only employees I assign</option>
+          </select>
+        </label>
+        <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={busy || (cfg && !cfg.available)} onClick={save}>{busy ? '…' : 'Save'}</button>
+        {msg && <span style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+      {turningOn && (
+        <div style={{ fontSize: 12, color: '#92400e', background: '#fff7e6', border: '1px solid #f5a623', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+          ⚠️ Saving this ON records face-recognition consent as <b>signed</b> for every employee who has
+          no consent record yet ({s.unrecorded ?? '—'} people), dated now and marked
+          &quot;assumed_on_enable&quot;. Employees already recorded as declined are left alone. Per the
+          owner directive of 2026-08-09 — but if you need a real signed release on file per person,
+          record it individually on HR → Employees &amp; Pay instead.
+        </div>
+      )}
+      <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+        Consent on file: <b>{s.signed ?? 0}</b> signed · <b>{s.declined ?? 0}</b> declined · <b>{s.unrecorded ?? 0}</b> not recorded.
+        {' '}Assignment: <b>{s.assigned_on ?? 0}</b> on · <b>{s.assigned_off ?? 0}</b> off · <b>{s.unassigned ?? 0}</b> following the tenant default.
+        {' '}Set these per person on the HR → Employees &amp; Pay tab.
       </div>
     </div>
   )

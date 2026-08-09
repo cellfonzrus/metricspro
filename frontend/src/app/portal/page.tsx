@@ -49,6 +49,10 @@ export default function PortalPage() {
   const [registered, setRegistered] = useState<boolean | null>(null)
   const [modelsReady, setModelsReady] = useState(false)
   const [faceError, setFaceError] = useState(false)
+  // Is face recognition switched on for THIS employee? (owner directive 2026-08-09 — tenant master
+  // switch × their own assignment/consent, answered by GET /timeclock/config.) null = not asked yet,
+  // which holds the CLOCK IN button for a moment rather than guessing the wrong path for a punch.
+  const [faceEnabled, setFaceEnabled] = useState<boolean | null>(null)
   const [mode, setMode] = useState<'idle' | 'camera'>('idle')
   const [phase, setPhase] = useState('')                 // user-facing camera prompt
   const [busy, setBusy] = useState(false)
@@ -75,6 +79,7 @@ export default function PortalPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gpsRef = useRef<{ lat?: number; lng?: number; acc?: number }>({})
   const initedRef = useRef(false)
+  const faceInitedRef = useRef(false)                    // face-api bundle injected once, only if enabled
   const thresholdRef = useRef(MATCH_THRESHOLD_DEFAULT)   // tenant-configurable face-match distance cutoff
 
   // every timeclock call carries the Supabase token — the backend derives employee_id from it.
@@ -84,20 +89,31 @@ export default function PortalPage() {
   // live clock
   useEffect(() => { const t = setInterval(() => setNow(new Date().toLocaleTimeString()), 1000); return () => clearInterval(t) }, [])
 
-  // one-time init once signed in: GPS + face-api models (don't prompt before login)
+  // one-time init once signed in: GPS only (don't prompt before login). The face-api bundle loads in
+  // its OWN effect below, and only when face recognition is actually switched on for this employee.
   useEffect(() => {
     if (!session || !empId || initedRef.current) return
     initedRef.current = true
     if (navigator.geolocation) navigator.geolocation.getCurrentPosition(
       p => { gpsRef.current = { lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy) } },
       () => {}, { enableHighAccuracy: true, timeout: 8000 })
+  }, [session, empId])
+
+  // Face models load ONLY when the master switch + this employee's assignment say so (migration 420).
+  // While it's off the face-api script and its weights are never fetched, no descriptor is ever
+  // computed from the camera, and clock-in takes the photo-only path — which is the same
+  // non-biometric fallback that already existed for a models-load failure, now the normal route.
+  // Re-enabling needs nothing here: the next page load sees enabled=true and loads the bundle.
+  useEffect(() => {
+    if (!session || !empId || faceEnabled !== true || faceInitedRef.current) return
+    faceInitedRef.current = true
     const start = () => loadModels()
     if ((window as any).faceapi) { start(); return }
     const s = document.createElement('script')
     s.src = FACEAPI_SRC; s.async = true
     s.onload = start; s.onerror = () => setFaceError(true)
     document.body.appendChild(s)
-  }, [session, empId])
+  }, [session, empId, faceEnabled])
 
   async function loadModels() {
     const faceapi = (window as any).faceapi
@@ -119,7 +135,15 @@ export default function PortalPage() {
         setConnErr("Can't reach the server right now — it may be busy. Your clock status may be out of date; this screen retries by itself.")
       })
     authed('/api/v1/storeops/timeclock/face', { signal: tsig(30000) }).then((r: any) => setRegistered(!!r?.registered)).catch(() => setRegistered(null))
-    authed('/api/v1/storeops/timeclock/config', { signal: tsig(30000) }).then((r: any) => { const t = Number(r?.face_match_threshold); if (t) thresholdRef.current = t }).catch(() => {})
+    authed('/api/v1/storeops/timeclock/config', { signal: tsig(30000) })
+      .then((r: any) => {
+        const t = Number(r?.face_match_threshold); if (t) thresholdRef.current = t
+        // A missing key (older backend) reads as OFF — the same fail-closed rule the backend applies
+        // when migration 420 hasn't run. A failed fetch does too: a punch must still be possible when
+        // the server is busy, and the photo-only path is the one that always works.
+        setFaceEnabled(r?.face_recognition_enabled === true)
+      })
+      .catch(() => setFaceEnabled(false))
   }, [empId, token, authed])
   useEffect(() => { refreshStatus() }, [refreshStatus])
 
@@ -265,6 +289,9 @@ export default function PortalPage() {
 
   // ── clock-in (enroll first time, else verify) ────────────────────────────────────────────────
   async function startClockIn() {
+    // Belt and braces: if face recognition is off (or the models failed) by the time this is tapped,
+    // punch via the photo-only path instead of opening an enroll/verify flow the backend will refuse.
+    if (faceEnabled !== true || faceError) { await clockInNoFace(); return }
     await openCamera()
     setTimeout(() => { registered ? doVerify() : doEnroll() }, 800)
   }
@@ -394,6 +421,9 @@ export default function PortalPage() {
   }
 
   const clockedIn = status?.clockedIn
+  const faceOn = faceEnabled === true                       // face recognition on for THIS employee
+  const faceCfgLoading = faceEnabled === null               // haven't heard back from /timeclock/config yet
+  const waitingOnModels = faceOn && !modelsReady && !faceError
 
   // ── render branches ───────────────────────────────────────────────────────────────────────────
   if (authLoading) {
@@ -543,15 +573,17 @@ export default function PortalPage() {
                   )}
                 </div>
               )}
-              <button disabled={busy || (!modelsReady && !faceError)} onClick={faceError ? clockInNoFace : startClockIn}
-                style={{ ...bigBtn, background: '#f5a623', color: '#1E3A5F', opacity: (!modelsReady && !faceError) ? 0.5 : 1 }}>
+              <button disabled={busy || faceCfgLoading || waitingOnModels} onClick={faceOn && !faceError ? startClockIn : clockInNoFace}
+                style={{ ...bigBtn, background: '#f5a623', color: '#1E3A5F', opacity: (faceCfgLoading || waitingOnModels) ? 0.5 : 1 }}>
                 {busy ? '…' : 'CLOCK IN'}
               </button>
               <div style={{ fontSize: 12, color: '#666', textAlign: 'center', marginTop: 8 }}>
-                {faceError ? 'Face models unavailable — clock-in will capture a selfie only.'
-                  : !modelsReady ? 'Loading face recognition…'
-                    : registered === false ? 'First time — you’ll register your face (3 quick photos).'
-                      : 'Look at the camera to verify.'}
+                {faceCfgLoading ? 'Checking clock-in settings…'
+                  : !faceOn ? 'Clock-in takes a photo for the record — face recognition is off.'
+                    : faceError ? 'Face models unavailable — clock-in will capture a selfie only.'
+                      : !modelsReady ? 'Loading face recognition…'
+                        : registered === false ? 'First time — you’ll register your face (3 quick photos).'
+                          : 'Look at the camera to verify.'}
               </div>
             </>
           )
@@ -575,7 +607,7 @@ export default function PortalPage() {
           </div>
         )}
         <div style={{ marginTop: 16, fontSize: 12, color: '#999', textAlign: 'center' }}>
-          {gpsRef.current.lat ? 'GPS ✓' : 'GPS off'} · {modelsReady ? 'face ✓' : faceError ? 'face ✗' : 'face …'}
+          {gpsRef.current.lat ? 'GPS ✓' : 'GPS off'} · {!faceOn ? 'photo only' : modelsReady ? 'face ✓' : faceError ? 'face ✗' : 'face …'}
         </div>
       </div>
 

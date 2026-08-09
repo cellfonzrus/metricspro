@@ -23,6 +23,8 @@ CONVENTIONS (matching import_health.py's own providers):
 """
 from datetime import datetime, timedelta, timezone
 
+from app.modules.storeops import face_recognition as _face
+
 
 def _item(group, key, severity, label, detail, count, deep_link, deep_link_label):
     return {"group": group, "key": key, "severity": severity, "label": label, "detail": detail,
@@ -127,6 +129,13 @@ def register(register_provider):
         doEnroll/doVerify). An employee with 2+ kiosk punches but still zero storeops.face_descriptors
         row means enrollment never once succeeded for them (commonly a face-api model load failure on
         their device) — face-match protection is silently absent for every one of their punches."""
+        # Migration 420 (owner directive 2026-08-09): with face recognition switched OFF for the
+        # tenant there is nothing to enroll, so "has never enrolled a face template" is the CONFIGURED
+        # state, not a defect — flagging it would nag every admin forever about a feature the owner
+        # deliberately turned off. Fail-closed on the read too: an unavailable config means off.
+        face_cfg, face_available = _face.get_tenant_face_config(org_id, client.schema("storeops"))
+        if not (face_available and face_cfg.get("enabled")):
+            return []
         now = ctx.get("now") or datetime.now(timezone.utc)
         since = (now - timedelta(days=60)).date().isoformat()
         try:
