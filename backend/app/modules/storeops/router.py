@@ -46,6 +46,7 @@ from app.modules.storeops.lunch_deduction import (
     period_lunch_deduction as _lunch_period_deduction,
 )
 from app.modules.storeops import face_recognition as _face
+from app.modules.storeops import face_retention as _fret
 from app.modules.storeops import salary_owed as _owed
 from app.modules.storeops import target_attribution as _dmta
 from app.modules.storeops import attendance_exceptions as _attn
@@ -3260,6 +3261,125 @@ def set_employee_face_config(emp_id: str, body: dict, authorization: str = Heade
             "face_consent_status": saved.get("face_consent_status"),
             "face_consent_at": saved.get("face_consent_at"),
             "face_consent_source": saved.get("face_consent_source")}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# FACE-DESCRIPTOR RETENTION SCHEDULE + DELETION JOB (owner decision 2026-08-09, migration 422) —
+# closes security-plan Phase 9.2. See docs/BIOMETRIC_RETENTION_POLICY.md (the written policy) and
+# face_retention.py (the rule + degrade in full). "whichever is first" of: 90 days (tenant-configurable,
+# ceilinged at 1095) after termination_date, or 1095 days (statutory, NEVER configurable) since the
+# employee's last interaction with their own descriptor — plus an immediate employee-request path and
+# an opt-in "purge everything while the tenant's face recognition is OFF" tenant setting.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/timeclock/face-retention/config")
+def get_face_retention_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Any signed-in caller may read (same posture as the other face-recognition config GETs — it
+    exposes no biometric data, only the tenant's retention settings)."""
+    cfg, available = _fret.get_tenant_retention_config(org_id, sb())
+    return {"available": available, "tenant": cfg,
+            "retention_days_default": _fret.FACE_RETENTION_DAYS_DEFAULT,
+            "retention_days_max": _fret.STATUTORY_BACKSTOP_DAYS,
+            "statutory_backstop_days": _fret.STATUTORY_BACKSTOP_DAYS}
+
+
+@router.put("/timeclock/face-retention/config")
+def set_face_retention_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only (same gate as PUT /timeclock/face-config — a tenant-wide compliance setting,
+    not a single-row edit). Body: {retention_days?, purge_on_disable?}. `retention_days` is clamped to
+    [1, 1095] server-side — RULE TWO's config table can never be pushed past the statutory ceiling.
+
+    Flipping `purge_on_disable` ON while the tenant's face recognition is ALREADY off (or turning face
+    recognition off while `purge_on_disable` is already on, via PUT /timeclock/face-config) fires the
+    purge IMMEDIATELY — the owner's "opts to purge" is an action, not merely a future-sweep setting."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    client = sb()
+    before, available = _fret.get_tenant_retention_config(org_id, client)
+    if not available:
+        raise HTTPException(400, "Face-retention settings aren't set up on this tenant yet (migration 422).")
+    upd = {}
+    if "retention_days" in body:
+        upd["face_retention_days"] = _fret.clamp_retention_days(body["retention_days"])
+    if "purge_on_disable" in body:
+        upd["face_recognition_purge_on_disable"] = bool(body["purge_on_disable"])
+    if not upd:
+        raise HTTPException(400, "no valid fields to update")
+    try:
+        client.table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the setting — is migration 422 applied?")
+    after, _ = _fret.get_tenant_retention_config(org_id, client)
+    purge_result = None
+    if after.get("purge_on_disable") and after.get("face_recognition_enabled") is False:
+        purge_result = _fret.destroy(org_id, client, dry_run=False, destroyed_by=(mgr.get("email") or "system"))
+    return {"ok": True, "tenant": after, "purge_result": purge_result}
+
+
+@router.post("/timeclock/face-retention/run")
+def run_face_retention_now(body: dict = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager-triggered run for the caller's own tenant. `dry_run` defaults TRUE — report only,
+    nothing destroyed (matches this codebase's dry-run-before-apply convention, e.g.
+    POST /hr/onboarding/reconcile). Pass {"dry_run": false} to actually destroy what's due."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    dry_run = (body or {}).get("dry_run", True) is not False
+    client = sb()
+    computed = _fret.compute_due(org_id, client)
+    return _fret.destroy(org_id, client, computed=computed, dry_run=dry_run,
+                          destroyed_by=(mgr.get("email") or "system"))
+
+
+@router.post("/timeclock/face-retention/run-due")
+def face_retention_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (guarded by NOTIFY_RUN_SECRET, same convention as
+    /timeclock/force-clockout/run-due and /google-reviews/sweep/run-due) — runs the REAL (non-dry-run)
+    destruction sweep across EVERY tenant. Schedule daily (see docs/handoffs/people.md OPERATOR
+    ACTIONS — an operator must add the pg_cron schedule; this endpoint is inert until something calls
+    it). Idempotent: a descriptor is destroyed at most once (the row is gone after)."""
+    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    try:
+        orgs = sorted({r.get("org_id") for r in
+                       (client.table("tenants").select("org_id").execute().data or [])
+                       if r.get("org_id")})
+    except Exception:
+        orgs = []
+    results = []
+    for oid in orgs:
+        computed = _fret.compute_due(oid, client)
+        r = _fret.destroy(oid, client, computed=computed, dry_run=False, destroyed_by="system:pg_cron")
+        results.append({"org_id": oid, **{k: v for k, v in r.items() if k != "items"},
+                        "employees_affected": len(r.get("items") or [])})
+    return {"orgs_processed": len(orgs), "results": results}
+
+
+@router.get("/timeclock/face-retention/log")
+def get_face_retention_log(authorization: str = Header(default=""), org_id: str = ORG_ID, limit: int = 100):
+    """The evidence view for the admin panel — org-scoped, most recent first."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return {"rows": _fret.recent_log(org_id, sb(), limit=limit)}
+
+
+@router.post("/employees/{emp_id}/face-retention/request-deletion")
+def request_face_deletion(emp_id: str, body: dict = None, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    """BIPA gives an employee the right to demand destruction of their biometric data — this is that
+    path: immediate, single-employee, logged with trigger='employee_request'. `emp_id` is the internal
+    numeric id (matches PATCH /employees/{id}). Body: {note?} — record how/when the request was made;
+    it becomes the audit row's `notes`."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    client = sb()
+    row = (client.table("employees").select("employee_id,name").eq("id", emp_id).eq("org_id", org_id)
+           .limit(1).execute().data or [None])[0]
+    if not row:
+        raise HTTPException(404, "employee not found")
+    note = ((body or {}).get("note") or "").strip()
+    return _fret.destroy_one_employee_request(
+        org_id, row.get("employee_id"), row.get("name"), client,
+        destroyed_by=(mgr.get("email") or "system"), note=(note or None))
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

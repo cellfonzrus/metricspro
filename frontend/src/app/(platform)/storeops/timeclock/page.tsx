@@ -80,6 +80,8 @@ export default function TimeClockAdminPage() {
   const [showLunchSettings, setShowLunchSettings] = useState(false)
   const [faceCfg, setFaceCfg] = useState<any>(null)
   const [showFaceSettings, setShowFaceSettings] = useState(false)
+  const [retCfg, setRetCfg] = useState<any>(null)
+  const [showRetSettings, setShowRetSettings] = useState(false)
   const [mh, setMh] = useState({ employee_id: '', work_date: iso(today), hours: '', reason: '' })
   const [msg, setMsg] = useState('')
   const [loading, setLoading] = useState(true)
@@ -92,6 +94,7 @@ export default function TimeClockAdminPage() {
     api('/api/v1/storeops/stores?include_inactive=true').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/storeops/timeclock/lunch-config').then(setLunchCfg).catch(() => setLunchCfg(null))
     api('/api/v1/storeops/timeclock/face-config').then(setFaceCfg).catch(() => setFaceCfg(null))
+    api('/api/v1/storeops/timeclock/face-retention/config').then(setRetCfg).catch(() => setRetCfg(null))
   }, [])
 
   // Deep-link from the Payroll Change Log (Deliverable 2, reverse direction): ?employee_id=&start=&end=
@@ -252,6 +255,9 @@ export default function TimeClockAdminPage() {
             ⚙ Face Recognition{faceCfg?.tenant && faceCfg.tenant.enabled === false ? ' · OFF' : ''}
           </button>
           <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowLunchSettings(s => !s)}>⚙ Lunch Break Settings</button>
+          <button className="btn" style={{ fontSize: 13 }} onClick={() => setShowRetSettings(s => !s)}>
+            🗑 Biometric Retention{retCfg?.tenant && retCfg.tenant.purge_on_disable ? ' · purge-on-disable' : ''}
+          </button>
           {/* 2026-08-06 owner directive: who was scheduled and didn't clock in / who covered instead. */}
           <a href="/storeops/attendance" className="btn" style={{ fontSize: 13 }}>🚨 Attendance Exceptions</a>
           <a href="/storeops/payroll-change-log" className="btn" style={{ fontSize: 13 }}>📜 Payroll Change Log</a>
@@ -265,6 +271,10 @@ export default function TimeClockAdminPage() {
 
       {showLunchSettings && (
         <LunchSettingsPanel cfg={lunchCfg} onSaved={c => setLunchCfg((prev: any) => ({ ...prev, tenant: c }))} onClose={() => setShowLunchSettings(false)} />
+      )}
+
+      {showRetSettings && (
+        <FaceRetentionPanel cfg={retCfg} onSaved={c => setRetCfg((prev: any) => ({ ...prev, tenant: c }))} onClose={() => setShowRetSettings(false)} />
       )}
 
       <StandardFilterBar
@@ -457,6 +467,138 @@ function FaceSettingsPanel({ cfg, onSaved, onClose }: { cfg: any; onSaved: (t: a
         {' '}Assignment: <b>{s.assigned_on ?? 0}</b> on · <b>{s.assigned_off ?? 0}</b> off · <b>{s.unassigned ?? 0}</b> following the tenant default.
         {' '}Set these per person on the HR → Employees &amp; Pay tab.
       </div>
+    </div>
+  )
+}
+
+// ── Biometric retention panel (owner decision 2026-08-09, migration 422) ───────────────────────────
+// Closes security-plan Phase 9.2. "Whichever is first" of: N days (this tenant's config, default 90,
+// hard-ceilinged at 1095) after termination_date, or the 1095-day statutory backstop since the
+// employee's last interaction with their own descriptor — see face_retention.py for the full rule.
+// The Preview/Destroy split mirrors this codebase's established dry-run-before-apply convention (HR's
+// onboarding "Reconcile mandatory docs" dry run) — nothing is ever destroyed without a preview first.
+function FaceRetentionPanel({ cfg, onSaved, onClose }: { cfg: any; onSaved: (t: any) => void; onClose: () => void }) {
+  const [days, setDays] = useState(90)
+  const [purgeOnDisable, setPurgeOnDisable] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [preview, setPreview] = useState<any>(null)
+  const [log, setLog] = useState<any[] | null>(null)
+  useEffect(() => {
+    if (cfg?.tenant) { setDays(cfg.tenant.retention_days ?? 90); setPurgeOnDisable(!!cfg.tenant.purge_on_disable) }
+  }, [cfg])
+  useEffect(() => {
+    api('/api/v1/storeops/timeclock/face-retention/log?limit=20').then((r: any) => setLog(r?.rows || [])).catch(() => setLog([]))
+  }, [])
+  async function save() {
+    setBusy(true); setMsg('')
+    try {
+      const r = await api('/api/v1/storeops/timeclock/face-retention/config', {
+        method: 'PUT', body: JSON.stringify({ retention_days: Number(days), purge_on_disable: purgeOnDisable }),
+      })
+      onSaved(r.tenant)
+      setMsg(r.purge_result
+        ? `✅ Saved. Purge-on-disable is now active and destroyed ${r.purge_result.destroyed} template(s) immediately.`
+        : '✅ Saved.')
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setBusy(false)
+  }
+  async function runPreview() {
+    setBusy(true); setMsg(''); setPreview(null)
+    try {
+      const r = await api('/api/v1/storeops/timeclock/face-retention/run', { method: 'POST', body: JSON.stringify({ dry_run: true }) })
+      setPreview(r)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setBusy(false)
+  }
+  async function destroyNow() {
+    if (!preview || preview.candidates === 0) return
+    if (!window.confirm(`Permanently destroy ${preview.candidates} face descriptor(s)? This cannot be undone.`)) return
+    setBusy(true); setMsg('')
+    try {
+      const r = await api('/api/v1/storeops/timeclock/face-retention/run', { method: 'POST', body: JSON.stringify({ dry_run: false }) })
+      setMsg(`✅ Destroyed ${r.destroyed} template(s).`)
+      setPreview(null)
+      api('/api/v1/storeops/timeclock/face-retention/log?limit=20').then((rr: any) => setLog(rr?.rows || [])).catch(() => {})
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    setBusy(false)
+  }
+  return (
+    <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>🗑 Biometric Data Retention — face descriptors</div>
+        <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onClose}>✕</button>
+      </div>
+      {cfg && !cfg.available && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 8 }}>
+          ℹ️ Migration 422 hasn&apos;t run on this tenant yet. Nothing is destroyed regardless (the job
+          fails closed), but settings below can&apos;t be saved until it runs.
+        </div>
+      )}
+      <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
+        Face descriptors are destroyed automatically, per BIPA&apos;s &quot;whichever is first&quot; rule:
+        <b> {days} days</b> after an employee&apos;s last day of employment, or an absolute <b>3-year (1095
+        day)</b> statutory backstop since their last interaction with their own template — whichever
+        comes first. The 3-year bound is fixed by law and cannot be configured past. See{' '}
+        <code>docs/BIOMETRIC_RETENTION_POLICY.md</code> for the written policy.
+      </p>
+      <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+        <label style={{ fontSize: 13 }}>
+          Destroy <input type="number" min={1} max={1095} style={{ ...sel, width: 70 }} value={days}
+            onChange={e => setDays(Number(e.target.value))} /> days after last day of employment
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }} title="When face recognition is OFF for this tenant, also destroy every already-enrolled template instead of keeping them for an instant re-enable">
+          <input type="checkbox" checked={purgeOnDisable} onChange={e => setPurgeOnDisable(e.target.checked)} />
+          Also purge everything while face recognition is OFF for this tenant
+        </label>
+        <button className="btn btn-primary" style={{ fontSize: 13 }} disabled={busy || (cfg && !cfg.available)} onClick={save}>{busy ? '…' : 'Save'}</button>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+        <button className="btn" style={{ fontSize: 13 }} disabled={busy || (cfg && !cfg.available)} onClick={runPreview}>Preview what&apos;s due now</button>
+        {preview && (
+          <>
+            <span style={{ fontSize: 13 }}>
+              {preview.candidates === 0 ? 'Nothing is due for destruction right now.' : `${preview.candidates} template(s) are due for destruction.`}
+              {preview.purge_all && ' (tenant-wide purge-on-disable is active)'}
+            </span>
+            {preview.candidates > 0 && (
+              <button className="btn" style={{ fontSize: 13, color: '#b91c1c', borderColor: '#b91c1c' }} disabled={busy} onClick={destroyNow}>Destroy now</button>
+            )}
+          </>
+        )}
+        {msg && <span style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+      {preview && preview.items?.length > 0 && (
+        <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', marginBottom: 10 }}>
+          <thead><tr style={{ textAlign: 'left', color: 'var(--text3)' }}><th>Employee</th><th>Trigger</th><th>Due date</th></tr></thead>
+          <tbody>
+            {preview.items.map((it: any, i: number) => (
+              <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={{ padding: '3px 6px 3px 0' }}>{it.employee_name || it.employee_id}</td>
+                <td style={{ padding: '3px 6px' }}>{it.trigger === 'purpose_satisfied' ? 'Termination + retention window' : it.trigger === 'statutory_backstop' ? '3-year statutory backstop' : it.trigger}</td>
+                <td style={{ padding: '3px 6px' }}>{it.due_date}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ fontSize: 12, color: 'var(--text2)', fontWeight: 600, marginTop: 6 }}>Recent destruction log (evidence)</div>
+      {log && log.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>No descriptors have been destroyed yet on this tenant.</div>}
+      {log && log.length > 0 && (
+        <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+          <thead><tr style={{ textAlign: 'left', color: 'var(--text3)' }}><th>When</th><th>Employee</th><th>Trigger</th><th>By</th></tr></thead>
+          <tbody>
+            {log.map((r: any) => (
+              <tr key={r.id} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={{ padding: '3px 6px 3px 0' }}>{(r.destroyed_at || '').replace('T', ' ').slice(0, 16)}</td>
+                <td style={{ padding: '3px 6px' }}>{r.employee_name || r.employee_id}</td>
+                <td style={{ padding: '3px 6px' }}>{r.trigger}</td>
+                <td style={{ padding: '3px 6px' }}>{r.destroyed_by}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }
