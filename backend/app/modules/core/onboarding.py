@@ -35,6 +35,8 @@ MULTI-TENANT (AGENT_CONTRACT §2)
     to run without an org_id, and its (schema, table) pair is checked against PREDICATE_TABLES — a
     config row can never be turned into an arbitrary-table probe or a cross-tenant read.
 """
+import re as _re
+
 from fastapi import APIRouter, Header, HTTPException
 
 from app.core.database import get_supabase
@@ -724,6 +726,12 @@ IMPORT_SOURCES = {
 }
 
 
+# A North-American phone number, however the export spells it: "(773) 241-9115", "773-241-9115",
+# "7732419115" after a "Phone#" label. Its presence in an item description proves the string belongs
+# to ONE transaction rather than to a catalog item.
+_PII_LINE_ITEM = _re.compile(r"(Phone\s*#)|(\(\d{3}\)\s*\d{3}-\d{4})|(\b\d{3}-\d{3}-\d{4}\b)", _re.I)
+
+
 def _page(client, schema, table, cols, org_id, extra=None, cap=20000):
     out, page = [], 0
     while page * 1000 < cap:
@@ -897,6 +905,7 @@ def apply_import(source: str, org_id: str, variant: str = "", actor: str = "") -
         insert("categories", new)
 
     elif source == "products_from_item_mapping":
+        pii_skipped = 0
         have = existing("products", "short_name")
         dept_ids = {(d.get("short_name") or "").strip().lower(): d["id"]
                     for d in _page(c, "pos", "departments", "id,short_name", org_id)}
@@ -908,6 +917,16 @@ def apply_import(source: str, org_id: str, variant: str = "", actor: str = "") -
         seen, new = set(), []
         for r in rows:
             name = (r.get("item_desc") or "").strip()
+            # PER-TRANSACTION LINE ITEMS ARE NOT CATALOG PRODUCTS (owner report 2026-08-09).
+            # item_mapping records every distinct item STRING seen on a sale, which is right for
+            # commission classification but wrong as a product source: on Luxelink 1,211 of 1,328
+            # strings carry the customer's own phone number ("Total Wireless RTR Wallet. Phone#:
+            # (773) 241-9115."), so importing them created 1,211 fake $0 products AND copied
+            # customer PII into the catalog. A string bearing a phone number is a transaction line,
+            # never a SKU — skip it, and count it so the import reports what it declined.
+            if name and _PII_LINE_ITEM.search(name):
+                pii_skipped += 1
+                continue
             k = name.lower()
             if not name or k in seen:
                 continue
