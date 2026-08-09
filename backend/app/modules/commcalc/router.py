@@ -17977,60 +17977,138 @@ async def get_target_calendar(
     return result
 
 
+def _self_keys_from_tokens(client, org_id: str, tokens) -> set:
+    """Raw store TOKENS → the UPPER keyset that identifies THOSE STORES and nothing else.
+
+    A token is whatever the org actually recorded for the person: a pinned `app_users.store_code`,
+    or a roster `storeops.employees.home_store`, which in live data is sometimes a store_code
+    ('B-3PL', 'Diversey'), sometimes a street address, sometimes a POS synonym. Resolution runs
+    through the SAME canonical vocabulary the span keyset is built from —
+    `app.core.scope.market_index()` = storeops.stores ∪ commcalc.store_mapping ∪
+    commcalc.store_aliases — so a roster spelling binds exactly like a manager's grant does. **No new
+    matcher**: code → address → synonym, in that order, ONE hop each, then the shared
+    `widen_codes_to_keys()` does the widening (its own proof that a code can never reach an
+    out-of-span store applies unchanged here).
+
+    A token that matches NOTHING in any vocabulary is carried through as a LITERAL key. That can only
+    ever match a row whose store column is exactly that string — i.e. the store the org named — and
+    can never reach a second store, so an unmapped roster value degrades to "your own store" rather
+    than to "everything".
+
+    Never raises: a vocabulary read failure leaves the literal tokens, which is the NARROW answer."""
+    raw = {str(t).strip().upper() for t in (tokens or []) if str(t).strip()}
+    if not raw:
+        return set()
+    keys, codes = set(raw), set()
+    try:
+        from app.core import scope as _cscope
+        idx = _cscope.market_index(client, org_id)
+        known = {str(s.get("store_code") or "").strip().upper()
+                 for s in (idx.get("stores") or []) if str(s.get("store_code") or "").strip()}
+        addr_owner, alias_owner = {}, {}
+        for code, addrs in (idx.get("addr_keys") or {}).items():
+            for a in (addrs or ()):
+                addr_owner.setdefault(a, set()).add(code)
+        for code, aliases in (idx.get("alias_keys") or {}).items():
+            for a in (aliases or ()):
+                alias_owner.setdefault(a, set()).add(code)
+        for t in raw:
+            if t in known:
+                codes.add(t)
+            elif t in addr_owner:
+                codes |= addr_owner[t]
+            elif t in alias_owner:
+                codes |= alias_owner[t]
+        if codes:
+            keys |= _cscope.widen_codes_to_keys(client, org_id, codes)
+    except Exception as e:                                          # pragma: no cover - I/O guard
+        print(f"WARN _self_keys_from_tokens vocabulary resolve failed: {e}")
+    return {k for k in keys if k}
+
+
 def _caller_self_keyset(authorization: str, org_id: str):
-    """For a SELF-scoped (rep) caller, the UPPER store keyset (store_code(s) + their addresses) of the
-    rep's OWN store(s). Returns (is_self, keyset|None):
-      • (False, None)  — not self-scoped (admin / unrestricted / a real manager span). Caller keeps
-                         scope_keyset's own result.
-      • (True, {keys}) — a self rep with a pinned store → restrict to THEIR store(s).
-      • (True, None)   — a self rep with NO pinned store → fall back to UNRESTRICTED so they are never
-                         locked out of picking their store (the pre-login "pick your store" behaviour).
-    WHY: scope_keyset returns an EMPTY SET for a self rep (reps get no manager span), and callers that
-    filter with `if ks is not None` then drop EVERY row → the rep's own targets/store never show (the
-    'My Targets not showing for employees' bug). This substitutes the rep's own store so they see their
-    own data. Reads app_users (public schema) READ-ONLY, org-scoped. Never raises."""
+    """For a SELF-scoped (rep) caller, the UPPER store keyset (store_code(s) + every address spelling
+    + every POS synonym) of the rep's OWN store(s). Returns (is_self, keyset):
+      • (False, None)  — NOT self-scoped (admin / unrestricted / a real manager span / RBAC off / no
+                         identifiable caller). The caller keeps scope_keyset's own result.
+      • (True, {keys}) — a self rep we could place in a store → restrict to THAT store.
+      • (True, set())  — a self rep we could place in NO store → they see NOTHING.
+
+    🔴 `None` NO LONGER MEANS "UNRESTRICTED" ON THE SELF PATH (fixed 2026-08-08, owner-authorised).
+    ─────────────────────────────────────────────────────────────────────────────────────────────
+    This function used to `return (True, None)` for a self rep with no pinned store, with the comment
+    "don't lock them out". At its call site `None` is the UNRESTRICTED sentinel (`if ks is not None:`
+    skips the span filter entirely), so that branch handed a single-store rep EVERY store in the
+    tenant. Six live logins sat on it (4 house + 2 Luxelink). "See nothing" is the safe failure; the
+    original intent — never a silent blank page — is preserved by the `setup_hint` the call site now
+    raises instead ("no store assigned — ask your manager").
+
+    A self caller can therefore NEVER be unrestricted from here: once we know the role is 'self',
+    every remaining step is best-effort STORE RESOLUTION whose failure NARROWS to `set()`.
+
+    WHERE THE STORE COMES FROM, in order:
+      1. `storeops.app_users.store_code` / `.store_codes` — the login pin.
+      2. `storeops.employees.home_store` for the same org_id + employee_id — the ROSTER. 5 of the 6
+         live pinless reps have a perfectly good one and this function never used to read it.
+      3. Nothing → `set()`.
+
+    🚫 `app_users.market` IS DELIBERATELY IGNORED. One of the six (a Luxelink `self` login) carries
+    market='Chicago' = 26 store codes; honouring it would turn a 1-store rep into a 26-store one —
+    the exact over-grant this fix exists to separate out. `storeops.caller_scope` already refuses
+    market widening for scope 'self'; this mirrors it.
+
+    SCHEMA (also fixed 2026-08-08): the reads were `sb().table("app_users")` / `sb().table("stores")`,
+    and commcalc's `sb()` is the DEFAULT-schema (public) client. `public.app_users` does not exist —
+    PostgREST answers PGRST205 for every role, including service_role, because a schema-cache miss is
+    role-independent — so the read raised and the whole function returned (False, None) on EVERY
+    request. `public.stores` is a different, legacy 25-row table with no `org_id` column, so the
+    address widening 400'd too. Both now go through `.schema("storeops")`, and the widening runs off
+    the shared canonical index. Verified live 2026-08-08 against the real PostgREST.
+
+    READ-ONLY, org-scoped on every read. Never raises."""
     try:
         from app.modules.storeops.router import _rbac_enabled, _role_scope
         from app.modules.core.router import _uid_from_token
     except Exception:
         return (False, None)
+    # ── STEP 1 · identity. A failure here means we do not know that the caller is a rep, so we must
+    # hand the decision back to scope_keyset — that is what (False, None) means and it is correct.
     try:
         if not _rbac_enabled(org_id):
             return (False, None)
         uid = _uid_from_token(authorization)
         if not uid:
             return (False, None)
-        rows = (sb().table("app_users")
-                .select("role,store_code,store_codes")
+        client = sb()
+        rows = (client.schema("storeops").table("app_users")
+                .select("role,employee_id,store_code,store_codes")
                 .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
         if not rows:
             return (False, None)
         u = rows[0]
         if _role_scope(org_id, (u.get("role") or "").strip()) != "self":
             return (False, None)
-        codes = set()
-        if u.get("store_code"):
-            codes.add(str(u.get("store_code")).strip().upper())
-        for c in (u.get("store_codes") or []):
-            if str(c).strip():
-                codes.add(str(c).strip().upper())
-        codes.discard("")
-        if not codes:
-            return (True, None)   # self rep, no pinned store → don't lock them out
-        keys = set(codes)
-        try:
-            meta = (sb().table("stores").select("store_code,address")
-                    .eq("org_id", org_id).execute().data) or []
-            for s in meta:
-                if str(s.get("store_code") or "").strip().upper() in codes:
-                    ad = str(s.get("address") or "").strip().upper()
-                    if ad:
-                        keys.add(ad)
-        except Exception:
-            pass
-        return (True, keys)
-    except Exception:
+    except Exception as e:                                          # pragma: no cover - I/O guard
+        print(f"WARN _caller_self_keyset identity read failed: {e}")
         return (False, None)
+    # ── STEP 2 · the caller IS a self rep. From here every failure NARROWS; none can widen.
+    tokens = [str(u.get("store_code"))] if str(u.get("store_code") or "").strip() else []
+    tokens += [str(c) for c in (u.get("store_codes") or []) if str(c).strip()]
+    if not tokens:
+        eid = str(u.get("employee_id") or "").strip()
+        if eid:
+            try:
+                erows = (client.schema("storeops").table("employees")
+                         .select("home_store").eq("org_id", org_id)
+                         .eq("employee_id", eid).limit(1).execute().data) or []
+                hs = str((erows[0].get("home_store") if erows else "") or "").strip()
+                if hs:
+                    tokens.append(hs)
+            except Exception as e:                                  # pragma: no cover - I/O guard
+                print(f"WARN _caller_self_keyset roster home_store read failed: {e}")
+    if not tokens:
+        return (True, set())          # no store anywhere → sees NOTHING (never everything)
+    return (True, _self_keys_from_tokens(client, org_id, tokens))
 
 
 def _as_filter_list(val):
@@ -18259,10 +18337,17 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     ks = scope_keyset(authorization, org_id)
     # A self-scoped rep gets an EMPTY keyset from scope_keyset (no manager span) → `is not None` would drop
     # every store and the rep's own targets would never show (My Targets empty). Substitute the rep's OWN
-    # store(s) so they see their own data; a rep with no pinned store falls back to unrestricted (pick).
+    # store(s) — login pin, else the ROSTER home store — so they see their own data.
+    #
+    # 🔴 A SELF CALLER IS NEVER UNRESTRICTED (2026-08-08). `_caller_self_keyset` used to return None for a
+    # rep with no pinned store, and `None` is this line's UNRESTRICTED sentinel — so 6 live single-store
+    # reps read EVERY store's targets. It now returns a SET (possibly empty); `or set()` re-states that
+    # invariant HERE so a future edit to the helper cannot silently reopen the hole. A rep we can place in
+    # no store sees zero stores and gets the explicit setup_hint below instead of a silent blank page.
     is_self, self_ks = _caller_self_keyset(authorization, org_id)
     if is_self:
-        ks = self_ks
+        ks = self_ks if self_ks is not None else set()
+    no_self_store = bool(is_self) and not ks
     if ks is not None:
         out = [s for s in out if in_keyset(ks, s.get('store_code'), s.get('address'))]
     # Config-required conditions surfaced as an EXPLICIT setup hint so the page can show a "configure X"
@@ -18271,18 +18356,31 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     sold_codes = {str(a.get('store_code') or '').strip().upper()
                   for a in actuals if str(a.get('store_code') or '').strip()}
     rendered_codes = {str(s.get('store_code') or '').strip().upper() for s in out}
-    if not tgt_by_code and not store_rows:
+    if no_self_store:
+        # The ONLY reason this rep's page is empty is that nobody has told the system which store they
+        # work at. Say so in plain English (RULE THREE/SIX voice) instead of showing a blank picker —
+        # that silent blank is what the removed `(True, None)` fallback was trying to avoid, and this
+        # is the safe way to avoid it. The two generic hints below would both misfire here (the rep's
+        # scope is fine; the tenant's targets and store matching are fine), so they are skipped.
+        setup_hint.append("No store is assigned to your login yet, so there are no targets to show. "
+                          "Ask your manager to set your store on your employee record (Team → your "
+                          "profile → Home store) or on your login.")
+    elif not tgt_by_code and not store_rows:
         setup_hint.append("No store roster or targets for this tenant yet — add your stores (Store Admin) "
                           "and set monthly targets in Target Settings for this month.")
     elif not out and tgt_by_code:
         setup_hint.append("Targets are set but none could be shown — check that the target store codes "
                           "match your store roster / your area (RBAC) scope.")
-    if sold_codes and not (sold_codes & rendered_codes):
-        setup_hint.append("Sales were found but none matched a target store — map your POS store names to "
-                          "stores in Store Matching so achieved numbers attach.")
-    elif setup_hint_unmapped:
-        # PARTIAL mismatch — the loud "nothing matched" hint above never fires, so this was silent.
-        setup_hint.append(setup_hint_unmapped)
+    if not no_self_store:
+        # Both of these are TENANT-CONFIG hints ("your POS store names aren't mapped"). For a rep with
+        # no store of their own they are noise at best and misleading at worst — nothing is wrong with
+        # the tenant's mapping, the rep just has no store — so the whole pair is skipped for them.
+        if sold_codes and not (sold_codes & rendered_codes):
+            setup_hint.append("Sales were found but none matched a target store — map your POS store names to "
+                              "stores in Store Matching so achieved numbers attach.")
+        elif setup_hint_unmapped:
+            # PARTIAL mismatch — the loud "nothing matched" hint above never fires, so this was silent.
+            setup_hint.append(setup_hint_unmapped)
     # ── AREA / SPAN ROLL-UP (owner 2026-08-03) ────────────────────────────────────────────────────
     # "the dm should have a collective target for all the stores assigned to them with a drill down for
     # each area assigning them per store."
@@ -18305,6 +18403,9 @@ async def get_targets_summary(period: str, today: str = "", include_untargeted: 
     scope_block = {
         'restricted': ks is not None,          # False = unrestricted admin / RBAC off
         'self_scoped': bool(is_self),
+        # ADDITIVE: a self rep the system cannot place in any store. Lets a page distinguish "you
+        # have no store yet" from "your store has no targets" without parsing the hint text.
+        'no_store_assigned': bool(no_self_store),
         'stores_in_scope': len(out),
         'is_multi_store': len(out) > 1,        # the DM/area case the collective view is for
         'can_edit_targets': bool(can_edit_targets),
