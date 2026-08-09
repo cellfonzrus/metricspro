@@ -556,6 +556,94 @@ def list_tax_codes(org_id: str = ORG_ID):
     return {"tax_codes": rows}
 
 
+@router.get("/tax-codes/store-grid")
+def tax_code_store_grid(org_id: str = ORG_ID):
+    """Every CONFIGURED store with the rate it currently has — the owner's dropdown (2026-08-09).
+
+    "give the store which are already configured as a drop down menu to assign them the respective
+    sales tax, if not then it should present a spreadsheet to enter." So this returns the stores the
+    tenant already has, each with its existing rate (or the org-wide rate it inherits), and tells the
+    caller which of the two UIs to render via `mode`:
+        mode='stores' -> pick from these; mode='blank' -> no stores yet, show an empty grid.
+
+    is_active is NULLABLE, so it is filtered IS NOT FALSE rather than == True — the platform's
+    standing rule; `.eq(True)` silently drops every store whose flag was never set."""
+    client = sb()
+    try:
+        stores = (client.schema("storeops").table("stores")
+                  .select("store_code,address,market,is_active")
+                  .eq("org_id", org_id).order("store_code").limit(1000).execute().data) or []
+    except Exception:
+        stores = []
+    stores = [s for s in stores if s.get("is_active") is not False]
+    codes = (client.schema("pos").table("tax_codes").select("*")
+             .eq("org_id", org_id).limit(1000).execute().data) or []
+    by_store = {(c.get("store_code") or "").strip(): c for c in codes if (c.get("store_code") or "").strip()}
+    org_wide = next((c for c in codes if not (c.get("store_code") or "").strip()), None)
+    rows = [{
+        "store_code": s.get("store_code"),
+        "address": s.get("address"), "market": s.get("market"),
+        "rate": (by_store.get(s.get("store_code")) or {}).get("rate"),
+        "tax_code_id": (by_store.get(s.get("store_code")) or {}).get("id"),
+        "name": (by_store.get(s.get("store_code")) or {}).get("name"),
+        "inherits_org_rate": s.get("store_code") not in by_store,
+    } for s in stores]
+    return {"mode": "stores" if rows else "blank", "stores": rows,
+            "org_wide": org_wide, "store_count": len(rows),
+            "configured": sum(1 for r in rows if r["rate"] is not None)}
+
+
+@router.post("/tax-codes/bulk")
+def bulk_set_tax_codes(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Assign rates to many stores at once — what the grid saves.
+
+    Each entry is {store_code, rate, name?}. A store already carrying a rate is UPDATED rather than
+    duplicated (two rates for one store is the one outcome that would silently mis-charge tax).
+    An empty/absent rate on an entry means "leave this store alone", so a half-filled grid is safe
+    to save; send is_active=false to retire a rate instead."""
+    _require_pos_perm(authorization, org_id, "pos_settings")
+    entries = body.get("entries") or []
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(400, "entries required")
+    if len(entries) > 1000:
+        raise HTTPException(400, "max 1000 entries per request")
+    client = sb()
+    codes = (client.schema("pos").table("tax_codes").select("id,store_code")
+             .eq("org_id", org_id).limit(1000).execute().data) or []
+    by_store = {(c.get("store_code") or "").strip(): c.get("id")
+                for c in codes if (c.get("store_code") or "").strip()}
+    created, updated, skipped = 0, 0, []
+    for i, e in enumerate(entries):
+        store = str((e or {}).get("store_code") or "").strip()
+        if not store:
+            skipped.append({"index": i, "message": "store_code required"})
+            continue
+        raw = (e or {}).get("rate")
+        if raw is None or str(raw).strip() == "":
+            continue                      # untouched row in a partially-filled grid
+        try:
+            rate = float(raw)
+        except (TypeError, ValueError):
+            skipped.append({"index": i, "message": "rate must be a number (percent)"})
+            continue
+        if not (0 <= rate <= 30):
+            skipped.append({"index": i, "message": "rate must be 0-30 (percent)"})
+            continue
+        name = str((e or {}).get("name") or "").strip() or f"{store} sales tax"
+        if store in by_store:
+            (client.schema("pos").table("tax_codes").update({"rate": rate, "name": name})
+             .eq("org_id", org_id).eq("id", by_store[store]).execute())
+            updated += 1
+        else:
+            r = client.schema("pos").table("tax_codes").insert({
+                "org_id": org_id, "name": name, "rate": rate, "store_code": store}).execute()
+            if r.data:
+                by_store[store] = r.data[0].get("id")
+            created += 1
+    return {"created": created, "updated": updated, "skipped": skipped,
+            "total": len(entries)}
+
+
 @router.post("/tax-codes")
 def create_tax_code(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     _require_pos_perm(authorization, org_id, "pos_settings")
@@ -1751,9 +1839,40 @@ def import_rows(entity: str, body: dict, org_id: str = ORG_ID):
             to_insert.append((i, p))
         inserted, errors = _batch_insert("activations", to_insert, org_id)
 
+    elif entity == "tax_codes":
+        # A downloadable template with no importer is a round trip that only looks complete: the
+        # tenant fills it in, uploads, and gets "unknown entity". rate is a PERCENT (8.875), and a
+        # blank store_code is the ORG-WIDE rate, matching the template's own note.
+        existing = _fetch_all("tax_codes", "name,store_code", org_id)
+        seen = {((r.get("name") or "").strip().lower(), (r.get("store_code") or "").strip())
+                for r in existing}
+        for i, row in enumerate(rows):
+            name = str(row.get("name") or "").strip()
+            store = str(row.get("store_code") or "").strip() or None
+            if not name:
+                skipped.append({"index": i, "message": "name required"})
+                continue
+            try:
+                rate = float(row.get("rate"))
+            except (TypeError, ValueError):
+                skipped.append({"index": i, "message": "rate must be a number (percent, e.g. 8.875)"})
+                continue
+            if not (0 <= rate <= 30):
+                skipped.append({"index": i, "message": "rate must be 0-30 (percent)"})
+                continue
+            key = (name.lower(), store or "")
+            if key in seen:
+                skipped.append({"index": i, "message": "duplicate (same name + store already exists)"})
+                continue
+            seen.add(key)
+            to_insert.append((i, {"name": name, "rate": rate, "store_code": store,
+                                  "is_active": row.get("is_active", True) is not False}))
+        inserted, errors = _batch_insert("tax_codes", to_insert, org_id)
+
     else:
         raise HTTPException(400, f"unknown entity '{entity}' "
-                                 "(importable: customers, products, vendors, inventory, activations)")
+                                 "(importable: customers, products, vendors, inventory, "
+                                 "activations, tax_codes)")
 
     return {"inserted": inserted, "skipped": skipped, "errors": errors,
             "total": len(rows)}

@@ -6629,7 +6629,11 @@ def create_report_def(body: dict, org_id: str = ORG_ID):
 def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
     require_org(org_id)
     allow = ('label', 'source_name', 'report_id', 'period_mode', 'target_table', 'upload_endpoint',
-             'source_url', 'auto', 'refresh_months', 'sort_order', 'note', 'carrier_id')
+             'source_url', 'auto', 'refresh_months', 'sort_order', 'note', 'carrier_id',
+             # daily-upload duty (mig 292) — the owner enters the assignee + instructions himself,
+             # so these must be editable from the Imports screen, not seeded from here.
+             'daily_upload', 'upload_assignee', 'upload_instructions',
+             'reminder_hour', 'reminder_minute')
     row = {k: body[k] for k in allow if k in body}
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     sb().schema('commcalc').table('report_definitions').update(row).eq('org_id', org_id).eq('id', rid).execute()
