@@ -59,7 +59,11 @@ END;
 $$;
 
 -- Allow the API roles to invoke it (the function body is the guard; it bypasses RLS as definer).
-GRANT EXECUTE ON FUNCTION commcalc.add_commission_column(TEXT, TEXT, TEXT) TO anon, authenticated, service_role;
+-- 2026-08-09 (mig 724): the web roles were REMOVED from this grant. A function granted to
+-- anon is callable by anyone holding the public anon key, and SECURITY DEFINER means it runs
+-- as the owner with RLS bypassed. The backend uses the SERVICE ROLE, so service_role alone is
+-- correct. See docs/PLAN_REVIEW_2026-08-09.md finding F1.
+GRANT EXECUTE ON FUNCTION commcalc.add_commission_column(TEXT, TEXT, TEXT) TO service_role;
 
 NOTIFY pgrst, 'reload schema';
 SELECT 'Migration 067 complete — commcalc.add_commission_column(p_column,p_type,p_table) installed' AS status;

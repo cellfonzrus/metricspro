@@ -104,7 +104,11 @@ BEGIN
   ON CONFLICT (org_id, key) DO NOTHING;
 END;
 $fn$;
-GRANT EXECUTE ON FUNCTION storeops.seed_intake_fields(uuid) TO anon, authenticated, service_role;
+-- 2026-08-09 (mig 724): the web roles were REMOVED from this grant. A function granted to
+-- anon is callable by anyone holding the public anon key, and SECURITY DEFINER means it runs
+-- as the owner with RLS bypassed. The backend uses the SERVICE ROLE, so service_role alone is
+-- correct. See docs/PLAN_REVIEW_2026-08-09.md finding F1.
+GRANT EXECUTE ON FUNCTION storeops.seed_intake_fields(uuid) TO service_role;
 
 -- ── 6. Fold intake-field seeding into the tenant provisioning engine (mig 076) ───────────────────
 -- Append to seed_tenant_defaults() so NEW tenants + re-syncs get the capture form too. The backend

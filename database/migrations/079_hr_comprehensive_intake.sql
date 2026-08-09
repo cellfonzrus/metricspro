@@ -97,7 +97,11 @@ BEGIN
      AND sort_order IN (120,130,140,150);
 END;
 $fn$;
-GRANT EXECUTE ON FUNCTION storeops.seed_intake_fields(uuid) TO anon, authenticated, service_role;
+-- 2026-08-09 (mig 724): the web roles were REMOVED from this grant. A function granted to
+-- anon is callable by anyone holding the public anon key, and SECURITY DEFINER means it runs
+-- as the owner with RLS bypassed. The backend uses the SERVICE ROLE, so service_role alone is
+-- correct. See docs/PLAN_REVIEW_2026-08-09.md finding F1.
+GRANT EXECUTE ON FUNCTION storeops.seed_intake_fields(uuid) TO service_role;
 
 -- ── Back-fill the comprehensive fields for EVERY existing tenant now ──────────────────────────────
 DO $backfill$
