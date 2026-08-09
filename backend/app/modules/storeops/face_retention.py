@@ -62,9 +62,20 @@ STATUTORY_BACKSTOP_DAYS = 1095
 
 TRIGGER_PURPOSE = "purpose_satisfied"
 TRIGGER_BACKSTOP = "statutory_backstop"
+# Same rule as TRIGGER_PURPOSE (90 days past the last day worked) but the last day was DERIVED from
+# the timekeeping record rather than recorded by HR. Named separately so the audit trail never claims
+# a termination date that no human ever entered — an auditor must be able to see which is which.
+TRIGGER_PURPOSE_DERIVED = "purpose_satisfied_derived"
+# An administrator destroying a descriptor EARLIER than the schedule requires, as a deliberate act.
+# Destroying early is never a violation — BIPA's "whichever occurs first" makes earlier strictly safer
+# — but it must not be logged as though a scheduled trigger fired, and it is NOT an employee_request
+# unless the employee actually asked. Recording an owner decision as the employee's request would be a
+# false entry in the one log that exists to be trusted years later.
+TRIGGER_ADMIN_DIRECTED = "admin_directed"
 TRIGGER_EMPLOYEE_REQUEST = "employee_request"
 TRIGGER_TENANT_PURGE = "tenant_disabled_purge"
-TRIGGERS = (TRIGGER_PURPOSE, TRIGGER_BACKSTOP, TRIGGER_EMPLOYEE_REQUEST, TRIGGER_TENANT_PURGE)
+TRIGGERS = (TRIGGER_PURPOSE, TRIGGER_PURPOSE_DERIVED, TRIGGER_BACKSTOP,
+            TRIGGER_EMPLOYEE_REQUEST, TRIGGER_TENANT_PURGE, TRIGGER_ADMIN_DIRECTED)
 
 DEFAULT_TENANT_RETENTION_CONFIG = {
     "retention_days": FACE_RETENTION_DAYS_DEFAULT,
@@ -73,7 +84,7 @@ DEFAULT_TENANT_RETENTION_CONFIG = {
 }
 
 _TENANT_COLS = "face_retention_days,face_recognition_purge_on_disable,face_recognition_enabled"
-_EMPLOYEE_COLS = "employee_id,name,termination_date"
+_EMPLOYEE_COLS = "employee_id,name,termination_date,is_active"
 _DESCRIPTOR_COLS = "id,employee_id,registered_at,updated_at"   # NEVER "descriptor" — see module docstring
 
 
@@ -133,7 +144,7 @@ def get_tenant_retention_config(org_id, sb_client):
 
 
 def get_employees_for_retention(org_id, sb_client):
-    """{employee_id: {name, termination_date}} for the whole roster, org-scoped."""
+    """{employee_id: {name, termination_date, is_active}} for the whole roster, org-scoped."""
     try:
         rows = (sb_client.table("employees").select(_EMPLOYEE_COLS)
                 .eq("org_id", org_id).execute().data) or []
@@ -156,6 +167,42 @@ def get_descriptors_for_org(org_id, sb_client):
     except Exception:
         return []
     return rows
+
+
+def get_last_worked_map(org_id, employee_ids, sb_client):
+    """{employee_id: last clock_in ISO string} across ALL timelog punches, org-scoped — face-matched or
+    not. This is the honest proxy for "last day of employment" when nobody recorded a termination date.
+
+    WHY THIS EXISTS. Verified live 2026-08-09: `termination_date` is populated for ZERO of 103
+    employees, including three already flagged inactive. The 90-day purpose-satisfied clock keys off
+    that field, so for a real leaver it never started and only the 3-year backstop could ever fire —
+    which is later than BIPA's "whichever occurs first" allows. Deriving the date from timekeeping is
+    what makes the published retention schedule true for people who have ALREADY left, rather than
+    only for future leavers whose paperwork is done properly.
+
+    Note the deliberate difference from `get_last_face_verified_map`: that one answers "when did this
+    person last interact with their BIOMETRIC template" (the statutory backstop clock), which must
+    ignore selfie-only punches. This one answers "when did this person last work", which must not.
+
+    Empty dict (never raises) on any read failure: a missing signal simply means no derived date, and
+    the descriptor stays in place rather than being destroyed on a guess."""
+    ids = sorted({str(e) for e in (employee_ids or []) if e})
+    if not ids:
+        return {}
+    try:
+        rows = (sb_client.table("timelog").select("employee_id,clock_in")
+                .eq("org_id", org_id).in_("employee_id", ids).execute().data) or []
+    except Exception:
+        return {}
+    out = {}
+    for r in rows:
+        eid = str(r.get("employee_id") or "")
+        ci = r.get("clock_in")
+        if not eid or not ci:
+            continue
+        if eid not in out or str(ci) > str(out[eid]):
+            out[eid] = ci
+    return out
 
 
 def get_last_face_verified_map(org_id, employee_ids, sb_client):
@@ -234,8 +281,9 @@ def compute_due(org_id, sb_client, today=None):
         return {"available": True, "purge_all": True, "purge_reason": TRIGGER_TENANT_PURGE, "items": items}
 
     retention_days = clamp_retention_days(tenant_cfg.get("retention_days"))
-    last_punch_map = get_last_face_verified_map(
-        org_id, [d.get("employee_id") for d in descriptors], sb_client)
+    _desc_ids = [d.get("employee_id") for d in descriptors]
+    last_punch_map = get_last_face_verified_map(org_id, _desc_ids, sb_client)
+    last_worked_map = get_last_worked_map(org_id, _desc_ids, sb_client)
 
     items = []
     for d in descriptors:
@@ -244,9 +292,25 @@ def compute_due(org_id, sb_client, today=None):
         term_date = _parse_date(emp.get("termination_date"))
         last_interact = _last_interaction_at(d, last_punch_map.get(eid))
 
+        # DERIVED LAST DAY (2026-08-09). The employee is flagged as gone but nobody recorded when. Use
+        # the last punch of any kind. The error here is asymmetric and that is the whole argument:
+        # destroying a descriptor slightly EARLY costs one re-enrollment (a photo); destroying it late
+        # is a statutory-damages exposure per person. So a derived date is used rather than waiting for
+        # paperwork that, on the evidence, never arrives.
+        #
+        # Only ever DERIVES — never writes to termination_date. If HR later records the real date, the
+        # recorded one wins on the next run (this branch is skipped whenever term_date is set), and the
+        # audit trail keeps them distinguishable via the trigger name.
+        derived_last_day = None
+        if not term_date and emp and emp.get("is_active") is False:
+            derived_last_day = _parse_date((last_worked_map.get(eid) or "")[:10]) or None
+
         candidates = []  # (trigger, due_date: date, retention_days_applied)
         if term_date:
             candidates.append((TRIGGER_PURPOSE, term_date + timedelta(days=retention_days), retention_days))
+        elif derived_last_day:
+            candidates.append((TRIGGER_PURPOSE_DERIVED,
+                               derived_last_day + timedelta(days=retention_days), retention_days))
         if last_interact:
             candidates.append((TRIGGER_BACKSTOP,
                                last_interact.date() + timedelta(days=STATUTORY_BACKSTOP_DAYS),
@@ -261,13 +325,25 @@ def compute_due(org_id, sb_client, today=None):
             "employee_id": eid, "employee_name": emp.get("name"),
             "trigger": trigger, "due_date": due_date.isoformat(),
             "retention_days_applied": applied_days,
-            "termination_date": term_date.isoformat() if term_date else None,
+            "termination_date": (term_date or derived_last_day).isoformat()
+                                if (term_date or derived_last_day) else None,
+            "termination_date_derived": bool(not term_date and derived_last_day),
             "last_interaction_at": last_interact.isoformat() if last_interact else None,
             "descriptor_id": d.get("id"),
             "descriptor_registered_at": d.get("registered_at"),
             "descriptor_updated_at": d.get("updated_at"),
         })
-    return {"available": True, "purge_all": False, "purge_reason": None, "items": items}
+    return {"available": True, "purge_all": False, "purge_reason": None, "items": items,
+            # Descriptors whose employee_id matches NO row on the roster. Live 2026-08-09: 7 of them.
+            # They are REPORTED, never auto-destroyed: an orphan is as likely to be a broken join (a
+            # renumbered employee_id) as a departed person, and destruction is irreversible. But they
+            # must be visible, because every date-based trigger above is keyed on an employee record
+            # these rows do not have — so nothing else in this module would ever mention them.
+            "unmatched": [{"employee_id": str(d.get("employee_id") or ""),
+                           "descriptor_id": d.get("id"),
+                           "descriptor_registered_at": d.get("registered_at")}
+                          for d in descriptors
+                          if str(d.get("employee_id") or "") not in employees_map]}
 
 
 def _write_audit_log(org_id, sb_client, item, destroyed_by, notes=None):
