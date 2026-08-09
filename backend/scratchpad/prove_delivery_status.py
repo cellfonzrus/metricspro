@@ -240,7 +240,7 @@ def statuses_payload(wamid="wamid.AAA", status="delivered", errors=None):
     return _json.dumps({"entry": [{"changes": [{"value": {"statuses": [ev]}}]}]}).encode()
 
 
-def messages_payload(frm="15162330422", mtype="button", payload="approve|abc|tok"):
+def messages_payload(frm="12125550123", mtype="button", payload="approve|abc|tok"):
     m = {"from": frm, "type": mtype}
     if mtype == "button":
         m["button"] = {"payload": payload}
@@ -273,21 +273,21 @@ ok("failed webhook records delivery_error",
 # inbound-approval (messages) payload → 200 AND routes to _handle_inbound UNTOUCHED
 res, store, hc = asyncio.run(run_inbound(messages_payload(mtype="button", payload="approve|req1|tok1")))
 ok("messages payload → 200", res == {"ok": True})
-ok("messages payload routes to approval path", hc == [("15162330422", "approve|req1|tok1", None)])
+ok("messages payload routes to approval path", hc == [("12125550123", "approve|req1|tok1", None)])
 ok("messages payload does NOT write delivery status", not store.updates)
 
 # text inbound still routes (byte-identical approval handling)
 res, store, hc = asyncio.run(run_inbound(messages_payload(mtype="text", payload="yes")))
-ok("text inbound routes to approval path", hc == [("15162330422", None, "yes")])
+ok("text inbound routes to approval path", hc == [("12125550123", None, "yes")])
 
 # a payload carrying BOTH messages and statuses → BOTH handled in one webhook call
 both = _json.dumps({"entry": [{"changes": [{"value": {
-    "messages": [{"from": "15162330422", "type": "button", "button": {"payload": "reject|r2|t2"}}],
+    "messages": [{"from": "12125550123", "type": "button", "button": {"payload": "reject|r2|t2"}}],
     "statuses": [{"id": "wamid.AAA", "status": "read"}]}}]}]}).encode()
 res, store, hc = asyncio.run(run_inbound(both))
 ok("mixed payload → 200", res == {"ok": True})
 ok("mixed payload handles the status", store.rows[0]["delivery_status"] == "read")
-ok("mixed payload handles the approval", hc == [("15162330422", "reject|r2|t2", None)])
+ok("mixed payload handles the approval", hc == [("12125550123", "reject|r2|t2", None)])
 
 # missing column + statuses via the webhook → STILL 200 (Meta must never see a 500)
 res, store, hc = asyncio.run(run_inbound(statuses_payload(status="delivered"), missing=True))

@@ -84,7 +84,7 @@ def _to_number(raw) -> str:
     prepend the US country code '1' to a bare 10-digit number (how reps are commonly stored). This is
     the transport-layer defense-in-depth: callers should already pass a normalized '+<cc>...' number
     (core.auth_security.normalize_phone), and stripping the '+' here is BYTE-COMPATIBLE with that (and
-    with the pre-existing notify send format). Without this an unprefixed 5162330422 hits Meta #131030
+    with the pre-existing notify send format). Without this an unprefixed 2125550123 hits Meta #131030
     'not in allowed list'."""
     digits = "".join(c for c in str(raw or "") if c.isdigit())
     if len(digits) == 10:

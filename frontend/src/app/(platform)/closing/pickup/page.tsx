@@ -242,7 +242,7 @@ export default function CashPickupPage() {
           <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <L t="Name"><input style={{ ...inp, width: 160 }} value={cfg.recipient_name || ''} onChange={e => setCfg({ ...cfg, recipient_name: e.target.value })} /></L>
             <L t={`Email${cfg.email_configured ? '' : ' (server not configured)'}`}><input style={{ ...inp, width: 220 }} value={cfg.recipient_email || ''} onChange={e => setCfg({ ...cfg, recipient_email: e.target.value })} placeholder="name@company.com" /></L>
-            <L t={`WhatsApp${cfg.whatsapp_configured ? '' : ' (server not configured)'}`}><input style={{ ...inp, width: 180 }} value={cfg.recipient_whatsapp || ''} onChange={e => setCfg({ ...cfg, recipient_whatsapp: e.target.value })} placeholder="5162330422 or +1516…" /></L>
+            <L t={`WhatsApp${cfg.whatsapp_configured ? '' : ' (server not configured)'}`}><input style={{ ...inp, width: 180 }} value={cfg.recipient_whatsapp || ''} onChange={e => setCfg({ ...cfg, recipient_whatsapp: e.target.value })} placeholder="2125550123 or +1516…" /></L>
             <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}><input type="checkbox" checked={cfg.notify_email !== false} onChange={e => setCfg({ ...cfg, notify_email: e.target.checked })} /> email</label>
             <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}><input type="checkbox" checked={cfg.notify_whatsapp !== false} onChange={e => setCfg({ ...cfg, notify_whatsapp: e.target.checked })} /> whatsapp</label>
             <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={saveCfg}>Save</button>

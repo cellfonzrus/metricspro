@@ -1080,7 +1080,7 @@ export default function RolesAdminPage() {
                                 <label style={lbl}>Home store<input style={{ ...sel, width: 120 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></label>
                                 <label style={lbl}>Job title<input style={{ ...sel, width: 130 }} value={e.role || ''} placeholder="Sales Rep" onChange={ev => setEmp(e.id, { role: ev.target.value })} /></label>
                                 <label style={lbl}>Pay $/hr<input type="number" style={{ ...sel, width: 80 }} value={e.pay_rate ?? ''} onChange={ev => setEmp(e.id, { pay_rate: ev.target.value === '' ? null : (ev.target.value as any) })} /></label>
-                                <label style={lbl}>Phone<input style={{ ...sel, width: 150 }} value={e.phone || ''} placeholder="5162330422" onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></label>
+                                <label style={lbl}>Phone<input style={{ ...sel, width: 150 }} value={e.phone || ''} placeholder="2125550123" onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></label>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, paddingBottom: 6 }}>
                                   <input type="checkbox" checked={!!e.is_active} onChange={ev => setEmp(e.id, { is_active: ev.target.checked })} />Active
                                 </label>

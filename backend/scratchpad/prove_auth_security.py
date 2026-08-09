@@ -195,18 +195,18 @@ def ph(raw, cc="+1"):
     return S.normalize_phone(raw, cc)
 
 # The owner's headline example
-ck("10-digit '5162330422' → +15162330422", ph("5162330422") == ("+15162330422", None))
+ck("10-digit '2125550123' → +12125550123", ph("2125550123") == ("+12125550123", None))
 # Formatted 10-digit (spaces/dashes/parens/dots)
-ck("formatted '(516) 233-0422' → +15162330422", ph("(516) 233-0422") == ("+15162330422", None))
-ck("dashed '516-233-0422' → +15162330422", ph("516-233-0422") == ("+15162330422", None))
-ck("dotted '516.233.0422' → +15162330422", ph("516.233.0422") == ("+15162330422", None))
-ck("spaced ' 516 233 0422 ' → +15162330422", ph(" 516 233 0422 ") == ("+15162330422", None))
+ck("formatted '(212) 555-0123' → +12125550123", ph("(212) 555-0123") == ("+12125550123", None))
+ck("dashed '212-555-0123' → +12125550123", ph("212-555-0123") == ("+12125550123", None))
+ck("dotted '212.555.0123' → +12125550123", ph("212.555.0123") == ("+12125550123", None))
+ck("spaced ' 212 555 0123 ' → +12125550123", ph(" 212 555 0123 ") == ("+12125550123", None))
 # 11-digit leading-1 (default CC already present, no '+')
-ck("11-digit '15162330422' → +15162330422", ph("15162330422") == ("+15162330422", None))
-ck("formatted 11-digit '1 (516) 233-0422' → +15162330422", ph("1 (516) 233-0422") == ("+15162330422", None))
+ck("11-digit '12125550123' → +12125550123", ph("12125550123") == ("+12125550123", None))
+ck("formatted 11-digit '1 (212) 555-0123' → +12125550123", ph("1 (212) 555-0123") == ("+12125550123", None))
 # already '+' — kept verbatim (never re-guessed)
-ck("already '+15162330422' kept", ph("+15162330422") == ("+15162330422", None))
-ck("'+1 (516) 233-0422' → +15162330422", ph("+1 (516) 233-0422") == ("+15162330422", None))
+ck("already '+12125550123' kept", ph("+12125550123") == ("+12125550123", None))
+ck("'+1 (212) 555-0123' → +12125550123", ph("+1 (212) 555-0123") == ("+12125550123", None))
 # international (never mangled)
 ck("intl '+44 20 7946 0958' → +442079460958", ph("+44 20 7946 0958") == ("+442079460958", None))
 ck("intl '+52 55 1234 5678' kept", ph("+52 55 1234 5678") == ("+525512345678", None))
@@ -225,9 +225,9 @@ ck("16-digit (too long) → error", ph("1234567890123456")[0] is None)
 ck("cc='+44' 10-digit '2079460958' → +442079460958", ph("2079460958", "+44") == ("+442079460958", None))
 ck("cc='+52' 10-digit '5512345678' → +525512345678", ph("5512345678", "+52") == ("+525512345678", None))
 ck("cc='+91' 10-digit → +91..........", ph("9876543210", "+91") == ("+919876543210", None))
-ck("invalid cc falls back to +1 for 10-digit", ph("5162330422", "garbage") == ("+15162330422", None))
+ck("invalid cc falls back to +1 for 10-digit", ph("2125550123", "garbage") == ("+12125550123", None))
 # phone_to_e164_digits convenience
-ck("phone_to_e164_digits('5162330422') → '15162330422'", S.phone_to_e164_digits("5162330422") == "15162330422")
+ck("phone_to_e164_digits('2125550123') → '12125550123'", S.phone_to_e164_digits("2125550123") == "12125550123")
 ck("phone_to_e164_digits garbage → ''", S.phone_to_e164_digits("nope") == "")
 
 print("J. Meta send formatting is BYTE-COMPATIBLE for an already-normalized number")
@@ -236,15 +236,15 @@ from app.modules.notify.channels import whatsapp_meta as WA
 def old_notify_normalize(raw):
     d = "".join(ch for ch in str(raw or "") if ch.isdigit())
     return ("1" + d) if len(d) == 10 else d
-for raw in ["5162330422", "+15162330422", "15162330422", "(516) 233-0422",
+for raw in ["2125550123", "+12125550123", "12125550123", "(212) 555-0123",
             "+442079460958", "442079460958"]:
     canon, _ = S.normalize_phone(raw)                      # what we now STORE / pass to the send path
     meta_new = WA._to_number(canon if canon else raw)     # what Meta receives now (transport strips '+')
     meta_old = old_notify_normalize(raw)                  # what Meta received before
     ck(f"Meta byte-compat: {raw!r} → {meta_new!r} == old {meta_old!r}", meta_new == meta_old)
 # And an already-'+1'-normalized number reaches Meta as pure digits (no '+'), byte-identical.
-ck("'+15162330422' → Meta '15162330422'", WA._to_number("+15162330422") == "15162330422")
-ck("Meta _to_number is idempotent on '15162330422'", WA._to_number("15162330422") == "15162330422")
+ck("'+12125550123' → Meta '12125550123'", WA._to_number("+12125550123") == "12125550123")
+ck("Meta _to_number is idempotent on '12125550123'", WA._to_number("12125550123") == "12125550123")
 
 print(f"\n{'PASS' if F == 0 else 'FAIL'}: {P} passed, {F} failed")
 sys.exit(1 if F else 0)
