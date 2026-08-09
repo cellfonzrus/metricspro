@@ -60,6 +60,7 @@ PL_SPEC = [
     ("accessory_rev", "Accessory sales revenue",                     "revenue", "auto",  "store"),
     ("device_rev",    "Device sales revenue",                        "revenue", "auto",  "store"),
     ("vip_reimb",     "Device-financing reimbursements (Distributor)", "revenue", "auto",  "store"),
+    ("service_income","Service fee income (bill-pay & other fees)",  "revenue", "auto",  "store"),
     ("vip_device_pay","Distributor device payments (PayGo, paid)",   "cogs",    "auto",  "store"),
     ("accessory_cost","Accessory cost",                              "cogs",    "auto",  "store"),
     ("device_cost",   "Device cost",                                 "cogs",    "auto",  "store"),
@@ -226,7 +227,8 @@ def _account_config(client, org_id):
     accessory_cogs_pct. Returns a dict of resolved values with the historical code defaults filled
     in, so a tenant with NO config row (and any tenant before mig 611 runs) is byte-identical to the
     old hard-coded behaviour. NEVER raises — a missing table/row degrades to the defaults."""
-    cfg = {"accessory_cogs_pct": ACCESSORY_COGS_PCT}
+    cfg = {"accessory_cogs_pct": ACCESSORY_COGS_PCT,
+           "service_fee_products": set(), "service_fee_products_list": []}
     try:
         rows = (client.schema("commcalc").table("account_config")
                 .select("accessory_cogs_pct").eq("org_id", org_id).limit(1).execute().data) or []
@@ -234,6 +236,18 @@ def _account_config(client, org_id):
             pct = safe_float(rows[0]["accessory_cogs_pct"])
             if 0 <= pct <= 1:
                 cfg["accessory_cogs_pct"] = pct
+    except Exception:
+        pass
+    # SERVICE-FEE products (mig 613) — its OWN defensive query, exactly like the commcalc config
+    # resolver: a missing column (pre-613) can never disturb the rate above, it just falls back to an
+    # EMPTY list, and an empty list books nothing (every tenant byte-identical).
+    try:
+        srows = (client.schema("commcalc").table("account_config")
+                 .select("service_fee_products").eq("org_id", org_id).limit(1).execute().data) or []
+        if srows and isinstance(srows[0].get("service_fee_products"), list):
+            picked = [str(p).strip() for p in (srows[0].get("service_fee_products") or []) if str(p).strip()]
+            cfg["service_fee_products_list"] = picked
+            cfg["service_fee_products"] = {p.lower() for p in picked}
     except Exception:
         pass
     return cfg
@@ -417,6 +431,7 @@ def build_inputs(client, org_id, period):
     resolve_store = store_resolver(client, org_id)
     acct_cfg = _account_config(client, org_id)           # per-org finance knobs (mig 611); default = Boost
     accessory_cogs_pct = acct_cfg["accessory_cogs_pct"]  # 0.20 default ⇒ Boost byte-identical
+    service_fee_products = acct_cfg["service_fee_products"]   # mig 613; empty ⇒ nothing booked
 
     L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}} for k, *_ in PL_SPEC + BS_SPEC}
 
@@ -508,7 +523,14 @@ def build_inputs(client, org_id, period):
             # Classify device vs accessory from the SAME per-tenant config the commission side uses.
             # ACCESSORY-FIRST: CATEGORY discriminates accessory lines inside an otherwise-device
             # department (luxelink). Empty config ⇒ Boost byte-identical (Ondigo→accessory, *-XP→device).
-            if is_accessory(dept, cat, prod):
+            # SERVICE FEE first (mig 613, owner 2026-08-09): a fee the store CHARGES is income, and it
+            # is identifiable only by product — its department holds the pass-through bill payments too.
+            # EXACT match, never containment: "ePay Service Charge" must not also catch the refill line
+            # it rides on. Booked at full price with NO COGS — the store incurs no cost to collect it.
+            # It is checked BEFORE accessory/device because an explicit owner pick outranks a taxonomy.
+            if service_fee_products and str(prod or "").strip().lower() in service_fee_products:
+                add("service_income", st, ext, detail_label=str(prod or "").strip() or None)
+            elif is_accessory(dept, cat, prod):
                 add("accessory_rev", st, ext)
                 add("accessory_cost", st, ext * accessory_cogs_pct)
             elif is_device(dept):
