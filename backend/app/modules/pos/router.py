@@ -202,7 +202,7 @@ def _caller_employee(authorization: str, org_id: str) -> str:
     uid = _uid_from_token(authorization)
     if not uid:
         return ""
-    rows = (sb().table("app_users").select("employee_id")
+    rows = (sb().schema("storeops").table("app_users").select("employee_id")
             .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
     return ((rows[0].get("employee_id") if rows else "") or "").strip()
 
@@ -215,14 +215,14 @@ def _caller_ctx(authorization: str, org_id: str):
     uid = _uid_from_token(authorization)
     if not uid:
         return None
-    rows = (sb().table("app_users").select("role, super_admin")
+    rows = (sb().schema("storeops").table("app_users").select("role, super_admin")
             .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
     if not rows:
         return None
     role = ((rows[0].get("role") if rows else "") or "").strip()
     if not role:
         return None
-    rr = (sb().table("roles").select("permissions")
+    rr = (sb().schema("storeops").table("roles").select("permissions")
           .eq("org_id", org_id).eq("name", role).limit(1).execute().data) or []
     if not rr:
         return None
@@ -272,7 +272,7 @@ def _require_member(authorization: str, org_id: str) -> str:
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "sign in to perform this action")
-    rows = (sb().table("app_users").select("id")
+    rows = (sb().schema("storeops").table("app_users").select("id")
             .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(403, "your login is not a member of this organization")
@@ -851,7 +851,7 @@ def _require_any_pos_perm(authorization: str, org_id: str, keys):
 
 def _employee_names(org_id: str) -> dict:
     """employee_id -> display name, from the platform roster."""
-    rows = (sb().table("employees").select("employee_id,name")
+    rows = (sb().schema("storeops").table("employees").select("employee_id,name")
             .eq("org_id", org_id).limit(2000).execute().data) or []
     return {(r.get("employee_id") or "").strip(): r.get("name")
             for r in rows if (r.get("employee_id") or "").strip()}
