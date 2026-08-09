@@ -263,6 +263,15 @@ def _identity_503() -> bool:
     return os.environ.get("IDENTITY_BACKEND_503", "1").lower() not in ("0", "false", "no", "off")
 
 
+def _ambiguous_tenant_strict() -> bool:
+    """Break-glass for the 2026-08-09 ambiguous-tenant fail-closed. Default ON when unset;
+    AMBIGUOUS_TENANT_STRICT=0 restores the old behaviour in which a login belonging to SEVERAL tenants,
+    sending no `x-active-org` and having no `is_default_org` row, was silently answered as whichever
+    membership happened to be created FIRST. Same never-strand-the-operator posture as REQUIRE_AUTH /
+    STRICT_MEMBERSHIP / IDENTITY_BACKEND_503."""
+    return os.environ.get("AMBIGUOUS_TENANT_STRICT", "1").lower() not in ("0", "false", "no", "off")
+
+
 def _strict_membership() -> bool:
     """Break-glass for the 2026-08-05 empty-membership fail-closed (H2). Default ON when unset;
     STRICT_MEMBERSHIP=0 restores the pre-2026-08-05 pass-through in which a verified login with NO
@@ -467,9 +476,19 @@ def _resolve_identity(token: str):
     try:
         super_admin = any(r.get("super_admin") for r in rows)
         member_orgs = tuple(r.get("org_id") for r in rows if r.get("org_id"))
-        # default membership: the row flagged is_default_org, else the earliest (rows are ordered).
+        # The tenant this login may act as WITHOUT being told which one — i.e. a tenant it has
+        # actually declared, not one we inferred. Two sources qualify: an explicit `is_default_org`
+        # row, or having exactly ONE membership (then there is nothing to infer).
+        #
+        # WHAT CHANGED 2026-08-09: this used to fall back to `member_orgs[0]` — the EARLIEST-CREATED
+        # membership — for ANY number of memberships. Verified live that same day: no app_users row
+        # anywhere has is_default_org set, so in practice every multi-tenant login silently acted as
+        # "whichever company you joined first". A login belonging to three companies was served its
+        # oldest (26 stores, 138k sales rows) while the human believed they were in a brand-new empty
+        # one. Now >1 membership with nothing declared yields None, which the caller reads as
+        # AMBIGUOUS and refuses — see `_tenant_is_ambiguous`.
         default_org = next((r.get("org_id") for r in rows if r.get("is_default_org")),
-                           (member_orgs[0] if member_orgs else None))
+                           (member_orgs[0] if len(member_orgs) == 1 else None))
         org_info = {r.get("org_id"): {"role": r.get("role"), "twofa_enabled": bool(r.get("twofa_enabled"))}
                     for r in rows if r.get("org_id")}
     except Exception:
@@ -486,6 +505,44 @@ def _pick_active_org(member_orgs, default_org, requested):
     if requested and requested in member_orgs:
         return requested
     return default_org
+
+
+def _tenant_is_ambiguous(member_orgs, requested, default_org) -> bool:
+    """PURE. Is the acting tenant a GUESS rather than a choice?
+
+    True only when the login belongs to at least one tenant, did NOT name a valid one via
+    `x-active-org`, and has no tenant it may act as without being told (`default_org` is None — see
+    `_resolve_identity`, which yields None exactly when there are several memberships and none is
+    flagged `is_default_org`).
+
+    A SINGLE-membership login is never ambiguous: its one tenant is the only possible answer, so the
+    92 of 96 logins that were single-membership when this shipped are completely untouched. A login
+    with ZERO memberships is not this function's problem either — the fail-closed 401 for an
+    unprovisioned account (H2, 2026-08-05) already ran above.
+
+    A header naming a tenant the login does NOT belong to counts as ambiguous rather than being quietly
+    downgraded to some other tenant. Answering a request for company X with company Y's data is the
+    precise shape of the bug this exists to prevent.
+    """
+    if not member_orgs:
+        return False
+    if requested and requested in member_orgs:
+        return False
+    return default_org is None
+
+
+async def _reject_tenant_choice(send):
+    """The login belongs to several companies and has not said which one it is acting as.
+
+    409, deliberately NOT 401: the session is perfectly valid and must not be torn down. The client
+    keeps its token, shows the company picker it already has, and retries. `code` is what the client
+    keys on; the prose is for whoever reads a log."""
+    body = (b'{"detail":"This sign-in belongs to more than one company. Choose which company you are '
+            b'working in, then try again.","code":"tenant_choice_required"}')
+    await send({"type": "http.response.start", "status": 409,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
 
 
 async def _reject_401(send):
@@ -676,6 +733,12 @@ class TenantScopeMiddleware:
         # Normal login: honor the caller's chosen tenant ONLY if it is one of their memberships,
         # else fall back to their default membership. Empty membership ⇒ no rewrite (unprovisioned).
         requested = (headers.get(_ACTIVE_ORG_HEADER, "") or "").strip()
+        # AMBIGUOUS TENANT (2026-08-09): refuse to guess which company this request is for. Placed
+        # before the 2FA gate and before the rewrite, so an ambiguous request never reaches a handler
+        # and never has an org_id stamped on it. The login/bootstrap routes a fresh session needs are
+        # on the public allowlist and returned far above, so the picker can always load.
+        if _ambiguous_tenant_strict() and _tenant_is_ambiguous(member_orgs, requested, default_org):
+            return await _reject_tenant_choice(send)
         org = _pick_active_org(member_orgs, default_org, requested)
         # 2FA gate (auth-hardening) — ADDITIVE, super-admins already returned above. Enforced only when
         # the global break-glass TWOFA_ENFORCE is on (default) AND the active tenant requires 2FA for

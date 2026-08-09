@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useState, useCallback, useRef } f
 import { createClient } from '@supabase/supabase-js'
 import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken,
          onSessionInvalid, clearSessionInvalid,
+         onTenantChoiceRequired, clearTenantChoiceRequired,
          getImpersonation, setImpersonation, setImpersonationReauth, impersonationHeader,
          onImpersonationInvalid, clearImpersonationInvalid, type ImpersonationState } from './client'
 import { setCacheIdentity } from './cache'
@@ -276,6 +277,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const switchTenant = useCallback(async (orgId: string) => {
     if (!session?.access_token) return
     setActiveOrg(orgId); setActiveOrgState(orgId); setNeedsTenantChoice(false)
+    clearTenantChoiceRequired()   // a company has now been chosen; disarm the latch
     await loadMe(session.access_token, orgId)
   }, [session, loadMe])
 
@@ -475,6 +477,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       supabase.auth.signOut().catch(() => { /* already gone / offline — the card still shows */ })
     })
   }, [rbacEnabled])
+
+  // AMBIGUOUS TENANT (2026-08-09). The backend now answers 409 `tenant_choice_required` rather than
+  // silently serving whichever company this login joined FIRST. client.ts has already dropped the stale
+  // saved choice by the time this fires; raising the picker here means the user chooses immediately
+  // instead of seeing an error and having to reload. Deliberately NOT tied to the dead-session path:
+  // the session is valid, and signing them out would be the wrong remedy.
+  useEffect(() => {
+    return onTenantChoiceRequired(() => {
+      setNeedsTenantChoice(true)
+      setActiveOrgState(null)
+      resetProfile()
+    })
+  }, [resetProfile])
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
