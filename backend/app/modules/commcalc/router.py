@@ -21,6 +21,7 @@ from app.modules.commcalc import targets_engine
 from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
+from app.modules.commcalc.safe_replace import safe_replace, ReplaceFailed
 from app.modules.commcalc import url_guard as _url_guard   # SSRF guard for tenant URLs (C4)
 from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_legs as _commission_legs
@@ -743,6 +744,7 @@ async def _sweep_shrink_alert(client, org_id, shrinks, *, source_line):
 # Row-count guardrail thresholds (user 2026-07-05): flag an ingest that SHRINKS a day/period which
 # previously held real data — the fingerprint of a truncated/partial export. Detection lives in
 # upload_file (all ingest paths); the email sweep escalates a hit to a WhatsApp/email alert.
+_NIL_UUID = '00000000-0000-0000-0000-000000000000'
 _SHRINK_MIN_PRIOR = 100   # only guard a key that already had a meaningful row count (avoids day-start noise)
 _SHRINK_RATIO = 0.5       # alert when the incoming count is < 50% of what it replaces
 
@@ -1259,6 +1261,21 @@ async def _upload_file_impl(
     # then loads foreign data under it — how a month's comp got clobbered). The file's true month
     # comes from its rows' Begin Date; reject a mismatch unless explicitly forced.
     if file_type == 'comp_report' and period and not force:
+        # A comp file spanning SEVERAL months is the dangerous case the dominant-month check below
+        # cannot see: every row is stamped with the ONE selected period, so a June+July+August file
+        # lands entirely under whichever month you picked and wipes that month's real data. Refuse
+        # it and name the months, so the fix ("upload one file per month") is obvious.
+        _spread = epay_sweep.comp_month_spread(rows)
+        if len(_spread) > 1:
+            _list = ', '.join(f"{p} ({n:,} rows)" for p, n in _spread)
+            raise HTTPException(
+                400,
+                f"This comp file covers {len(_spread)} different months — {_list}. The upload files "
+                f"every row under the one period you select, so loading it as '{period}' would put "
+                f"all of those months into '{period}' and overwrite it. Please upload ONE FILE PER "
+                f"MONTH, selecting the matching period each time (the portal's Start/End Date filter "
+                f"can be set to a single month). Pass force=true only if you really intend to file "
+                f"every one of those rows under '{period}'.")
         derived = epay_sweep.comp_period_from_records(rows)
         if derived and derived[0].strip().lower() != period.strip().lower():
             raise HTTPException(
@@ -1651,11 +1668,18 @@ async def _upload_file_impl(
                                       f"so those day(s) were left as-is; ingested the file's fresh day(s) only. "
                                       f"Ensure the scheduled b2bsoft report keeps the Ext Price + GP columns.")},
             }
+    # WHAT THIS BLOCK USED TO DO, AND WHY IT NO LONGER DOES IT (2026-08-09).
+    # It DELETED the target period/day(s) right here, and the insert happened further down. A file
+    # that mapped fine but failed to INSERT therefore wiped the period and put nothing back:
+    # raw_comp_report April 2026 went from 10,431 rows to 0 on a single bad upload, and every retry
+    # destroyed it again. The delete is now deferred into safe_replace() below, which inserts FIRST
+    # and only retires the previous load once the whole replacement has landed. Here we just decide
+    # WHAT the replaced scope is, and keep the existing shrink guardrails (which only warn).
+    _replace_scope = None
     if mapped:
         if file_type in DATE_KEYED:
-            # Date-grain feeds are keyed by DAY, not month. Make a re-pull of the same day(s)
-            # idempotent by clearing only the dates this file covers (never the whole month — other
-            # days' rows survive). Rows with no parseable date can't be deduped, so they just append.
+            # Date-grain feeds are keyed by DAY, not month: a re-pull of the same day(s) replaces
+            # only those days, never the whole month.
             dk = DATE_KEYED[file_type]
             feed_dates = sorted({m.get(dk) for m in mapped if m.get(dk)})
             if feed_dates:
@@ -1673,12 +1697,8 @@ async def _upload_file_impl(
                             shrink.append({'key': str(_d), 'prior': int(prior), 'new': int(newc)})
                 except Exception as e:
                     print(f'WARN row-count guardrail (date) skipped: {e}')
-                try:
-                    client.schema('commcalc').table(table).delete()\
-                        .eq('org_id', org_id).in_(dk, feed_dates).execute()
-                except Exception as e:
-                    mig = 'migration 047' if file_type == 'daily_sales' else 'migration 083'
-                    raise HTTPException(500, f"Failed to clear existing {file_type} rows: {e}. Run {mig}.")
+                _replace_scope = (lambda q, _dk=dk, _fd=list(feed_dates):
+                                  q.eq('org_id', org_id).in_(_dk, _fd))
         elif has_period and period:
             try:
                 prior = (client.schema('commcalc').table(table).select('org_id', count='exact')
@@ -1687,15 +1707,11 @@ async def _upload_file_impl(
                     shrink.append({'key': period, 'prior': int(prior), 'new': len(mapped)})
             except Exception as e:
                 print(f'WARN row-count guardrail (period) skipped: {e}')
-            try:
-                client.schema('commcalc').table(table).delete().eq('org_id', org_id).in_('period', _pvariants(period)).execute()
-            except Exception as e:
-                raise HTTPException(500, f"Failed to clear existing data: {e}. Run commcalc_master_fix.sql")
+            _replace_scope = (lambda q, _pv=_pvariants(period):
+                              q.eq('org_id', org_id).in_('period', _pv))
         elif not has_period:
-            try:
-                client.schema('commcalc').table(table).delete().eq('org_id', org_id).neq('id', '00000000-0000-0000-0000-000000000000').execute()
-            except Exception:
-                pass
+            # Snapshot tables (catalog): the upload replaces the org's whole set.
+            _replace_scope = lambda q: q.eq('org_id', org_id)
 
     # ── CROSS-TENANT INGEST GUARD (owner-approved 2026-08-06, migration 280) ────────────────
     # The control for the Diversey class: a Luxelink sales export ingested under the HOUSE org on
@@ -1716,18 +1732,32 @@ async def _upload_file_impl(
     except Exception as _ge:
         print(f"WARN ingest guard skipped: {_ge}")
 
-    # Insert in batches
+    # Insert the new rows, THEN retire the ones they replace — never the other way round.
+    # safe_replace() guarantees that a failed insert leaves the scope exactly as it was, so a
+    # retry of a broken file is harmless instead of destroying the month a second time.
     saved = 0
-    for i in range(0, len(mapped), 500):
-        batch = mapped[i:i+500]
+    replace_warning = None
+    if mapped:
+        if _replace_scope is None:
+            # No scope to replace (append-only: has_period but no period selected) — plain insert,
+            # still rolled back as a unit if it fails part-way.
+            _replace_scope_noop = lambda q: q.eq('org_id', org_id).eq('id', _NIL_UUID)
+            _scope_for_call = _replace_scope_noop
+        else:
+            _scope_for_call = _replace_scope
         try:
-            # Plain insert for all upload types. The period was wiped just above (only when the
-            # upload produced rows), so there are no conflicts. The old unique dedup index was
-            # dropped because one transaction has many line items that share a single Trans ID.
-            client.schema('commcalc').table(table).insert(batch).execute()
-            saved += len(batch)
-        except Exception as e:
-            raise HTTPException(500, f"Insert failed at row {i}: {e}")
+            _res = safe_replace(client, table, mapped, _scope_for_call,
+                                label=f"{file_type} {period or ''}".strip())
+            saved = _res['saved']
+            replace_warning = _res.get('warning')
+            if replace_warning:
+                print(f'WARN safe_replace({table}): {replace_warning}')
+            print(f"DEBUG safe_replace: table={table} mode={_res['mode']} prior={_res['prior']} "
+                  f"saved={saved} removed={_res['removed']}")
+        except ReplaceFailed as e:
+            # The message already states whether the previous data survived — surface it verbatim
+            # so the operator knows the month is still there and can just fix the file and retry.
+            raise HTTPException(500, f"Insert failed: {e}")
     
     print(f'DEBUG upload complete: file_type={file_type} saved={saved} mapped={len(mapped)} period={period!r}')
 
