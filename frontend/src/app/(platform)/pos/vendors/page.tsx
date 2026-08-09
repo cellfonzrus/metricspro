@@ -13,7 +13,14 @@ interface Vendor {
 }
 
 const US_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']
-const BUSINESS_TYPES = ['Vendor', 'Manufacturer', 'Master Dealer', 'Shipper', 'ePay carrier']
+// 'Sub Dealer' added 2026-08-09 — the owner named master AND sub dealers as trading partners a
+// tenant must be able to record ("customers, vendors, manufacturer, master dealers, sub dealers if
+// any"), and the list shipped without it, so a sub dealer could only be filed as a plain Vendor.
+// The list itself is still a constant, which is a RULE TWO gap: it belongs in a config table with
+// the other POS vocabularies. Tracked in the platform-core handoff rather than widened here, because
+// the same constant is duplicated in the onboarding template registry and the two should move to
+// config together, not one at a time.
+const BUSINESS_TYPES = ['Vendor', 'Manufacturer', 'Master Dealer', 'Sub Dealer', 'Shipper', 'ePay carrier']
 const SEARCH_BY_OPTIONS: { label: string; value: string }[] = [
   { label: 'Company Name', value: 'legal_name' },
   { label: 'Contact Name', value: 'contact_name' },

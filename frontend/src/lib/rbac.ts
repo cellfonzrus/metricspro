@@ -263,6 +263,11 @@ export const NAV: NavGroup[] = [
   // POS module (mig 724/725) — the point-of-sale port (Phase 1: register, customers, inventory,
   // settings). Activations/vendors/POs/reports arrive in Phase 2; see pos-system INTEGRATION_PLAN.md.
   { group: 'Point of Sale', module: 'pos', items: [
+    // Setup wizard (mig 733, owner directive 2026-08-09). FIRST in the group deliberately: a tenant
+    // whose POS is not configured is redirected here by (platform)/pos/layout.tsx, and this entry is
+    // how they get BACK to it afterwards. Scoped 'all' + 'market' — a store-scoped cashier is not the
+    // person who defines the tenant's departments and tax rates.
+    { href: '/pos/onboarding', label: 'Setup Wizard', icon: '🛠️', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/sales', label: 'Register', icon: '🛒', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/customers', label: 'Customers', icon: '👤', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
