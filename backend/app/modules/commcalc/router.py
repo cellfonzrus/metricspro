@@ -2844,15 +2844,23 @@ def _vip_set_status(client, org_id, status, detail, mark_run=False, success=None
 
 
 def _registry_auto_map(client, org_id):
-    """report_definitions.auto by report_key — the registry (Connectors page) drives which reports a
+    """report_definitions.auto by report_key — CARRIER-SCOPED. The registry (Connectors page) drives which reports a
     sweep pulls. A report with no registry row falls back to the connector's config toggle, so this is
     a zero-behavior-change cutover (the seeded auto flags already match the live toggles)."""
     try:
         rows = (client.schema('commcalc').table('report_definitions')
-                .select('report_key,auto').eq('org_id', org_id).execute().data) or []
-        return {r['report_key']: bool(r['auto']) for r in rows if r.get('report_key')}
+                .select('report_key,auto,carrier_id').eq('org_id', org_id).execute().data) or []
     except Exception:
-        return {}
+        try:    # pre-291 database has no carrier_id — degrade to the un-scoped read, never to {}
+            rows = (client.schema('commcalc').table('report_definitions')
+                    .select('report_key,auto').eq('org_id', org_id).execute().data) or []
+        except Exception:
+            return {}
+    # CARRIER SCOPE (mig 291): never auto-pull a report belonging to a carrier this tenant does not
+    # run. A row with carrier_id NULL is carrier-agnostic and always considered.
+    carriers = _tenant_carriers(client, org_id)
+    return {r['report_key']: bool(r['auto']) for r in rows
+            if r.get('report_key') and _carrier_visible(r, carriers)}
 
 
 # Columns the sweep reads per report. Kept as a literal list so a pre-290 database (which lacks the
@@ -6338,15 +6346,55 @@ def _connector_creds(client, org_id, cfg_table):
     return {'has_user': bool(u), 'has_pass': has_pass, 'user_hint': hint}
 
 
+def _tenant_carriers(client, org_id):
+    """{carrier_id: name} for the carriers THIS tenant runs. commcalc.carrier is already per-org.
+    Empty dict when the table is missing/unreadable, which the callers read as "do not filter" —
+    a carrier lookup failing must never hide a report the tenant needs to upload."""
+    try:
+        rows = (client.schema('commcalc').table('carrier').select('id,name')
+                .eq('org_id', org_id).execute().data) or []
+        return {r['id']: r.get('name') for r in rows if r.get('id')}
+    except Exception:
+        return {}
+
+
+def _carrier_visible(d, carriers):
+    """A report is shown when it is carrier-agnostic (carrier_id NULL — VIP / B2B / closing) or its
+    carrier is one this tenant runs. Unknown carrier_id with a populated carrier list ⇒ hidden: it
+    names a carrier the tenant does not run, which is exactly the clutter this removes."""
+    cid = d.get('carrier_id')
+    if not cid or not carriers:
+        return True
+    return cid in carriers
+
+
 @router.get("/connectors")
-def list_connectors(org_id: str = ORG_ID):
-    """Every vendor portal + the reports it provides + live sweep status. The single registry."""
+def list_connectors(org_id: str = ORG_ID, carrier: str = ""):
+    """Every vendor portal + the reports it provides + live sweep status. The single registry.
+
+    Reports are CARRIER-SCOPED (owner directive 2026-08-09): a row tied to a carrier the tenant does
+    not run is omitted, and `?carrier=<id|name>` narrows further to one carrier. Carrier-agnostic
+    rows (carrier_id NULL) always show — VIP invoices, B2B POS inventory and daily closing are not
+    carrier concepts and must not be forced under one."""
     require_org(org_id)
     client = sb()
     conns = (client.schema('commcalc').table('connector_instances').select('*')
              .eq('org_id', org_id).order('sort_order').execute().data) or []
     defs = (client.schema('commcalc').table('report_definitions').select('*')
             .eq('org_id', org_id).order('sort_order').execute().data) or []
+    carriers = _tenant_carriers(client, org_id)
+    want = (carrier or '').strip().lower()
+    kept = []
+    for d in defs:
+        if not _carrier_visible(d, carriers):
+            continue
+        d['carrier_name'] = carriers.get(d.get('carrier_id'))
+        if want and want not in ('all', '*'):
+            nm = (d.get('carrier_name') or '').lower()
+            if str(d.get('carrier_id') or '').lower() != want and nm != want:
+                continue
+        kept.append(d)
+    defs = kept
     # last upload per report (upload_log.file_type == report_key for the period reports)
     last_up = {}
     try:
@@ -6429,6 +6477,7 @@ def create_report_def(body: dict, org_id: str = ORG_ID):
            'period_mode': body.get('period_mode') or 'current', 'target_table': body.get('target_table'),
            'upload_endpoint': body.get('upload_endpoint'), 'source_url': body.get('source_url'),
            'auto': bool(body.get('auto')), 'refresh_months': int(body.get('refresh_months') or 1),
+           'carrier_id': (body.get('carrier_id') or None),   # NULL = carrier-agnostic (mig 291)
            'sort_order': int(body.get('sort_order') or 100),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
@@ -6439,7 +6488,7 @@ def create_report_def(body: dict, org_id: str = ORG_ID):
 def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
     require_org(org_id)
     allow = ('label', 'source_name', 'report_id', 'period_mode', 'target_table', 'upload_endpoint',
-             'source_url', 'auto', 'refresh_months', 'sort_order', 'note')
+             'source_url', 'auto', 'refresh_months', 'sort_order', 'note', 'carrier_id')
     row = {k: body[k] for k in allow if k in body}
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     sb().schema('commcalc').table('report_definitions').update(row).eq('org_id', org_id).eq('id', rid).execute()

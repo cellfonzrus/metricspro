@@ -343,6 +343,13 @@ def _report_definition_candidates(report_defs, already_covered):
         rk = (r.get("report_key") or "").strip()
         if not rk or rk in already_covered:
             continue
+        # INERT ROW GUARD (2026-08-09). A registry row with no target_table AND no upload_endpoint
+        # cannot receive data by any route, so a feed for it can only ever read "never" -- a phantom
+        # alert for something that is not wired up. Five such rows exist live (hand-typed MA entries
+        # with empty label/target_table, e.g. "MA Dailt TX SubMA"). Registering them as feeds is what
+        # put blank-labelled errors on the board. Fix the registry row and the feed appears.
+        if not (r.get("target_table") or "").strip() and not (r.get("upload_endpoint") or "").strip():
+            continue
         auto = bool(r.get("auto"))
         cad = _MANUAL_CADENCE_HOURS if not auto else 24.0
         ep = (r.get("upload_endpoint") or "").strip()
@@ -462,6 +469,28 @@ def load_feeds(client, org_id, persist=True, force=False):
         _derive_done(org_id)
     except Exception:
         cands = []
+    # ── REGISTRY auto=false MUST TURN AN EXISTING FEED OFF (owner directive 2026-08-09) ──────────
+    # The idempotence contract below only ever INSERTS, so a report whose `auto` was later unticked
+    # kept the `enabled: true` it was first stored with and went on counting as overdue. Measured
+    # live: house `report:inventory` and `report:sales` were auto=false in report_definitions and
+    # enabled=true in core.import_feed -- exactly the "sheets I never scheduled are showing errors"
+    # the owner reported.
+    #
+    # DELIBERATELY ONE-DIRECTIONAL: this only ever DISABLES, and only for `auto_derived` feeds. It
+    # can therefore never override an admin who switched a feed ON by hand, and can never re-enable
+    # something a human switched OFF -- the two ways a bidirectional sync would fight the operator.
+    # Ticking auto back on in the registry surfaces the feed in the admin UI to be re-enabled there.
+    stale_off = [r for r in stored
+                 if r.get("auto_derived") and r.get("enabled")
+                 and any(c["feed_key"] == r.get("feed_key") and not c.get("enabled") for c in cands)]
+    if stale_off and persist:
+        for r in stale_off:
+            try:
+                (client.schema("core").table("import_feed")
+                 .update({"enabled": False}).eq("org_id", org_id).eq("id", r.get("id")).execute())
+                r["enabled"] = False        # reflect it in THIS response, not only the next one
+            except Exception:
+                pass                        # a sync failure must never break the health read
     new_rows = []
     for c in cands:
         if c["feed_key"] in have:
