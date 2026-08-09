@@ -32,7 +32,7 @@ EpayLoginError telling the operator to add it (graceful degradation). The portal
 WAF-protected, so Railway's datacenter IP must be allowed to reach it; if a run reports a WAF
 "Request Rejected", the sweep can be pointed at a residential/allow-listed egress.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 try:
     from app.modules.commcalc import url_guard as _url_guard      # SSRF guard (finding C4)
@@ -131,12 +131,30 @@ def map_payment_detail_row(r, base):
 # this is the real mapping, now shared by the upload + the sweep. The full per-payment grain is
 # captured (incl. external_reference_id) so the comp is stored VERBATIM and the Residual Trend
 # report can track each payment across months.
-# COMP CADENCE (user 2026-06-20): each daily pull is the carrier's cumulative month-to-date snapshot,
-# so the sweep REPLACES the open month (delete current period + insert). A canceled account that drops
-# out of the report correctly disappears — a merge/upsert would keep it stale and mask the residual
-# dip. Closed months are a different `period`, so they're never re-pulled and stay frozen. An empty
-# in-arrears pull raises before touching the table (guard in _process_report), so a not-yet-posted
-# month is never wiped.
+#
+# COMP CADENCE — CORRECTED 2026-08-09 (owner), replacing the 2026-06-20 note that used to sit here.
+# The old note said each pull was "the carrier's cumulative month-to-date snapshot", so the sweep
+# REPLACED the whole open month on every pull. That was wrong, and it was never observed to be
+# right: the comp leg has NEVER once succeeded (zero 'epay auto-sweep' rows for comp_report in
+# upload_log, ever, since the leg was added on 2026-06-17). What the portal actually serves:
+#
+#   * Comp is a DAILY report. Every row carries Begin Date == End Date == one day, ~270-450 rows
+#     and ~$11k-26k a day (verified live 2026-08-09 against seven pulls).
+#   * Its filter panel has NO month control at all. It has "Summarize by" (Daily/Weekly/Monthly)
+#     plus Start Date / End Date. _set_report_month could never move anything here and always
+#     returned False, which is why all three "in-arrears" months pulled the same empty default.
+#   * "Summarize by" is REQUIRED. Left on "Please Choose:" the report returns a header-only
+#     workbook for EVERY date — that, not a portal change or a parser drift, is the entire cause of
+#     'Comprehensive Comp report downloaded but contained no rows'. Set it to Daily and the same
+#     date returns its rows: 2026-04-15 -> 381 rows / $20,698.61, matching raw_comp_report exactly.
+#   * The day's compensation posts LATE (owner: ~11:30 PM). A 06:00 pull of today is legitimately
+#     empty. So a zero-row day is NORMAL and must not be an error; comp gets its own late slot via
+#     report_definitions.sweep_hour.
+#
+# Storage therefore keys on the DAY, not the month: each day in the pull replaces only its own
+# begin_date. A single day's pull can never wipe a month, and a re-run of the same day is
+# idempotent. The month label still comes from the rows' own dates (period mode "data"), so
+# nothing can be mislabeled.
 
 
 def _comp_get(r, *names):
@@ -169,8 +187,15 @@ def map_comp_report_row(r, base):
     from app.modules.commcalc.calculator import safe_float, safe_int
     row = {
         **base,
-        "begin_date": str(_comp_get(r, "Begin Date", "BeginDate"))[:10] or None,
-        "end_date": str(_comp_get(r, "End Date", "EndDate"))[:10] or None,
+        # Normalised to ISO. The export spells these 'MM/DD/YYYY', and this used to store that
+        # string verbatim and let Postgres coerce it — which only works while DateStyle stays MDY,
+        # and left the value in a different spelling from the ISO day key the sweep now replaces
+        # by. _iso_day falls back to the raw first-10 characters if it meets a shape it doesn't
+        # know, so an unexpected format still reaches the column exactly as it did before.
+        "begin_date": _iso_day(_comp_get(r, "Begin Date", "BeginDate"))
+                      or (str(_comp_get(r, "Begin Date", "BeginDate"))[:10] or None),
+        "end_date": _iso_day(_comp_get(r, "End Date", "EndDate"))
+                    or (str(_comp_get(r, "End Date", "EndDate"))[:10] or None),
         "retailer_account": _comp_get(r, "Retailer Account", "RetailerAccount"),
         "owner_id": _comp_get(r, "OwnerID", "Owner ID"),
         "terminal_id": _comp_get(r, "TerminalID", "Terminal ID"),
@@ -194,13 +219,22 @@ def map_comp_report_row(r, base):
 PAYMENT_DETAIL_REPORT_ID = "50273"
 COMP_REPORT_ID = "100614"
 
-# Comp posts in ARREARS (a closed month's compensation keeps accruing for weeks after month-end),
-# so each sweep refreshes the current month PLUS the most recent closed months. The portal's report
-# defaults its Month filter to the current month, which is why a just-closed month's comp was never
-# auto-swept (the design gap). _set_report_month drives the filter to each target month, and — the
-# key safety — every pull is stored under the period implied by its own rows' Begin Date
-# (period mode "data"), so even if the filter doesn't move, a pull can never be MISLABELED.
-COMP_REFRESH_MONTHS = 3  # current + 2 prior closed months
+# HOW WIDE EACH REPORT REFETCHES is now read from the registry the Connectors page already edits
+# (commcalc.report_definitions), not from a constant here:
+#
+#   refresh_months  month-grain reports (MI). Current month + N-1 prior closed months. MI is a
+#                   month-to-date ACCRUAL, so a month that stops being re-pulled freezes wherever
+#                   it was: June 2026 froze on 06-23 at $83,221 and July on 07-08 at $23,156,
+#                   against a ~$128k/month run rate. The column existed and was set to 3, and
+#                   nothing read it — the refresh was hard-coded and applied to comp only.
+#   refresh_days    day-grain reports (comp). Trailing days including today; 1 = today only.
+#                   The portal accepts a date RANGE and returns every day in it in ONE run
+#                   (2026-07-01..07-31 -> 11,054 rows across 30 days in 12s), so widening this
+#                   costs one report run, not N, and makes a missed night self-heal.
+#
+# These are the DEFAULTS used only when a report has no registry row.
+DEFAULT_REFRESH_MONTHS = 1
+DEFAULT_REFRESH_DAYS = 1
 
 # Partial-collapse guard: a REPLACE never overwrites a period that already holds >= REPLACE_MIN_ROWS
 # rows with a pull smaller than REPLACE_MIN_RETAIN of that count. A glitched/partial pull (e.g. the
@@ -210,21 +244,52 @@ COMP_REFRESH_MONTHS = 3  # current + 2 prior closed months
 REPLACE_MIN_ROWS = 50
 REPLACE_MIN_RETAIN = 0.5
 
-# Report registry: key → how to download + map + store. MI derives its period from the report's
-# "Report Month" column; comp derives it from the data's Begin Date ("data"); payment uses the
-# current month ("current", the portal's default Month filter).
+# Report registry: key → how to download, filter, map and store it.
+#   registry_key  the commcalc.report_definitions.report_key this report is configured by
+#   grain         "month" (refetch N months, one run each) | "day" (refetch a date RANGE in ONE
+#                 run and store per day) | "none" (single default pull)
+#   filter        which portal control the sweep drives: "month" dropdown | "daily_range"
+#                 (Summarize by = Daily + Start/End Date) | None
+#   period        how the stored period is derived: the file's "Report Month" column, the rows'
+#                 own dates ("data"), or the current month
+#   day_key       for grain "day": the mapped column that carries the row's day
+#   empty_ok      a zero-row pull is a legitimate answer, not a failure
 REPORTS = {
     "mi": {"report_id": MI_REPORT_ID, "table": "raw_mi", "file_type": "mi_report",
+           "registry_key": "mi_report", "grain": "month", "filter": "month",
            "period": "report_month", "map": map_mi_records, "label": "MI/ATU"},
     "payment_detail": {"report_id": PAYMENT_DETAIL_REPORT_ID, "table": "raw_payment_detail",
-                       "file_type": "payment_detail", "period": "current", "label": "Commission Payment Detail",
+                       "file_type": "payment_detail", "registry_key": "payment_detail",
+                       "grain": "none", "filter": None,
+                       "period": "current", "label": "Commission Payment Detail",
                        "map": lambda recs, base: _map_filtered(recs, base, map_payment_detail_row)},
     "comp_report": {"report_id": COMP_REPORT_ID, "table": "raw_comp_report",
-                    "file_type": "comp_report", "period": "data", "label": "Comprehensive Comp",
-                    # REPLACE the open month each pull (cumulative MTD snapshot); empty + partial pulls
-                    # are guarded, and the period comes from the rows' Begin Date so it's never mislabeled.
+                    "file_type": "comp_report", "registry_key": "comp_report",
+                    "grain": "day", "filter": "daily_range", "day_key": "begin_date",
+                    "empty_ok": True,
+                    "period": "data", "label": "Comprehensive Comp",
                     "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
 }
+
+
+def _iso_day(v):
+    """'04/15/2026' or '2026-04-15' -> '2026-04-15'. None when unparseable."""
+    s = str(v or "").strip()
+    if len(s) >= 10 and s[2] == "/" and s[5] == "/":
+        try:
+            return f"{int(s[6:10]):04d}-{int(s[0:2]):02d}-{int(s[3:5]):02d}"
+        except ValueError:
+            return None
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return s[:10]
+    return None
+
+
+def _period_of_day(iso):
+    """'2026-04-15' -> ('April 2026', 4, 2026)."""
+    import calendar as _cal
+    y, m = int(iso[0:4]), int(iso[5:7])
+    return f"{_cal.month_name[m]} {y}", m, y
 
 
 def comp_month_spread(records):
@@ -383,14 +448,56 @@ def _set_report_month(page, month_name, year):
     the report is run, so an in-arrears closed month can be pulled instead of just the default
     current month.
 
-    Written BLIND — the portal is only reachable from Railway's egress (WAF), so this cannot be
-    exercised from a dev box. It therefore tries several generic widget patterns and is fully
-    NON-FATAL: if it can't set the month, the report simply runs on its default month, and the
-    caller stores the result under the period implied by the DOWNLOADED DATA (comp_period_from_
-    records) — so a failed month-set wastes a pull but can never mislabel one. Returns True if it
-    believes it changed the filter."""
+    NO LONGER BLIND (2026-08-09). This used to be written against a portal nobody could reach from
+    a dev box, so it guessed at widget patterns. Observed live, the MI report (#102817) carries a
+    jqWidgets dropdown whose labels are spelled "August- 26" / "July- 26" — note the space AFTER the
+    hyphen and the TWO-DIGIT year, which none of the guessed variants match. It only worked at all
+    because the last-resort variant is the bare month name and Playwright's `text=June` is a
+    SUBSTRING match. That is one "June- 25" away from silently selecting the wrong year, on a report
+    that feeds residual income. Step 0 below now selects through the widget's own API, matching the
+    year properly; the old heuristics stay as fallbacks.
+
+    Still NON-FATAL by design: if the month cannot be set, the report runs on its default month and
+    the caller stores the result under the period implied by the DOWNLOADED DATA — a failed
+    month-set wastes a pull but can never mislabel one. (The comp report takes the opposite,
+    fail-loud path — see _set_daily_range — because an unfiltered comp run returns nothing at all.)
+    Returns True if it believes it changed the filter.
+
+    Verified live 2026-08-09: on #102817 this drives the dropdown to 'June- 26'."""
     label = f"{month_name} {year}"
-    variants = [label, f"{month_name}-{year}", f"{month_name} - {year}", month_name]
+    yy = str(year)[-2:]
+    variants = [label, f"{month_name}-{year}", f"{month_name} - {year}",
+                f"{month_name}- {yy}", f"{month_name}-{yy}", f"{month_name} {yy}", month_name]
+    try:
+        # 0) The widget's own API, matching BOTH the month and the year — the portal's real
+        #    spelling is "June- 26", so compare on normalised text rather than an exact literal.
+        picked = page.evaluate(
+            """([month, year, yy]) => {
+                 const $ = window.jQuery || window.$;
+                 if (!$) return null;
+                 const norm = s => String(s||'').toLowerCase().replace(/[^a-z0-9]/g, '');
+                 const want = [norm(month + year), norm(month + yy)];
+                 let hit = null;
+                 document.querySelectorAll('.jqx-dropdownlist-state-normal').forEach(host => {
+                   if (hit) return;
+                   try {
+                     const items = ($(host).jqxDropDownList('getItems') || []);
+                     const m = items.find(it => want.indexOf(norm(it.label)) >= 0);
+                     if (m) {
+                       $(host).jqxDropDownList('selectItem', m.label);
+                       const s = $(host).jqxDropDownList('getSelectedItem');
+                       hit = s ? s.label : m.label;
+                     }
+                   } catch (e) {}
+                 });
+                 return hit;
+               }""",
+            [month_name, str(year), yy])
+        if picked:
+            page.wait_for_timeout(800)
+            return True
+    except Exception:
+        pass
     try:
         # 1) Native <select> month picker — the cleanest case.
         for sel in page.query_selector_all("select"):
@@ -441,18 +548,101 @@ def _set_report_month(page, month_name, year):
     return False
 
 
+# The comp report's real controls, reverse-engineered live 2026-08-09 from the Railway-equivalent
+# egress. jQuery 2.1.3 + jqWidgets are on the page, so the widgets are driven through their own API
+# rather than by typing into a masked input (typing '04/15/2026' into a widget whose formatString is
+# 'M/d/yyyy' produced 12/15/2026 — the mask reinterpreted it).
+_SET_INTERVAL_JS = """
+(want) => {
+  const $ = window.jQuery || window.$;
+  if (!$) return {ok:false, why:'no jQuery'};
+  let hit = null;
+  document.querySelectorAll('.jqx-dropdownlist-state-normal').forEach(host => {
+    if (hit) return;
+    try {
+      const items = ($(host).jqxDropDownList('getItems') || []).map(i => i.label);
+      if (items.indexOf(want) >= 0) {
+        $(host).jqxDropDownList('selectItem', want);
+        const s = $(host).jqxDropDownList('getSelectedItem');
+        hit = {id: host.id, selected: s ? s.label : null};
+      }
+    } catch (e) {}
+  });
+  const h = document.querySelector('input[name="DateIntervalOption"]');
+  return {ok: !!hit, hit, hidden: h ? h.value : null};
+}
+"""
+
+_SET_DATES_JS = """
+([beginIso, endIso]) => {
+  const $ = window.jQuery || window.$;
+  if (!$) return {ok:false, why:'no jQuery'};
+  const put = (name, iso) => {
+    const inp = document.querySelector('input[name="' + name + '"]');
+    const host = inp ? inp.closest('.jqx-datetimeinput') : null;
+    if (!host) return null;
+    const p = iso.split('-').map(Number);
+    // NOON, not midnight: a midnight Date can roll into the previous day under the widget's
+    // own timezone handling and silently fetch the wrong day.
+    $(host).jqxDateTimeInput('setDate', new Date(p[0], p[1]-1, p[2], 12, 0, 0));
+    const got = $(host).jqxDateTimeInput('getDate');
+    return got ? (got.getFullYear() + '-' +
+                  String(got.getMonth()+1).padStart(2,'0') + '-' +
+                  String(got.getDate()).padStart(2,'0')) : null;
+  };
+  const b = put('BeginDate', beginIso), e = put('EndDate', endIso);
+  return {ok: b === beginIso && e === endIso, begin: b, end: e};
+}
+"""
+
+
+def _set_daily_range(page, begin_iso, end_iso):
+    """Drive the comp report to Summarize by = Daily over [begin_iso, end_iso].
+
+    Returns (ok, detail). Unlike _set_report_month this is VERIFIED and its caller treats failure
+    as fatal, because an unfiltered comp run returns an empty workbook that is indistinguishable
+    from a legitimately quiet day — silently reporting "no data posted" when in truth we never set
+    the filter is exactly how this leg stayed broken for eight weeks.
+    """
+    try:
+        iv = page.evaluate(_SET_INTERVAL_JS, "Daily")
+    except Exception as e:
+        return False, f"could not set 'Summarize by' ({type(e).__name__}: {e})"
+    if not iv.get("ok") or (iv.get("hidden") or "") != "Daily":
+        return False, (f"'Summarize by' could not be set to Daily (hidden field = "
+                       f"{iv.get('hidden')!r}); the report returns an empty workbook without it")
+    page.wait_for_timeout(600)
+    try:
+        dr = page.evaluate(_SET_DATES_JS, [begin_iso, end_iso])
+    except Exception as e:
+        return False, f"could not set Start/End Date ({type(e).__name__}: {e})"
+    if not dr.get("ok"):
+        return False, (f"Start/End Date did not take: wanted {begin_iso}..{end_iso}, "
+                       f"widget reads {dr.get('begin')}..{dr.get('end')}")
+    page.wait_for_timeout(400)
+    return True, f"Daily {begin_iso}..{end_iso}"
+
+
 def _open_and_download(page, report_id, dest_path, target=None):
     """Open a Commissions report by its menu id, run it, and save the .xlsx.
 
-    `target` (optional) = a {'month_name','year'} dict; when given, the Month filter is driven to
-    that month before running (best-effort — see _set_report_month). When omitted the report runs
-    on its default (current) month."""
+    `target` (optional) describes which slice to fetch:
+      {'kind': 'month', 'month_name', 'year'}       -> drive the Month dropdown (best-effort)
+      {'kind': 'day_range', 'begin', 'end'}          -> drive Summarize by = Daily + Start/End Date
+                                                        (VERIFIED; a failure raises)
+    When omitted the report runs on its own defaults."""
     page.hover("span.k-link:has-text('Commissions')", timeout=20000)
     page.wait_for_timeout(1500)
     page.wait_for_selector(f'[id="{report_id}"]', state="visible", timeout=20000)
     page.click(f'[id="{report_id}"]')
     page.wait_for_timeout(5000)
-    if target:
+    if target and target.get("kind") == "day_range":
+        # FATAL on failure, deliberately: without the filter this report returns a header-only
+        # workbook, which the caller would otherwise record as "nothing posted that day".
+        ok, detail = _set_daily_range(page, target["begin"], target["end"])
+        if not ok:
+            raise EpayPortalError(f"could not set the report's daily date filter — {detail}")
+    elif target:
         try:
             _set_report_month(page, target["month_name"], target["year"])
         except Exception:
@@ -539,6 +729,127 @@ def _period_row_count(client, table, org_id, period):
         return 0
 
 
+class EpayEmptyReport(EpayPortalError):
+    """The portal ran the report and returned a VALID workbook with zero data rows.
+
+    Split out from EpayPortalError on 2026-08-09 because the old single message —
+    "<report> downloaded but contained no rows" — conflated three completely different situations:
+      (a) the carrier has posted nothing for that slice yet  (normal; comp before ~11:30 PM)
+      (b) we downloaded something we cannot parse as Excel   (broken; an error page, a truncated file)
+      (c) we never actually set the report's required filter (broken; returns empty for every date)
+    (b) now raises EpayPortalError with the file's real shape attached, (c) raises before the
+    download even happens, and (a) is this class — which a report marked empty_ok records as a
+    clean 'no data' rather than a failure.
+    """
+
+
+def _describe_workbook(path):
+    """What we actually downloaded, in words — size, magic bytes, sheets and their dimensions.
+    Attached to every parse failure so the next one is diagnosable without a live re-run."""
+    import os
+    bits = []
+    try:
+        size = os.path.getsize(path)
+        bits.append(f"{size} bytes")
+    except OSError:
+        return "the download could not be read from disk"
+    try:
+        with open(path, "rb") as fh:
+            magic = fh.read(4)
+        if magic[:2] == b"PK":
+            bits.append("looks like a real .xlsx (PK zip header)")
+        elif magic[:1] == b"<":
+            bits.append("looks like HTML — the portal probably served an error/login page")
+        else:
+            bits.append(f"unrecognised leading bytes {magic!r}")
+    except OSError:
+        pass
+    try:
+        import pandas as pd
+        book = pd.read_excel(path, sheet_name=None, header=None, dtype=str)
+        bits.append("sheets: " + ", ".join(f"{n!r} {d.shape[0]}x{d.shape[1]}"
+                                           for n, d in book.items()))
+    except Exception as e:
+        bits.append(f"pandas could not open it: {type(e).__name__}: {e}")
+    return "; ".join(bits)
+
+
+def _read_report_records(xlsx_path, label):
+    """Parse a downloaded report into records, distinguishing 'unparseable' from 'legitimately
+    empty'. Returns (records, columns). Raises EpayPortalError for (b), EpayEmptyReport for (a)."""
+    import pandas as pd
+    try:
+        df = pd.read_excel(xlsx_path, dtype=str).fillna("")
+    except Exception as e:
+        raise EpayPortalError(
+            f"{label}: downloaded a file we could NOT PARSE as Excel "
+            f"({type(e).__name__}: {e}). What arrived: {_describe_workbook(xlsx_path)}") from e
+    records = df.to_dict("records")
+    if not records:
+        raise EpayEmptyReport(
+            f"{label}: the portal returned an EMPTY report — the workbook parsed fine and has the "
+            f"expected header ({', '.join(str(c) for c in list(df.columns)[:8])}"
+            f"{'…' if len(df.columns) > 8 else ''}) but zero data rows. "
+            f"What arrived: {_describe_workbook(xlsx_path)}")
+    return records, [str(c) for c in df.columns]
+
+
+def _store_day_grain(client, org_id, spec, key, records, target):
+    """Comp: store a pull DAY BY DAY, each day replacing only its own begin_date.
+
+    Why not by month: the pull is now a date range (often a single day), so replacing the month
+    would delete every other day in it. Each day is independent and idempotent, the month label
+    comes from the day itself, and a day the portal did not return is LEFT ALONE rather than
+    treated as deleted — we cannot tell "nothing posted" from "not included" and the safe reading
+    of an absent day is that we simply do not have news about it."""
+    day_key = spec["day_key"]
+    by_day = {}
+    for r in records:
+        iso = _iso_day(_comp_get(r, "Begin Date", "BeginDate"))
+        if iso:
+            by_day.setdefault(iso, []).append(r)
+    if not by_day:
+        raise EpayPortalError(
+            f"{spec['label']}: {len(records)} row(s) came back but not one carried a usable "
+            f"Begin Date, so they cannot be filed against a day. Columns seen: "
+            f"{', '.join(sorted(records[0].keys()))[:300]}")
+
+    from app.modules.commcalc.safe_replace import safe_replace as _safe_replace
+    days, saved_total, skipped = [], 0, []
+    for iso in sorted(by_day):
+        period, pm, py = _period_of_day(iso)
+        base = {"org_id": org_id, "period": period, "period_month": pm, "period_year": py}
+        rows = spec["map"](by_day[iso], base)
+        if not rows:
+            continue
+        # Same partial-collapse guard as the month path, applied per DAY.
+        existing = _day_row_count(client, spec["table"], org_id, day_key, iso)
+        if existing >= REPLACE_MIN_ROWS and len(rows) < existing * REPLACE_MIN_RETAIN:
+            skipped.append({"day": iso, "existing": existing, "pulled": len(rows)})
+            continue
+        res = _safe_replace(client, spec["table"], rows,
+                            lambda q, _k=day_key, _v=iso: q.eq("org_id", org_id).eq(_k, _v),
+                            label=f"{key} {iso}")
+        saved_total += res["saved"]
+        days.append({"day": iso, "rows": res["saved"], "prior": res["prior"],
+                     "warning": res.get("warning")})
+    out = {"report": key, "label": spec["label"], "grain": "day",
+           "period": ", ".join(sorted({_period_of_day(d)[0] for d in by_day})),
+           "days": days, "rows": saved_total, "mode": "replace_by_day"}
+    if skipped:
+        out["skipped_guard"] = skipped
+    return out
+
+
+def _day_row_count(client, table, org_id, day_key, iso):
+    try:
+        resp = (client.schema("commcalc").table(table).select("org_id", count="exact")
+                .eq("org_id", org_id).eq(day_key, iso).limit(1).execute())
+        return resp.count or 0
+    except Exception:
+        return 0
+
+
 def _process_report(client, org_id, page, key, xlsx_path, target=None):
     """Download one report by key, parse, derive its period, and store it. Every report REPLACES its
     period (delete that period + insert the fresh pull). For comp the period comes from the rows'
@@ -549,13 +860,22 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None):
     filter to (comp multi-month refresh). Two guards keep a populated period safe: an EMPTY download
     raises before any write, and the PARTIAL-COLLAPSE guard refuses to overwrite a period that holds
     >= REPLACE_MIN_ROWS rows with a pull < REPLACE_MIN_RETAIN of that count."""
-    import pandas as pd
     spec = REPORTS[key]
     _open_and_download(page, spec["report_id"], xlsx_path, target=target)
-    df = pd.read_excel(xlsx_path, dtype=str).fillna("")
-    records = df.to_dict("records")
-    if not records:
-        raise EpayPortalError(f"{spec['label']} report downloaded but contained no rows.")
+    try:
+        records, _cols = _read_report_records(xlsx_path, spec["label"])
+    except EpayEmptyReport as empty:
+        # A report that is ALLOWED to come back empty (comp: the carrier posts late in the evening,
+        # and some days genuinely have nothing) records the attempt cleanly and touches no data.
+        if spec.get("empty_ok"):
+            win = (f"{target['begin']}..{target['end']}"
+                   if target and target.get("kind") == "day_range" else "default window")
+            return {"report": key, "label": spec["label"], "rows": 0, "mode": "no_data",
+                    "window": win, "period": None,
+                    "note": f"no compensation posted for {win} — nothing to store (not an error)"}
+        raise
+    if spec.get("grain") == "day":
+        return _store_day_grain(client, org_id, spec, key, records, target)
     mode = spec["period"]
     if mode == "report_month":
         report_month = ""
@@ -571,7 +891,7 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None):
         derived = comp_period_from_records(records)
         if derived:
             period, pm, py = derived
-        elif target:
+        elif target and target.get("period"):
             period, pm, py = target["period"], target["month"], target["year"]
         else:
             period, pm, py = _period_now()
@@ -628,21 +948,46 @@ def _recent_months(n):
     return out
 
 
-def _expand_jobs(keys):
-    """Expand report keys into (key, target) jobs. comp_report fans out across the current month +
-    the most recent closed months (so in-arrears comp lands automatically); every other report is a
-    single current-month pull (target=None)."""
+def _recent_days(n, today=None):
+    """The last `n` days ending today (UTC), oldest first, as ISO strings."""
+    from datetime import date as _date
+    end = today or datetime.now(timezone.utc).date()
+    n = max(1, int(n or 1))
+    return [(end - timedelta(days=i)).isoformat() for i in range(n - 1, -1, -1)]
+
+
+def _expand_jobs(keys, report_cfg=None):
+    """Expand report keys into (key, target) jobs, driven by commcalc.report_definitions.
+
+    MONTH-grain (MI): one job per month, current + refresh_months-1 prior closed months. This is
+    the setting that existed in the database and was never read — MI only ever pulled the current
+    month, so every closed month froze mid-accrual.
+
+    DAY-grain (comp): ONE job covering the trailing refresh_days window, because the portal returns
+    every day in a date range in a single run. Storage then splits it per day.
+
+    Anything else: a single default pull.
+    """
+    cfg = report_cfg or {}
     jobs = []
     for k in keys:
-        if k == "comp_report":
-            for tm in _recent_months(COMP_REFRESH_MONTHS):
-                jobs.append((k, tm))
+        spec = REPORTS.get(k) or {}
+        rc = cfg.get(spec.get("registry_key") or k) or {}
+        grain = spec.get("grain")
+        if grain == "month":
+            n = int(rc.get("refresh_months") or DEFAULT_REFRESH_MONTHS)
+            for tm in _recent_months(n):
+                jobs.append((k, {**tm, "kind": "month"}))
+        elif grain == "day":
+            days = _recent_days(rc.get("refresh_days") or DEFAULT_REFRESH_DAYS)
+            jobs.append((k, {"kind": "day_range", "begin": days[0], "end": days[-1],
+                             "days": days, "period": None}))
         else:
             jobs.append((k, None))
     return jobs
 
 
-def run_epay_sweep(client, org_id, url, user, pw, reports=None):
+def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None):
     """Launch headless Chromium, log into the epay Owner Portal ONCE, and download + ingest each
     requested report. `reports` = list of REPORTS keys; defaults to ['mi'] for back-compat (MI/ATU
     only). MI/payment pull the current month; comp pulls the current month + COMP_REFRESH_MONTHS-1
@@ -673,7 +1018,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None):
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
             _login(page, user, pw)
-            jobs = _expand_jobs(keys)
+            jobs = _expand_jobs(keys, report_cfg)
             for idx, (key, target) in enumerate(jobs):
                 if idx > 0:
                     # Reload to a clean app shell between every report run so each opens on a fresh
@@ -688,7 +1033,13 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None):
                         pass
                 tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
                 tmp.close()
-                tgt = f" [{target['period']}]" if target else ""
+                tgt = ""
+                if target and target.get("kind") == "day_range":
+                    tgt = (f" [{target['begin']}]" if target["begin"] == target["end"]
+                           else f" [{target['begin']}..{target['end']}]")
+                elif target and target.get("period"):
+                    tgt = f" [{target['period']}]"
+
                 try:
                     results.append(_process_report(client, org_id, page, key, tmp.name, target=target))
                 except Exception as e:
@@ -703,6 +1054,8 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None):
 
     if not results and errors:
         raise EpayPortalError("; ".join(errors))
+    # A day-grain report that legitimately had nothing posted returns mode='no_data'; that is a
+    # completed pull, not a partial run, and must not flag the connector as degraded.
     summary = {"reports": results}
     if errors:
         summary["errors"] = errors

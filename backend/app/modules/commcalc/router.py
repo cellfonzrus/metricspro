@@ -2662,8 +2662,12 @@ def _vip_cfg(client, org_id):
     return rows[0] if rows else None
 
 
-def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname):
-    """Next run (UTC ISO) after now, in `tzname`. day_of_week 0=Mon..6=Sun."""
+def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname, minute=0):
+    """Next run (UTC ISO) after now, in `tzname`. day_of_week 0=Mon..6=Sun.
+
+    `minute` (added 2026-08-09, default 0 so every existing caller is unchanged) exists because a
+    per-report slot needs a real time, not just an hour: Comprehensive Comp is pulled at 23:30
+    because the carrier posts the day's compensation late in the evening."""
     from zoneinfo import ZoneInfo
     import calendar as _c
     try:
@@ -2672,12 +2676,13 @@ def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname):
         tz = ZoneInfo('America/New_York')
     now = _datetime.now(tz)
     hour = int(hour if hour is not None else 6)
+    minute = min(59, max(0, int(minute or 0)))
     if frequency == 'hourly':
         # Intra-day feed (e.g. the daily-transaction report pulled every hour for live targets).
         # `hour` is ignored; the next run is simply the top of the next hour.
-        nxt = now.replace(minute=0, second=0, microsecond=0) + _timedelta(hours=1)
+        nxt = now.replace(minute=minute, second=0, microsecond=0) + _timedelta(hours=1)
     elif frequency == 'daily':
-        nxt = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        nxt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if nxt <= now:
             nxt += _timedelta(days=1)
     elif frequency == 'monthly':
@@ -2685,14 +2690,14 @@ def _vip_next_run(frequency, day_of_week, day_of_month, hour, tzname):
 
         def at(y, m):
             d = min(dom, _c.monthrange(y, m)[1])
-            return now.replace(year=y, month=m, day=d, hour=hour, minute=0, second=0, microsecond=0)
+            return now.replace(year=y, month=m, day=d, hour=hour, minute=minute, second=0, microsecond=0)
         nxt = at(now.year, now.month)
         if nxt <= now:
             ny, nm = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
             nxt = at(ny, nm)
     else:  # weekly (default)
         target = int(day_of_week if day_of_week is not None else 0)
-        nxt = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+        nxt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         nxt += _timedelta(days=(target - nxt.weekday()) % 7)
         if nxt <= now:
             nxt += _timedelta(days=7)
@@ -2846,6 +2851,88 @@ def _registry_auto_map(client, org_id):
         return {r['report_key']: bool(r['auto']) for r in rows if r.get('report_key')}
     except Exception:
         return {}
+
+
+# Columns the sweep reads per report. Kept as a literal list so a pre-290 database (which lacks the
+# schedule columns) can be detected and degraded gracefully rather than 400-ing the whole sweep.
+_REGISTRY_SWEEP_COLS = ('report_key,auto,refresh_months,refresh_days,'
+                        'sweep_hour,sweep_minute,sweep_timezone,sweep_next_run_at')
+
+
+def _registry_report_cfg(client, org_id):
+    """Per-report sweep configuration from commcalc.report_definitions, keyed by report_key.
+
+    This is the SAP-configurable half of two live defects: `refresh_months` had been a column on
+    this table (set to 3 for mi_report) that NOTHING READ — the multi-month refresh was a Python
+    constant applied to the comp leg only, so MI never re-pulled a closed month and every one of
+    them froze mid-accrual. `sweep_hour` (migration 290) is the same idea for time: the connector
+    has ONE hour for all three reports, but Comprehensive Comp must run at 23:30 because the
+    carrier posts the day's compensation late in the evening.
+
+    Degrades to {} — i.e. the built-in defaults — if migration 290 has not been applied."""
+    try:
+        rows = (client.schema('commcalc').table('report_definitions')
+                .select(_REGISTRY_SWEEP_COLS).eq('org_id', org_id).execute().data) or []
+    except Exception as e:
+        # pre-290: the schedule columns don't exist yet. Fall back to the columns that do.
+        print(f'WARN report_definitions sweep columns unavailable (run migration 290?): {e}')
+        try:
+            rows = (client.schema('commcalc').table('report_definitions')
+                    .select('report_key,auto,refresh_months').eq('org_id', org_id).execute().data) or []
+        except Exception:
+            return {}
+    return {r['report_key']: r for r in rows if r.get('report_key')}
+
+
+def _epay_sub_schedule(client, org_id, now_iso):
+    """Split the ePay reports into (due_on_their_own_slot, riding_the_connector_slot).
+
+    Migration 290 lets a single report own a time: `report_definitions.sweep_hour/sweep_minute`.
+    Comprehensive Comp needs 23:30 because the carrier posts the day's compensation late in the
+    evening — pulling it on the connector's 06:00 slot returned an empty workbook every time and
+    was logged as a failure for eight weeks. MI and payment detail stay on 06:00 untouched.
+
+    Reports whose own slot has come round are returned in the first list AND have their
+    `sweep_next_run_at` advanced here, so a caller that fires hourly does not re-run them. Reports
+    with no slot of their own are returned in the second list for the caller to run when the
+    CONNECTOR is due. Degrades to ([], all reports) if migration 290 is not applied, which is
+    exactly today's behaviour."""
+    all_keys = list(_EPAY_REGISTRY_KEYS)
+    try:
+        defs = (client.schema('commcalc').table('report_definitions')
+                .select('id,report_key,auto,sweep_hour,sweep_minute,sweep_timezone,sweep_next_run_at')
+                .eq('org_id', org_id).execute().data) or []
+    except Exception as e:
+        print(f'WARN per-report schedule unavailable (run migration 290?): {e}')
+        return [], all_keys
+    by_report = {d.get('report_key'): d for d in defs}
+    tzname = None
+    try:
+        _c = _epay_cfg(client, org_id) or {}
+        tzname = _c.get('timezone')
+    except Exception:
+        pass
+    due, shared = [], []
+    for key, rkey in _EPAY_REGISTRY_KEYS.items():
+        d = by_report.get(rkey)
+        if not d or d.get('sweep_hour') is None:
+            shared.append(key)          # no slot of its own -> rides the connector
+            continue
+        if not d.get('auto'):
+            continue                    # switched off in the registry
+        nra = d.get('sweep_next_run_at')
+        if nra and nra > now_iso:
+            continue                    # its slot has not come round yet
+        nxt = _vip_next_run('daily', None, None, d.get('sweep_hour'),
+                            d.get('sweep_timezone') or tzname,
+                            minute=int(d.get('sweep_minute') or 0))
+        try:
+            client.schema('commcalc').table('report_definitions').update(
+                {'sweep_next_run_at': nxt, 'sweep_last_run_at': now_iso}).eq('id', d['id']).execute()
+        except Exception as e:
+            print(f'WARN could not advance {rkey} slot: {e}')
+        due.append(key)
+    return due, shared
 
 
 def _do_vip_sweep(org_id):
@@ -6583,7 +6670,29 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
         if not cf.get('enabled'):
             continue
         nra = cf.get('next_run_at')
-        if nra and nra > now_iso:
+        connector_due = not nra or nra <= now_iso
+
+        # ePay is the one connector whose reports can each own a schedule slot (migration 290):
+        # Comprehensive Comp runs at 23:30 while MI and payment detail stay on the connector's
+        # 06:00. Every other connector keeps the single-schedule behaviour unchanged.
+        if kind == 'epay':
+            slot_due, shared = _epay_sub_schedule(client, oid, now_iso)
+            run_now = list(slot_due) + (list(shared) if connector_due else [])
+            if not run_now:
+                continue
+            if connector_due:
+                nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
+                                    cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
+                try:
+                    client.schema('commcalc').table(tbl).update(
+                        {'next_run_at': nxt}).eq('org_id', oid).execute()
+                except Exception:
+                    pass
+            background_tasks.add_task(dispatch[kind], oid, run_now)
+            triggered.append(f"{c.get('vendor_name')} ({', '.join(run_now)})")
+            continue
+
+        if not connector_due:
             continue
         nxt = _vip_next_run(cf.get('frequency') or 'daily', cf.get('day_of_week'),
                             cf.get('day_of_month'), cf.get('hour'), cf.get('timezone'))
@@ -8179,6 +8288,10 @@ async def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: 
 # ── epay Owner Portal MI+ATU auto-sweep (#5b — headless Playwright; WAF-protected SPA) ──
 # Same admin/schedule pattern as the DLAR sweep, but the connector drives headless Chromium
 # (see epay_sweep.py). Creds live in the backend-only table commcalc.epay_sweep_config.
+# epay_sweep report key -> commcalc.report_definitions.report_key
+_EPAY_REGISTRY_KEYS = {'mi': 'mi_report', 'comp_report': 'comp_report',
+                       'payment_detail': 'payment_detail'}
+
 _EPAY_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
                       'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
                       'portal_url': epay_sweep.DEFAULT_URL,
@@ -8214,8 +8327,13 @@ def _epay_set_status(client, org_id, status, detail, mark_run=False, success=Non
     _sweep_set_status(client, 'epay_sweep_config', org_id, status, detail, mark_run, success)
 
 
-def _do_epay_sweep(org_id):
-    """Background worker: read creds, run the epay sweep, record status (no secrets)."""
+def _do_epay_sweep(org_id, only=None):
+    """Background worker: read creds, run the epay sweep, record status (no secrets).
+
+    `only` = an optional list of epay_sweep report keys to run this time. The scheduler uses it so
+    a report with its own slot (Comprehensive Comp at 23:30) runs without dragging MI and payment
+    detail off their 06:00 slot — the connector has a single `hour` column and all three used to
+    ride it."""
     client = sb()
     cfg = _epay_cfg(client, org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
@@ -8224,7 +8342,8 @@ def _do_epay_sweep(org_id):
     _epay_set_status(client, org_id, 'running', 'Sweep in progress…')
     # which reports to pull — driven by the registry (report_definitions.auto), falling back to the
     # config toggle per report. registry 'mi_report' maps to the epay_sweep key 'mi'.
-    amap = _registry_auto_map(client, org_id)
+    rcfg = _registry_report_cfg(client, org_id)
+    amap = {k: bool(v.get('auto')) for k, v in rcfg.items()}
     def _en(key, fb):
         return amap[key] if key in amap else fb
     reports = []
@@ -8234,9 +8353,15 @@ def _do_epay_sweep(org_id):
         reports.append('comp_report')
     if _en('payment_detail', bool(cfg.get('sweep_payment'))):
         reports.append('payment_detail')
+    if only:
+        reports = [r for r in reports if r in set(only)]
+        if not reports:
+            _epay_set_status(client, org_id, 'ok', f'Nothing due to pull ({", ".join(only)})')
+            return
     try:
         res = epay_sweep.run_epay_sweep(client, org_id, cfg.get('portal_url'),
-                                        cfg['portal_user'], cfg['portal_pass'], reports=reports)
+                                        cfg['portal_user'], cfg['portal_pass'], reports=reports,
+                                        report_cfg=rcfg)
         # run_epay_sweep raises only when EVERY report failed; a mixed run returns res['errors'].
         # That used to be reported as a flat 'ok' (the failed report looked imported) — call it 'partial'
         # so the connectors page and the attention feed can tell the operator WHICH report is missing.
@@ -8341,16 +8466,26 @@ async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret:
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = client.schema('commcalc').table('epay_sweep_config').select('*') \
-        .eq('enabled', True).lte('next_run_at', now_iso).execute().data or []
-    for cfg in due:
+    triggered = 0
+    # Same rule as connectors/run-due (the entrypoint pg_cron actually calls): a report with its
+    # own slot runs when THAT slot comes round; everything else rides the connector's schedule.
+    for cfg in (client.schema('commcalc').table('epay_sweep_config').select('*')
+                .eq('enabled', True).execute().data or []):
         oid = cfg.get('org_id') or ORG_ID
-        nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
-                            cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
-        client.schema('commcalc').table('epay_sweep_config').update(
-            {'next_run_at': nxt}).eq('org_id', oid).execute()
-        background_tasks.add_task(_do_epay_sweep, oid)
-    return {"triggered": len(due)}
+        nra = cfg.get('next_run_at')
+        connector_due = not nra or nra <= now_iso
+        slot_due, shared = _epay_sub_schedule(client, oid, now_iso)
+        run_now = list(slot_due) + (list(shared) if connector_due else [])
+        if not run_now:
+            continue
+        if connector_due:
+            nxt = _vip_next_run(cfg.get('frequency') or 'daily', cfg.get('day_of_week'),
+                                cfg.get('day_of_month'), cfg.get('hour'), cfg.get('timezone'))
+            client.schema('commcalc').table('epay_sweep_config').update(
+                {'next_run_at': nxt}).eq('org_id', oid).execute()
+        background_tasks.add_task(_do_epay_sweep, oid, run_now)
+        triggered += 1
+    return {"triggered": triggered}
 
 
 # ── RECOMPUTE SINGLE-FLIGHT GUARD (mig 275) ───────────────────
