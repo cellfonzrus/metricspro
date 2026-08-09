@@ -932,11 +932,10 @@ def _require_hr_or_admin(authorization: str):
         if _rbac_enforced():
             raise HTTPException(401, "Sign in as HR or an admin to view sensitive information.")
         return (ORG_ID, "(open-app)", "open")
-    rows = (get_supabase().schema("storeops").table("app_users")
-            .select("org_id,email,role,super_admin").eq("auth_id", uid).limit(1).execute().data) or []
-    if not rows:
-        raise HTTPException(403, "Your login isn't recognized.")
-    u = rows[0]
+    from app.core.tenant_middleware import caller_app_user_http
+    u = caller_app_user_http(uid)
+    if not u:
+        raise HTTPException(403, "Your login isn't recognized for the company you are working in.")
     role = (u.get("role") or "").lower()
     ok = bool(u.get("super_admin")) or role in ("admin",) or "hr" in role
     if not ok:
@@ -1123,11 +1122,10 @@ def _require_admin_reveal(authorization: str):
         if _rbac_enforced():
             raise HTTPException(401, "Sign in as an admin to reveal full sensitive values.")
         return (ORG_ID, "(open-app)", "open")
-    rows = (get_supabase().schema("storeops").table("app_users")
-            .select("org_id,email,role,super_admin").eq("auth_id", uid).limit(1).execute().data) or []
-    if not rows:
-        raise HTTPException(403, "Your login isn't recognized.")
-    u = rows[0]
+    from app.core.tenant_middleware import caller_app_user_http
+    u = caller_app_user_http(uid)
+    if not u:
+        raise HTTPException(403, "Your login isn't recognized for the company you are working in.")
     role = (u.get("role") or "").lower()
     if not (bool(u.get("super_admin")) or role == "admin"):
         raise HTTPException(403, "Only admins/super-admins can reveal full sensitive values (SSN, direct-deposit numbers).")
@@ -2455,11 +2453,11 @@ def _me_from_token(authorization):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
-    rows = (get_supabase().schema("storeops").table("app_users")
-            .select("org_id,employee_id,email,full_name,role").eq("auth_id", uid).limit(1).execute().data) or []
-    if not rows or not rows[0].get("employee_id"):
+    from app.core.tenant_middleware import caller_app_user_http
+    row = caller_app_user_http(uid, "org_id,employee_id,email,full_name,role")
+    if not row or not row.get("employee_id"):
         raise HTTPException(403, "no employee record is linked to this login")
-    return rows[0]
+    return row
 
 
 def _onboarding_bundle(org_id, employee_id):

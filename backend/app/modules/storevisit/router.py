@@ -92,11 +92,10 @@ def _caller_perms(authorization: str) -> dict:
         if not uid:
             return {}
         c = sb()   # already schema("storeops")
-        rows = (c.table("app_users").select("org_id,role,super_admin")
-                .eq("auth_id", uid).limit(1).execute().data) or []
-        if not rows:
+        from app.core.tenant_middleware import caller_app_user
+        u = caller_app_user(uid, "org_id,role,super_admin")
+        if not u:
             return {}
-        u = rows[0]
         perms = {}
         if u.get("role"):
             rr = (c.table("roles").select("permissions")

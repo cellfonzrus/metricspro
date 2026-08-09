@@ -87,6 +87,7 @@ row, not by the target's 2FA.
 import os
 import time
 import asyncio
+import contextvars
 from urllib.parse import parse_qs, urlencode
 
 # Exact full paths that are public (matched literally, no prefix semantics).
@@ -507,6 +508,90 @@ def _pick_active_org(member_orgs, default_org, requested):
     return default_org
 
 
+# ── ACTING TENANT, PUBLISHED TO THE HANDLERS (2026-08-09 cross-tenant fix) ──────────────────────
+# The middleware already resolves WHICH tenant a request acts as, but it only ever expressed that by
+# rewriting the `org_id` QUERY PARAM. An endpoint that takes no org_id param therefore could not see
+# the answer, and several token-gated endpoints re-derived the tenant themselves with
+#
+#     .table("app_users").select(...).eq("auth_id", uid).limit(1)
+#
+# — no ORDER BY, no tenant preference, and the org read OUT of whichever row came back. For the 4 of
+# 96 logins that belong to more than one tenant that is a coin toss, and it leaked: a NON-super-admin
+# member of three orgs, acting as one, was served another's full employee roster (and the same gate
+# gates the decrypted SSN / bank reveal). These contextvars publish the already-validated answer so a
+# handler never has to guess. Set once per request, on every authenticated path.
+_ACTING_ORG: contextvars.ContextVar = contextvars.ContextVar("mp_acting_org", default=None)
+_ACTING_SUPER_ADMIN: contextvars.ContextVar = contextvars.ContextVar("mp_acting_super_admin", default=False)
+
+
+class TenantChoiceRequired(Exception):
+    """The login belongs to several tenants and did not name a valid one — refuse, never guess.
+    Mirrors `_tenant_is_ambiguous`, for handlers the middleware's own rejection cannot cover."""
+
+
+def _set_acting(org, super_admin=False):
+    _ACTING_ORG.set(org or None)
+    _ACTING_SUPER_ADMIN.set(bool(super_admin))
+
+
+def acting_org():
+    """The tenant THIS request acts as, as already validated by the middleware (None when unknown —
+    an unauthenticated/public/enforcement-off request)."""
+    return _ACTING_ORG.get()
+
+
+def caller_app_user(uid: str, columns: str = "org_id,email,role,super_admin"):
+    """The caller's storeops.app_users row FOR THE TENANT THIS REQUEST ACTS AS.
+
+    Replaces the unsafe `.eq("auth_id", uid).limit(1)` shape everywhere the org came OUT of the row.
+    Here the tenant is an INPUT — taken from the middleware's validated resolution — so a login that
+    belongs to several tenants can only ever be handed the one it is actually acting as.
+
+      • acting tenant known  → the row for (auth_id, that org). No row ⇒ None ⇒ the caller 403s,
+        EXCEPT for a super-admin, whose cross-tenant administration is intentional
+        (see the `super_admin` branch in the dispatcher): they get their own row with org_id pinned
+        to the tenant they are administering.
+      • acting tenant unknown (enforcement off / no token) → exactly one membership is unambiguous
+        and is returned; several memberships raise TenantChoiceRequired rather than picking one.
+
+    Returns a dict or None. Blocking (PostgREST) — call it from a sync handler, as all callers do."""
+    from app.core.database import get_supabase
+    tbl = get_supabase().schema("storeops").table("app_users")
+    acting = _ACTING_ORG.get()
+    if acting:
+        rows = (tbl.select(columns).eq("auth_id", uid)
+                .eq("org_id", acting).limit(1).execute().data) or []
+        if rows:
+            return rows[0]
+        if not _ACTING_SUPER_ADMIN.get():
+            return None
+        own = (tbl.select(columns).eq("auth_id", uid)
+               .order("org_id").limit(1).execute().data) or []
+        if not own:
+            return None
+        row = dict(own[0])
+        if "org_id" in row:
+            row["org_id"] = acting      # a super-admin acts on the tenant they chose
+        return row
+    rows = (tbl.select(columns).eq("auth_id", uid).order("org_id").execute().data) or []
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise TenantChoiceRequired()
+    return rows[0]
+
+
+def caller_app_user_http(uid: str, columns: str = "org_id,email,role,super_admin"):
+    """`caller_app_user` for FastAPI handlers: an ambiguous tenant becomes a 409 telling the caller
+    to choose, never a silent guess. Returns the row, or None so the caller can 403 in its own words."""
+    from fastapi import HTTPException
+    try:
+        return caller_app_user(uid, columns)
+    except TenantChoiceRequired:
+        raise HTTPException(409, "Your login belongs to more than one company. "
+                                 "Choose which one you are working in, then try again.")
+
+
 def _tenant_is_ambiguous(member_orgs, requested, default_org) -> bool:
     """PURE. Is the acting tenant a GUESS rather than a choice?
 
@@ -638,6 +723,11 @@ class TenantScopeMiddleware:
         if _imp.is_forbidden_while_impersonating(path, method):
             return await _reject_impersonation_forbidden(send, path)
         org = ctx["org_id"]
+        # The grant pins the tenant; an impersonated request is never the actor's to redirect. The
+        # ACTOR's own super-admin standing is carried through unchanged, so pinning the tenant here
+        # cannot newly 403 an admin who was already allowed in — privilege reduction while
+        # impersonating stays the job of `is_forbidden_while_impersonating`, above, not of this line.
+        _set_acting(org, super_admin=bool(_sa))
         # PIN the tenant on BOTH channels. Note the deliberate omission: the super-admin
         # "no rewrite, client org_id is honored" bypass is NOT taken here.
         qs = parse_qs(scope.get("query_string", b"").decode(), keep_blank_values=True)
@@ -718,6 +808,9 @@ class TenantScopeMiddleware:
             return await self.app(scope, receive, send)
         if super_admin:
             # Super-admin ⇒ no rewrite; the client-supplied org_id is honored (cross-tenant admin).
+            # Publish the tenant they declared so a token-gated handler administers THAT tenant
+            # instead of silently falling back to whichever membership row sorted first.
+            _set_acting((headers.get(_ACTIVE_ORG_HEADER, "") or "").strip() or None, super_admin=True)
             return await self.app(scope, receive, send)
         if not member_orgs:
             # H2 (2026-08-05): the token VERIFIED but the login has NO tenant membership (no app_users
@@ -740,6 +833,7 @@ class TenantScopeMiddleware:
         if _ambiguous_tenant_strict() and _tenant_is_ambiguous(member_orgs, requested, default_org):
             return await _reject_tenant_choice(send)
         org = _pick_active_org(member_orgs, default_org, requested)
+        _set_acting(org, super_admin=False)
         # 2FA gate (auth-hardening) — ADDITIVE, super-admins already returned above. Enforced only when
         # the global break-glass TWOFA_ENFORCE is on (default) AND the active tenant requires 2FA for
         # this user AND a valid x-2fa-token is absent. The OTP start/verify endpoints live under the

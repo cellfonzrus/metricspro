@@ -729,9 +729,8 @@ def _who_for_log(authorization, org_id=ORG_ID):
         uid = _uid_from_token(authorization)
         if not uid:
             return {}
-        rows = (sb().table("app_users").select("org_id,email,role,employee_id")
-                .eq("auth_id", uid).limit(1).execute().data) or []
-        return rows[0] if rows else {}
+        from app.core.tenant_middleware import caller_app_user
+        return caller_app_user(uid, "org_id,email,role,employee_id") or {}
     except Exception:
         return {}
 
@@ -2468,11 +2467,10 @@ def _require_manager(authorization, org_id=ORG_ID):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "A manager must sign in to approve this override.")
-    rows = (sb().table("app_users").select("org_id,email,role,employee_id")
-            .eq("auth_id", uid).limit(1).execute().data) or []
-    if not rows:
-        raise HTTPException(403, "That login isn't recognized.")
-    u = rows[0]
+    from app.core.tenant_middleware import caller_app_user_http
+    u = caller_app_user_http(uid, "org_id,email,role,employee_id")
+    if not u:
+        raise HTTPException(403, "That login isn't recognized for the company you are working in.")
     org_id = (u.get("org_id") or "").strip() or org_id
     role = (u.get("role") or "").lower()
     MGR_ROLES = {"admin", "market_manager", "store_manager", "district_manager",
@@ -2543,9 +2541,8 @@ def _caller_identity(authorization: str):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "Sign in to use the time clock.")
-    rows = (sb().table("app_users").select("org_id,employee_id")
-            .eq("auth_id", uid).limit(1).execute().data) or []
-    row = rows[0] if rows else {}
+    from app.core.tenant_middleware import caller_app_user_http
+    row = caller_app_user_http(uid, "org_id,employee_id") or {}
     org = (row.get("org_id") or "").strip() or ORG_ID
     eid = ((row.get("employee_id") or "")).strip()
     if not eid:

@@ -182,11 +182,10 @@ def _require_hr_or_admin(authorization: str):
         if _rbac_enforced():
             raise HTTPException(401, "Sign in as HR or an admin to manage HR letters.")
         return (ORG_ID, "(open-app)", "open")
-    rows = (_so().table("app_users").select("org_id,email,role,super_admin")
-            .eq("auth_id", uid).limit(1).execute().data) or []
-    if not rows:
-        raise HTTPException(403, "Your login isn't recognized.")
-    u = rows[0]
+    from app.core.tenant_middleware import caller_app_user_http
+    u = caller_app_user_http(uid)
+    if not u:
+        raise HTTPException(403, "Your login isn't recognized for the company you are working in.")
     role = (u.get("role") or "").lower()
     ok = bool(u.get("super_admin")) or role == "admin" or "hr" in role
     if not ok:

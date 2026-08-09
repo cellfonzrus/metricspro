@@ -2496,7 +2496,7 @@ def _resolve_invite(client, inv, status, auth_id):
 def _email_for_uid(client, uid):
     """The authenticated login's own email — from its app_users row, else the Supabase auth account."""
     rows = (client.schema("storeops").table("app_users").select("email")
-            .eq("auth_id", uid).limit(1).execute().data) or []
+            .eq("auth_id", uid).order("email").limit(1).execute().data) or []
     if rows and rows[0].get("email"):
         return (rows[0]["email"] or "").strip().lower()
     try:

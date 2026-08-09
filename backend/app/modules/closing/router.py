@@ -4875,11 +4875,10 @@ def _caller_perms(client, authorization: str) -> dict:
         uid = _uid_from_token(authorization)
         if not uid:
             return {}
-        rows = (client.schema("storeops").table("app_users").select("org_id,role,super_admin")
-                .eq("auth_id", uid).limit(1).execute().data) or []
-        if not rows:
+        from app.core.tenant_middleware import caller_app_user
+        u = caller_app_user(uid, "org_id,role,super_admin")
+        if not u:
             return {}
-        u = rows[0]
         perms = {}
         if u.get("role"):
             rr = (client.schema("storeops").table("roles").select("permissions")
@@ -4925,7 +4924,7 @@ def _caller_email(client, authorization: str) -> str | None:
         if not uid:
             return None
         rows = (client.schema("storeops").table("app_users").select("email")
-                .eq("auth_id", uid).limit(1).execute().data) or []
+                .eq("auth_id", uid).order("email").limit(1).execute().data) or []
         return rows[0].get("email") if rows else None
     except Exception:
         return None
