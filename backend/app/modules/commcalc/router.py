@@ -6,6 +6,7 @@ import pandas as pd
 import io
 import re
 from app.core.database import get_supabase
+from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
 from app.modules.commcalc import whatif_gates
@@ -634,6 +635,15 @@ def _sweep_ingest_outcome(res, *, upload_type=None):
                     res.get('reason') or note or f"'{upload_type}' has no importer — ignored",
                     True)
 
+    # (a2) The DDIA Phase 1 idempotency guard refused an exact re-upload (mig 732). TERMINAL, unlike
+    #      every other named 0-row marker below: the refusal is a property of the BYTES, so retrying
+    #      the identical attachment next sweep can only be refused again. Marking it retryable would
+    #      make every re-delivered email attachment a permanent ⚠️ in the sweep history.
+    if marker == 'duplicate_file':
+        return _out('skipped',
+                    note or 'exact duplicate of an earlier import — nothing inserted',
+                    True)
+
     # (b) Rows landed → done. A caveat marker keeps its shipped wording in `detail`.
     if rows_saved > 0:
         detail = None
@@ -848,7 +858,29 @@ async def upload_file(
     _fname = getattr(file, "filename", None)
     _res = None
     _err = None
+    _batch = None
     try:
+        # ── DDIA Phase 1 (mig 732): claim these bytes BEFORE parsing them ──────────────────────────
+        # Wired HERE, in the traced wrapper, because it is the single choke point every caller passes
+        # through — manual upload, the FTP sweep, the email sweep and the ma_overview path. The sweeps
+        # are the real duplicate risk: they re-fetch an attachment whenever a prior run ended
+        # non-terminal, and until now that re-inserted every row again.
+        # We read the bytes and seek back to 0 so `_upload_file_impl`'s own `await file.read()` is
+        # unaffected — the guard must be invisible to the parse path.
+        _content = await file.read()
+        try:
+            await file.seek(0)
+        except Exception:
+            file.file.seek(0)   # a plain BytesIO-backed shim (the sweeps' _UF) rather than UploadFile
+        _batch = _import_batches.claim(org_id=org_id, source=file_type, content=_content,
+                                       file_name=_fname, period=period, uploaded_by=trace_source,
+                                       force=force)
+        if _batch.get("state") == _import_batches.DUPLICATE:
+            # Nothing is parsed and nothing is inserted. The `finally` below still writes the
+            # upload_trace row, so a refused duplicate is as visible in the trace as a real import.
+            _res = _import_batches.duplicate_response(file_type, _batch)
+            return _res
+
         _res = await _upload_file_impl(file_type, file, period, force, close_date, org_id)
         # Return a clean copy WITHOUT the internal `_trace` payload; `_write_upload_trace` (finally) still
         # sees the rich `_trace` because it reads `_res`, not the returned copy.
@@ -863,6 +895,15 @@ async def upload_file(
         _write_upload_trace(org_id, source=trace_source, filename=_fname, upload_type=file_type,
                             period=period, result=_res,
                             duration_ms=int((_t_up.monotonic() - _t0) * 1000), error=_err)
+        # Close the batch out. `fail` matters more than `loaded`: the unique index is partial on
+        # `status <> 'failed'`, so marking a broken import failed is what RELEASES the hash and lets
+        # the corrected file be re-uploaded. A batch left in 'parsing' would block its own retry.
+        if _batch is not None and _batch.get("state") == _import_batches.CLAIMED:
+            if _err:
+                _import_batches.fail(_batch.get("batch_id"), error=_err)
+            else:
+                _import_batches.complete(_batch.get("batch_id"),
+                                         row_count=_ingest_rows_saved(_res if isinstance(_res, dict) else {}))
 
 
 async def _upload_file_impl(
