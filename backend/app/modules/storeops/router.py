@@ -45,6 +45,7 @@ from app.modules.storeops.lunch_deduction import (
     compute_lunch_deduction_from_rows as _lunch_compute_from_rows,
     period_lunch_deduction as _lunch_period_deduction,
 )
+from app.modules.storeops import face_recognition as _face
 from app.modules.storeops import salary_owed as _owed
 from app.modules.storeops import target_attribution as _dmta
 from app.modules.storeops import attendance_exceptions as _attn
@@ -2506,6 +2507,26 @@ def _caller_employee_id(authorization: str, org_id: str = ORG_ID) -> str:
     return eid
 
 
+_FACE_OFF_MSG = ("Face recognition is turned off for your account — use the photo-only clock-in "
+                 "button. (An admin can turn it back on under Time Clock \u2192 \u2699 Face Recognition.)")
+
+
+def _face_gate(org_id, employee_id):
+    """{enabled, reason} for ONE employee — the single place the kiosk config, the enroll endpoint and
+    the descriptor read all get the same answer (owner directive 2026-08-09, migration 420). See
+    face_recognition.py for the precedence rules and why the tenant flag is a MASTER switch rather
+    than migration 418's per-field override."""
+    client = sb()
+    tenant_cfg, available = _face.get_tenant_face_config(org_id, client)
+    row = _face.get_employee_face_row(org_id, employee_id, client) if employee_id else {}
+    return _face.resolve_employee_face(tenant_cfg, row, available)
+
+
+def _face_flags(gate):
+    """The two keys every face endpoint echoes back, so the kiosk always knows WHY it's off."""
+    return {"face_recognition_enabled": gate["enabled"], "face_recognition_reason": gate["reason"]}
+
+
 def _caller_identity(authorization: str):
     """Resolve the caller's OWN (org_id, employee_id) from their Supabase JWT ALONE — no org filter.
     auth_id is globally unique, so it maps to exactly ONE app_users row, in whatever tenant that user
@@ -3113,7 +3134,132 @@ def timeclock_config(authorization: str = Header(default=""), org_id: str = ORG_
         thr = 0.60
     # clamp to the same safe band the setter enforces
     thr = max(0.45, min(0.72, thr))
-    return {"face_match_threshold": thr}
+    # FACE RECOGNITION ENABLEMENT (owner directive 2026-08-09, migration 420) — resolved for THIS
+    # caller: tenant master switch, then their own consent/assignment. The kiosk reads this and skips
+    # the entire face-api path (photo-only clock-in, the non-biometric alternative the security plan's
+    # Phase 9.3 asks for) when it is false. The backend enforces the SAME answer on the enroll and
+    # descriptor endpoints, so a stale kiosk bundle can never keep capturing biometrics after the
+    # switch goes off. Identity is best-effort: an unresolvable caller gets the TENANT-level answer
+    # with no per-employee assignment applied (still fail-closed when the tenant is off).
+    try:
+        face_org, face_emp = _caller_identity(authorization)
+    except Exception:
+        face_org, face_emp = org_id, None
+    gate = _face_gate(face_org, face_emp)
+    return {"face_match_threshold": thr, **_face_flags(gate)}
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# FACE-RECOGNITION SETTINGS (owner directive 2026-08-09, migration 420): OFF for every tenant, with a
+# master switch to turn it back on later, a per-employee assignment, and a consent record stamped
+# across the whole roster at the moment the switch goes ON ("as if the consent has been signed by all
+# employees" — recorded as a dated per-employee row, never a silent assumption).
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/timeclock/face-config")
+def get_face_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Tenant switch + the per-employee assignment/consent roster, for the Time Clock page's
+    ⚙ Face Recognition panel and the HR “Employees & Pay” tab. Any signed-in caller may read (same
+    posture as GET /timeclock/config and /timeclock/lunch-config — it exposes no biometric data, only
+    whether the feature is on). `available=False` whenever migration 420 hasn't run on this tenant."""
+    client = sb()
+    tenant_cfg, available = _face.get_tenant_face_config(org_id, client)
+    rows, roster_available = _face.get_employee_face_rows(org_id, client)
+    # How many biometric templates are currently STORED (they are kept, not deleted, while the feature
+    # is off — that is what makes re-enabling instant instead of a re-enrollment campaign). Shown in
+    # the panel so the retention question stays visible rather than invisible.
+    try:
+        enrolled = len((client.table("face_descriptors").select("employee_id")
+                        .eq("org_id", org_id).limit(10000).execute().data) or [])
+    except Exception:
+        enrolled = 0
+    return {"available": bool(available and roster_available), "tenant": tenant_cfg,
+            "summary": _face.consent_summary(rows), "enrolled_templates": enrolled,
+            "employees": [{"employee_id": eid,
+                           "face_recognition_enabled": r.get("face_recognition_enabled"),
+                           "face_consent_status": r.get("face_consent_status"),
+                           "face_consent_at": r.get("face_consent_at"),
+                           "face_consent_source": r.get("face_consent_source")}
+                          for eid, r in rows.items()]}
+
+
+@router.put("/timeclock/face-config")
+def set_face_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only (same gate as PUT /timeclock/lunch-config — a tenant-wide toggle, not a
+    single-row edit). Body: {enabled?, default_for_employees?}.
+
+    Turning `enabled` ON is what stamps the owner's “consent signed by all employees” across the
+    roster: every employee with NO consent record gets status='signed', a real timestamp, and
+    source='assumed_on_enable'. An employee already recorded as 'declined' is deliberately never
+    overwritten — a refusal has to survive the switch being toggled off and on again."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    client = sb()
+    before, available = _face.get_tenant_face_config(org_id, client)
+    if not available:
+        raise HTTPException(400, "Face-recognition settings aren't set up on this tenant yet (migration 420).")
+    upd, turning_on = {}, False
+    if "enabled" in body:
+        want = bool(body["enabled"])
+        upd["face_recognition_enabled"] = want
+        turning_on = want and not before.get("enabled")
+        if turning_on:
+            upd["face_recognition_enabled_at"] = datetime.now(timezone.utc).isoformat()
+            upd["face_recognition_enabled_by"] = ((mgr.get("email") or "").strip() or None)
+    if "default_for_employees" in body:
+        upd["face_recognition_default_for_employees"] = bool(body["default_for_employees"])
+    if not upd:
+        raise HTTPException(400, "no valid fields to update")
+    try:
+        client.table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the setting — is migration 420 applied?")
+    # Best-effort by design: the switch is already flipped, and a stamping failure must not undo that
+    # or 500 the request — it comes back as consent_stamped=None so the panel can say so out loud.
+    stamped = _face.stamp_assumed_consent_for_all(org_id, client, who=mgr.get("email")) if turning_on else None
+    after, _ = _face.get_tenant_face_config(org_id, client)
+    return {"ok": True, "tenant": after, "consent_stamped": stamped}
+
+
+@router.put("/employees/{emp_id}/face-config")
+def set_employee_face_config(emp_id: str, body: dict, authorization: str = Header(default=""),
+                             org_id: str = ORG_ID):
+    """Per-employee ASSIGNMENT + consent record (“it should be assigned per employee”). Isolated from
+    the generic PATCH /employees/{emp_id} for exactly the reason /lunch-config is: a tenant that hasn't
+    run migration 420 can then never have an unrelated name/pay_rate save fail because of it.
+
+    Body: {enabled: bool|null, consent: 'signed'|'declined'|null}. `enabled: null` = inherit the tenant
+    default. `consent: null` clears the record back to “nothing recorded”. A 'declined' consent turns
+    face recognition off for that person regardless of the assignment (face_recognition.py precedence)."""
+    row = {}
+    if "enabled" in body:
+        row["face_recognition_enabled"] = None if body["enabled"] is None else bool(body["enabled"])
+    if "consent" in body:
+        c = body["consent"]
+        if c is None:
+            row.update({"face_consent_status": None, "face_consent_at": None, "face_consent_source": None})
+        else:
+            c = str(c).strip().lower()
+            if c not in _face.CONSENT_STATUSES:
+                raise HTTPException(400, f"consent must be one of {list(_face.CONSENT_STATUSES)} or null")
+            who = (_who_for_log(authorization, org_id) or {}).get("email")
+            src = _face.CONSENT_SOURCE_MANUAL if c == _face.CONSENT_SIGNED else _face.CONSENT_DECLINED
+            row.update({"face_consent_status": c,
+                        "face_consent_at": datetime.now(timezone.utc).isoformat(),
+                        "face_consent_source": (f"{src}:{who}"[:120] if who else src)})
+    if not row:
+        raise HTTPException(400, "no valid fields to update")
+    try:
+        r = sb().table("employees").update(row).eq("id", emp_id).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save the setting — is migration 420 applied?")
+    if not r.data:
+        raise HTTPException(404, "employee not found")
+    saved = r.data[0]
+    return {"ok": True, "employee_id": saved.get("employee_id"),
+            "face_recognition_enabled": saved.get("face_recognition_enabled"),
+            "face_consent_status": saved.get("face_consent_status"),
+            "face_consent_at": saved.get("face_consent_at"),
+            "face_consent_source": saved.get("face_consent_source")}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
@@ -3226,13 +3372,20 @@ def get_face(authorization: str = Header(default=""), action: str = "", org_id: 
     """Registration status (and the descriptor itself when action=descriptor, for verify) for the
     SIGNED-IN employee — identity comes from the auth token."""
     org_id, employee_id = _caller_identity(authorization)
+    # Migration 420: while face recognition is off for this employee the stored descriptor is NOT
+    # handed out (biometric data leaves the table only for a purpose the feature is switched on for).
+    # The registration state itself is still reported truthfully, so the admin panel can show that a
+    # template exists and re-enabling won't need a re-enrollment.
+    gate = _face_gate(org_id, employee_id)
+    if action == "descriptor" and not gate["enabled"]:
+        raise HTTPException(403, _FACE_OFF_MSG)
     rows = (sb().table("face_descriptors").select("*").eq("org_id", org_id)
             .eq("employee_id", employee_id).limit(1).execute().data) or []
     if not rows:
-        return {"registered": False}
+        return {"registered": False, **_face_flags(gate)}
     if action == "descriptor":
-        return {"registered": True, "descriptor": rows[0].get("descriptor")}
-    return {"registered": True, "register_count": rows[0].get("register_count")}
+        return {"registered": True, "descriptor": rows[0].get("descriptor"), **_face_flags(gate)}
+    return {"registered": True, "register_count": rows[0].get("register_count"), **_face_flags(gate)}
 
 
 @router.post("/timeclock/face")
@@ -3240,6 +3393,12 @@ def save_face(body: dict, authorization: str = Header(default=""), org_id: str =
     """Save (or re-register) an averaged 128-float descriptor for the SIGNED-IN employee — identity
     comes from the auth token, so you can only enroll your own face."""
     org_id, employee_id = _caller_identity(authorization)
+    # Migration 420 / owner directive 2026-08-09: NO new biometric template is captured while the
+    # feature is off for this employee. Server-side, so a stale kiosk bundle still running the old
+    # enroll-on-first-clock-in flow cannot create one after the switch was thrown.
+    gate = _face_gate(org_id, employee_id)
+    if not gate["enabled"]:
+        raise HTTPException(403, _FACE_OFF_MSG)
     descriptor = body.get("descriptor")
     if not isinstance(descriptor, list) or len(descriptor) != 128:
         raise HTTPException(400, "a 128-float descriptor is required")

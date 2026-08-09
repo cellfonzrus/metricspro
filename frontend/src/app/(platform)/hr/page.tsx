@@ -89,6 +89,33 @@ export default function HRPage() {
     }
   }
 
+  // ---- face recognition, per-employee assignment + consent (owner directive 2026-08-09, mig 420) ----
+  // "it should be assigned per employee". Same shape and permission posture as the lunch override
+  // right next to it, and the same isolation reason for a DEDICATED endpoint
+  // (PUT /employees/{id}/face-config): a tenant without migration 420 must never have an unrelated
+  // pay-rate save fail. 'Default' = follow the tenant master switch's default; 'Off' excludes this
+  // person even while the feature is on; a 'declined' consent excludes them regardless of assignment.
+  const [faceEdit, setFaceEdit] = useState<Record<number, { mode: 'default' | 'on' | 'off'; consent: '' | 'signed' | 'declined'; busy?: boolean; msg?: string }>>({})
+  const faceModeOf = (e: any) => e.face_recognition_enabled === true ? 'on' : e.face_recognition_enabled === false ? 'off' : 'default'
+  const faceConsentOf = (e: any) => (e.face_consent_status === 'signed' || e.face_consent_status === 'declined') ? e.face_consent_status : ''
+  function faceStateFor(e: any) {
+    return faceEdit[e.id] || { mode: faceModeOf(e) as 'default' | 'on' | 'off', consent: faceConsentOf(e) as '' | 'signed' | 'declined' }
+  }
+  async function saveFace(e: any) {
+    const st = faceStateFor(e)
+    setFaceEdit(s => ({ ...s, [e.id]: { ...st, busy: true, msg: '' } }))
+    try {
+      const body = { enabled: st.mode === 'default' ? null : st.mode === 'on', consent: st.consent === '' ? null : st.consent }
+      const r = await api(`/api/v1/storeops/employees/${e.id}/face-config`, { method: 'PUT', body: JSON.stringify(body) })
+      // Re-seat the row from the SAVED values so the dirty check clears (the consent timestamp/source
+      // are server-generated — echoing the request back would leave the row looking permanently dirty).
+      setEmps(es => es.map(x => x.id === e.id ? { ...x, face_recognition_enabled: r.face_recognition_enabled, face_consent_status: r.face_consent_status, face_consent_at: r.face_consent_at, face_consent_source: r.face_consent_source } : x))
+      setFaceEdit(s => { const n = { ...s }; delete n[e.id]; return n })
+    } catch (err: any) {
+      setFaceEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '❌ ' + (err?.message || err) } }))
+    }
+  }
+
   // ---- pay editing (HR owns pay rates; StoreOps no longer shows them) ----
   const setEmpField = (id: number, patch: any) => setEmps(es => es.map(e => e.id === id ? { ...e, ...patch, _dirty: true } : e))
   const setPay = (id: number, v: string) => setEmpField(id, { pay_rate: v })
@@ -246,7 +273,7 @@ export default function HRPage() {
                   <thead><tr style={{ background: 'var(--surface2)' }}>
                     {['Name', 'Emp ID', 'Home store', 'Role', 'Pay basis',
                       ...(salaryFieldsAvailable ? ['Salary amount', 'Pay $/hr', 'Terminated'] : ['Pay $/hr']),
-                      'Lunch (auto-deduct)', 'Email', 'Phone', ''].map(h => <th key={h} style={th}>{h}</th>)}
+                      'Lunch (auto-deduct)', 'Face recognition', 'Email', 'Phone', ''].map(h => <th key={h} style={th}>{h}</th>)}
                   </tr></thead>
                   <tbody>
                     {emps.map((e: any) => {
@@ -256,6 +283,8 @@ export default function HRPage() {
                       const ls = lunchStateFor(e)
                       const lunchDirty = ls.mode !== (e.lunch_deduction_enabled === true ? 'on' : e.lunch_deduction_enabled === false ? 'off' : 'default')
                         || ls.minutes !== (e.lunch_deduction_minutes != null ? String(e.lunch_deduction_minutes) : '')
+                      const fs = faceStateFor(e)
+                      const faceDirty = fs.mode !== faceModeOf(e) || fs.consent !== faceConsentOf(e)
                       return (
                       <tr key={e.id}>
                         <td style={{ ...td, fontWeight: 600 }}>{e.name}</td>
@@ -314,6 +343,26 @@ export default function HRPage() {
                             {ls.msg && <span style={{ fontSize: 11 }}>{ls.msg}</span>}
                           </div>
                         </td>
+                        <td style={td}>
+                          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                            <select value={fs.mode} onChange={ev => setFaceEdit(s => ({ ...s, [e.id]: { ...fs, mode: ev.target.value as any, msg: '' } }))}
+                              title="Whether the kiosk verifies this person by face. Only has any effect while the tenant master switch (Time Clock → ⚙ Face Recognition) is on."
+                              style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${faceDirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }}>
+                              <option value="default">Default (tenant)</option>
+                              <option value="on">On</option>
+                              <option value="off">Off</option>
+                            </select>
+                            <select value={fs.consent} onChange={ev => setFaceEdit(s => ({ ...s, [e.id]: { ...fs, consent: ev.target.value as any, msg: '' } }))}
+                              title={e.face_consent_at ? `Consent ${e.face_consent_status} on ${String(e.face_consent_at).slice(0, 10)} (${e.face_consent_source || 'source not recorded'})` : 'No biometric consent recorded for this person'}
+                              style={{ padding: '4px 6px', borderRadius: 6, border: `1px solid ${faceDirty ? 'var(--accent)' : 'var(--border)'}`, fontSize: 12, background: 'var(--surface)' }}>
+                              <option value="">Consent: none</option>
+                              <option value="signed">Consent: signed</option>
+                              <option value="declined">Consent: declined</option>
+                            </select>
+                            {faceDirty && <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 8px' }} disabled={fs.busy} onClick={() => saveFace(e)}>{fs.busy ? '…' : '💾'}</button>}
+                            {fs.msg && <span style={{ fontSize: 11 }}>{fs.msg}</span>}
+                          </div>
+                        </td>
                         <td style={td}>{e.email || '—'}</td>
                         <td style={td}>{e.phone || '—'}</td>
                         <td style={td}>{e._dirty && <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} disabled={rowBusy === e.id} onClick={() => savePay(e)}>{rowBusy === e.id ? '…' : '💾'}</button>}</td>
@@ -324,7 +373,8 @@ export default function HRPage() {
                         the lunch-deduction column (parallel branch, same day) both bumped the header
                         count independently — colSpan must match the UNION header row above, not
                         either side's original count alone. */}
-                    {emps.length === 0 && <tr><td style={td} colSpan={salaryFieldsAvailable ? 12 : 10}><span style={{ color: 'var(--text3)' }}>No employees in your area.</span></td></tr>}
+                    {/* +1 again 2026-08-09 for the face-recognition column (migration 420). */}
+                    {emps.length === 0 && <tr><td style={td} colSpan={salaryFieldsAvailable ? 13 : 11}><span style={{ color: 'var(--text3)' }}>No employees in your area.</span></td></tr>}
                   </tbody>
                 </table>
               </div>
