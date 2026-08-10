@@ -1,14 +1,29 @@
 'use client'
-import { useState, useEffect } from 'react'
-import { api, fmt, ORG_ID } from '@/lib/client'
+import { useState, useEffect, useCallback, useMemo } from 'react'
+import { api, fmt, ORG_ID, getActiveOrg } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 // Marketplace/handset-fulfillment purchase orders — the VidaPay "MA - Marketplace Handset
 // Fulfillment Orders" report (mod-commission's report-pull ingest), read here org-scoped via
 // commcalc.raw_ma_marketplace_orders (mig 207). Asset-landing style: per-order rows with
 // filters (date range / business / status / order type) — RULE THREE pickers, RULE FOUR exports.
 // OWNER REQUEST 2026-07-15: "is similar to the asset landing which shows the purchases."
+//
+// RULE FIVE (§3d) retrofit 2026-08-10 (owner: "should also have our standard filters in addition to the
+// ones which are there"): the shared <StandardFilterBar> is ADDED — period as a date range (it replaces
+// the page's own Ordered from/to inputs, same two values), plus the market -> store cascade. The three
+// existing pickers (business / status / order type) are module facets and are APPENDED, never
+// substituted. DEVIATION, stated out loud: a marketplace order is placed against the DEALER account and
+// carries no salesperson, so there is no rep dimension to filter on and the rep control is hidden.
+//
+// Store/market narrow the loaded rows CLIENT-side (the row's canonicalized `store`, with market joined
+// from the org roster), and the three stat tiles are computed from that same filtered set — otherwise
+// the tiles would keep reporting the server's unfiltered totals while the table showed a subset.
 
 type MPRow = {
   id: string
@@ -49,6 +64,20 @@ type FilterOptions = {
 
 const selStyle: React.CSSProperties = { padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
+// Reads carry the ACTIVE tenant, not the house constant. The tenant middleware rewrites org_id from the
+// JWT for a normal user (so this is a no-op for them) but it does NOT rewrite it for a super-admin — who
+// would otherwise sit on luxelink's Marketplace Purchases and be shown the house org's orders. Same
+// mitigation the Sales Report / Executive MTD already carry.
+const orgQS = () => `org_id=${encodeURIComponent(getActiveOrg() || ORG_ID)}`
+
+// Header -> row field, so the sortable columns and the rendered columns cannot drift apart.
+const COLS: [string, keyof MPRow][] = [
+  ['Date Ordered', 'date_ordered'], ['Date Filled', 'date_filled'], ['Date Shipped', 'date_shipped'],
+  ['Order #', 'order_number'], ['Status', 'order_status'], ['Order Type', 'order_type'],
+  ['Business / Store', 'store'], ['Product', 'product_name'], ['Qty', 'number_ordered'],
+  ['Price', 'price'], ['Tracking #', 'tracking_number'],
+]
+
 function Stat({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return (
     <div className="card" style={{ padding: '14px 16px' }}>
@@ -64,19 +93,26 @@ export default function MarketplacePurchasesPage() {
   const [opts, setOpts] = useState<FilterOptions | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  // The standard core set. `period`/`periodTo` ARE the Ordered from/to dates this page already sent to
+  // the server, so the range control drives the same query — no second, competing date filter.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const dateFrom = filt.period || '', dateTo = filt.periodTo || ''
   const [business, setBusiness] = useState('')
   const [status, setStatus] = useState('')
   const [orderType, setOrderType] = useState('')
+  // Org roster → the cascade's store options (each store WITH its market). Org-scoped by construction.
+  const [roster, setRoster] = useState<StoreOpt[]>([])
 
   useEffect(() => {
-    api(`/api/v1/asset/marketplace-purchases/filter-options?org_id=${ORG_ID}`)
+    api(`/api/v1/asset/marketplace-purchases/filter-options?${orgQS()}`)
       .then(setOpts).catch(() => setOpts({ available: false, businesses: [], statuses: [], order_types: [] }))
+    api(`/api/v1/core/filter-options?${orgQS()}`)
+      .then((d: any) => setRoster((d?.stores || []).map((x: any) => ({ id: x.store, label: x.store, market: x.market || null }))))
+      .catch(() => setRoster([]))
   }, [])
 
   function filterQS() {
-    const p = new URLSearchParams({ org_id: ORG_ID })
+    const p = new URLSearchParams({ org_id: getActiveOrg() || ORG_ID })
     if (dateFrom) p.set('date_from', dateFrom)
     if (dateTo) p.set('date_to', dateTo)
     if (business) p.set('business', business)
@@ -92,10 +128,33 @@ export default function MarketplacePurchasesPage() {
       .catch((e: any) => setData({ available: false, rows: [], count: 0, totals: { orders: 0, qty: 0, price: 0 }, by_status: {}, note: e?.message || String(e) }))
       .finally(() => setLoading(false))
   }
-  useEffect(() => { load() }, [dateFrom, dateTo, business, status, orderType])
+  useEffect(() => { load() }, [dateFrom, dateTo, business, status, orderType])   // store/market narrow client-side
+
+  // Store/market narrowing happens here (client-side, over the rows the server already returned for the
+  // date/business/status/type query). Market is joined from the org roster onto the row's canonical
+  // `store`; a row whose store isn't in the roster keeps market=null and is reachable via '(no market)'.
+  const marketByStore = useMemo(() => {
+    const m: Record<string, string> = {}
+    roster.forEach(r => { if (r.market) m[r.id.trim().toLowerCase()] = r.market })
+    return m
+  }, [roster])
+  const serverRows = data?.rows || []
+  const scopedRows = useMemo(() => filterRows(serverRows, filt, {
+    store: (r: MPRow) => r.store || r.business_name,
+    market: (r: MPRow) => marketByStore[String(r.store || r.business_name || '').trim().toLowerCase()] || '',
+  }), [serverRows, filt, marketByStore])
+
+  const getCell = useCallback((r: any, field: string) => r?.[field], [])
+  const { sort, toggle, sorted: viewRows } = useTableSort(scopedRows, getCell)
+
+  // Tiles follow the SAME filtered set the table shows (what you see is what the totals count).
+  const tiles = useMemo(() => scopedRows.reduce(
+    (t, r) => ({ orders: t.orders + 1, qty: t.qty + (Number(r.number_ordered) || 0), price: t.price + (Number(r.price) || 0) }),
+    { orders: 0, qty: 0, price: 0 },
+  ), [scopedRows])
 
   function buildPayload(): ExportPayload {
-    const rows = data?.rows || []
+    const rows = viewRows
     return {
       title: 'Marketplace Purchases', subtitle: `${rows.length} order line(s)`,
       filename: 'marketplace-purchases',
@@ -117,7 +176,7 @@ export default function MarketplacePurchasesPage() {
     }
   }
 
-  const rows = data?.rows || []
+  const rows = viewRows
 
   return (
     <div>
@@ -151,34 +210,43 @@ export default function MarketplacePurchasesPage() {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14, marginBottom: 16 }}>
-            <Stat label="Orders" value={data.totals.orders.toLocaleString()} />
-            <Stat label="Units Ordered" value={data.totals.qty.toLocaleString()} />
-            <Stat label="Total Purchased" value={fmt(data.totals.price)} color="var(--accent)" />
+            <Stat label="Orders" value={tiles.orders.toLocaleString()} />
+            <Stat label="Units Ordered" value={tiles.qty.toLocaleString()} />
+            <Stat label="Total Purchased" value={fmt(tiles.price)} color="var(--accent)" />
           </div>
 
-          <div className="card" style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)' }}>Filters:</span>
-            <select style={selStyle} value={business} onChange={e => setBusiness(e.target.value)}>
-              <option value="">All businesses</option>
-              {(opts?.businesses || []).map(b => <option key={b} value={b}>{b}</option>)}
-            </select>
-            <select style={selStyle} value={status} onChange={e => setStatus(e.target.value)}>
-              <option value="">All statuses</option>
-              {(opts?.statuses || []).map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <select style={selStyle} value={orderType} onChange={e => setOrderType(e.target.value)}>
-              <option value="">All order types</option>
-              {(opts?.order_types || []).map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-            <label style={{ fontSize: 12, color: 'var(--text3)' }}>Ordered</label>
-            <input type="date" style={selStyle} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
-            <span style={{ fontSize: 12, color: 'var(--text3)' }}>to</span>
-            <input type="date" style={selStyle} value={dateTo} onChange={e => setDateTo(e.target.value)} />
-            {(business || status || orderType || dateFrom || dateTo) && (
-              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }}
-                onClick={() => { setBusiness(''); setStatus(''); setOrderType(''); setDateFrom(''); setDateTo('') }}>✕ Clear</button>
-            )}
-            <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 'auto' }}>{rows.length.toLocaleString()} order(s)</span>
+          {/* RULE FIVE core set (period as an Ordered date range + market -> store cascade), with this
+              module's own three pickers APPENDED via `right`. No rep control — see the header note. */}
+          <div className="card" style={{ padding: '10px 14px', marginBottom: 12 }}>
+            <StandardFilterBar
+              value={filt} onChange={setFilt} periodMode="range"
+              show={{ period: true, stores: true, markets: true, reps: false }}
+              cascadeStores={roster}
+              storeLabel="Stores…" marketLabel="Markets…"
+              right={
+                <>
+                  <select style={selStyle} value={business} onChange={e => setBusiness(e.target.value)}>
+                    <option value="">All businesses</option>
+                    {(opts?.businesses || []).map(b => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                  <select style={selStyle} value={status} onChange={e => setStatus(e.target.value)}>
+                    <option value="">All statuses</option>
+                    {(opts?.statuses || []).map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                  <select style={selStyle} value={orderType} onChange={e => setOrderType(e.target.value)}>
+                    <option value="">All order types</option>
+                    {(opts?.order_types || []).map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  {(business || status || orderType) && (
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }}
+                      onClick={() => { setBusiness(''); setStatus(''); setOrderType('') }}>✕ Clear these</button>
+                  )}
+                  <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+                    {rows.length.toLocaleString()} order(s){rows.length !== serverRows.length ? ` of ${serverRows.length.toLocaleString()}` : ''}
+                  </span>
+                </>
+              }
+            />
           </div>
 
           {rows.length === 0 ? (
@@ -190,8 +258,9 @@ export default function MarketplacePurchasesPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
                 <thead>
                   <tr style={{ background: 'var(--surface2)', fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
-                    {['Date Ordered', 'Date Filled', 'Date Shipped', 'Order #', 'Status', 'Order Type', 'Business / Store', 'Product', 'Qty', 'Price', 'Tracking #'].map(h => (
-                      <th key={h} style={{ textAlign: 'left', padding: '8px 12px', whiteSpace: 'nowrap' }}>{h}</th>
+                    {COLS.map(([h, field]) => (
+                      <SortableTh key={h} field={field} sort={sort} onSort={toggle}
+                        style={{ textAlign: 'left', padding: '8px 12px', whiteSpace: 'nowrap' }}>{h}</SortableTh>
                     ))}
                   </tr>
                 </thead>
