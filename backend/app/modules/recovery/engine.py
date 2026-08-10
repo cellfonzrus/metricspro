@@ -43,6 +43,36 @@ def _parse_date(v):
         return None
 
 
+def _read_all(client, table, select, page=1000, cap=2_000_000, **eqs):
+    """Read EVERY matching row, paginated. Replaces a single `.limit(N)` shot (2026-08-10).
+
+    A bare `.limit(200000)` is not a safety valve here, it is a silent wrong answer. Measured live:
+    `commcalc.raw_mi` holds **234,610** rows and `raw_payment_detail` **205,886**, so the old limit
+    dropped 34,610 and 5,886 rows respectively — with no ORDER BY, so WHICH rows vanished was
+    arbitrary from one call to the next.
+
+    That matters more here than in a reporting scan. These reads build the `pay_by_imei` /
+    `mi_by_serial` evidence dictionaries, and a device whose payment or activation row happened to
+    fall outside the truncation reads as "no evidence found" — which is precisely the input that
+    buckets an appeal as not_recoverable. Missing evidence and absent evidence are indistinguishable
+    downstream, so the engine cannot detect its own blind spot.
+
+    `cap` is a runaway guard set far above any real table, not a business limit; the loop exits on a
+    short page long before reaching it.
+    """
+    out, start = [], 0
+    while start < cap:
+        q = client.schema("commcalc").table(table).select(select)
+        for k, v in eqs.items():
+            q = q.in_(k, list(v)) if isinstance(v, (list, tuple, set)) else q.eq(k, v)
+        rows = (q.range(start, start + page - 1).execute().data) or []
+        out.extend(rows)
+        if len(rows) < page:
+            break
+        start += page
+    return out
+
+
 def build_recovery_ledger(client, org_id, cfg, today):
     """Rebuild commcalc.appeal_recovery for `org_id` as of `today` (a date). Returns a summary dict.
     `cfg` is the appeal_recovery_config row (dict). Delete-then-insert snapshot."""
@@ -52,15 +82,14 @@ def build_recovery_ledger(client, org_id, cfg, today):
     match_mdn = cfg.get("match_mdn", True)
     match_imei = cfg.get("match_imei", True)
 
-    appeals = (client.schema("commcalc").table("asset_ledger")
-               .select("esn_imei,phone_number,store,market,device_model,category,"
-                       "owed_to_vip,payg_date,date_sold,acquired_date")
-               .eq("org_id", org_id).in_("category", cats).limit(50000).execute().data) or []
+    appeals = _read_all(client, "asset_ledger",
+                        "esn_imei,phone_number,store,market,device_model,category,"
+                        "owed_to_vip,payg_date,date_sold,acquired_date",
+                        org_id=org_id, category=cats)
 
     # Payment confirmation — raw_payment_detail (mdn + imei + payment_type + amount + payment_date)
-    pays = (client.schema("commcalc").table("raw_payment_detail")
-            .select("imei,mdn,payment_type,amount,payment_date")
-            .eq("org_id", org_id).limit(200000).execute().data) or []
+    pays = _read_all(client, "raw_payment_detail",
+                     "imei,mdn,payment_type,amount,payment_date", org_id=org_id)
     pay_by_imei, pay_by_mdn = {}, {}
     for p in pays:
         rec = {"type": p.get("payment_type"), "amount": _safe_float(p.get("amount")),
@@ -72,10 +101,9 @@ def build_recovery_ledger(client, org_id, cfg, today):
             pay_by_mdn.setdefault(mk, []).append(rec)
 
     # Active-status confirmation — raw_mi (device_serial + phone_number + subscriber_status + payout)
-    mis = (client.schema("commcalc").table("raw_mi")
-           .select("device_serial,phone_number,subscriber_status,actual_mi_payout,"
-                   "actual_atu_payout,mi_activation_date")
-           .eq("org_id", org_id).limit(200000).execute().data) or []
+    mis = _read_all(client, "raw_mi",
+                    "device_serial,phone_number,subscriber_status,actual_mi_payout,"
+                    "actual_atu_payout,mi_activation_date", org_id=org_id)
     mi_by_serial, mi_by_phone = {}, {}
     for m in mis:
         rec = {"active": str(m.get("subscriber_status") or "").strip().lower().startswith("activ"),

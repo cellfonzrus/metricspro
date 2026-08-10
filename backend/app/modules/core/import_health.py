@@ -88,6 +88,35 @@ def sb():
     return get_supabase()
 
 
+def _scan_all(client, schema, table, select, page=1000, cap=2_000_000, **eqs):
+    """Read EVERY matching row, paginated. Replaces a single `.limit(N)` shot (2026-08-10).
+
+    The two `cost="heavy"` mapping providers below scanned `commcalc.raw_comp_report` and
+    `commcalc.raw_mi` with a bare `.limit(200000)`. Measured live, `raw_mi` holds **234,610** rows —
+    so 34,610 were silently discarded, with no ORDER BY, meaning WHICH ones changed between calls.
+
+    A truncated scan cannot under-report a little here; it under-reports in exactly the direction that
+    looks CLEAN. Both providers answer "what is NOT mapped yet", so a plan or compensation category
+    whose only rows fell past the cut simply does not appear, and the board reports fewer gaps than
+    exist. The failure mode of an attention board is silence, which is why the limit had to go rather
+    than be raised.
+
+    `cap` is a runaway guard far above any real table, not a business limit — the loop exits on a
+    short page long before it.
+    """
+    out, start = [], 0
+    while start < cap:
+        q = client.schema(schema).table(table).select(select)
+        for k, v in eqs.items():
+            q = q.in_(k, list(v)) if isinstance(v, (list, tuple, set)) else q.eq(k, v)
+        rows = (q.range(start, start + page - 1).execute().data) or []
+        out.extend(rows)
+        if len(rows) < page:
+            break
+        start += page
+    return out
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -1024,9 +1053,8 @@ def _p_carrier_categories(client, org_id, ctx):
         return []
     try:
         rules = carrier_map.load_rules(client, org_id, None)
-        rows = (client.schema("commcalc").table("raw_comp_report")
-                .select("compensation_type,payment_amount").eq("org_id", org_id)
-                .limit(200000).execute().data) or []
+        rows = _scan_all(client, "commcalc", "raw_comp_report",
+                         "compensation_type,payment_amount", org_id=org_id)
     except Exception:
         return []
     agg = {}
@@ -1054,8 +1082,7 @@ def _p_product_mrc(client, org_id, ctx):
         return []
     try:
         catalog = installment_engine._load_product_mrc(client, org_id)
-        rows = (client.schema("commcalc").table("raw_mi").select("customer_plan,carrier_id")
-                .eq("org_id", org_id).limit(200000).execute().data) or []
+        rows = _scan_all(client, "commcalc", "raw_mi", "customer_plan,carrier_id", org_id=org_id)
     except Exception:
         return []
     seen, unmatched = set(), set()

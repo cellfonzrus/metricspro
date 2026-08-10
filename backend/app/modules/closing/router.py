@@ -4302,7 +4302,14 @@ def _ocr_deposit_amount(raw: bytes, ext: str):
     try:
         import json as _json
         from anthropic import Anthropic
-        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        from app.modules.closing.ai_limits import CLOSING_OCR_TIMEOUT_S, CLOSING_OCR_MAX_RETRIES
+        # SYNCHRONOUS client is correct here — record_deposit is a sync `def`, so uvicorn runs it on
+        # the threadpool and the event loop is never touched. But it MUST stay capped: uncapped, the
+        # SDK default is 600s x 2 retries (~30 min), and each stuck call pins one of ~40 worker
+        # threads. Every store closes inside the same hour, so these uploads arrive together — enough
+        # of them stuck and the backend has no free worker for ANY request. See closing/ai_limits.py.
+        cli = Anthropic(api_key=settings.ANTHROPIC_API_KEY,
+                        timeout=CLOSING_OCR_TIMEOUT_S, max_retries=CLOSING_OCR_MAX_RETRIES)
         media = "image/png" if ext == "png" else "image/jpeg"
         b64 = base64.b64encode(raw).decode("ascii")
         msg = cli.messages.create(
