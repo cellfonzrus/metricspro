@@ -6925,3 +6925,15 @@ try:
     _storeops_attention.register(_register_attention_provider)
 except Exception as _attn_e:
     print(f"WARN storeops attention providers not registered: {_attn_e}")
+
+
+# ── Weekly payroll-hours approval (migration 431, owner directive 2026-08-10) ──────────────────────
+# DM approves last week's hours -> HR approves -> dispatch to whoever pays that employee. The routes
+# live in their own module (this file is already large) and are mounted onto THIS router, so the
+# shared app/main.py needs no edit (AGENT_CONTRACT §1: no agent touches main.py).
+#
+# Imported LAST, and lazily on the other side: payroll_approval calls back into this module for
+# get_payroll / _require_manager / _log_payroll_change / _dm_for_store, so its imports of `router.py`
+# all sit INSIDE functions. By the time this line runs, everything it needs is defined.
+from app.modules.storeops.payroll_approval import router as _payroll_approval_router  # noqa: E402
+router.include_router(_payroll_approval_router)

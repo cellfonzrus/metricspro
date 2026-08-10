@@ -374,6 +374,13 @@ export const NAV: NavGroup[] = [
     { href: '/hr', label: 'HR · Total Comp', icon: '📊', module: 'hr', scopes: ['all', 'market'] },
     { href: '/hr/payroll-expenses', label: 'Payroll Expenses', icon: '💼', module: 'hr', scopes: ['all', 'market'] },
     { href: '/storeops/payroll', label: 'Payroll', icon: '💵', module: 'storeops', scopes: ['all', 'market'] },
+    // Weekly hours approval (mig 431, owner directive 2026-08-10). Scoped 'all' + 'market' + 'store':
+    // the DM ('market') is the FIRST gate and must reach it, and a store manager standing in for an
+    // absent DM sees only their own span anyway (the read is span-scoped server-side). Same shape as
+    // its Payroll sibling, so it adds no permission surface an existing role did not already have.
+    { href: '/storeops/payroll/approvals', label: 'Hours Approval', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'] },
+    // Payer registry — admin-only config ('all'), like every other "who receives money" setting.
+    { href: '/storeops/payroll/payers', label: 'Who Pays Payroll', icon: '🏦', module: 'storeops', scopes: ['all'] },
     { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'] },
   ]},
   { group: 'Daily Closing', module: 'closing', items: [
