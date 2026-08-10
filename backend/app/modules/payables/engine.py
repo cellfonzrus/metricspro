@@ -136,6 +136,54 @@ def _sold_imei_set(client, org_id, table, imei_field, imeis):
     return set(_sold_imei_store_map(client, org_id, table, imei_field, imeis))
 
 
+def _owed_link_map(client, org_id, link, keys):
+    """{source key -> (amount, date)} from a RELATED report, per `payable_source_map.owed_link` (mig 620).
+
+    The MA reports say what was ACTIVATED, never what was INVOICED, so a Total source map has no
+    owed_field and every device priced at NULL — which is why Daily Owed grouped nothing and 1,147
+    devices sat in `discrepancy` at $0.00. The amount was one table over the whole time
+    (raw_ma_fulfillment.price + .date_shipped). This resolves that join from CONFIG rather than
+    hard-coding "Total reads the fulfillment report", so another processor is described, not coded.
+
+    Chunked .in_() like the other match helpers. Returns {} for a missing/incomplete link or an
+    unreadable table — the caller then leaves owed as NULL, which is honest ("nobody has priced this
+    device") and is NOT the same as $0."""
+    if not isinstance(link, dict):
+        return {}
+    table = str(link.get("table") or "").strip()
+    ref_field = str(link.get("ref_field") or "").strip()
+    amount_field = str(link.get("amount_field") or "").strip()
+    date_field = str(link.get("date_field") or "").strip()
+    if not (table and ref_field and amount_field):
+        return {}
+    cand = sorted({str(k).strip() for k in (keys or []) if str(k or "").strip()})
+    if not cand:
+        return {}
+    cols = ",".join([c for c in (ref_field, amount_field, date_field) if c])
+    out = {}
+    for j in range(0, len(cand), 200):
+        try:
+            chunk = (client.schema("commcalc").table(table).select(cols)
+                     .eq("org_id", org_id).in_(ref_field, cand[j:j + 200]).execute().data) or []
+        except Exception as e:
+            print(f"WARN owed_link read failed ({table}.{ref_field}): {e}")
+            return {}
+        for r in chunk:
+            k = str(r.get(ref_field) or "").strip()
+            if not k:
+                continue
+            amt = _f(r.get(amount_field))
+            dt = _pdate(r.get(date_field)) if date_field else None
+            # One order can carry several lines; the device's cost is the line, and the earliest ship
+            # date is when the dealer took it on. First priced row wins, then fill a missing date.
+            if k not in out:
+                out[k] = (amt, dt)
+            else:
+                a0, d0 = out[k]
+                out[k] = (a0 if a0 is not None else amt, d0 or dt)
+    return out
+
+
 def _sold_imei_store_map(client, org_id, table, imei_field, imeis):
     """{normalized imei -> the store that sold it} over a sales/match table. Chunked .in_() like
     _epay_map. Membership alone answers "sold?"; the STORE is what a source map with no `store_field`
@@ -270,6 +318,19 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
                   if cfg.get("sold_source") == "sales_match" else {})
     sold_set = set(sold_store)
 
+    # owed_link (mig 620): price the device from a RELATED report when its own row has no amount.
+    # Resolved once per chunk, keyed on the source row's own key field (e.g. activation_order).
+    owed_link = cfg.get("owed_link") if not owed_field else None
+    link_key_field = str((owed_link or {}).get("key_field") or "").strip()
+    link_map = (_owed_link_map(client, org_id, owed_link,
+                               [r.get(link_key_field) for r in chunk]) if link_key_field else {})
+    link_terms = None
+    try:
+        if owed_link and owed_link.get("terms_days") is not None:
+            link_terms = max(0, int(owed_link["terms_days"]))
+    except (TypeError, ValueError):
+        link_terms = None
+
     out = []
     for r in chunk:
         imei = _norm_imei(r.get(imei_field))
@@ -283,6 +344,15 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
             store = sold_store.get(imei)
         owed = _f(r.get(owed_field)) if owed_field else None
         owed_source = "asset_ledger" if owed_field else "unconfigured"
+        # A configured owed_field always WINS; the link only fills a map that has none.
+        link_date = None
+        if owed is None and link_map:
+            amt, dt = link_map.get(str(r.get(link_key_field) or "").strip(), (None, None))
+            if amt is not None:
+                owed, link_date = amt, dt
+                owed_source = f"{owed_link.get('table')}.{owed_link.get('amount_field')}"
+            elif dt:
+                link_date = dt
 
         # invoice date
         if cfg.get("invoice_date_source") == "vip_invoices":
@@ -292,6 +362,10 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
         else:
             invoice_date = _pdate(r.get(cfg.get("invoice_date_field")))
             invoice_source = "field"
+            # The linked report's own date (e.g. date_shipped) is when the dealer took the device on,
+            # so it is the recognition date the net terms run from.
+            if invoice_date is None and link_date:
+                invoice_date, invoice_source = link_date, f"{owed_link.get('table')}.{owed_link.get('date_field')}"
 
         # due date: report field first, else invoice_date + net terms
         due_date, due_source = None, None
@@ -299,8 +373,9 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
             due_date = _pdate(r.get(cfg["due_date_field"]))
             if due_date:
                 due_source = "report"
-        if not due_date and invoice_date and terms:
-            due_date = invoice_date + timedelta(days=terms)
+        _terms = link_terms if (link_terms is not None and link_date) else terms
+        if not due_date and invoice_date and _terms:
+            due_date = invoice_date + timedelta(days=_terms)
             due_source = "net_terms"
 
         # Boost: copy the Friday-billing verbatim so DUE == /owed-weekly (never recompute)
