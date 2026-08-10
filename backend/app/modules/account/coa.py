@@ -57,12 +57,21 @@ PL_SPEC = [
     ("carrier_comm",  "Carrier commissions & incentives",            "revenue", "auto",  "company"),
     ("mi_income",     "MI residual income",                          "revenue", "auto",  "company"),
     ("atu_income",    "ATU income",                                  "revenue", "auto",  "company"),
+    # Owner ruling 2026-08-10. These three carried no head of their own, so they were swept into
+    # "MI residual income" along with the device rebate — see the MA block below for the numbers.
+    ("ma_device_margin", "Device margin (Distributor/MA)",           "revenue", "auto",  "company"),
+    ("fee_income",    "Fee income (Distributor/MA)",                 "revenue", "auto",  "company"),
+    ("financing_income", "Consumer financing income",                "revenue", "auto",  "company"),
     ("accessory_rev", "Accessory sales revenue",                     "revenue", "auto",  "store"),
     ("device_rev",    "Device sales revenue",                        "revenue", "auto",  "store"),
     ("vip_reimb",     "Device-financing reimbursements (Distributor)", "revenue", "auto",  "store"),
     ("vip_device_pay","Distributor device payments (PayGo, paid)",   "cogs",    "auto",  "store"),
     ("accessory_cost","Accessory cost",                              "cogs",    "auto",  "store"),
     ("device_cost",   "Device cost",                                 "cogs",    "auto",  "store"),
+    # CONTRA-COGS (owner ruling 2026-08-10): carries a NEGATIVE amount so it nets against Device cost
+    # in the COGS subtotal — device GP then reflects the true net purchase price per IMEI — while
+    # staying a visible line of its own rather than vanishing into device_cost.
+    ("device_rebate", "Device purchase rebates (contra-COGS)",       "cogs",    "auto",  "company"),
     ("vip_fees",      "Distributor fees paid (shipping / SIM kit / processing)", "cogs", "auto", "store"),
     ("rep_comm",      "Rep commissions paid",                        "opex",    "auto",  "store"),
     ("wages",         "Wages / hourly payroll",                      "opex",    "auto",  "store"),
@@ -113,14 +122,18 @@ def _in_period(date_str, pm, py):
         return False
 
 
-def _fetch_all(client, table, select, eqs=None, page=1000, cap=200000):
+def _fetch_all(client, table, select, eqs=None, page=1000, cap=200000, ilike=None):
     """Paginated select of an entire (org-scoped) table — supabase caps a query at 1000 rows.
-    A list/tuple/set filter value becomes an IN (...) clause (used for multi-spelling period)."""
+    A list/tuple/set filter value becomes an IN (...) clause (used for multi-spelling period).
+    `ilike` is an optional (column, pattern) pair for a case-insensitive LIKE — used to match the
+    MA feed's residual product_name label FAMILY rather than one literal (see residual_subs)."""
     out, start = [], 0
     while start < cap:
         q = client.schema("commcalc").table(table).select(select)
         for k, v in (eqs or {}).items():
             q = q.in_(k, list(v)) if isinstance(v, (list, tuple, set)) else q.eq(k, v)
+        if ilike:
+            q = q.ilike(ilike[0], ilike[1])
         rows = (q.range(start, start + page - 1).execute().data) or []
         out.extend(rows)
         if len(rows) < page:
@@ -457,17 +470,65 @@ def build_inputs(client, org_id, period):
         # store_address (only a processor merchant/account id), so — like PayGo — this is booked
         # COMPANY-WIDE (store=None) rather than inventing a phantom per-store bucket keyed by an
         # account id. Empty MA tables (data not yet ingested) → $0, correct. NEVER raises.
+        # OWNER RULING 2026-08-10 — the 12 raw_ma_commission components are NOT all residual, and the
+        # real residual was not among them. luxelink July 2026 booked $124,043.34 of "MI residual
+        # income" made up of: rebate 126,636.77 · spiff_m1–m6 15,914.70 · device_margin 3,210.00 ·
+        # fees_margin 3,087.50 · consumer_financing 1,549.98 · consumer_margin 0 · wallet_funding
+        # −26,355.61. Every component is a different kind of money and only the label said otherwise.
+        # Each now goes to the head it belongs to (the arithmetic is unchanged per component — this
+        # re-files them, it does not re-compute them):
+        _MA_HEAD = {
+            # A device rebate is an equipment subsidy on a purchased IMEI, so it nets against Device
+            # cost rather than inflating revenue — booked NEGATIVE into the contra-COGS line.
+            "rebate":             ("device_rebate",    -1),
+            "device_margin":      ("ma_device_margin",  1),
+            "fees_margin":        ("fee_income",        1),
+            "consumer_financing": ("financing_income",  1),
+            "consumer_margin":    ("ma_device_margin",  1),
+            # M1–M6 spiffs are carrier bounty, the same money carrier_comm already collects for Boost.
+            "spiff_m1": ("carrier_comm", 1), "spiff_m2": ("carrier_comm", 1),
+            "spiff_m3": ("carrier_comm", 1), "spiff_m4": ("carrier_comm", 1),
+            "spiff_m5": ("carrier_comm", 1), "spiff_m6": ("carrier_comm", 1),
+        }
+        # wallet_funding is deliberately absent: funding a VidaPay wallet moves cash between the
+        # dealer's own pockets, so it is a balance-sheet movement and belongs on NO P&L line. Leaving
+        # it in (as a NEGATIVE revenue) understated luxelink's July income by $26,355.61. It is
+        # EXCLUDED here rather than re-homed because which balance-sheet line it belongs to — a
+        # prepaid wallet asset or a settlement clearing account — is the owner's call, still open.
         try:
             from app.modules.account.residual_subs import _MA_COMPONENTS
             for r in _fetch_all(client, "raw_ma_commission", ",".join(_MA_COMPONENTS),
                                 {"org_id": org_id, "period": period_keys}):
-                add("mi_income", None, -sum(safe_float(r.get(c)) for c in _MA_COMPONENTS))
+                for c in _MA_COMPONENTS:
+                    head_sign = _MA_HEAD.get(c)
+                    if not head_sign:
+                        continue                      # wallet_funding — see above
+                    head, sign = head_sign
+                    # Feed convention: NEGATIVE = paid TO the dealer, so the value is sign-flipped to
+                    # "money the dealer receives" exactly as before; `sign` then re-points a rebate
+                    # into the contra-COGS line as a negative cost.
+                    add(head, None, sign * -safe_float(r.get(c)),
+                        detail_label=("SPIFF / bounty" if head == "carrier_comm" else None))
         except Exception:
             pass
         try:
             for r in _fetch_all(client, "raw_ma_daily_tx", "merchant_discount",
                                 {"org_id": org_id, "period": period_keys}):
                 add("atu_income", None, r.get("merchant_discount"))
+        except Exception:
+            pass
+        # The ACTUAL recurring residual, which nothing above ever booked. It lives in raw_ma_daily_tx
+        # under the product_name residual labels, and its dollars are in `retail_cost` — on those rows
+        # `merchant_discount` is $0.00, so this cannot double-count the ATU sweep directly above (a
+        # residual row contributes 0 there). luxelink July 2026 = $24,004.11, which until now appeared
+        # on no P&L line at all while $124k of other money sat under its name. Same filter as the
+        # residual-per-sub report so the report and the books cannot diverge.
+        try:
+            from app.modules.account.residual_subs import _MA_RESIDUAL_LABEL_MATCH
+            for r in _fetch_all(client, "raw_ma_daily_tx", "retail_cost",
+                                {"org_id": org_id, "period": period_keys},
+                                ilike=("product_name", _MA_RESIDUAL_LABEL_MATCH)):
+                add("mi_income", None, -safe_float(r.get("retail_cost")))
         except Exception:
             pass
 

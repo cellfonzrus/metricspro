@@ -97,7 +97,19 @@ def assert_money_columns(cols, where=""):
 
 # The feed's own label for the recurring residual line (owner ruling 2026-08-05). A LABEL, not a
 # column — the taxonomy lives in product_name, which is why this is matched, not computed.
+#
+# It is a label FAMILY, not one literal (2026-08-10). An exact `.eq("Residual")` matched only 346 of
+# luxelink's July 2026 rows worth $7,549.05 and silently skipped 5,602 rows labelled
+# "Trac Autopay Residual" worth $16,455.06 — 69% of the month's real residual. Both are the recurring
+# per-subscriber residual the owner's 08-05 ruling points at; nothing else in the live feed carries
+# "residual" in its product_name. Matching the family also survives the carrier adding another
+# residual label without a code change, which a literal cannot.
+#
+# ONE definition, used by BOTH the residual-per-sub report (below) and the P&L's mi_income
+# (account/coa.py). They read the same rows through the same filter, so the report and the books
+# cannot drift apart again — divergence between those two is precisely what sent this to the owner.
 _MA_RESIDUAL_LABEL = "Residual"
+_MA_RESIDUAL_LABEL_MATCH = "%residual%"
 
 _MA_ATU_COLUMN = assert_money_columns(["merchant_discount"], "raw_ma_daily_tx ATU-equivalent")[0]
 assert_money_columns(_MA_COMPONENTS, "raw_ma_commission MI-equivalent")
@@ -176,7 +188,7 @@ def _aggregate_ma(client, org_id, months, meta=None):
             chunk = (client.schema("commcalc").table("raw_ma_daily_tx")
                      .select("period,account_id,account_name,product_name,retail_cost")
                      .eq("org_id", org_id).in_("period", list(want))
-                     .eq("product_name", _MA_RESIDUAL_LABEL)
+                     .ilike("product_name", _MA_RESIDUAL_LABEL_MATCH)
                      .range(start, start + page - 1).execute().data) or []
             for r in chunk:
                 per = (r.get("period") or "").strip()
