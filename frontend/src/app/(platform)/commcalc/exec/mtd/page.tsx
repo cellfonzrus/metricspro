@@ -1,15 +1,20 @@
 'use client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, getActiveOrg, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
-import { MultiSelect } from '@/lib/multiselect'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
 // so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
 // org. No-op for normal users (the middleware overrides org_id to their membership) and when no tenant is
-// selected. RULE FIVE: this page's filter bar mirrors the Sales Report's — same MultiSelect UX.
+// selected. RULE FIVE (§3d): this page carries the SHARED <StandardFilterBar> — market -> store
+// cascade with checkbox dropdowns (owner refinement 2026-08-04) + the employee multi-select — so it
+// looks and behaves like every other report instead of carrying its own hand-rolled picker row.
 const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeURIComponent(o)}` : '' }
 
 // Executive MTD summary — replicates b2bsoft's "Month To Date Location / Employee Sales Report".
@@ -32,10 +37,12 @@ export default function ExecMtdPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [showCfg, setShowCfg] = useState(false)
-  // RULE FIVE standardized filters — store(s) / market(s) / rep(s) multi-select, applied SERVER-SIDE.
-  const [selStores, setSelStores] = useState<string[]>([])
-  const [selMarkets, setSelMarkets] = useState<string[]>([])
-  const [selReps, setSelReps] = useState<string[]>([])
+  // RULE FIVE standardized filters — one StandardFilterValue (store(s) / market(s) / rep(s)), applied
+  // SERVER-SIDE. `period` is NOT part of it here: this page follows the global period selector in the
+  // app header (usePeriod), and a second month control in the bar would give the user two competing
+  // answers to "which month am I looking at".
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const selStores = filt.stores, selMarkets = filt.markets, selReps = filt.reps
 
   const load = useCallback(() => {
     if (!period) return
@@ -55,12 +62,17 @@ export default function ExecMtdPage() {
   useEffect(() => { load() }, [load])
 
   // Options are computed by the backend from the UNFILTERED union (pick-don't-type over real data).
+  // `stores_detail` carries each store's market, which is what the cascade narrows on; a backend that
+  // predates it (or a store with no store_mapping row) still yields a usable flat list via the fallback.
   const opt = data?.filters || {}
   const storeOpts: string[] = opt.stores || []
-  const marketOpts: string[] = opt.markets || []
-  const repOpts: string[] = opt.reps || []
+  const repOpts: { id: string; label: string }[] = (opt.reps || []).map((r: string) => ({ id: r, label: r }))
+  const cascadeStores: StoreOpt[] = useMemo(() => (
+    (opt.stores_detail as any[] | undefined)?.map(s => ({ id: s.id, label: s.label, market: s.market })) ||
+    storeOpts.map(s => ({ id: s, label: s, market: null }))
+  ), [opt.stores_detail, storeOpts])
   const hasFilter = selStores.length > 0 || selMarkets.length > 0 || selReps.length > 0
-  const clearFilters = () => { setSelStores([]); setSelMarkets([]); setSelReps([]) }
+  const clearFilters = () => setFilt(emptyStandardFilter())
   const src = data?.source || {}
 
   const active = tab === 'location' ? data?.by_location : data?.by_employee
@@ -103,6 +115,14 @@ export default function ExecMtdPage() {
     { header: 'Employee pay', field: 'setup_fee_employee_pay', money: true, get: (r) => r.setup_fee_employee_pay },
     { header: 'Acc.+Set-up (target basis)', field: 'acc_plus_setup', money: true, get: (r) => r.acc_plus_setup },
   ]
+  // CLICK-A-HEADER SORT (owner 2026-08-10) — the same shared primitive <ReportShell> reports use, so a
+  // hand-rolled table behaves identically. Column keys come from `cols(...)` (the export definition), so
+  // the sortable columns and the exported columns can never drift apart. The TOTAL row is rendered
+  // separately below and is therefore never sorted into the middle of the table.
+  const sortCols = cols(labelKey)
+  const getCell = useCallback((r: any, field: string) => r?.[field], [])
+  const { sort, toggle, sorted: viewRows } = useTableSort(rows, getCell)
+
   // Export BOTH tabs (like the file's two sheets), each with its own totals row appended.
   const withTotal = (rs: any[], tot: any, lk: string) => [...rs, { ...tot, [lk]: 'TOTAL' }]
   const exportSheets = [
@@ -145,14 +165,16 @@ export default function ExecMtdPage() {
         </p>
       </div>
 
-      {/* RULE FIVE standardized filter bar — store(s) / market(s) / rep(s), pick-don't-type over the org's
-          real data, applied server-side so tables, trending AND exports all reflect the same selection. */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
-        {storeOpts.length > 0 && <MultiSelect allLabel="All stores" width={150} value={selStores} options={storeOpts} onChange={setSelStores} searchable />}
-        {marketOpts.length > 0 && <MultiSelect allLabel="All markets" width={140} value={selMarkets} options={marketOpts} onChange={setSelMarkets} />}
-        {repOpts.length > 0 && <MultiSelect allLabel="All employees" width={150} value={selReps} options={repOpts} onChange={setSelReps} searchable />}
-        {hasFilter && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={clearFilters}>Clear filters</button>}
-      </div>
+      {/* RULE FIVE standardized filter bar — market -> store cascade (checkbox dropdowns) + employees,
+          pick-don't-type over the org's real data, applied SERVER-SIDE so the tables, the trending math
+          AND the exports all reflect the same selection. Period comes from the global header selector. */}
+      <StandardFilterBar
+        value={filt} onChange={setFilt} periodMode="none"
+        show={{ period: false, stores: true, markets: true, reps: true }}
+        cascadeStores={cascadeStores}
+        repOptions={repOpts}
+        storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
+      />
 
       {/* Source-coverage transparency (owner's debug-first mandate): which source led the union and how
           many stores it surfaced — so a partial-feed month that hid stores is self-evident here. */}
@@ -203,11 +225,14 @@ export default function ExecMtdPage() {
         <div className="card table-wrapper" style={{ padding: 0 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
-              <th style={thL}>{labelHdr}</th>
-              {HEADERS.map((h) => <th key={h} style={th} title={HEADER_TIPS[h]}>{h}</th>)}
+              <SortableTh field={labelKey} sort={sort} onSort={toggle} style={thL}>{labelHdr}</SortableTh>
+              {HEADERS.map((h, i) => (
+                <SortableTh key={h} field={String(sortCols[i + 1]?.field || h)} sort={sort} onSort={toggle}
+                  style={th} title={HEADER_TIPS[h]}>{h}</SortableTh>
+              ))}
             </tr></thead>
             <tbody>
-              {rows.map((r, i) => (
+              {viewRows.map((r, i) => (
                 <tr key={i}>
                   <td style={{ ...tdL, fontWeight: 600 }}>{r[labelKey] || '—'}</td>
                   {cellVals(r).map((v, j) => <td key={j} style={td}>{v}</td>)}

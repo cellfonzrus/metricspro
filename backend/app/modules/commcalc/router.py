@@ -19455,7 +19455,14 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 opt_stores.add(a)
     except Exception:
         pass
-    filters = {'stores': sorted(opt_stores), 'markets': sorted(_all_markets), 'reps': sorted(opt_reps)}
+    # `stores_detail` carries each store's MARKET so the RULE FIVE cascade picker (owner refinement
+    # 2026-08-04: pick a market -> only that market's stores are selectable) can narrow the store list
+    # client-side. Additive — the flat `stores` / `markets` lists keep their exact previous contract, so
+    # nothing that already reads this response has to change. A store with no store_mapping row carries
+    # market=None and lands in the picker's '(no market)' bucket rather than disappearing.
+    filters = {'stores': sorted(opt_stores), 'markets': sorted(_all_markets), 'reps': sorted(opt_reps),
+               'stores_detail': [{'id': st, 'label': st, 'market': (_market_for(st) or None)}
+                                 for st in sorted(opt_stores)]}
 
     # ── Apply the selected filters to the UNION rows SERVER-SIDE (before bucketing) — case-insensitive
     #    membership; a market filter resolves each row's store to its market. Empty selection = no filter.

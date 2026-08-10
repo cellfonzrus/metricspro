@@ -7,11 +7,12 @@
 //   • Export to Excel / PDF / Print (lib/export) and 📤 Send to a rep via email / WhatsApp (lib/send-report),
 //     both operating on the CURRENTLY FILTERED rows.
 // Filtering/grouping is client-side over the rows the page already loaded — no backend change to adopt.
-import { Fragment, useMemo, useState, useEffect } from 'react'
+import { Fragment, useCallback, useMemo, useState, useEffect } from 'react'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 import { computeTotalRow } from '@/lib/report-totals'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 type Col = ExportColumn
 type Filter = { field: string; op: string; value: string }
@@ -148,6 +149,13 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
     })
   }, [rows, rep, store, dFrom, dTo, month, custom, repCol, storeCol, dateCol, byKey])
 
+  // CLICK-A-HEADER SORT (owner 2026-08-10) — applied to the FILTERED rows, so every downstream consumer
+  // (the table, the groups, the exports, Send) sees the same order the user is looking at: what you see
+  // is what you export (§3c). Sorting is a permutation, so no total/subtotal changes. No sort selected =
+  // `sortRows` hands back the original array, i.e. the report's own default order is preserved exactly.
+  const getCell = useCallback((r: any, field: string) => byKey[field]?.get(r), [byKey])
+  const { sort, toggle, sorted: view } = useTableSort(filtered, getCell)
+
   const activeCount = (rep ? 1 : 0) + (store ? 1 : 0) + (dFrom || dTo ? 1 : 0) + (month ? 1 : 0) + custom.filter(f => f.value).length
   const clearAll = () => { setRep(''); setStore(''); setDFrom(''); setDTo(''); setMonth(''); setCustom([]) }
 
@@ -156,9 +164,9 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   const groups = useMemo(() => {
     if (!groupCol) return null
     const m = new Map<string, any[]>()
-    for (const r of filtered) { const g = str(groupCol.get(r)).trim() || '—'; (m.get(g) || m.set(g, []).get(g)!).push(r) }
+    for (const r of view) { const g = str(groupCol.get(r)).trim() || '—'; (m.get(g) || m.set(g, []).get(g)!).push(r) }
     return Array.from(m.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  }, [groupCol, filtered])
+  }, [groupCol, view])
 
   const moneyCols = cols.filter(isMoney)
   const subtotal = (rs: any[], c: Col) => rs.reduce((s, r) => s + (Number(String(c.get(r)).replace(/[^0-9.-]/g, '')) || 0), 0)
@@ -187,7 +195,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
       title, subtitle, filename: filename || title.replace(/[^\w]+/g, '_').toLowerCase(),
       sheets: groups
         ? groups.map(([g, rs]) => ({ name: g.slice(0, 28), ...mkSheet(rs) }))
-        : [{ name: 'Report', ...mkSheet(filtered) }],
+        : [{ name: 'Report', ...mkSheet(view) }],
     }
   }
 
@@ -283,9 +291,15 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
       <div className="table-wrapper" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
           <colgroup>{cols.map(c => <col key={key(c)} style={{ width: cw.width(key(c)) }} />)}</colgroup>
-          <thead><tr>{cols.map(c => <th key={key(c)} style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', ...thPos }}>{c.header}<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} /></th>)}</tr></thead>
+          <thead><tr>{cols.map(c => (
+            <SortableTh key={key(c)} field={key(c)} sort={sort} onSort={toggle}
+              style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', ...thPos }}
+              after={<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} />}>
+              {c.header}
+            </SortableTh>
+          ))}</tr></thead>
           <tbody>
-            {!groups && filtered.map((r, i) => (
+            {!groups && view.map((r, i) => (
               <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined}
                 style={{ ...(onRowClick ? { cursor: 'pointer' } : undefined), ...(rowStyle ? rowStyle(r) : undefined) }}
                 className={onRowClick ? 'rs-clickable' : undefined}>
