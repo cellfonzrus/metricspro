@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
@@ -209,66 +209,169 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   const initials = (user?.full_name || user?.email || '?').split(/[\s@.]+/).filter(Boolean)
     .slice(0, 2).map(s => s[0]?.toUpperCase()).join('') || 'U'
 
+  // ── MODULE SEARCH (owner directive 2026-08-10) ─────────────────────────────────────────────────
+  // Jump straight to any page in the sidebar without hunting through the accordion. The index is
+  // built from `groups` — i.e. AFTER RBAC gating, tenant capability gating, carrier gating and the
+  // admin layout override — so search can never surface a page the user could not already see and
+  // click. It matches the DISPLAYED label (tenant nicknames from navCfg), not the built-in one.
+  const [query, setQuery] = useState('')
+  const [hi, setHi] = useState(0)                       // highlighted result (keyboard)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const index = useMemo(
+    () => groups.flatMap(g => g.items.map(it => ({
+      href: it.href, icon: it.icon,
+      label: labelOf(it.href, it.label),
+      group: labelOf('group:' + g.group, g.group),
+    }))),
+    [groups, navCfg.labels])
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    const seen = new Set<string>()
+    // Rank: label starts-with, then label contains, then group contains. De-duped by href so an item
+    // the layout override placed in two groups (`also`) offers ONE destination, not a double row.
+    const rank = (r: typeof index[number]) => {
+      const l = r.label.toLowerCase()
+      return l.startsWith(q) ? 0 : l.includes(q) ? 1 : r.group.toLowerCase().includes(q) ? 2 : 9
+    }
+    return index.map(r => ({ r, k: rank(r) })).filter(x => x.k < 9)
+      .sort((a, b) => a.k - b.k || a.r.label.localeCompare(b.r.label))
+      .map(x => x.r).filter(r => (seen.has(r.href) ? false : (seen.add(r.href), true)))
+      .slice(0, 12)
+  }, [index, query])
+
+  useEffect(() => { setHi(0) }, [query])
+
+  const go = (href: string) => { setQuery(''); router.push(href) }
+
+  // ⌘K / Ctrl-K from anywhere focuses the box (expanding the icon rail first, since the input only
+  // renders when the sidebar is open). Ignored while typing in another field so it never steals a key.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault(); setCollapsed(false)
+        setTimeout(() => searchRef.current?.focus(), 0)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)', flexDirection: 'column' }}>
     <ImpersonationBanner />
     <div style={{ display: 'flex', flex: 1, minHeight: 0, background: 'var(--bg)' }}>
-      <aside style={{ width: collapsed ? 56 : 220, background: 'var(--accent)', flexShrink: 0,
-        display: 'flex', flexDirection: 'column', transition: 'width 0.2s', overflow: 'hidden' }}>
-        <div style={{ padding: '20px 16px 12px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+      <aside className="mp-sidebar" style={{ width: collapsed ? 60 : 248, flexShrink: 0,
+        display: 'flex', flexDirection: 'column', transition: 'width 0.18s ease', overflow: 'hidden' }}>
+        {/* Brand + collapse. The mark keeps the rail identifiable when the wordmark is hidden. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10,
+          padding: collapsed ? '16px 0' : '16px 14px', justifyContent: collapsed ? 'center' : 'flex-start' }}>
+          <div style={{ width: 28, height: 28, flexShrink: 0, borderRadius: 8, display: 'flex',
+            alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 13, fontWeight: 800,
+            letterSpacing: '-0.02em', background: 'linear-gradient(135deg,#3b82f6,#2e75b6)',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.35)' }}>M</div>
           {!collapsed && (
-            <div>
-              <div style={{ color: 'white', fontWeight: 700, fontSize: 16 }}>MetricsPro</div>
-              <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>Commission Intelligence</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ color: 'rgba(255,255,255,0.95)', fontWeight: 650, fontSize: 14, letterSpacing: '-0.01em' }}>MetricsPro</div>
+              <div style={{ color: 'rgba(255,255,255,0.42)', fontSize: 10.5, whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {tenants.find(t => t.org_id === activeOrg)?.name || tenants[0]?.name || 'Commission Intelligence'}
+              </div>
             </div>
           )}
-          <button onClick={() => setCollapsed(!collapsed)} style={{ background: 'none', border: 'none',
-            color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: 18,
-            padding: collapsed ? '4px 0' : '8px 0 0', display: 'block' }}>
-            {collapsed ? '→' : '←'}
-          </button>
+          {!collapsed && (
+            <button className="mp-icon-btn" onClick={() => setCollapsed(true)} title="Collapse menu"
+              aria-label="Collapse menu">‹</button>
+          )}
         </div>
 
-        {!collapsed && (
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-            <label style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Period</label>
-            <select value={period} onChange={e => setPeriod(e.target.value)}
-              style={{ width: '100%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
-                borderRadius: 6, color: 'white', padding: '5px 8px', fontSize: 13, marginTop: 4 }}>
-              {periods.map(p => <option key={p} value={p} style={{ color: 'black' }}>{p}</option>)}
+        {/* MODULE SEARCH. In the rail it degrades to a button that expands + focuses (⌘K does the same). */}
+        {collapsed ? (
+          <button className="mp-icon-btn" title="Search modules (⌘K)" aria-label="Search modules"
+            onClick={() => { setCollapsed(false); setTimeout(() => searchRef.current?.focus(), 0) }}
+            style={{ margin: '0 auto 6px', fontSize: 14 }}>⌕</button>
+        ) : (
+          <div style={{ padding: '0 12px 10px', position: 'relative' }}>
+            <span aria-hidden style={{ position: 'absolute', left: 22, top: 7, fontSize: 12.5,
+              color: 'rgba(255,255,255,0.4)', pointerEvents: 'none' }}>⌕</span>
+            <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)}
+              placeholder="Search modules…" aria-label="Search modules"
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, results.length - 1)) }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)) }
+                else if (e.key === 'Enter' && results[hi]) { e.preventDefault(); go(results[hi].href) }
+                else if (e.key === 'Escape') { setQuery(''); searchRef.current?.blur() }
+              }}
+              className="mp-search" style={{ width: '100%', padding: '6px 30px 6px 26px' }} />
+            {query
+              ? <button className="mp-icon-btn" onClick={() => { setQuery(''); searchRef.current?.focus() }}
+                  title="Clear" aria-label="Clear search"
+                  style={{ position: 'absolute', right: 15, top: 3 }}>×</button>
+              : <span aria-hidden style={{ position: 'absolute', right: 19, top: 7, fontSize: 9.5, fontWeight: 600,
+                  letterSpacing: '0.04em', color: 'rgba(255,255,255,0.32)', pointerEvents: 'none' }}>⌘K</span>}
+          </div>
+        )}
+
+        {!collapsed && !query && (
+          <div style={{ padding: '0 12px 12px' }}>
+            <label style={{ display: 'block', color: 'rgba(255,255,255,0.38)', fontSize: 9.5, fontWeight: 600,
+              textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: 4 }}>Period</label>
+            <select value={period} onChange={e => setPeriod(e.target.value)} className="mp-search"
+              style={{ width: '100%', padding: '6px 8px', cursor: 'pointer' }}>
+              {periods.map(p => <option key={p} value={p} style={{ color: '#0f172a' }}>{p}</option>)}
             </select>
           </div>
         )}
 
-        <nav style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
-          {groups.map(({ group, items }) => {
+        <nav className="mp-nav" style={{ flex: 1, overflowY: 'auto', padding: '2px 8px 8px' }}>
+          {/* SEARCH RESULTS replace the accordion while a query is active — one flat, ranked list, so
+              the user never has to know which group a page lives in. Gated on !collapsed as well as on
+              the query: the input is hidden in the icon rail, so a stale query must not leave the user
+              staring at two-line result rows in a 60px column with no way to see or clear the box. */}
+          {query && !collapsed ? (
+            results.length === 0 ? (
+              <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 12, padding: '14px 8px', lineHeight: 1.5 }}>
+                No module matches “{query}”.
+              </div>
+            ) : results.map((r, i) => (
+              <button key={r.href} onClick={() => go(r.href)} onMouseEnter={() => setHi(i)}
+                className={'mp-nav-item' + (i === hi ? ' is-active' : '')}
+                style={{ width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer' }}>
+                <span className="mp-nav-icon">{r.icon}</span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.label}</span>
+                  <span style={{ display: 'block', fontSize: 10.5, fontWeight: 400, color: 'rgba(255,255,255,0.42)',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.group}</span>
+                </span>
+              </button>
+            ))
+          ) : groups.map(({ group, items }) => {
             // In the icon rail (collapsed) every item shows as an icon (no headers); in the full
             // sidebar only the open group's items render.
             const isOpen = collapsed || openGroup === group
             return (
-            <div key={group}>
+            <div key={group} style={{ marginBottom: collapsed ? 0 : 1 }}>
               {!collapsed && (
                 <button onClick={() => setOpenGroup(g => (g === group ? null : group))}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
-                    background: 'none', border: 'none', cursor: 'pointer',
-                    color: 'rgba(255,255,255,0.35)', fontSize: 10, textTransform: 'uppercase',
-                    letterSpacing: '0.08em', padding: '12px 16px 4px', fontWeight: 600 }}>
-                  <span>{labelOf('group:' + group, group)}</span>
-                  <span style={{ fontSize: 9, display: 'inline-block', transition: 'transform 0.15s',
-                    transform: isOpen ? 'rotate(90deg)' : 'none' }}>▸</span>
+                  className="mp-nav-group" aria-expanded={isOpen}>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {labelOf('group:' + group, group)}
+                  </span>
+                  <span aria-hidden style={{ fontSize: 8, opacity: 0.75, display: 'inline-block',
+                    transition: 'transform 0.15s ease', transform: isOpen ? 'rotate(90deg)' : 'none' }}>▶</span>
                 </button>
               )}
               {isOpen && items.map(({ href, label, icon }) => {
                 const active = pathname === href || pathname.startsWith(href + '/')
                 return (
-                  <Link key={href} href={href} style={{ display: 'flex', alignItems: 'center', gap: 10,
-                    padding: collapsed ? '10px 0' : '8px 16px', justifyContent: collapsed ? 'center' : 'flex-start',
-                    color: active ? 'white' : 'rgba(255,255,255,0.6)',
-                    background: active ? 'rgba(255,255,255,0.12)' : 'transparent',
-                    textDecoration: 'none', fontSize: 13, fontWeight: active ? 600 : 400,
-                    borderLeft: active ? '3px solid rgba(255,255,255,0.6)' : '3px solid transparent', transition: 'all 0.1s' }}>
-                    <span style={{ fontSize: 15 }}>{icon}</span>
-                    {!collapsed && labelOf(href, label)}
+                  <Link key={href} href={href} title={collapsed ? labelOf(href, label) : undefined}
+                    className={'mp-nav-item' + (active ? ' is-active' : '')}
+                    style={collapsed ? { justifyContent: 'center', padding: '9px 0' } : undefined}>
+                    <span className="mp-nav-icon">{icon}</span>
+                    {!collapsed && <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap' }}>{labelOf(href, label)}</span>}
                   </Link>
                 )
               })}
@@ -276,12 +379,14 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
           )})}
         </nav>
 
-        {!collapsed && (
-          <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.1)',
-            color: 'rgba(255,255,255,0.4)', fontSize: 11 }}>
-            Cellular Services · v1.0
-          </div>
-        )}
+        <div style={{ padding: collapsed ? '10px 0' : '10px 14px', borderTop: '1px solid rgba(255,255,255,0.08)',
+          display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'space-between',
+          color: 'rgba(255,255,255,0.34)', fontSize: 10.5 }}>
+          {collapsed
+            ? <button className="mp-icon-btn" onClick={() => setCollapsed(false)} title="Expand menu"
+                aria-label="Expand menu">›</button>
+            : <><span>v1.0</span><span>{index.length} pages</span></>}
+        </div>
       </aside>
 
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>

@@ -40,3 +40,79 @@ tr:hover td { background: var(--surface2); }
 .badge-amber { background: #fef3c7; color: #d97706; }
 .badge-blue { background: #dbeafe; color: #2563eb; }
 .badge-slate { background: #f1f5f9; color: #64748b; }
+
+/* ── Sidebar (2026-08-10 nav refresh) ────────────────────────────────────────────────────────────
+   Owner ask: a search box over every menu, POS first / Reports last, and a more considered look than
+   the flat emoji list. Everything here is scoped to .mp-* so no page style changes. Layout.tsx holds
+   the structure; these rules carry the states (hover/active/focus) inline styles can't express. */
+.mp-sidebar {
+  background: linear-gradient(180deg, #1e3a5f 0%, #16304f 100%);
+  border-right: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+/* Small ghost control: collapse chevrons, clear-search, the rail's search button. */
+.mp-icon-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; flex-shrink: 0;
+  background: transparent; border: none; border-radius: 6px;
+  color: rgba(255, 255, 255, 0.5); font-size: 15px; line-height: 1; cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.mp-icon-btn:hover { background: rgba(255, 255, 255, 0.1); color: rgba(255, 255, 255, 0.9); }
+
+/* Search field + the period select, so the two controls read as one system. */
+.mp-search {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.94);
+  font-size: 12.5px; font-family: inherit; outline: none;
+  transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.mp-search::placeholder { color: rgba(255, 255, 255, 0.38); }
+.mp-search:hover { background: rgba(255, 255, 255, 0.1); }
+.mp-search:focus {
+  background: rgba(255, 255, 255, 0.13);
+  border-color: rgba(147, 197, 253, 0.55);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+
+/* Group header — quiet until pointed at, so the eye goes to the items. */
+.mp-nav-group {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 11px 10px 5px;
+  background: none; border: none; cursor: pointer;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: inherit; font-size: 9.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  transition: color 0.12s ease;
+}
+.mp-nav-group:hover { color: rgba(255, 255, 255, 0.72); }
+
+/* Nav row. Rounded full-width pill instead of the old flush-left bar + border-left. */
+.mp-nav-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px; margin: 1px 0; border-radius: 7px;
+  background: transparent; color: rgba(255, 255, 255, 0.66);
+  font-family: inherit; font-size: 12.5px; font-weight: 450; line-height: 1.35;
+  text-decoration: none;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.mp-nav-item:hover { background: rgba(255, 255, 255, 0.07); color: rgba(255, 255, 255, 0.95); }
+.mp-nav-item.is-active {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff; font-weight: 600;
+  box-shadow: inset 2px 0 0 #60a5fa;
+}
+/* Fixed-width icon slot so every label starts on the same x — the single biggest tidiness win. */
+.mp-nav-icon {
+  width: 17px; flex-shrink: 0; text-align: center;
+  font-size: 13.5px; line-height: 1; filter: saturate(0.85);
+}
+
+/* Thin, self-effacing scrollbar (the default light one on a navy panel is loud). */
+.mp-nav { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.18) transparent; }
+.mp-nav::-webkit-scrollbar { width: 6px; }
+.mp-nav::-webkit-scrollbar-track { background: transparent; }
+.mp-nav::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); border-radius: 3px; }
+.mp-nav::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
