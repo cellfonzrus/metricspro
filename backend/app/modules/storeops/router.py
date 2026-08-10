@@ -6422,7 +6422,26 @@ def put_google_review_store_config(store_code: str, body: dict, authorization: s
         sb().table("google_review_store").upsert(row, on_conflict="org_id,store_code").execute()
     except Exception as e:
         raise HTTPException(400, f"Could not save (run migration 411 first?): {str(e)[:160]}")
-    return {"ok": True}
+    # Return what actually PERSISTED, read back from the table — not an unconditional {"ok": True}
+    # (2026-08-10). The old shape could not distinguish a real write from a no-op, so the settings
+    # page had no way to show the operator whether a manually-pasted Place ID had landed: it kept
+    # rendering the string still sitting in local component state either way. Read-back also catches
+    # the case where the upsert reports success but a filtered/again-empty row comes back.
+    saved = {}
+    try:
+        got = (sb().table("google_review_store").select("*").eq("org_id", org_id)
+               .eq("store_code", store_code).limit(1).execute().data) or []
+        saved = got[0] if got else {}
+    except Exception:
+        saved = {}
+    if not saved:
+        raise HTTPException(500, "The save reported success but nothing was stored for "
+                                 f"{store_code}. Nothing has been changed — please report this.")
+    return {"ok": True, "store_code": store_code, "place_id": saved.get("place_id"),
+            "place_id_source": saved.get("place_id_source"),
+            "target_override": saved.get("target_override"),
+            "resolved_address": saved.get("resolved_address"),
+            "resolved_display_name": saved.get("resolved_display_name")}
 
 
 @router.post("/google-reviews/resolve-place")

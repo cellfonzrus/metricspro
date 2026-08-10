@@ -81,6 +81,13 @@ export default function GoogleReviewsConfigPage() {
       .then(() => load()).catch((e: any) => setMsg('❌ ' + (e?.message || e))).finally(() => setBusy(false))
   }, [load])
 
+  // Save one store's Place ID / target override. Every exit path MUST say something (2026-08-10):
+  // this used to `return` silently when it decided the body was empty, and on success it left the
+  // typed string sitting in local state — so a Save that did nothing and a Save that worked looked
+  // IDENTICAL, and a Place ID that never persisted still showed in the box until the next reload.
+  // Now: nothing-to-save says so by name, and success clears the local edit so the box re-renders
+  // from what the server actually stored — a blank box after saving then means the write did not
+  // land, which is information rather than a mystery.
   const saveStoreOverride = useCallback((storeCode: string) => {
     const body: any = {}
     if (storeCode in overrideEdit) {
@@ -89,10 +96,22 @@ export default function GoogleReviewsConfigPage() {
       else body.target_override = Number(v)
     }
     if (storeCode in placeEdit && placeEdit[storeCode].trim()) body.place_id = placeEdit[storeCode].trim()
-    if (Object.keys(body).length === 0) return
+    if (Object.keys(body).length === 0) {
+      setMsg(`⚠️ Nothing to save for ${storeCode} — type a Place ID or a target first, then Save.`)
+      return
+    }
     setBusy(true); setMsg('')
     api(`/api/v1/storeops/google-reviews/store-config/${encodeURIComponent(storeCode)}`, { method: 'PUT', body: JSON.stringify(body) })
-      .then(() => load()).catch((e: any) => setMsg('❌ ' + (e?.message || e))).finally(() => setBusy(false))
+      .then((r: any) => {
+        // Drop this store's local edits so the inputs fall back to the PERSISTED values below.
+        setPlaceEdit(prev => { const n = { ...prev }; delete n[storeCode]; return n })
+        setOverrideEdit(prev => { const n = { ...prev }; delete n[storeCode]; return n })
+        setMsg(r?.place_id
+          ? `✅ ${storeCode} — Place ID saved (${r.place_id_source || 'manual'}): ${r.place_id}`
+          : `✅ ${storeCode} — saved.`)
+        load()
+      })
+      .catch((e: any) => setMsg('❌ ' + (e?.message || e))).finally(() => setBusy(false))
   }, [overrideEdit, placeEdit, load])
 
   if (!cfg) return <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
@@ -206,13 +225,15 @@ export default function GoogleReviewsConfigPage() {
                     <input style={{ ...inp, width: 70 }} type="number" step="0.1" min={1} max={5}
                       placeholder={String(cfg.target_default)}
                       value={overrideEdit[s.store_code] ?? (s.target_override != null ? String(s.target_override) : '')}
-                      onChange={e => setOverrideEdit({ ...overrideEdit, [s.store_code]: e.target.value })}
+                      onChange={e => setOverrideEdit(prev => ({ ...prev, [s.store_code]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveStoreOverride(s.store_code) } }}
                       disabled={readOnly} />
                   </td>
                   <td>
                     <input style={{ ...inp, width: 150 }} placeholder="auto-resolve or paste"
                       value={placeEdit[s.store_code] ?? (s.place_id || '')}
-                      onChange={e => setPlaceEdit({ ...placeEdit, [s.store_code]: e.target.value })}
+                      onChange={e => setPlaceEdit(prev => ({ ...prev, [s.store_code]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveStoreOverride(s.store_code) } }}
                       disabled={readOnly} />
                     {s.place_id_source && <div style={{ fontSize: 10, color: 'var(--text3)' }}>{s.place_id_source}</div>}
                   </td>
