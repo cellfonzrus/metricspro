@@ -177,7 +177,11 @@ CUSTOMER_FIELDS = ("account_type", "company_name", "first_name", "last_name", "m
                    "zip", "referral_source", "credit_limit", "accept_checks", "is_active")
 SERIAL_FIELDS = ("product_id", "store_code", "serial_number", "imei", "sim_card", "color",
                  "storage", "condition", "status", "cost", "date_received", "po_number")
-TAX_CODE_FIELDS = ("name", "rate", "store_code", "is_active")
+# `market` is writable here as of 2026-08-10: migration 741 added the column and gave it a resolver and
+# a bulk-create path, but the single-row UPDATE could not set OR CLEAR it — so a market-scoped rate,
+# once created, could never be moved to a store or repointed at another market. Adding it back is what
+# makes the scope selector on the Sales Tax screen a round trip instead of a one-way door.
+TAX_CODE_FIELDS = ("name", "rate", "store_code", "market", "is_active")
 RECEIPT_TEMPLATE_FIELDS = ("name", "header_text", "footer_text", "show_store_name",
                            "show_customer", "show_employee", "show_serials",
                            "show_tax_breakdown", "show_discounts", "paper_width_mm",
@@ -811,8 +815,18 @@ def update_tax_code(code_id: str, body: dict, authorization: str = Header(defaul
                     org_id: str = ORG_ID):
     _require_pos_perm(authorization, org_id, "pos_settings")
     upd = {k: body[k] for k in TAX_CODE_FIELDS if k in body}
-    if "store_code" in upd and upd["store_code"] == "":
-        upd["store_code"] = None
+    for k in ("store_code", "market"):
+        if k in upd and str(upd[k] or "").strip() == "":
+            upd[k] = None                      # "" is the UI's way of saying "clear this rung"
+        elif k in upd:
+            upd[k] = str(upd[k]).strip()
+    # Migration 741 already REFUSES a row naming both a store and a market at the database, because
+    # such a row belongs to neither rung and resolves differently depending on which query finds it
+    # first. Catching it here turns a raw constraint-violation string into a sentence, and keeps the
+    # two statements of the same rule from drifting.
+    if (upd.get("store_code") or "") and (upd.get("market") or ""):
+        raise HTTPException(400, "a tax code applies to a store OR a market, not both — "
+                                 "clear one of them")
     if "rate" in upd:
         try:
             upd["rate"] = float(upd["rate"])
@@ -1387,16 +1401,28 @@ def _dealer_sync(org_id: str, commit: bool):
             seen.setdefault(code.upper(), (code, str(r.get(namecol) or "").strip() if namecol else ""))
         fresh = [v for k, v in seen.items() if k not in existing]
         if commit and fresh:
+            # `description` (mig 742) carries the carrier's OWN name for the code. Before 742 it was
+            # read for the preview and then dropped on insert, which left the operator with a list of
+            # bare six-digit numbers they could not tell apart -- and telling them apart is the entire
+            # point of importing them. Degrades: a tenant whose 742 has not run gets the pre-742
+            # payload rather than a failed import.
             payload = [{"org_id": org_id, "code": code, "carrier": c.get("name"),
-                        "store_code": None, "is_active": True} for code, _nm in fresh]
+                        "store_code": None, "is_active": True,
+                        "description": (nm or None)} for code, nm in fresh]
             for i in range(0, len(payload), 500):
-                client.schema("pos").table("dealer_codes").insert(payload[i:i + 500]).execute()
+                chunk = payload[i:i + 500]
+                try:
+                    client.schema("pos").table("dealer_codes").insert(chunk).execute()
+                except Exception:
+                    client.schema("pos").table("dealer_codes").insert(
+                        [{k: v for k, v in row.items() if k != "description"} for row in chunk]).execute()
             existing |= {code.upper() for code, _ in fresh}
             inserted_total += len(fresh)
         out.append({"carrier": c.get("name"), "configured": True,
                     "label": c.get("dealer_code_label"), "source": f"{tbl}.{col}",
+                    "name_source": (f"{tbl}.{namecol}" if namecol else None),
                     "found": len(seen), "new": len(fresh),
-                    "sample": [code for code, _ in fresh[:5]]})
+                    "sample": [{"code": code, "description": nm or None} for code, nm in fresh[:8]]})
     return {"carriers": out, "inserted": inserted_total if commit else 0, "committed": commit}
 
 
@@ -1406,11 +1432,18 @@ def create_dealer_code(body: dict, authorization: str = Header(default=""), org_
     code = (body.get("code") or "").strip()
     if not code:
         raise HTTPException(400, "code required")
-    r = sb().schema("pos").table("dealer_codes").insert({
+    row = {
         "org_id": org_id, "code": code, "carrier": (body.get("carrier") or "").strip() or None,
         "store_code": (body.get("store_code") or "").strip() or None,
         "is_active": bool(body.get("is_active", True)),
-    }).execute()
+        "description": (str(body.get("description") or "").strip() or None),
+    }
+    try:
+        r = sb().schema("pos").table("dealer_codes").insert(row).execute()
+    except Exception:
+        # mig 742 un-run -> save the code without its label rather than refusing the whole write.
+        r = sb().schema("pos").table("dealer_codes").insert(
+            {k: v for k, v in row.items() if k != "description"}).execute()
     return {"dealer_code": (r.data or [{}])[0]}
 
 
@@ -1418,8 +1451,9 @@ def create_dealer_code(body: dict, authorization: str = Header(default=""), org_
 def update_dealer_code(code_id: str, body: dict, authorization: str = Header(default=""),
                        org_id: str = ORG_ID):
     _require_pos_perm(authorization, org_id, "pos_settings")
-    upd = {k: body[k] for k in ("code", "carrier", "store_code", "is_active") if k in body}
-    _clean_nullable(upd, ("carrier", "store_code"))
+    upd = {k: body[k] for k in ("code", "carrier", "store_code", "description", "is_active")
+           if k in body}
+    _clean_nullable(upd, ("carrier", "store_code", "description"))
     if not upd:
         raise HTTPException(400, "nothing to update")
     r = (sb().schema("pos").table("dealer_codes").update(upd)
