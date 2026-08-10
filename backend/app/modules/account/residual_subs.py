@@ -95,6 +95,10 @@ def assert_money_columns(cols, where=""):
     return cols
 
 
+# The feed's own label for the recurring residual line (owner ruling 2026-08-05). A LABEL, not a
+# column — the taxonomy lives in product_name, which is why this is matched, not computed.
+_MA_RESIDUAL_LABEL = "Residual"
+
 _MA_ATU_COLUMN = assert_money_columns(["merchant_discount"], "raw_ma_daily_tx ATU-equivalent")[0]
 assert_money_columns(_MA_COMPONENTS, "raw_ma_commission MI-equivalent")
 
@@ -152,12 +156,53 @@ def _aggregate_ma(client, org_id, months, meta=None):
             a["store_name"] = name
         return a
 
-    # MI-equivalent — per-activation dealer payable, by merchant account (store)
+    # ── RESIDUAL — the labelled `Residual` line on the daily-tx feed ─────────────────────────────
+    # OWNER RULING 2026-08-05 (raw_ma_daily_tx is the ONLY total-residual source) + explicit GO
+    # 2026-08-10. This REPLACES the previous MI-equivalent, which summed `_MA_COMPONENTS` from MA
+    # Commission Details — that is TOTAL COMPENSATION, not residual, and it was wrong by ~18x:
+    # luxelink July 2026 reported $124,043.34 of "MI", of which the device `rebate` alone was
+    # $126,636.77 (the components reconcile to the reported figure exactly, so there was no ambiguity
+    # about what it was summing). A device rebate is an equipment subsidy; it is not recurring
+    # residual, and mixing them made "residual per subscriber" read $174.84/month on $30-65 plans.
+    #
+    # The feed labels the real thing in `product_name`, and NEGATIVE retail_cost = paid TO the dealer,
+    # so residual is the sign-flipped sum of the rows labelled 'Residual'. Summed across EVERY
+    # account_name in the org (owner 2026-08-10: "the data has to be pulled from 2 sources, novawave
+    # residual and luxelink residual") — the entity split is reported as coverage, never as a filter,
+    # so a missing entity shows up as a gap instead of silently halving the number.
     try:
-        cols = "period,merchant_account_id," + ",".join(_MA_COMPONENTS)
         start, page = 0, 1000
         while True:
-            chunk = (client.schema("commcalc").table("raw_ma_commission").select(cols)
+            chunk = (client.schema("commcalc").table("raw_ma_daily_tx")
+                     .select("period,account_id,account_name,product_name,retail_cost")
+                     .eq("org_id", org_id).in_("period", list(want))
+                     .eq("product_name", _MA_RESIDUAL_LABEL)
+                     .range(start, start + page - 1).execute().data) or []
+            for r in chunk:
+                per = (r.get("period") or "").strip()
+                if not per:
+                    continue
+                store = (r.get("account_id") or "").strip() or "(Unassigned)"
+                a = _bucket(per, store, name=(r.get("account_name") or None))
+                a["sum_mi"] += -safe_float(r.get("retail_cost"))   # flip: positive = dealer receives
+                a["lines"] += 1
+                _cov(per, "residual_rows")
+                nm = (r.get("account_name") or "").strip()
+                if nm:
+                    cov.setdefault(per, {}).setdefault("entities", set()).add(nm)
+            if len(chunk) < page:
+                break
+            start += page
+    except Exception:
+        pass
+
+    # SUBSCRIBER COUNT — still one row per activated line on MA Commission Details. Counting only:
+    # no money is read from that report any more (see the block above for why).
+    try:
+        start, page = 0, 1000
+        while True:
+            chunk = (client.schema("commcalc").table("raw_ma_commission")
+                     .select("period,merchant_account_id")
                      .eq("org_id", org_id).in_("period", list(want))
                      .range(start, start + page - 1).execute().data) or []
             for r in chunk:
@@ -165,11 +210,7 @@ def _aggregate_ma(client, org_id, months, meta=None):
                 if not per:
                     continue
                 store = (r.get("merchant_account_id") or "").strip() or "(Unassigned)"
-                pay = -sum(safe_float(r.get(c)) for c in _MA_COMPONENTS)  # flip: positive = dealer receives
-                a = _bucket(per, store)
-                a["sum_mi"] += pay
-                a["lines"] += 1
-                a["subs"] += 1  # one Commission Details row == one activated subscriber line
+                _bucket(per, store)["subs"] += 1
                 _cov(per, "commission_rows")
             if len(chunk) < page:
                 break
@@ -200,6 +241,9 @@ def _aggregate_ma(client, org_id, months, meta=None):
         pass
 
     if meta is not None:
+        for _p, _c in cov.items():
+            if isinstance(_c.get("entities"), set):
+                _c["entities"] = sorted(_c["entities"])
         meta["ma_coverage"] = cov
     return list(agg.values())
 
@@ -267,8 +311,9 @@ def _aggregate_boost(client, org_id, months):
 
 _SOURCE_LABELS = {
     "boost_mi_atu": "Boost / ePay — raw_mi actual MI + ATU payout",
-    "vidapay_ma": ("VidaPay / master-agent — MA Commission Details (MI-equivalent) "
-                   "+ MA Daily Tx airtime margin (ATU-equivalent)"),
+    "vidapay_ma": ("VidaPay / master-agent — MA Daily Tx 'Residual' line (recurring residual, all "
+                   "entities) + MA Daily Tx airtime margin. Device rebates and spiffs are NOT residual "
+                   "and are excluded."),
 }
 
 
@@ -287,10 +332,33 @@ def _source_diagnostics(source, meta, kept):
     for p in kept:
         c = cov.get(p) or {}
         cr, dr = int(c.get("commission_rows") or 0), int(c.get("daily_tx_rows") or 0)
-        rows.append({"period": p, "commission_rows": cr, "daily_tx_rows": dr})
+        rows.append({"period": p, "commission_rows": cr, "daily_tx_rows": dr,
+                     "residual_rows": int(c.get("residual_rows") or 0),
+                     "entities": list(c.get("entities") or [])})
         if dr and not cr:
             airtime_only.append(p)
     out["ma_coverage"] = rows
+
+    # ENTITY COVERAGE (owner 2026-08-10: "the data has to be pulled from 2 sources, novawave residual
+    # and luxelink residual"). A tenant can hold several master-agent entities in ONE org, and each
+    # month's daily-tx file is pulled per entity — so a month whose file for one entity was never
+    # uploaded silently reports a PARTIAL residual that looks like a real decline. Verified on
+    # luxelink: Feb-Jun carry Novawave only, July carries Luxelink only (no Novawave rows at all),
+    # August carries both but over DISJOINT date ranges. Name the entities per period so a gap is
+    # visible instead of being read as a business result.
+    seen = sorted({e for r in rows for e in (r.get("entities") or [])})
+    if len(seen) > 1:
+        partial = [r["period"] for r in rows
+                   if r.get("residual_rows") and len(r.get("entities") or []) < len(seen)]
+        if partial:
+            out["entity_note"] = (
+                "PARTIAL ENTITY COVERAGE (not a decline) — this tenant reports residual for "
+                + str(len(seen)) + " entities (" + ", ".join(seen) + "), but "
+                + ", ".join(partial) + " "
+                + ("carries" if len(partial) == 1 else "carry")
+                + " only some of them. Those months' residual is INCOMPLETE until the missing "
+                "entity's MA Daily Tx file is uploaded — do not compare them month over month.")
+    out["entities"] = seen
     if airtime_only:
         one = len(airtime_only) == 1
         out["data_note"] = (

@@ -184,6 +184,24 @@ export default function ResidualPerSubPage() {
         </label>
       </div>
 
+      {/* ENTITY-coverage warning (owner 2026-08-10) — one org can hold several master-agent entities
+          and each month's daily-tx file is pulled per entity, so a month missing one entity's file
+          reports a PARTIAL residual that reads exactly like a business decline. Name it. */}
+      {!loading && data?.entity_note && (
+        <div className="card" style={{ padding: 12, marginBottom: 14, fontSize: 12, color: '#7c2d12', background: '#fff7ed', borderLeft: '3px solid #ea580c' }}>
+          {data.entity_note}
+          {Array.isArray(data.ma_coverage) && data.ma_coverage.length > 0 && (
+            <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap', color: 'var(--text2)' }}>
+              {data.ma_coverage.map((c: any) => (
+                <span key={c.period} style={{ fontSize: 11 }}>
+                  <b>{shortPeriod(c.period)}</b>: {(c.entities || []).length > 0 ? (c.entities || []).join(' + ') : '—'}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Source-coverage warning — a month with airtime rows but no MA Commission Details rows
           computes to $0 residual/subscriber legitimately; say so instead of showing a silent $0. */}
       {!loading && data?.data_note && (
