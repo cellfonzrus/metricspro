@@ -1042,10 +1042,15 @@ async def _upload_file_impl(
         # into commcalc.inventory_aging_device. Additive + org-scoped; degrades gracefully until mig 216
         # is run (a missing table must NOT break the per-store inventory_value ingest above).
         devices_saved = 0
+        recon_counts = {}
         try:
             devices = b2b_sweep.extract_inventory_devices(rows, as_of_date=as_of)
             if devices:
                 devices_saved = b2b_sweep.write_inventory_devices(client, org_id, devices, as_of)
+                # v3 (owner 2026-08-10): the SAME file is now the basis for the CURRENT inventory COUNT
+                # (the b2bsoft portal sweep is parked on the VidaPay proxy issue), so feed the per-store
+                # x device-type units the On-Inventory recon compares against. Best-effort by design.
+                recon_counts = b2b_sweep.write_b2b_inventory_counts(client, org_id, devices, as_of)
         except Exception as e:
             print(f"WARN inventory_aging per-device persist skipped (mig 216 pending?): {e}")
         try:
@@ -1094,9 +1099,10 @@ async def _upload_file_impl(
                      f"/ Location / Site / Branch) or a grouped 'Store:' header.")
             return {'success': True, 'file_type': 'inventory_aging', 'stores': 0, 'saved': 0,
                     'devices': devices_saved, 'skipped': 'inventory_devices_only', 'as_of': as_of,
-                    'rows_read': len(rows), 'note': dnote}
+                    'rows_read': len(rows), 'note': dnote, 'recon_counts': recon_counts}
         return {'success': True, 'file_type': 'inventory_aging', 'stores': saved, 'saved': saved,
-                'devices': devices_saved, 'as_of': as_of, 'rows_read': len(rows)}
+                'devices': devices_saved, 'as_of': as_of, 'rows_read': len(rows),
+                'recon_counts': recon_counts}
 
     # POS "X report": daily takings BY TENDER TYPE per store → commcalc.pos_tender_summary, for the tender
     # reconciliation against the daily closing sheet. Flexible column detection (any POS). Periodless.

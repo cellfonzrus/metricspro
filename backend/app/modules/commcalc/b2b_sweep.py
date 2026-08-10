@@ -338,12 +338,34 @@ def device_diagnostics(raw_rows):
 
 
 def write_inventory_devices(client, org_id, devices, as_of_date):
-    """Upsert per-device inventory-aging rows into commcalc.inventory_aging_device (device key = imei,
-    conflict target org_id,imei so an hourly re-pull refreshes rather than duplicates). Degrades
-    gracefully if the table doesn't exist yet (mig 216 pending) — the caller wraps this in try/except.
-    Returns the count written."""
+    """Write per-device inventory-aging rows into commcalc.inventory_aging_device as a SNAPSHOT.
+
+    OWNER REPORT 2026-08-10: "inventory is really those phones which were not sold ... the device which
+    got sold did not pay rebate should not be in inventory as it got sold."  He is right, and this
+    function was the reason it was wrong. It used to ONLY upsert (conflict org_id,imei) and never
+    delete, so the table was a cumulative pile of every device ever seen in ANY Inventory Aging file —
+    a device that sold last month simply kept its old row with a stale as_of_date. Measured before the
+    fix: 1,057 of luxelink's 2,097 rows (50%) had already been sold in POS, and the rows carried 20
+    distinct as_of dates instead of one.
+
+    An Inventory Aging export IS a point-in-time snapshot of what is ON HAND, so it is now treated as
+    one: write the file's devices, then drop the rows this file's own stores no longer list (their
+    as_of_date stayed behind). The prune is SCOPED to the stores the file actually covers, so a
+    per-store or partial export can never wipe a store it said nothing about — the one failure mode a
+    blanket delete-all would have. Rows with no store are pruned only when the file itself carried
+    store-less rows (i.e. it is the same device-only export shape).
+
+    Returns the count written. Degrades gracefully if the table doesn't exist yet (mig 216 pending) —
+    the caller wraps this in try/except."""
+    devices = list(devices or [])
     saved = 0
-    for d in (devices or []):
+    stores_seen, had_storeless = set(), False
+    for d in devices:
+        st = (str(d.get("store") or "").strip() or None)
+        if st:
+            stores_seen.add(st)
+        else:
+            had_storeless = True
         rec = {"org_id": org_id, "imei": d.get("imei"), "serial": d.get("serial"),
                "sku": d.get("sku"), "item": d.get("item"), "store": d.get("store"),
                "unit_cost": d.get("unit_cost"), "received_date": d.get("received_date"),
@@ -354,7 +376,76 @@ def write_inventory_devices(client, org_id, devices, as_of_date):
         client.schema("commcalc").table("inventory_aging_device").upsert(
             rec, on_conflict="org_id,imei").execute()
         saved += 1
+
+    # ── prune what this file's stores no longer list (= sold / transferred out) ──────────────────
+    # Everything still on hand was just re-stamped with `as_of_date`, so "older than this file" is
+    # exactly "absent from this file". Only runs when the file actually wrote something, so an empty
+    # or misparsed file can never empty the inventory.
+    pruned = 0
+    if saved and as_of_date:
+        try:
+            for st in sorted(stores_seen):
+                r = (client.schema("commcalc").table("inventory_aging_device")
+                     .delete(count="exact").eq("org_id", org_id).eq("store", st)
+                     .lt("as_of_date", as_of_date).execute())
+                pruned += (getattr(r, "count", None) or 0)
+            if had_storeless:
+                r = (client.schema("commcalc").table("inventory_aging_device")
+                     .delete(count="exact").eq("org_id", org_id).is_("store", "null")
+                     .lt("as_of_date", as_of_date).execute())
+                pruned += (getattr(r, "count", None) or 0)
+        except Exception as e:                      # a prune failure must never lose the ingest
+            print(f"WARN inventory_aging_device prune skipped: {e}")
+    if pruned:
+        print(f"inventory_aging_device: {saved} on hand, pruned {pruned} no longer listed")
     return saved
+
+
+def write_b2b_inventory_counts(client, org_id, devices, as_of_date):
+    """Per-store x device-type UNIT COUNTS from an Inventory Aging file -> commcalc.b2b_inventory.
+
+    OWNER DIRECTIVE 2026-08-10: "inventory aging file can be used as a basis for the current inventory
+    count", now that the b2bsoft portal sweep is parked behind the VidaPay proxy issue. Until this, the
+    ONLY writer of b2b_inventory was the manual paste on the On-Inventory recon page, so that table was
+    EMPTY for every tenant and the recon rendered nothing no matter how many Inventory Aging files
+    imported cleanly — the "it is not updating the relevant tables" report.
+
+    Buckets come from the SHARED classifier (asset.inventory_buckets.inv_bucket) — the same five types
+    the recon compares against, never a second copy of the keyword rules. A device that buckets to None
+    (SIM kit, accessory) is counted in `skipped`, not silently dropped into a bucket it isn't.
+
+    Replaces this as_of's snapshot (delete-then-insert by date, the same contract the manual upload
+    uses), and writes source='inventory_aging' so the recon page can say where the numbers came from.
+    Returns {rows, devices, skipped, stores}. NEVER raises — a recon-feed failure must not fail the
+    ingest that already wrote the value + per-device rows."""
+    from app.modules.asset.inventory_buckets import inv_bucket
+    out = {"rows": 0, "devices": 0, "skipped": 0, "stores": 0}
+    agg = {}
+    for d in (devices or []):
+        st = str(d.get("store") or "").strip()
+        # The bucket is read from the product description first (what the item IS), falling back to the
+        # SKU — mirroring how the manual upload classifies its `category` column.
+        bucket = inv_bucket(d.get("item")) or inv_bucket(d.get("sku"))
+        if not st or not bucket:
+            out["skipped"] += 1
+            continue
+        agg[(st, bucket)] = agg.get((st, bucket), 0) + 1
+        out["devices"] += 1
+    if not agg:
+        return out
+    try:
+        client.schema("commcalc").table("b2b_inventory").delete() \
+            .eq("org_id", org_id).eq("as_of_date", as_of_date).eq("source", "inventory_aging").execute()
+        payload = [{"org_id": org_id, "store": st, "category": b, "qty": q,
+                    "as_of_date": as_of_date, "source": "inventory_aging"}
+                   for (st, b), q in agg.items()]
+        for i in range(0, len(payload), 500):
+            client.schema("commcalc").table("b2b_inventory").insert(payload[i:i + 500]).execute()
+        out["rows"] = len(payload)
+        out["stores"] = len({st for st, _ in agg})
+    except Exception as e:
+        print(f"WARN b2b_inventory counts not written: {e}")
+    return out
 
 
 # ── orchestration (REAL — writes commcalc.inventory_value, preserving manual overrides) ───────

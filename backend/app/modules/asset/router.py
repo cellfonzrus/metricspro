@@ -1084,26 +1084,9 @@ async def borrowings_summary(org_id: str = ORG_ID, store: str = "", market: str 
 INV_BUCKETS = ["iphone", "android", "tablet", "watch", "hotspot"]
 
 
-def _inv_bucket(s):
-    """Map a device model OR a b2bsoft category label to one of the 5 reconciled
-    buckets (or None to exclude: SIM kits, accessories, anything else)."""
-    t = (s or "").lower()
-    if not t:
-        return None
-    if "watch" in t:
-        return "watch"
-    if "ipad" in t or "tablet" in t or " tab" in t or t.endswith("tab") or "tab " in t:
-        return "tablet"
-    if any(w in t for w in ("hotspot", "mifi", "jetpack", "modem", "internet")):
-        return "hotspot"
-    if "iphone" in t:
-        return "iphone"
-    if any(w in t for w in ("samsung", "galaxy", "motorola", "moto ", "google", "pixel",
-                            "android", "celero", "oneplus", "tcl", "nokia", "blu ")):
-        return "android"
-    if "apple" in t:   # bare Apple inventory that isn't iPad/Watch -> iPhone
-        return "iphone"
-    return None
+# The bucket classifier now lives in a leaf module so the commcalc Inventory-Aging ingest can bucket a
+# file into the SAME five device types this recon compares against, without a second copy of the rules.
+from .inventory_buckets import inv_bucket as _inv_bucket        # noqa: E402  (kept at its original spot)
 
 
 def _asset_oninv_by_bucket(client, org_id, store="", market=""):
