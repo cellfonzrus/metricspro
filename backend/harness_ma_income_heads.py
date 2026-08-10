@@ -145,12 +145,21 @@ def run():
         ok &= good
         print(f"  {'✓' if good else '✗'} {key:18} = {got:>10,.2f}  (expected {want:>10,.2f})  {why}")
 
-    # ── wallet_funding must appear on NO line ───────────────────────────────────────────────────
-    # Seeded as +300 total, which under the old code became -300 of "MI residual income".
-    total_pl = sum(round(v["company_wide"], 2) for v in L.values())
-    stray = approx(total_pl, sum(w for _, w, _ in checks) - 300.0)
-    print(f"  {'✓' if not stray else '✗'} wallet_funding excluded from every P&L line")
-    ok &= not stray
+    # ── wallet_funding: OFF the P&L, ON the balance sheet as the clearing asset ─────────────────
+    # Seeded as +300 total (money paid INTO the wallet), which under the old code became -300 of
+    # "MI residual income". It must now be +300 of distributor_clearing and $0 of every P&L line.
+    clearing = cw("distributor_clearing")
+    good = approx(clearing, 300.00)
+    ok &= good
+    print(f"  {'✓' if good else '✗'} {'distributor_clearing':18} = {clearing:>10,.2f}  "
+          f"(expected {300.00:>10,.2f})  wallet funding, NOT sign-flipped: the asset paid in")
+    pl_keys = {k for k, *_ in coa.PL_SPEC}
+    on_pl = round(sum(L[k]["company_wide"] for k in pl_keys), 2)
+    want_pl = round(sum(w for _, w, _ in checks), 2)
+    good = approx(on_pl, want_pl)
+    ok &= good
+    print(f"  {'✓' if good else '✗'} P&L total {on_pl:,.2f} == Σ heads {want_pl:,.2f} "
+          f"— no wallet funding leaked onto any P&L line")
 
     # ── no double-count: a residual row must not also be counted as ATU ──────────────────────────
     ok &= approx(cw("atu_income"), 5.00)

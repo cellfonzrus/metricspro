@@ -86,6 +86,12 @@ BS_SPEC = [
     ("fixtures",        "Fixtures / equipment",                      "asset",     "manual",  None),
     ("owed_vip",        "Owed to Distributor (device financing)",    "liability", "auto",    "store"),
     ("vip_ap",          "Accounts payable — Distributor invoices unpaid", "liability", "auto",  "store"),
+    # Owner ruling 2026-08-10: wallet funding is a SETTLEMENT CLEARING account — a pass-through that
+    # nets against what the distributor owes. An ASSET (cash the dealer has parked with the processor
+    # and has not yet consumed), sitting next to owed_vip / vip_ap so the distributor position reads
+    # in one place. It is emphatically NOT income; carrying it as negative revenue understated
+    # luxelink's July P&L by $26,355.61 (see the MA block in build_inputs).
+    ("distributor_clearing", "Distributor settlement clearing (wallet funding)", "asset", "auto", "company"),
     ("inter_store_pay", "Inter-store payable (borrowed)",            "liability", "auto*",   "store"),
     ("chargeback_res",  "Chargeback reserve",                        "liability", "auto",    "store"),
     ("owner_capital",   "Owner capital / contributions",             "equity",    "manual",  None),
@@ -490,19 +496,26 @@ def build_inputs(client, org_id, period):
             "spiff_m3": ("carrier_comm", 1), "spiff_m4": ("carrier_comm", 1),
             "spiff_m5": ("carrier_comm", 1), "spiff_m6": ("carrier_comm", 1),
         }
-        # wallet_funding is deliberately absent: funding a VidaPay wallet moves cash between the
-        # dealer's own pockets, so it is a balance-sheet movement and belongs on NO P&L line. Leaving
-        # it in (as a NEGATIVE revenue) understated luxelink's July income by $26,355.61. It is
-        # EXCLUDED here rather than re-homed because which balance-sheet line it belongs to — a
-        # prepaid wallet asset or a settlement clearing account — is the owner's call, still open.
+        # wallet_funding is absent from the P&L on purpose: funding a VidaPay wallet moves cash
+        # between the dealer's own pockets, so it belongs on NO P&L line. Leaving it in (as a NEGATIVE
+        # revenue) understated luxelink's July income by $26,355.61. Owner ruled 2026-08-10 that it is
+        # a SETTLEMENT CLEARING account — a pass-through netting against what the distributor owes —
+        # so it is booked to the balance-sheet line `distributor_clearing` a few lines below, NOT
+        # dropped. Sign is the OPPOSITE of the revenue components: the feed's positive value is money
+        # the dealer PAID IN, which is the asset.
         try:
             from app.modules.account.residual_subs import _MA_COMPONENTS
             for r in _fetch_all(client, "raw_ma_commission", ",".join(_MA_COMPONENTS),
                                 {"org_id": org_id, "period": period_keys}):
                 for c in _MA_COMPONENTS:
+                    if c == "wallet_funding":
+                        # Balance sheet, not P&L. NOT sign-flipped: a positive feed value is cash the
+                        # dealer paid into the wallet, i.e. the clearing asset it still holds.
+                        add("distributor_clearing", None, safe_float(r.get(c)))
+                        continue
                     head_sign = _MA_HEAD.get(c)
                     if not head_sign:
-                        continue                      # wallet_funding — see above
+                        continue
                     head, sign = head_sign
                     # Feed convention: NEGATIVE = paid TO the dealer, so the value is sign-flipped to
                     # "money the dealer receives" exactly as before; `sign` then re-points a rebate
