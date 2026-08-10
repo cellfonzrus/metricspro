@@ -68,10 +68,6 @@ PL_SPEC = [
     ("vip_device_pay","Distributor device payments (PayGo, paid)",   "cogs",    "auto",  "store"),
     ("accessory_cost","Accessory cost",                              "cogs",    "auto",  "store"),
     ("device_cost",   "Device cost",                                 "cogs",    "auto",  "store"),
-    # CONTRA-COGS (owner ruling 2026-08-10): carries a NEGATIVE amount so it nets against Device cost
-    # in the COGS subtotal — device GP then reflects the true net purchase price per IMEI — while
-    # staying a visible line of its own rather than vanishing into device_cost.
-    ("device_rebate", "Device purchase rebates (contra-COGS)",       "cogs",    "auto",  "company"),
     ("vip_fees",      "Distributor fees paid (shipping / SIM kit / processing)", "cogs", "auto", "store"),
     ("rep_comm",      "Rep commissions paid",                        "opex",    "auto",  "store"),
     ("wages",         "Wages / hourly payroll",                      "opex",    "auto",  "store"),
@@ -484,9 +480,11 @@ def build_inputs(client, org_id, period):
         # Each now goes to the head it belongs to (the arithmetic is unchanged per component — this
         # re-files them, it does not re-compute them):
         _MA_HEAD = {
-            # A device rebate is an equipment subsidy on a purchased IMEI, so it nets against Device
-            # cost rather than inflating revenue — booked NEGATIVE into the contra-COGS line.
-            "rebate":             ("device_rebate",    -1),
+            # SUPERSEDED 2026-08-10 (same day): first booked as a NEGATIVE contra-COGS against Device
+            # cost. The owner then placed it precisely — a device purchase rebate is a REIMBURSEMENT,
+            # and it belongs in the income column on the existing distributor-reimbursement line
+            # rather than netting invisibly inside COGS. Same money, income side, drillable by label.
+            "rebate":             ("vip_reimb",         1),
             "device_margin":      ("ma_device_margin",  1),
             "fees_margin":        ("fee_income",        1),
             "consumer_financing": ("financing_income",  1),
@@ -520,8 +518,10 @@ def build_inputs(client, org_id, period):
                     # Feed convention: NEGATIVE = paid TO the dealer, so the value is sign-flipped to
                     # "money the dealer receives" exactly as before; `sign` then re-points a rebate
                     # into the contra-COGS line as a negative cost.
+                    _DETAIL = {"carrier_comm": "SPIFF / bounty",
+                               "vip_reimb": "Device purchase rebates (Distributor/MA)"}
                     add(head, None, sign * -safe_float(r.get(c)),
-                        detail_label=("SPIFF / bounty" if head == "carrier_comm" else None))
+                        detail_label=_DETAIL.get(head))
         except Exception:
             pass
         try:

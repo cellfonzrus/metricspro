@@ -131,7 +131,7 @@ def run():
     # ── every component lands on its own head ────────────────────────────────────────────────────
     checks = [
         ("mi_income", 100.00, "real residual only: 30 + 70, both labels, June excluded"),
-        ("device_rebate", -1500.00, "rebate as NEGATIVE contra-COGS: -(1000 + 500)"),
+        ("vip_reimb", 1500.00, "rebate as REIMBURSEMENT income (owner 08-10): 1000 + 500"),
         ("ma_device_margin", 120.00, "device_margin 100 + 20, consumer_margin 0"),
         ("fee_income", 75.00, "fees_margin"),
         ("financing_income", 50.00, "consumer_financing"),
