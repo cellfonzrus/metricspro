@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import math as _math
+import re as _re
 import re
 from datetime import datetime, timedelta, timezone, date as _date
 
@@ -323,6 +324,31 @@ def stores_for_employees(client, org_id: str, employee_ids: list[str],
 
 
 # ── Google Places API (New) — pure HTTP calls, mockable by monkeypatching these two names ──────
+def street_number(addr: str) -> str:
+    """The leading street number of an address ('104-08 Lefferts Blvd' -> '104-08'). Keeps hyphens,
+    because Queens-style numbers ARE hyphenated and '104-08' vs '10408' must not be conflated."""
+    m = _re.match(r"\s*([0-9][0-9\-]*)", str(addr or ""))
+    return (m.group(1).rstrip("-") if m else "")
+
+
+def wrong_street_number(query_address: str, formatted_address: str) -> bool:
+    """True when Google answered with a DIFFERENT street number than we asked for — i.e. it matched a
+    neighbouring business, not ours.
+
+    Found live 2026-08-10 and the reason this guard exists: the house store is stored as the bare
+    street line "1115 Liberty Ave" (no city/state). Searching it plain returned "1115 Liberty Ave,
+    Liberty, INDIANA"; searching it with the brand token returned "WIRELESS WORLD, 113-03 Liberty Ave"
+    — a real wireless shop with 62 reviews, at a different address. Caching that would have attributed
+    another business's ratings to this store and driven its employees' action plans off them. Wrong
+    data is worse than no data, so an auto-resolution that fails this check is REFUSED rather than
+    stored; a human can still set the Place ID by hand.
+
+    Only fires when BOTH sides expose a street number — a genuinely number-less address (a mall unit,
+    say) is left to the postal-address check rather than being blocked on a comparison we cannot make."""
+    a, b = street_number(query_address), street_number(formatted_address)
+    return bool(a and b and a != b)
+
+
 def looks_like_postal_address(display_name: str, address: str) -> bool:
     """True when Google handed back the STREET ADDRESS rather than the business at it — the failure mode
     mig 430 exists for. Detected structurally (the display name is just the leading part of the address)
@@ -362,7 +388,13 @@ def text_search_place(address: str, api_key: str, timeout: int = 15, brand: str 
         raise RuntimeError(f"No Google Place found for address: {address}")
     p = places[0]
     dn = (p.get("displayName") or {}).get("text")
-    return {"place_id": p.get("id"), "formatted_address": p.get("formattedAddress"),
+    fa = p.get("formattedAddress")
+    if wrong_street_number(address, fa):
+        raise RuntimeError(
+            f"Google matched a different address ({fa}) than the store's ({address}) — most likely "
+            "because the stored address has no city/state, so the search drifted to a neighbouring "
+            "business. Nothing was saved. Complete this store's address, or set its Place ID manually.")
+    return {"place_id": p.get("id"), "formatted_address": fa,
             "display_name": dn, "query": query,
             # Surfaced, not swallowed: a postal-address match yields a place with no ratings, and the
             # store page can then say "set a brand token or override the place ID" instead of showing
