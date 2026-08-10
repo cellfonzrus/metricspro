@@ -173,6 +173,8 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
         ))}
       </div>
 
+      {/* Shown only when the selected employee genuinely has no qualifying lines this period — a
+          statement of fact (their quantities really are zero), not a refusal to compute. */}
       {data.rep_note && (
         <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 12.5, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
           {data.rep_note}

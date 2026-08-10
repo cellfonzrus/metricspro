@@ -359,7 +359,7 @@ def _derive_qty(payout, rate):
     return round(payout / rate, 2) if rate else 0.0
 
 
-def _plan_template(client, org_id, period, carrier):
+def _plan_template(client, org_id, period, carrier, rep=None):
     """Build the employee-payout template for a NON-Boost carrier from its configured pay sources:
     Commission Plan rules (+ tiers) and payout_schedule installments. Baseline qty/current-$ come from the
     read-only commission_engine preview. Empty state (R1-style) when the carrier has no pay source."""
@@ -398,16 +398,34 @@ def _plan_template(client, org_id, period, carrier):
                 "configure_url": "/commcalc/commission-plans"}
 
     # baseline from the read-only preview (never writes rep_commissions)
+    # The preview is ALREADY per-rep (`by_rep` carries rep / store / plan / the per-rule breakdown) —
+    # this loop simply summed across it. So narrowing to one employee is a filter, not a new
+    # computation: same engine, same numbers, one rep's rows instead of all of them. (Corrected
+    # 2026-08-10 after the owner pointed out that non-Boost employees plainly do have their own
+    # numbers — Executive MTD shows them from the same ingested data.)
     agg_rule, base_subtotal, total_payout, rep_plan_ids = {}, 0.0, 0.0, set()
+    reps_seen, rep_matched = {}, False
+    want_rep = commission_engine._canon_person(rep) if rep else None
     try:
         pv = commission_engine.preview(client, org_id, period)
-        for rep in (pv.get("by_rep") or []):
-            if cplan_ids and str(rep.get("plan_id")) not in cplan_ids:
+        for rrow in (pv.get("by_rep") or []):
+            if cplan_ids and str(rrow.get("plan_id")) not in cplan_ids:
                 continue
-            rep_plan_ids.add(str(rep.get("plan_id")))
-            total_payout += safe_float(rep.get("total_payout"))
-            base_subtotal += safe_float(rep.get("base_payout")) + safe_float(rep.get("tiered_payout"))
-            for rb in (rep.get("rules") or []):
+            nm = (rrow.get("rep") or "").strip()
+            if nm:
+                e = reps_seen.setdefault(commission_engine._canon_person(nm),
+                                         {"id": nm, "label": nm, "store": (rrow.get("store") or "").strip(),
+                                          "current_payout": 0.0})
+                e["current_payout"] += safe_float(rrow.get("total_payout"))
+            # Name bridge: the picker's value can come from the roster OR from a rep_commissions row,
+            # so compare through the engine's own canonicalizer ("Last, First" vs "First Last").
+            if want_rep and commission_engine._canon_person(nm) != want_rep:
+                continue
+            rep_matched = True
+            rep_plan_ids.add(str(rrow.get("plan_id")))
+            total_payout += safe_float(rrow.get("total_payout"))
+            base_subtotal += safe_float(rrow.get("base_payout")) + safe_float(rrow.get("tiered_payout"))
+            for rb in (rrow.get("rules") or []):
                 a = agg_rule.setdefault(str(rb.get("rule_id")),
                                         {"payout": 0.0, "units": 0, "matched": 0})
                 a["payout"] += safe_float(rb.get("payout"))
@@ -415,6 +433,8 @@ def _plan_template(client, org_id, period, carrier):
                 a["matched"] += int(rb.get("matched_lines") or 0)
     except Exception:
         agg_rule = {}
+    for e in reps_seen.values():
+        e["current_payout"] = round(e["current_payout"], 2)
 
     comps = []
     for p in cplans:
@@ -467,7 +487,9 @@ def _plan_template(client, org_id, period, carrier):
 
     actuals = {"subtotal": round(base_subtotal, 2), "total_payout": round(total_payout, 2),
                "avg_tier": 1.0, "reps": len(rep_plan_ids)}
-    return {"components": comps, "tier": tier, "actuals": actuals}
+    return {"components": comps, "tier": tier, "actuals": actuals,
+            "reps": sorted(reps_seen.values(), key=lambda x: x["label"].lower()),
+            "rep_matched": (rep_matched if rep else None)}
 
 
 def activation_baseline(client, org_id, period, carrier_id=None, rep=None):
@@ -491,7 +513,7 @@ def activation_baseline(client, org_id, period, carrier_id=None, rep=None):
                      "template": {"components": comps, "tier": tier, "source_kind": "boost_rates"}})
         return base
 
-    tpl = _plan_template(client, org_id, period, picked)
+    tpl = _plan_template(client, org_id, period, picked, rep=rep)
     if tpl.get("template_empty"):
         base.update({"template": {"components": [], "tier": None, "source_kind": "empty",
                                   "empty": True, "reason": tpl.get("reason"),
@@ -501,16 +523,17 @@ def activation_baseline(client, org_id, period, carrier_id=None, rep=None):
     base.update({"actuals": tpl["actuals"],
                  "template": {"components": tpl["components"], "tier": tpl["tier"],
                               "source_kind": "commission_plan"}})
-    if rep:
-        # HONEST REFUSAL: the plan-based baseline comes from the read-only commission-engine preview,
-        # which is computed for the carrier as a whole — there is no per-rep split of it yet. Showing
-        # the COMPANY numbers under one employee's name would be a lie, so say so and keep the figures
-        # labelled for what they are.
+    # The plan preview knows its own reps, so prefer that list for a plan-based carrier — a rep can
+    # have plan pay without a rep_commissions row, and would otherwise be missing from the picker.
+    if tpl.get("reps"):
+        base["reps"] = tpl["reps"]
+    if rep and tpl.get("rep_matched") is False:
+        # Not a refusal to compute — a statement that this person has no lines under this carrier's
+        # plans in this period. Quantities are therefore zero, which is the truth, not a gap.
         base["rep_note"] = (
-            "Per-employee baselines aren't available for this carrier yet — its components come from "
-            "the Commission-Plan preview, which is computed carrier-wide. The quantities below are "
-            "COMPANY totals; change them freely to model one person, but they did not start from "
-            f"{rep}'s own numbers.")
+            f"{rep} has no qualifying lines under this carrier's commission plans for {period}, so "
+            "every quantity below starts at zero. Change them to model a scenario, or pick a different "
+            "period or carrier.")
     return base
 
 
