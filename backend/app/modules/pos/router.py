@@ -207,6 +207,27 @@ def _caller_employee(authorization: str, org_id: str) -> str:
     return ((rows[0].get("employee_id") if rows else "") or "").strip()
 
 
+def _super_admin_login(uid: str) -> bool:
+    """Whether this LOGIN is a platform super-admin, regardless of which tenant it is acting on.
+
+    `storeops.app_users.auth_id` is globally unique per login, so super-admin standing is a property
+    of the PERSON, not of one membership row. That is already the platform's posture: tenant_middleware
+    skips the org_id rewrite entirely for a super-admin, so the client-supplied org_id is honoured and
+    cross-tenant administration works. Every POS gate must read it the same way — this lives in ONE
+    place because two gates need it and the drift between them is precisely the bug being fixed here.
+
+    FAILS CLOSED: any lookup fault returns False (not a super-admin). A gate must never ESCALATE on
+    error; the surrounding caller then applies its own normal denial."""
+    if not uid:
+        return False
+    try:
+        rows = (sb().schema("storeops").table("app_users").select("id")
+                .eq("auth_id", uid).eq("super_admin", True).limit(1).execute().data) or []
+    except Exception:
+        return False
+    return bool(rows)
+
+
 def _caller_ctx(authorization: str, org_id: str):
     """The caller's RBAC context — {'perms', 'role', 'super_admin'} — or None when the caller is
     UNRESOLVABLE (no/invalid token, no app_users membership, or a role name with no roles row).
@@ -227,9 +248,7 @@ def _caller_ctx(authorization: str, org_id: str):
         # Since app_users.auth_id is globally unique, super-admin standing is a property of the LOGIN,
         # not of one membership: look it up without the org filter and, if present, grant it here.
         # A non-super-admin with no membership still returns None and is still denied.
-        sa = (sb().schema("storeops").table("app_users").select("super_admin")
-              .eq("auth_id", uid).eq("super_admin", True).limit(1).execute().data) or []
-        if not sa:
+        if not _super_admin_login(uid):
             return None
         return {"perms": {}, "role": "super_admin", "super_admin": True}
     role = ((rows[0].get("role") if rows else "") or "").strip()
@@ -280,14 +299,32 @@ def _require_pos_perm(authorization: str, org_id: str, key: str):
 
 
 def _require_member(authorization: str, org_id: str) -> str:
-    """401 unless the caller is a signed-in member of this org; returns their auth uid."""
+    """401/403 unless the caller may act on this org; returns their auth uid.
+
+    A member of the org passes. A PLATFORM SUPER-ADMIN passes on ANY org — the same standing
+    _caller_ctx already grants, and the same posture tenant_middleware takes (no org_id rewrite for a
+    super-admin, so the tenant they picked in the switcher is honoured).
+
+    WHY THIS SECOND PLACE EXISTS (2026-08-10). The 2026-08-09 fix (f4c39b2) taught `_caller_ctx` to
+    recognise super-admin standing from any membership, to unblock the owner's "the POS set up wizard
+    is not letting me update the sales tax". It could not work: this function is called by
+    `_require_pos_access`, the APIRouter-level dependency, and a router dependency runs BEFORE the
+    endpoint body — so a super-admin with no `app_users` row in the acting tenant was refused here,
+    with `_caller_ctx` never reached. Measured on prod 2026-08-10: the owner's login holds exactly ONE
+    membership (the house org), so on Luxelink/Vzone EVERY POS endpoint — the wizard's GETs included —
+    answered 403.
+
+    IT CANNOT LEAK. The extra branch tests one thing, `super_admin = true` on this uid, and grants
+    nothing else: a non-super-admin with no membership in the acting org is still refused, which is the
+    control that keeps this the opposite of the 2026-08-09 HR gate (that one ignored the tenant
+    switcher and served another tenant's employees to an ordinary admin)."""
     from app.modules.core.router import _uid_from_token
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "sign in to perform this action")
     rows = (sb().schema("storeops").table("app_users").select("id")
             .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
-    if not rows:
+    if not rows and not _super_admin_login(uid):
         raise HTTPException(403, "your login is not a member of this organization")
     return uid
 
