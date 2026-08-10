@@ -133,8 +133,20 @@ def _epay_reimb_amount(entries, reimb_types):
 
 def _sold_imei_set(client, org_id, table, imei_field, imeis):
     """Which of these IMEIs appear in a sales/match table (=> sold). Chunked .in_() like _epay_map."""
+    return set(_sold_imei_store_map(client, org_id, table, imei_field, imeis))
+
+
+def _sold_imei_store_map(client, org_id, table, imei_field, imeis):
+    """{normalized imei -> the store that sold it} over a sales/match table. Chunked .in_() like
+    _epay_map. Membership alone answers "sold?"; the STORE is what a source map with no `store_field`
+    needs — a Total/MA row is booked against the DEALER account and carries no store of its own, so
+    without this the whole ledger (and therefore the store filter, the per-store payables view and the
+    forecast's "which store is this order for") reads '—' for every Total device. Owner report
+    2026-08-10: "Phone forecast should show which store the inventory is being ordered for".
+    Measured coverage on the luxelink ledger: 1,081 of 1,118 IMEIs (97%) resolve. The rest stay None —
+    an unresolved device is never attached to an arbitrary store."""
     if not table or not imei_field:
-        return set()
+        return {}
     candidates = set()
     for i in imeis:
         if not i:
@@ -145,15 +157,26 @@ def _sold_imei_set(client, org_id, table, imei_field, imeis):
         candidates.add(n + ".0")
     candidates.discard("")
     cand = list(candidates)
-    found = set()
+    found = {}
+    # `store` is selected alongside the key so this costs the SAME queries it always did. A table with
+    # no store column would 400 the select, so fall back to the key-only read and keep the sold answer.
     for j in range(0, len(cand), 200):
+        chunk, with_store = [], True
         try:
-            chunk = (client.schema("commcalc").table(table).select(imei_field)
+            chunk = (client.schema("commcalc").table(table).select(f"{imei_field},store")
                      .eq("org_id", org_id).in_(imei_field, cand[j:j + 200]).execute().data) or []
         except Exception:
-            chunk = []
+            with_store = False
+            try:
+                chunk = (client.schema("commcalc").table(table).select(imei_field)
+                         .eq("org_id", org_id).in_(imei_field, cand[j:j + 200]).execute().data) or []
+            except Exception:
+                chunk = []
         for r in chunk:
-            found.add(_norm_imei(r.get(imei_field)))
+            k = _norm_imei(r.get(imei_field))
+            st = (str(r.get("store") or "").strip() or None) if with_store else None
+            if k not in found or (found[k] is None and st):
+                found[k] = st
     return found
 
 
@@ -242,9 +265,10 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
                if cfg.get("invoice_date_source") == "vip_invoices" else {})
     do_epay = bool(cfg.get("epay_crosscheck")) or cfg.get("reimbursement_source") == "epay"
     epay_map = _epay_payments_map(client, org_id, imeis) if do_epay else {}
-    sold_set = (_sold_imei_set(client, org_id, cfg.get("sold_match_table"),
-                               cfg.get("sold_match_imei_field"), imeis)
-                if cfg.get("sold_source") == "sales_match" else set())
+    sold_store = (_sold_imei_store_map(client, org_id, cfg.get("sold_match_table"),
+                                       cfg.get("sold_match_imei_field"), imeis)
+                  if cfg.get("sold_source") == "sales_match" else {})
+    sold_set = set(sold_store)
 
     out = []
     for r in chunk:
@@ -252,6 +276,11 @@ def _rows_for_page(client, org_id, cfg, chunk, today, pct, alias, reimb_types, t
         model_raw = (r.get(cfg["model_field"]) if cfg.get("model_field") else None)
         model = alias.get((str(model_raw or "").strip().lower()), model_raw)
         store = r.get(cfg["store_field"]) if cfg.get("store_field") else None
+        # No store on the source row (every Total/MA map: the activation is booked against the dealer
+        # account) -> use the POS store that sold the device. Only ever FILLS a blank; a configured
+        # store_field always wins.
+        if not store:
+            store = sold_store.get(imei)
         owed = _f(r.get(owed_field)) if owed_field else None
         owed_source = "asset_ledger" if owed_field else "unconfigured"
 

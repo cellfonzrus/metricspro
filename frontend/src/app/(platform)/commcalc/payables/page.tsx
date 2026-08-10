@@ -1,9 +1,11 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { api, fmt } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
+import { SortableTh, useTableSort } from '@/components/SortableTh'
 
 // Device Forecasting & Vendor Payables (module 095). Reads the config-driven ledger built by
 // POST /api/v1/payables/rebuild. Forecasting is phones-only; payables + due are per-IMEI.
@@ -71,7 +73,15 @@ export default function PayablesPage() {
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const owedStore = filt.stores.length === 1 ? filt.stores[0] : ''
 
+  // The ledger rows carry a store but NO market, so the cascade's market vocabulary comes from the
+  // org roster (the same org-scoped pick-don't-type source /core/filter-options serves every other bar).
+  const [roster, setRoster] = useState<StoreOpt[]>([])
   useEffect(() => { api(`/api/v1/payables/settings`).then(setSettings).catch(() => {}) }, [])
+  useEffect(() => {
+    api(`/api/v1/core/filter-options`)
+      .then((d: any) => setRoster((d?.stores || []).map((x: any) => ({ id: x.store, label: x.store, market: x.market || null }))))
+      .catch(() => setRoster([]))
+  }, [])
   useEffect(() => { const t = new URLSearchParams(window.location.search).get('tab'); if (t && ['payables', 'forecast', 'owed', 'map'].includes(t)) setTab(t as Tab) }, [])
   useEffect(() => { if (tab === 'forecast') loadForecast() }, [tab, lookback, horizon])
   useEffect(() => { if (tab === 'payables') loadPayables() }, [tab, status])
@@ -151,8 +161,28 @@ export default function PayablesPage() {
   // carry `store`; `market` shows only if the ledger has it → the market picker self-hides when absent).
   const facc = { store: (r: any) => r.store, market: (r: any) => r.market }
   const filterOpts = useMemo(() => optionsFromRows([...fRows, ...pRows], facc), [fRows, pRows])   // eslint-disable-line react-hooks/exhaustive-deps
+  // Cascade options = the org roster (which carries the markets) UNION any store present in the loaded
+  // rows but missing from the roster — a store that genuinely has payables must never become unselectable
+  // just because it isn't on the roster yet.
+  const cascade: StoreOpt[] = useMemo(() => {
+    const seen = new Map<string, StoreOpt>()
+    roster.forEach(r => seen.set(r.id.trim().toLowerCase(), r))
+    filterOpts.stores.forEach(st => {
+      const k = st.trim().toLowerCase()
+      if (!seen.has(k)) seen.set(k, { id: st, label: st, market: null })
+    })
+    return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label))
+  }, [roster, filterOpts.stores])
+
   const fRowsF = useMemo(() => filterRows(fRows, filt, facc), [fRows, filt])   // eslint-disable-line react-hooks/exhaustive-deps
   const pRowsF = useMemo(() => filterRows(pRows, filt, facc), [pRows, filt])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Click-a-header sorting (owner 2026-08-10, "for all reports"). One hook per table so a column picked
+  // on Payables doesn't follow you to Forecast, where it has no meaning.
+  const getCell = useCallback((r: any, field: string) => r?.[field], [])
+  const fSort = useTableSort(fRowsF, getCell)
+  const pSort = useTableSort(pRowsF, getCell)
+  const oSort = useTableSort(oRows, getCell)
 
   const th = { textAlign: 'left' as const, padding: '8px 10px', borderBottom: '2px solid var(--border)', fontSize: 12, color: 'var(--muted)' }
   const td = { padding: '7px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }
@@ -270,6 +300,7 @@ export default function PayablesPage() {
 
       {tab !== 'map' && (filterOpts.stores.length > 0 || filterOpts.markets.length > 0) && (
         <StandardFilterBar value={filt} onChange={setFilt} show={{ period: false, reps: false }}
+          cascadeStores={cascade}
           storeOptions={filterOpts.stores} marketOptions={filterOpts.markets} />
       )}
 
@@ -280,21 +311,55 @@ export default function PayablesPage() {
           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
             Velocity from the last {fMeta.lookback ?? lookback} days → order for the next {fMeta.horizon ?? horizon} days, per carrier.
             {(fMeta.unmapped ?? 0) > 0 && <> · <button onClick={() => setTab('map')} style={{ background: 'none', border: 'none', color: '#d97706', cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline' }}>{fMeta.unmapped} unmapped model(s)</button> — map them so sales &amp; stock line up.</>}
+            {(fMeta.unassigned_store ?? 0) > 0 && <> · <b>{fMeta.unassigned_store}</b> row(s) with no store — a Total/marketplace order is placed against the dealer account, so its store is resolved from the POS line that sold the device; these could not be resolved.</>}
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr><th style={th}>Carrier</th><th style={th}>Store</th><th style={th}>Model</th><th style={th}>Sold ({fMeta.lookback ?? lookback}d)</th><th style={th}>Velocity/day</th><th style={th}>Projected ({fMeta.horizon ?? horizon}d)</th><th style={th}>On hand</th><th style={th}>Order</th></tr></thead>
-            <tbody>{fRowsF.map((r, i) => (
-              <tr key={i}><td style={td}>{r.carrier}{!r.mapped && <span title="unmapped model — map it on the Phone Mapping tab" style={{ color: '#d97706' }}> •</span>}</td><td style={td}>{r.store || '—'}</td><td style={td}>{r.device_model}</td><td style={td}>{r.units}</td><td style={td}>{r.avg_daily_velocity}</td><td style={td}>{r.projected_demand}</td><td style={td}>{r.on_hand}</td>
+            <thead><tr>
+              <SortableTh field="carrier" sort={fSort.sort} onSort={fSort.toggle} style={th}>Carrier</SortableTh>
+              <SortableTh field="store" sort={fSort.sort} onSort={fSort.toggle} style={th}>Store</SortableTh>
+              <SortableTh field="device_model" sort={fSort.sort} onSort={fSort.toggle} style={th}>Model</SortableTh>
+              <SortableTh field="units" sort={fSort.sort} onSort={fSort.toggle} style={th}>Sold ({fMeta.lookback ?? lookback}d)</SortableTh>
+              <SortableTh field="avg_daily_velocity" sort={fSort.sort} onSort={fSort.toggle} style={th}>Velocity/day</SortableTh>
+              <SortableTh field="projected_demand" sort={fSort.sort} onSort={fSort.toggle} style={th}>Projected ({fMeta.horizon ?? horizon}d)</SortableTh>
+              <SortableTh field="on_hand" sort={fSort.sort} onSort={fSort.toggle} style={th}>On hand</SortableTh>
+              <SortableTh field="recommend_order" sort={fSort.sort} onSort={fSort.toggle} style={th}>Order</SortableTh>
+            </tr></thead>
+            <tbody>{fSort.sorted.map((r: any, i: number) => (
+              <tr key={i}><td style={td}>{r.carrier}{!r.mapped && <span title="unmapped model — map it on the Phone Mapping tab" style={{ color: '#d97706' }}> •</span>}</td><td style={td}>{r.store || <span style={{ color: 'var(--muted)' }}>(unassigned)</span>}</td><td style={td}>{r.device_model}</td><td style={td}>{r.units}</td><td style={td}>{r.avg_daily_velocity}</td><td style={td}>{r.projected_demand}</td><td style={td}>{r.on_hand}</td>
                 <td style={{ ...td, fontWeight: r.recommend_order > 0 ? 700 : 400, color: r.recommend_order > 0 ? '#d97706' : 'inherit' }}>{r.recommend_order}</td></tr>
             ))}</tbody>
           </table>
         </>
       )}
 
+      {/* STATUS LEGEND (owner 2026-08-10: "Payable per imei shows discrepancy — what does that mean and
+          how to address that"). Four one-line definitions + the action, so the word on the row is
+          self-explanatory instead of needing someone to remember the engine's routing rules. */}
+      {tab === 'payables' && !loading && (
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 10, lineHeight: 1.65, maxWidth: 960 }}>
+          <b style={{ color: STATUS_COLORS.discrepancy }}>Discrepancy</b> = the device was <b>sold</b> but
+          <b> no equipment rebate / reimbursement came back</b> — the dealer is still carrying its cost. Fix
+          it by loading the rebate source (or the vendor invoice, if the cost itself is missing); it clears
+          to <b style={{ color: STATUS_COLORS.offset }}>Offset</b> once a rebate ≥ the amount owed lands.
+          {' · '}<b style={{ color: STATUS_COLORS.due }}>Due</b> = unsold and past its due date.
+          {' · '}<b>Open</b> = inside the window, nothing to do yet.
+          {' · '}An <b>Owed</b> of “—” means no invoice has priced this device — a discrepancy at $0 is a
+          <i> missing rebate on an unpriced device</i>, not a $0 loss.
+        </div>
+      )}
       {tab === 'payables' && !loading && (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>IMEI</th><th style={th}>Store</th><th style={th}>Model</th><th style={th}>Owed</th><th style={th}>Rebate</th><th style={th}>Net owed</th><th style={th}>Due</th><th style={th}>Status</th></tr></thead>
-          <tbody>{pRowsF.map((r, i) => (
+          <thead><tr>
+            <SortableTh field="imei" sort={pSort.sort} onSort={pSort.toggle} style={th}>IMEI</SortableTh>
+            <SortableTh field="store" sort={pSort.sort} onSort={pSort.toggle} style={th}>Store</SortableTh>
+            <SortableTh field="device_model" sort={pSort.sort} onSort={pSort.toggle} style={th}>Model</SortableTh>
+            <SortableTh field="owed" sort={pSort.sort} onSort={pSort.toggle} style={th}>Owed</SortableTh>
+            <SortableTh field="rebate_amount" sort={pSort.sort} onSort={pSort.toggle} style={th}>Rebate</SortableTh>
+            <SortableTh field="net_owed" sort={pSort.sort} onSort={pSort.toggle} style={th}>Net owed</SortableTh>
+            <SortableTh field="due_date" sort={pSort.sort} onSort={pSort.toggle} style={th}>Due</SortableTh>
+            <SortableTh field="status" sort={pSort.sort} onSort={pSort.toggle} style={th}>Status</SortableTh>
+          </tr></thead>
+          <tbody>{pSort.sorted.map((r: any, i: number) => (
             <tr key={i} onClick={() => openDrill(r.imei)} style={{ cursor: 'pointer' }}>
               <td style={td}>{r.imei}</td><td style={td}>{r.store}</td><td style={td}>{r.device_model}</td>
               <td style={td}>{r.owed == null ? '—' : fmt(r.owed)}</td>
@@ -308,12 +373,36 @@ export default function PayablesPage() {
       )}
 
       {tab === 'owed' && !loading && (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr><th style={th}>Due date</th><th style={th}>Devices</th><th style={th}>Owed</th></tr></thead>
-          <tbody>{oRows.map((r, i) => (
-            <tr key={i}><td style={td}>{r.due_date}</td><td style={td}>{r.count}</td><td style={{ ...td, fontWeight: 600 }}>{fmt(r.owed)}</td></tr>
-          ))}</tbody>
-        </table>
+        oRows.length === 0 ? (
+          // HONEST EMPTY (owner report 2026-08-10: "Daily owed is also not showing, it should show how
+          // much is owed"). An empty table here is almost never "you owe nothing" — it is "no device
+          // carries an amount", which happens when the tenant's payable source map has no owed field
+          // (every Total/MA map: the MA reports say what was ACTIVATED, never what was INVOICED). Say
+          // that, and point at the one thing that fixes it, instead of rendering a blank grid.
+          <div className="card" style={{ padding: 20, fontSize: 13, color: 'var(--text2)', maxWidth: 820 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>No dated amounts to show yet.</div>
+            This tab groups <b>net owed</b> by due date, so it is empty whenever no device carries an
+            amount. That is the case when the carrier&apos;s source map has no <b>owed</b> field — the
+            Total / marketplace reports record what was <i>activated</i>, never what was <i>invoiced</i>,
+            so there is no price and no due date to group by. Loading the <b>vendor invoices</b> is what
+            supplies owed + invoice date + terms; until then every sold device with no rebate lands in{' '}
+            <button onClick={() => { setTab('payables'); setStatus('discrepancy') }}
+              style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 13, padding: 0, textDecoration: 'underline' }}>
+              Payables → Discrepancy
+            </button>{' '}at $0.
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <SortableTh field="due_date" sort={oSort.sort} onSort={oSort.toggle} style={th}>Due date</SortableTh>
+              <SortableTh field="count" sort={oSort.sort} onSort={oSort.toggle} style={th}>Devices</SortableTh>
+              <SortableTh field="owed" sort={oSort.sort} onSort={oSort.toggle} style={th}>Owed</SortableTh>
+            </tr></thead>
+            <tbody>{oSort.sorted.map((r: any, i: number) => (
+              <tr key={i}><td style={td}>{r.due_date}</td><td style={td}>{r.count}</td><td style={{ ...td, fontWeight: 600 }}>{fmt(r.owed)}</td></tr>
+            ))}</tbody>
+          </table>
+        )
       )}
 
       {tab === 'map' && !loading && (

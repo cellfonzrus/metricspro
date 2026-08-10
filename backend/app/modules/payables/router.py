@@ -119,11 +119,29 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
             continue
         _bucket(r.get("product_desc"), boost_id, boost_name, r.get("store"))["units"] += 1
 
-    # velocity — Total device sales (raw_ma_commission), if the table has rows
+    # velocity — Total device sales (raw_ma_commission), if the table has rows.
+    # A marketplace/MA activation is booked against the DEALER account and carries no store, so it used
+    # to bucket under store=None and the whole Total forecast read "—" in the Store column — you could
+    # not tell which store the recommended order was FOR (owner report 2026-08-10). Resolve it through
+    # the device: IMEI -> the POS line that sold it -> that line's store. Unresolved stays None and
+    # renders as "(unassigned)" rather than being attached to a store it wasn't ordered for.
+    ma_store = {}
+    try:
+        for r in _fetch_all(lambda: client.schema("commcalc").table("raw_sales")
+                            .select("serial_1,store").eq("org_id", org_id).gte("trans_date", cutoff)):
+            sn = str(r.get("serial_1") or "").strip()
+            st = str(r.get("store") or "").strip()
+            if sn and st:
+                ma_store.setdefault(sn, st)
+    except Exception:
+        pass
     try:
         for r in _fetch_all(lambda: client.schema("commcalc").table("raw_ma_commission")
-                            .select("sku,tx_date").eq("org_id", org_id).gte("tx_date", cutoff)):
-            _bucket(r.get("sku"), total_id, total_name, None)["units"] += 1
+                            .select("sku,imei,tx_date").eq("org_id", org_id).gte("tx_date", cutoff)):
+            st = ma_store.get(str(r.get("imei") or "").strip())
+            if store and st != store:      # honor an explicit ?store= the same way the Boost leg does
+                continue
+            _bucket(r.get("sku"), total_id, total_name, st)["units"] += 1
     except Exception:
         pass
 
@@ -149,7 +167,11 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
     out.sort(key=lambda x: (x["recommend_order"], x["units"]), reverse=True)
     return {"lookback": lookback, "horizon": horizon, "store": store or None,
             "carriers": sorted({r["carrier"] for r in out if r["carrier"]}),
-            "unmapped": sum(1 for r in out if not r["mapped"]), "rows": out, "total": len(out)}
+            "unmapped": sum(1 for r in out if not r["mapped"]),
+            # How many rows still have no store, so the page can SAY "n rows unassigned" instead of
+            # showing a silent '—' the reader has to guess at.
+            "unassigned_store": sum(1 for r in out if not r.get("store")),
+            "rows": out, "total": len(out)}
 
 
 # ── Part B — payables + offsets + due ─────────────────────────────────────────
