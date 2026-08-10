@@ -58,6 +58,10 @@ function CarrierPicker({ carriers, carrierId, setCarrierId, mode }:
   )
 }
 
+// Default assumed sale price of one accessory (OWNER 2026-08-10: "make that $34.99 by default and
+// changeable by the user"). A starting assumption for the simulator only — nothing pays off it.
+const DEFAULT_ITEM_PRICE = 34.99
+
 // ───────────────────────── Tab 1: Employee-payout template (carrier-agnostic) ─────────────────────────
 function ActivationMix({ carrierId }: { carrierId: string }) {
   const [period, setPeriod] = useState('')
@@ -65,6 +69,14 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
   const [qty, setQty] = useState<Record<string, number>>({})
   const [rate, setRate] = useState<Record<string, number>>({})
   const [tier, setTier] = useState(1)
+  // OWNER 2026-08-10: a %-of-sales component (accessory / set-up fee) pays a FRACTION OF DOLLARS, so a
+  // quantity that is a COUNT projects to nothing — there was nowhere to say what an accessory sells
+  // for. Two bases per row:
+  //   • 'month'  — Quantity IS the monthly sales $ total (x1). The previous behaviour, still default,
+  //                so every existing projection returns the exact same number as before.
+  //   • 'item'   — Quantity is the NUMBER of accessories, priced at $/item below.
+  const [basis, setBasis] = useState<Record<string, 'month' | 'item'>>({})
+  const [price, setPrice] = useState<Record<string, number>>({})
 
   useEffect(() => { setData(null); load1(period) }, [carrierId])
   useEffect(() => { if (period) load1(period) }, [period])
@@ -77,8 +89,15 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
     setData(d)
     const comps = d.template?.components || []
     const q: Record<string, number> = {}, r: Record<string, number> = {}
-    comps.forEach((c: any) => { q[c.key] = num(c.qty); r[c.key] = num(c.rate) })
-    setQty(q); setRate(r)
+    const bs: Record<string, 'month' | 'item'> = {}, pr: Record<string, number> = {}
+    comps.forEach((c: any) => {
+      q[c.key] = num(c.qty); r[c.key] = num(c.rate)
+      bs[c.key] = 'month'                       // unchanged default -> identical numbers to before
+      // $/item seeds from the tenant's OWN average when the baseline supplies one, else the owner's
+      // stated default. Editable either way — it is an assumption, and the user owns it.
+      pr[c.key] = num(c.avg_item_price) || DEFAULT_ITEM_PRICE
+    })
+    setQty(q); setRate(r); setBasis(bs); setPrice(pr)
     setTier(num(d.template?.tier?.baseline) || 1)
   }
 
@@ -100,7 +119,13 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
     </div>
   )
 
-  const rowComm = (k: string) => num(qty[k]) * num(rate[k])
+  const isPct = (c: any) => c?.kind === 'pct'
+  const byKey: Record<string, any> = Object.fromEntries(comps.map((c: any) => [c.key, c]))
+  // per month  -> quantity is already the $ total, x1.
+  // per accessory -> $ x number of accessories, then the rate applies to those dollars.
+  const rowSalesBase = (k: string) =>
+    (isPct(byKey[k]) && basis[k] === 'item') ? num(qty[k]) * num(price[k]) : num(qty[k])
+  const rowComm = (k: string) => rowSalesBase(k) * num(rate[k])
   const subtotal = comps.reduce((s, c) => s + rowComm(c.key), 0)
   const payout = subtotal * num(tier)
   const baseSub = data?.actuals?.subtotal || 0
@@ -124,7 +149,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
       <div className="card" style={{ padding: 0, marginBottom: 18 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead><tr style={{ background: 'var(--surface2)' }}>
-            {['Pay component', 'Quantity', 'Rate', 'Projected $', 'Current $'].map(h =>
+            {['Pay component', 'Basis', 'Quantity', '$ / item', 'Rate', 'Projected $', 'Current $'].map(h =>
               <th key={h} style={{ textAlign: h === 'Pay component' ? 'left' : 'right', padding: '9px 14px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
           </tr></thead>
           <tbody>
@@ -132,8 +157,36 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
               <tr key={c.key} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : 'transparent' }}>
                 <td style={{ padding: '8px 14px', fontSize: 13, fontWeight: 500 }}>{c.label}
                   <span style={{ color: 'var(--text3)', fontWeight: 400, fontSize: 11 }}> · {c.unit}{c.plan_name ? ` · ${c.plan_name}` : ''}</span></td>
+                {/* BASIS — only meaningful for a %-of-sales component; a flat $-per-unit rate is already
+                    per item, so the cell says so rather than offering a choice that changes nothing. */}
+                <td style={{ padding: '8px 14px', textAlign: 'right' }}>
+                  {isPct(c) ? (
+                    <select value={basis[c.key] || 'month'}
+                      onChange={e => setBasis({ ...basis, [c.key]: e.target.value as 'month' | 'item' })}
+                      style={{ ...inp, width: 128, textAlign: 'left' }}>
+                      <option value="month">per month</option>
+                      <option value="item">per accessory</option>
+                    </select>
+                  ) : <span style={{ color: 'var(--text3)', fontSize: 12 }}>per unit</span>}
+                </td>
                 <td style={{ padding: '8px 14px', textAlign: 'right' }}>
                   <input style={inp} value={qty[c.key] ?? 0} onChange={e => setQty({ ...qty, [c.key]: num(e.target.value) })} />
+                  <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>
+                    {isPct(c) ? (basis[c.key] === 'item' ? 'accessories' : 'sales $') : 'units'}
+                  </div>
+                </td>
+                {/* $ / ITEM — editable, defaulted, and only active in per-accessory mode. In per-month
+                    mode the quantity is already dollars, so a price would double-count; the cell shows
+                    an em-dash for the same reason the money columns elsewhere do: not applicable is not
+                    zero. */}
+                <td style={{ padding: '8px 14px', textAlign: 'right' }}>
+                  {isPct(c) && basis[c.key] === 'item' ? (
+                    <>
+                      <span style={{ color: 'var(--text3)', fontSize: 12 }}>$</span>
+                      <input style={{ ...inp, width: 74 }} value={price[c.key] ?? DEFAULT_ITEM_PRICE}
+                        onChange={e => setPrice({ ...price, [c.key]: num(e.target.value) })} />
+                    </>
+                  ) : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>}
                 </td>
                 <td style={{ padding: '8px 14px', textAlign: 'right' }}>
                   <span style={{ color: 'var(--text3)', fontSize: 12 }}>{c.kind === 'pct' ? '' : '$'}</span>
@@ -144,7 +197,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
                 <td style={{ padding: '8px 14px', textAlign: 'right', fontSize: 12, color: 'var(--text3)' }}>{fmt(num(c.current_comm))}</td>
               </tr>
             ))}
-            {comps.length === 0 && <tr><td colSpan={5} style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>No pay components for this carrier/period.</td></tr>}
+            {comps.length === 0 && <tr><td colSpan={7} style={{ padding: 20, color: 'var(--text3)', fontSize: 13 }}>No pay components for this carrier/period.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -156,7 +209,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
         {tpl.source_kind === 'boost_rates'
-          ? <>Rates pre-filled from your <b>payout_config</b> for {period}; quantities from actual <b>rep_commissions</b>. Payout = Σ(qty × rate) × tier — the exact engine formula. Accessory / Setup rates are a fraction of sales $ (0.10 = 10%).</>
+          ? <>Rates pre-filled from your <b>payout_config</b> for {period}; quantities from actual <b>rep_commissions</b>. Payout = Σ(qty × rate) × tier — the exact engine formula. Accessory / Setup rates are a fraction of sales $ (0.10 = 10%), which is why those rows carry a <b>basis</b>: <b>per month</b> treats the quantity as the month's sales $ (×1), <b>per accessory</b> treats it as a COUNT and multiplies by the $/item you set (default ${DEFAULT_ITEM_PRICE}).</>
           : <>Components auto-populated from <b>{data.carrier?.name}</b>'s configured Commission Plans / rules / tiers + payout schedules; baseline quantities from the read-only plan preview for {period}. Payout = Σ(qty × rate) × tier.</>}
       </p>
     </div>
