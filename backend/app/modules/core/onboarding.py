@@ -834,7 +834,12 @@ def preview_import(source: str, org_id: str, variant: str = "") -> dict:
                               "ready-to-sell stock (the same filter the Inventory Aging report uses).")
         elif v == "inventory_aging":
             rows = _page(c, "commcalc", "inventory_aging_device",
-                         "imei,serial,sku,item,store,unit_cost,received_date,as_of_date", org_id)
+                         "imei,serial,sku,item,store,unit_cost,received_date,as_of_date,on_hand", org_id)
+            # Seed POS from what is CURRENTLY on the shelf. A row the latest Inventory Aging export no
+            # longer lists is a sold/transferred device kept only for its cost (mig 294) — seeding it
+            # would put ~50% already-sold handsets into a new tenant's opening stock. `is not False`
+            # keeps pre-294 rows, which have no flag.
+            rows = [r for r in rows if r.get("on_hand") is not False]
             units = [{"serial_number": (r.get("serial") or r.get("imei") or "").strip(),
                       "imei": (r.get("imei") or "").strip() or None,
                       "product_name": (r.get("item") or "").strip(),
@@ -1061,7 +1066,8 @@ def _all_vendors(c, org_id):
 def _all_units(c, org_id, variant):
     if variant == "inventory_aging":
         rows = _page(c, "commcalc", "inventory_aging_device",
-                     "imei,serial,sku,item,store,unit_cost,received_date", org_id)
+                     "imei,serial,sku,item,store,unit_cost,received_date,on_hand", org_id)
+        rows = [r for r in rows if r.get("on_hand") is not False]      # current stock only (mig 294)
         return [{"serial_number": (r.get("serial") or r.get("imei") or "").strip(),
                  "imei": (r.get("imei") or "").strip() or None,
                  "product_name": (r.get("item") or "").strip(),

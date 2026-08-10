@@ -26476,8 +26476,12 @@ def device_cost_recon_endpoint(period: str = "", window_months: int = 1, group_b
 
     # ── ④ inventory snapshot (one CURRENT row per device — no month-end history exists) ───────────
     inv_rows, inv_ok, inv_trunc = _dcr_paged(
-        client, "inventory_aging_device", _DCR_INV_COLS,
+        client, "inventory_aging_device", _DCR_INV_COLS + ",on_hand",
         lambda q: q.eq("org_id", org_id), _DCR_INV_CAP, "inventory_aging_device")
+    # ④ values what is CURRENTLY on the shelf, so a device the latest export no longer lists is out
+    # (mig 294). Filtered in Python, not in the query, so `is not False` also keeps rows written before
+    # the flag existed — a pre-294 row must not silently vanish from the valuation.
+    inv_rows = [r for r in inv_rows if r.get("on_hand") is not False]
     if not inv_ok:
         degraded.append("④ the per-device inventory snapshot could not be read (is mig 216 run and the "
                         "Inventory Aging report imported?).")

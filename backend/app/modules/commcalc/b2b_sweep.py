@@ -349,11 +349,17 @@ def write_inventory_devices(client, org_id, devices, as_of_date):
     distinct as_of dates instead of one.
 
     An Inventory Aging export IS a point-in-time snapshot of what is ON HAND, so it is now treated as
-    one: write the file's devices, then drop the rows this file's own stores no longer list (their
-    as_of_date stayed behind). The prune is SCOPED to the stores the file actually covers, so a
-    per-store or partial export can never wipe a store it said nothing about — the one failure mode a
-    blanket delete-all would have. Rows with no store are pruned only when the file itself carried
-    store-less rows (i.e. it is the same device-only export shape).
+    one — but by FLAGGING, never deleting (mig 294). `unit_cost` on these rows is ALSO source (1) of the
+    Device History purchase-price chain, the universal POS/SKU cost that owed_to_vip was deliberately
+    demoted beneath; deleting a sold device would destroy the primary cost record for exactly the
+    devices whose cost matters most and silently downgrade them to the at-sale fallback. So: write the
+    file's devices (on_hand=true), then mark `on_hand=false` on the rows this file's own stores no
+    longer list. Nothing is lost, and "current inventory" becomes `on_hand = true`.
+
+    The mark is SCOPED to the stores the file actually covers, so a per-store or partial export can
+    never blank a store it said nothing about — the one failure mode a blanket sweep would have. Rows
+    with no store are marked only when the file itself carried store-less rows (the same device-only
+    export shape).
 
     Returns the count written. Degrades gracefully if the table doesn't exist yet (mig 216 pending) —
     the caller wraps this in try/except."""
@@ -371,33 +377,36 @@ def write_inventory_devices(client, org_id, devices, as_of_date):
                "unit_cost": d.get("unit_cost"), "received_date": d.get("received_date"),
                "days_in_stock": d.get("days_in_stock"),
                "as_of_date": (d.get("as_of_date") or as_of_date), "source": "inventory_aging",
-               "raw_row": d.get("raw_row"),
+               "raw_row": d.get("raw_row"), "on_hand": True, "off_hand_as_of": None,
                "updated_at": datetime.now(timezone.utc).isoformat()}
         client.schema("commcalc").table("inventory_aging_device").upsert(
             rec, on_conflict="org_id,imei").execute()
         saved += 1
 
-    # ── prune what this file's stores no longer list (= sold / transferred out) ──────────────────
+    # ── mark what this file's stores no longer list (= sold / transferred out) ───────────────────
     # Everything still on hand was just re-stamped with `as_of_date`, so "older than this file" is
-    # exactly "absent from this file". Only runs when the file actually wrote something, so an empty
-    # or misparsed file can never empty the inventory.
-    pruned = 0
+    # exactly "absent from this file". Only runs when the file actually wrote something, so an empty or
+    # misparsed file can never blank the inventory. Degrades to a no-op (with a warning) until mig 294
+    # has run — the ingest itself must never fail over the flag.
+    off = 0
+    patch = {"on_hand": False, "off_hand_as_of": as_of_date,
+             "updated_at": datetime.now(timezone.utc).isoformat()}
     if saved and as_of_date:
         try:
             for st in sorted(stores_seen):
                 r = (client.schema("commcalc").table("inventory_aging_device")
-                     .delete(count="exact").eq("org_id", org_id).eq("store", st)
-                     .lt("as_of_date", as_of_date).execute())
-                pruned += (getattr(r, "count", None) or 0)
+                     .update(patch, count="exact").eq("org_id", org_id).eq("store", st)
+                     .lt("as_of_date", as_of_date).eq("on_hand", True).execute())
+                off += (getattr(r, "count", None) or 0)
             if had_storeless:
                 r = (client.schema("commcalc").table("inventory_aging_device")
-                     .delete(count="exact").eq("org_id", org_id).is_("store", "null")
-                     .lt("as_of_date", as_of_date).execute())
-                pruned += (getattr(r, "count", None) or 0)
-        except Exception as e:                      # a prune failure must never lose the ingest
-            print(f"WARN inventory_aging_device prune skipped: {e}")
-    if pruned:
-        print(f"inventory_aging_device: {saved} on hand, pruned {pruned} no longer listed")
+                     .update(patch, count="exact").eq("org_id", org_id).is_("store", "null")
+                     .lt("as_of_date", as_of_date).eq("on_hand", True).execute())
+                off += (getattr(r, "count", None) or 0)
+        except Exception as e:                      # never lose the ingest over the flag
+            print(f"WARN inventory_aging_device on_hand flag skipped (mig 294 pending?): {e}")
+    if off:
+        print(f"inventory_aging_device: {saved} on hand, {off} marked no-longer-listed")
     return saved
 
 
