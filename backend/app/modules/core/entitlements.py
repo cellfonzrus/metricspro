@@ -27,7 +27,17 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 9   # bumped: 9 = mig 721 (What's New) added the bundled platform release-note pack, which
+SEED_VERSION = 10  # bumped: 10 = the 2026-08-10 training pack (v2 of app/data/training_tours_seed.json)
+                   #              adds the Point of Sale walk-throughs — setup wizard, sales tax, the
+                   #              register, stock + activations, who can use it — plus imports/daily
+                   #              uploads. The tours live on the HOUSE org and every tenant READS them,
+                   #              so only the house org's sync pass has to run; this bump is what makes
+                   #              it run. Without it the new tours reach a brand-new tenant and nobody
+                   #              else, which is the exact silent-miss this counter exists to prevent.
+                   #              Never-clobber still applies: a tour edited in /admin/training is
+                   #              skipped by the reseed. No new entitlement module, no new permission
+                   #              key, no money code.
+                   #          9 = mig 721 (What's New) added the bundled platform release-note pack, which
                    #             loads into the HOUSE org on its sync pass so every tenant's ADMIN STAFF see
                    #             the new-features / improvements feed beside the login warnings. No new
                    #             entitlement module: it is an admin surface gated by the SAME gate as the

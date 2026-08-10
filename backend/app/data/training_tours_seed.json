@@ -1,7 +1,7 @@
 {
   "pack": "platform-default-tours",
-  "version": 1,
-  "note": "PLATFORM DEFAULT guided walk-throughs, loaded into the HOUSE org by app/modules/core/training_seed.py on the house sync pass (SEED_VERSION 8). Every tenant reads these; a tenant that saves its own tour under the same slug overrides it for itself only. `narration` + `action_hint` are the PHASE-2 video recording script and are never shown to a user in the app. Anchor syntax: tour:<data-tour-id> | text:<visible text> | css:<selector> | null = centered card (an anchor that does not resolve degrades to a centered card).",
+  "version": 2,
+  "note": "PLATFORM DEFAULT guided walk-throughs, loaded into the HOUSE org by app/modules/core/training_seed.py on the house sync pass (SEED_VERSION 8). Every tenant reads these; a tenant that saves its own tour under the same slug overrides it for itself only. `narration` + `action_hint` are the PHASE-2 video recording script and are never shown to a user in the app. Anchor syntax: tour:<data-tour-id> | text:<visible text> | css:<selector> | null = centered card (an anchor that does not resolve degrades to a centered card). v2 (2026-08-10): adds the Point of Sale pack (setup wizard, sales tax, the register, stock + activations, who can use it) and the imports/daily-upload walk-through. Where a module is incomplete the step SAYS SO rather than describing a flow that does not work — a training pack that lies is worse than no training pack.",
   "tours": [
     {
       "slug": "closing-submit",
@@ -540,6 +540,492 @@
           "body": "Filter to last week, read the total loss, open appeals, push the flags. Ten minutes a week is the difference between a charge you can still appeal and one you have simply paid.",
           "narration": "Filter to last week, read the total loss, open appeals, push the flags. Ten minutes a week is the difference between a charge you can still appeal and one you've simply paid.",
           "action_hint": "Fade out on the dashboard."
+        }
+      ]
+    },
+    {
+      "slug": "pos-setup-wizard",
+      "title": "Set up the Point of Sale",
+      "module": "pos",
+      "audience": "admin",
+      "description": "The 17-step setup that has to be done once per company before anyone rings a sale. Eight steps are required; the rest can wait.",
+      "start_href": "/pos/onboarding",
+      "est_minutes": 6,
+      "sort_order": 10,
+      "steps": [
+        {
+          "page_href": "/pos/onboarding",
+          "target": null,
+          "title": "Setup is measured, not ticked off",
+          "body": "This page does not ask you to confirm anything. It looks at your actual data and works out what is still missing — so a step goes green when the thing genuinely exists, and goes back to red if someone later deletes it. You cannot accidentally mark yourself finished.",
+          "narration": "This page doesn't ask you to confirm anything. It looks at your real data and works out what is still missing, so a step only goes green when the thing genuinely exists.",
+          "action_hint": "Open /pos/onboarding on a tenant with setup outstanding."
+        },
+        {
+          "page_href": "/pos/onboarding",
+          "target": "text:Set up your Point of Sale",
+          "title": "Eight of the seventeen are required",
+          "body": "Required steps are the ones a register cannot work without: your stores, your staff, a carrier, departments, categories, products, sales tax and rate plans. Everything else — vendors, customers, stock, receipt wording — is offered, never enforced. You can open the register with the first eight done.",
+          "narration": "Eight steps are required — stores, staff, carrier, departments, categories, products, sales tax and plans. The rest are offered, never enforced.",
+          "action_hint": "Point at the header, then scroll the step list.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/onboarding",
+          "target": "text:REQUIRED",
+          "title": "Red means the register will misbehave",
+          "body": "A REQUIRED step that is not done is not a formality. Skip products and there is nothing to ring up; skip plans and an activation records no monthly fee, which quietly breaks the commission figures further down the line.",
+          "narration": "A required step that isn't done isn't a formality — skip plans, for instance, and activations record no monthly fee, which quietly breaks commissions later.",
+          "action_hint": "Hover a REQUIRED badge.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/onboarding",
+          "target": "text:What goes in it",
+          "title": "Every step says why it exists",
+          "body": "Open a step and it tells you what the thing is for, in plain terms, and gives you the button that takes you to the screen where you do it. You are never left guessing which page a step means.",
+          "narration": "Open a step and it tells you what the thing is for and takes you to the screen where you do it.",
+          "action_hint": "Expand one step to show the explanation and its link.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/onboarding",
+          "target": "text:Re-check",
+          "title": "Re-check after you have been away",
+          "body": "Do the work on the other screen, come back, press Re-check. The page re-reads your data and the step turns green on its own. If it stays red, the thing you created is not where the step is looking — read the grey reason line, it names the count it found.",
+          "narration": "Do the work, come back, press Re-check. If a step stays red, the grey reason line tells you the count it actually found.",
+          "action_hint": "Press Re-check and show a step flipping to DONE.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/onboarding",
+          "target": "text:Skip for now",
+          "title": "Skip is honest, not a shortcut",
+          "body": "A few steps cannot be measured from data — deciding who may use POS, whether POS feeds your commissions. Those you acknowledge or skip yourself. A skipped step stays visible and stays skipped until you un-skip it, so nothing disappears just because you were busy.",
+          "narration": "A few steps can't be measured from data, so you acknowledge or skip them yourself. A skipped step stays visible until you un-skip it.",
+          "action_hint": "Show Skip for now and Un-skip on the same step.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/onboarding",
+          "target": null,
+          "title": "Your stores and staff are already here",
+          "body": "The first three steps — stores, staff, carrier — are almost always green the moment you arrive. POS reads the same store list and the same employee roster the rest of MetricsPro uses. You are not setting up a second company.",
+          "narration": "The first three steps are usually already green: POS reads the same stores and the same staff roster the rest of MetricsPro uses.",
+          "action_hint": "Point at the three Your business steps."
+        },
+        {
+          "page_href": "/pos/onboarding",
+          "target": null,
+          "title": "Sales tax is the step people get wrong",
+          "body": "Adding one tax rate turns the step green, and that is NOT the same as being finished. A rate belongs to a store, a market, or the whole company — and any store none of them reaches charges no tax at all. Do this one on the POS Settings screen, where the red banner counts the stores still uncovered, and do not trust a green tick here on its own.",
+          "narration": "Adding one tax rate turns this step green, and that is not the same as being finished. Check the red coverage banner on POS Settings before you believe it.",
+          "action_hint": "Point at the Sales tax step, then open /pos/settings in a second tab."
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:POS setup incomplete",
+          "title": "The reminder follows you, it does not trap you",
+          "body": "While a required step is outstanding, a yellow strip sits on every POS page. “Continue later” silences it for this browser session and lets you into the register — you will be asked again next time you sign in. Nothing about the register is locked.",
+          "narration": "While something required is outstanding, a yellow strip sits on every POS page. Continue later silences it for this session; nothing is locked.",
+          "action_hint": "Press Continue later, land on the register, show the strip.",
+          "target_fragile": true
+        }
+      ]
+    },
+    {
+      "slug": "pos-sales-tax",
+      "title": "Sales tax — get every store covered",
+      "module": "pos",
+      "audience": "admin",
+      "description": "The highest-stakes screen in POS. A store with no rate charges nothing, and you cannot fix that after the customer has left.",
+      "start_href": "/pos/settings",
+      "est_minutes": 5,
+      "sort_order": 20,
+      "steps": [
+        {
+          "page_href": "/pos/settings",
+          "target": null,
+          "title": "Why this screen matters more than the others",
+          "body": "The register does not work tax out for itself. It charges the rate this screen resolves for the store the sale is rung at. If no rate reaches that store, the sale goes through at zero tax, the customer leaves, and the money is yours to find.",
+          "narration": "The register doesn't work tax out for itself — it charges the rate this screen resolves. If no rate reaches a store, the sale goes through at zero tax and the money is yours to find.",
+          "action_hint": "Open /pos/settings and scroll to Sales Tax."
+        },
+        {
+          "page_href": "/pos/settings",
+          "target": "text:Sales Tax",
+          "title": "Three levels, most specific wins",
+          "body": "A rate can cover one store, a whole market, or the company. The register looks for the store's own rate first, then its market's, then the company default — and stops at the first one it finds. That order is fixed and is the same everywhere, so two screens can never disagree about what a store charges.",
+          "narration": "A rate can cover one store, a whole market, or the company. The register takes the store's own rate first, then its market's, then the company default.",
+          "action_hint": "Point at the Sales Tax section header.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/settings",
+          "target": "text:has no sales-tax rate",
+          "title": "Read the red banner before anything else",
+          "body": "If any store has no rate that reaches it, a red banner at the top of this section says how many and names them. That count is the only number on this screen worth acting on immediately. When it is gone you get a green line instead.",
+          "narration": "If any store has no rate reaching it, a red banner says how many and names them. That's the number to act on first.",
+          "action_hint": "Hold on the coverage banner.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/settings",
+          "target": "text:+ Add Tax Code",
+          "title": "Adding a rate: pick who it applies to",
+          "body": "Give the rate a name and a percent, then choose what it applies to. “Specific store(s)” lets you tick several at once — the same rate goes on all of them. “A whole market” writes one rate for every store in that market, so changing it later is one edit rather than twenty. “Every store” is the company safety net.",
+          "narration": "Name the rate, set the percent, then choose whether it applies to specific stores, a whole market, or every store.",
+          "action_hint": "Open Add Tax Code and switch the Applies-to dropdown through all three.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/settings",
+          "target": "text:with no rate",
+          "title": "The quickest way to fix a gap",
+          "body": "Inside the store picker there is a button that selects exactly the stores with no rate. Tick it, type the percent once, save. If they genuinely share a rate, the banner at the top will be gone when the screen reloads.",
+          "narration": "The store picker has a button that selects exactly the stores with no rate — tick it, type the percent once, save.",
+          "action_hint": "Press the “only the N with no rate” button, then Save.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/settings",
+          "target": "text:Set rates store by store",
+          "title": "Or work down the list",
+          "body": "This opens every store you have, with three columns worth reading together: what is set on the store itself, what it actually charges once markets and the company default are taken into account, and which of the three that came from. Type into any row and press Save rates. A store that already has a rate is updated, never duplicated.",
+          "narration": "This opens every store with what is set on it, what it actually charges, and where that came from. Type into any row and save.",
+          "action_hint": "Open the store list and type a rate into two rows.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/settings",
+          "target": "text:Deactivate",
+          "title": "Turning a rate off has consequences downhill",
+          "body": "Deactivating does not delete — the rate stops applying and the register falls to the next level down. If there is no next level, that store charges nothing. The confirmation box spells out which stores are affected before you agree.",
+          "narration": "Deactivating stops a rate applying and the register falls to the next level down. If there isn't one, that store charges nothing.",
+          "action_hint": "Press Deactivate and read the confirmation aloud, then cancel.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/settings",
+          "target": null,
+          "title": "One thing to know about the setup wizard",
+          "body": "The POS setup wizard's sales-tax step used to go green as soon as ONE rate existed anywhere in the company — which is how a company with twenty stores and one rate saw a green tick. It now measures every store. Either way, the red banner on THIS screen is the answer you should trust.",
+          "narration": "The setup wizard's tax step used to go green as soon as one rate existed anywhere. Trust the red banner on this screen.",
+          "action_hint": "Centered card; no anchor."
+        }
+      ]
+    },
+    {
+      "slug": "pos-register-sale",
+      "title": "Ring a sale on the register",
+      "module": "pos",
+      "audience": "rep",
+      "description": "Open the drawer, build the cart, take payment, print the receipt — and what to do when the register refuses.",
+      "start_href": "/pos/sales",
+      "est_minutes": 6,
+      "sort_order": 30,
+      "steps": [
+        {
+          "page_href": "/pos/sales",
+          "target": "text:Cash Register",
+          "title": "This is the register",
+          "body": "Cart on one side, product search on the other, totals bottom right. Everything you need for a walk-in sale is on this one screen — you should not have to leave it once the customer is in front of you.",
+          "narration": "Cart on one side, product search on the other, totals bottom right. Everything for a walk-in sale is on this one screen.",
+          "action_hint": "Open /pos/sales.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:Store:",
+          "title": "Pick your store first — everything follows from it",
+          "body": "The store decides which stock you can sell, which tax rate is charged, and which store the sale is booked against. Get it wrong and the sale lands at another door. If your login only covers one store, it is already chosen for you.",
+          "narration": "The store decides which stock you can sell, which tax you charge, and where the sale is booked. Get it wrong and it lands at another door.",
+          "action_hint": "Open the store dropdown and choose one.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:User:",
+          "title": "The sale is stamped with YOU",
+          "body": "Whoever is signed in gets the sale — it is taken from your login, never typed in, so nobody can ring a sale under someone else's name. If the register tells you your login is not linked to an employee record, that is an admin fix in Roles & Access, not something you can work around.",
+          "narration": "The sale is stamped with whoever is signed in — taken from your login, never typed. If it says your login isn't linked to an employee record, an admin has to set that.",
+          "action_hint": "Point at the User label in the header.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": null,
+          "title": "Cash sales may need the drawer open first",
+          "body": "If your company has turned this on, you must open the register with a float count before a cash transaction is accepted — the same discipline as counting a till at the start of a shift. Card sales are unaffected. If cash is being refused, this is usually why.",
+          "narration": "If your company requires it, you must open the register with a float count before cash is accepted. If cash is being refused, this is usually why.",
+          "action_hint": "Show the drawer panel and the opening float."
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:+ Add Product",
+          "title": "Build the cart",
+          "body": "Scan a barcode into the box, or search by name and click. Quantities and line discounts are edited on the cart line itself. If a discount box will not accept anything, discounts are switched off for your company in POS Settings — the field says so when you hover it.",
+          "narration": "Scan a barcode or search by name. Quantities and discounts are edited on the cart line itself.",
+          "action_hint": "Scan one item, then search another by name.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:Serial",
+          "title": "Phones need their serial or IMEI",
+          "body": "Anything tracked by serial asks for the number before it can leave the cart. That is what ties the handset to this ticket — it is how the device is later matched to an activation, a return, or a chargeback. Do not guess it; scan it.",
+          "narration": "Anything tracked by serial asks for the number. That's what ties the handset to this ticket for activations, returns and chargebacks later.",
+          "action_hint": "Add a serialised product and show the serial prompt.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:Order Summary",
+          "title": "Check the total before you take money",
+          "body": "Subtotal, discounts, tax, total. The tax line is not typed by you — it is the rate your company set for this store. If it reads zero on a taxable sale, stop and tell a manager: that is a setup problem, and it cannot be corrected after the customer has gone.",
+          "narration": "The tax line isn't typed by you — it's the rate set for this store. If it reads zero on a taxable sale, stop and tell a manager.",
+          "action_hint": "Hold on the totals block, especially the tax line.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:Confirm Payment",
+          "title": "Take the payment",
+          "body": "Choose the method. For cash, type what the customer handed you and the register works out the change — the quick-amount buttons cover the usual notes. Split payments are added one line at a time until the balance is nil.",
+          "narration": "Choose the method. For cash, type what the customer handed over and the register works out the change. Split payments go on one line at a time.",
+          "action_hint": "Take a cash payment and show the change calculation.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:Customer Sale",
+          "title": "Named sale or quick sale",
+          "body": "A quick sale needs no customer record and is right for a walk-in accessory. Attach a customer when the sale has a life after today — an activation, a device on a plan, anything you may have to look up later by the person rather than the ticket.",
+          "narration": "A quick sale needs no customer and suits a walk-in accessory. Attach a customer when the sale has a life after today.",
+          "action_hint": "Toggle between Quick Sale and Customer Sale.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/sales",
+          "target": "text:Sale Log",
+          "title": "Finding a sale afterwards",
+          "body": "The Sale Log searches by ticket number, date range, store or customer, and reprints a receipt. Voiding a completed sale is a separate right your manager grants — if the button is not there, that is why, and it is deliberate.",
+          "narration": "The Sale Log searches by ticket, date, store or customer and reprints receipts. Voiding needs a permission your manager grants.",
+          "action_hint": "Open the Sale Log and search a date range.",
+          "target_fragile": true
+        }
+      ]
+    },
+    {
+      "slug": "pos-stock-and-activations",
+      "title": "Stock, transfers and activations",
+      "module": "pos",
+      "audience": "manager",
+      "description": "What is on your shelf, moving a unit between stores, and recording an activation with the right dealer code — including the parts that are not finished yet.",
+      "start_href": "/pos/inventory",
+      "est_minutes": 6,
+      "sort_order": 40,
+      "steps": [
+        {
+          "page_href": "/pos/inventory",
+          "target": null,
+          "title": "Two kinds of stock",
+          "body": "Serialised units — phones, anything with an IMEI — are tracked one at a time, each with its own history. Everything else is a count per store. The tabs on this page separate the two because they behave differently: you can transfer a specific handset, you can only move a quantity of cases.",
+          "narration": "Serialised units like phones are tracked one at a time. Everything else is a count per store. The tabs separate them because they behave differently.",
+          "action_hint": "Open /pos/inventory and switch tabs."
+        },
+        {
+          "page_href": "/pos/inventory",
+          "target": "text:All stores",
+          "title": "Filter to the store you are asking about",
+          "body": "Stock questions are always about one store. Set the store filter first; the status filter then tells you what is available, what is reserved and what has already gone.",
+          "narration": "Stock questions are always about one store. Set the store filter first, then the status filter.",
+          "action_hint": "Set the store filter, then the status filter.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/inventory",
+          "target": null,
+          "title": "⚠️ Known problem — scoped users may see an empty list",
+          "body": "The stock now in POS was loaded from your existing MetricsPro inventory, and it recorded each unit against a street address rather than the short store code the rest of the system uses. A company-wide login sees everything, so this is easy to miss — but a store or market-scoped manager can see nothing at all. If your list is empty and you know the stock is there, this is why. It is a known fault, not something you have done.",
+          "narration": "The stock was loaded against street addresses rather than store codes. A company-wide login sees everything, but a store-scoped manager may see nothing. Known fault.",
+          "action_hint": "Centered card. Compare an admin view with a store-scoped view."
+        },
+        {
+          "page_href": "/pos/inventory",
+          "target": "text:From (source store)",
+          "title": "Moving a unit between stores",
+          "body": "A transfer is deliberately three moves, not one: create it, ship it, receive it. The unit belongs to neither store while it is in transit, which is what stops a handset appearing on two shelves at once. Cancel is available until it has been received.",
+          "narration": "A transfer is three moves — create, ship, receive. The unit belongs to neither store in transit, which stops it appearing on two shelves at once.",
+          "action_hint": "Walk a transfer from create to receive.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/activations",
+          "target": "text:Carrier",
+          "title": "Recording an activation",
+          "body": "An activation hangs off a sale and adds what the carrier needs: the line, the plan, the device and the dealer code. The plan matters beyond paperwork — it carries the monthly fee that your commission figures are worked out from.",
+          "narration": "An activation adds what the carrier needs: line, plan, device and dealer code. The plan carries the monthly fee your commissions are worked out from.",
+          "action_hint": "Open /pos/activations and start a new one.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/activations",
+          "target": "text:Dealer Code",
+          "title": "The dealer code is how the carrier knows the door",
+          "body": "A wrong or missing dealer code is the usual reason an activation is never paid. The list here comes from POS Settings, and each code should be attached to the store it belongs to — a code left on “all stores” can be picked at any door, which is exactly how they get mixed up.",
+          "narration": "A wrong or missing dealer code is the usual reason an activation is never paid. Each code should be attached to the store it belongs to.",
+          "action_hint": "Open the Dealer Code dropdown.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/settings",
+          "target": "text:Dealer Codes",
+          "title": "Pull the codes out of your carrier reports",
+          "body": "You do not have to type these. “Pull from reports” reads the codes out of the carrier data MetricsPro already holds — it shows you what it found before it writes anything, and it only ever adds codes that are missing, so a code you have corrected by hand is never overwritten. A carrier nobody has mapped yet is reported as unmapped rather than guessed at.",
+          "narration": "Pull from reports reads the codes out of your existing carrier data, shows you what it found before writing, and only adds what's missing.",
+          "action_hint": "Press Pull from reports and read the preview.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/pos/activations",
+          "target": null,
+          "title": "What is not finished here yet",
+          "body": "Purchase orders and receiving against a PO exist but have had little real use. Trade-in credit records the value but does not yet feed the P&L. Treat the activation record as the reliable part and reconcile the money against the carrier's own report, not against this screen.",
+          "narration": "Purchase orders and trade-in credit are early. Treat the activation record as the reliable part and reconcile money against the carrier's own report.",
+          "action_hint": "Centered card; no anchor."
+        }
+      ]
+    },
+    {
+      "slug": "pos-who-can-use-it",
+      "title": "Give your team access to POS",
+      "module": "admin",
+      "audience": "admin",
+      "description": "Point of Sale is switched off for every role until you switch it on. This is the five-minute job that makes it appear in the menu for your staff.",
+      "start_href": "/admin/roles",
+      "est_minutes": 4,
+      "sort_order": 50,
+      "steps": [
+        {
+          "page_href": "/admin/roles",
+          "target": null,
+          "title": "Nobody can see POS until you turn it on",
+          "body": "POS arrived after your roles were created, and a role only carries the modules it was given when it was made. So the Point of Sale menu is hidden from everyone except a super-admin — not because anything is broken, but because no role has been granted it yet. This is the screen where that changes.",
+          "narration": "POS arrived after your roles were created, so no role carries it yet and the menu is hidden from everyone but a super-admin. This is where you change that.",
+          "action_hint": "Open /admin/roles."
+        },
+        {
+          "page_href": "/admin/roles",
+          "target": "text:Modules",
+          "title": "Tick Point of Sale on each role that needs it",
+          "body": "Every role has a Modules list. Tick “Point of Sale” for the roles that should have a register — usually your reps, store managers and admins — and press Save on that role. The menu appears for those people the next time they load the app.",
+          "narration": "Every role has a Modules list. Tick Point of Sale for the roles that need a register and press Save on that role.",
+          "action_hint": "Tick Point of Sale on the store manager role and save.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/admin/roles",
+          "target": "text:Only their own data",
+          "title": "A role scoped to “own data” sees no POS at all",
+          "body": "This one catches people out. Every POS screen needs at least store-level reach — a role set to “only their own data” will have the module ticked and still see nothing. If you want a rep on the register, their role has to be their store, their market, or company-wide.",
+          "narration": "Every POS screen needs at least store-level reach. A role set to only their own data will have the module ticked and still see nothing.",
+          "action_hint": "Show the Scope selector and the four options.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/admin/roles",
+          "target": "text:Sensitive data",
+          "title": "The four rights inside POS",
+          "body": "Beyond seeing the module, four things are granted separately: revealing a customer's full identity details, voiding a completed sale, adjusting or receiving stock, and changing POS settings such as tax rates. A rep normally has none of them. Grant them one at a time to the people who genuinely need them.",
+          "narration": "Four things are granted separately inside POS: revealing customer identity details, voiding a sale, adjusting stock, and changing POS settings such as tax rates.",
+          "action_hint": "Point at the per-function grants.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/admin/roles",
+          "target": null,
+          "title": "Link each person to their employee record",
+          "body": "The register stamps every sale with the signed-in person's employee record. A login with no Employee ID cannot complete a sale at all — it is refused with a message saying exactly that. Set the Employee ID on each user here before their first shift, not during it.",
+          "narration": "The register stamps every sale with the signed-in person's employee record. A login with no Employee ID cannot complete a sale.",
+          "action_hint": "Open a user and show the Employee ID field."
+        },
+        {
+          "page_href": "/admin/roles",
+          "target": null,
+          "title": "If you administer more than one company",
+          "body": "A super-admin can set another company's POS up without being a member of it — pick the company in the switcher and carry on. Everyone else only ever sees and edits their own company's POS, and that boundary is enforced on the server, not just in the menu.",
+          "narration": "A super-admin can set another company's POS up without being a member of it. Everyone else only ever sees their own company's POS.",
+          "action_hint": "Show the tenant switcher."
+        }
+      ]
+    },
+    {
+      "slug": "imports-and-daily-uploads",
+      "title": "Imports: what pulls itself, and what you owe daily",
+      "module": "commissions",
+      "audience": "admin",
+      "description": "The connectors board after the 2026-08-09 changes — why some reports vanished from your list, what 'overdue' really counts, and who is supposed to upload what.",
+      "start_href": "/commcalc/connectors",
+      "est_minutes": 5,
+      "sort_order": 60,
+      "steps": [
+        {
+          "page_href": "/commcalc/connectors",
+          "target": "text:Connectors",
+          "title": "One row per report your company needs",
+          "body": "Each row is a report MetricsPro expects: where it comes from, whether it pulls itself, when it last arrived. This board is the honest picture of what your numbers are actually built from.",
+          "narration": "Each row is a report MetricsPro expects: where it comes from, whether it pulls itself, and when it last arrived.",
+          "action_hint": "Open /commcalc/connectors.",
+          "target_fragile": true
+        },
+        {
+          "page_href": "/commcalc/connectors",
+          "target": null,
+          "title": "You only see your own carrier's reports",
+          "body": "Reports are filtered to the carriers your company actually sells. A Total dealer no longer sees Boost's ePay reports sitting there looking overdue. Reports that belong to no carrier — closing, inventory, distributor invoices — are shown to everyone, because they are not a carrier concept. If a report you need is missing, the fix is to attach the carrier, not to hunt for the report.",
+          "narration": "Reports are filtered to the carriers you actually sell. Reports that belong to no carrier are shown to everyone.",
+          "action_hint": "Centered card; mention the Carriers page."
+        },
+        {
+          "page_href": "/commcalc/connectors",
+          "target": null,
+          "title": "Automatic and manual are different promises",
+          "body": "A report marked automatic is pulled for you on a schedule. Untick automatic and the report stops being chased — it also stops being counted as overdue, which is the point: a report you have decided to upload by hand should not nag you as a failure.",
+          "narration": "A report marked automatic is pulled on a schedule. Untick it and the report stops being chased and stops counting as overdue.",
+          "action_hint": "Toggle the automatic tick on one row."
+        },
+        {
+          "page_href": "/commcalc/connectors",
+          "target": null,
+          "title": "Overdue and never-arrived are both real",
+          "body": "The counts at the top are worth taking seriously — each one has been checked and each is a genuine gap, not noise. “Never” usually means a report nobody has ever uploaded; “overdue” means one that used to arrive and has stopped. Work the never list first: it is usually a credential or a missing decision.",
+          "narration": "Overdue means a report that used to arrive and has stopped. Never means one nobody has ever uploaded. Work the never list first.",
+          "action_hint": "Point at the overdue and never counts."
+        },
+        {
+          "page_href": "/commcalc/connectors",
+          "target": null,
+          "title": "Reports that must be uploaded every day need an owner",
+          "body": "Some reports have to be pulled from a portal by a person, daily. Those carry an owner — the one person who gets told what to upload, for exactly which dates, with the steps to get it. When an automatic pull fails, the same person is told, because a failed robot is still somebody's job.",
+          "narration": "Some reports must be pulled from a portal daily. Those carry an owner who is told what to upload and for which dates — including when an automatic pull fails.",
+          "action_hint": "Centered card."
+        },
+        {
+          "page_href": "/commcalc/connectors",
+          "target": null,
+          "title": "⚠️ Assigning that owner is not on screen yet",
+          "body": "The daily-upload duty exists and is already working out what is owed, but the screen for naming the person has not been built. Until it is, an unassigned duty shows up as a warning in the admin attention panel — “Daily upload has no owner” — and an administrator has to set the owner for you. Do not read the warning as a data problem; it is a missing screen.",
+          "narration": "The daily-upload duty works, but the screen for naming the person hasn't been built. Until then an unassigned duty shows as a warning in the admin panel.",
+          "action_hint": "Show the Daily upload has no owner warning in the attention panel."
+        },
+        {
+          "page_href": "/failures",
+          "target": null,
+          "title": "When an import fails, it is written down",
+          "body": "Failures are logged rather than shown once and lost. If a file went in and the numbers did not move, look here before re-uploading — a second upload of the same file is recognised and skipped, so repeating it will not tell you anything new.",
+          "narration": "Failures are logged rather than shown once and lost. Look here before re-uploading — a repeat of the same file is recognised and skipped.",
+          "action_hint": "Open /failures and filter to import errors."
         }
       ]
     }
