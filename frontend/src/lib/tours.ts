@@ -197,13 +197,14 @@ export const MODULE_LABEL: Record<string, string> = {
   storeops: 'StoreOps — people & hours',
   hr: 'HR / People',
   asset: 'Assets & Inventory',
+  pos: 'Point of Sale',
   account: 'Finance & P&L',
   notify: 'Notifications',
   helpdesk: 'Helpdesk',
   admin: 'Administration',
   training: 'Training',
 }
-export const MODULE_ORDER = ['closing', 'commissions', 'storeops', 'asset', 'account', 'hr',
+export const MODULE_ORDER = ['closing', 'commissions', 'pos', 'storeops', 'asset', 'account', 'hr',
   'notify', 'helpdesk', 'admin', 'training']
 
 export function groupByModule(tours: Tour[]): { key: string; label: string; tours: Tour[] }[] {

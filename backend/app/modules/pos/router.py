@@ -177,7 +177,11 @@ CUSTOMER_FIELDS = ("account_type", "company_name", "first_name", "last_name", "m
                    "zip", "referral_source", "credit_limit", "accept_checks", "is_active")
 SERIAL_FIELDS = ("product_id", "store_code", "serial_number", "imei", "sim_card", "color",
                  "storage", "condition", "status", "cost", "date_received", "po_number")
-TAX_CODE_FIELDS = ("name", "rate", "store_code", "is_active")
+# `market` is writable here as of 2026-08-10: migration 741 added the column and gave it a resolver and
+# a bulk-create path, but the single-row UPDATE could not set OR CLEAR it — so a market-scoped rate,
+# once created, could never be moved to a store or repointed at another market. Adding it back is what
+# makes the scope selector on the Sales Tax screen a round trip instead of a one-way door.
+TAX_CODE_FIELDS = ("name", "rate", "store_code", "market", "is_active")
 RECEIPT_TEMPLATE_FIELDS = ("name", "header_text", "footer_text", "show_store_name",
                            "show_customer", "show_employee", "show_serials",
                            "show_tax_breakdown", "show_discounts", "paper_width_mm",
@@ -207,6 +211,27 @@ def _caller_employee(authorization: str, org_id: str) -> str:
     return ((rows[0].get("employee_id") if rows else "") or "").strip()
 
 
+def _super_admin_login(uid: str) -> bool:
+    """Whether this LOGIN is a platform super-admin, regardless of which tenant it is acting on.
+
+    `storeops.app_users.auth_id` is globally unique per login, so super-admin standing is a property
+    of the PERSON, not of one membership row. That is already the platform's posture: tenant_middleware
+    skips the org_id rewrite entirely for a super-admin, so the client-supplied org_id is honoured and
+    cross-tenant administration works. Every POS gate must read it the same way — this lives in ONE
+    place because two gates need it and the drift between them is precisely the bug being fixed here.
+
+    FAILS CLOSED: any lookup fault returns False (not a super-admin). A gate must never ESCALATE on
+    error; the surrounding caller then applies its own normal denial."""
+    if not uid:
+        return False
+    try:
+        rows = (sb().schema("storeops").table("app_users").select("id")
+                .eq("auth_id", uid).eq("super_admin", True).limit(1).execute().data) or []
+    except Exception:
+        return False
+    return bool(rows)
+
+
 def _caller_ctx(authorization: str, org_id: str):
     """The caller's RBAC context — {'perms', 'role', 'super_admin'} — or None when the caller is
     UNRESOLVABLE (no/invalid token, no app_users membership, or a role name with no roles row).
@@ -227,9 +252,7 @@ def _caller_ctx(authorization: str, org_id: str):
         # Since app_users.auth_id is globally unique, super-admin standing is a property of the LOGIN,
         # not of one membership: look it up without the org filter and, if present, grant it here.
         # A non-super-admin with no membership still returns None and is still denied.
-        sa = (sb().schema("storeops").table("app_users").select("super_admin")
-              .eq("auth_id", uid).eq("super_admin", True).limit(1).execute().data) or []
-        if not sa:
+        if not _super_admin_login(uid):
             return None
         return {"perms": {}, "role": "super_admin", "super_admin": True}
     role = ((rows[0].get("role") if rows else "") or "").strip()
@@ -280,14 +303,32 @@ def _require_pos_perm(authorization: str, org_id: str, key: str):
 
 
 def _require_member(authorization: str, org_id: str) -> str:
-    """401 unless the caller is a signed-in member of this org; returns their auth uid."""
+    """401/403 unless the caller may act on this org; returns their auth uid.
+
+    A member of the org passes. A PLATFORM SUPER-ADMIN passes on ANY org — the same standing
+    _caller_ctx already grants, and the same posture tenant_middleware takes (no org_id rewrite for a
+    super-admin, so the tenant they picked in the switcher is honoured).
+
+    WHY THIS SECOND PLACE EXISTS (2026-08-10). The 2026-08-09 fix (f4c39b2) taught `_caller_ctx` to
+    recognise super-admin standing from any membership, to unblock the owner's "the POS set up wizard
+    is not letting me update the sales tax". It could not work: this function is called by
+    `_require_pos_access`, the APIRouter-level dependency, and a router dependency runs BEFORE the
+    endpoint body — so a super-admin with no `app_users` row in the acting tenant was refused here,
+    with `_caller_ctx` never reached. Measured on prod 2026-08-10: the owner's login holds exactly ONE
+    membership (the house org), so on Luxelink/Vzone EVERY POS endpoint — the wizard's GETs included —
+    answered 403.
+
+    IT CANNOT LEAK. The extra branch tests one thing, `super_admin = true` on this uid, and grants
+    nothing else: a non-super-admin with no membership in the acting org is still refused, which is the
+    control that keeps this the opposite of the 2026-08-09 HR gate (that one ignored the tenant
+    switcher and served another tenant's employees to an ordinary admin)."""
     from app.modules.core.router import _uid_from_token
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "sign in to perform this action")
     rows = (sb().schema("storeops").table("app_users").select("id")
             .eq("org_id", org_id).eq("auth_id", uid).limit(1).execute().data) or []
-    if not rows:
+    if not rows and not _super_admin_login(uid):
         raise HTTPException(403, "your login is not a member of this organization")
     return uid
 
@@ -774,8 +815,18 @@ def update_tax_code(code_id: str, body: dict, authorization: str = Header(defaul
                     org_id: str = ORG_ID):
     _require_pos_perm(authorization, org_id, "pos_settings")
     upd = {k: body[k] for k in TAX_CODE_FIELDS if k in body}
-    if "store_code" in upd and upd["store_code"] == "":
-        upd["store_code"] = None
+    for k in ("store_code", "market"):
+        if k in upd and str(upd[k] or "").strip() == "":
+            upd[k] = None                      # "" is the UI's way of saying "clear this rung"
+        elif k in upd:
+            upd[k] = str(upd[k]).strip()
+    # Migration 741 already REFUSES a row naming both a store and a market at the database, because
+    # such a row belongs to neither rung and resolves differently depending on which query finds it
+    # first. Catching it here turns a raw constraint-violation string into a sentence, and keeps the
+    # two statements of the same rule from drifting.
+    if (upd.get("store_code") or "") and (upd.get("market") or ""):
+        raise HTTPException(400, "a tax code applies to a store OR a market, not both — "
+                                 "clear one of them")
     if "rate" in upd:
         try:
             upd["rate"] = float(upd["rate"])
@@ -1350,16 +1401,28 @@ def _dealer_sync(org_id: str, commit: bool):
             seen.setdefault(code.upper(), (code, str(r.get(namecol) or "").strip() if namecol else ""))
         fresh = [v for k, v in seen.items() if k not in existing]
         if commit and fresh:
+            # `description` (mig 742) carries the carrier's OWN name for the code. Before 742 it was
+            # read for the preview and then dropped on insert, which left the operator with a list of
+            # bare six-digit numbers they could not tell apart -- and telling them apart is the entire
+            # point of importing them. Degrades: a tenant whose 742 has not run gets the pre-742
+            # payload rather than a failed import.
             payload = [{"org_id": org_id, "code": code, "carrier": c.get("name"),
-                        "store_code": None, "is_active": True} for code, _nm in fresh]
+                        "store_code": None, "is_active": True,
+                        "description": (nm or None)} for code, nm in fresh]
             for i in range(0, len(payload), 500):
-                client.schema("pos").table("dealer_codes").insert(payload[i:i + 500]).execute()
+                chunk = payload[i:i + 500]
+                try:
+                    client.schema("pos").table("dealer_codes").insert(chunk).execute()
+                except Exception:
+                    client.schema("pos").table("dealer_codes").insert(
+                        [{k: v for k, v in row.items() if k != "description"} for row in chunk]).execute()
             existing |= {code.upper() for code, _ in fresh}
             inserted_total += len(fresh)
         out.append({"carrier": c.get("name"), "configured": True,
                     "label": c.get("dealer_code_label"), "source": f"{tbl}.{col}",
+                    "name_source": (f"{tbl}.{namecol}" if namecol else None),
                     "found": len(seen), "new": len(fresh),
-                    "sample": [code for code, _ in fresh[:5]]})
+                    "sample": [{"code": code, "description": nm or None} for code, nm in fresh[:8]]})
     return {"carriers": out, "inserted": inserted_total if commit else 0, "committed": commit}
 
 
@@ -1369,11 +1432,18 @@ def create_dealer_code(body: dict, authorization: str = Header(default=""), org_
     code = (body.get("code") or "").strip()
     if not code:
         raise HTTPException(400, "code required")
-    r = sb().schema("pos").table("dealer_codes").insert({
+    row = {
         "org_id": org_id, "code": code, "carrier": (body.get("carrier") or "").strip() or None,
         "store_code": (body.get("store_code") or "").strip() or None,
         "is_active": bool(body.get("is_active", True)),
-    }).execute()
+        "description": (str(body.get("description") or "").strip() or None),
+    }
+    try:
+        r = sb().schema("pos").table("dealer_codes").insert(row).execute()
+    except Exception:
+        # mig 742 un-run -> save the code without its label rather than refusing the whole write.
+        r = sb().schema("pos").table("dealer_codes").insert(
+            {k: v for k, v in row.items() if k != "description"}).execute()
     return {"dealer_code": (r.data or [{}])[0]}
 
 
@@ -1381,8 +1451,9 @@ def create_dealer_code(body: dict, authorization: str = Header(default=""), org_
 def update_dealer_code(code_id: str, body: dict, authorization: str = Header(default=""),
                        org_id: str = ORG_ID):
     _require_pos_perm(authorization, org_id, "pos_settings")
-    upd = {k: body[k] for k in ("code", "carrier", "store_code", "is_active") if k in body}
-    _clean_nullable(upd, ("carrier", "store_code"))
+    upd = {k: body[k] for k in ("code", "carrier", "store_code", "description", "is_active")
+           if k in body}
+    _clean_nullable(upd, ("carrier", "store_code", "description"))
     if not upd:
         raise HTTPException(400, "nothing to update")
     r = (sb().schema("pos").table("dealer_codes").update(upd)

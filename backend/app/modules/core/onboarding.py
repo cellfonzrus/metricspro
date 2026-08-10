@@ -108,8 +108,13 @@ POS_TASKS = [
     dict(task_key="tax_codes", sort_order=70, step_group="Catalog",
          title="Set your sales-tax rates",
          why="A taxable sale with no tax code charges zero tax, and that is a number you cannot fix "
-             "after the customer has left. One rate per state/store is enough to start.",
-         predicate={"type": "count", "schema": "pos", "table": "tax_codes", "min": 1},
+             "after the customer has left. Every store needs a rate that reaches it — its own, its "
+             "market's, or a company default.",
+         # COVERAGE, NOT A ROW COUNT (2026-08-10). This step used to be satisfied by ONE tax code
+         # anywhere in the tenant, which is how Luxelink's wizard reported sales tax COMPLETE with a
+         # single rate on a single store while the other 19 charged $0 -- the exact outcome this
+         # task's own `why` warns about. It now asks the register's own question, store by store.
+         predicate={"type": "coverage", "check": "pos_tax_rate"},
          is_required=True, skippable=False, template_key="tax_codes", href="/pos/settings"),
 
     # ── STEP GROUP: wireless ──────────────────────────────────────────────────────────────────
@@ -227,6 +232,37 @@ PREDICATE_TABLES = {
 }
 
 
+def _cov_pos_tax_rate(org_id: str):
+    """Does every ACTIVE store resolve to a sales-tax rate? -> (covered, total, missing[]).
+
+    Asks the REGISTER'S question through the register's own resolver (pos._resolve_tax: store >
+    market > org-wide), so this can never disagree with what a sale would actually charge. Counting
+    rows here instead -- which is what the predicate did until 2026-08-10 -- says "done" the moment
+    one store in the company has a rate.
+
+    is_active is NULLABLE, so stores are filtered IS NOT FALSE, never == True."""
+    from app.modules.pos.router import _resolve_tax    # lazy: main.py imports both routers
+    client = sb()
+    stores = (client.schema("storeops").table("stores").select("store_code,market,is_active")
+              .eq("org_id", org_id).limit(2000).execute().data) or []
+    stores = [s for s in stores if s.get("is_active") is not False and (s.get("store_code") or "").strip()]
+    codes = (client.schema("pos").table("tax_codes").select("*")
+             .eq("org_id", org_id).limit(1000).execute().data) or []
+    missing = [s["store_code"] for s in stores
+               if _resolve_tax(codes, s.get("store_code"), s.get("market"))[1] == "none"]
+    return len(stores) - len(missing), len(stores), missing
+
+
+# Whitelist, same discipline as PREDICATE_TABLES: a predicate naming an unregistered check is
+# UNKNOWN, never complete. A checker answers "is this configured for every place that needs it",
+# which a row count structurally cannot.
+COVERAGE_CHECKS = {
+    "pos_tax_rate": dict(fn=_cov_pos_tax_rate, noun="store",
+                         done="every store has a sales-tax rate that reaches it",
+                         gap="{n} of {total} stores have NO rate — a taxable sale there charges $0"),
+}
+
+
 def _count(schema: str, table: str, org_id: str, where: dict) -> int:
     """org-scoped exact count. Returns -1 for "could not determine" (missing table / schema not
     exposed to PostgREST), which the caller renders as UNKNOWN — never as complete."""
@@ -271,6 +307,27 @@ def _evaluate(pred: dict, org_id: str) -> dict:
         need = int(pred.get("min") or 1)
         return {"state": "complete" if n >= need else "incomplete", "count": n,
                 "reason": f"{n} row(s), need {need}"}
+
+    if ptype == "coverage":
+        spec = COVERAGE_CHECKS.get((pred or {}).get("check") or "")
+        if not spec:
+            return {"state": "unknown", "count": None,
+                    "reason": f"predicate names an unregistered check ({pred.get('check')})"}
+        try:
+            covered, total, missing = spec["fn"](org_id)
+        except Exception as e:
+            # A coverage check reads two tables and may hit an unexposed schema or an un-run
+            # migration. UNKNOWN, never complete -- the same posture _count takes on a -1.
+            return {"state": "unknown", "count": None,
+                    "reason": f"could not check coverage ({str(e)[:120]})"}
+        if total == 0:
+            return {"state": "unknown", "count": 0,
+                    "reason": f"no {spec['noun']}s to cover yet"}
+        if not missing:
+            return {"state": "complete", "count": covered, "reason": spec["done"]}
+        shown = ", ".join(missing[:5]) + (f" and {len(missing) - 5} more" if len(missing) > 5 else "")
+        return {"state": "incomplete", "count": covered,
+                "reason": spec["gap"].format(n=len(missing), total=total) + f" ({shown})"}
 
     return {"state": "unknown", "count": None, "reason": f"unknown predicate type {ptype!r}"}
 
