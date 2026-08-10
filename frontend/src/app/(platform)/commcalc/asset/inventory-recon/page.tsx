@@ -126,6 +126,13 @@ export default function InventoryReconPage() {
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Asset On-Inventory vs b2bsoft inventory, per store · iPhone / Android / Tablet / Watch / Hotspot. Each cell = <b>asset / b2b</b>; mismatches highlighted.
           </p>
+          {/* PURPOSE LINE (owner 2026-08-10) — see the twin note on /accounts/inventory. */}
+          <p style={{ color: 'var(--text3)', fontSize: 12.5, margin: '6px 0 0', maxWidth: 780 }}>
+            <b>Purpose — UNITS.</b> Do the device COUNTS agree? It compares the VIP asset ledger’s unsold
+            On-Inventory devices against b2bsoft’s snapshot, per store and per device type, to surface
+            missing/extra handsets. It says nothing about value. For “what is the stock WORTH” (the
+            Balance Sheet line), use <Link href="/accounts/inventory">Inventory Values</Link>.
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <a className="btn" href="/commcalc/asset" style={{ textDecoration: 'none' }}>← Asset</a>
@@ -175,7 +182,18 @@ export default function InventoryReconPage() {
 
       {loading ? <div style={{ padding: 40, color: 'var(--text3)' }}>Loading…</div> : !data?.b2b_loaded ? (
         <div className="card" style={{ padding: 24, color: 'var(--text2)', fontSize: 14 }}>
-          No b2bsoft inventory loaded yet. Asset On-Inventory is classified and ready — upload a b2bsoft snapshot to reconcile.
+          No b2bsoft inventory loaded yet. Asset On-Inventory is classified and ready — upload a b2bsoft
+          snapshot below to reconcile.
+          {/* Owner report 2026-08-10: "inventory aging is being pulled in ... but it is not updating the
+              relevant tables". It is landing — just not HERE. Say so, instead of leaving an empty page
+              that looks like the import failed. */}
+          <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--text3)', maxWidth: 820 }}>
+            <b>Note:</b> the automatic <i>Inventory Aging</i> import does <b>not</b> feed this page. It writes
+            the per-store <b>$ value</b> (→ <Link href="/accounts/inventory">Inventory Values</Link> and the
+            Balance Sheet) and the per-device cost rows — but the per-store × device-type <b>unit counts</b>
+            this recon compares against are only written by the upload on this page. So a green
+            “inventory_aging ✓ N rows” on the Imports screen is real and still leaves this table empty.
+          </div>
         </div>
       ) : (
         <div className="card" style={{ padding: 0, overflowX: 'auto' }}>

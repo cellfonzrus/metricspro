@@ -87,6 +87,15 @@ export default function InventoryValuesPage() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📦 Inventory Values</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Real-time on-hand value per store (b2bsoft Inventory Aging) → Balance Sheet · a manual override always wins.</p>
+          {/* PURPOSE LINE (owner 2026-08-10: "this page shows the inventory so what is the difference
+              between the 2 pages — show the purpose of each page on top"). Two pages read the SAME
+              Inventory Aging file for two different questions; say which one this is, and link the other. */}
+          <p style={{ color: 'var(--text3)', fontSize: 12.5, margin: '6px 0 0', maxWidth: 780 }}>
+            <b>Purpose — DOLLARS.</b> What the on-hand stock is WORTH per store, for the Balance Sheet
+            inventory line. It answers “how much money is sitting on the shelf.” It does not check unit
+            counts. For “do our device COUNTS match b2bsoft,” use{' '}
+            <Link href="/commcalc/asset/inventory-recon">On-Inventory ↔ b2bsoft Recon</Link>.
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)', maxWidth: 360 }}>{msg}</span>}
