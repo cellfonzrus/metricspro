@@ -260,12 +260,47 @@ def _rates(client, org_id, period):
     return {k: (dv if row.get(k) is None else row.get(k)) for k, dv in _RATE_DEFAULTS.items()}
 
 
-def _boost_actuals(client, org_id, period, rates):
-    """Baseline actuals for the Boost template — UNCHANGED aggregation over rep_commissions."""
+def _rep_key(r):
+    """The employee a rep_commissions row belongs to. storeops_name is the human roster name; the ePay
+    salesperson string is the fallback for a row that was never matched to the roster."""
+    return (str(r.get("storeops_name") or "").strip() or str(r.get("epay_salesperson") or "").strip())
+
+
+def whatif_reps(client, org_id, period):
+    """Distinct employees with pay in this period — the pick-don't-type option source for the
+    per-employee simulator (OWNER 2026-08-10: "under each employee, what would I make"). Names come
+    from the rows themselves, so the picker can only ever offer someone who actually has a baseline."""
+    try:
+        rc = (client.schema("commcalc").table("rep_commissions")
+              .select("storeops_name,epay_salesperson,store,total_payout")
+              .eq("org_id", org_id).in_("period", _pvariants(period)).limit(100000).execute().data) or []
+    except Exception:
+        return []
+    seen = {}
+    for r in rc:
+        k = _rep_key(r)
+        if not k:
+            continue
+        e = seen.setdefault(k.lower(), {"id": k, "label": k, "store": (r.get("store") or "").strip(),
+                                        "current_payout": 0.0})
+        e["current_payout"] += safe_float(r.get("total_payout"))
+    out = sorted(seen.values(), key=lambda x: x["label"].lower())
+    for e in out:
+        e["current_payout"] = round(e["current_payout"], 2)
+    return out
+
+
+def _boost_actuals(client, org_id, period, rates, rep=None):
+    """Baseline actuals for the Boost template. Company-wide by default (UNCHANGED aggregation); when
+    `rep` is given, narrowed to that ONE employee's rows so the simulator starts from THEIR real
+    numbers instead of the company total."""
     rc = (client.schema("commcalc").table("rep_commissions")
           .select("premium_acts,byod_acts,upgrade_acts,acc_comm,setup_fee_comm,trade_in_comm,"
-                  "acima_comm,subtotal,total_payout,tier")
+                  "acima_comm,subtotal,total_payout,tier,storeops_name,epay_salesperson")
           .eq("org_id", org_id).in_("period", _pvariants(period)).limit(100000).execute().data) or []
+    if rep:
+        want = str(rep).strip().lower()
+        rc = [r for r in rc if _rep_key(r).lower() == want]
     agg = {k: 0.0 for k in ("acc_comm", "setup_fee_comm", "trade_in_comm", "acima_comm", "subtotal", "total_payout")}
     cnt = {k: 0 for k in ("premium_acts", "byod_acts", "upgrade_acts")}
     tiers = []
@@ -435,7 +470,7 @@ def _plan_template(client, org_id, period, carrier):
     return {"components": comps, "tier": tier, "actuals": actuals}
 
 
-def activation_baseline(client, org_id, period, carrier_id=None):
+def activation_baseline(client, org_id, period, carrier_id=None, rep=None):
     """What-If tool #1 (carrier-agnostic employee payout). Boost → the legacy 8-component template
     (byte-identical); non-Boost → components from configured plans/rules/tiers + payout_schedule; no pay
     source → an explicit empty state pointing at /commcalc/commission-plans."""
@@ -445,11 +480,12 @@ def activation_baseline(client, org_id, period, carrier_id=None):
     base = {"period": period, "carrier": carrier_meta, "carrier_mode": mode,
             "carriers": [{"id": c.get("id"), "name": c.get("name"), "code": c.get("code"),
                           "is_default": bool(c.get("is_default"))} for c in carriers],
-            "periods": _list_periods(client, org_id)}
+            "periods": _list_periods(client, org_id),
+            "reps": whatif_reps(client, org_id, period), "rep": (rep or None)}
 
     if mode == "boost":
         rates = _rates(client, org_id, period)
-        actuals = _boost_actuals(client, org_id, period, rates)
+        actuals = _boost_actuals(client, org_id, period, rates, rep=rep)
         comps, tier = _boost_template(rates, actuals)
         base.update({"rates": rates, "actuals": actuals,
                      "template": {"components": comps, "tier": tier, "source_kind": "boost_rates"}})
@@ -465,6 +501,16 @@ def activation_baseline(client, org_id, period, carrier_id=None):
     base.update({"actuals": tpl["actuals"],
                  "template": {"components": tpl["components"], "tier": tpl["tier"],
                               "source_kind": "commission_plan"}})
+    if rep:
+        # HONEST REFUSAL: the plan-based baseline comes from the read-only commission-engine preview,
+        # which is computed for the carrier as a whole — there is no per-rep split of it yet. Showing
+        # the COMPANY numbers under one employee's name would be a lie, so say so and keep the figures
+        # labelled for what they are.
+        base["rep_note"] = (
+            "Per-employee baselines aren't available for this carrier yet — its components come from "
+            "the Commission-Plan preview, which is computed carrier-wide. The quantities below are "
+            "COMPANY totals; change them freely to model one person, but they did not start from "
+            f"{rep}'s own numbers.")
     return base
 
 

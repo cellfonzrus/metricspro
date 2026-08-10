@@ -77,11 +77,17 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
   //   • 'item'   — Quantity is the NUMBER of accessories, priced at $/item below.
   const [basis, setBasis] = useState<Record<string, 'month' | 'item'>>({})
   const [price, setPrice] = useState<Record<string, number>>({})
+  // OWNER 2026-08-10: "under each employee, what would I make — it should show their current numbers
+  // by default and then they can change them." '' = the company total (the previous behaviour).
+  const [rep, setRep] = useState('')
 
   useEffect(() => { setData(null); load1(period) }, [carrierId])
   useEffect(() => { if (period) load1(period) }, [period])
+  // Switching employee RE-SEEDS every quantity from that person's own actuals — the whole point is to
+  // start from their real numbers, so an edit made for one employee must not follow you to the next.
+  useEffect(() => { if (period) load1(period) }, [rep])
   function load1(p: string) {
-    api(`/api/v1/commcalc/whatif/activation-baseline?org_id=${ORG_ID}&carrier_id=${carrierId}&period=${encodeURIComponent(p || 'auto')}`).then(load).catch(console.error)
+    api(`/api/v1/commcalc/whatif/activation-baseline?org_id=${ORG_ID}&carrier_id=${carrierId}&period=${encodeURIComponent(p || 'auto')}&rep=${encodeURIComponent(rep)}`).then(load).catch(console.error)
   }
 
   function load(d: any) {
@@ -126,6 +132,14 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
   const rowSalesBase = (k: string) =>
     (isPct(byKey[k]) && basis[k] === 'item') ? num(qty[k]) * num(price[k]) : num(qty[k])
   const rowComm = (k: string) => rowSalesBase(k) * num(rate[k])
+  // Slider bounds per row, derived from that row's own baseline so one table can hold a 3-unit row and
+  // a $40,000 row without either becoming undraggable.
+  const sliderMax = (c: any) => {
+    const base = num(c.qty)
+    if (isPct(c) && basis[c.key] !== 'item') return Math.max(Math.ceil(base * 2), 1000)
+    return Math.max(Math.ceil(base * 2), 20)
+  }
+  const sliderStep = (c: any) => (isPct(c) && basis[c.key] !== 'item' ? 25 : 1)
   const subtotal = comps.reduce((s, c) => s + rowComm(c.key), 0)
   const payout = subtotal * num(tier)
   const baseSub = data?.actuals?.subtotal || 0
@@ -137,6 +151,19 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
     <div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <PeriodBar period={period} setPeriod={setPeriod} periods={data.periods} />
+        {/* EMPLOYEE — pick-don't-type over the people who actually have pay in this period. */}
+        {(data.reps || []).length > 0 && (
+          <>
+            <label style={{ fontSize: 13, color: 'var(--text2)' }}>Employee:</label>
+            <select value={rep} onChange={e => setRep(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', maxWidth: 260 }}>
+              <option value="">All employees (company total)</option>
+              {(data.reps || []).map((r: any) => (
+                <option key={r.id} value={r.id}>{r.label}{r.store ? ` · ${r.store}` : ''} — {fmt(r.current_payout)}</option>
+              ))}
+            </select>
+          </>
+        )}
         <div style={{ flex: 1 }} />
         <label style={{ fontSize: 13, color: 'var(--text2)' }}>Tier:</label>
         {tierOpts.map((o: any) => (
@@ -145,6 +172,12 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
                      background: num(tier) === num(o.value) ? 'var(--accent)' : 'var(--surface)', color: num(tier) === num(o.value) ? '#fff' : 'var(--text2)' }}>{o.label}</button>
         ))}
       </div>
+
+      {data.rep_note && (
+        <div className="card" style={{ padding: 12, marginBottom: 12, fontSize: 12.5, color: '#92400e', background: '#fffbeb', borderLeft: '3px solid #f59e0b' }}>
+          {data.rep_note}
+        </div>
+      )}
 
       <div className="card" style={{ padding: 0, marginBottom: 18 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -169,10 +202,26 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
                     </select>
                   ) : <span style={{ color: 'var(--text3)', fontSize: 12 }}>per unit</span>}
                 </td>
+                {/* QUANTITY — the number, plus a slider to nudge it (owner 2026-08-10: "having a
+                    slider to increase or decrease their numbers will be very helpful"). Both edit the
+                    SAME state, so typing and dragging stay in step. The slider's ceiling is derived
+                    from this row's own baseline (2x, with a floor so a baseline of 0 is still
+                    draggable) — a fixed max would make a 3-unit row and a $40k row unusable in the
+                    same table. The baseline is marked so it is obvious what you changed FROM. */}
                 <td style={{ padding: '8px 14px', textAlign: 'right' }}>
                   <input style={inp} value={qty[c.key] ?? 0} onChange={e => setQty({ ...qty, [c.key]: num(e.target.value) })} />
+                  <input type="range" aria-label={`Adjust ${c.label}`}
+                    min={0} max={sliderMax(c)} step={sliderStep(c)}
+                    value={Math.min(num(qty[c.key]), sliderMax(c))}
+                    onChange={e => setQty({ ...qty, [c.key]: num(e.target.value) })}
+                    style={{ display: 'block', width: 130, marginTop: 5, accentColor: 'var(--accent)', cursor: 'pointer' }} />
                   <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>
                     {isPct(c) ? (basis[c.key] === 'item' ? 'accessories' : 'sales $') : 'units'}
+                    {' · now '}{isPct(c) && basis[c.key] !== 'item' ? fmt(num(c.qty)) : num(c.qty).toLocaleString()}
+                    {num(qty[c.key]) !== num(c.qty) && (
+                      <button onClick={() => setQty({ ...qty, [c.key]: num(c.qty) })}
+                        style={{ marginLeft: 5, background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', fontSize: 10.5 }}>reset</button>
+                    )}
                   </div>
                 </td>
                 {/* $ / ITEM — editable, defaulted, and only active in per-accessory mode. In per-month
@@ -205,7 +254,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
         <Stat label="Projected subtotal (pre-tier)" value={fmt(subtotal)} sub={`vs current ${fmt(baseSub)}`} />
         <Stat label={`Projected payout (× ${(+num(tier)).toFixed(2)} tier)`} value={fmt(payout)} color="var(--accent)" sub={`vs current ${fmt(basePay)}`} />
-        <Stat label="Delta vs current" value={(payout - basePay >= 0 ? '+' : '') + fmt(payout - basePay)} color={payout - basePay >= 0 ? '#059669' : '#dc2626'} sub={`${data.actuals?.reps ?? 0} reps in baseline`} />
+        <Stat label="Delta vs current" value={(payout - basePay >= 0 ? '+' : '') + fmt(payout - basePay)} color={payout - basePay >= 0 ? '#059669' : '#dc2626'} sub={rep ? `baseline: ${rep}` : `${data.actuals?.reps ?? 0} reps in baseline`} />
       </div>
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
         {tpl.source_kind === 'boost_rates'

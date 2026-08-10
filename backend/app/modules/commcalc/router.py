@@ -1852,7 +1852,7 @@ async def _upload_file_impl(
 
 
 @router.get("/whatif/activation-baseline")
-def whatif_activation_baseline(period: str, carrier_id: str = "",
+def whatif_activation_baseline(period: str, carrier_id: str = "", rep: str = "",
                                authorization: str = Header(default=""), org_id: str = ORG_ID):
     """What-If tool #1 — CARRIER-AGNOSTIC employee-payout template. Boost carriers keep the legacy 8
     components (byte-identical); non-Boost carriers' components auto-populate from their configured
@@ -1865,7 +1865,8 @@ def whatif_activation_baseline(period: str, carrier_id: str = "",
     report's per-component payout template. Enforced BEFORE the first read."""
     require_org(org_id)
     whatif_gates.require_whatif_report(authorization, whatif_gates.EMPLOYEE_PAYOUT, org_id)
-    return whatif.activation_baseline(sb(), org_id, period, carrier_id=(carrier_id or None))
+    return whatif.activation_baseline(sb(), org_id, period, carrier_id=(carrier_id or None),
+                                      rep=(rep.strip() or None))
 
 
 @router.get("/whatif/byod-residual")
