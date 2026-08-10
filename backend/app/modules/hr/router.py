@@ -92,7 +92,9 @@ async def hr_list_employees(org_id: str = ORG_ID):
 
 
 @router.post("/employees")
-async def hr_create_employee(body: dict, org_id: str = ORG_ID):
+async def hr_create_employee(body: dict, org_id: str = ORG_ID,
+                             authorization: str = Header(default=""),
+                             x_active_org: str = Header(default="")):
     """Create a person from HR. Body: name (req), email?, phone?, home_store?, job title (role)?,
     pay_rate?, employee_id?, plus optional app fields: role_name (RBAC role), market?, store_code?,
     store_codes?[], create_login?. De-dupes by email. Returns the employee + any login temp password."""
@@ -132,12 +134,14 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID):
             "email": email, "full_name": name, "role": role or "sales_rep",
             "market": body.get("market"), "store_code": body.get("store_code"),
             "store_codes": body.get("store_codes"), "employee_id": emp.get("employee_id"),
-        }, org_id))
+        }, org_id, authorization=authorization, x_active_org=x_active_org))
         assigned = role or "sales_rep"
         if body.get("create_login"):
             from app.modules.core.router import create_login as core_create_login
             try:
-                login = await _maybe_await(core_create_login({"email": email}, org_id))
+                login = await _maybe_await(core_create_login({"email": email}, org_id,
+                                                             authorization=authorization,
+                                                             x_active_org=x_active_org))
             except Exception as e:
                 login = {"error": str(e)[:200]}
     elif (role or has_scope) and not email:
@@ -154,7 +158,8 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID):
             invite = await _send_invite(org_id, emp, method,
                                         dob=(body.get("dob") or "").strip() or None,
                                         ssn4=(body.get("ssn4") or "").strip() or None,
-                                        role_name=role or None, send_email_flag=True, actor="HR")
+                                        role_name=role or None, send_email_flag=True, actor="HR",
+                                        authorization=authorization, x_active_org=x_active_org)
         except Exception as e:
             invite = {"ok": False, "error": str(e)[:200]}
     return {"employee": emp, "assigned_role": assigned, "login": login, "invite": invite,
@@ -163,7 +168,8 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/employees/{emp_id}")
-async def hr_update_employee(emp_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def hr_update_employee(emp_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID,
+                             x_active_org: str = Header(default="")):
     """Update a person from HR. Updates the roster row (if roster fields are present) and, when a
     role/scope + email is given, re-syncs the app_users assignment so the login stays in step.
 
@@ -184,7 +190,7 @@ async def hr_update_employee(emp_id: str, body: dict, authorization: str = Heade
             "role": role or None, "market": body.get("market"),
             "store_code": body.get("store_code"), "store_codes": body.get("store_codes"),
             "employee_id": (res or {}).get("employee_id"),
-        }, org_id))
+        }, org_id, authorization=authorization, x_active_org=x_active_org))
     return res or {"ok": True, "id": emp_id}
 
 
@@ -2078,10 +2084,18 @@ def _invite_email_html(first_name, method, url, email=None, temp_pw=None, task_l
 
 
 async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, role_name=None,
-                       expires_days=30, actor="HR", send_email_flag=True):
+                       expires_days=30, actor="HR", send_email_flag=True,
+                       authorization="", x_active_org=""):
     """Prepare + (optionally) email an onboarding invite. Returns a per-employee result dict.
     method='link' → mint a token portal (needs a DOB or last-4 gate).
-    method='login' → ensure an app_users role + a Supabase login, email the temp credentials."""
+    method='login' → ensure an app_users role + a Supabase login, email the temp credentials.
+
+    `authorization`/`x_active_org` are the CALLER's own request headers, threaded through to the
+    core user-write routes below. They gate on `_require_setting(..., "security")`, which resolves
+    the caller from the verified JWT — an in-process call that passes nothing binds FastAPI's
+    `Header(default="")` SENTINEL there, resolves to no caller, and raises 401 "not authenticated"
+    (regression from the 2026-08-05 core RBAC hardening; live symptom was the Documents board
+    reporting `401: not authenticated` per employee instead of sending the packet)."""
     so = _so()
     email = (employee.get("email") or "").strip().lower()
     employee_id = employee.get("employee_id")
@@ -2100,8 +2114,11 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, 
             from app.modules.core.router import assign_role, create_login as core_create_login
             # ensure an app_users row exists so create_login can attach the auth account
             await _maybe_await(assign_role({"email": email, "full_name": employee.get("name"),
-                               "role": (role_name or "sales_rep"), "employee_id": employee_id}, org_id))
-            login = await _maybe_await(core_create_login({"email": email}, org_id))
+                               "role": (role_name or "sales_rep"), "employee_id": employee_id}, org_id,
+                               authorization=authorization, x_active_org=x_active_org))
+            login = await _maybe_await(core_create_login({"email": email}, org_id,
+                                                         authorization=authorization,
+                                                         x_active_org=x_active_org))
         except Exception as e:
             return {**result, "ok": False, "error": str(e)[:200]}
         url = f"{settings.APP_PUBLIC_URL}/portal"
@@ -2169,7 +2186,9 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, 
 
 
 @router.post("/onboarding/employee/{employee_id}/invite")
-async def onboarding_invite_one(employee_id: str, body: dict, org_id: str = ORG_ID):
+async def onboarding_invite_one(employee_id: str, body: dict, org_id: str = ORG_ID,
+                                authorization: str = Header(default=""),
+                                x_active_org: str = Header(default="")):
     """Invite/re-invite ONE hire. Body: method('link'|'login'), dob?/ssn4? (link gate), role_name?,
     expires_days?, send_email? (default true). Returns the link or temp credentials."""
     so = _so()
@@ -2183,14 +2202,17 @@ async def onboarding_invite_one(employee_id: str, body: dict, org_id: str = ORG_
                              role_name=(body.get("role_name") or "").strip() or None,
                              expires_days=body.get("expires_days", 30),
                              actor=(body.get("actor") or "HR"),
-                             send_email_flag=body.get("send_email", True))
+                             send_email_flag=body.get("send_email", True),
+                             authorization=authorization, x_active_org=x_active_org)
     if not res.get("ok"):
         raise HTTPException(400, res.get("error") or "invite failed")
     return res
 
 
 @router.post("/onboarding/invite-bulk")
-async def onboarding_invite_bulk(body: dict, org_id: str = ORG_ID):
+async def onboarding_invite_bulk(body: dict, org_id: str = ORG_ID,
+                                 authorization: str = Header(default=""),
+                                 x_active_org: str = Header(default="")):
     """Invite MANY hires in one action (for a roster of existing staff). Body:
     method('link'|'login', default 'login' — link needs a per-person DOB we usually don't have),
     employee_ids?[] (omit + all_incomplete=true → everyone without a completed onboarding),
@@ -2219,7 +2241,8 @@ async def onboarding_invite_bulk(body: dict, org_id: str = ORG_ID):
     for e in emps:
         results.append(await _send_invite(org_id, e, "login",
                                           role_name=(body.get("role_name") or "").strip() or None,
-                                          send_email_flag=body.get("send_email", True), actor=body.get("actor") or "HR"))
+                                          send_email_flag=body.get("send_email", True), actor=body.get("actor") or "HR",
+                                          authorization=authorization, x_active_org=x_active_org))
     ok = sum(1 for r in results if r.get("ok"))
     emailed = sum(1 for r in results if r.get("emailed"))
     return {"invited": ok, "emailed": emailed, "total": len(results), "results": results}
@@ -2289,7 +2312,9 @@ def onboarding_advance(employee_id: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/onboarding/employee/{employee_id}/provision")
-async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_ID):
+async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_ID,
+                               authorization: str = Header(default=""),
+                               x_active_org: str = Header(default="")):
     """Auto-provision the hire: create their login, assign their role/scope, email the credentials,
     and move to 'provisioned'. Gated on docs_verified UNLESS body.override=true (with a reason —
     the override is recorded). Body: role_name?, market?/store_code?/store_codes?, override?, reason?,
@@ -2319,9 +2344,12 @@ async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_I
     role = (body.get("role_name") or "sales_rep").strip()
     await _maybe_await(assign_role({"email": email, "full_name": emp[0].get("name"), "role": role,
                        "market": body.get("market"), "store_code": body.get("store_code"),
-                       "store_codes": body.get("store_codes"), "employee_id": employee_id}, org_id))
+                       "store_codes": body.get("store_codes"), "employee_id": employee_id}, org_id,
+                       authorization=authorization, x_active_org=x_active_org))
     try:
-        login = await _maybe_await(core_create_login({"email": email}, org_id))
+        login = await _maybe_await(core_create_login({"email": email}, org_id,
+                                                     authorization=authorization,
+                                                     x_active_org=x_active_org))
     except Exception as e:
         raise HTTPException(400, f"could not create login: {str(e)[:200]}")
     _set_status(so, org_id, employee_id, "provisioned",
@@ -2891,7 +2919,9 @@ def onboarding_doc_status(org_id: str = ORG_ID):
 
 
 @router.post("/onboarding/send-documents")
-async def onboarding_send_documents(body: dict, org_id: str = ORG_ID):
+async def onboarding_send_documents(body: dict, org_id: str = ORG_ID,
+                                    authorization: str = Header(default=""),
+                                    x_active_org: str = Header(default="")):
     """The Documents-board checkbox action: (re)send the onboarding packet to the selected people.
     Per person: an existing identity gate (DOB / last-4) re-issues their token LINK; otherwise a
     portal LOGIN invite goes to the roster email. Stamps docs_sent_at so the board shows who's been
@@ -2918,7 +2948,8 @@ async def onboarding_send_documents(body: dict, org_id: str = ORG_ID):
             continue
         res = await _send_invite(org_id, emp, method, dob=dob, ssn4=ssn4,
                                  send_email_flag=body.get("send_email", True),
-                                 actor=body.get("actor") or "HR")
+                                 actor=body.get("actor") or "HR",
+                                 authorization=authorization, x_active_org=x_active_org)
         if res.get("ok"):
             try:
                 so.table("employee_onboarding_profile").upsert(
