@@ -140,10 +140,16 @@ function AccountConfigCard() {
   const [saving, setSaving] = useState(false)
   const [open, setOpen] = useState(false)
 
+  // Service-fee products (mig 613): which sale lines are FEE INCOME to the store. RULE THREE —
+  // picked from what this tenant's sales actually carry, never typed.
+  const [fees, setFees] = useState<string[]>([])
+  const [feeQ, setFeeQ] = useState('')
+
   function load() {
     api(`/api/v1/account/config?org_id=${ORG_ID}`).then((r: any) => {
       setCfg(r)
       setPct(String(Math.round((r?.config?.accessory_cogs_pct ?? 0.2) * 10000) / 100))
+      setFees(r?.config?.service_fee_products || [])
     }).catch(() => {})
   }
   useEffect(() => { load() }, [])
@@ -153,10 +159,17 @@ function AccountConfigCard() {
     if (isNaN(v) || v < 0 || v > 100) { setMsg('Enter a percent between 0 and 100.'); return }
     setSaving(true); setMsg('')
     try {
-      await api(`/api/v1/account/config?org_id=${ORG_ID}`, { method: 'PUT', body: JSON.stringify({ accessory_cogs_pct: v / 100 }) })
+      await api(`/api/v1/account/config?org_id=${ORG_ID}`, {
+        method: 'PUT',
+        body: JSON.stringify({ accessory_cogs_pct: v / 100, service_fee_products: fees }),
+      })
       setMsg('Saved. Recompute this period’s statements for it to take effect.'); load()
     } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
     setSaving(false)
+  }
+
+  function toggleFee(p: string) {
+    setFees(f => f.includes(p) ? f.filter(x => x !== p) : [...f, p])
   }
 
   if (!cfg) return null
@@ -169,19 +182,59 @@ function AccountConfigCard() {
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>
           Accessory COGS: <strong>{Math.round((cfg.config?.accessory_cogs_pct ?? 0.2) * 10000) / 100}%</strong>
           {cfg.is_default && <span style={{ marginLeft: 6, color: 'var(--text3)' }}>(default)</span>}
+          {fees.length > 0 && <span style={{ marginLeft: 10 }}>· Service-fee products: <strong>{fees.length}</strong></span>}
         </span>
       </div>
       {open && (
-        <div style={{ marginTop: 10, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 13 }}>Accessory COGS %
-            <input type="number" step="0.01" min={0} max={100} value={pct} onChange={e => setPct(e.target.value)}
-              style={{ marginLeft: 8, width: 90, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }} />
-          </label>
-          <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '⏳…' : 'Save'}</button>
-          {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
-          <span style={{ fontSize: 12, color: 'var(--text3)' }}>
-            Accessory cost is booked as this fraction of gross accessory sales (money-touching — recompute after saving).
-          </span>
+        <div style={{ marginTop: 10 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 13 }}>Accessory COGS %
+              <input type="number" step="0.01" min={0} max={100} value={pct} onChange={e => setPct(e.target.value)}
+                style={{ marginLeft: 8, width: 90, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }} />
+            </label>
+            <button className="btn btn-primary" onClick={save} disabled={saving}>{saving ? '⏳…' : 'Save'}</button>
+            {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
+            <span style={{ fontSize: 12, color: 'var(--text3)' }}>
+              Accessory cost is booked as this fraction of gross accessory sales (money-touching — recompute after saving).
+            </span>
+          </div>
+
+          {/* Service-fee income (mig 613). A fee the store CHARGES is revenue; the bill payment it rides
+              on is pass-through and must never be picked. Options come from this tenant's own sales. */}
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Service-fee products → P&amp;L “Service fee income”</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+              Pick the sale lines that are a <strong>fee your store charges</strong> (e.g. a bill-payment service
+              charge). Each is booked as revenue at full price with no cost. Do <strong>not</strong> pick the bill
+              payment or refill itself — that is the customer’s money passing through, not income.
+            </div>
+            {fees.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                {fees.map(p => (
+                  <button key={p} onClick={() => toggleFee(p)} title="Remove"
+                    style={{ fontSize: 12, padding: '4px 9px', borderRadius: 999, cursor: 'pointer',
+                             border: '1px solid var(--border)', background: 'var(--surface2, var(--surface))' }}>
+                    {p} ✕
+                  </button>
+                ))}
+              </div>
+            )}
+            <input value={feeQ} onChange={e => setFeeQ(e.target.value)} placeholder="Search this tenant's products…"
+              style={{ width: '100%', maxWidth: 460, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }} />
+            <div style={{ maxHeight: 190, overflowY: 'auto', marginTop: 8, border: '1px solid var(--border)', borderRadius: 7 }}>
+              {(cfg.service_fee_product_options || [])
+                .filter((p: string) => !feeQ || p.toLowerCase().includes(feeQ.toLowerCase()))
+                .slice(0, 200)
+                .map((p: string) => (
+                  <label key={p} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 9px', fontSize: 12.5, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={fees.includes(p)} onChange={() => toggleFee(p)} />
+                    <span>{p}</span>
+                  </label>
+                ))}
+              {!(cfg.service_fee_product_options || []).length &&
+                <div style={{ padding: '8px 9px', fontSize: 12, color: 'var(--text3)' }}>No sales products found for this tenant yet.</div>}
+            </div>
+          </div>
         </div>
       )}
     </div>

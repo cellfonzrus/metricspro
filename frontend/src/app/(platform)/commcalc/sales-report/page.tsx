@@ -260,6 +260,11 @@ export default function SalesReportPage() {
           ⚠️ {data.classification_gaps.note}
           {(data.classification_gaps.rescued_by_rules ?? 0) > 0 &&
             <> · <b>{data.classification_gaps.rescued_by_rules}</b> blank-contract-type transaction(s) already classified by your activation rules.</>}
+          {/* Never a silent suppression: say how many blank-contract-type transactions were left OUT of the
+              count because they could not have been activations (bill-payment / accessory-only receipts). */}
+          {(data.classification_gaps.blank_ct_non_activation ?? 0) > 0 &&
+            <> · <b>{data.classification_gaps.blank_ct_non_activation}</b> further blank-contract-type transaction(s) are
+              bill-payment or accessory-only and are correctly <i>not</i> counted as activations.</>}
         </div>
       )}
 

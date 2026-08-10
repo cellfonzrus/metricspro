@@ -279,5 +279,59 @@ c10b = router._sales_cell_agg(vtx2, acfg_with(rules=LUX_RULES))
 check("m2: a voided-only ct label doesn't mark tid 'classed' → still rescued to premium",
       len(c10b[("957 Pennsylvania Avenue", "Jane Rep", D)]["_prem"]) == 1)
 
+# ══ (11) gap-note ALARM QUALITY — a bill-payment / accessory-only receipt is NOT a mapping gap ════
+# 2026-08-09: the note counted EVERY blank-contract-type transaction, so the Total Wireless tenant was
+# told 1009 of its 1303 August transactions needed mapping "so they count as activations" — when 930
+# were RTR bill payments (which the owner ruled never pay) and 78 were accessory-only receipts. Acting
+# on it would have created a rule that swept every bill payment into the activation count.
+print("(11) gap note only alarms on transactions that could plausibly BE activations")
+
+_RTR = [{"code": "rtr", "match_field": "product_desc", "match_op": "word",
+         "match_value": "RTR", "enabled": True, "status": "confirmed"}]
+from app.modules.commcalc.plan_pay_gate import exclusion_hit as _EXH  # noqa: E402
+_is_exc = lambda r: _EXH(r, _RTR) is not None                          # noqa: E731
+
+# a pure bill-payment receipt: every line is an RTR refill, nothing was activated
+billpay_only = [L("2001", dept="Rtr", cat="Other Carr. payments", pdesc="Total MAX 5G Plan $55 RTR."),
+                L("2001", dept="Rtr", cat="Other Carr. payments", pdesc="Total Wireless Protect+ RTR.")]
+# an accessory-only receipt (base_acfg's accessory departments/categories)
+acc_only = [L("2002", dept="Ondigo", cat="Accessory", pdesc="Case")]
+# a REAL gap: a branded handset sold with no contract type at all
+real_gap = [L("2003", dept="BrandedHandset", cat="KittedBranded", pdesc="Motorola Moto G 5G 2026 TO")]
+
+g_bp = router._classification_gaps(billpay_only, acfg_with(rules=[]), is_excluded=_is_exc)
+check("bill-payment-only receipt is not reported as an unclassified activation",
+      g_bp["blank_ct_unrecovered"] == 0 and g_bp["note"] is None)
+check("...but it is still COUNTED and returned, never silently dropped",
+      g_bp["blank_ct_transactions"] == 1 and g_bp["blank_ct_non_activation"] == 1)
+
+g_ac = router._classification_gaps(acc_only, acfg_with(rules=[]), is_excluded=_is_exc)
+check("accessory-only receipt is not reported as an unclassified activation",
+      g_ac["blank_ct_unrecovered"] == 0 and g_ac["note"] is None)
+
+g_rg = router._classification_gaps(real_gap, acfg_with(rules=[]), is_excluded=_is_exc)
+check("a device sold with NO contract type IS still reported (the alarm still works)",
+      g_rg["blank_ct_unrecovered"] == 1 and g_rg["note"] is not None)
+
+g_mix = router._classification_gaps(billpay_only + acc_only + real_gap,
+                                    acfg_with(rules=[]), is_excluded=_is_exc)
+check("mixed period: only the device receipt is flagged, the other two are explained",
+      g_mix["blank_ct_transactions"] == 3 and g_mix["blank_ct_non_activation"] == 2
+      and g_mix["blank_ct_unrecovered"] == 1)
+
+# DEGRADATION: a tenant with no exclusion map configured keeps the OLD, louder behaviour rather than
+# silently suppressing anything — the filter can only ever be as good as the tenant's own config.
+g_noexc = router._classification_gaps(billpay_only, acfg_with(rules=[]))
+check("no exclusion config → bill-payment receipt still flagged (no silent suppression)",
+      g_noexc["blank_ct_unrecovered"] == 1)
+
+# A transaction the activation_rules DO rescue is still rescued, not suppressed as non-activation.
+g_resc = router._classification_gaps(
+    [L("2004", dept="BrandedHandset", cat="KittedBranded", pdesc="dev"),
+     L("2004", dept="Rtr", cat="Other Carr. payments", pdesc="plan")],
+    acfg_with(rules=LUX_RULES), is_excluded=_is_exc)
+check("the blank-ct activation rules still rescue what they always rescued",
+      g_resc["rescued_by_rules"] == 1 and g_resc["blank_ct_unrecovered"] == 0)
+
 print(f"\n{PASS}/{PASS + FAIL} passed" + ("" if not FAIL else f"  ({FAIL} FAILED)"))
 sys.exit(1 if FAIL else 0)

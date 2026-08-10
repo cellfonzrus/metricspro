@@ -271,29 +271,75 @@ async def get_config(org_id: str = ORG_ID):
                       .eq("org_id", org_id).limit(1).execute().data))
     except Exception:
         saved = False
-    return {"org_id": org_id, "config": cfg, "is_default": not saved,
-            "defaults": {"accessory_cogs_pct": coa.ACCESSORY_COGS_PCT}}
+    # RULE THREE (pick-don't-type): the service-fee picker offers the product descriptions this tenant's
+    # OWN sales actually carry — never a typed string, never a hard-coded vendor name. Capped and
+    # frequency-ordered so the list stays usable; failure degrades to an empty option list (the saved
+    # picks still render), never a 500 on a settings read.
+    options = []
+    try:
+        from collections import Counter as _C
+        seen = _C()
+        for t in ("raw_sales", "daily_sales_feed"):
+            try:
+                for r in (sb().schema("commcalc").table(t).select("product_desc")
+                          .eq("org_id", org_id).limit(100000).execute().data) or []:
+                    p = str(r.get("product_desc") or "").strip()
+                    if p:
+                        seen[p] += 1
+            except Exception:
+                continue
+        options = [p for p, _ in seen.most_common(400)]
+    except Exception:
+        options = []
+    return {"org_id": org_id, "config": {**cfg, "service_fee_products": cfg["service_fee_products_list"]},
+            "is_default": not saved,
+            "service_fee_product_options": options,
+            "defaults": {"accessory_cogs_pct": coa.ACCESSORY_COGS_PCT, "service_fee_products": []}}
 
 
 @router.put("/config")
 async def put_config(body: dict, org_id: str = ORG_ID):
-    """Set this tenant's finance/accounting config. Body: {accessory_cogs_pct} (0..1). MONEY-TOUCHING —
-    changing the accessory COGS % moves this tenant's Accessory cost / Gross Profit; RECOMPUTE the
-    period statements afterward for it to take effect on the stored P&L."""
+    """Set this tenant's finance/accounting config. Body may carry either knob, independently:
+      accessory_cogs_pct    0..1 — accessory COGS as a fraction of gross accessory sales.
+      service_fee_products  [str] — sale-line products that are FEE INCOME to the store (mig 613),
+                            booked to the `service_income` revenue line at full price with no COGS.
+    A key that is ABSENT is left untouched. MONEY-TOUCHING — both move reported revenue / Gross Profit;
+    RECOMPUTE the period statements afterward for either to take effect on the stored P&L."""
     require_org(org_id)
-    try:
-        pct = float(body.get("accessory_cogs_pct"))
-    except (TypeError, ValueError):
-        raise HTTPException(400, "accessory_cogs_pct must be a number between 0 and 1")
-    if not (0 <= pct <= 1):
-        raise HTTPException(400, "accessory_cogs_pct must be between 0 and 1 (e.g. 0.20 = 20%)")
-    row = {"org_id": org_id, "accessory_cogs_pct": round(pct, 6),
-           "updated_at": datetime.now(timezone.utc).isoformat()}
+    cur = coa._account_config(sb(), org_id)
+    row = {"org_id": org_id, "updated_at": datetime.now(timezone.utc).isoformat()}
+    # PARTIAL SAVE: each knob is written only when the body actually carries it, so the service-fee
+    # picker cannot silently rewrite the accessory COGS % (and vice-versa). An absent key keeps the
+    # tenant's current value; this endpoint used to REQUIRE accessory_cogs_pct on every call.
+    if "accessory_cogs_pct" in body:
+        try:
+            pct = float(body.get("accessory_cogs_pct"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "accessory_cogs_pct must be a number between 0 and 1")
+        if not (0 <= pct <= 1):
+            raise HTTPException(400, "accessory_cogs_pct must be between 0 and 1 (e.g. 0.20 = 20%)")
+        row["accessory_cogs_pct"] = round(pct, 6)
+    else:
+        row["accessory_cogs_pct"] = round(float(cur["accessory_cogs_pct"]), 6)
+    if "service_fee_products" in body:
+        raw = body.get("service_fee_products") or []
+        if not isinstance(raw, list):
+            raise HTTPException(400, "service_fee_products must be a list of product descriptions")
+        # de-duplicate case-insensitively but KEEP the observed spelling (it is what the picker shows)
+        picked, seen = [], set()
+        for p in raw:
+            s = str(p or "").strip()
+            if s and s.lower() not in seen:
+                seen.add(s.lower())
+                picked.append(s)
+        row["service_fee_products"] = picked
     try:
         sb().schema("commcalc").table("account_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
         raise HTTPException(500, f"save failed — run migration 611 first: {e}")
-    return {"ok": True, "org_id": org_id, "config": coa._account_config(sb(), org_id)}
+    _new = coa._account_config(sb(), org_id)
+    return {"ok": True, "org_id": org_id,
+            "config": {**_new, "service_fee_products": _new["service_fee_products_list"]}}
 
 
 # ── compute (build + persist all snapshots) ───────────────────────────────────────────────────
