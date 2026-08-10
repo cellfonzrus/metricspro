@@ -1,0 +1,47 @@
+-- 622_finance_luxelink_brandedhandset_device.sql — map luxelink's phone department to 'device' so
+-- $23,289.18/month of handset revenue stops landing on NO P&L line.
+--
+-- ⚠️⚠️ MONEY-TOUCHING **AND CROSS-MODULE** — DO NOT APPLY WITHOUT OWNER GO **AND** mod-commission
+-- SIGN-OFF. This is one config row, but `commcalc.gp_category_map` is a SHARED classifier. ⚠️⚠️
+--
+-- ── WHY ────────────────────────────────────────────────────────────────────────────────────────────
+-- luxelink has exactly ONE gp_category_map row: `Handset -> device`. Its actual phone sales sit in
+-- department `BrandedHandset`, which is unmapped. Measured, July 2026 raw_sales:
+--
+--   dept BrandedHandset / cat KittedBranded   939 lines  ext $23,289.18  gp $25,625.51  -> NO P&L LINE
+--   dept BrandedHandset / cat HandsetBranded  286 lines  ext $11,819.87                 -> accessory (correct)
+--   dept Handset        / cat Accessories     436 lines  ext $10,666.58                 -> accessory (correct)
+--   dept Handset        / cat SimMarketplace   84 lines  ext    $140.43                 -> device (wrong bucket, trivial)
+--
+-- `coa.py` classifies ACCESSORY-FIRST, so adding BrandedHandset -> device does NOT steal the
+-- HandsetBranded accessory lines: category peels those off before the department is consulted. That
+-- ordering is what makes this row safe.
+--
+-- ── WHY IT MUST NOT LAND ALONE ─────────────────────────────────────────────────────────────────────
+-- On its own this books $23,289.18 of revenue against **NEGATIVE** COGS: POS `ext − gp` on those lines
+-- = 23,289.18 − 25,625.51 = **−$2,336.33**, because B2B Soft records the post-subsidy cost. It must be
+-- applied TOGETHER with `device_cogs_mode='auto'` (mig 621) so device cost comes from the distributor
+-- invoice instead. Applying 622 without 621 makes the P&L worse, not better.
+--
+-- ── CROSS-MODULE IMPACT (mod-commission must confirm) ───────────────────────────────────────────────
+-- gp_category_map is read by `commcalc/gp_report.py::_dept_classifier` as well as by
+-- `account/coa.py::_sales_classifier`. Adding a department to 'device' therefore also moves any GP /
+-- commission surface that buckets by that classifier. Escalation filed in docs/handoffs/commission.md.
+-- Nothing in this file is safe to run until that is answered.
+--
+-- ── WHAT ───────────────────────────────────────────────────────────────────────────────────────────
+-- One row, luxelink only, idempotent. No schema change.
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════
+-- ⛔ MONEY SEED — COMMENTED OUT. Owner Gate 2 + mod-commission sign-off uncomment and run this.
+--
+-- INSERT INTO commcalc.gp_category_map (org_id, department, category)
+-- SELECT '854f6d7b-6590-4e4d-88ab-646f560d4f4c', 'BrandedHandset', 'device'
+-- WHERE NOT EXISTS (
+--   SELECT 1 FROM commcalc.gp_category_map
+--    WHERE org_id = '854f6d7b-6590-4e4d-88ab-646f560d4f4c'
+--      AND lower(trim(department)) = 'brandedhandset');
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+SELECT 'Migration 622 — INERT BY DESIGN. The single money row is commented out pending owner GO + '
+       'mod-commission sign-off; it must be applied together with mig 621 device_cogs_mode=auto.' AS status;

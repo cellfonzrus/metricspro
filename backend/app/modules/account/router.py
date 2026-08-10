@@ -291,10 +291,32 @@ async def get_config(org_id: str = ORG_ID):
         options = [p for p, _ in seen.most_common(400)]
     except Exception:
         options = []
-    return {"org_id": org_id, "config": {**cfg, "service_fee_products": cfg["service_fee_products_list"]},
+    # RULE THREE for the PAYROLL-NAME picker too (mig 621, owner ruling K2): the options are the
+    # tenant's OWN `store_expenses.expense_name` values, so a name can never be mistyped into a list
+    # that then silently matches nothing. Frequency-ordered; a failure degrades to an empty option
+    # list (saved picks still render) rather than a 500 on a settings read.
+    payroll_options = []
+    try:
+        from collections import Counter as _C2
+        seen2 = _C2()
+        for r in (sb().schema("commcalc").table("store_expenses").select("expense_name")
+                  .eq("org_id", org_id).limit(100000).execute().data) or []:
+            n = str(r.get("expense_name") or "").strip()
+            if n:
+                seen2[n] += 1
+        payroll_options = [n for n, _ in seen2.most_common(300)]
+    except Exception:
+        payroll_options = []
+    return {"org_id": org_id,
+            "config": {**cfg,
+                       "service_fee_products": cfg["service_fee_products_list"],
+                       "payroll_expense_names": cfg["payroll_expense_names_list"]},
             "is_default": not saved,
             "service_fee_product_options": options,
-            "defaults": {"accessory_cogs_pct": coa.ACCESSORY_COGS_PCT, "service_fee_products": []}}
+            "payroll_expense_name_options": payroll_options,
+            "defaults": {"accessory_cogs_pct": coa.ACCESSORY_COGS_PCT, "service_fee_products": [],
+                         "payroll_expense_names": [], "payroll_expense_routes": {},
+                         "device_cogs_mode": "off"}}
 
 
 @router.put("/config")
@@ -303,6 +325,14 @@ async def put_config(body: dict, org_id: str = ORG_ID):
       accessory_cogs_pct    0..1 — accessory COGS as a fraction of gross accessory sales.
       service_fee_products  [str] — sale-line products that are FEE INCOME to the store (mig 613),
                             booked to the `service_income` revenue line at full price with no COGS.
+      payroll_expense_names [str] — expense names that ARE payroll (mig 621, ruling K2). Any such row
+                            makes payroll authoritative and SUPPRESSES the shifts x rate estimate.
+      payroll_expense_routes {name: 'wages'|'payroll_expenses'} — optional per-name line override.
+                            Moves a dollar between two OPEX lines; never changes net income.
+      device_cogs_mode      'off'|'auto'|'invoice'|'pos' (mig 621, ruling K3). 'off' = POS-only
+                            (default, pre-621). 'auto' = invoice-first with a POS fallback.
+                            'invoice' = never fall back to POS (POS cost on a subsidised handset is
+                            NEGATIVE). See device_cogs.py.
     A key that is ABSENT is left untouched. MONEY-TOUCHING — both move reported revenue / Gross Profit;
     RECOMPUTE the period statements afterward for either to take effect on the stored P&L."""
     require_org(org_id)
@@ -333,13 +363,50 @@ async def put_config(body: dict, org_id: str = ORG_ID):
                 seen.add(s.lower())
                 picked.append(s)
         row["service_fee_products"] = picked
+    # ── OWNER RULING K2 (mig 621) — which expense names ARE payroll ─────────────────────────────
+    # Listing a name makes payroll AUTHORITATIVE for the period and SUPPRESSES the StoreOps
+    # shifts×rate estimate. That is the whole point: luxelink keys payroll by hand, so it was getting
+    # a $145,358.27 estimate ON TOP of $108,430.59 of real salary rows.
+    if "payroll_expense_names" in body:
+        raw = body.get("payroll_expense_names") or []
+        if not isinstance(raw, list):
+            raise HTTPException(400, "payroll_expense_names must be a list of expense names")
+        picked, seen = [], set()
+        for n in raw:
+            s = str(n or "").strip()
+            if s and s.lower() not in seen:
+                seen.add(s.lower())
+                picked.append(s)
+        row["payroll_expense_names"] = picked
+    if "payroll_expense_routes" in body:
+        raw = body.get("payroll_expense_routes") or {}
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "payroll_expense_routes must be a {expense name: line} object")
+        routes = {}
+        for k, v in raw.items():
+            name, lk = str(k or "").strip(), str(v or "").strip()
+            if not name:
+                continue
+            if lk not in ("wages", "payroll_expenses"):
+                raise HTTPException(
+                    400, f"payroll_expense_routes['{name}'] must be 'wages' or 'payroll_expenses'")
+            routes[name] = lk
+        row["payroll_expense_routes"] = routes
+    # ── OWNER RULING K3 (mig 621) — device COGS recognition mode ────────────────────────────────
+    if "device_cogs_mode" in body:
+        mode = str(body.get("device_cogs_mode") or "").strip()
+        if mode not in ("off", "auto", "invoice", "pos"):
+            raise HTTPException(400, "device_cogs_mode must be one of: off, auto, invoice, pos")
+        row["device_cogs_mode"] = mode
     try:
         sb().schema("commcalc").table("account_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migration 611 first: {e}")
+        raise HTTPException(500, f"save failed — run migration 611/621 first: {e}")
     _new = coa._account_config(sb(), org_id)
     return {"ok": True, "org_id": org_id,
-            "config": {**_new, "service_fee_products": _new["service_fee_products_list"]}}
+            "config": {**_new,
+                       "service_fee_products": _new["service_fee_products_list"],
+                       "payroll_expense_names": _new["payroll_expense_names_list"]}}
 
 
 # ── compute (build + persist all snapshots) ───────────────────────────────────────────────────

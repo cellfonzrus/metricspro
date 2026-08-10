@@ -145,11 +145,22 @@ function AccountConfigCard() {
   const [fees, setFees] = useState<string[]>([])
   const [feeQ, setFeeQ] = useState('')
 
+  // Owner ruling K2 (mig 621): which expense names ARE payroll. Listing one makes payroll
+  // AUTHORITATIVE for the period and SUPPRESSES the StoreOps shifts x rate estimate — the fix for a
+  // tenant that keys payroll by hand and was getting BOTH. RULE THREE: picked from this tenant's own
+  // expense names, never typed.
+  const [payNames, setPayNames] = useState<string[]>([])
+  const [payQ, setPayQ] = useState('')
+  // Owner ruling K3 (mig 621): device COGS recognition. 'off' keeps the legacy POS basis.
+  const [devMode, setDevMode] = useState('off')
+
   function load() {
     api(`/api/v1/account/config?org_id=${ORG_ID}`).then((r: any) => {
       setCfg(r)
       setPct(String(Math.round((r?.config?.accessory_cogs_pct ?? 0.2) * 10000) / 100))
       setFees(r?.config?.service_fee_products || [])
+      setPayNames(r?.config?.payroll_expense_names || [])
+      setDevMode(r?.config?.device_cogs_mode || 'off')
     }).catch(() => {})
   }
   useEffect(() => { load() }, [])
@@ -161,7 +172,10 @@ function AccountConfigCard() {
     try {
       await api(`/api/v1/account/config?org_id=${ORG_ID}`, {
         method: 'PUT',
-        body: JSON.stringify({ accessory_cogs_pct: v / 100, service_fee_products: fees }),
+        body: JSON.stringify({
+          accessory_cogs_pct: v / 100, service_fee_products: fees,
+          payroll_expense_names: payNames, device_cogs_mode: devMode,
+        }),
       })
       setMsg('Saved. Recompute this period’s statements for it to take effect.'); load()
     } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
@@ -170,6 +184,10 @@ function AccountConfigCard() {
 
   function toggleFee(p: string) {
     setFees(f => f.includes(p) ? f.filter(x => x !== p) : [...f, p])
+  }
+
+  function togglePay(p: string) {
+    setPayNames(f => f.includes(p) ? f.filter(x => x !== p) : [...f, p])
   }
 
   if (!cfg) return null
@@ -183,6 +201,8 @@ function AccountConfigCard() {
           Accessory COGS: <strong>{Math.round((cfg.config?.accessory_cogs_pct ?? 0.2) * 10000) / 100}%</strong>
           {cfg.is_default && <span style={{ marginLeft: 6, color: 'var(--text3)' }}>(default)</span>}
           {fees.length > 0 && <span style={{ marginLeft: 10 }}>· Service-fee products: <strong>{fees.length}</strong></span>}
+          {payNames.length > 0 && <span style={{ marginLeft: 10 }}>· Payroll names: <strong>{payNames.length}</strong></span>}
+          <span style={{ marginLeft: 10 }}>· Device COGS: <strong>{devMode}</strong></span>
         </span>
       </div>
       {open && (
@@ -233,6 +253,65 @@ function AccountConfigCard() {
                 ))}
               {!(cfg.service_fee_product_options || []).length &&
                 <div style={{ padding: '8px 9px', fontSize: 12, color: 'var(--text3)' }}>No sales products found for this tenant yet.</div>}
+            </div>
+          </div>
+
+          {/* Owner ruling K2 (2026-08-10) — payroll authority. If your payroll is TYPED into the
+              expense sheet, say so here; otherwise the books add an estimate from the schedule on top
+              of it and the same wages get counted twice. */}
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Which expenses are payroll?</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+              Tick the expense names you use for <strong>wages and salaries</strong>. When any of them has
+              an amount for a month, that is treated as the real payroll for that month and the estimate
+              calculated from the schedule (hours × pay rate) is <strong>switched off</strong> — so the same
+              wages are never counted twice. Leave this empty to keep the old behaviour.
+            </div>
+            {payNames.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+                {payNames.map(p => (
+                  <button key={p} onClick={() => togglePay(p)} title="Remove"
+                    style={{ fontSize: 12, padding: '4px 9px', borderRadius: 999, cursor: 'pointer',
+                             border: '1px solid var(--border)', background: 'var(--surface2, var(--surface))' }}>
+                    {p} ✕
+                  </button>
+                ))}
+              </div>
+            )}
+            <input value={payQ} onChange={e => setPayQ(e.target.value)} placeholder="Search this tenant's expense names…"
+              style={{ width: '100%', maxWidth: 460, padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }} />
+            <div style={{ maxHeight: 170, overflowY: 'auto', marginTop: 8, border: '1px solid var(--border)', borderRadius: 7 }}>
+              {(cfg.payroll_expense_name_options || [])
+                .filter((p: string) => !payQ || p.toLowerCase().includes(payQ.toLowerCase()))
+                .slice(0, 200)
+                .map((p: string) => (
+                  <label key={p} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 9px', fontSize: 12.5, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={payNames.includes(p)} onChange={() => togglePay(p)} />
+                    <span>{p}</span>
+                  </label>
+                ))}
+              {!(cfg.payroll_expense_name_options || []).length &&
+                <div style={{ padding: '8px 9px', fontSize: 12, color: 'var(--text3)' }}>No expense names found for this tenant yet.</div>}
+            </div>
+          </div>
+
+          {/* Owner ruling K3 (2026-08-10) — device COGS recognition. */}
+          <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Where does the cost of phones come from?</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+              Your point-of-sale records the phone cost <strong>after</strong> the carrier subsidy, which can make
+              it look like a phone cost nothing — or less than nothing. Reading the cost from the
+              <strong> distributor’s invoice</strong> instead puts the real handset cost on the P&amp;L.
+            </div>
+            <select value={devMode} onChange={e => setDevMode(e.target.value)}
+              style={{ padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)', maxWidth: 460, width: '100%' }}>
+              <option value="off">Point of sale only (current default)</option>
+              <option value="auto">Distributor invoice, fall back to point of sale — recommended</option>
+              <option value="invoice">Distributor invoice only (never fall back)</option>
+              <option value="pos">Point of sale only (explicit)</option>
+            </select>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6 }}>
+              Money-touching — <strong>recompute</strong> each period after saving. Needs migration 621.
             </div>
           </div>
         </div>

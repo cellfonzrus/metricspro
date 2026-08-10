@@ -23,6 +23,8 @@ Lines whose source has no usable store key (MI/ATU residual, carrier comp w/o a
 matching store) are "company-wide": they appear in the CONSOLIDATED view only and
 read 0 (with a note) under a company/store filter — honest beats mis-attributed.
 """
+import logging
+
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import carrier_map
 from app.modules.account import _period
@@ -31,6 +33,23 @@ from app.modules.account import _period
 from app.modules.account._period import parse_period  # noqa: F401
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+_log = logging.getLogger(__name__)
+
+
+def _warn(what, exc):
+    """Log a degraded source instead of swallowing it silently.
+
+    Every source block in `build_inputs` is wrapped in `try/except: pass` so that one missing table can
+    never break a whole statement — the right call, but it also hid a real defect for weeks: the
+    `store_borrowings` select named three columns that do not exist, raised on every call, and pinned
+    both inter-store lines at $0 for every tenant with nothing in the logs (formula book §F #7). This
+    keeps the graceful degradation AND makes the next schema drift visible. NEVER raises.
+    """
+    try:
+        _log.warning("coa: %s — %s: %s", what, type(exc).__name__, exc)
+    except Exception:
+        pass
 
 # Boost taxonomy — kept ONLY as the emergency fallback for `_sales_classifier` (below). Live
 # device/accessory classification is now resolved from the SAME per-tenant config the commission side
@@ -69,6 +88,19 @@ PL_SPEC = [
     ("vip_device_pay","Distributor device payments (PayGo, paid)",   "cogs",    "auto",  "store"),
     ("accessory_cost","Accessory cost",                              "cogs",    "auto",  "store"),
     ("device_cost",   "Device cost",                                 "cogs",    "auto",  "store"),
+    # CONTRA-COGS. OWNER RULING K1 (2026-08-10, formula book §K1) — this REVERSES `fae81a3`, which had
+    # moved the MA device rebate into `vip_reimb` reimbursement income. The written ruling of record
+    # stands: a device purchase rebate is an equipment subsidy on a purchased IMEI, so the purchase and
+    # its rebate are two halves of ONE transaction and the rebate nets against Device cost. Carries a
+    # NEGATIVE amount so it reduces the COGS subtotal while staying a visible line of its own instead
+    # of vanishing inside device_cost.
+    #   NET INCOME IS UNCHANGED by this ruling. What it decides is device GROSS MARGIN, which now reads
+    #   as the tight margin it really is (luxelink July 2026, measured):
+    #     device revenue 23,289.18 − COGS 142,033.93 + rebate contra 126,636.77 = net device COGS
+    #     (15,397.16); + MA device margin 3,210.00 ⇒ device contribution +11,102.02.
+    #   ⚠️ `vip_reimb` LOSES $126,636.77 and COGS falls by the same amount, so every surface quoting
+    #   "reimbursement income" or gross margin MOVES. That is the ruling, not a regression.
+    ("device_rebate", "Device purchase rebates (contra-COGS)",       "cogs",    "auto",  "company"),
     ("vip_fees",      "Distributor fees paid (shipping / SIM kit / processing)", "cogs", "auto", "store"),
     ("rep_comm",      "Rep commissions paid",                        "opex",    "auto",  "store"),
     ("wages",         "Wages / hourly payroll",                      "opex",    "auto",  "store"),
@@ -243,7 +275,12 @@ def _account_config(client, org_id):
     in, so a tenant with NO config row (and any tenant before mig 611 runs) is byte-identical to the
     old hard-coded behaviour. NEVER raises — a missing table/row degrades to the defaults."""
     cfg = {"accessory_cogs_pct": ACCESSORY_COGS_PCT,
-           "service_fee_products": set(), "service_fee_products_list": []}
+           "service_fee_products": set(), "service_fee_products_list": [],
+           # K2 (mig 621). EMPTY defaults ⇒ every org byte-identical until a name is explicitly picked.
+           "payroll_expense_names": set(), "payroll_expense_names_list": [],
+           "payroll_expense_routes": {},
+           # K3 (mig 621). 'off' ⇒ POS-only device cost, i.e. pre-621 behaviour.
+           "device_cogs_mode": "off"}
     try:
         rows = (client.schema("commcalc").table("account_config")
                 .select("accessory_cogs_pct").eq("org_id", org_id).limit(1).execute().data) or []
@@ -263,6 +300,44 @@ def _account_config(client, org_id):
             picked = [str(p).strip() for p in (srows[0].get("service_fee_products") or []) if str(p).strip()]
             cfg["service_fee_products_list"] = picked
             cfg["service_fee_products"] = {p.lower() for p in picked}
+    except Exception:
+        pass
+    # PAYROLL AUTHORITY (mig 621, owner ruling K2 2026-08-10) — its OWN defensive query, same pattern as
+    # the two above: a missing column (pre-621) can never disturb them, it just falls back to an EMPTY
+    # list, and an empty list changes nothing for any tenant.
+    #
+    # RULE TWO: no expense name and no tenant appears in this file. The tenant supplies its own
+    # vocabulary, picked from the expense names already present in its `store_expenses` rows (RULE
+    # THREE). `payroll_expense_routes` is an OPTIONAL per-name P&L line override; a name that is in
+    # `payroll_expense_names` but absent from the route map keeps whatever route it already had
+    # (store_opex for a hand-entered row) — which is the presentation ruling K2's target figures use.
+    # Routing only moves a dollar between two OPEX lines; it never changes net income.
+    try:
+        prows = (client.schema("commcalc").table("account_config")
+                 .select("payroll_expense_names,payroll_expense_routes")
+                 .eq("org_id", org_id).limit(1).execute().data) or []
+        if prows:
+            names = prows[0].get("payroll_expense_names")
+            if isinstance(names, list):
+                picked = [str(n).strip() for n in names if str(n).strip()]
+                cfg["payroll_expense_names_list"] = picked
+                cfg["payroll_expense_names"] = {n.lower() for n in picked}
+            routes = prows[0].get("payroll_expense_routes")
+            if isinstance(routes, dict):
+                # only the two payroll OPEX lines are legal targets — a typo must not invent a line
+                # key that `L` has no bucket for (that would KeyError inside `add`).
+                cfg["payroll_expense_routes"] = {
+                    str(k).strip().lower(): str(v).strip()
+                    for k, v in routes.items()
+                    if str(v).strip() in ("wages", "payroll_expenses") and str(k).strip()}
+    except Exception:
+        pass
+    # DEVICE COGS MODE (mig 621, owner ruling K3) — same defensive shape; 'off' keeps pre-621 behaviour.
+    try:
+        drows = (client.schema("commcalc").table("account_config")
+                 .select("device_cogs_mode").eq("org_id", org_id).limit(1).execute().data) or []
+        if drows and str(drows[0].get("device_cogs_mode") or "").strip() in ("off", "auto", "invoice", "pos"):
+            cfg["device_cogs_mode"] = str(drows[0]["device_cogs_mode"]).strip()
     except Exception:
         pass
     return cfg
@@ -447,6 +522,9 @@ def build_inputs(client, org_id, period):
     acct_cfg = _account_config(client, org_id)           # per-org finance knobs (mig 611); default = Boost
     accessory_cogs_pct = acct_cfg["accessory_cogs_pct"]  # 0.20 default ⇒ Boost byte-identical
     service_fee_products = acct_cfg["service_fee_products"]   # mig 613; empty ⇒ nothing booked
+    payroll_names = acct_cfg["payroll_expense_names"]         # mig 621 K2; empty ⇒ nothing changes
+    payroll_routes = acct_cfg["payroll_expense_routes"]       # mig 621 K2; optional line override
+    device_cogs_mode = acct_cfg["device_cogs_mode"]           # mig 621 K3; 'off' ⇒ POS-only (pre-621)
 
     L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}} for k, *_ in PL_SPEC + BS_SPEC}
 
@@ -495,11 +573,12 @@ def build_inputs(client, org_id, period):
         # Each now goes to the head it belongs to (the arithmetic is unchanged per component — this
         # re-files them, it does not re-compute them):
         _MA_HEAD = {
-            # SUPERSEDED 2026-08-10 (same day): first booked as a NEGATIVE contra-COGS against Device
-            # cost. The owner then placed it precisely — a device purchase rebate is a REIMBURSEMENT,
-            # and it belongs in the income column on the existing distributor-reimbursement line
-            # rather than netting invisibly inside COGS. Same money, income side, drillable by label.
-            "rebate":             ("vip_reimb",         1),
+            # OWNER RULING K1 (2026-08-10) — CONTRA-COGS, reversing `fae81a3`. The rebate is an
+            # equipment subsidy on a purchased IMEI: purchase and rebate are two halves of one
+            # transaction, so it nets against Device cost rather than inflating revenue. Booked
+            # NEGATIVE (sign −1) into the contra-COGS line. Net income identical either way; this
+            # decides device gross MARGIN. See PL_SPEC's `device_rebate` note for the figures.
+            "rebate":             ("device_rebate",    -1),
             "device_margin":      ("ma_device_margin",  1),
             "fees_margin":        ("fee_income",        1),
             "consumer_financing": ("financing_income",  1),
@@ -534,7 +613,7 @@ def build_inputs(client, org_id, period):
                     # "money the dealer receives" exactly as before; `sign` then re-points a rebate
                     # into the contra-COGS line as a negative cost.
                     _DETAIL = {"carrier_comm": "SPIFF / bounty",
-                               "vip_reimb": "Device purchase rebates (Distributor/MA)"}
+                               "device_rebate": "Device purchase rebates (Distributor/MA)"}
                     add(head, None, sign * -safe_float(r.get(c)),
                         detail_label=_DETAIL.get(head))
         except Exception:
@@ -586,6 +665,7 @@ def build_inputs(client, org_id, period):
     # (dedup by trans_id, raw_sales wins) so GP is correct whether or not the daily feed was promoted
     # into raw_sales — see _sales_union_rows for the Boost-neutral / no-double-count proof.
     is_accessory, is_device = _sales_classifier(client, org_id)
+    pos_device_cost = {}          # staged POS device cost — settled after the scan (ruling K3)
     try:
         for r in _sales_union_rows(client, org_id, period_keys):
             if str(r.get("voided") or "").strip().lower() in ("true", "yes", "1", "voided", "void"):
@@ -609,9 +689,52 @@ def build_inputs(client, org_id, period):
                 add("accessory_cost", st, ext * accessory_cogs_pct)
             elif is_device(dept):
                 add("device_rev", st, ext)
-                add("device_cost", st, ext - gp)
+                # OWNER RULING K3 (2026-08-10) — device COST is no longer booked straight off the POS.
+                # It is STAGED here and settled after the scan, because the invoice-first rule can only
+                # be applied once we know whether a distributor invoice covered this period at all.
+                # `ext − gp` on a subsidised handset is NEGATIVE (luxelink July: −$2,336.33), so the POS
+                # is a last resort, not a source. With device_cogs_mode='off' (the default) this stages
+                # and then books the identical figure ⇒ byte-identical to pre-621 for every tenant.
+                pos_device_cost[st] = round(pos_device_cost.get(st, 0.0) + (ext - gp), 2)
     except Exception:
         pass
+
+    # ── DEVICE COGS SETTLEMENT — OWNER RULING K3 (2026-08-10) = the released "Option C" flip ────────
+    # Policy of record (owner 2026-07-30, docs/designs/device-cost-ledger.md §9 C1): cost comes from the
+    # INVOICE when one is in the system, and the POS sale-time figure is a FALLBACK only. `device_cogs`
+    # resolves the invoice side carrier-agnostically (raw_ma_* for VidaPay, asset_ledger consignment for
+    # VIP) — chosen by which data the org HAS, never by tenant name — and dedups by IMEI so one handset
+    # is charged once.
+    #
+    # BYTE-IDENTICAL DEFAULT: `device_cogs_mode` is 'off' unless a tenant is explicitly switched on in
+    # `account_config` (mig 621), and 'off' returns active=False, so the staged POS figure books exactly
+    # as it always did. Nothing moves for any org — including the house org, whose VIP consignment
+    # ledger WOULD produce a cost under 'auto' and therefore needs its own owner GO.
+    #
+    # `meta` (including the un-linkable remainder — unpriced SKUs, dropped duplicate IMEIs) is attached
+    # to the line so a $0 is never mistaken for a measurement. See device_cogs.py for the figures.
+    _dev = {"active": False, "meta": {"mode": device_cogs_mode}}
+    try:
+        from app.modules.account import device_cogs as _device_cogs
+        _dev = _device_cogs.resolve(client, org_id, period_keys, pm, py,
+                                    _in_period, resolve_store, device_cogs_mode)
+    except Exception as e:
+        _warn("device COGS invoice source unavailable — falling back to POS", e)
+    if _dev.get("active"):
+        if _dev.get("company_wide"):
+            add("device_cost", None, _dev["company_wide"])
+        for _st, _amt in (_dev.get("by_store") or {}).items():
+            add("device_cost", _st, _amt)
+        for _lbl, _amt in (_dev.get("detail") or {}).items():
+            L["device_cost"]["detail"][_lbl] = round(
+                L["device_cost"]["detail"].get(_lbl, 0.0) + _amt, 2)
+        # The displaced POS figure is recorded, never silently dropped — it is what makes the
+        # before/after ledger auditable for the mass recompute ruling K3(a) demands.
+        L["device_cost"]["displaced_pos_cost"] = round(sum(pos_device_cost.values()), 2)
+    else:
+        for _st, _amt in pos_device_cost.items():
+            add("device_cost", _st, _amt)
+    L["device_cost"]["meta"] = _dev.get("meta") or {}
 
     # asset_ledger — reimbursement income (cash, by reimbursement_date), VIP fees (COGS),
     # inventory value (BS), owed-to-VIP (BS). One scan, multiple lines.
@@ -730,6 +853,31 @@ def build_inputs(client, org_id, period):
             sa = code2addr.get(_norm_store(r.get("store_code")), _norm_store(r.get("store_code")))
             sk = (r.get("source_key") or "").strip()
             line_key, fallback_label = route_expense_line(sk)
+            # ── OWNER RULING K2 (2026-08-10) — a HAND-ENTERED payroll row is authoritative too ──────
+            # The old guard keyed ONLY on the producer token `payroll_gross`, so a tenant that types its
+            # payroll into the expense sheet got the manual rows AND a StoreOps shifts×rate estimate on
+            # top: luxelink July 2026 booked $145,358.27 of estimate beside $108,430.59 of manual
+            # salaries, penny-identical per store for 8 of 20 stores. Same dollars, twice.
+            #
+            # A name listed in `payroll_expense_names` now (a) makes payroll AUTHORITATIVE — suppressing
+            # the estimate exactly as `payroll_gross` does — and (b) optionally re-routes to a payroll
+            # OPEX line. With no route configured the row stays on `store_opex`, so the ONLY figure that
+            # moves is the suppressed estimate. Net income is identical whichever line holds it.
+            #
+            # Ordering: an explicit producer `source_key` always wins. This clause is for MANUAL rows,
+            # and it can only ever apply to a row that would otherwise have gone to `store_opex`.
+            ename = (r.get("expense_name") or "").strip()
+            is_manual_payroll = bool(
+                payroll_names and not sk and ename and ename.lower() in payroll_names)
+            if is_manual_payroll:
+                # AUTHORITATIVE regardless of which line it books to — the point is that a real,
+                # tenant-entered payroll figure exists for this period, so the estimate must not be
+                # added on top of it.
+                has_payroll_gross = True
+                routed = payroll_routes.get(ename.lower())
+                if routed:
+                    line_key = routed
+                    fallback_label = "Payroll"
             if line_key == "wages":
                 add("wages", sa, r.get("amount"))            # exact Gross Payroll — relabelled below
                 # ONLY an authoritative exact-gross key suppresses the shifts×rate fallback.
@@ -749,27 +897,42 @@ def build_inputs(client, org_id, period):
     # StoreOps shifts×rate ESTIMATE when NO payroll_gross line exists — booking BOTH double-counts the
     # gross. Relabel to "Gross Payroll" when the exact figure is present; keep "Wages / hourly payroll"
     # (byte-identical) for the estimate so a tenant without the payroll job is unchanged from today.
+    # `has_payroll_gross` now means "an AUTHORITATIVE payroll figure exists for this period", from
+    # either the `payroll_gross` producer token or a tenant-configured manual payroll name (K2).
     if has_payroll_gross:
-        L["wages"]["label"] = "Gross Payroll"
+        # Only relabel when the line actually carries money. Under ruling K2's default presentation the
+        # authoritative salaries stay on `store_opex`, so `wages` is legitimately $0.00 — calling an
+        # empty line "Gross Payroll" would be a lie, and `auto` lines render even at zero.
+        if L["wages"]["by_store"] or L["wages"]["company_wide"]:
+            L["wages"]["label"] = "Gross Payroll"
     else:
         try:
             for st, amt in wages_by_store(client, org_id, period).items():
                 add("wages", st, amt)
-        except Exception:
-            pass
+        except Exception as e:
+            _warn("StoreOps shifts x rate wages estimate skipped", e)
 
     # #6 inter-store borrowings (auto*, migration 018) — receivable/payable. Degrade to 0 if absent.
+    # BUG FIX 2026-08-10 (formula book §F #7): this select asked for `from_store,to_store,amount,repaid`
+    # and THREE of those four columns do not exist. The real schema is
+    #   id, org_id, borrower_store, lender_store, market, amount, borrowed_date, note, created_at
+    # — there is no `repaid` column at all. Every call therefore raised and was swallowed by the bare
+    # `except: pass` below, pinning BOTH inter-store lines at $0 for every tenant, forever. The table is
+    # empty today so no figure moves; without this fix the lines would have stayed silently dead the
+    # moment a borrowing was entered. With no `repaid` column the outstanding amount IS `amount`
+    # (settlement is recorded by deleting the row); if a repayment column is added later, subtract it
+    # here. The exception is now LOGGED instead of silently swallowed so the next schema drift is loud.
     try:
         bor = _fetch_all(client, "store_borrowings",
-                         "from_store,to_store,amount,repaid", {"org_id": org_id})
+                         "borrower_store,lender_store,amount", {"org_id": org_id})
         for r in bor:
-            amt = safe_float(r.get("amount")) - safe_float(r.get("repaid"))
+            amt = safe_float(r.get("amount"))
             if amt <= 0:
                 continue
-            add("inter_store_recv", _norm_store(r.get("to_store")), amt)     # lender is owed
-            add("inter_store_pay", _norm_store(r.get("from_store")), amt)    # borrower owes
-    except Exception:
-        pass
+            add("inter_store_recv", _norm_store(r.get("lender_store")), amt)    # lender is owed
+            add("inter_store_pay", _norm_store(r.get("borrower_store")), amt)   # borrower owes
+    except Exception as e:
+        _warn("store_borrowings inter-store lines skipped", e)
 
     # Inventory value — real-time on-hand $ value from the b2bsoft Inventory Aging sweep,
     # EDITABLE. Overrides the asset_ledger-derived inventory line above on a per-store basis:

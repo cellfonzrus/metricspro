@@ -131,7 +131,12 @@ def run():
     # ── every component lands on its own head ────────────────────────────────────────────────────
     checks = [
         ("mi_income", 100.00, "real residual only: 30 + 70, both labels, June excluded"),
-        ("vip_reimb", 1500.00, "rebate as REIMBURSEMENT income (owner 08-10): 1000 + 500"),
+        # RE-BASED for OWNER RULING K1 (2026-08-10, formula book §K1): the rebate is CONTRA-COGS,
+        # not reimbursement income. This harness previously asserted vip_reimb == 1500.00, which was
+        # the `fae81a3` placement the owner has now reversed. Same money, opposite side of the
+        # statement: it is booked NEGATIVE on `device_rebate` so it nets against Device cost.
+        ("device_rebate", -1500.00, "rebate as CONTRA-COGS (ruling K1): -(1000 + 500)"),
+        ("vip_reimb", 0.00, "rebate has LEFT the income column (ruling K1)"),
         ("ma_device_margin", 120.00, "device_margin 100 + 20, consumer_margin 0"),
         ("fee_income", 75.00, "fees_margin"),
         ("financing_income", 50.00, "consumer_financing"),
