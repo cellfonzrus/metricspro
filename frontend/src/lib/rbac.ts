@@ -209,8 +209,26 @@ export type NavGroup = { group: string; module: string; items: NavItem[] }
 // catch-all spanning Commissions / Finance / Assets / VIP / Targets / Integrations; it's split
 // into those real domains below. Pages keep their URLs (a deeper re-home is a separate phase).
 export const NAV: NavGroup[] = [
-  { group: 'Reports', module: 'targets', items: [
-    { href: '/reports', label: 'Report Center', icon: '📊', module: 'targets' },
+  // ── ORDER (owner directive 2026-08-10): Point of Sale FIRST, Reports LAST. Group order in this
+  // array IS the sidebar order — applyNavLayout() walks `defaultOrder` (this array) before appending
+  // any tenant-created or Reports-directory groups, so moving a block here moves it in the sidebar.
+  // POS module (mig 724/725) — the point-of-sale port (Phase 1: register, customers, inventory,
+  // settings). Activations/vendors/POs/reports arrive in Phase 2; see pos-system INTEGRATION_PLAN.md.
+  { group: 'Point of Sale', module: 'pos', items: [
+    // Setup wizard (mig 733, owner directive 2026-08-09). FIRST in the group deliberately: a tenant
+    // whose POS is not configured is redirected here by (platform)/pos/layout.tsx, and this entry is
+    // how they get BACK to it afterwards. Scoped 'all' + 'market' — a store-scoped cashier is not the
+    // person who defines the tenant's departments and tax rates.
+    { href: '/pos/onboarding', label: 'Setup Wizard', icon: '🛠️', module: 'pos', scopes: ['all', 'market'] },
+    { href: '/pos/sales', label: 'Register', icon: '🛒', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/customers', label: 'Customers', icon: '👤', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/activations', label: 'Activations', icon: '📱', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'] },
+    { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
+    { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
+    { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'] },
   ]},
   { group: 'Commissions', module: 'commissions', items: [
       { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
@@ -329,24 +347,6 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/vip', label: 'Distributor · Invoices', icon: '🧾', module: 'vip' },
     { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'], cap: 'asset_lending' },
     { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
-  ]},
-  // POS module (mig 724/725) — the point-of-sale port (Phase 1: register, customers, inventory,
-  // settings). Activations/vendors/POs/reports arrive in Phase 2; see pos-system INTEGRATION_PLAN.md.
-  { group: 'Point of Sale', module: 'pos', items: [
-    // Setup wizard (mig 733, owner directive 2026-08-09). FIRST in the group deliberately: a tenant
-    // whose POS is not configured is redirected here by (platform)/pos/layout.tsx, and this entry is
-    // how they get BACK to it afterwards. Scoped 'all' + 'market' — a store-scoped cashier is not the
-    // person who defines the tenant's departments and tax rates.
-    { href: '/pos/onboarding', label: 'Setup Wizard', icon: '🛠️', module: 'pos', scopes: ['all', 'market'] },
-    { href: '/pos/sales', label: 'Register', icon: '🛒', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/customers', label: 'Customers', icon: '👤', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/activations', label: 'Activations', icon: '📱', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'] },
-    { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
-    { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
-    { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'] },
   ]},
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
@@ -488,6 +488,11 @@ export const NAV: NavGroup[] = [
     // no SEED_VERSION bump for roles. Deliberately NOT a new module key: it is a platform surface, not
     // a billable tenant module.
     { href: '/admin/fix-requests', label: 'Auto-Fix Pipeline', icon: '🛠️', module: 'admin' },
+  ]},
+  // Reports LAST (owner directive 2026-08-10) — the Report Center directory sits at the foot of the
+  // sidebar, immediately above the per-category report groups applyNavLayout() appends after it.
+  { group: 'Reports', module: 'targets', items: [
+    { href: '/reports', label: 'Report Center', icon: '📊', module: 'targets' },
   ]},
 ]
 
