@@ -6152,6 +6152,7 @@ def _gr_store_card(client, org_id, store_code, store_row, cfg, employee_id=None)
     return {"store_code": store_code, "address": store_row.get("address"),
             "market": store_row.get("market"), "place_id": ov0.get("place_id"),
             "rating": rating, "review_count": review_count, "target": target, "status": status,
+            "reviews_needed": _gr.reviews_needed_for_target(rating, review_count, target),
             "reviews": reviews, "action_plan": my_plan,
             "fetched_at": snap.get("fetched_at")}
 
@@ -6257,6 +6258,10 @@ def put_google_reviews_config(body: dict, authorization: str = Header(default=""
         # every other not-yet-run-migration write here); GET always still returns the code default
         # (30) regardless via google_reviews.get_config's degrade-gracefully shape.
         row["lookback_days"] = _gr.clamp_lookback_days(body["lookback_days"])
+    if "search_brand" in body:
+        # mig 430 — the business token prepended to the Places text search. Empty string clears it back
+        # to address-only (which resolves to the postal address and yields no rating — see the migration).
+        row["search_brand"] = (str(body["search_brand"] or "").strip() or None)
     key = (body.get("api_key") or "").strip()
     if key:
         row["api_key"] = key
@@ -6383,7 +6388,9 @@ def list_google_review_stores(authorization: str = Header(default=""), org_id: s
                     "resolved_display_name": ov.get("resolved_display_name"),
                     "target_override": ov.get("target_override"), "target": target,
                     "rating": rating, "review_count": snap.get("review_count"),
-                    "status": _gr.rating_status(rating, target), "fetched_at": snap.get("fetched_at")})
+                    "status": _gr.rating_status(rating, target), "fetched_at": snap.get("fetched_at"),
+                    "reviews_needed": _gr.reviews_needed_for_target(
+                        rating, snap.get("review_count"), target)})
     return {"stores": out, "target_default": cfg.get("target_default", _gr.DEFAULT_TARGET)}
 
 
@@ -6699,7 +6706,9 @@ def google_reviews_employee_summary(employee_ids: str = "", authorization: str =
             snap = latest.get(sc) or {}
             rating = snap.get("rating")
             rows.append({"store_code": sc, "rating": rating, "review_count": snap.get("review_count"),
-                        "target": target, "status": _gr.rating_status(rating, target)})
+                        "target": target, "status": _gr.rating_status(rating, target),
+                        "reviews_needed": _gr.reviews_needed_for_target(
+                            rating, snap.get("review_count"), target)})
         summaries[eid] = rows
     return {"summaries": summaries}
 

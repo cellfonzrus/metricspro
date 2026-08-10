@@ -28,6 +28,7 @@ gated) and every hit is labeled 'possible' — never a certainty claim. See matc
 from __future__ import annotations
 
 import hashlib
+import math as _math
 import re
 from datetime import datetime, timedelta, timezone, date as _date
 
@@ -91,6 +92,40 @@ def effective_target(store_row: dict | None, org_target_default) -> float:
     if store_row and store_row.get("target_override") is not None:
         return clamp_target(store_row["target_override"])
     return clamp_target(org_target_default, DEFAULT_TARGET)
+
+
+def reviews_needed_for_target(rating, review_count, target, best: float = 5.0):
+    """How many further 5.0 reviews lift a store from `rating` to `target` (OWNER 2026-08-10: "if the
+    reviews are below 4.7 ... tell the employee how many 5.0 reviews they need to get above 4.7").
+
+    A Google rating is the MEAN of its reviews, so with R over N reviews, adding k perfect ones gives
+    (R·N + best·k) / (N + k). Requiring that to reach T and solving for k:
+
+        k >= N·(T - R) / (best - T)
+
+    rounded UP, since you cannot leave half a review. With T=4.7 the denominator is 0.3, which is why
+    the number climbs so fast: a 4.3 over 6 reviews needs 8 more, not 1 or 2. That steepness is the
+    honest, useful part of the answer — it is the difference between "ask a few customers" and "this
+    needs a sustained push".
+
+    Returns None (not 0) when the question does not apply: already at/above target, no rating yet, no
+    reviews yet, or a target at/above `best` (mathematically unreachable — no number of 5.0s averages
+    above 5.0). None means "no answer", 0 would wrongly read as "you are there"."""
+    try:
+        r = float(rating)
+        n = int(review_count)
+        t = float(target)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0 or t >= best or r >= t:
+        return None
+    # EPSILON, not decoration: 4.3 over 6 reviews toward 4.7 is EXACTLY 8 (25.8 + 40) / 14 = 4.70, but
+    # in binary (4.7 - 4.3) is 0.40000000000000036 and (5.0 - 4.7) is 0.2999999999999998, so the
+    # quotient lands at 8.000000000000012 and a bare ceil() answers 9. Telling an employee to chase a
+    # ninth review when the eighth already gets them there is the kind of small lie that makes people
+    # stop believing the number. Shave a hair before rounding up.
+    k = (n * (t - r)) / (best - t)
+    return max(1, int(_math.ceil(k - 1e-9)))
 
 
 def rating_status(rating, target) -> str:
@@ -288,28 +323,51 @@ def stores_for_employees(client, org_id: str, employee_ids: list[str],
 
 
 # ── Google Places API (New) — pure HTTP calls, mockable by monkeypatching these two names ──────
-def text_search_place(address: str, api_key: str, timeout: int = 15) -> dict:
-    """Text Search -> the best-matching place_id for a store address. Raises RuntimeError on any
-    failure (no key, no result, HTTP error) — the caller decides how to surface that."""
+def looks_like_postal_address(display_name: str, address: str) -> bool:
+    """True when Google handed back the STREET ADDRESS rather than the business at it — the failure mode
+    mig 430 exists for. Detected structurally (the display name is just the leading part of the address)
+    rather than by keyword, so it holds for any country's address format."""
+    dn = (display_name or "").strip().lower()
+    ad = (address or "").strip().lower()
+    if not dn:
+        return False
+    return bool(ad) and (ad.startswith(dn) or dn == ad.split(",")[0].strip())
+
+
+def text_search_place(address: str, api_key: str, timeout: int = 15, brand: str | None = None) -> dict:
+    """Text Search -> the best-matching place_id for a store. Raises RuntimeError on any failure (no key,
+    no result, HTTP error) — the caller decides how to surface that.
+
+    `brand` (google_review_config.search_brand, mig 430) is prepended to the query. WITHOUT it a bare
+    address resolves to the POSTAL ADDRESS — verified live 2026-08-10: "104-08 Lefferts Blvd, South
+    Richmond Hill, NY" returned the address itself with NO rating, while "wireless store 104-08 Lefferts
+    Blvd" returned "Total Wireless" at 4.3 with 6 reviews. The token does not have to name the right
+    brand; Google matches the business at that address either way."""
     address = (address or "").strip()
     if not address:
         raise RuntimeError("No store address to search")
     if not api_key:
         raise RuntimeError("No Google Places API key configured")
+    query = f"{(brand or '').strip()} {address}".strip()
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": "places.id,places.formattedAddress,places.displayName",
     }
-    r = requests.post(PLACES_SEARCH_URL, json={"textQuery": address}, headers=headers, timeout=timeout)
+    r = requests.post(PLACES_SEARCH_URL, json={"textQuery": query}, headers=headers, timeout=timeout)
     r.raise_for_status()
     data = r.json() or {}
     places = data.get("places") or []
     if not places:
         raise RuntimeError(f"No Google Place found for address: {address}")
     p = places[0]
+    dn = (p.get("displayName") or {}).get("text")
     return {"place_id": p.get("id"), "formatted_address": p.get("formattedAddress"),
-            "display_name": (p.get("displayName") or {}).get("text")}
+            "display_name": dn, "query": query,
+            # Surfaced, not swallowed: a postal-address match yields a place with no ratings, and the
+            # store page can then say "set a brand token or override the place ID" instead of showing
+            # a permanently blank rating that reads as "this store has no reviews".
+            "looks_like_address": looks_like_postal_address(dn, address)}
 
 
 def place_details(place_id: str, api_key: str, timeout: int = 15) -> dict:
@@ -379,7 +437,8 @@ def get_config(client, org_id: str) -> dict:
     except Exception:
         pass
     return {"org_id": org_id, "api_key": None, "enabled": False, "target_default": DEFAULT_TARGET,
-            "notify_on_new_reviews": True, "lookback_days": DEFAULT_LOOKBACK_DAYS}
+            "notify_on_new_reviews": True, "lookback_days": DEFAULT_LOOKBACK_DAYS,
+            "search_brand": None}
 
 
 def public_config(cfg: dict) -> dict:
@@ -388,6 +447,7 @@ def public_config(cfg: dict) -> dict:
             "notify_on_new_reviews": cfg.get("notify_on_new_reviews", True),
             "lookback_days": clamp_lookback_days(cfg.get("lookback_days")),
             "has_api_key": bool(cfg.get("api_key")), "api_key_hint": mask_api_key(cfg.get("api_key")),
+            "search_brand": cfg.get("search_brand"),
             "updated_at": cfg.get("updated_at")}
 
 
@@ -428,10 +488,13 @@ def next_run_at(frequency, day_of_week, hour, tzname) -> str:
 
 
 # ── place resolution ─────────────────────────────────────────────────────────────────────────────
-def resolve_place_for_store(client, org_id: str, store_code: str, address: str, api_key: str) -> dict:
-    """Text Search on the store's own address, cached (upserted) as an 'auto' place_id. Raises
-    RuntimeError on failure — the caller (router.py) turns that into a clear HTTP 400."""
-    result = text_search_place(address, api_key)
+def resolve_place_for_store(client, org_id: str, store_code: str, address: str, api_key: str,
+                            brand: str | None = None) -> dict:
+    """Text Search on the store's address (prefixed with the tenant's `search_brand`, mig 430), cached
+    (upserted) as an 'auto' place_id. Raises RuntimeError on failure — the caller (router.py) turns that
+    into a clear HTTP 400. A MANUAL place_id set on the store row always wins and is never overwritten
+    here; this only runs when there is nothing cached."""
+    result = text_search_place(address, api_key, brand=brand)
     row = {"org_id": org_id, "store_code": store_code, "place_id": result["place_id"],
            "place_id_source": "auto", "resolved_address": result.get("formatted_address"),
            "resolved_display_name": result.get("display_name"),
@@ -565,8 +628,16 @@ def sweep_store(client, org_id: str, store_row: dict, org_cfg: dict) -> dict:
             result["error"] = "No place_id cached and no store address to auto-resolve"
             return result
         try:
-            resolved = resolve_place_for_store(client, org_id, store_code, address, api_key)
+            resolved = resolve_place_for_store(client, org_id, store_code, address, api_key,
+                                               brand=org_cfg.get("search_brand"))
             place_id = resolved["place_id"]
+            if resolved.get("looks_like_address"):
+                # Not fatal — carry on and read the details, which will simply have no rating. Naming it
+                # here is what turns "this store shows nothing" into an actionable instruction.
+                result["partial_detail"] = (
+                    f"Google matched the postal address ({resolved.get('display_name')}), not a "
+                    "business, so this store has no rating to read. Set a business token in the Google "
+                    "Reviews settings (e.g. \"wireless store\"), or set this store's Place ID manually.")
         except Exception as e:
             result["error"] = f"Could not resolve a Google Place for this store: {e}"
             return result

@@ -29,7 +29,7 @@ interface ActionPlan {
 }
 interface StoreCard {
   store_code: string; address?: string; market?: string
-  rating?: number | null; review_count?: number | null; target: number
+  rating?: number | null; review_count?: number | null; target: number; reviews_needed?: number | null
   status: 'above' | 'below' | 'unknown'
   reviews: ReviewItem[]
   action_plan: ActionPlan | null
@@ -125,6 +125,10 @@ function CompactStoreRow({ s }: { s: StoreCard }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ color: '#d97706', fontSize: 12 }}>{stars(s.rating ?? undefined)}</span>
           <span style={{ fontWeight: 800, fontSize: 13, color: fg }}>{s.rating != null ? Number(s.rating).toFixed(1) : '—'}</span>
+          {s.reviews_needed != null && s.reviews_needed > 0 && (
+            <span title={`${s.reviews_needed} more 5-star reviews to reach ${Number(s.target).toFixed(1)}`}
+              style={{ fontSize: 11, fontWeight: 700, color: fg }}>+{s.reviews_needed}⭐</span>
+          )}
           <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 10, color: fg, border: `1px solid ${fg}44` }}>
             {STATUS_LABEL[s.status]}
           </span>
@@ -211,6 +215,13 @@ export default function GoogleReviewsCard({ token, employeeId, compact, compactT
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ fontSize: 20, fontWeight: 800, color: fg }}>{s.rating != null ? Number(s.rating).toFixed(1) : '—'}</div>
                   <div style={{ fontSize: 11, color: 'var(--text2)' }}>target {Number(s.target).toFixed(1)} · {s.review_count ?? '—'} reviews</div>
+                  {/* THE ACTIONABLE NUMBER (owner 2026-08-10): below target, say exactly how many more
+                      5.0 reviews close the gap — a rating on its own tells nobody what to do. */}
+                  {s.reviews_needed != null && s.reviews_needed > 0 && (
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: fg, marginTop: 3 }}>
+                      ⭐ {s.reviews_needed} more 5-star review{s.reviews_needed === 1 ? '' : 's'} to reach {Number(s.target).toFixed(1)}
+                    </div>
+                  )}
                 </div>
               </div>
               <div style={{ padding: 12 }}>
