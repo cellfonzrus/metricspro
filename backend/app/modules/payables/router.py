@@ -251,9 +251,78 @@ def due(as_of: str = "", store: str = "", carrier_id: str = "", org_id: str = OR
             "note": "aging.owed matches /api/v1/asset/owed-weekly due_this_week.aging.owed"}
 
 
+_VENDOR_FEED_TABLE = "raw_ma_daily_tx"
+
+
+def _owed_from_vendor_feed(client, org_id, start, end):
+    """Daily owed straight from the PROCESSOR'S OWN feed — `raw_ma_daily_tx.due_date`.
+
+    OWNER 2026-08-10: "if we have the actual due date build that and ship it."  We do. This is the
+    fallback for a tenant whose per-IMEI ledger carries no amounts, which is every Total/MA tenant:
+    their source map has no owed_field because the MA reports record what was ACTIVATED, never what was
+    INVOICED, so Daily Owed grouped nothing at all.
+
+    The earlier plan was to ESTIMATE the due date as ship + 20 days off the handset fulfillment report.
+    That is not needed and would have been less accurate: the daily-tx feed already carries the
+    vendor's own `due_date` on every row (all 45,525 luxelink rows, 2026-02-02..2026-09-24). A positive
+    `retail_cost` is money the DEALER OWES (negative = paid to the dealer — the same sign convention
+    the canonical commission ledger books from), so the owed side is the positive rows.
+
+    GRAIN, stated out loud: this is per ORDER LINE, not per device. The feed carries no IMEI, and
+    neither does the fulfillment report — there is no device identity on this path at all, which is
+    exactly why the per-IMEI ledger cannot be priced from it. So these rows answer "how much is due on
+    what date", not "which handset". They are NOT mixed into the ledger.
+
+    Returns (rows, meta). Never raises — a tenant without the table just gets no fallback."""
+    rows, page, start_at = [], 1000, 0
+    by_date, entities = {}, set()
+    try:
+        while True:
+            q = (client.schema("commcalc").table(_VENDOR_FEED_TABLE)
+                 .select("due_date,retail_cost,account_name")
+                 .eq("org_id", org_id).not_.is_("due_date", "null"))
+            if start:
+                q = q.gte("due_date", start)
+            if end:
+                q = q.lte("due_date", end)
+            chunk = q.range(start_at, start_at + page - 1).execute().data or []
+            for r in chunk:
+                amt = r.get("retail_cost")
+                try:
+                    amt = float(amt)
+                except (TypeError, ValueError):
+                    continue
+                if amt <= 0:                     # negative / zero = paid TO the dealer, not owed BY it
+                    continue
+                d = str(r.get("due_date") or "")[:10]
+                if not d:
+                    continue
+                e = by_date.setdefault(d, {"due_date": d, "count": 0, "owed": 0.0})
+                e["count"] += 1
+                e["owed"] += amt
+                nm = (r.get("account_name") or "").strip()
+                if nm:
+                    entities.add(nm)
+            if len(chunk) < page:
+                break
+            start_at += page
+    except Exception as e:
+        print(f"WARN owed-by-date vendor feed unavailable: {e}")
+        return [], {}
+    rows = [dict(v, owed=round(v["owed"], 2)) for v in by_date.values()]
+    rows.sort(key=lambda x: x["due_date"])
+    return rows, {"entities": sorted(entities)}
+
+
 @router.get("/owed-by-date")
 def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = ORG_ID):
-    """Consolidated daily owed: net_owed grouped by due_date."""
+    """Consolidated daily owed: net_owed grouped by due_date.
+
+    Two possible sources, and the response always names which one answered:
+      • `device_ledger` — the per-IMEI payable ledger (Boost/VIP: owed_to_vip + the VIP invoice dates);
+      • `vendor_feed`  — the processor's own `raw_ma_daily_tx.due_date` + amounts, used when the ledger
+        carries no amounts at all (every Total/MA tenant). Per ORDER LINE, not per device.
+    """
     client = sb()
     q = (client.schema("commcalc").table("device_payable_ledger")
          .select("due_date,net_owed,owed,store").eq("org_id", org_id))
@@ -277,7 +346,27 @@ def owed_by_date(start: str = "", end: str = "", store: str = "", org_id: str = 
         e["owed"] += float(amt or 0)
     out = [dict(v, owed=round(v["owed"], 2)) for v in by_date.values()]
     out.sort(key=lambda x: x["due_date"])
-    return {"rows": out, "total_owed": round(sum(x["owed"] for x in out), 2)}
+    if out:
+        return {"rows": out, "total_owed": round(sum(x["owed"] for x in out), 2),
+                "source": "device_ledger", "grain": "device"}
+
+    # The ledger produced nothing — which for a Total/MA tenant is not "you owe nothing", it is "no
+    # device carries an amount". Fall back to the processor's own dated amounts and SAY so, including
+    # the grain change, rather than showing an empty table.
+    vrows, vmeta = _owed_from_vendor_feed(client, org_id, start, end)
+    if not vrows:
+        return {"rows": [], "total_owed": 0.0, "source": None, "grain": None}
+    note = ("Dated from the processor's own feed (MA Daily Tx `due_date`), not from the per-IMEI "
+            "payable ledger — this tenant's carrier source map carries no owed field, because the MA "
+            "reports record what was activated, never what was invoiced. These are ORDER LINES, not "
+            "devices, so there is no IMEI to drill into"
+            + (" · entities: " + ", ".join(vmeta["entities"]) if vmeta.get("entities") else "") + ".")
+    if store:
+        note += (" The store filter does not apply here: the feed carries no store — an order is placed "
+                 "against the dealer account.")
+    return {"rows": vrows, "total_owed": round(sum(x["owed"] for x in vrows), 2),
+            "source": "vendor_feed", "grain": "order_line", "note": note,
+            "entities": vmeta.get("entities") or []}
 
 
 # ── Part C — per-store priority list ──────────────────────────────────────────

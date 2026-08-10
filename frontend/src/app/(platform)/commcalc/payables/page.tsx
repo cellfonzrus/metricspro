@@ -63,6 +63,7 @@ export default function PayablesPage() {
   const [drill, setDrill] = useState<any | null>(null)
   // owed-by-date
   const [oRows, setORows] = useState<any[]>([])
+  const [oMeta, setOMeta] = useState<any>({})
   const [loading, setLoading] = useState(false)
   const [settings, setSettings] = useState<any>({ priority_ack_enabled: false, priority_window_pct: 25 })
   const [showSettings, setShowSettings] = useState(false)
@@ -143,7 +144,7 @@ export default function PayablesPage() {
     try {
       const qs = new URLSearchParams()
       if (owedStore) qs.set('store', owedStore)   // date-aggregate has no store dim → single-store server filter
-      const d = await api(`/api/v1/payables/owed-by-date${qs.toString() ? `?${qs}` : ''}`); setORows(d.rows || [])
+      const d = await api(`/api/v1/payables/owed-by-date${qs.toString() ? `?${qs}` : ''}`); setORows(d.rows || []); setOMeta(d || {})
     } catch (e) { console.error(e) }
     setLoading(false)
   }
@@ -392,16 +393,32 @@ export default function PayablesPage() {
             </button>{' '}at $0.
           </div>
         ) : (
+          <>
+          {/* GRAIN + SOURCE, said out loud (owner 2026-08-10 "if we have the actual due date build that
+              and ship it"). When the amounts come from the processor's own feed rather than the
+              per-IMEI ledger, the rows are ORDER LINES and there is no device to drill into — the
+              reader has to know that before comparing this to the Payables tab. */}
+          {oMeta.source === 'vendor_feed' && oMeta.note && (
+            <div style={{ fontSize: 12, color: 'var(--text2)', background: 'var(--surface2)', borderRadius: 8, padding: '8px 11px', marginBottom: 10, maxWidth: 980 }}>
+              ℹ️ {oMeta.note}
+            </div>
+          )}
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>
               <SortableTh field="due_date" sort={oSort.sort} onSort={oSort.toggle} style={th}>Due date</SortableTh>
-              <SortableTh field="count" sort={oSort.sort} onSort={oSort.toggle} style={th}>Devices</SortableTh>
+              <SortableTh field="count" sort={oSort.sort} onSort={oSort.toggle} style={th}>{oMeta.grain === 'order_line' ? 'Order lines' : 'Devices'}</SortableTh>
               <SortableTh field="owed" sort={oSort.sort} onSort={oSort.toggle} style={th}>Owed</SortableTh>
             </tr></thead>
             <tbody>{oSort.sorted.map((r: any, i: number) => (
               <tr key={i}><td style={td}>{r.due_date}</td><td style={td}>{r.count}</td><td style={{ ...td, fontWeight: 600 }}>{fmt(r.owed)}</td></tr>
             ))}</tbody>
+            <tfoot><tr>
+              <td style={{ ...td, fontWeight: 800 }}>TOTAL</td>
+              <td style={td} />
+              <td style={{ ...td, fontWeight: 800 }}>{fmt(oMeta.total_owed ?? 0)}</td>
+            </tr></tfoot>
           </table>
+          </>
         )
       )}
 
