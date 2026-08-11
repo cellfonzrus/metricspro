@@ -12504,6 +12504,58 @@ async def list_commission_plans(org_id: str = ORG_ID):
     return {"plans": plans, "ready": True}
 
 
+# ── PAYOUT STRUCTURE DOCUMENT (owner directive 2026-08-11) ────────────────────────────────────────
+# "i need payout structure to be communicated as the first pdf, make it in a professional format."
+# The tenant's OWN plan configuration, restated in the words an employee can act on. READ-ONLY: it
+# computes no pay and writes nothing — every rate on the page is re-stated from commission_plan /
+# commission_rule, and the frequency column is resolved through plan_pay_gate, the same resolver the
+# payout uses, so the document cannot drift from the arithmetic. See payout_structure.py's header for
+# the three traps (amount-vs-pct, contains-vs-in, per-line-vs-per-device) it exists to avoid.
+@router.get("/commission-plans/payout-structure")
+def payout_structure_document(fmt: str = "pdf", plan_id: str = "", org_id: str = ORG_ID):
+    """The employee-facing Payout Structure document.
+
+    fmt=pdf (default) downloads it; fmt=json returns the SAME document model so an on-screen preview and
+    the PDF can never disagree. `plan_id` renders a single plan as a per-team handout.
+    """
+    from fastapi import Response
+    from app.modules.commcalc import payout_structure as _ps
+    from app.modules.commcalc import plan_pay_gate as _ppg
+
+    client = sb()
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        raise HTTPException(400, "Commission plans are not enabled for this tenant "
+                                 "(migration 059_commission_plans.sql).")
+    # Both config loaders degrade to their code defaults on their own; the extra guard keeps a missing
+    # optional migration (260/261) from turning a readable document into a 500.
+    try:
+        gate_cfg = _ppg.load_gate_config(client, org_id)
+    except Exception:
+        gate_cfg = None
+    try:
+        exclusions, _ = _ppg.load_exclusions(client, org_id)
+    except Exception:
+        exclusions = []
+    # The tenant's real name heads the document. A tenant with no storeops row still gets a valid
+    # (untitled) document rather than a failure.
+    tenant = ""
+    try:
+        _t = (client.schema("storeops").table("tenants").select("name")
+              .eq("org_id", org_id).limit(1).execute().data) or []
+        tenant = (_t[0].get("name") or "") if _t else ""
+    except Exception:
+        tenant = ""
+
+    doc = _ps.build_doc(plans, tenant_name=tenant, gate_cfg=gate_cfg, exclusions=exclusions,
+                        plan_id=(plan_id or None))
+    if (fmt or "pdf").strip().lower() == "json":
+        return doc
+    return Response(content=_ps.render_pdf(doc), media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{_ps.filename_for(doc)}"'})
+
+
 @router.post("/commission-plans")
 async def save_commission_plan(body: dict, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
