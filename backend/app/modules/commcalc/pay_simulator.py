@@ -613,12 +613,40 @@ def build_lines(client, org_id, plan, rep_name, store, period, inputs):
         key = f"rule:{rule.get('id')}"
         spec = (inputs or {}).get(key) or {}
         units = int(max(0, min(MAX_UNITS_PER_LEVER, int(safe_float(spec.get("units"))))))
-        if units <= 0:
+        # A 'month' basis carries its whole figure in `amount`, so a blank unit count is a legitimate
+        # input there — skipping on units alone would silently drop the lever the owner just filled in.
+        if units <= 0 and not (str(spec.get("basis") or "").strip().lower() == "month"
+                               and safe_float(spec.get("amount")) > 0):
             continue
         kind = (rule.get("payout_kind") or "flat_per_unit").strip().lower()
         needs_amt, amt_meaning, _cu = _KIND_INPUT.get(kind, (False, None, "units"))
         amount = safe_float(spec.get("amount"))
         field, value = _match_target(rule)
+
+        # ── BASIS (owner 2026-08-11): "the rate of accessories or accessories per month as a drop
+        #    down option … the selling price and the number of accessories, or the acc per month x %".
+        #    Two ways to say the same thing, mirroring the What-If page's own 'item' / 'month' choice
+        #    so the two surfaces can never disagree about what a number means:
+        #      'item'  (default, = today's behaviour byte-for-byte) — `amount` is the price of ONE
+        #              accessory; N units ⇒ N lines at that price.
+        #      'month' — `amount` is the MONTH'S TOTAL sales $ for this rule. The total is SPREAD
+        #              across the unit count rather than booked as a single line, so the percentage
+        #              sees the same dollars AND the tier still sees the same unit count. Collapsing
+        #              it to one line would silently change unit-based tier qualification — which is
+        #              exactly how a simulator starts disagreeing with payroll.
+        basis = str(spec.get("basis") or "item").strip().lower()
+        if basis == "month" and needs_amt:
+            if units <= 0:
+                units = 1
+            per_unit = round(amount / units, 4) if units else amount
+            if not safe_float(spec.get("units")):
+                warnings.append({"lever": key, "code": "month_basis_no_count",
+                                 "message": (f"'{rule.get('label') or 'This rule'}' was modelled from a "
+                                             f"monthly total with no accessory count, so it is one line. "
+                                             f"If this rule qualifies on UNIT COUNT, enter the number of "
+                                             f"accessories too — otherwise tier qualification is not "
+                                             f"being modelled.")})
+            amount = per_unit
 
         base = {
             "salesperson": rep_name, "store": store, "period": _canon_period(period),
@@ -674,8 +702,52 @@ def build_lines(client, org_id, plan, rep_name, store, period, inputs):
                 mrc_override[mdn] = amount
             lines.append(row)
         applied.append({"lever": key, "units": units, "amount": amount if needs_amt else None,
-                        "payout_kind": kind})
+                        "basis": basis if needs_amt else None, "payout_kind": kind})
     return lines, mrc_override, applied, warnings
+
+
+def current_actuals(client, org_id, period, plan, rep_name):
+    """{lever_key: {units, amount, from_actuals}} — what this rep ACTUALLY did this period.
+
+    OWNER 2026-08-11: the simulator "should have the current numbers not just placeholder 10 each".
+    It used to seed every lever with a hard-coded 1/10 units and $50/$25 — numbers nobody chose, that
+    look like a projection. The figures below come from `commission_engine.preview()` run with NO
+    sales_override, i.e. **the same engine over the same real lines that actually pay this rep**, so
+    the starting point can never drift from payroll the way a second implementation would.
+
+    A lever the rep has no history for is returned as 0, NOT as a comfortable default: an invented
+    quantity is how a simulator starts lying. Never raises — a failure just means "no seed".
+    """
+    out = {}
+    try:
+        from app.modules.commcalc import commission_engine as ce
+        pv = ce.preview(client, org_id, _canon_period(period), plan_id=plan.get("id"),
+                        detail=True, only_rep=rep_name)
+        row = None
+        for r in (pv.get("by_rep") or []):
+            if ce._canon_person(r.get("rep")) == ce._canon_person(rep_name):
+                row = r
+                break
+        if not row:
+            return out
+        for rb in (row.get("rules") or []):
+            key = f"rule:{rb.get('rule_id')}"
+            rlines = rb.get("lines") or []
+            units = int(safe_float(rb.get("qualifying_units")) or len(rlines)
+                        or safe_float(rb.get("matched_lines")))
+            amounts = [safe_float(l.get("gp")) or safe_float(l.get("ext_price")) for l in rlines]
+            amounts = [a for a in amounts if a]
+            out[key] = {
+                "units": units,
+                # AVERAGE, not total: the 'item' basis asks for the price of ONE unit.
+                "amount": round(sum(amounts) / len(amounts), 2) if amounts else 0.0,
+                "month_total": round(sum(amounts), 2) if amounts else 0.0,
+                "payout": round(safe_float(rb.get("payout")), 2),
+                "from_actuals": True,
+            }
+    except Exception as e:
+        print(f"WARN pay_simulator.current_actuals failed (levers will seed empty): {e}")
+    return out
 
 
 def simulate(client, org_id, period, rep_name, store, market, inputs):
@@ -790,10 +862,37 @@ def context(client, authorization, period, requested_rep="", requested_org=""):
         return {**base, "ok": False, "ready": ready, "reason": reason, "plan": None,
                 "levers": [], "tier": None}
     levers, tier = build_levers(client, org_id, plan)
+    # Seed from THIS rep's real period, not from invented defaults (owner 2026-08-11). Switching rep
+    # re-runs context, so the numbers always belong to the person on screen.
+    cur = current_actuals(client, org_id, _canon_period(period), plan, me["rep_name"])
+    seeded = 0
+    for lv in levers:
+        c = cur.get(lv["key"])
+        if c:
+            lv["current"] = c
+            seeded += 1
+        else:
+            lv["current"] = {"units": 0, "amount": 0.0, "month_total": 0.0, "payout": 0.0,
+                             "from_actuals": False}
+        # The accessory/percent levers are the ones the owner asked to be able to express two ways.
+        if lv.get("amount_input"):
+            lv["basis_options"] = [
+                {"value": "item", "label": f"Per {lv.get('count_unit') or 'unit'}",
+                 "amount_label": lv.get("amount_label") or "$ each"},
+                {"value": "month", "label": "Per month (total $)",
+                 "amount_label": "This month's total $"},
+            ]
     return {**base, "ok": True, "ready": True, "reason": None,
             "plan": {"id": plan.get("id"), "name": plan.get("name"),
                      "carrier_id": plan.get("carrier_id")},
-            "levers": levers, "tier": tier}
+            "levers": levers, "tier": tier,
+            "seeded_from_actuals": seeded,
+            "seed_note": (f"Starting numbers are {me['display_name']}'s actual {_canon_period(period)} "
+                          f"figures from the pay engine ({seeded} of {len(levers)} levers). Change any "
+                          f"of them to model a different month."
+                          if seeded else
+                          "No paid activity found for this period, so every lever starts at zero — "
+                          "type your own numbers to model a month.")}
 
 
 def run(client, authorization, period, inputs, requested_rep="", requested_org=""):

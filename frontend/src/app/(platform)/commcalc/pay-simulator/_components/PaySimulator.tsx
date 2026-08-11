@@ -33,6 +33,10 @@ export type Lever = {
   count_unit: string; amount_input: boolean; amount_meaning: string | null; amount_label: string
   rate: number; rate_kind: 'pct' | 'flat'; tiered: boolean; qualifies: boolean
   simulatable: boolean; note: string | null
+  /** The rep's ACTUAL figures for the period, from the pay engine — the simulator's starting point. */
+  current?: { units: number; amount: number; month_total: number; payout: number; from_actuals: boolean }
+  /** Present on percent levers: express the input per-unit, or as the month's total $. */
+  basis_options?: { value: 'item' | 'month'; label: string; amount_label: string }[]
 }
 export type RosterPerson = { value: string; label: string; email?: string; store?: string; active?: boolean }
 type Ctx = {
@@ -46,6 +50,8 @@ type Ctx = {
   reps?: RosterPerson[]
   plan?: { id: string; name: string } | null
   levers?: Lever[]
+  seeded_from_actuals?: number
+  seed_note?: string
   tier?: { metric: string; basis: string; below_min_multiplier: any; steps: { min_count: number; multiplier: number }[] } | null
 }
 type SimResult = {
@@ -57,7 +63,7 @@ type SimResult = {
 }
 type Sim = { ok: boolean; result: SimResult | null; warnings?: any[]; no_input?: boolean; reason?: string | null }
 
-export type LeverInput = { units: number; amount: number }
+export type LeverInput = { units: number; amount: number; basis?: 'item' | 'month' }
 
 const inp: React.CSSProperties = {
   width: 82, padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)',
@@ -69,15 +75,24 @@ const td: React.CSSProperties = { padding: '6px 8px', fontSize: 13 }
 const rateLabel = (l: Lever) =>
   l.rate_kind === 'pct' ? `${(Number(l.rate || 0) * 100).toFixed(1)}%` : fmt(l.rate)
 
-/** Sensible starting quantity so the card shows a real number on first paint instead of $0.
- *  Deliberately conservative and clearly a STARTING POINT (the header says "your numbers"). */
+/** Start from the rep's OWN numbers for the period.
+ *
+ *  OWNER 2026-08-11: "should have the current numbers not just placeholder 10 each". This used to
+ *  seed 1/10 units and $50/$25 — figures nobody chose, that render as a projection. `lever.current`
+ *  now arrives from the server, computed by the SAME engine that pays the rep (preview() over their
+ *  real lines), so the opening screen is their actual month.
+ *
+ *  A lever with no history seeds ZERO, deliberately. An invented quantity is how a simulator starts
+ *  lying; an empty one asks a question. */
 function seedInputs(levers: Lever[]): Record<string, LeverInput> {
   const out: Record<string, LeverInput> = {}
   for (const l of levers) {
     if (!l.simulatable) continue
+    const c = l.current
     out[l.key] = {
-      units: l.payout_kind === 'flat' ? 1 : 10,
-      amount: l.amount_meaning === 'mrc' ? 50 : l.amount_meaning ? 25 : 0,
+      units: Math.max(0, Number(c?.units ?? 0)),
+      amount: Number(c?.amount ?? 0),
+      basis: 'item',
     }
   }
   return out
@@ -196,6 +211,14 @@ export default function PaySimulator({ period, compact = false }: { period: stri
         {ctx.store ? <> · {ctx.store}</> : null} · {ctx.period}
         {' '}· projection only, nothing is saved
       </div>
+      {/* Say WHERE the opening numbers came from. A simulator that silently pre-fills is
+          indistinguishable from one that made the figures up — which is the bug this replaced. */}
+      {ctx.seed_note && (
+        <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 10, padding: '7px 10px',
+                      background: 'var(--surface2, rgba(127,127,127,.07))', borderRadius: 8 }}>
+          {(ctx.seeded_from_actuals ?? 0) > 0 ? '📌 ' : 'ℹ️ '}{ctx.seed_note}
+        </div>
+      )}
 
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
@@ -203,7 +226,7 @@ export default function PaySimulator({ period, compact = false }: { period: stri
             <th style={th}>What you sell</th>
             <th style={{ ...th, textAlign: 'right' }}>Rate</th>
             <th style={{ ...th, textAlign: 'right' }}>How many</th>
-            <th style={{ ...th, textAlign: 'right' }}>$ each</th>
+            <th style={{ ...th, textAlign: 'right' }}>Amount</th>
             <th style={{ ...th, textAlign: 'right' }}>Pays</th>
           </tr>
         </thead>
@@ -226,9 +249,29 @@ export default function PaySimulator({ period, compact = false }: { period: stri
                 </td>
                 <td style={{ ...td, textAlign: 'right' }}>
                   {l.amount_input
-                    ? <input type="number" min={0} step={1} style={inp} value={v.amount}
-                        aria-label={`${l.label} — ${l.amount_label}`} title={l.amount_label}
-                        onChange={e => setLever(l.key, { amount: Math.max(0, Number(e.target.value) || 0) })} />
+                    ? (() => {
+                        // OWNER 2026-08-11: express a percent lever EITHER as price-per-unit or as the
+                        // month's total $. Same 'item' / 'month' vocabulary the What-If page uses, so
+                        // the two surfaces can never mean different things by the same word.
+                        const basis = v.basis || 'item'
+                        const opt = (l.basis_options || []).find(o => o.value === basis)
+                        const lbl = opt?.amount_label || l.amount_label
+                        return (
+                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                            {(l.basis_options || []).length > 1 && (
+                              <select value={basis} aria-label={`${l.label} — how to enter this`}
+                                style={{ ...inp, width: 128, textAlign: 'left' }}
+                                onChange={e => setLever(l.key, { basis: e.target.value as 'item' | 'month' })}>
+                                {(l.basis_options || []).map(o =>
+                                  <option key={o.value} value={o.value}>{o.label}</option>)}
+                              </select>
+                            )}
+                            <input type="number" min={0} step={1} style={inp} value={v.amount}
+                              aria-label={`${l.label} — ${lbl}`} title={lbl}
+                              onChange={e => setLever(l.key, { amount: Math.max(0, Number(e.target.value) || 0) })} />
+                          </div>
+                        )
+                      })()
                     : <span style={{ color: 'var(--text3)' }}>—</span>}
                 </td>
                 <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>
