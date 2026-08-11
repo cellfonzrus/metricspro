@@ -168,17 +168,38 @@ check("E3 a placeholder contributes no scheduled hours",
       one_day(shifts=[PLACEHOLDER])["scheduled_hours"], 0)
 check("E4 a real one does", one_day(shifts=[SHIFT])["scheduled_hours"], 7.75)
 
-section("F. ARMED negative control")
+section("F. days that have not happened yet are not evidence")
+
+FUTURE_SHIFT = {"shift_date": "2026-08-18", "store_code": "CERMARK", "scheduled_hours": "6.25",
+                "start_time": "13:00"}
+r_fut = ce.analyze("Future Person", date(2026, 8, 16), date(2026, 8, 18), [], [], [FUTURE_SHIFT],
+                   peer_punches=[], today=date(2026, 8, 11))
+check("F1 a shift scheduled after today is 'not_yet'", r_fut["days"][-1]["verdict"], "not_yet")
+check("F2 ... and carries no claim weight", r_fut["days"][-1]["claim_effect"], "neutral")
+check("F3 ... and never says 'nobody clocked in at this store'",
+      any("Nobody at this store" in n for d in r_fut["days"] for n in d["notes"]), False)
+# Without `today` the behaviour is unchanged for every existing caller.
+r_no_today = ce.analyze("Future Person", date(2026, 8, 16), date(2026, 8, 18), [], [], [FUTURE_SHIFT],
+                        peer_punches=[])
+check("F4 omitting `today` keeps the previous behaviour",
+      r_no_today["days"][-1]["verdict"], "no_record_scheduled")
+# A day in the future that somehow HAS a punch is real data and must still be read as one.
+r_odd = ce.analyze("Odd", date(2026, 8, 18), date(2026, 8, 18),
+                   [dict(PUNCH, work_date="2026-08-18")], [], [FUTURE_SHIFT], today=date(2026, 8, 11))
+check("F5 real data on a future date still classifies as a punch",
+      r_odd["days"][0]["verdict"], "clocked_in")
+
+section("G. ARMED negative control")
 
 _f0 = len(FAIL)
-check("F-armed blank day", one_day(shifts=[SHIFT])["claim_effect"], "weakens")     # wrong: no peer data
-check("F-armed override", one_day(punches=[OVERRIDE_PUNCH], shifts=[SHIFT])["verdict"], "clocked_in")
+check("G-armed blank day", one_day(shifts=[SHIFT])["claim_effect"], "weakens")     # wrong: no peer data
+check("G-armed override", one_day(punches=[OVERRIDE_PUNCH], shifts=[SHIFT])["verdict"], "clocked_in")
 fired = len(FAIL) - _f0
 if fired == 2:
     FAIL[:] = FAIL[:_f0]
-    PASS.append("F1 negative control fired on both wrong expectations (checks are live)")
+    PASS.append("G1 negative control fired on both wrong expectations (checks are live)")
 else:
-    FAIL.append(f"F1 NEGATIVE CONTROL DID NOT FIRE — {fired}/2 wrong answers accepted.")
+    FAIL.append(f"G1 NEGATIVE CONTROL DID NOT FIRE — {fired}/2 wrong answers accepted.")
 
 print(f"\n{'=' * 78}")
 for f in FAIL:

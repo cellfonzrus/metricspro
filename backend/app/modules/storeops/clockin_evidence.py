@@ -60,6 +60,7 @@ VERDICTS = {
     "worked_without_clocking": "No punch, but they were provably at work that day.",
     "no_record_scheduled": "Scheduled, but the system holds no punch, no attempt and no other activity.",
     "no_record_unscheduled": "Not scheduled and no activity — nothing to explain.",
+    "not_yet": "This day has not happened yet.",
 }
 
 # How each verdict bears on a claim of "the app would not let me clock in".
@@ -70,6 +71,7 @@ CLAIM_EFFECT = {
     "worked_without_clocking": "supports",
     "no_record_scheduled": "inconclusive",
     "no_record_unscheduled": "neutral",
+    "not_yet": "neutral",
 }
 
 
@@ -116,7 +118,7 @@ def daterange(start, end):
 
 
 def analyze(employee_name, start, end, punches, failures, shifts,
-            peer_punches=None, activity=None, strikes=None):
+            peer_punches=None, activity=None, strikes=None, today=None):
     """Build the day-by-day evidence report. PURE.
 
     punches   : storeops.timelog rows for THIS employee in range
@@ -126,6 +128,11 @@ def analyze(employee_name, start, end, punches, failures, shifts,
                   Rows belonging to this employee are ignored when counting peers.
     activity  : [{work_date, kind, detail}] independent proof of presence (sales rung, closing filed)
     strikes   : storeops.late_clockin_strike rows (a late-strike is itself proof a punch landed)
+    today     : the caller's today. Days AFTER it have not happened yet, so they carry no evidence
+                either way and are marked `not_yet`. Without this, a schedule that runs past today
+                produced "scheduled, and the system holds nothing" for days nobody could possibly have
+                worked — and, where no colleague had clocked in yet either, scored them as SUPPORTING
+                a complaint about a shift in the future. None = do not classify any day as future.
     """
     by_day_punch, by_day_fail, by_day_shift = {}, {}, {}
     for p in punches or []:
@@ -178,7 +185,9 @@ def analyze(employee_name, start, end, punches, failures, shifts,
         for st in (stores or {""}):
             peer_names |= peers.get((iso, st), set())
 
-        if ps:
+        if today is not None and d > today and not (ps or fs or act or strk):
+            verdict = "not_yet"
+        elif ps:
             verdict = "clocked_in_override" if all(_is_override(p) for p in ps) else "clocked_in"
         elif fs:
             verdict = "attempted_failed"
@@ -192,7 +201,7 @@ def analyze(employee_name, start, end, punches, failures, shifts,
         effect = CLAIM_EFFECT[verdict]
         notes = []
         # Kiosk health only MEANS anything on a day with no punch — otherwise it is noise.
-        if verdict in ("attempted_failed", "no_record_scheduled", "worked_without_clocking"):
+        if verdict in ("attempted_failed", "no_record_scheduled", "worked_without_clocking"):  # never 'not_yet''
             if peer_names:
                 notes.append(f"{len(peer_names)} other employee(s) clocked in normally at this store "
                              f"that day — the kiosk was working for them.")
@@ -408,7 +417,7 @@ def clock_in_check(employee_id: str = "", name: str = "", start: str = "", end: 
     punches, failures, shifts, peers, activity, strikes = gather(
         org_id, (emp or {}).get("employee_id") or employee_id, subject, s, e)
     out = analyze(subject, s, e, punches, failures, shifts,
-                  peer_punches=peers, activity=activity, strikes=strikes)
+                  peer_punches=peers, activity=activity, strikes=strikes, today=date.today())
     out["employee_id"] = (emp or {}).get("employee_id") or employee_id
     out["resolved"] = bool(emp)
     if not emp:
