@@ -1,0 +1,25 @@
+TASK B — NJ MTD July 2026.xlsx  vs  MetricsPro (house org), July 2026
+STORE                             FILE Acc    OUR ext$      delta |   FILE DSF  OUR setup$      delta
+1115 Liberty Ave                   2968.56     2968.56       0.00 |    1091.00     1091.00       0.00
+11636 Springfield Blvd             3960.01     3978.09      18.08 |    1520.00     1535.00      15.00
+3565 Broadway                      2696.37     2696.37      -0.00 |    1575.00     1575.00       0.00
+103 Fulton Ave                     2860.98     2860.98       0.00 |    1125.00     1125.00       0.00
+1750 5th Ave                       2297.51     2297.51       0.00 |     970.00      970.00       0.00
+559 BROADWAY                       3165.35     3165.35      -0.00 |    1847.00     1847.00       0.00
+5135 BERGENLINE                    3406.03     3406.03       0.00 |    1965.00     1996.00      31.00
+509 Nostrand Ave                   4117.88     4117.88       0.00 |    2002.00     2002.00       0.00
+418 Uniondale Ave                  3146.34     2885.35    -260.99 |    1315.00     1315.00       0.00
+151 E 170th St                     6357.73     5857.73    -500.00 |    2446.00     2461.00      15.00
+3 Palisade Ave Yonkers             8890.32     8867.36     -22.96 |    3519.00     3519.00       0.00
+117 E Burnside Ave                 4428.69     4428.69      -0.00 |    4070.03     2904.00   -1166.03
+196 Martin Luther King Jr Dr       3179.91     3274.91      95.00 |    1790.00     1800.00      10.00
+2612 Pitkin Ave                    4836.75     4845.75       9.00 |    2454.00     2484.00      30.00
+652 Communipaw Avenue              2405.03     2736.40     331.37 |    1255.00     1360.00     105.00
+4712 White Plains Rd               1841.61     1841.61      -0.00 |     883.00      883.00       0.00
+1800 Great Neck rd                 4752.00     4772.00      20.00 |    1625.00     1625.00       0.00
+2509 Bergenline Ave Ste A          1502.21     1502.21      -0.00 |     845.00      845.00       0.00
+6011 Bergenline Ave                2002.83     2002.83      -0.00 |     870.00      870.00       0.00
+TOTAL (19 stores)                 68816.11    68505.61    -310.50 |   33167.03    32207.00    -960.03
+
+Our accessory GROSS PROFIT for the same 19 stores: 54323.51  (78.9% of the file) -> the file is NOT a GP column.
+Our accessory EXT PRICE  for the same 19 stores: 68505.61  (99.55% of the file) -> the file IS retail revenue.

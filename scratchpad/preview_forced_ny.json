@@ -1,0 +1,1014 @@
+{
+ "ready": true,
+ "period": "July 2026",
+ "by_rep": [
+  {
+   "rep": "Antunez, Diana",
+   "store": "4640-A W Diversey Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 38,
+   "tier_multiplier": 1.0,
+   "base_payout": 380.0,
+   "tiered_payout": 0.0,
+   "total_payout": 380.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 38,
+     "qualifying_units": 38,
+     "payout": 380.0
+    }
+   ]
+  },
+  {
+   "rep": "Vergara, Tatiana",
+   "store": "3966 W Grand Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 31,
+   "tier_multiplier": 1.0,
+   "base_payout": 310.0,
+   "tiered_payout": 0.0,
+   "total_payout": 310.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 31,
+     "qualifying_units": 31,
+     "payout": 310.0
+    }
+   ]
+  },
+  {
+   "rep": "Espinoza, Carolina",
+   "store": "4640-A W Diversey Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 31,
+   "tier_multiplier": 1.0,
+   "base_payout": 310.0,
+   "tiered_payout": 0.0,
+   "total_payout": 310.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 31,
+     "qualifying_units": 31,
+     "payout": 310.0
+    }
+   ]
+  },
+  {
+   "rep": "Nava, Silvia",
+   "store": "4801 W Armitage Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 28,
+   "tier_multiplier": 1.0,
+   "base_payout": 280.0,
+   "tiered_payout": 0.0,
+   "total_payout": 280.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 28,
+     "qualifying_units": 28,
+     "payout": 280.0
+    }
+   ]
+  },
+  {
+   "rep": "Chacon, Angelica",
+   "store": "3248 W Lawrence Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 25,
+   "tier_multiplier": 1.0,
+   "base_payout": 250.0,
+   "tiered_payout": 0.0,
+   "total_payout": 250.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 25,
+     "qualifying_units": 25,
+     "payout": 250.0
+    }
+   ]
+  },
+  {
+   "rep": "Ortiz, Ruby",
+   "store": "3966 W Grand Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 24,
+   "tier_multiplier": 1.0,
+   "base_payout": 240.0,
+   "tiered_payout": 0.0,
+   "total_payout": 240.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 24,
+     "qualifying_units": 24,
+     "payout": 240.0
+    }
+   ]
+  },
+  {
+   "rep": "Chavez, Antonio",
+   "store": "639 W Lincoln Hwy",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 24,
+   "tier_multiplier": 1.0,
+   "base_payout": 240.0,
+   "tiered_payout": 0.0,
+   "total_payout": 240.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 24,
+     "qualifying_units": 24,
+     "payout": 240.0
+    }
+   ]
+  },
+  {
+   "rep": "Espinoza, Nancy",
+   "store": "2414 W Cermak Rd",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 23,
+   "tier_multiplier": 1.0,
+   "base_payout": 230.0,
+   "tiered_payout": 0.0,
+   "total_payout": 230.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 23,
+     "qualifying_units": 23,
+     "payout": 230.0
+    }
+   ]
+  },
+  {
+   "rep": "Martinez, Luis",
+   "store": "2317 S Cicero Ave STE A",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 23,
+   "tier_multiplier": 1.0,
+   "base_payout": 230.0,
+   "tiered_payout": 0.0,
+   "total_payout": 230.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 23,
+     "qualifying_units": 23,
+     "payout": 230.0
+    }
+   ]
+  },
+  {
+   "rep": "Garibay, Janet",
+   "store": "3352 W 26th St",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 22,
+   "tier_multiplier": 1.0,
+   "base_payout": 220.0,
+   "tiered_payout": 0.0,
+   "total_payout": 220.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 22,
+     "qualifying_units": 22,
+     "payout": 220.0
+    }
+   ]
+  },
+  {
+   "rep": "Pitre, Terry",
+   "store": "2317 S Cicero Ave STE A",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 22,
+   "tier_multiplier": 1.0,
+   "base_payout": 220.0,
+   "tiered_payout": 0.0,
+   "total_payout": 220.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 22,
+     "qualifying_units": 22,
+     "payout": 220.0
+    }
+   ]
+  },
+  {
+   "rep": "Romero, Christopher",
+   "store": "5601 W Belmont Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 22,
+   "tier_multiplier": 1.0,
+   "base_payout": 220.0,
+   "tiered_payout": 0.0,
+   "total_payout": 220.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 22,
+     "qualifying_units": 22,
+     "payout": 220.0
+    }
+   ]
+  },
+  {
+   "rep": "Montijo, Genvieve",
+   "store": "3248 W Lawrence Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 22,
+   "tier_multiplier": 1.0,
+   "base_payout": 220.0,
+   "tiered_payout": 0.0,
+   "total_payout": 220.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 22,
+     "qualifying_units": 22,
+     "payout": 220.0
+    }
+   ]
+  },
+  {
+   "rep": "Collins, Mea",
+   "store": "18226 Kedzie Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 19,
+   "tier_multiplier": 1.0,
+   "base_payout": 190.0,
+   "tiered_payout": 0.0,
+   "total_payout": 190.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 19,
+     "qualifying_units": 19,
+     "payout": 190.0
+    }
+   ]
+  },
+  {
+   "rep": "Hernandez, Jocelyn",
+   "store": "5601 W Belmont Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 16,
+   "tier_multiplier": 1.0,
+   "base_payout": 160.0,
+   "tiered_payout": 0.0,
+   "total_payout": 160.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 16,
+     "qualifying_units": 16,
+     "payout": 160.0
+    }
+   ]
+  },
+  {
+   "rep": "Chico, Natalie",
+   "store": "6500 W Irving Park Rd",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 15,
+   "tier_multiplier": 1.0,
+   "base_payout": 150.0,
+   "tiered_payout": 0.0,
+   "total_payout": 150.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 15,
+     "qualifying_units": 15,
+     "payout": 150.0
+    }
+   ]
+  },
+  {
+   "rep": "Espinoza, Nallely",
+   "store": "2414 W Cermak Rd",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 15,
+   "tier_multiplier": 1.0,
+   "base_payout": 150.0,
+   "tiered_payout": 0.0,
+   "total_payout": 150.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 15,
+     "qualifying_units": 15,
+     "payout": 150.0
+    }
+   ]
+  },
+  {
+   "rep": "Jacobo, Vanessa",
+   "store": "4801 W Armitage Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 15,
+   "tier_multiplier": 1.0,
+   "base_payout": 150.0,
+   "tiered_payout": 0.0,
+   "total_payout": 150.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 15,
+     "qualifying_units": 15,
+     "payout": 150.0
+    }
+   ]
+  },
+  {
+   "rep": "Kellie, Mark",
+   "store": "957 Pennsylvania Avenue",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 14,
+   "tier_multiplier": 1.0,
+   "base_payout": 140.0,
+   "tiered_payout": 0.0,
+   "total_payout": 140.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 14,
+     "qualifying_units": 14,
+     "payout": 140.0
+    }
+   ]
+  },
+  {
+   "rep": "Aviles, Brendaliz",
+   "store": "2640 Narragansett",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 13,
+   "tier_multiplier": 1.0,
+   "base_payout": 130.0,
+   "tiered_payout": 0.0,
+   "total_payout": 130.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 13,
+     "qualifying_units": 13,
+     "payout": 130.0
+    }
+   ]
+  },
+  {
+   "rep": "Esparza, Yuvia",
+   "store": "3966 W Grand Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 12,
+   "tier_multiplier": 1.0,
+   "base_payout": 120.0,
+   "tiered_payout": 0.0,
+   "total_payout": 120.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 12,
+     "qualifying_units": 12,
+     "payout": 120.0
+    }
+   ]
+  },
+  {
+   "rep": "Cabrera, Natasha",
+   "store": "2640 Narragansett",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 11,
+   "tier_multiplier": 1.0,
+   "base_payout": 110.0,
+   "tiered_payout": 0.0,
+   "total_payout": 110.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 11,
+     "qualifying_units": 11,
+     "payout": 110.0
+    }
+   ]
+  },
+  {
+   "rep": "Lopez, Zuleicka",
+   "store": "3352 W 26th St",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 10,
+   "tier_multiplier": 1.0,
+   "base_payout": 100.0,
+   "tiered_payout": 0.0,
+   "total_payout": 100.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 10,
+     "qualifying_units": 10,
+     "payout": 100.0
+    }
+   ]
+  },
+  {
+   "rep": "Navarrete, Nicolas",
+   "store": "3735 W 26th St",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 10,
+   "tier_multiplier": 1.0,
+   "base_payout": 100.0,
+   "tiered_payout": 0.0,
+   "total_payout": 100.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 10,
+     "qualifying_units": 10,
+     "payout": 100.0
+    }
+   ]
+  },
+  {
+   "rep": "Islam Khan, Ariful",
+   "store": "218-80 Hempstead Avenue",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 9,
+   "tier_multiplier": 1.0,
+   "base_payout": 90.0,
+   "tiered_payout": 0.0,
+   "total_payout": 90.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 9,
+     "payout": 90.0
+    }
+   ]
+  },
+  {
+   "rep": "Mendoza, Natalie",
+   "store": "639 W Lincoln Hwy",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 9,
+   "tier_multiplier": 1.0,
+   "base_payout": 90.0,
+   "tiered_payout": 0.0,
+   "total_payout": 90.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 9,
+     "qualifying_units": 9,
+     "payout": 90.0
+    }
+   ]
+  },
+  {
+   "rep": "Jacobo, Liset",
+   "store": "3735 W 26th St",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 7,
+   "tier_multiplier": 1.0,
+   "base_payout": 70.0,
+   "tiered_payout": 0.0,
+   "total_payout": 70.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 7,
+     "qualifying_units": 7,
+     "payout": 70.0
+    }
+   ]
+  },
+  {
+   "rep": "Sri ram, Nivas",
+   "store": "3560 Nostrand Avenue",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 6,
+   "tier_multiplier": 1.0,
+   "base_payout": 60.0,
+   "tiered_payout": 0.0,
+   "total_payout": 60.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 6,
+     "qualifying_units": 6,
+     "payout": 60.0
+    }
+   ]
+  },
+  {
+   "rep": "Galarza, Alejandro",
+   "store": "6500 W Irving Park Rd",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 6,
+   "tier_multiplier": 1.0,
+   "base_payout": 60.0,
+   "tiered_payout": 0.0,
+   "total_payout": 60.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 6,
+     "qualifying_units": 6,
+     "payout": 60.0
+    }
+   ]
+  },
+  {
+   "rep": "ar, Rush",
+   "store": "218-80 Hempstead Avenue",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 6,
+   "tier_multiplier": 1.0,
+   "base_payout": 60.0,
+   "tiered_payout": 0.0,
+   "total_payout": 60.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 6,
+     "qualifying_units": 6,
+     "payout": 60.0
+    }
+   ]
+  },
+  {
+   "rep": "Perez, Melennie",
+   "store": "18226 Kedzie Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 6,
+   "tier_multiplier": 1.0,
+   "base_payout": 60.0,
+   "tiered_payout": 0.0,
+   "total_payout": 60.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 6,
+     "qualifying_units": 6,
+     "payout": 60.0
+    }
+   ]
+  },
+  {
+   "rep": "Navarro, Alondra",
+   "store": "3735 W 26th St",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 4,
+   "tier_multiplier": 1.0,
+   "base_payout": 40.0,
+   "tiered_payout": 0.0,
+   "total_payout": 40.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 40.0
+    }
+   ]
+  },
+  {
+   "rep": "Office, Back",
+   "store": "639 W Lincoln Hwy",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 4,
+   "tier_multiplier": 1.0,
+   "base_payout": 40.0,
+   "tiered_payout": 0.0,
+   "total_payout": 40.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 40.0
+    }
+   ]
+  },
+  {
+   "rep": "Perez, Yesica",
+   "store": "3352 W 26th St",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 4,
+   "tier_multiplier": 1.0,
+   "base_payout": 40.0,
+   "tiered_payout": 0.0,
+   "total_payout": 40.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 4,
+     "qualifying_units": 4,
+     "payout": 40.0
+    }
+   ]
+  },
+  {
+   "rep": "Penumatcha, Venkata",
+   "store": "218-80 Hempstead Avenue",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 3,
+   "tier_multiplier": 1.0,
+   "base_payout": 30.0,
+   "tiered_payout": 0.0,
+   "total_payout": 30.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 3,
+     "qualifying_units": 3,
+     "payout": 30.0
+    }
+   ]
+  },
+  {
+   "rep": "Asghar, Mariem",
+   "store": "3560 Nostrand Avenue",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 2,
+   "tier_multiplier": 1.0,
+   "base_payout": 20.0,
+   "tiered_payout": 0.0,
+   "total_payout": 20.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 20.0
+    }
+   ]
+  },
+  {
+   "rep": "olvera, Emily",
+   "store": "5601 W Belmont Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 2,
+   "tier_multiplier": 1.0,
+   "base_payout": 20.0,
+   "tiered_payout": 0.0,
+   "total_payout": 20.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 2,
+     "qualifying_units": 2,
+     "payout": 20.0
+    }
+   ]
+  },
+  {
+   "rep": "Fozilova, Shakhnozakhon",
+   "store": "902 Avenue U",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 1,
+   "tier_multiplier": 1.0,
+   "base_payout": 10.0,
+   "tiered_payout": 0.0,
+   "total_payout": 10.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 10.0
+    }
+   ]
+  },
+  {
+   "rep": "Romero, Brenda",
+   "store": "3966 W Grand Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 1,
+   "tier_multiplier": 1.0,
+   "base_payout": 10.0,
+   "tiered_payout": 0.0,
+   "total_payout": 10.0,
+   "rules": [
+    {
+     "rule_id": "10501466-96ff-4264-a8cc-e3d41e23e0ca",
+     "label": "Activations",
+     "payout_kind": "flat_per_unit",
+     "tiered": false,
+     "qualifies": true,
+     "matched_lines": 1,
+     "qualifying_units": 1,
+     "payout": 10.0
+    }
+   ]
+  },
+  {
+   "rep": "Fatima, Syeda Zainab",
+   "store": "531 Utica Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 0,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": []
+  },
+  {
+   "rep": "Nooren, Naima",
+   "store": "7812 Bergenline Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 0,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": []
+  },
+  {
+   "rep": "Chauhan, Dixit",
+   "store": "902 Avenue U",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 0,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": []
+  },
+  {
+   "rep": "ramos, Paola",
+   "store": "7812 Bergenline Ave",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 0,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": []
+  },
+  {
+   "rep": "Bhuvan, Alladi,",
+   "store": "902 Avenue U",
+   "market": "",
+   "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 0,
+   "tier_multiplier": 1.0,
+   "base_payout": 0.0,
+   "tiered_payout": 0.0,
+   "total_payout": 0.0,
+   "rules": []
+  }
+ ],
+ "totals": {
+  "payout": 5550.0,
+  "reps": 44,
+  "sale_lines": 9391,
+  "plans": 4
+ },
+ "note": null
+}

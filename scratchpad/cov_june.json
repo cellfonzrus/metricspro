@@ -1,0 +1,1223 @@
+{
+ "period": "June 2026",
+ "carrier_mode": "plan",
+ "ready": true,
+ "note": null,
+ "totals": {
+  "payout": 0.0,
+  "reps": 0,
+  "sale_lines": 1525,
+  "plans": 4
+ },
+ "by_rep": [],
+ "coverage": {
+  "unassigned_reps": [
+   {
+    "rep": "Kellie, Mark",
+    "store": "957 Pennsylvania Avenue",
+    "market": "",
+    "role": null,
+    "lines": 347,
+    "transactions": 163,
+    "ext_price": 11807.26,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Kellie, Mark",
+      "canonical": "mark kellie",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "957 Pennsylvania Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "957",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "957",
+       "address": "957 Pennsylvania Ave",
+       "market": "NY",
+       "via": "store alias '957 Pennsylvania Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "957",
+       "957 pennsylvania ave",
+       "957 pennsylvania avenue"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '957 Pennsylvania Avenue' to 957 (957 Pennsylvania Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "957",
+       "957 pennsylvania ave",
+       "957 pennsylvania avenue"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '957 Pennsylvania Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Islam Khan, Ariful",
+    "store": "218-80 Hempstead Avenue",
+    "market": "",
+    "role": null,
+    "lines": 335,
+    "transactions": 145,
+    "ext_price": 9970.31,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Islam Khan, Ariful",
+      "canonical": "ariful islam khan",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "218-80 Hempstead Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "218-80",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "QV",
+       "address": "21880 Hempstead Ave",
+       "market": "NY",
+       "via": "store alias '218-80 Hempstead Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '218-80 Hempstead Avenue' to QV (21880 Hempstead Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '218-80 Hempstead Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Nooren, Naima",
+    "store": "7812 Bergenline Ave",
+    "market": "",
+    "role": null,
+    "lines": 196,
+    "transactions": 102,
+    "ext_price": 7223.42,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Nooren, Naima",
+      "canonical": "naima nooren",
+      "candidates": [
+       {
+        "employee_id": 214,
+        "name": "Naima",
+        "role": null,
+        "email": "naimanooren@gmail.com",
+        "epay_salesperson": null,
+        "home_store": "7812",
+        "is_active": true,
+        "score": 0.5,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Naima \u2014 50% match.",
+      "remediation": "set Naima's ePay/POS name (epay_salesperson) to exactly 'Nooren, Naima' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "7812 Bergenline Ave",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "7812",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "7812",
+       "address": "7812 Bergenline",
+       "market": "NY",
+       "via": "store alias '7812 Bergenline Ave'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "7812",
+       "7812 bergenline",
+       "7812 bergenline ave"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '7812 Bergenline Ave' to 7812 (7812 Bergenline) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "7812",
+       "7812 bergenline",
+       "7812 bergenline ave"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '7812 Bergenline Ave' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Naima's ePay/POS name (epay_salesperson) to exactly 'Nooren, Naima' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Fatima, Syeda Zainab",
+    "store": "531 Utica Ave",
+    "market": "",
+    "role": null,
+    "lines": 241,
+    "transactions": 87,
+    "ext_price": 6684.5,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Fatima, Syeda Zainab",
+      "canonical": "syeda zainab fatima",
+      "candidates": [
+       {
+        "employee_id": 220,
+        "name": "Zainab",
+        "role": null,
+        "email": "syedazfatima11@gmail.com",
+        "epay_salesperson": null,
+        "home_store": "Utica",
+        "is_active": true,
+        "score": 0.333,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Zainab \u2014 33% match.",
+      "remediation": "set Zainab's ePay/POS name (epay_salesperson) to exactly 'Fatima, Syeda Zainab' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "531 Utica Ave",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "531",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Utica",
+       "address": "531 Utica Ave",
+       "market": "NY",
+       "via": "store alias '531 Utica Ave'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "531 utica ave",
+       "utica"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '531 Utica Ave' to Utica (531 Utica Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "531 utica ave",
+       "utica"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '531 Utica Ave' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Zainab's ePay/POS name (epay_salesperson) to exactly 'Fatima, Syeda Zainab' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Sri ram, Nivas",
+    "store": "531 Utica Ave",
+    "market": "",
+    "role": null,
+    "lines": 163,
+    "transactions": 71,
+    "ext_price": 6155.61,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Sri ram, Nivas",
+      "canonical": "nivas sri ram",
+      "candidates": [
+       {
+        "employee_id": 215,
+        "name": "Nivas",
+        "role": null,
+        "email": "nivasgalahad2025@gmail.com",
+        "epay_salesperson": null,
+        "home_store": "Ave u",
+        "is_active": true,
+        "score": 0.333,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Nivas \u2014 33% match.",
+      "remediation": "set Nivas's ePay/POS name (epay_salesperson) to exactly 'Sri ram, Nivas' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "531 Utica Ave",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "531",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Utica",
+       "address": "531 Utica Ave",
+       "market": "NY",
+       "via": "store alias '531 Utica Ave'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "531 utica ave",
+       "utica"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '531 Utica Ave' to Utica (531 Utica Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "531 utica ave",
+       "utica"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '531 Utica Ave' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Nivas's ePay/POS name (epay_salesperson) to exactly 'Sri ram, Nivas' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Fozilova, Shakhnozakhon",
+    "store": "3560 Nostrand Avenue",
+    "market": "",
+    "role": null,
+    "lines": 62,
+    "transactions": 47,
+    "ext_price": 2925.53,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Fozilova, Shakhnozakhon",
+      "canonical": "shakhnozakhon fozilova",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "3560 Nostrand Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "3560",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Nostrand",
+       "address": "3560 Nostrand Ave",
+       "market": "NY",
+       "via": "store alias '3560 Nostrand Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "3560 nostrand ave",
+       "3560 nostrand avenue",
+       "nostrand"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3560 Nostrand Avenue' to Nostrand (3560 Nostrand Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "3560 nostrand ave",
+       "3560 nostrand avenue",
+       "nostrand"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '3560 Nostrand Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Asghar, Mariem",
+    "store": "3560 Nostrand Avenue",
+    "market": "",
+    "role": null,
+    "lines": 87,
+    "transactions": 36,
+    "ext_price": 2429.94,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Asghar, Mariem",
+      "canonical": "mariem asghar",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "3560 Nostrand Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "3560",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Nostrand",
+       "address": "3560 Nostrand Ave",
+       "market": "NY",
+       "via": "store alias '3560 Nostrand Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "3560 nostrand ave",
+       "3560 nostrand avenue",
+       "nostrand"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3560 Nostrand Avenue' to Nostrand (3560 Nostrand Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "3560 nostrand ave",
+       "3560 nostrand avenue",
+       "nostrand"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '3560 Nostrand Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Bhuvan, Alladi,",
+    "store": "7812 Bergenline Ave",
+    "market": "",
+    "role": null,
+    "lines": 39,
+    "transactions": 5,
+    "ext_price": 1078.96,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Bhuvan, Alladi,",
+      "canonical": "bhuvan, alladi,",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "7812 Bergenline Ave",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "7812",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "7812",
+       "address": "7812 Bergenline",
+       "market": "NY",
+       "via": "store alias '7812 Bergenline Ave'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "7812",
+       "7812 bergenline",
+       "7812 bergenline ave"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '7812 Bergenline Ave' to 7812 (7812 Bergenline) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "7812",
+       "7812 bergenline",
+       "7812 bergenline ave"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '7812 Bergenline Ave' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Haider, Syed",
+    "store": "902 Avenue U",
+    "market": "",
+    "role": null,
+    "lines": 22,
+    "transactions": 14,
+    "ext_price": 722.18,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Haider, Syed",
+      "canonical": "syed haider",
+      "candidates": [
+       {
+        "employee_id": 218,
+        "name": "Syed",
+        "role": null,
+        "email": "atg3515@gmail.com",
+        "epay_salesperson": null,
+        "home_store": "Nostrand",
+        "is_active": true,
+        "score": 0.5,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Syed \u2014 50% match.",
+      "remediation": "set Syed's ePay/POS name (epay_salesperson) to exactly 'Haider, Syed' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [
+      {
+       "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+       "plan_name": "Total Employee Comp NY",
+       "scope_value": "Syed",
+       "score": 0.5,
+       "message": "plan 'Total Employee Comp NY' is assigned to 'Syed', but this seller rings as 'Haider, Syed' \u2014 the engine compares 'syed' to 'syed haider', so it does not attach."
+      }
+     ],
+     "store_bridge": {
+      "raw": "902 Avenue U",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "902",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Ave U",
+       "address": "902 Ave U",
+       "market": "NY",
+       "via": "store alias '902 Avenue U'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "902 ave u",
+       "902 avenue u",
+       "ave u"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '902 Avenue U' to Ave U (902 Ave U) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "902 ave u",
+       "902 avenue u",
+       "ave u"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '902 Avenue U' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Syed's ePay/POS name (epay_salesperson) to exactly 'Haider, Syed' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "ar, Rush",
+    "store": "218-80 Hempstead Avenue",
+    "market": "",
+    "role": null,
+    "lines": 33,
+    "transactions": 10,
+    "ext_price": 555.26,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "ar, Rush",
+      "canonical": "rush ar",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "218-80 Hempstead Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "218-80",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "QV",
+       "address": "21880 Hempstead Ave",
+       "market": "NY",
+       "via": "store alias '218-80 Hempstead Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '218-80 Hempstead Avenue' to QV (21880 Hempstead Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '218-80 Hempstead Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": true,
+      "confidence": "low",
+      "reasons": [
+       "contains a 2-character word ('ar') \u2014 often a truncated POS entry",
+       "and no roster person resembles this name"
+      ]
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   }
+  ],
+  "unassigned_count": 10,
+  "unassigned_ext_price": 49552.97,
+  "excluded_reps": [],
+  "excluded_count": 0,
+  "excluded_ext_price": 0,
+  "excluded_config": {
+   "sellers": [],
+   "ready": true
+  },
+  "orphan_assignments": [
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Syed",
+    "nearest_sellers": [
+     {
+      "rep": "Haider, Syed",
+      "score": 0.5
+     }
+    ],
+    "message": "'Syed' is assigned to plan 'Total Employee Comp NY' but nobody sold under that name this period. Closest seller(s): 'Haider, Syed' (50%) \u2014 the POS spells the name differently, so the plan never attaches."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Alejandro Galarza",
+    "nearest_sellers": [],
+    "message": "'Alejandro Galarza' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Alondra Navarro",
+    "nearest_sellers": [],
+    "message": "'Alondra Navarro' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Angelica Chacon",
+    "nearest_sellers": [],
+    "message": "'Angelica Chacon' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Antonio Chavez",
+    "nearest_sellers": [],
+    "message": "'Antonio Chavez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "84320fea-252f-4a10-95cb-a46390490834",
+    "plan_name": "Total Comp DM",
+    "scope_value": "Brenda Romero",
+    "nearest_sellers": [],
+    "message": "'Brenda Romero' is assigned to plan 'Total Comp DM' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Brendaliz Aviles",
+    "nearest_sellers": [],
+    "message": "'Brendaliz Aviles' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Carolina Espinoza",
+    "nearest_sellers": [],
+    "message": "'Carolina Espinoza' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Christopher Romero",
+    "nearest_sellers": [],
+    "message": "'Christopher Romero' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Daisy Brito",
+    "nearest_sellers": [],
+    "message": "'Daisy Brito' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Diana Antunez",
+    "nearest_sellers": [],
+    "message": "'Diana Antunez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "84320fea-252f-4a10-95cb-a46390490834",
+    "plan_name": "Total Comp DM",
+    "scope_value": "Eduardo Brito",
+    "nearest_sellers": [],
+    "message": "'Eduardo Brito' is assigned to plan 'Total Comp DM' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Emily Olvera",
+    "nearest_sellers": [],
+    "message": "'Emily Olvera' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Espinoza, Nancy",
+    "nearest_sellers": [],
+    "message": "'Espinoza, Nancy' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Genevieve Montijo",
+    "nearest_sellers": [],
+    "message": "'Genevieve Montijo' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Janet Garibay",
+    "nearest_sellers": [],
+    "message": "'Janet Garibay' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Jocelyn Hernandez",
+    "nearest_sellers": [],
+    "message": "'Jocelyn Hernandez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "7b19d5a2-ec85-4d2d-a7b7-582c44d81315",
+    "plan_name": "Total Comp Sales manager",
+    "scope_value": "Jose Utrera",
+    "nearest_sellers": [],
+    "message": "'Jose Utrera' is assigned to plan 'Total Comp Sales manager' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Liset Jacobo",
+    "nearest_sellers": [],
+    "message": "'Liset Jacobo' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Luis Martinez",
+    "nearest_sellers": [],
+    "message": "'Luis Martinez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Maria Gutierrez",
+    "nearest_sellers": [],
+    "message": "'Maria Gutierrez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Marukh",
+    "nearest_sellers": [],
+    "message": "'Marukh' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Mea Collins",
+    "nearest_sellers": [],
+    "message": "'Mea Collins' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Mea Collins",
+    "nearest_sellers": [],
+    "message": "'Mea Collins' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Melennie Perez",
+    "nearest_sellers": [],
+    "message": "'Melennie Perez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Nallely Espinoza",
+    "nearest_sellers": [],
+    "message": "'Nallely Espinoza' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Nancy Espinoza",
+    "nearest_sellers": [],
+    "message": "'Nancy Espinoza' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Natalie Chico",
+    "nearest_sellers": [],
+    "message": "'Natalie Chico' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Natasha Nicole Cabrera",
+    "nearest_sellers": [],
+    "message": "'Natasha Nicole Cabrera' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Nathalie Mendoza",
+    "nearest_sellers": [],
+    "message": "'Nathalie Mendoza' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Nicolas Navarrete",
+    "nearest_sellers": [],
+    "message": "'Nicolas Navarrete' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Nivas",
+    "nearest_sellers": [],
+    "message": "'Nivas' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Ruby Ortiz",
+    "nearest_sellers": [],
+    "message": "'Ruby Ortiz' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Silvia Nava",
+    "nearest_sellers": [],
+    "message": "'Silvia Nava' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Tatiana Vergara",
+    "nearest_sellers": [],
+    "message": "'Tatiana Vergara' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Terry Pitre",
+    "nearest_sellers": [],
+    "message": "'Terry Pitre' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Vanessa Jacobo",
+    "nearest_sellers": [],
+    "message": "'Vanessa Jacobo' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Yasir",
+    "nearest_sellers": [],
+    "message": "'Yasir' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Yesica Perez",
+    "nearest_sellers": [],
+    "message": "'Yesica Perez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Yuvia Esparza",
+    "nearest_sellers": [],
+    "message": "'Yuvia Esparza' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Zuliecka Lopez",
+    "nearest_sellers": [],
+    "message": "'Zuliecka Lopez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "arif",
+    "nearest_sellers": [],
+    "message": "'arif' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   }
+  ],
+  "orphan_count": 42,
+  "stores": {
+   "mode": "exact",
+   "rows": [
+    {
+     "store": "218-80 Hempstead Avenue",
+     "lines": 368,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "QV",
+      "address": "21880 Hempstead Ave",
+      "market": "NY",
+      "via": "store alias '218-80 Hempstead Avenue'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '218-80 Hempstead Avenue' to QV (21880 Hempstead Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "957 Pennsylvania Avenue",
+     "lines": 347,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "957",
+      "address": "957 Pennsylvania Ave",
+      "market": "NY",
+      "via": "store alias '957 Pennsylvania Avenue'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '957 Pennsylvania Avenue' to 957 (957 Pennsylvania Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "7812 Bergenline Ave",
+     "lines": 265,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "7812",
+      "address": "7812 Bergenline",
+      "market": "NY",
+      "via": "store alias '7812 Bergenline Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '7812 Bergenline Ave' to 7812 (7812 Bergenline) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "531 Utica Ave",
+     "lines": 264,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "Utica",
+      "address": "531 Utica Ave",
+      "market": "NY",
+      "via": "store alias '531 Utica Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '531 Utica Ave' to Utica (531 Utica Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "3560 Nostrand Avenue",
+     "lines": 171,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "Nostrand",
+      "address": "3560 Nostrand Ave",
+      "market": "NY",
+      "via": "store alias '3560 Nostrand Avenue'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3560 Nostrand Avenue' to Nostrand (3560 Nostrand Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "902 Avenue U",
+     "lines": 110,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "Ave U",
+      "address": "902 Ave U",
+      "market": "NY",
+      "via": "store alias '902 Avenue U'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '902 Avenue U' to Ave U (902 Ave U) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    }
+   ],
+   "distinct": 6,
+   "unresolved": 6,
+   "would_resolve_with_alias": 6,
+   "bridge_available": true
+  },
+  "unmatched": {
+   "reps": [],
+   "total_lines": 0
+  },
+  "contract_type": {
+   "sale_lines": 1525,
+   "blank": 904,
+   "blank_pct": 59.3,
+   "values": [
+    {
+     "value": "Activation",
+     "lines": 165
+    },
+    {
+     "value": "Port with IDV AAL",
+     "lines": 139
+    },
+    {
+     "value": "Port with IDV",
+     "lines": 106
+    },
+    {
+     "value": "BYOD Activation",
+     "lines": 52
+    },
+    {
+     "value": "Activation With IDV",
+     "lines": 49
+    },
+    {
+     "value": "Upgrade",
+     "lines": 47
+    },
+    {
+     "value": "BYOD Port",
+     "lines": 18
+    },
+    {
+     "value": "Activation AAL",
+     "lines": 17
+    },
+    {
+     "value": "Port",
+     "lines": 12
+    },
+    {
+     "value": "BYOD Internal Port",
+     "lines": 6
+    },
+    {
+     "value": "BYOD Port AAL",
+     "lines": 3
+    },
+    {
+     "value": "Internal Port with IDV",
+     "lines": 3
+    },
+    {
+     "value": "Internal Port with IDV AAL",
+     "lines": 3
+    },
+    {
+     "value": "BYOD Activation AAL",
+     "lines": 1
+    }
+   ],
+   "resolution": "raw",
+   "bucket_resolver_ran": true,
+   "bucket_classified_lines": 621
+  },
+  "plan_warnings": [
+   {
+    "plan": "Total Comp Sales manager",
+    "severity": "high",
+    "code": "plan_without_rules",
+    "message": "'Total Comp Sales manager' has no rules \u2014 every rep it covers pays $0."
+   },
+   {
+    "plan": "Total Employee Comp Chicago",
+    "severity": "high",
+    "code": "ct_rules_vs_blank_ct",
+    "message": "'Total Employee Comp Chicago' has 1 rule(s) keyed on Contract Type, but 904 of 1525 sale lines this period have a BLANK Contract Type \u2014 those lines can never match, so they pay $0. Either key the rules on 'activation_bucket', or set Contract-type resolution to 'mapped' (Commission settings) after configuring the tenant's activation rules."
+   }
+  ],
+  "settings": {
+   "plan_ct_resolution": "raw",
+   "store_resolution": "exact"
+  }
+ },
+ "snapshot": {
+  "stored_rows": 0,
+  "stored_total": 0,
+  "engine_total": 0.0,
+  "stale": false,
+  "note": null
+ }
+}

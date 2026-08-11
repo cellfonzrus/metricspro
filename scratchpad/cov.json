@@ -1,0 +1,3532 @@
+{
+ "period": "July 2026",
+ "carrier_mode": "plan",
+ "ready": true,
+ "note": null,
+ "totals": {
+  "payout": 1551.47,
+  "reps": 27,
+  "sale_lines": 9391,
+  "plans": 4
+ },
+ "by_rep": [
+  {
+   "rep": "Nava, Silvia",
+   "store": "4801 W Armitage Ave",
+   "plan_name": "Total Employee Comp NY",
+   "qualifying_units": 28,
+   "tier_units": 28,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 280.0,
+   "unmatched_lines": 390,
+   "unmatched_ext_price": 10707.1
+  },
+  {
+   "rep": "Antunez, Diana",
+   "store": "4640-A W Diversey Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 64,
+   "tier_units": 45,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 139.0,
+   "unmatched_lines": 413,
+   "unmatched_ext_price": 11541.26
+  },
+  {
+   "rep": "Espinoza, Carolina",
+   "store": "4640-A W Diversey Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 68,
+   "tier_units": 44,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 95.09,
+   "unmatched_lines": 357,
+   "unmatched_ext_price": 9143.21
+  },
+  {
+   "rep": "Ortiz, Ruby",
+   "store": "3966 W Grand Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 67,
+   "tier_units": 24,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 90.0,
+   "unmatched_lines": 272,
+   "unmatched_ext_price": 7389.04
+  },
+  {
+   "rep": "Martinez, Luis",
+   "store": "2317 S Cicero Ave STE A",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 37,
+   "tier_units": 21,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 75.56,
+   "unmatched_lines": 293,
+   "unmatched_ext_price": 8971.87
+  },
+  {
+   "rep": "Vergara, Tatiana",
+   "store": "3966 W Grand Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 54,
+   "tier_units": 26,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 64.0,
+   "unmatched_lines": 463,
+   "unmatched_ext_price": 13952.74
+  },
+  {
+   "rep": "Garibay, Janet",
+   "store": "3352 W 26th St",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 40,
+   "tier_units": 20,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 63.15,
+   "unmatched_lines": 227,
+   "unmatched_ext_price": 7385.08
+  },
+  {
+   "rep": "Pitre, Terry",
+   "store": "2317 S Cicero Ave STE A",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 32,
+   "tier_units": 25,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 62.0,
+   "unmatched_lines": 191,
+   "unmatched_ext_price": 4854.87
+  },
+  {
+   "rep": "Chacon, Angelica",
+   "store": "3248 W Lawrence Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 39,
+   "tier_units": 26,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 62.0,
+   "unmatched_lines": 267,
+   "unmatched_ext_price": 6975.27
+  },
+  {
+   "rep": "Espinoza, Nallely",
+   "store": "2414 W Cermak Rd",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 23,
+   "tier_units": 15,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 57.0,
+   "unmatched_lines": 158,
+   "unmatched_ext_price": 4341.34
+  },
+  {
+   "rep": "Hernandez, Jocelyn",
+   "store": "5601 W Belmont Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 54,
+   "tier_units": 20,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 56.0,
+   "unmatched_lines": 185,
+   "unmatched_ext_price": 4754.79
+  },
+  {
+   "rep": "Espinoza, Nancy",
+   "store": "2414 W Cermak Rd",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 35,
+   "tier_units": 21,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 51.15,
+   "unmatched_lines": 264,
+   "unmatched_ext_price": 8241.71
+  },
+  {
+   "rep": "Chavez, Antonio",
+   "store": "639 W Lincoln Hwy",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 11,
+   "tier_units": 24,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 50.0,
+   "unmatched_lines": 152,
+   "unmatched_ext_price": 2927.83
+  },
+  {
+   "rep": "Jacobo, Vanessa",
+   "store": "4801 W Armitage Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 36,
+   "tier_units": 22,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 47.1,
+   "unmatched_lines": 368,
+   "unmatched_ext_price": 11574.29
+  },
+  {
+   "rep": "Chico, Natalie",
+   "store": "6500 W Irving Park Rd",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 26,
+   "tier_units": 17,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 43.93,
+   "unmatched_lines": 139,
+   "unmatched_ext_price": 3462.68
+  },
+  {
+   "rep": "Esparza, Yuvia",
+   "store": "3966 W Grand Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 40,
+   "tier_units": 16,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 43.84,
+   "unmatched_lines": 240,
+   "unmatched_ext_price": 6907.71
+  },
+  {
+   "rep": "Aviles, Brendaliz",
+   "store": "2640 Narragansett",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 37,
+   "tier_units": 14,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 43.35,
+   "unmatched_lines": 127,
+   "unmatched_ext_price": 4056.72
+  },
+  {
+   "rep": "Collins, Mea",
+   "store": "18226 Kedzie Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 27,
+   "tier_units": 15,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 37.15,
+   "unmatched_lines": 128,
+   "unmatched_ext_price": 3256.21
+  },
+  {
+   "rep": "Navarro, Alondra",
+   "store": "3735 W 26th St",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 16,
+   "tier_units": 11,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 32.0,
+   "unmatched_lines": 210,
+   "unmatched_ext_price": 6991.75
+  },
+  {
+   "rep": "Romero, Christopher",
+   "store": "5601 W Belmont Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 68,
+   "tier_units": 29,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 31.0,
+   "unmatched_lines": 372,
+   "unmatched_ext_price": 9224.12
+  },
+  {
+   "rep": "Navarrete, Nicolas",
+   "store": "3735 W 26th St",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 21,
+   "tier_units": 13,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 30.0,
+   "unmatched_lines": 156,
+   "unmatched_ext_price": 5237.34
+  },
+  {
+   "rep": "Jacobo, Liset",
+   "store": "3735 W 26th St",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 33,
+   "tier_units": 15,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 29.0,
+   "unmatched_lines": 150,
+   "unmatched_ext_price": 5371.29
+  },
+  {
+   "rep": "Galarza, Alejandro",
+   "store": "6500 W Irving Park Rd",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 7,
+   "tier_units": 9,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 26.0,
+   "unmatched_lines": 65,
+   "unmatched_ext_price": 1724.81
+  },
+  {
+   "rep": "Perez, Yesica",
+   "store": "3352 W 26th St",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 10,
+   "tier_units": 4,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 24.0,
+   "unmatched_lines": 46,
+   "unmatched_ext_price": 1281.31
+  },
+  {
+   "rep": "Perez, Melennie",
+   "store": "18226 Kedzie Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 8,
+   "tier_units": 5,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 17.15,
+   "unmatched_lines": 59,
+   "unmatched_ext_price": 1445.85
+  },
+  {
+   "rep": "olvera, Emily",
+   "store": "5601 W Belmont Ave",
+   "plan_name": "Total Employee Comp Chicago",
+   "qualifying_units": 3,
+   "tier_units": 1,
+   "tier_basis": "transactions",
+   "tier_multiplier": 1.0,
+   "total_payout": 2.0,
+   "unmatched_lines": 32,
+   "unmatched_ext_price": 1156.56
+  },
+  {
+   "rep": "Romero, Brenda",
+   "store": "3966 W Grand Ave",
+   "plan_name": "Total Comp DM",
+   "qualifying_units": 0,
+   "tier_units": 0,
+   "tier_basis": "rule_units",
+   "tier_multiplier": 1.0,
+   "total_payout": 0.0,
+   "unmatched_lines": 15,
+   "unmatched_ext_price": 422.72
+  }
+ ],
+ "coverage": {
+  "unassigned_reps": [
+   {
+    "rep": "Islam Khan, Ariful",
+    "store": "218-80 Hempstead Avenue",
+    "market": "",
+    "role": null,
+    "lines": 386,
+    "transactions": 179,
+    "ext_price": 10269.05,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Islam Khan, Ariful",
+      "canonical": "ariful islam khan",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "218-80 Hempstead Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "218-80",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "QV",
+       "address": "21880 Hempstead Ave",
+       "market": "NY",
+       "via": "store alias '218-80 Hempstead Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '218-80 Hempstead Avenue' to QV (21880 Hempstead Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '218-80 Hempstead Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Montijo, Genvieve",
+    "store": "3248 W Lawrence Ave",
+    "market": "",
+    "role": null,
+    "lines": 360,
+    "transactions": 114,
+    "ext_price": 9945.1,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Montijo, Genvieve",
+      "canonical": "genvieve montijo",
+      "candidates": [
+       {
+        "employee_id": 188,
+        "name": "Genevieve Montijo",
+        "role": null,
+        "email": "genvieve.montijo@luxelinkwireless.com",
+        "epay_salesperson": null,
+        "home_store": "3248 Lawrence Chicago",
+        "is_active": true,
+        "score": 0.333,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Genevieve Montijo \u2014 33% match.",
+      "remediation": "set Genevieve Montijo's ePay/POS name (epay_salesperson) to exactly 'Montijo, Genvieve' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "3248 W Lawrence Ave",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "3248",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "lawrence",
+       "address": "3248 Lawrence Chicago",
+       "market": "Chicago",
+       "via": "store alias '3248 W Lawrence Ave'",
+       "source": "storeops"
+      },
+      "alias_market": "Chicago",
+      "alias_keys": [
+       "3248 lawrence chicago",
+       "3248 w lawrence ave",
+       "lawrence"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3248 W Lawrence Ave' to lawrence (3248 Lawrence Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": true,
+      "market": "Chicago",
+      "store_keys": [
+       "3248 lawrence chicago",
+       "3248 w lawrence ave",
+       "lawrence"
+      ],
+      "plan_name": "Total Employee Comp Chicago",
+      "scope": "market",
+      "scope_value": "Chicago",
+      "message": "with Store resolution set to 'alias', store alias '3248 W Lawrence Ave' would give this rep market 'Chicago' and plan 'Total Employee Comp Chicago' would attach by market scope."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Genevieve Montijo's ePay/POS name (epay_salesperson) to exactly 'Montijo, Genvieve' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Kellie, Mark",
+    "store": "957 Pennsylvania Avenue",
+    "market": "",
+    "role": null,
+    "lines": 421,
+    "transactions": 156,
+    "ext_price": 9480.53,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Kellie, Mark",
+      "canonical": "mark kellie",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "957 Pennsylvania Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "957",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "957",
+       "address": "957 Pennsylvania Ave",
+       "market": "NY",
+       "via": "store alias '957 Pennsylvania Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "957",
+       "957 pennsylvania ave",
+       "957 pennsylvania avenue"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '957 Pennsylvania Avenue' to 957 (957 Pennsylvania Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "957",
+       "957 pennsylvania ave",
+       "957 pennsylvania avenue"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '957 Pennsylvania Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Nooren, Naima",
+    "store": "7812 Bergenline Ave",
+    "market": "",
+    "role": null,
+    "lines": 138,
+    "transactions": 91,
+    "ext_price": 7060.66,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Nooren, Naima",
+      "canonical": "naima nooren",
+      "candidates": [
+       {
+        "employee_id": 214,
+        "name": "Naima",
+        "role": null,
+        "email": "naimanooren@gmail.com",
+        "epay_salesperson": null,
+        "home_store": "7812",
+        "is_active": true,
+        "score": 0.5,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Naima \u2014 50% match.",
+      "remediation": "set Naima's ePay/POS name (epay_salesperson) to exactly 'Nooren, Naima' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "7812 Bergenline Ave",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "7812",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "7812",
+       "address": "7812 Bergenline",
+       "market": "NY",
+       "via": "store alias '7812 Bergenline Ave'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "7812",
+       "7812 bergenline",
+       "7812 bergenline ave"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '7812 Bergenline Ave' to 7812 (7812 Bergenline) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "7812",
+       "7812 bergenline",
+       "7812 bergenline ave"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '7812 Bergenline Ave' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Naima's ePay/POS name (epay_salesperson) to exactly 'Nooren, Naima' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Sri ram, Nivas",
+    "store": "3560 Nostrand Avenue",
+    "market": "",
+    "role": null,
+    "lines": 212,
+    "transactions": 114,
+    "ext_price": 6939.52,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Sri ram, Nivas",
+      "canonical": "nivas sri ram",
+      "candidates": [
+       {
+        "employee_id": 215,
+        "name": "Nivas",
+        "role": null,
+        "email": "nivasgalahad2025@gmail.com",
+        "epay_salesperson": null,
+        "home_store": "Ave u",
+        "is_active": true,
+        "score": 0.333,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Nivas \u2014 33% match.",
+      "remediation": "set Nivas's ePay/POS name (epay_salesperson) to exactly 'Sri ram, Nivas' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "3560 Nostrand Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "3560",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Nostrand",
+       "address": "3560 Nostrand Ave",
+       "market": "NY",
+       "via": "store alias '3560 Nostrand Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "3560 nostrand ave",
+       "3560 nostrand avenue",
+       "nostrand"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3560 Nostrand Avenue' to Nostrand (3560 Nostrand Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "3560 nostrand ave",
+       "3560 nostrand avenue",
+       "nostrand"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '3560 Nostrand Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Nivas's ePay/POS name (epay_salesperson) to exactly 'Sri ram, Nivas' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Fatima, Syeda Zainab",
+    "store": "531 Utica Ave",
+    "market": "",
+    "role": null,
+    "lines": 180,
+    "transactions": 94,
+    "ext_price": 6064.44,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Fatima, Syeda Zainab",
+      "canonical": "syeda zainab fatima",
+      "candidates": [
+       {
+        "employee_id": 220,
+        "name": "Zainab",
+        "role": null,
+        "email": "syedazfatima11@gmail.com",
+        "epay_salesperson": null,
+        "home_store": "Utica",
+        "is_active": true,
+        "score": 0.333,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Zainab \u2014 33% match.",
+      "remediation": "set Zainab's ePay/POS name (epay_salesperson) to exactly 'Fatima, Syeda Zainab' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "531 Utica Ave",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "531",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Utica",
+       "address": "531 Utica Ave",
+       "market": "NY",
+       "via": "store alias '531 Utica Ave'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "531 utica ave",
+       "utica"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '531 Utica Ave' to Utica (531 Utica Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "531 utica ave",
+       "utica"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '531 Utica Ave' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Zainab's ePay/POS name (epay_salesperson) to exactly 'Fatima, Syeda Zainab' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Lopez, Zuleicka",
+    "store": "3352 W 26th St",
+    "market": "",
+    "role": null,
+    "lines": 186,
+    "transactions": 76,
+    "ext_price": 5497.07,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Lopez, Zuleicka",
+      "canonical": "zuleicka lopez",
+      "candidates": [
+       {
+        "employee_id": 203,
+        "name": "Zuliecka Lopez",
+        "role": null,
+        "email": "zuleicka.lopez@luxelinkwireless.com",
+        "epay_salesperson": null,
+        "home_store": "3352 26th Chicago",
+        "is_active": true,
+        "score": 0.333,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Zuliecka Lopez \u2014 33% match.",
+      "remediation": "set Zuliecka Lopez's ePay/POS name (epay_salesperson) to exactly 'Lopez, Zuleicka' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "3352 W 26th St",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "3352",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "3352 26th",
+       "address": "3352 26th Chicago",
+       "market": "Chicago",
+       "via": "store alias '3352 W 26th St'",
+       "source": "storeops"
+      },
+      "alias_market": "Chicago",
+      "alias_keys": [
+       "3352 26th",
+       "3352 26th chicago",
+       "3352 w 26th st"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3352 W 26th St' to 3352 26th (3352 26th Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": true,
+      "market": "Chicago",
+      "store_keys": [
+       "3352 26th",
+       "3352 26th chicago",
+       "3352 w 26th st"
+      ],
+      "plan_name": "Total Employee Comp Chicago",
+      "scope": "market",
+      "scope_value": "Chicago",
+      "message": "with Store resolution set to 'alias', store alias '3352 W 26th St' would give this rep market 'Chicago' and plan 'Total Employee Comp Chicago' would attach by market scope."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Zuliecka Lopez's ePay/POS name (epay_salesperson) to exactly 'Lopez, Zuleicka' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Fozilova, Shakhnozakhon",
+    "store": "902 Avenue U",
+    "market": "",
+    "role": null,
+    "lines": 105,
+    "transactions": 72,
+    "ext_price": 4620.57,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Fozilova, Shakhnozakhon",
+      "canonical": "shakhnozakhon fozilova",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "902 Avenue U",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "902",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Ave U",
+       "address": "902 Ave U",
+       "market": "NY",
+       "via": "store alias '902 Avenue U'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "902 ave u",
+       "902 avenue u",
+       "ave u"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '902 Avenue U' to Ave U (902 Ave U) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "902 ave u",
+       "902 avenue u",
+       "ave u"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '902 Avenue U' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Asghar, Mariem",
+    "store": "3560 Nostrand Avenue",
+    "market": "",
+    "role": null,
+    "lines": 160,
+    "transactions": 66,
+    "ext_price": 4310.87,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Asghar, Mariem",
+      "canonical": "mariem asghar",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "3560 Nostrand Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "3560",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Nostrand",
+       "address": "3560 Nostrand Ave",
+       "market": "NY",
+       "via": "store alias '3560 Nostrand Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "3560 nostrand ave",
+       "3560 nostrand avenue",
+       "nostrand"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3560 Nostrand Avenue' to Nostrand (3560 Nostrand Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "3560 nostrand ave",
+       "3560 nostrand avenue",
+       "nostrand"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '3560 Nostrand Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Cabrera, Natasha",
+    "store": "2640 Narragansett",
+    "market": "",
+    "role": null,
+    "lines": 139,
+    "transactions": 55,
+    "ext_price": 3522.21,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Cabrera, Natasha",
+      "canonical": "natasha cabrera",
+      "candidates": [
+       {
+        "employee_id": 206,
+        "name": "Natasha Nicole Cabrera",
+        "role": null,
+        "email": "natasha.cabrera@luxelinkwireless.com",
+        "epay_salesperson": null,
+        "home_store": "2640 Narragansett",
+        "is_active": true,
+        "score": 0.667,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Natasha Nicole Cabrera \u2014 67% match.",
+      "remediation": "set Natasha Nicole Cabrera's ePay/POS name (epay_salesperson) to exactly 'Cabrera, Natasha' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [
+      {
+       "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+       "plan_name": "Total Employee Comp Chicago",
+       "scope_value": "Natasha Nicole Cabrera",
+       "score": 0.667,
+       "message": "plan 'Total Employee Comp Chicago' is assigned to 'Natasha Nicole Cabrera', but this seller rings as 'Cabrera, Natasha' \u2014 the engine compares 'natasha nicole cabrera' to 'natasha cabrera', so it does not attach."
+      }
+     ],
+     "store_bridge": {
+      "raw": "2640 Narragansett",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "2640",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Narragansett",
+       "address": "2640 Narragansett Chicago",
+       "market": "Chicago",
+       "via": "store alias '2640 Narragansett'",
+       "source": "storeops"
+      },
+      "alias_market": "Chicago",
+      "alias_keys": [
+       "2640 narragansett",
+       "2640 narragansett chicago",
+       "narragansett"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '2640 Narragansett' to Narragansett (2640 Narragansett Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": true,
+      "market": "Chicago",
+      "store_keys": [
+       "2640 narragansett",
+       "2640 narragansett chicago",
+       "narragansett"
+      ],
+      "plan_name": "Total Employee Comp Chicago",
+      "scope": "market",
+      "scope_value": "Chicago",
+      "message": "with Store resolution set to 'alias', store alias '2640 Narragansett' would give this rep market 'Chicago' and plan 'Total Employee Comp Chicago' would attach by market scope."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Natasha Nicole Cabrera's ePay/POS name (epay_salesperson) to exactly 'Cabrera, Natasha' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Mendoza, Natalie",
+    "store": "639 W Lincoln Hwy",
+    "market": "",
+    "role": null,
+    "lines": 88,
+    "transactions": 35,
+    "ext_price": 1815.4,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Mendoza, Natalie",
+      "canonical": "natalie mendoza",
+      "candidates": [
+       {
+        "employee_id": 196,
+        "name": "Natalie Chico",
+        "role": null,
+        "email": "natalie.chico@luxelinkwireless.com",
+        "epay_salesperson": null,
+        "home_store": "6500 Irving Park Chicago",
+        "is_active": true,
+        "score": 0.333,
+        "matched_on": "name"
+       },
+       {
+        "employee_id": 197,
+        "name": "Nathalie Mendoza",
+        "role": null,
+        "email": "natalie.mendoza@luxelinkwireless.com",
+        "epay_salesperson": null,
+        "home_store": "639 Lincoln Chicago Heights",
+        "is_active": true,
+        "score": 0.333,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "NO roster person's name matches this POS seller. Closest: Natalie Chico \u2014 33% match; Nathalie Mendoza \u2014 33% match.",
+      "remediation": "set Natalie Chico's ePay/POS name (epay_salesperson) to exactly 'Mendoza, Natalie' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "639 W Lincoln Hwy",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "639",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Chicago heights",
+       "address": "639 Lincoln Chicago Heights",
+       "market": "Chicago",
+       "via": "store alias '639 W Lincoln Hwy'",
+       "source": "storeops"
+      },
+      "alias_market": "Chicago",
+      "alias_keys": [
+       "639 lincoln chicago heights",
+       "639 w lincoln hwy",
+       "chicago heights"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '639 W Lincoln Hwy' to Chicago heights (639 Lincoln Chicago Heights) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": true,
+      "market": "Chicago",
+      "store_keys": [
+       "639 lincoln chicago heights",
+       "639 w lincoln hwy",
+       "chicago heights"
+      ],
+      "plan_name": "Total Employee Comp Chicago",
+      "scope": "market",
+      "scope_value": "Chicago",
+      "message": "with Store resolution set to 'alias', store alias '639 W Lincoln Hwy' would give this rep market 'Chicago' and plan 'Total Employee Comp Chicago' would attach by market scope."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "set Natalie Chico's ePay/POS name (epay_salesperson) to exactly 'Mendoza, Natalie' on the roster so employee-scope assignments attach \u2014 then RE-APPLY the plan, because an assignment written before the change still stores the old spelling."
+    }
+   },
+   {
+    "rep": "Penumatcha, Venkata",
+    "store": "218-80 Hempstead Avenue",
+    "market": "",
+    "role": null,
+    "lines": 49,
+    "transactions": 19,
+    "ext_price": 1568.23,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Penumatcha, Venkata",
+      "canonical": "venkata penumatcha",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "218-80 Hempstead Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "218-80",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "QV",
+       "address": "21880 Hempstead Ave",
+       "market": "NY",
+       "via": "store alias '218-80 Hempstead Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '218-80 Hempstead Avenue' to QV (21880 Hempstead Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '218-80 Hempstead Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Chauhan, Dixit",
+    "store": "902 Avenue U",
+    "market": "",
+    "role": null,
+    "lines": 25,
+    "transactions": 10,
+    "ext_price": 994.3,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Chauhan, Dixit",
+      "canonical": "dixit chauhan",
+      "candidates": [
+       {
+        "employee_id": 173,
+        "name": "Dixit Chauhan",
+        "role": null,
+        "email": "dc@luxelinkwireless.com",
+        "epay_salesperson": null,
+        "home_store": null,
+        "is_active": true,
+        "score": 1.0,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "name_match",
+      "matched": {
+       "employee_id": 173,
+       "name": "Dixit Chauhan",
+       "role": null,
+       "email": "dc@luxelinkwireless.com",
+       "epay_salesperson": null,
+       "is_active": true
+      },
+      "message": "the roster DOES have 'Dixit Chauhan' under this exact name, but that row has NO job role \u2014 so a role-scope assignment can never attach to them.",
+      "remediation": "set a job role on 'Dixit Chauhan' in the employee roster, or attach the plan to them by EMPLOYEE scope."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "902 Avenue U",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "902",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Ave U",
+       "address": "902 Ave U",
+       "market": "NY",
+       "via": "store alias '902 Avenue U'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "902 ave u",
+       "902 avenue u",
+       "ave u"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '902 Avenue U' to Ave U (902 Ave U) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "902 ave u",
+       "902 avenue u",
+       "ave u"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '902 Avenue U' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '902 Avenue U' to Ave U (902 Ave U) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    }
+   },
+   {
+    "rep": "ramos, Paola",
+    "store": "7812 Bergenline Ave",
+    "market": "",
+    "role": null,
+    "lines": 19,
+    "transactions": 3,
+    "ext_price": 486.32,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "ramos, Paola",
+      "canonical": "paola ramos",
+      "candidates": [
+       {
+        "employee_id": 228,
+        "name": "PAOLA RAMOS",
+        "role": null,
+        "email": "ramosbonilla19@gmail.com",
+        "epay_salesperson": null,
+        "home_store": "7812 bergenline ave",
+        "is_active": true,
+        "score": 1.0,
+        "matched_on": "name"
+       }
+      ],
+      "roster_rows": 54,
+      "status": "name_match",
+      "matched": {
+       "employee_id": 228,
+       "name": "PAOLA RAMOS",
+       "role": null,
+       "email": "ramosbonilla19@gmail.com",
+       "epay_salesperson": null,
+       "is_active": true
+      },
+      "message": "the roster DOES have 'PAOLA RAMOS' under this exact name, but that row has NO job role \u2014 so a role-scope assignment can never attach to them.",
+      "remediation": "set a job role on 'PAOLA RAMOS' in the employee roster, or attach the plan to them by EMPLOYEE scope."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "7812 Bergenline Ave",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "7812",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "7812",
+       "address": "7812 Bergenline",
+       "market": "NY",
+       "via": "store alias '7812 Bergenline Ave'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "7812",
+       "7812 bergenline",
+       "7812 bergenline ave"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '7812 Bergenline Ave' to 7812 (7812 Bergenline) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "7812",
+       "7812 bergenline",
+       "7812 bergenline ave"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '7812 Bergenline Ave' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '7812 Bergenline Ave' to 7812 (7812 Bergenline) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    }
+   },
+   {
+    "rep": "Bhuvan, Alladi,",
+    "store": "902 Avenue U",
+    "market": "",
+    "role": null,
+    "lines": 1,
+    "transactions": 1,
+    "ext_price": 20.0,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Bhuvan, Alladi,",
+      "canonical": "bhuvan, alladi,",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "902 Avenue U",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "902",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Ave U",
+       "address": "902 Ave U",
+       "market": "NY",
+       "via": "store alias '902 Avenue U'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "902 ave u",
+       "902 avenue u",
+       "ave u"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '902 Avenue U' to Ave U (902 Ave U) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "902 ave u",
+       "902 avenue u",
+       "ave u"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '902 Avenue U' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": false,
+      "confidence": null,
+      "reasons": []
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   },
+   {
+    "rep": "Office, Back",
+    "store": "639 W Lincoln Hwy",
+    "market": "",
+    "role": null,
+    "lines": 81,
+    "transactions": 37,
+    "ext_price": 2453.18,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "Office, Back",
+      "canonical": "back office",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "639 W Lincoln Hwy",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "639",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "Chicago heights",
+       "address": "639 Lincoln Chicago Heights",
+       "market": "Chicago",
+       "via": "store alias '639 W Lincoln Hwy'",
+       "source": "storeops"
+      },
+      "alias_market": "Chicago",
+      "alias_keys": [
+       "639 lincoln chicago heights",
+       "639 w lincoln hwy",
+       "chicago heights"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '639 W Lincoln Hwy' to Chicago heights (639 Lincoln Chicago Heights) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": true,
+      "market": "Chicago",
+      "store_keys": [
+       "639 lincoln chicago heights",
+       "639 w lincoln hwy",
+       "chicago heights"
+      ],
+      "plan_name": "Total Employee Comp Chicago",
+      "scope": "market",
+      "scope_value": "Chicago",
+      "message": "with Store resolution set to 'alias', store alias '639 W Lincoln Hwy' would give this rep market 'Chicago' and plan 'Total Employee Comp Chicago' would attach by market scope."
+     },
+     "artifact": {
+      "suspect": true,
+      "confidence": "high",
+      "reasons": [
+       "'back office' is a POS placeholder name, not a person"
+      ]
+     },
+     "conclusion": "this looks like a POS terminal / back-office login, not a person \u2014 mark it 'not a commissionable seller' in Plan-coverage settings to take it off this list."
+    }
+   },
+   {
+    "rep": "ar, Rush",
+    "store": "218-80 Hempstead Avenue",
+    "market": "",
+    "role": null,
+    "lines": 31,
+    "transactions": 6,
+    "ext_price": 490.96,
+    "reason": "no commission-plan assignment matched this rep (employee > role > store > market > default all missed)",
+    "diagnosis": {
+     "name_bridge": {
+      "sales_name": "ar, Rush",
+      "canonical": "rush ar",
+      "candidates": [],
+      "roster_rows": 54,
+      "status": "no_match",
+      "message": "no roster person resembles this POS seller at all \u2014 they are either missing from the employee roster, or this is not a person.",
+      "remediation": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+     },
+     "assignment_near_miss": [],
+     "store_bridge": {
+      "raw": "218-80 Hempstead Avenue",
+      "address_hit": false,
+      "code_hit": false,
+      "first_token": "218-80",
+      "first_token_hit": false,
+      "exact_market": "",
+      "alias": {
+       "store_code": "QV",
+       "address": "21880 Hempstead Ave",
+       "market": "NY",
+       "via": "store alias '218-80 Hempstead Avenue'",
+       "source": "storeops"
+      },
+      "alias_market": "NY",
+      "alias_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "status": "unmapped",
+      "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '218-80 Hempstead Avenue' to QV (21880 Hempstead Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+     },
+     "alias_preview": {
+      "would_attach": false,
+      "market": "NY",
+      "store_keys": [
+       "218-80 hempstead avenue",
+       "21880 hempstead ave",
+       "qv"
+      ],
+      "plan_name": null,
+      "scope": null,
+      "scope_value": null,
+      "message": "even with Store resolution set to 'alias' (store alias '218-80 Hempstead Avenue' \u2192 market 'NY') no assignment would attach \u2014 the gap is not the store."
+     },
+     "artifact": {
+      "suspect": true,
+      "confidence": "low",
+      "reasons": [
+       "contains a 2-character word ('ar') \u2014 often a truncated POS entry",
+       "and no roster person resembles this name"
+      ]
+     },
+     "conclusion": "add them to the employee roster with this exact ePay/POS name, or mark the seller as not commissionable in Plan-coverage settings."
+    }
+   }
+  ],
+  "unassigned_count": 17,
+  "unassigned_ext_price": 75538.41,
+  "excluded_reps": [],
+  "excluded_count": 0,
+  "excluded_ext_price": 0,
+  "excluded_config": {
+   "sellers": [],
+   "ready": true
+  },
+  "orphan_assignments": [
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Natasha Nicole Cabrera",
+    "nearest_sellers": [
+     {
+      "rep": "Cabrera, Natasha",
+      "score": 0.667
+     }
+    ],
+    "message": "'Natasha Nicole Cabrera' is assigned to plan 'Total Employee Comp Chicago' but nobody sold under that name this period. Closest seller(s): 'Cabrera, Natasha' (67%) \u2014 the POS spells the name differently, so the plan never attaches."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Daisy Brito",
+    "nearest_sellers": [],
+    "message": "'Daisy Brito' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "84320fea-252f-4a10-95cb-a46390490834",
+    "plan_name": "Total Comp DM",
+    "scope_value": "Eduardo Brito",
+    "nearest_sellers": [],
+    "message": "'Eduardo Brito' is assigned to plan 'Total Comp DM' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Genevieve Montijo",
+    "nearest_sellers": [],
+    "message": "'Genevieve Montijo' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "7b19d5a2-ec85-4d2d-a7b7-582c44d81315",
+    "plan_name": "Total Comp Sales manager",
+    "scope_value": "Jose Utrera",
+    "nearest_sellers": [],
+    "message": "'Jose Utrera' is assigned to plan 'Total Comp Sales manager' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Maria Gutierrez",
+    "nearest_sellers": [],
+    "message": "'Maria Gutierrez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Marukh",
+    "nearest_sellers": [],
+    "message": "'Marukh' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Nathalie Mendoza",
+    "nearest_sellers": [],
+    "message": "'Nathalie Mendoza' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Nivas",
+    "nearest_sellers": [],
+    "message": "'Nivas' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Syed",
+    "nearest_sellers": [],
+    "message": "'Syed' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "Yasir",
+    "nearest_sellers": [],
+    "message": "'Yasir' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "1e53d090-5810-406c-b958-dd02fe80620a",
+    "plan_name": "Total Employee Comp Chicago",
+    "scope_value": "Zuliecka Lopez",
+    "nearest_sellers": [],
+    "message": "'Zuliecka Lopez' is assigned to plan 'Total Employee Comp Chicago' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   },
+   {
+    "plan_id": "71b0524c-dce2-43fd-bf01-a3cc61a6207b",
+    "plan_name": "Total Employee Comp NY",
+    "scope_value": "arif",
+    "nearest_sellers": [],
+    "message": "'arif' is assigned to plan 'Total Employee Comp NY' but has no sales this period under that name (nothing to pay, or a different POS spelling)."
+   }
+  ],
+  "orphan_count": 13,
+  "stores": {
+   "mode": "exact",
+   "rows": [
+    {
+     "store": "3966 W Grand Ave",
+     "lines": 1160,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Grand",
+      "address": "3966 Grand Chicago",
+      "market": "Chicago",
+      "via": "store alias '3966 W Grand Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3966 W Grand Ave' to Grand (3966 Grand Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "4640-A W Diversey Ave",
+     "lines": 1014,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Diversey",
+      "address": "4640 Diversey Chicago",
+      "market": "Chicago",
+      "via": "store alias '4640-A W Diversey Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '4640-A W Diversey Ave' to Diversey (4640 Diversey Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "4801 W Armitage Ave",
+     "lines": 767,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Armitage",
+      "address": "4801 Armitage Chicago",
+      "market": "Chicago",
+      "via": "store alias '4801 W Armitage Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '4801 W Armitage Ave' to Armitage (4801 Armitage Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "5601 W Belmont Ave",
+     "lines": 732,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Belmont",
+      "address": "5601 Belmont Chicago",
+      "market": "Chicago",
+      "via": "store alias '5601 W Belmont Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '5601 W Belmont Ave' to Belmont (5601 Belmont Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "3248 W Lawrence Ave",
+     "lines": 682,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "lawrence",
+      "address": "3248 Lawrence Chicago",
+      "market": "Chicago",
+      "via": "store alias '3248 W Lawrence Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3248 W Lawrence Ave' to lawrence (3248 Lawrence Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "2317 S Cicero Ave STE A",
+     "lines": 569,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Cicero",
+      "address": "2317 Cicero Cicero",
+      "market": "Chicago",
+      "via": "store alias '2317 S Cicero Ave STE A'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '2317 S Cicero Ave STE A' to Cicero (2317 Cicero Cicero) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "3352 W 26th St",
+     "lines": 563,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "3352 26th",
+      "address": "3352 26th Chicago",
+      "market": "Chicago",
+      "via": "store alias '3352 W 26th St'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3352 W 26th St' to 3352 26th (3352 26th Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "3735 W 26th St",
+     "lines": 553,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "3735 26th",
+      "address": "3735 26th Chicago",
+      "market": "Chicago",
+      "via": "store alias '3735 W 26th St'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3735 W 26th St' to 3735 26th (3735 26th Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "2414 W Cermak Rd",
+     "lines": 513,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Cermark",
+      "address": "2414 Cermak Chicago",
+      "market": "Chicago",
+      "via": "store alias '2414 W Cermak Rd'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '2414 W Cermak Rd' to Cermark (2414 Cermak Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "218-80 Hempstead Avenue",
+     "lines": 444,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "QV",
+      "address": "21880 Hempstead Ave",
+      "market": "NY",
+      "via": "store alias '218-80 Hempstead Avenue'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '218-80 Hempstead Avenue' to QV (21880 Hempstead Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "957 Pennsylvania Avenue",
+     "lines": 429,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "957",
+      "address": "957 Pennsylvania Ave",
+      "market": "NY",
+      "via": "store alias '957 Pennsylvania Avenue'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '957 Pennsylvania Avenue' to 957 (957 Pennsylvania Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "639 W Lincoln Hwy",
+     "lines": 332,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Chicago heights",
+      "address": "639 Lincoln Chicago Heights",
+      "market": "Chicago",
+      "via": "store alias '639 W Lincoln Hwy'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '639 W Lincoln Hwy' to Chicago heights (639 Lincoln Chicago Heights) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "2640 Narragansett",
+     "lines": 316,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Narragansett",
+      "address": "2640 Narragansett Chicago",
+      "market": "Chicago",
+      "via": "store alias '2640 Narragansett'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '2640 Narragansett' to Narragansett (2640 Narragansett Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "3560 Nostrand Avenue",
+     "lines": 297,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "Nostrand",
+      "address": "3560 Nostrand Ave",
+      "market": "NY",
+      "via": "store alias '3560 Nostrand Avenue'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '3560 Nostrand Avenue' to Nostrand (3560 Nostrand Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "6500 W Irving Park Rd",
+     "lines": 232,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "Irving Park",
+      "address": "6500 Irving Park Chicago",
+      "market": "Chicago",
+      "via": "store alias '6500 W Irving Park Rd'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '6500 W Irving Park Rd' to Irving Park (6500 Irving Park Chicago) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "18226 Kedzie Ave",
+     "lines": 230,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "Chicago",
+     "alias": {
+      "store_code": "kedzie",
+      "address": "18226 Kedzie Hazel Crest",
+      "market": "Chicago",
+      "via": "store alias '18226 Kedzie Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '18226 Kedzie Ave' to kedzie (18226 Kedzie Hazel Crest) in market 'Chicago' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "531 Utica Ave",
+     "lines": 205,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "Utica",
+      "address": "531 Utica Ave",
+      "market": "NY",
+      "via": "store alias '531 Utica Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '531 Utica Ave' to Utica (531 Utica Ave) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "7812 Bergenline Ave",
+     "lines": 203,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "7812",
+      "address": "7812 Bergenline",
+      "market": "NY",
+      "via": "store alias '7812 Bergenline Ave'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '7812 Bergenline Ave' to 7812 (7812 Bergenline) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    },
+    {
+     "store": "902 Avenue U",
+     "lines": 150,
+     "status": "unmapped",
+     "market": "",
+     "alias_market": "NY",
+     "alias": {
+      "store_code": "Ave U",
+      "address": "902 Ave U",
+      "market": "NY",
+      "via": "store alias '902 Avenue U'",
+      "source": "storeops"
+     },
+     "would_resolve_with_alias": true,
+     "message": "store_mapping has no row for this POS string, but the store-match table resolves it via store alias '902 Avenue U' to Ave U (902 Ave U) in market 'NY' \u2014 this only counts once Store resolution is set to 'alias' (Commission settings)."
+    }
+   ],
+   "distinct": 19,
+   "unresolved": 19,
+   "would_resolve_with_alias": 19,
+   "bridge_available": true
+  },
+  "unmatched": {
+   "reps": [
+    {
+     "rep": "Nava, Silvia",
+     "plan_name": "Total Employee Comp NY",
+     "unmatched_lines": 390,
+     "unmatched_ext_price": 10707.1,
+     "sample": [
+      {
+       "trans_id": "4051",
+       "date": "2026-07-18",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 63.0
+      },
+      {
+       "trans_id": "1902",
+       "date": "2026-07-02",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "",
+       "product": "Apple iPhone 13 128GB Midnight TO - Promo $529, Total Wireless Multi-Line Promotion - 5G+ Plan + Port + Veriff",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "1902",
+       "date": "2026-07-02",
+       "department": "",
+       "category": "",
+       "contract_type": "",
+       "product": "Total Wireless Base Unlimited Tablet 3-Month Plan $30",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2240",
+       "date": "2026-07-05",
+       "department": "BrandedHandset",
+       "category": "HandsetBranded",
+       "contract_type": "",
+       "product": "Screen Protectors BYOD",
+       "ext_price": 24.99
+      },
+      {
+       "trans_id": "1893",
+       "date": "2026-07-02",
+       "department": "",
+       "category": "",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Antunez, Diana",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 413,
+     "unmatched_ext_price": 11541.26,
+     "sample": [
+      {
+       "trans_id": "3035",
+       "date": "2026-07-11",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (312) 722-1262.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "4325",
+       "date": "2026-07-21",
+       "department": "",
+       "category": "",
+       "contract_type": "Port with IDV AAL",
+       "product": "Total MAX 5G Plan $55",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "5081",
+       "date": "2026-07-27",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "3487",
+       "date": "2026-07-14",
+       "department": "System",
+       "category": "Bill Payments",
+       "contract_type": "Activation",
+       "product": "Activation Fee",
+       "ext_price": 24.99
+      },
+      {
+       "trans_id": "3519",
+       "date": "2026-07-15",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 3.0
+      }
+     ]
+    },
+    {
+     "rep": "Espinoza, Carolina",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 357,
+     "unmatched_ext_price": 9143.21,
+     "sample": [
+      {
+       "trans_id": "4111",
+       "date": "2026-07-19",
+       "department": "",
+       "category": "",
+       "contract_type": "Port with IDV",
+       "product": "Total MAX 5G Plan $55",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2041",
+       "date": "2026-07-03",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 38.0
+      },
+      {
+       "trans_id": "2012",
+       "date": "2026-07-03",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G Unlimited RTR $55. Phone#: (312) 217-5392.",
+       "ext_price": 10.0
+      },
+      {
+       "trans_id": "3956",
+       "date": "2026-07-18",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "Port with IDV",
+       "product": "Apple iPhone 16e 128GB Black TO - Promo $575, Total Wireless Discount Promotion - Veriff + Port",
+       "ext_price": 24.99
+      },
+      {
+       "trans_id": "3318",
+       "date": "2026-07-13",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (312) 882-5316.",
+       "ext_price": 50.0
+      }
+     ]
+    },
+    {
+     "rep": "Ortiz, Ruby",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 272,
+     "unmatched_ext_price": 7389.04,
+     "sample": [
+      {
+       "trans_id": "5223",
+       "date": "2026-07-29",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4905",
+       "date": "2026-07-26",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet. Phone#: (773) 882-5837.",
+       "ext_price": 30.0
+      },
+      {
+       "trans_id": "3989",
+       "date": "2026-07-18",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total MAX 5G BYO Plan $30 RTR. Phone#: (304) 952-2851.",
+       "ext_price": 30.0
+      },
+      {
+       "trans_id": "3590",
+       "date": "2026-07-15",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total MAX 5G Plan $55 RTR. Phone#: (708) 334-7657.",
+       "ext_price": 55.0
+      },
+      {
+       "trans_id": "4217",
+       "date": "2026-07-20",
+       "department": "",
+       "category": "",
+       "contract_type": "Activation",
+       "product": "Total Wireless Base Unlimited Tablet 6-Month Plan $60",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Martinez, Luis",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 293,
+     "unmatched_ext_price": 8971.87,
+     "sample": [
+      {
+       "trans_id": "1681",
+       "date": "2026-07-01",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet RTR. Phone#: (708) 219-0378.",
+       "ext_price": 35.0
+      },
+      {
+       "trans_id": "3704",
+       "date": "2026-07-16",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet RTR. Phone#: (312) 339-9542.",
+       "ext_price": 60.0
+      },
+      {
+       "trans_id": "2160",
+       "date": "2026-07-04",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total STARTER Plan $40 RTR. Phone#: (872) 329-2303.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "4565",
+       "date": "2026-07-23",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 30.0
+      },
+      {
+       "trans_id": "5473",
+       "date": "2026-07-31",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Vergara, Tatiana",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 463,
+     "unmatched_ext_price": 13952.74,
+     "sample": [
+      {
+       "trans_id": "5024",
+       "date": "2026-07-27",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (630) 644-0274.",
+       "ext_price": 30.0
+      },
+      {
+       "trans_id": "2477",
+       "date": "2026-07-07",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 22.0
+      },
+      {
+       "trans_id": "1737",
+       "date": "2026-07-02",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (815) 749-5833.",
+       "ext_price": 25.0
+      },
+      {
+       "trans_id": "1939",
+       "date": "2026-07-03",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (708) 275-1366.",
+       "ext_price": 20.0
+      },
+      {
+       "trans_id": "5024",
+       "date": "2026-07-27",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (312) 267-9872.",
+       "ext_price": 65.0
+      }
+     ]
+    },
+    {
+     "rep": "Garibay, Janet",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 227,
+     "unmatched_ext_price": 7385.08,
+     "sample": [
+      {
+       "trans_id": "3817",
+       "date": "2026-07-17",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 60.0
+      },
+      {
+       "trans_id": "2110",
+       "date": "2026-07-03",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total ALL ACCESS Plan $65 RTR. Phone#: (708) 738-8463.",
+       "ext_price": 65.0
+      },
+      {
+       "trans_id": "3452",
+       "date": "2026-07-14",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 30.0
+      },
+      {
+       "trans_id": "3859",
+       "date": "2026-07-17",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (708) 582-3616.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "3691",
+       "date": "2026-07-16",
+       "department": "",
+       "category": "",
+       "contract_type": "BYOD Port",
+       "product": "Total MAX 5G Plan $55",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Pitre, Terry",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 191,
+     "unmatched_ext_price": 4854.87,
+     "sample": [
+      {
+       "trans_id": "2414",
+       "date": "2026-07-06",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "4090",
+       "date": "2026-07-19",
+       "department": "",
+       "category": "",
+       "contract_type": "Activation",
+       "product": "Total Wireless Base Unlimited Tablet 6-Month Plan $60",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4724",
+       "date": "2026-07-24",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet",
+       "ext_price": 90.0
+      },
+      {
+       "trans_id": "5257",
+       "date": "2026-07-29",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet. Phone#: (708) 219-7056.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "5070",
+       "date": "2026-07-27",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "Activation",
+       "product": "Samsung Galaxy Tab A11+ 5G TO - Promo $279.99, Total Wireless Base Unlimited Tablet Promotion 6-Months - Add to Existing",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Chacon, Angelica",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 267,
+     "unmatched_ext_price": 6975.27,
+     "sample": [
+      {
+       "trans_id": "3349",
+       "date": "2026-07-13",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet RTR. Phone#: (708) 497-5869.",
+       "ext_price": 45.0
+      },
+      {
+       "trans_id": "3051",
+       "date": "2026-07-11",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 12.78
+      },
+      {
+       "trans_id": "3065",
+       "date": "2026-07-11",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G Unlimited RTR $55. Phone#: (773) 354-2616.",
+       "ext_price": 10.0
+      },
+      {
+       "trans_id": "3970",
+       "date": "2026-07-18",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "Activation With IDV AAL",
+       "product": "Samsung Galaxy A16 5G TO - Promo $129.99, Total Wireless Discount Promotion - Veriff",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2362",
+       "date": "2026-07-06",
+       "department": "",
+       "category": "",
+       "contract_type": "",
+       "product": "Total STARTER Plan $40",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Espinoza, Nallely",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 158,
+     "unmatched_ext_price": 4341.34,
+     "sample": [
+      {
+       "trans_id": "4492",
+       "date": "2026-07-22",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet RTR. Phone#: (708) 497-8322.",
+       "ext_price": 35.0
+      },
+      {
+       "trans_id": "1800",
+       "date": "2026-07-02",
+       "department": "",
+       "category": "",
+       "contract_type": "",
+       "product": "Total MAX 5G Plan $55",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "5493",
+       "date": "2026-07-31",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "5172",
+       "date": "2026-07-28",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet RTR. Phone#: (708) 469-9456.",
+       "ext_price": 60.0
+      },
+      {
+       "trans_id": "4020",
+       "date": "2026-07-18",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "Activation AAL",
+       "product": "TCL Tab 8 NXTPAPER 5G TO - Promo $179.99, Total Wireless Multi-Line Promotion - Tablet",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Hernandez, Jocelyn",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 185,
+     "unmatched_ext_price": 4754.79,
+     "sample": [
+      {
+       "trans_id": "5265",
+       "date": "2026-07-29",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (312) 914-1593.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "4585",
+       "date": "2026-07-23",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 38.0
+      },
+      {
+       "trans_id": "2332",
+       "date": "2026-07-06",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G Unlimited RTR $55. Phone#: (773) 444-9548.",
+       "ext_price": 25.0
+      },
+      {
+       "trans_id": "4255",
+       "date": "2026-07-20",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total by Verizon RTR $30. Phone#: (708) 793-2856.",
+       "ext_price": 33.67
+      },
+      {
+       "trans_id": "3558",
+       "date": "2026-07-15",
+       "department": "",
+       "category": "",
+       "contract_type": "BYOD Port",
+       "product": "Total MAX 5G BYO Plan $30",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Espinoza, Nancy",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 264,
+     "unmatched_ext_price": 8241.71,
+     "sample": [
+      {
+       "trans_id": "3227",
+       "date": "2026-07-12",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+       "ext_price": 25.0
+      },
+      {
+       "trans_id": "2056",
+       "date": "2026-07-03",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "3177",
+       "date": "2026-07-12",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total MAX 5G Plan $55 RTR. Phone#: (464) 277-1550.",
+       "ext_price": 55.0
+      },
+      {
+       "trans_id": "3212",
+       "date": "2026-07-12",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4576",
+       "date": "2026-07-23",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (708) 631-8050.",
+       "ext_price": 25.0
+      }
+     ]
+    },
+    {
+     "rep": "Chavez, Antonio",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 152,
+     "unmatched_ext_price": 2927.83,
+     "sample": [
+      {
+       "trans_id": "2942",
+       "date": "2026-07-10",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4967",
+       "date": "2026-07-26",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4932",
+       "date": "2026-07-26",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "3955",
+       "date": "2026-07-18",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2034",
+       "date": "2026-07-03",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Jacobo, Vanessa",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 368,
+     "unmatched_ext_price": 11574.29,
+     "sample": [
+      {
+       "trans_id": "2621",
+       "date": "2026-07-08",
+       "department": "BrandedHandset",
+       "category": "HandsetBranded",
+       "contract_type": "",
+       "product": "Screen Protectors BYOD",
+       "ext_price": 24.99
+      },
+      {
+       "trans_id": "3845",
+       "date": "2026-07-17",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet. Phone#: (773) 664-7709.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "4315",
+       "date": "2026-07-21",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total STARTER Plan $40 RTR. Phone#: (312) 972-0951.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "4871",
+       "date": "2026-07-25",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "Activation",
+       "product": "Samsung Galaxy Tab A11+ 5G TO - Promo $279.99, Total Wireless Base Unlimited Tablet Promotion 6-Months - Add to Existing",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2451",
+       "date": "2026-07-06",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Chico, Natalie",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 139,
+     "unmatched_ext_price": 3462.68,
+     "sample": [
+      {
+       "trans_id": "4243",
+       "date": "2026-07-20",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "3758",
+       "date": "2026-07-16",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G Unlimited RTR $55. Phone#: (773) 474-2229.",
+       "ext_price": 55.0
+      },
+      {
+       "trans_id": "4760",
+       "date": "2026-07-24",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet RTR. Phone#: (331) 251-4417.",
+       "ext_price": 45.0
+      },
+      {
+       "trans_id": "1690",
+       "date": "2026-07-01",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4261",
+       "date": "2026-07-20",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (708) 779-8974.",
+       "ext_price": 20.0
+      }
+     ]
+    },
+    {
+     "rep": "Esparza, Yuvia",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 240,
+     "unmatched_ext_price": 6907.71,
+     "sample": [
+      {
+       "trans_id": "4358",
+       "date": "2026-07-21",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Access Charge",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "1702",
+       "date": "2026-07-01",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2250",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (773) 979-2814.",
+       "ext_price": 25.0
+      },
+      {
+       "trans_id": "2295",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (312) 933-1330.",
+       "ext_price": 20.0
+      },
+      {
+       "trans_id": "2307",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G Unlimited RTR $55. Phone#: (708) 548-0785.",
+       "ext_price": 55.0
+      }
+     ]
+    },
+    {
+     "rep": "Aviles, Brendaliz",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 127,
+     "unmatched_ext_price": 4056.72,
+     "sample": [
+      {
+       "trans_id": "3061",
+       "date": "2026-07-11",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet",
+       "ext_price": 38.27
+      },
+      {
+       "trans_id": "4978",
+       "date": "2026-07-26",
+       "department": "",
+       "category": "",
+       "contract_type": "Port with IDV",
+       "product": "Total MAX 5G Plan $55",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "5447",
+       "date": "2026-07-31",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4978",
+       "date": "2026-07-26",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "Activation AAL",
+       "product": "TCL Tab 8 NXTPAPER 5G TO - Promo $179.99, Total Wireless Multi-Line Promotion - Tablet",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4645",
+       "date": "2026-07-24",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Collins, Mea",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 128,
+     "unmatched_ext_price": 3256.21,
+     "sample": [
+      {
+       "trans_id": "2574",
+       "date": "2026-07-07",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total STARTER Plan $40 RTR. Phone#: (708) 621-2580.",
+       "ext_price": 30.0
+      },
+      {
+       "trans_id": "3986",
+       "date": "2026-07-18",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "3343",
+       "date": "2026-07-13",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "5135",
+       "date": "2026-07-28",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet. Phone#: (708) 620-9075.",
+       "ext_price": 73.0
+      },
+      {
+       "trans_id": "4569",
+       "date": "2026-07-23",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+       "ext_price": 25.0
+      }
+     ]
+    },
+    {
+     "rep": "Navarro, Alondra",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 210,
+     "unmatched_ext_price": 6991.75,
+     "sample": [
+      {
+       "trans_id": "5173",
+       "date": "2026-07-28",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 73.0
+      },
+      {
+       "trans_id": "2154",
+       "date": "2026-07-04",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet RTR. Phone#: (708) 348-6032.",
+       "ext_price": 50.0
+      },
+      {
+       "trans_id": "4149",
+       "date": "2026-07-19",
+       "department": "",
+       "category": "",
+       "contract_type": "Activation With IDV",
+       "product": "Total MAX 5G Plan $55",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "3122",
+       "date": "2026-07-11",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (708) 930-2336.",
+       "ext_price": 35.0
+      },
+      {
+       "trans_id": "2000",
+       "date": "2026-07-03",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (312) 914-7378.",
+       "ext_price": 40.0
+      }
+     ]
+    },
+    {
+     "rep": "Romero, Christopher",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 372,
+     "unmatched_ext_price": 9224.12,
+     "sample": [
+      {
+       "trans_id": "2135",
+       "date": "2026-07-04",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G Unlimited RTR $55. Phone#: (708) 712-4686.",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "5108",
+       "date": "2026-07-28",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (312) 859-6976.",
+       "ext_price": 25.0
+      },
+      {
+       "trans_id": "3508",
+       "date": "2026-07-14",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Wallet Funding",
+       "ext_price": 38.0
+      },
+      {
+       "trans_id": "3517",
+       "date": "2026-07-14",
+       "department": "",
+       "category": "",
+       "contract_type": "BYOD Upgrade",
+       "product": "Total Wireless Device Upgrade",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "3395",
+       "date": "2026-07-13",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total MAX 5G BYO Plan $30 RTR. Phone#: (708) 341-2553.",
+       "ext_price": 28.06
+      }
+     ]
+    },
+    {
+     "rep": "Navarrete, Nicolas",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 156,
+     "unmatched_ext_price": 5237.34,
+     "sample": [
+      {
+       "trans_id": "2795",
+       "date": "2026-07-09",
+       "department": "",
+       "category": "",
+       "contract_type": "Activation",
+       "product": "Total Wireless Base Unlimited Tablet 6-Month Plan $60",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2252",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (708) 621-0223.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "2848",
+       "date": "2026-07-09",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "Activation AAL",
+       "product": "TCL Tab 10 NXTPAPER 5G TO - Promo $200, Total Wireless Base Unlimited Tablet Promotion 3-Months - Multi-Line",
+       "ext_price": 19.99
+      },
+      {
+       "trans_id": "4039",
+       "date": "2026-07-18",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4234",
+       "date": "2026-07-20",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (312) 343-1571.",
+       "ext_price": 40.0
+      }
+     ]
+    },
+    {
+     "rep": "Jacobo, Liset",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 150,
+     "unmatched_ext_price": 5371.29,
+     "sample": [
+      {
+       "trans_id": "4291",
+       "date": "2026-07-20",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet",
+       "ext_price": 35.0
+      },
+      {
+       "trans_id": "1798",
+       "date": "2026-07-02",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (920) 251-3978.",
+       "ext_price": 15.0
+      },
+      {
+       "trans_id": "1777",
+       "date": "2026-07-02",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (872) 367-1194.",
+       "ext_price": 15.0
+      },
+      {
+       "trans_id": "1777",
+       "date": "2026-07-02",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (773) 559-4223.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "2903",
+       "date": "2026-07-10",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet",
+       "ext_price": 90.0
+      }
+     ]
+    },
+    {
+     "rep": "Galarza, Alejandro",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 65,
+     "unmatched_ext_price": 1724.81,
+     "sample": [
+      {
+       "trans_id": "5441",
+       "date": "2026-07-31",
+       "department": "",
+       "category": "",
+       "contract_type": "BYOD Activation",
+       "product": "Total MAX 5G BYO Plan $30",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2272",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (312) 200-0684.",
+       "ext_price": 5.0
+      },
+      {
+       "trans_id": "2263",
+       "date": "2026-07-05",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2388",
+       "date": "2026-07-06",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+       "ext_price": 25.0
+      },
+      {
+       "trans_id": "2388",
+       "date": "2026-07-06",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      }
+     ]
+    },
+    {
+     "rep": "Perez, Yesica",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 46,
+     "unmatched_ext_price": 1281.31,
+     "sample": [
+      {
+       "trans_id": "4034",
+       "date": "2026-07-18",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet RTR. Phone#: (248) 408-8406.",
+       "ext_price": 12.52
+      },
+      {
+       "trans_id": "4025",
+       "date": "2026-07-18",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (708) 446-7734.",
+       "ext_price": 65.0
+      },
+      {
+       "trans_id": "4855",
+       "date": "2026-07-25",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total MAX 5G Plan $55 RTR. Phone#: (773) 632-7681.",
+       "ext_price": 55.0
+      },
+      {
+       "trans_id": "4818",
+       "date": "2026-07-25",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet. Phone#: (464) 277-0562.",
+       "ext_price": 34.96
+      },
+      {
+       "trans_id": "4054",
+       "date": "2026-07-18",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G+ Unlimited RTR $65. Phone#: (312) 579-7552.",
+       "ext_price": 60.0
+      }
+     ]
+    },
+    {
+     "rep": "Perez, Melennie",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 59,
+     "unmatched_ext_price": 1445.85,
+     "sample": [
+      {
+       "trans_id": "3740",
+       "date": "2026-07-16",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total STARTER Plan $40 RTR. Phone#: (708) 632-7823.",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "2902",
+       "date": "2026-07-10",
+       "department": "System",
+       "category": "System",
+       "contract_type": "Activation",
+       "product": "Activation payment",
+       "ext_price": 0.0
+      },
+      {
+       "trans_id": "4823",
+       "date": "2026-07-25",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless RTR Wallet",
+       "ext_price": 30.0
+      },
+      {
+       "trans_id": "3011",
+       "date": "2026-07-10",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+       "ext_price": 25.0
+      },
+      {
+       "trans_id": "2902",
+       "date": "2026-07-10",
+       "department": "System",
+       "category": "System",
+       "contract_type": "",
+       "product": "Access Charge - $25 for single line, max $50 for multiple lines.",
+       "ext_price": 25.0
+      }
+     ]
+    },
+    {
+     "rep": "olvera, Emily",
+     "plan_name": "Total Employee Comp Chicago",
+     "unmatched_lines": 32,
+     "unmatched_ext_price": 1156.56,
+     "sample": [
+      {
+       "trans_id": "2266",
+       "date": "2026-07-05",
+       "department": "BrandedHandset",
+       "category": "KittedBranded",
+       "contract_type": "",
+       "product": "Apple iPhone 13 128GB Midnight TO - Promo $429.01, Total Wireless iPhone 13 Add to Existing Promotion - Veriff",
+       "ext_price": 99.99
+      },
+      {
+       "trans_id": "1882",
+       "date": "2026-07-02",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (331) 312-5692.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "2266",
+       "date": "2026-07-05",
+       "department": "BrandedHandset",
+       "category": "HandsetBranded",
+       "contract_type": "",
+       "product": "Accessories Package",
+       "ext_price": 70.0
+      },
+      {
+       "trans_id": "2241",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (312) 914-1593.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "1895",
+       "date": "2026-07-02",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base Unlimited Tablet Plan RTR $50. Phone#: (708) 927-4934.",
+       "ext_price": 10.0
+      }
+     ]
+    },
+    {
+     "rep": "Romero, Brenda",
+     "plan_name": "Total Comp DM",
+     "unmatched_lines": 15,
+     "unmatched_ext_price": 422.72,
+     "sample": [
+      {
+       "trans_id": "2249",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless Base 5G Unlimited RTR $40. Phone#: (262) 336-4008.",
+       "ext_price": 40.0
+      },
+      {
+       "trans_id": "2289",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total ALL ACCESS Plan $65 RTR. Phone#: (708) 476-4444.",
+       "ext_price": 10.0
+      },
+      {
+       "trans_id": "2223",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G Unlimited RTR $55. Phone#: (708) 571-4661.",
+       "ext_price": 10.0
+      },
+      {
+       "trans_id": "2223",
+       "date": "2026-07-05",
+       "department": "Rtr",
+       "category": "Other Carr. payments",
+       "contract_type": "",
+       "product": "Total Wireless 5G Unlimited RTR $55. Phone#: (312) 468-0970.",
+       "ext_price": 55.0
+      },
+      {
+       "trans_id": "1868",
+       "date": "2026-07-02",
+       "department": "",
+       "category": "",
+       "contract_type": "",
+       "product": "Total Wireless Home Internet",
+       "ext_price": 0.0
+      }
+     ]
+    }
+   ],
+   "total_lines": 5739
+  },
+  "contract_type": {
+   "sale_lines": 9391,
+   "blank": 6957,
+   "blank_pct": 74.1,
+   "values": [
+    {
+     "value": "Activation",
+     "lines": 999
+    },
+    {
+     "value": "Port with IDV",
+     "lines": 335
+    },
+    {
+     "value": "Activation With IDV",
+     "lines": 315
+    },
+    {
+     "value": "Upgrade",
+     "lines": 198
+    },
+    {
+     "value": "Activation AAL",
+     "lines": 138
+    },
+    {
+     "value": "Port with IDV AAL",
+     "lines": 137
+    },
+    {
+     "value": "BYOD Activation",
+     "lines": 126
+    },
+    {
+     "value": "BYOD Port",
+     "lines": 67
+    },
+    {
+     "value": "Activation With IDV AAL",
+     "lines": 50
+    },
+    {
+     "value": "BYOD Port AAL",
+     "lines": 23
+    },
+    {
+     "value": "BYOD Upgrade",
+     "lines": 18
+    },
+    {
+     "value": "BYOD Activation AAL",
+     "lines": 9
+    },
+    {
+     "value": "Internal Port with IDV",
+     "lines": 8
+    },
+    {
+     "value": "Port",
+     "lines": 8
+    },
+    {
+     "value": "BYOD Internal Port AAL",
+     "lines": 2
+    },
+    {
+     "value": "BYOD Internal Port",
+     "lines": 1
+    }
+   ],
+   "resolution": "raw",
+   "bucket_resolver_ran": true,
+   "bucket_classified_lines": 2459
+  },
+  "plan_warnings": [
+   {
+    "plan": "Total Comp Sales manager",
+    "severity": "high",
+    "code": "plan_without_rules",
+    "message": "'Total Comp Sales manager' has no rules \u2014 every rep it covers pays $0."
+   },
+   {
+    "plan": "Total Employee Comp Chicago",
+    "severity": "high",
+    "code": "ct_rules_vs_blank_ct",
+    "message": "'Total Employee Comp Chicago' has 1 rule(s) keyed on Contract Type, but 6957 of 9391 sale lines this period have a BLANK Contract Type \u2014 those lines can never match, so they pay $0. Either key the rules on 'activation_bucket', or set Contract-type resolution to 'mapped' (Commission settings) after configuring the tenant's activation rules."
+   }
+  ],
+  "settings": {
+   "plan_ct_resolution": "raw",
+   "store_resolution": "exact"
+  }
+ },
+ "snapshot": {
+  "stored_rows": 44,
+  "stored_total": 2830.72,
+  "engine_total": 1551.47,
+  "stale": true,
+  "note": "The stored commission snapshot does NOT match what the plans compute today \u2014 the page is showing pre-recalculation numbers. Run Calculate for this period to apply the current configuration."
+ }
+}
