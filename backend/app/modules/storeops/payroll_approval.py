@@ -362,6 +362,40 @@ def _active_in_span(org_id, authorization):
         return []          # never let the roster read break the board
 
 
+def _sales_name_resolver(org_id):
+    """(resolve, canon) — turn a raw POS salesperson string into a canonical employee-name key.
+
+    TWO HOPS, and both are needed:
+      1. commcalc.name_map + commcalc.rep_aliases (via commcalc.router._rep_canon_map) — the tenant's
+         OWN merge table, which is where a real misspelling is resolved. It is keyed on the raw string
+         UPPER-cased, exactly as the commission side keys it.
+      2. commission_engine._canon_person — the format hop, 'Last, First' -> 'first last'.
+
+    Hop 1 alone is not enough (it only knows strings a human has merged); hop 2 alone is not enough
+    (it is deliberately not fuzzy, so 'Lopez, Zuleicka' never reaches employee 'Zuliecka Lopez').
+    MEASURED 2026-08-11: with hop 1 missing, 18 of 48 Luxelink salespersons resolved to nobody, and
+    all 12 alias rows pointed at a canonical that was not an employee at all.
+    """
+    try:
+        from app.modules.commcalc.commission_engine import _canon_person as _canon
+    except Exception:
+        def _canon(s):
+            return " ".join(("" if s is None else str(s)).lower().split())
+    cmap = {}
+    try:
+        from app.modules.commcalc.router import _rep_canon_map
+        cmap = _rep_canon_map(sb(), org_id) or {}
+    except Exception:
+        cmap = {}
+
+    def resolve(raw):
+        s = ("" if raw is None else str(raw)).strip()
+        if not s:
+            return ""
+        return _canon(cmap.get(s.upper(), s))
+    return resolve, _canon
+
+
 def _worked_days_from_sales(org_id, start, end):
     """{canonical employee name -> sorted worked dates} from the POS. Best-effort.
 
@@ -375,10 +409,7 @@ def _worked_days_from_sales(org_id, start, end):
     commission_engine._canon_person, the canonicalizer that already exists for this, never a second
     local one. A name that still does not match (a real misspelling) simply yields no days rather than
     being fuzzily attached to the wrong person."""
-    try:
-        from app.modules.commcalc.commission_engine import _canon_person as _canon
-    except Exception:
-        return {}
+    resolve, _canon = _sales_name_resolver(org_id)
     out = {}
     try:
         rows = (sb().schema("commcalc").table("raw_sales").select("salesperson,trans_date")
@@ -388,7 +419,7 @@ def _worked_days_from_sales(org_id, start, end):
     except Exception:
         return {}
     for r in rows:
-        who = _canon(r.get("salesperson"))
+        who = resolve(r.get("salesperson"))
         d = str(r.get("trans_date") or "")[:10]
         if who and d:
             out.setdefault(who, set()).add(d)
@@ -430,7 +461,7 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
     try:
         from app.modules.commcalc.commission_engine import _canon_person as _canon
     except Exception:
-        _canon = None
+        _canon = None   # employee names are already 'First Last'; only the POS side needs the merge
     for emp in _active_in_span(org_id, authorization):
         eid = emp.get("employee_id")
         if eid in present:

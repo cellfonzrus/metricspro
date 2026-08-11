@@ -384,18 +384,17 @@ def gather(org_id, employee_id, employee_name, start, end):
     # canonicalizer the commission side already uses for this exact problem, and is compared per row
     # rather than filtered in the query.
     activity = []
-    try:
-        from app.modules.commcalc.commission_engine import _canon_person as _canon
-    except Exception:
-        def _canon(s):
-            return " ".join(_s(s).lower().split())
+    # ONE resolver shared with the payroll board (name_map + rep_aliases, then the 'Last, First' hop),
+    # so the two surfaces can never disagree about whose sale a line is.
+    from app.modules.storeops.payroll_approval import _sales_name_resolver
+    resolve, _canon = _sales_name_resolver(org_id)
     want = _canon(employee_name)
     for row in _try(lambda: (client.schema("commcalc").table("raw_sales")
                              .select("salesperson,trans_date,store")
                              .eq("org_id", org_id)
                              .gte("trans_date", lo).lte("trans_date", hi)
                              .limit(200000).execute().data) or [], []) or []:
-        if _canon(row.get("salesperson")) != want:
+        if resolve(row.get("salesperson")) != want:
             continue
         activity.append({"work_date": row.get("trans_date"), "kind": "rang sales",
                          "detail": _s(row.get("store"))})
