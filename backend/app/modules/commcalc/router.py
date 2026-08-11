@@ -3519,17 +3519,84 @@ def _known_columns(client, table, cols):
 _RESTORE_STRIP_COLS = ("id", "created_at", "updated_at")
 
 
-def _select_replace_slice(client, table, org_id, period, *, source_null_only=False, chunk=1000):
-    """SELECT the (org, period[, source_id IS NULL]) slice that a manual replace is about to delete, so a
-    failed insert can restore it. Chunked + id-ordered (stable pagination); serial/default cols stripped
-    for clean re-insert. MEMORY BOUND: at most ONE such slice is held at a time, read `chunk` rows per
-    round-trip. Raises on read failure so the caller can refuse to delete without a safety net."""
+# ── PARTITION-SCOPED REPLACE (owner report 2026-08-11: "the tx report is being overwritten for
+#    luxelink when i uploaded the Nova today — make that as an added file without duplicates") ───────
+#
+# A manual replace used to delete EVERYTHING in (org, period) before inserting. That is correct only
+# when a period holds exactly ONE independently-uploaded slice. It does not here: luxelink is ONE org
+# holding TWO companies (Luxelink Wireless LLC + Novawave), each with its own MA export, and stores
+# whose sales arrive in separate files. MEASURED DAMAGE before this fix:
+#   • 2026-07-29 `MA Daily Tx SubMA.xls` saved 16,409 July rows — July now holds 4,902, Nova only.
+#   • 2026-08-04 `MA Daily Tx SubMA (1).xls` saved 3,417 (Jul+Aug, Luxelink) — 1,903 survive (Aug 1–3);
+#     the July half was destroyed on 2026-08-11 by `MA Daily Tx SubMA Nova July.xls`.
+#   • 2026-08-08 22:00 file (2) saved 3,006 August rows — destroyed 16 MINUTES later by file (3).
+#   • `raw_sales` June holds 6 of 20 stores — the same fingerprint.
+#
+# THE SCOPE IS TWO-DIMENSIONAL, and both halves are load-bearing:
+#   PARTITION — the column that says WHOSE slice this is (the MA account, the store). Without it, one
+#               company's upload deletes the other's rows for that period.
+#   DATE RANGE — [min, max] of the file's own date column. Without it, an Aug 4–8 file for the SAME
+#               account still deletes that account's Aug 1–3 rows — which is exactly the 08-08 pair.
+# Together they mean: **a file replaces its own slice and nothing else.** Re-uploading the identical
+# file is still idempotent (same partition, same range ⇒ delete-then-insert, never a duplicate), which
+# is the "without duplicates" half of the owner's ask.
+#
+# Any table not listed here, or a file whose partition column is blank, keeps TODAY'S period-wide
+# behaviour byte-for-byte — and says so in the returned note rather than narrowing silently.
+_INGEST_PARTITION = {
+    "raw_ma_daily_tx":   {"partition": "account_id",          "date": "tx_date"},
+    "raw_ma_commission": {"partition": "merchant_account_id", "date": "tx_date"},
+    "raw_sales":         {"partition": "store",               "date": "trans_date"},
+}
+
+
+def _replace_scope(table, mapped):
+    """The (partition_col, values, date_col, lo, hi) a file may replace — or None to keep the legacy
+    period-wide delete. None is returned whenever the file cannot prove its own slice: unknown table,
+    no partition values, or no usable dates. Narrowing on a GUESS would strand rows the next upload
+    then silently deletes, so the honest fallback is the old behaviour plus a note."""
+    spec = _INGEST_PARTITION.get(table)
+    if not spec or not mapped:
+        return None
+    pcol, dcol = spec["partition"], spec["date"]
+    vals = sorted({str(r.get(pcol)).strip() for r in mapped
+                   if r.get(pcol) is not None and str(r.get(pcol)).strip() != ""})
+    if not vals or len(vals) != len({v for v in vals}):
+        return None
+    # Every row must carry the partition value; one blank row means the file's slice is not provable.
+    if any(r.get(pcol) is None or str(r.get(pcol)).strip() == "" for r in mapped):
+        return None
+    dates = sorted({str(r.get(dcol))[:10] for r in mapped
+                    if r.get(dcol) and str(r.get(dcol))[:10]})
+    if not dates:
+        return None
+    return {"partition_col": pcol, "values": vals, "date_col": dcol, "lo": dates[0], "hi": dates[-1]}
+
+
+def _apply_scope(q, scope):
+    """Narrow a delete/select to the file's own slice. Kept in ONE place so the snapshot and the delete
+    can never disagree about what is being removed — a restore that covers a different slice than the
+    delete is worse than no restore at all."""
+    if not scope:
+        return q
+    return (q.in_(scope["partition_col"], scope["values"])
+             .gte(scope["date_col"], scope["lo"]).lte(scope["date_col"], scope["hi"]))
+
+
+def _select_replace_slice(client, table, org_id, period, *, source_null_only=False, chunk=1000,
+                          scope=None):
+    """SELECT the (org, period[, source_id IS NULL][, partition ∩ date-range]) slice that a manual
+    replace is about to delete, so a failed insert can restore it. Chunked + id-ordered (stable
+    pagination); serial/default cols stripped for clean re-insert. MEMORY BOUND: at most ONE such slice
+    is held at a time, read `chunk` rows per round-trip. Raises on read failure so the caller can refuse
+    to delete without a safety net."""
     rows, start = [], 0
     while True:
         q = (client.schema("commcalc").table(table).select("*")
              .eq("org_id", org_id).in_("period", _pvariants(period)))
         if source_null_only:
             q = q.is_("source_id", "null")
+        q = _apply_scope(q, scope)
         try:
             page = (q.order("id").range(start, start + chunk - 1).execute().data) or []
         except Exception:
@@ -3538,7 +3605,7 @@ def _select_replace_slice(client, table, org_id, period, *, source_null_only=Fal
                   .eq("org_id", org_id).in_("period", _pvariants(period)))
             if source_null_only:
                 q2 = q2.is_("source_id", "null")
-            page = (q2.execute().data) or []
+            page = (_apply_scope(q2, scope).execute().data) or []
             rows.extend(page)
             break
         if not page:
@@ -3673,10 +3740,14 @@ async def upload_mapped(
     #     period replace. Either way: snapshot the to-be-deleted slice FIRST; on ANY insert failure restore
     #     it so a failed import leaves the table AT LEAST as full as before (no DB transactions in supabase-py).
     source_aware = _table_has_column(client, table, "source_id")
+    # (c) PARTITION-SCOPED replace — a file replaces its OWN slice (its MA accounts / stores, within its
+    #     own date range) and never another company's. See _replace_scope. None ⇒ legacy period-wide.
+    scope = _replace_scope(table, mapped)
     saved = 0
     if mapped and period:
         try:
-            snapshot = _select_replace_slice(client, table, org_id, period, source_null_only=source_aware)
+            snapshot = _select_replace_slice(client, table, org_id, period,
+                                             source_null_only=source_aware, scope=scope)
         except Exception as e:
             _trace("error", 0, "aborted before delete — could not snapshot existing rows", error=str(e))
             raise HTTPException(500, f"Could not snapshot existing {table}/{period} rows for a safe replace; "
@@ -3686,6 +3757,7 @@ async def upload_mapped(
                  .eq("org_id", org_id).in_("period", _pvariants(period)))
             if source_aware:
                 d = d.is_("source_id", "null")
+            d = _apply_scope(d, scope)
             d.execute()
         except Exception as e:
             _trace("error", 0, "delete failed — nothing deleted", error=str(e))
@@ -3724,14 +3796,24 @@ async def upload_mapped(
              "filename": fname, "rows_saved": saved}).execute()
     except Exception as e:
         print(f"WARN upload_log insert failed: {e}")
+    # SAY WHAT WAS REPLACED. A narrowing the reader cannot see is how the original bug stayed invisible
+    # for a week — the upload always reported success, and the rows it deleted belonged to someone else.
     note = (f"onboarding import: {saved} row(s) into {table}"
             + (f" (default layout)" if used_defaults else "")
             + (f"; scoped to manual rows (source_id IS NULL) — portal-pulled rows preserved" if source_aware and period else "")
+            + (f"; replaced ONLY this file's slice — {len(scope['values'])} {scope['partition_col']} "
+               f"value(s) between {scope['lo']} and {scope['hi']}; other companies'/stores' rows in "
+               f"{period} were left untouched" if scope and period else "")
+            + ("; ⚠️ replaced the WHOLE period (this file carries no per-slice key, so a narrower "
+               "replace could not be proven safe)" if period and not scope and table in _INGEST_PARTITION else "")
             + (f"; dropped {len(dropped_columns)} unknown column(s): {', '.join(dropped_columns)}" if dropped_columns else ""))
     _trace("partial" if dropped_columns else "ok", saved, note)
     return {"saved": saved, "report_key": report_key, "target_table": table, "period": period,
             "rules_used": len(rules), "used_defaults": used_defaults, "mapped": len(mapped),
-            "dropped_columns": dropped_columns, "source_scoped": bool(source_aware and period), "note": note}
+            "dropped_columns": dropped_columns, "source_scoped": bool(source_aware and period),
+            "replace_scope": ({"column": scope["partition_col"], "values": len(scope["values"]),
+                               "from": scope["lo"], "to": scope["hi"]} if scope and period else None),
+            "note": note}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -6038,9 +6120,22 @@ async def commission_import_commit(
         for mrow in mapped:
             mrow["total_commission"] = round(sum(safe_float(mrow.get(a)) for a in amt_fields), 2)
 
+    # THIS is the path that destroyed luxelink's July MA data (owner report 2026-08-11). It had TWO
+    # defects the sibling /upload-mapped did not: the delete was period-WIDE (so Nova's July file
+    # deleted Luxelink's July rows), and there was NO snapshot, so a failed insert left the period
+    # empty with nothing to restore. Both are fixed here; see _replace_scope.
+    scope = _replace_scope(table, mapped)
+    snapshot = []
     if mapped and period:
         try:
-            client.schema("commcalc").table(table).delete().eq("org_id", org_id).in_("period", _pvariants(period)).execute()
+            snapshot = _select_replace_slice(client, table, org_id, period, scope=scope)
+        except Exception as e:
+            raise HTTPException(500, f"Could not snapshot existing {table}/{period} rows for a safe "
+                                     f"replace; aborted to avoid data loss: {e}")
+        try:
+            d = (client.schema("commcalc").table(table).delete()
+                 .eq("org_id", org_id).in_("period", _pvariants(period)))
+            _apply_scope(d, scope).execute()
         except Exception as e:
             raise HTTPException(500, f"Failed to clear existing {table}/{period}: {e}")
     saved = 0
@@ -6049,7 +6144,14 @@ async def commission_import_commit(
             client.schema("commcalc").table(table).insert(mapped[i:i + 500]).execute()
             saved += len(mapped[i:i + 500])
         except Exception as e:
-            raise HTTPException(500, f"Insert into {table} failed at row {i}: {e}")
+            restored, rerr = _restore_rows(client, table, snapshot)
+            if rerr is not None:
+                lost = max(0, len(snapshot) - restored)
+                raise HTTPException(500, f"Insert into {table} failed at row {i} AND restore was "
+                    f"incomplete ({restored}/{len(snapshot)} prior rows restored, {lost} at risk). "
+                    f"Original error: {e}")
+            raise HTTPException(400, f"Insert into {table} failed at row {i}: {e}. Restored {restored} "
+                                     f"prior row(s) — no data lost. Fix the file and re-import.")
     try:
         client.schema("commcalc").table("upload_log").insert(
             {"org_id": org_id, "file_type": report_key, "period": period or None,
