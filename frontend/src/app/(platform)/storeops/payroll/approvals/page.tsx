@@ -28,10 +28,21 @@ type Row = {
   hr_status: string; hr_by?: string | null; hr_at?: string | null; hr_note?: string | null
   payer_id?: string | null; payer_name?: string | null; payer_kind?: string | null; payer_from?: string | null
   override_by?: string | null; override_reason?: string | null
+  // mig 746. hours_worked is GROSS; hours_source is already NET of lunch (the payroll screen
+  // subtracts it there), so payable = hours_source + adjustment, NOT hours_worked − lunch + adj
+  // computed off hours_source — that would take lunch out twice.
+  hours_worked?: number | null; lunch_hours?: number | null
+  adjustment_hours?: number | null; adjustment_reason?: string | null
+  hours_payable?: number | null; hours_drifted?: boolean
+  worked_at_approval?: number | null; lunch_at_approval?: number | null
   dispatch_status?: string; dispatched_at?: string | null; dispatch_to?: string | null
   held?: boolean; payable?: boolean
 }
 type Payer = { id: string; name: string; kind: string; email?: string | null; is_default?: boolean }
+// What a reviewer has typed but not yet submitted: an hours correction and/or an adjustment, each
+// with its own reason. Both reasons are required by the server when the number actually moves.
+type Edit = { hours: string; reason: string; adj: string; adjReason: string }
+const EMPTY_EDIT: Edit = { hours: '', reason: '', adj: '', adjReason: '' }
 
 const card: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 16 }
 const btn: React.CSSProperties = { padding: '7px 13px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', fontSize: 13, cursor: 'pointer', fontWeight: 600 }
@@ -64,7 +75,13 @@ export default function PayrollApprovalsPage() {
   const [busy, setBusy] = useState(false)
   const [chip, setChip] = useState('all')
   const [sel, setSel] = useState<Record<string, boolean>>({})
-  const [edits, setEdits] = useState<Record<string, { hours: string; reason: string }>>({})
+  const [edits, setEdits] = useState<Record<string, Edit>>({})
+
+  // One updater for all four fields, so adding the adjustment pair cannot drop the hours pair on
+  // the floor the way two independent setEdits calls would.
+  function setEdit(id: string, patch: Partial<Edit>) {
+    setEdits(s => ({ ...s, [id]: { ...(s[id] ?? EMPTY_EDIT), ...patch } }))
+  }
 
   const load = useCallback(async () => {
     setErr(''); setMsg('')
@@ -125,8 +142,10 @@ export default function PayrollApprovalsPage() {
       rows: selIds.map(id => {
         const e = edits[id]
         const changed = stage === 'dm' && e && e.hours !== ''
+        const adjusted = stage === 'dm' && e && e.adj !== ''
         return { employee_id: id, action, note: note || undefined,
-                 ...(changed ? { hours_approved: e.hours, reason: e.reason } : {}) }
+                 ...(changed ? { hours_approved: e.hours, reason: e.reason } : {}),
+                 ...(adjusted ? { adjustment_hours: e.adj, adjustment_reason: e.adjReason } : {}) }
       }),
     }
     const verb = action === 'approve' ? 'Approved' : action === 'send_back' ? 'Sent back' : 'Reset'
@@ -174,7 +193,12 @@ export default function PayrollApprovalsPage() {
     { header: 'Employee ID', field: 'employee_id', get: (r: Row) => r.employee_id },
     { header: 'Store', field: 'store', role: 'store', get: (r: Row) => r.store || '' },
     { header: 'Scheduled', field: 'scheduled_hours', type: 'number', get: (r: Row) => r.scheduled_hours ?? '' },
-    { header: 'Computed Hours', field: 'hours_source', type: 'number', get: (r: Row) => r.hours_source ?? '' },
+    { header: 'Worked Hours', field: 'hours_worked', type: 'number', get: (r: Row) => r.hours_worked ?? '' },
+    { header: 'Lunch', field: 'lunch_hours', type: 'number', get: (r: Row) => r.lunch_hours ?? '' },
+    { header: 'Adjustment', field: 'adjustment_hours', type: 'number', get: (r: Row) => r.adjustment_hours ?? '' },
+    { header: 'Adjustment reason', field: 'adjustment_reason', get: (r: Row) => r.adjustment_reason || '' },
+    { header: 'Payable Hours', field: 'hours_payable', type: 'number', get: (r: Row) => r.hours_payable ?? '' },
+    { header: 'Computed Hours (net)', field: 'hours_source', type: 'number', get: (r: Row) => r.hours_source ?? '' },
     { header: 'Approved Hours', field: 'hours_effective', type: 'number', get: (r: Row) => r.hours_effective ?? '' },
     { header: 'Corrected', field: 'hours_corrected', get: (r: Row) => (r.hours_corrected ? 'yes' : '') },
     { header: 'Rate', field: 'pay_rate', type: 'number', get: (r: Row) => r.pay_rate ?? '' },
@@ -281,7 +305,10 @@ export default function PayrollApprovalsPage() {
               </th>
               <th>Employee</th><th>Store</th>
               <th style={{ textAlign: 'right' }}>Sched</th>
-              <th style={{ textAlign: 'right' }}>Computed</th>
+              <th style={{ textAlign: 'right' }} title="Gross hours from the clock, before the lunch deduction">Worked</th>
+              <th style={{ textAlign: 'right' }} title="Auto lunch deduction, already applied on the Payroll screen">Lunch</th>
+              <th style={{ textAlign: 'right' }} title="Manual +/- correction. Needs a reason — it moves a payroll number">Adjustment</th>
+              <th style={{ textAlign: 'right' }} title="Worked − lunch ± adjustment. This is the figure being approved">Payable</th>
               <th style={{ textAlign: 'right' }}>Approve hours</th>
               <th style={{ textAlign: 'right' }}>Pay</th>
               <th>DM</th><th>HR</th><th>Paid by</th><th>State</th>
@@ -289,7 +316,7 @@ export default function PayrollApprovalsPage() {
           </thead>
           <tbody>
             {shown.length === 0 && (
-              <tr><td colSpan={11} style={{ color: 'var(--text3)', padding: 22, textAlign: 'center' }}>
+              <tr><td colSpan={15} style={{ color: 'var(--text3)', padding: 22, textAlign: 'center' }}>
                 {ready ? 'Nobody worked in this week, or your filters exclude everyone.' : 'Not activated yet.'}
               </td></tr>
             )}
@@ -297,6 +324,7 @@ export default function PayrollApprovalsPage() {
               const e = edits[r.employee_id]
               const typed = e?.hours ?? ''
               const changed = typed !== '' && Number(typed) !== (r.hours_source ?? 0)
+              const adjusted = (e?.adj ?? '') !== '' && Number(e?.adj) !== (r.adjustment_hours ?? 0)
               return (
                 <tr key={r.employee_id} style={{ background: r.held ? '#fffbeb' : undefined }}>
                   <td><input type="checkbox" checked={!!sel[r.employee_id]}
@@ -307,15 +335,48 @@ export default function PayrollApprovalsPage() {
                   </td>
                   <td>{r.store || <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                   <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.scheduled_hours ?? '—'}</td>
-                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.hours_source ?? '—'}</td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {r.hours_worked ?? '—'}
+                    {r.hours_drifted && (
+                      <div style={{ fontSize: 10, color: '#b45309' }} title={`Was ${r.worked_at_approval} when this was approved`}>
+                        changed since sign-off
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.lunch_hours ? '#b45309' : 'var(--text3)' }}>
+                    {r.lunch_hours ? `− ${r.lunch_hours.toFixed(2)}` : '—'}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    <input value={e?.adj ?? ''} placeholder={String(r.adjustment_hours ?? 0)} inputMode="decimal"
+                      onChange={ev => setEdit(r.employee_id, { adj: ev.target.value })}
+                      title="+ adds hours, − takes them away"
+                      style={{ width: 60, padding: '4px 6px', textAlign: 'right', borderRadius: 6, fontSize: 13,
+                        border: `1px solid ${adjusted ? '#f59e0b' : 'var(--border)'}`, background: 'var(--surface)' }} />
+                    {adjusted && (
+                      <input value={e?.adjReason || ''} placeholder="reason (required)"
+                        onChange={ev => setEdit(r.employee_id, { adjReason: ev.target.value })}
+                        style={{ display: 'block', marginTop: 4, width: 150, padding: '4px 6px', fontSize: 11.5,
+                          borderRadius: 6, border: '1px solid #f59e0b', background: 'var(--surface)' }} />
+                    )}
+                    {!adjusted && !!r.adjustment_hours && (
+                      <div style={{ fontSize: 10.5, color: '#b45309' }} title={r.adjustment_reason || ''}>
+                        {r.adjustment_reason ? r.adjustment_reason.slice(0, 24) : 'adjusted'}
+                      </div>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>
+                    {(adjusted && Number.isFinite(Number(e?.adj))
+                      ? (r.hours_source ?? 0) + Number(e?.adj)
+                      : (r.hours_payable ?? 0)).toFixed(2)}
+                  </td>
                   <td style={{ textAlign: 'right' }}>
                     <input value={typed} placeholder={String(r.hours_effective ?? '')} inputMode="decimal"
-                      onChange={ev => setEdits(s => ({ ...s, [r.employee_id]: { hours: ev.target.value, reason: s[r.employee_id]?.reason || '' } }))}
+                      onChange={ev => setEdit(r.employee_id, { hours: ev.target.value })}
                       style={{ width: 66, padding: '4px 6px', textAlign: 'right', borderRadius: 6, fontSize: 13,
                         border: `1px solid ${changed ? '#f59e0b' : 'var(--border)'}`, background: 'var(--surface)' }} />
                     {changed && (
                       <input value={e?.reason || ''} placeholder="reason (required)"
-                        onChange={ev => setEdits(s => ({ ...s, [r.employee_id]: { hours: s[r.employee_id]?.hours || '', reason: ev.target.value } }))}
+                        onChange={ev => setEdit(r.employee_id, { reason: ev.target.value })}
                         style={{ display: 'block', marginTop: 4, width: 150, padding: '4px 6px', fontSize: 11.5,
                           borderRadius: 6, border: '1px solid #f59e0b', background: 'var(--surface)' }} />
                     )}

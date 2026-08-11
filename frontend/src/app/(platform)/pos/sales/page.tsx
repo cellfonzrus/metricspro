@@ -38,6 +38,11 @@ interface CartItem {
   serial_number: string
   qty: number
   unit_price: number
+  // What the product was LISTED at when it went into the cart. The register may edit unit_price
+  // (owner directive 2026-08-11), so a line that stored only the charged price would make a
+  // $199 case sold for $99 indistinguishable from a $99 product. An override is exactly
+  // list_price !== unit_price, and pos.sale_items.list_price (mig 745) keeps it after checkout.
+  list_price: number
   cost: number
   discount: number
   tax_rate: number      // FRACTION (e.g. 0.08875)
@@ -561,6 +566,7 @@ export default function PosSalesPage() {
       serial_number: serial,
       qty: 1,
       unit_price: product.retail_price,
+      list_price: product.retail_price,
       cost: product.cost,
       discount: 0,
       tax_rate: product.is_taxable ? (activeTaxRate ?? 0) : 0,
@@ -601,6 +607,14 @@ export default function PosSalesPage() {
 
   function updateDiscount(idx: number, discount: number) {
     setCart(prev => prev.map((it, i) => i === idx ? recalcItem({ ...it, discount }) : it))
+  }
+
+  // Price override. recalcItem() already derives tax and the line total FROM unit_price, so the
+  // rest of the sale follows without a second code path. A blank/NaN entry is read as 0 rather
+  // than NaN — one NaN in a cart line propagates silently into the sale total.
+  function updateUnitPrice(idx: number, unit_price: number) {
+    const v = Number.isFinite(unit_price) ? Math.max(0, unit_price) : 0
+    setCart(prev => prev.map((it, i) => i === idx ? recalcItem({ ...it, unit_price: v }) : it))
   }
 
   function updateSerial(idx: number, serial: string) {
@@ -744,6 +758,7 @@ export default function PosSalesPage() {
             serial_number: item.serial_number || null,
             qty: item.qty,
             unit_price: item.unit_price,
+            list_price: item.list_price,
             cost: item.cost,
             discount: item.discount,
             tax_rate: item.tax_rate,
@@ -932,7 +947,21 @@ export default function PosSalesPage() {
                           <button onClick={() => updateQty(idx, item.qty + 1)} style={{ background: 'var(--surface2)', border: '1px solid var(--border)', color: 'var(--text)', width: 20, height: 20, borderRadius: 3, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
                         </div>
                       </td>
-                      <td style={{ padding: '8px 10px', color: 'var(--green)' }}>${item.unit_price.toFixed(2)}</td>
+                      <td style={{ padding: '8px 10px' }}>
+                        <input type="number" step="0.01" min="0" value={item.unit_price}
+                          onChange={e => updateUnitPrice(idx, parseFloat(e.target.value))}
+                          title={item.list_price !== item.unit_price
+                            ? `List price $${item.list_price.toFixed(2)} — this line is overridden`
+                            : 'Price — edit to override for this sale'}
+                          style={{ ...inputStyle, width: 74, padding: '4px 6px', fontSize: 11,
+                            color: 'var(--green)', fontWeight: 600,
+                            borderColor: item.list_price !== item.unit_price ? 'var(--amber, #d97706)' : undefined }} />
+                        {item.list_price !== item.unit_price && (
+                          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2 }}>
+                            was ${item.list_price.toFixed(2)}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: '8px 10px' }}>
                         {discountsEnabled ? (
                           <input type="number" step="0.01" value={item.discount} readOnly={!canDiscount}
