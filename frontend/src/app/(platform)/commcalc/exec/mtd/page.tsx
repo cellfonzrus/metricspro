@@ -43,6 +43,10 @@ export default function ExecMtdPage() {
   // answers to "which month am I looking at".
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const selStores = filt.stores, selMarkets = filt.markets, selReps = filt.reps
+  // DATE RANGE (owner 2026-08-11) — the bar's range mode writes the two bounds into `period`/`periodTo`
+  // (the shared StandardFilterValue shape). They are sent to the SERVER, like every other filter on this
+  // page, so the tables, the trending math and the exports narrow together instead of the table alone.
+  const dFrom = filt.period || '', dTo = filt.periodTo || ''
 
   const load = useCallback(() => {
     if (!period) return
@@ -52,14 +56,23 @@ export default function ExecMtdPage() {
     // MTD cut + trending divisor were resolved on the server's UTC clock, so after ~8pm ET the two
     // surfaces projected off a different "complete days elapsed" and could not agree.
     qs.set('today', localToday())
+    if (dFrom) qs.set('date_from', dFrom)
+    if (dTo) qs.set('date_to', dTo)
     selStores.forEach((s) => qs.append('stores', s))
     selMarkets.forEach((s) => qs.append('markets', s))
     selReps.forEach((s) => qs.append('reps', s))
     const q = qs.toString()
     api(`/api/v1/commcalc/exec-mtd/${encodeURIComponent(period)}?${q}${orgParam()}`)
       .then(setData).catch((e) => setErr(String(e?.message || e))).finally(() => setLoading(false))
-  }, [period, selStores, selMarkets, selReps])
+  }, [period, selStores, selMarkets, selReps, dFrom, dTo])
   useEffect(() => { load() }, [load])
+
+  // Switching the MONTH in the app header drops a stale day-range. Without this, moving from July to
+  // August while a July range is set would show an empty report whose emptiness is real but reads as a
+  // bug — the range is scoped to the month the report is built from.
+  useEffect(() => {
+    setFilt((f) => (f.period || f.periodTo ? { ...f, period: '', periodTo: '' } : f))
+  }, [period])
 
   // Options are computed by the backend from the UNFILTERED union (pick-don't-type over real data).
   // `stores_detail` carries each store's market, which is what the cascade narrows on; a backend that
@@ -71,7 +84,7 @@ export default function ExecMtdPage() {
     (opt.stores_detail as any[] | undefined)?.map(s => ({ id: s.id, label: s.label, market: s.market })) ||
     storeOpts.map(s => ({ id: s, label: s, market: null }))
   ), [opt.stores_detail, storeOpts])
-  const hasFilter = selStores.length > 0 || selMarkets.length > 0 || selReps.length > 0
+  const hasFilter = selStores.length > 0 || selMarkets.length > 0 || selReps.length > 0 || !!dFrom || !!dTo
   const clearFilters = () => setFilt(emptyStandardFilter())
   const src = data?.source || {}
 
@@ -81,6 +94,9 @@ export default function ExecMtdPage() {
   const rows: any[] = active?.rows || []
   const total = active?.total || {}
   const tr = data?.trending || {}
+  // What the SERVER actually did with the requested window (clamped / no overlap / undated lines it had
+  // to drop). A backend that predates the range simply omits it -> {} -> the status line never renders.
+  const dr = data?.date_range || {}
 
   // 16-column layout, in the exact order of the owner's spreadsheet, THEN two appended reconciliation
   // columns (the spreadsheet's own order is preserved). Conv. exported as the raw ratio (as the file
@@ -161,7 +177,14 @@ export default function ExecMtdPage() {
         </div>
         <p style={{ color: 'var(--text2)', fontSize: 13.5, margin: '4px 0 0' }}>
           Month-to-date location &amp; employee sales — activations by type, phones, bill payments, accessory
-          sales, and trending projections. {tr.factor ? `Trending = MTD × ${tr.days_in_month} ÷ ${tr.elapsed_days} complete days.` : ''}
+          sales, and trending projections.{' '}
+          {tr.factor
+            ? (tr.basis === 'range'
+              // The column keeps meaning "project to a full month", but the divisor is the WINDOW's own
+              // complete days — saying which is in force is what stops the same header meaning two things.
+              ? `Trending = selected days × ${tr.days_in_month} ÷ ${tr.elapsed_days} complete day${tr.elapsed_days === 1 ? '' : 's'} in the range.`
+              : `Trending = MTD × ${tr.days_in_month} ÷ ${tr.elapsed_days} complete days.`)
+            : ''}
         </p>
       </div>
 
@@ -169,12 +192,33 @@ export default function ExecMtdPage() {
           pick-don't-type over the org's real data, applied SERVER-SIDE so the tables, the trending math
           AND the exports all reflect the same selection. Period comes from the global header selector. */}
       <StandardFilterBar
-        value={filt} onChange={setFilt} periodMode="none"
-        show={{ period: false, stores: true, markets: true, reps: true }}
+        value={filt} onChange={setFilt} periodMode="range"
+        show={{ period: true, stores: true, markets: true, reps: true }}
         cascadeStores={cascadeStores}
         repOptions={repOpts}
         storeLabel="Stores…" marketLabel="Markets…" repLabel="Employees…"
       />
+
+      {/* DATE-RANGE STATUS (owner 2026-08-11). The window is scoped to the month in the header — the
+          report is built from that one month's sales union — so when the server clamps it, says the
+          window misses the month entirely, or drops undated lines, the page states it rather than
+          showing a narrowed number that looks like the whole story. */}
+      {dr.active && (
+        <div style={{ fontSize: 12, marginBottom: 10 }}>
+          <span style={{ background: dr.no_overlap ? '#fef3f2' : 'var(--surface2)',
+            color: dr.no_overlap ? '#b42318' : 'var(--text2)', borderRadius: 8, padding: '4px 10px' }}>
+            {dr.no_overlap ? (
+              <>The selected dates fall outside <b>{period}</b> ({dr.month_from} → {dr.month_to}) — nothing to
+                show. Pick dates inside the month, or change the month in the header.</>
+            ) : (
+              <>Showing <b>{dr.from}</b> → <b>{dr.to}</b>
+                {dr.clamped && <> · clamped to <b>{period}</b> (you asked for {dr.requested_from || dr.month_from} → {dr.requested_to || dr.month_to}; this report is built from one month at a time)</>}
+                {dr.undated_excluded > 0 && <> · {dr.undated_excluded} line{dr.undated_excluded === 1 ? '' : 's'} with no date excluded (they cannot be placed in a range)</>}
+                {' '}· tables, totals and exports all follow the range.</>
+            )}
+          </span>
+        </div>
+      )}
 
       {/* Source-coverage transparency (owner's debug-first mandate): which source led the union and how
           many stores it surfaced — so a partial-feed month that hid stores is self-evident here. */}
