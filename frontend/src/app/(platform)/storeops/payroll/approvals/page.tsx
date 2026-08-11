@@ -68,6 +68,12 @@ export default function PayrollApprovalsPage() {
   const [payers, setPayers] = useState<Payer[]>([])
   const [totals, setTotals] = useState<any>(null)
   const [period, setPeriod] = useState<{ start: string; end: string } | null>(null)
+  // The pay CYCLE the shown period belongs to (server-resolved from the tenant's own settings, the same
+  // ones the schedule grid uses). `payday` is present only when the range IS a configured period.
+  const [cycle, setCycle] = useState<{ pay_period_type?: string; week_starts_on?: string; payday?: string | null; matches_cycle?: boolean } | null>(null)
+  // Owner 2026-08-11: a DM / market manager approves HOURS and must not see anyone's pay scale. The
+  // server withholds the values; this only controls whether the columns are rendered at all.
+  const [canSeePay, setCanSeePay] = useState(true)
   const [ready, setReady] = useState(true)
   const [note, setNote] = useState('')
   const [msg, setMsg] = useState('')
@@ -95,8 +101,12 @@ export default function PayrollApprovalsPage() {
       setReady(d?.ready !== false); setNote(d?.note || '')
       setRows(d?.rows || []); setPayers(d?.payers || []); setTotals(d?.totals || null)
       if (d?.period_start) setPeriod({ start: d.period_start, end: d.period_end })
+      setCycle(d?.cycle || null)
+      // Server decides; the UI only mirrors it. Absent key => treat as allowed (an older backend
+      // still sends the rates, so hiding the columns would blank data the caller is entitled to).
+      setCanSeePay(d?.can_see_pay_rates !== false)
       setSel({}); setEdits({})
-    } catch (e: any) { setErr(e?.message || 'Could not load the week') }
+    } catch (e: any) { setErr(e?.message || 'Could not load the pay period') }
   }, [f.period, f.periodTo, f.stores, f.markets, f.reps])
 
   useEffect(() => { load() }, [load])
@@ -201,8 +211,12 @@ export default function PayrollApprovalsPage() {
     { header: 'Computed Hours (net)', field: 'hours_source', type: 'number', get: (r: Row) => r.hours_source ?? '' },
     { header: 'Approved Hours', field: 'hours_effective', type: 'number', get: (r: Row) => r.hours_effective ?? '' },
     { header: 'Corrected', field: 'hours_corrected', get: (r: Row) => (r.hours_corrected ? 'yes' : '') },
-    { header: 'Rate', field: 'pay_rate', type: 'number', get: (r: Row) => r.pay_rate ?? '' },
-    { header: 'Pay', field: 'pay_effective', type: 'number', get: (r: Row) => r.pay_effective ?? '' },
+    // Pay-scale columns are DROPPED for a caller who may not see rates (owner 2026-08-11), not blanked
+    // — the server already withholds the values, so an exported blank column would only advertise them.
+    ...(canSeePay ? [
+      { header: 'Rate', field: 'pay_rate', type: 'number', get: (r: Row) => r.pay_rate ?? '' },
+      { header: 'Pay', field: 'pay_effective', type: 'number', get: (r: Row) => r.pay_effective ?? '' },
+    ] as ExportColumn[] : []),
     { header: 'DM', field: 'dm_status', get: (r: Row) => r.dm_status },
     { header: 'HR', field: 'hr_status', get: (r: Row) => r.hr_status },
     { header: 'Paid by', field: 'payer_name', get: (r: Row) => r.payer_name || 'not routed' },
@@ -223,12 +237,20 @@ export default function PayrollApprovalsPage() {
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Hours Approval</h1>
-        {period && <span style={{ color: 'var(--text2)', fontSize: 14 }}>week of <b>{period.start}</b> → <b>{period.end}</b></span>}
+        {period && (
+          <span style={{ color: 'var(--text2)', fontSize: 14 }}>
+            {/* Never the hardcoded word "week": a biweekly tenant's period is a fortnight, and calling
+                it a week is how the board stopped matching the schedule and the payday. */}
+            {cycle?.matches_cycle === false ? 'custom range' : 'pay period'}{' '}
+            <b>{period.start}</b> → <b>{period.end}</b>
+            {cycle?.payday && <> · payable <b>{cycle.payday}</b></>}
+          </span>
+        )}
         <div style={{ flex: 1 }} />
         <Link href="/storeops/payroll/payers" style={{ ...btn, textDecoration: 'none', color: 'var(--text1)' }}>⚙️ Who pays</Link>
       </div>
       <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 14px', maxWidth: '78ch' }}>
-        The district manager checks last week&apos;s hours, corrects anything wrong, and approves. HR approves
+        The district manager checks the closed pay period&apos;s hours, corrects anything wrong, and approves. HR approves
         after them, then sends each payer the people they pay. Hours can only be changed here with a reason,
         and every change is written to the payroll change log.
       </p>
@@ -246,7 +268,7 @@ export default function PayrollApprovalsPage() {
       {totals && (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
           {[['Employees', String(totals.employees)], ['Hours', String(totals.hours)],
-            ['Payroll', money(totals.pay)], ['Ready to pay', money(totals.payable_pay)],
+            ...(canSeePay ? [['Payroll', money(totals.pay)], ['Ready to pay', money(totals.payable_pay)]] : []),
             ['Held', String(totals.held)]].map(([k, v]) => (
             <div key={k} style={{ ...card, padding: '10px 16px', minWidth: 120 }}>
               <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.06em', fontWeight: 700 }}>{k}</div>
@@ -264,7 +286,9 @@ export default function PayrollApprovalsPage() {
         ))}
         <div style={{ flex: 1 }} />
         <ReportExportBar title="Payroll — Hours Approval"
-          subtitle={period ? `Week of ${period.start} to ${period.end}` : undefined}
+          subtitle={period
+            ? `Pay period ${period.start} to ${period.end}${cycle?.payday ? ` · payable ${cycle.payday}` : ''}`
+            : undefined}
           columns={cols} rows={shown} />
       </div>
 
@@ -310,7 +334,7 @@ export default function PayrollApprovalsPage() {
               <th style={{ textAlign: 'right' }} title="Manual +/- correction. Needs a reason — it moves a payroll number">Adjustment</th>
               <th style={{ textAlign: 'right' }} title="Worked − lunch ± adjustment. This is the figure being approved">Payable</th>
               <th style={{ textAlign: 'right' }}>Approve hours</th>
-              <th style={{ textAlign: 'right' }}>Pay</th>
+              {canSeePay && <th style={{ textAlign: 'right' }}>Pay</th>}
               <th>DM</th><th>HR</th><th>Paid by</th><th>State</th>
             </tr>
           </thead>
@@ -384,7 +408,7 @@ export default function PayrollApprovalsPage() {
                       <div style={{ fontSize: 10.5, color: '#b45309' }}>was {r.hours_source}</div>
                     )}
                   </td>
-                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{money(r.pay_effective)}</td>
+                  {canSeePay && <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{money(r.pay_effective)}</td>}
                   <td><Pill status={r.dm_status} />{r.dm_by && <div style={{ fontSize: 10, color: 'var(--text3)' }}>{r.dm_by}</div>}</td>
                   <td><Pill status={r.hr_status} />{r.hr_by && <div style={{ fontSize: 10, color: 'var(--text3)' }}>{r.hr_by}</div>}</td>
                   <td>

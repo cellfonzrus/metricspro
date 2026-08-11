@@ -6937,3 +6937,11 @@ except Exception as _attn_e:
 # all sit INSIDE functions. By the time this line runs, everything it needs is defined.
 from app.modules.storeops.payroll_approval import router as _payroll_approval_router  # noqa: E402
 router.include_router(_payroll_approval_router)
+
+# ── Clock-in self check (owner directive 2026-08-11) ──────────────────────────────────────────────
+# "create a self check module for the failed clockin attempts to verify if the employee is lying or
+# actual issue was there." Mounted here for the same reason as the block above: main.py is shared and
+# no agent edits it (AGENT_CONTRACT §1). Imports payroll_approval.previous_pay_period lazily, inside
+# the endpoint, so this line's position stays irrelevant to import order.
+from app.modules.storeops.clockin_evidence import router as _clockin_evidence_router  # noqa: E402
+router.include_router(_clockin_evidence_router)

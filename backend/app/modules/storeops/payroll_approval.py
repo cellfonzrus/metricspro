@@ -70,27 +70,62 @@ def _num(v):
 
 
 # ── period resolution ─────────────────────────────────────────────────────────────────────────────
+# OWNER 2026-08-11: "for payroll hour approval the system should show the default dates as per the
+# payroll cycle set up in the system which should also tally with the schedule set up — for ref we are
+# running 07/23-08/05 payable on 08/14."
+#
+# TWO defects sat between this board and that sentence, and they compounded:
+#
+#   ① THE WEEKDAY CONVENTION WAS INVERTED HERE, AND ONLY HERE. `storeops.tenants.work_week_start_dow`
+#      is 0=MONDAY across the product — `core.router.pay_period_for` indexes `ref.weekday()` with it
+#      directly, `storeops/router.py::_work_week_bounds` does `dow % 7`, and the schedule grid states
+#      it outright ("0=Mon..6=Sun; e.g. Luxelink=3/Thursday"). This module alone converted it as if
+#      0=Sunday, shifting every default back one day: Luxelink's dow=3 read as WEDNESDAY, so the board
+#      opened on a Wed–Tue window while the schedule ran Thu–Wed. That is precisely the "doesn't tally
+#      with the schedule" symptom. All three tenants' `biweekly_anchor` dates independently confirm
+#      0=Monday (Cellfonz dow=0/anchor Mon 2026-06-29, Vzone dow=0/anchor Mon 2026-07-27, Luxelink
+#      dow=3/anchor Thu 2026-07-02).
+#
+#   ② THE BOARD DEFAULTED TO A WEEK, NEVER A PAY PERIOD. `pay_period_type` was not read at all, so a
+#      BIWEEKLY tenant was asked to approve 7 of its 14 payable days — half a pay period, which is
+#      exactly as un-approvable as half a week. The period now comes from the tenant's own cycle.
+#
+# The canonical period math is core.router.pay_period_for and is IMPORTED, never reimplemented — the
+# same read-only dependency payroll_salary.py already takes. A second copy of this arithmetic is how
+# two payroll surfaces come to disagree about which fortnight is being paid.
 def _week_start_dow(org_id):
     """The tenant's work-week start as a Python weekday (0=Mon .. 6=Sun).
 
-    storeops.tenants.work_week_start_dow follows the SQL/JS convention (0=Sunday), so it is converted
-    here rather than assumed. A tenant with nothing configured falls back to Sunday, which is what
-    every existing tenant row carries today."""
+    `work_week_start_dow` is ALREADY 0=Monday (see ① above) — it is returned as-is, not converted.
+    A tenant with nothing configured falls back to Monday, matching the column's own default and
+    `_pp_settings`' documented "Monday week today"."""
     try:
         rows = (sb().table("tenants").select("work_week_start_dow")
                 .eq("org_id", org_id).limit(1).execute().data) or []
         raw = rows[0].get("work_week_start_dow") if rows else None
     except Exception:
         raw = None
-    sql_dow = 0 if raw is None else int(raw)          # 0=Sun .. 6=Sat
-    return (sql_dow - 1) % 7                           # -> 0=Mon .. 6=Sun
+    return (0 if raw is None else int(raw)) % 7
+
+
+def _pay_settings(org_id):
+    """The tenant's pay-cycle settings, normalized by core (`_pp_settings`), or None if unreadable.
+    Returning None lets every caller fall back to the plain-week behaviour rather than 500."""
+    try:
+        from app.modules.core.router import _pp_settings
+        rows = (sb().table("tenants").select(
+            "work_week_start_dow,pay_period_type,payday_dow,payday_weeks_after,biweekly_anchor")
+            .eq("org_id", org_id).limit(1).execute().data) or []
+        return _pp_settings(rows[0]) if rows else None
+    except Exception:
+        return None
 
 
 def previous_week(org_id, ref=None):
     """The last COMPLETE work week before `ref` (default: today). Returns (start_date, end_date).
 
-    This is what the Monday notice asks the DM to review: the week that has finished, never the one
-    in progress — half a week of hours is not a thing anyone can approve."""
+    Kept as the weekly primitive and as the fallback when the pay-cycle settings can't be read.
+    `previous_pay_period` is what the board and the notice actually use."""
     ref = ref or date.today()
     wsd = _week_start_dow(org_id)
     # Start of the week `ref` falls in, then step back one full week.
@@ -99,14 +134,73 @@ def previous_week(org_id, ref=None):
     return start, start + timedelta(days=6)
 
 
+def previous_pay_period(org_id, ref=None):
+    """The last COMPLETE PAY PERIOD before `ref` (default: today), per the tenant's configured cycle.
+    Returns (start_date, end_date, payday_date_or_None).
+
+    This is the period a DM can actually approve: the one that has FINISHED. The in-progress period is
+    never the default — half a fortnight of hours is not approvable, which is the same reason
+    `previous_week` never returned the current week.
+
+    Luxelink, asked on 2026-08-11 (cycle: biweekly, Thursday start, anchor 2026-07-09, payday Friday
+    +2): the current period is 08/06–08/19, so this returns **07/23 – 08/05, payable 08/14** — the
+    owner's stated reference, to the day.
+
+    Degrades to `previous_week` (+ no payday) whenever the settings are unreadable or the tenant is
+    weekly-with-no-config, so this can never leave the board with no period at all."""
+    ref = ref or date.today()
+    s = _pay_settings(org_id)
+    if not s:
+        a, b = previous_week(org_id, ref)
+        return a, b, None
+    try:
+        from app.modules.core.router import pay_period_for
+        cur = pay_period_for(s, ref)
+        # One day before the current period starts is, by construction, inside the previous one.
+        prev = pay_period_for(s, date.fromisoformat(cur["start"]) - timedelta(days=1))
+        return (date.fromisoformat(prev["start"]), date.fromisoformat(prev["end"]),
+                date.fromisoformat(prev["payday"]) if prev.get("payday") else None)
+    except Exception:
+        a, b = previous_week(org_id, ref)
+        return a, b, None
+
+
+DOW_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _cycle_meta(org_id, s, e):
+    """What CYCLE the shown period belongs to: {pay_period_type, week_starts_on, payday, matches_cycle}.
+
+    `payday` is filled ONLY when the shown range IS one of the tenant's configured periods. A
+    hand-picked range gets `matches_cycle: false` and NO payday — inventing a pay date for an
+    arbitrary window is exactly the kind of confident-but-wrong number this board must not show.
+    Returns None when the cycle can't be read, and the UI simply omits the line."""
+    cfg = _pay_settings(org_id)
+    if not cfg:
+        return None
+    out = {"pay_period_type": cfg.get("pay_period_type") or "weekly",
+           "week_starts_on": DOW_NAMES[int(cfg.get("work_week_start_dow") or 0) % 7],
+           "payday": None, "matches_cycle": False}
+    try:
+        from app.modules.core.router import pay_period_for
+        p = pay_period_for(cfg, s)
+        if p.get("start") == s.isoformat() and p.get("end") == e.isoformat():
+            out["matches_cycle"] = True
+            out["payday"] = p.get("payday")
+    except Exception:
+        pass
+    return out
+
+
 def _resolve_period(org_id, start, end):
-    """(start, end) from explicit params, else the previous complete week."""
+    """(start, end) from explicit params, else the last complete PAY PERIOD (not merely a week)."""
     s, e = _d(start), _d(end)
     if s and e:
         if e < s:
             raise HTTPException(400, "end is before start")
         return s, e
-    return previous_week(org_id)
+    a, b, _payday = previous_pay_period(org_id)
+    return a, b
 
 
 # ── payer resolution ──────────────────────────────────────────────────────────────────────────────
@@ -151,6 +245,67 @@ def _is_admin(authorization, org_id, who=None):
     except Exception:
         pass
     return (who or {}).get("role", "").lower() == "admin"
+
+
+# ── pay-rate visibility (OWNER 2026-08-11) ────────────────────────────────────────────────────────
+# "DM / market manager should be able to see the payroll hours and deducted hours but not the actual
+# payscale for any employee."
+#
+# A DM approves HOURS — worked, lunch, adjustment, payable. None of that requires knowing what anyone
+# earns per hour, and the board was handing over `pay_rate` and `pay_effective` for every employee in
+# their span. The gate is applied SERVER-SIDE, on the payload, before it leaves the endpoint: hiding
+# the columns in the UI alone would still ship the rates to the browser and straight into the Excel /
+# PDF export (RULE FOUR — "a gated money column never leaks through an export").
+#
+# The role list is a seeded DEFAULT VALUE, not a branch — the same convention as
+# plan_pay_gate.DEFAULT_EXCLUSIONS. It lives in ONE place so a tenant that names its roles differently
+# is a one-line change here rather than a hunt through the module.
+PAY_RATE_HIDDEN_ROLES = {"district_manager", "dm", "market_manager", "market"}
+
+
+def _can_see_pay_rates(authorization, org_id, who=None):
+    """May this caller see per-employee pay RATES and dollar amounts on the approvals board?
+
+    An admin / full-scope / super-admin always may. A caller acting in one of the
+    PAY_RATE_HIDDEN_ROLES may not. Anyone else is unchanged (HR, accountant, company — the roles that
+    actually run payroll keep the money view they have today; this narrows the DM's view only).
+
+    FAIL-CLOSED: if the caller cannot be resolved, the rates are HIDDEN. Hours still render, so a
+    transient resolver failure degrades to "less information", never to a leak."""
+    if _is_admin(authorization, org_id, who):
+        return True
+    role = ""
+    try:
+        from app.modules.core.router import _resolve_caller, sb as _core_sb, _uid_from_token
+        uid = _uid_from_token(authorization)
+        if uid:
+            caller = _resolve_caller(_core_sb(), uid, org_id) or {}
+            role = str(caller.get("role") or "").strip().lower()
+    except Exception:
+        role = str((who or {}).get("role") or "").strip().lower()
+    if not role:
+        role = str((who or {}).get("role") or "").strip().lower()
+    if not role:
+        return False                      # unresolvable caller -> hide
+    return role not in PAY_RATE_HIDDEN_ROLES
+
+
+# The row keys that carry an employee's pay scale, and the totals key derived from them.
+PAY_FIELDS = ("pay_rate", "pay_effective")
+PAY_TOTALS_FIELDS = ("payable_pay",)
+
+
+def _strip_pay(rows, totals):
+    """Remove every pay-scale figure from an outgoing payload. Returns (rows, totals) with the keys
+    DELETED rather than zeroed — a 0.00 rate reads as "this person earns nothing", which is a
+    different and worse lie than "you cannot see this"."""
+    for r in rows:
+        for k in PAY_FIELDS:
+            r.pop(k, None)
+    if isinstance(totals, dict):
+        for k in PAY_TOTALS_FIELDS:
+            totals.pop(k, None)
+    return rows, totals
 
 
 def _payer_recipient(org_id, payer, store_code):
@@ -321,8 +476,17 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
         "held": sum(1 for r in out if r["held"]),
         "payable_pay": round(sum(r["pay_effective"] or 0 for r in out if r["payable"]), 2),
     }
+    # Pay-scale gate (owner 2026-08-11) — applied to the PAYLOAD, so the export can't carry what the
+    # screen hides. `can_see_pay_rates` tells the UI to drop the columns instead of rendering blanks.
+    can_see_pay = _can_see_pay_rates(authorization, org_id)
+    if not can_see_pay:
+        out, totals = _strip_pay(out, totals)
+
     return {"ready": True, "period_start": s.isoformat(), "period_end": e.isoformat(),
-            "rows": out, "totals": totals,
+            "rows": out, "totals": totals, "can_see_pay_rates": can_see_pay,
+            # The cycle this period belongs to, so the board can SAY "payable on ..." instead of
+            # showing two bare dates the DM has to reconcile against the schedule in their head.
+            "cycle": _cycle_meta(org_id, s, e),
             "payers": [{"id": p["id"], "name": p["name"], "kind": p["kind"],
                         "email": p.get("email"), "is_default": p.get("is_default")}
                        for p in payers if p.get("is_active") is not False]}
@@ -826,7 +990,10 @@ async def run_weekly_notice(x_notify_secret: str = Header(default=""), eval_date
     results = []
     for t in tens:
         oid, tname = t.get("org_id"), (t.get("name") or "your company")
-        s, e = previous_week(oid, ref)
+        # The notice must ask about the period that is actually PAYABLE. On a biweekly tenant a weekly
+        # window is half a pay period, so the DM would be chased to approve something that never lines
+        # up with a payday — the same mismatch the board had.
+        s, e, _pd = previous_pay_period(oid, ref)
         try:
             # No caller: "" is a REAL empty string, deliberately — the org-wide path. Passing nothing
             # would bind the Header sentinel (see the module docstring).
