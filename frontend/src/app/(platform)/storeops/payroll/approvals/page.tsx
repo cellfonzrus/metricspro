@@ -24,6 +24,8 @@ type Row = {
   scheduled_hours?: number | null; hours_source?: number | null
   hours_approved?: number | null; hours_effective?: number | null; hours_corrected?: boolean
   pay_rate?: number; pay_effective?: number
+  // An active employee the clock holds nothing for, plus the days the POS proves they worked.
+  no_clock_record?: boolean; worked_days_evidence?: string[]
   dm_status: string; dm_by?: string | null; dm_at?: string | null; dm_note?: string | null
   hr_status: string; hr_by?: string | null; hr_at?: string | null; hr_note?: string | null
   payer_id?: string | null; payer_name?: string | null; payer_kind?: string | null; payer_from?: string | null
@@ -208,6 +210,9 @@ export default function PayrollApprovalsPage() {
     { header: 'Adjustment', field: 'adjustment_hours', type: 'number', get: (r: Row) => r.adjustment_hours ?? '' },
     { header: 'Adjustment reason', field: 'adjustment_reason', get: (r: Row) => r.adjustment_reason || '' },
     { header: 'Payable Hours', field: 'hours_payable', type: 'number', get: (r: Row) => r.hours_payable ?? '' },
+    { header: 'No clock record', field: 'no_clock_record', get: (r: Row) => (r.no_clock_record ? 'yes' : '') },
+    { header: 'Days worked (POS)', field: 'worked_days_evidence',
+      get: (r: Row) => (r.worked_days_evidence || []).join(' ') },
     { header: 'Computed Hours (net)', field: 'hours_source', type: 'number', get: (r: Row) => r.hours_source ?? '' },
     { header: 'Approved Hours', field: 'hours_effective', type: 'number', get: (r: Row) => r.hours_effective ?? '' },
     { header: 'Corrected', field: 'hours_corrected', get: (r: Row) => (r.hours_corrected ? 'yes' : '') },
@@ -356,6 +361,21 @@ export default function PayrollApprovalsPage() {
                   <td>
                     <div style={{ fontWeight: 600 }}>{r.name || r.employee_id}</div>
                     <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.employee_id}</div>
+                    {/* A 0.00 that means "the clock has nothing" must not look like a real zero. When
+                        the POS proves they were working, say so — that is the correction to make. */}
+                    {r.no_clock_record && (
+                      <div style={{ fontSize: 10.5, color: '#b45309', marginTop: 2 }}>
+                        {r.worked_days_evidence?.length
+                          ? `no clock record — POS shows ${r.worked_days_evidence.length} day(s) worked`
+                          : 'no clock record this period'}
+                        {!!r.worked_days_evidence?.length && (
+                          <div style={{ color: 'var(--text3)', fontSize: 10 }}>
+                            {r.worked_days_evidence.slice(0, 7).join(', ')}
+                            {r.worked_days_evidence.length > 7 ? ` +${r.worked_days_evidence.length - 7} more` : ''}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td>{r.store || <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                   <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.scheduled_hours ?? '—'}</td>

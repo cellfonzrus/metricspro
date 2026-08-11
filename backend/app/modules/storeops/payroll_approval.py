@@ -342,6 +342,59 @@ def _hours_for_period(org_id, start, end, authorization):
     return rows or []
 
 
+def _active_in_span(org_id, authorization):
+    """Every ACTIVE employee the caller may see, span-scoped exactly as /storeops/employees is.
+
+    Scoping is not optional here. `_hours_for_period` returns rows already narrowed to the caller's
+    span; appending an unscoped roster on top would show a DM every employee in the tenant — a
+    cross-span leak introduced by a feature meant to add rows. The SAME `scope_keyset` / `in_keyset`
+    pair the roster endpoint uses is applied, so a DM's board grows only by their own people."""
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        rows = (sb().table("employees")
+                .select("employee_id,name,home_store,pay_rate,is_active")
+                .eq("org_id", org_id).eq("is_active", True).order("name").execute().data) or []
+        ks = scope_keyset(authorization or "", org_id)
+        if ks is not None:
+            rows = [e for e in rows if in_keyset(ks, e.get("home_store"))]
+        return [r for r in rows if r.get("employee_id")]
+    except Exception:
+        return []          # never let the roster read break the board
+
+
+def _worked_days_from_sales(org_id, start, end):
+    """{canonical employee name -> sorted worked dates} from the POS. Best-effort.
+
+    WHY THIS IS ON THE PAYROLL BOARD AT ALL (owner 2026-08-11, from a real case): four active
+    Luxelink employees rang 27 days of sales inside 2026-07-23..08-05 while holding zero punches and
+    zero shifts. Listing them with 0.00 hours and nothing else would tell the DM "this person did not
+    work" — the opposite of the truth. The sale lines are independent proof they were on the floor, so
+    a zero-hours row can say WHICH days need correcting instead of just sitting at zero.
+
+    Name vocabulary: raw_sales is 'Last, First', storeops is 'First Last' — matched through
+    commission_engine._canon_person, the canonicalizer that already exists for this, never a second
+    local one. A name that still does not match (a real misspelling) simply yields no days rather than
+    being fuzzily attached to the wrong person."""
+    try:
+        from app.modules.commcalc.commission_engine import _canon_person as _canon
+    except Exception:
+        return {}
+    out = {}
+    try:
+        rows = (sb().schema("commcalc").table("raw_sales").select("salesperson,trans_date")
+                .eq("org_id", org_id)
+                .gte("trans_date", start.isoformat()).lte("trans_date", end.isoformat())
+                .limit(200000).execute().data) or []
+    except Exception:
+        return {}
+    for r in rows:
+        who = _canon(r.get("salesperson"))
+        d = str(r.get("trans_date") or "")[:10]
+        if who and d:
+            out.setdefault(who, set()).add(d)
+    return {k: sorted(v) for k, v in out.items()}
+
+
 def _existing(org_id, start, end):
     try:
         rows = (sb().table("payroll_approval").select("*").eq("org_id", org_id)
@@ -364,6 +417,35 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
     Span-scoped — a DM sees their stores, an admin sees all."""
     s, e = _resolve_period(org_id, start, end)
     hours = _hours_for_period(org_id, s, e, authorization)
+
+    # OWNER 2026-08-11: "we need to add all to the payroll report even as they are active employees in
+    # hours correction." An employee with no punch and no shift never reached this board, so there was
+    # no row on which to correct their hours — the four Luxelink employees who worked 27 days between
+    # them (proven by their own sale lines) were simply absent, and absence reads as "did not work".
+    # Every ACTIVE employee in the caller's span now gets a row; those with no clock record come in at
+    # 0.00 hours, flagged, carrying the days the POS says they worked so the correction is informed
+    # rather than invented. This ADDS rows only — no existing row's hours change.
+    present = {h.get("employee_id") for h in hours if h.get("employee_id")}
+    _sales_days = _worked_days_from_sales(org_id, s, e)
+    try:
+        from app.modules.commcalc.commission_engine import _canon_person as _canon
+    except Exception:
+        _canon = None
+    for emp in _active_in_span(org_id, authorization):
+        eid = emp.get("employee_id")
+        if eid in present:
+            continue
+        worked = _sales_days.get(_canon(emp.get("name")), []) if _canon else []
+        hours.append({
+            "employee_id": eid, "name": emp.get("name"), "store": emp.get("home_store") or "",
+            "pay_rate": float(emp.get("pay_rate") or 0),
+            "scheduled_hours": 0, "actual_hours": 0, "shifts": 0,
+            # Distinguishes "the clock has nothing for this person" from a genuine zero — the board
+            # must never present the two as the same fact.
+            "no_clock_record": True,
+            "worked_days_evidence": worked,
+        })
+
     saved = _existing(org_id, s, e)
     if saved is None:
         return {"ready": False, "period_start": s.isoformat(), "period_end": e.isoformat(),
@@ -423,6 +505,11 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
 
         out.append({
             "employee_id": eid, "name": h.get("name"), "store": st,
+            # An active employee the clock holds NOTHING for. Not the same as a real 0.00, and the
+            # evidence list says which days the POS proves they worked (empty = none found, which is
+            # not the same as "did not work" either — see clockin_evidence).
+            "no_clock_record": bool(h.get("no_clock_record")),
+            "worked_days_evidence": h.get("worked_days_evidence") or [],
             "scheduled_hours": _num(h.get("scheduled_hours")),
             "hours_source": src, "hours_approved": approved, "hours_effective": effective,
             "hours_corrected": approved is not None and src is not None and approved != src,
