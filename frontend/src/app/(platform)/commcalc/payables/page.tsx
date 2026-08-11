@@ -78,8 +78,13 @@ export default function PayablesPage() {
   // org roster (the same org-scoped pick-don't-type source /core/filter-options serves every other bar).
   const [roster, setRoster] = useState<StoreOpt[]>([])
   useEffect(() => { api(`/api/v1/payables/settings`).then(setSettings).catch(() => {}) }, [])
+  // ⚠️ NOT /core/filter-options. That one keys stores on `storeops.stores.address` ("4640 Diversey
+  // Chicago"), while every row on this page carries the store_mapping spelling ("4640-A W Diversey
+  // Ave") — MEASURED 2026-08-11: 0 of luxelink's 20 stores matched, so the roster's options could
+  // never select a row and the market picker filtered the whole table away. /payables/filter-options
+  // serves the vocabulary the DATA uses, with the market attached.
   useEffect(() => {
-    api(`/api/v1/core/filter-options`)
+    api(`/api/v1/payables/filter-options`)
       .then((d: any) => setRoster((d?.stores || []).map((x: any) => ({ id: x.store, label: x.store, market: x.market || null }))))
       .catch(() => setRoster([]))
   }, [])
