@@ -866,9 +866,17 @@ def build_inputs(client, org_id, period):
             #
             # Ordering: an explicit producer `source_key` always wins. This clause is for MANUAL rows,
             # and it can only ever apply to a row that would otherwise have gone to `store_opex`.
+            #
+            # The amount must be NON-ZERO. Suppression is triggered by a real payroll figure existing
+            # for the period, and a $0.00 placeholder row is not one — without this guard a tenant that
+            # pre-creates its expense rows at zero would zero out `wages` AND lose the estimate,
+            # overstating net income by the entire payroll. A NEGATIVE row (a correction) still counts:
+            # money was keyed by hand either way. This matches the settings-card wording exactly —
+            # "when any of them has an amount for a month".
             ename = (r.get("expense_name") or "").strip()
             is_manual_payroll = bool(
-                payroll_names and not sk and ename and ename.lower() in payroll_names)
+                payroll_names and not sk and ename and ename.lower() in payroll_names
+                and safe_float(r.get("amount")))
             if is_manual_payroll:
                 # AUTHORITATIVE regardless of which line it books to — the point is that a real,
                 # tenant-entered payroll figure exists for this period, so the estimate must not be

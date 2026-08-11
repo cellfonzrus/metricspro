@@ -297,6 +297,29 @@ def test_k2_case_and_route():
                L["wages"].get("label") == "Gross Payroll", "label follows the money")
 
 
+def test_k2_zero_amount_row_is_not_authoritative():
+    print("\n[2d] K2 — a $0.00 placeholder row must NOT suppress the estimate (Gate-1 2026-08-11)")
+    # A tenant that pre-creates its expense rows at zero, then keys the real figure later in the
+    # month. Without the non-zero guard, the mere PRESENCE of the name zeroes `wages` AND kills the
+    # estimate, so the period reports NO payroll at all and net income is overstated by the lot.
+    zeroed = [dict(r) for r in STORE_EXPENSES]
+    for r in STORE_EXPENSES:
+        if r.get("expense_name") == "Employee Salaries":
+            r["amount"] = 0.0
+    set_config(payroll_expense_names=["Employee Salaries"])
+    L = build()
+    check("estimate SURVIVES a $0.00 payroll row", line(L, "wages"), 1000.00,
+          "no real payroll was keyed, so the shifts x rate estimate is still the best figure")
+    # ...and a NEGATIVE row (a correction) IS authoritative — money was keyed by hand either way.
+    for r in STORE_EXPENSES:
+        if r.get("expense_name") == "Employee Salaries":
+            r["amount"] = -50.0
+    L = build()
+    check("a NEGATIVE correction row still suppresses", line(L, "wages"), 0.00,
+          "a correction is a hand-keyed payroll figure, not an absent one")
+    STORE_EXPENSES[:] = zeroed
+
+
 def test_k2_producer_token_still_wins():
     print("\n[2c] K2 — the EEP guard is intact: additional_payroll must never be authoritative")
     STORE_EXPENSES.append({"org_id": ORG, "period": "July 2026", "store_code": "STORE-1",
@@ -429,6 +452,7 @@ def main():
     test_k2_bug_reproduced()
     test_k2_fixed()
     test_k2_case_and_route()
+    test_k2_zero_amount_row_is_not_authoritative()
     test_k2_producer_token_still_wins()
     test_k1_rebate_contra_cogs()
     test_k3_off_is_byte_identical()

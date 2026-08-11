@@ -90,16 +90,36 @@ COMMENT ON COLUMN commcalc.account_config.device_cogs_mode IS
 -- Effect on luxelink (854f6d7b-6590-4e4d-88ab-646f560d4f4c) July 2026, MEASURED, after a recompute:
 --   wages         145,358.27 -> 0.00           (estimate suppressed; K2)
 --   store_opex    225,080.58 -> 225,080.58     (unchanged - keeps the authoritative $108,430.59)
---   device_cost      234.00 -> 142,267.93      (invoice-first; K3)
+--   device_cost      234.00 -> 137,185.10      (invoice-first, IMEI-DEDUPED; K3. The $234.00 of POS
+--                                               SIM-kit cost is DISPLACED, not added to - when an
+--                                               invoice source answers, the POS basis is not booked.)
 --   device_rebate      0.00 -> (126,636.77)    (contra-COGS; K1, code-side, no seed needed)
 --   vip_reimb    126,636.77 -> 0.00            (K1 moves it out of income)
---   NET INCOME  (172,411.98) -> (145,798.46)   delta +26,613.52
+--   NET INCOME  (172,411.98) -> (164,004.81)   delta +8,407.17    <- mig 621 ALONE (this file)
+--                             -> (140,715.63)  delta +31,696.35   <- 621 AND 622 together
+--
+-- 📌 CORRECTED 2026-08-11 at Gate-1 review. This block previously read device_cost -> 142,267.93 and
+-- NET INCOME -> (145,798.46) / delta +26,613.52. Those figures are SUPERSEDED and were wrong twice:
+-- they counted all 787 activation rows instead of the 746 distinct IMEIs that policy S9 C1 requires
+-- (-$4,848.83), and they added the displaced $234.00 POS cost on top of the invoice figure. They also
+-- silently assumed mig 622 was applied. The numbers above are the ones in formula book SM, measured
+-- read-only against prod. READ THE 621-ALONE LINE unless you are running 622 in the same session.
 --
 -- INSERT INTO commcalc.account_config (org_id, payroll_expense_names, payroll_expense_routes, device_cogs_mode)
 -- VALUES ('854f6d7b-6590-4e4d-88ab-646f560d4f4c',
 --         ARRAY['Employee Salaries','DM Salaries','Owner / Mgmt Salaries'],
 --         '{}'::jsonb,
 --         'auto')
+-- Names VERIFIED against luxelink's own July rows at Gate-1 (2026-08-11): 'Employee Salaries'
+-- $72,930.58 + 'DM Salaries' $25,500.01 + 'Owner / Mgmt Salaries' $10,000.00 = $108,430.59, which is
+-- ruling K2's figure to the cent. A mistyped name would match NOTHING and silently change nothing.
+--
+-- ⚠️ MODE CHOICE, decide before uncommenting: 'auto' falls back to the POS when no distributor
+-- invoice covers a period, and POS device cost on a subsidised handset is NEGATIVE. For July it is
+-- identical either way (the MA source answers, so the POS is never reached). If this tenant is ever
+-- swept over months with no `raw_ma_commission`, 'invoice' is the mode that honours ruling K3(b)'s
+-- honest-zero and refuses to book a negative cost. Feb-May carry no raw_sales at all, so the two
+-- modes are also identical there TODAY - but that stops being true the moment sales are backloaded.
 -- ON CONFLICT (org_id) DO UPDATE
 --   SET payroll_expense_names  = EXCLUDED.payroll_expense_names,
 --       payroll_expense_routes = EXCLUDED.payroll_expense_routes,
