@@ -139,11 +139,23 @@ export default function MaProductClassPage() {
     } catch (e: any) { flash(e?.message || 'Save failed — is migration 254 applied?') }
   }
 
-  async function confirm(names: string[]) {
-    if (!names.length) { flash('Nothing to confirm.'); return }
+  async function confirm(items: Item[]) {
+    if (!items.length) { flash('Nothing to confirm.'); return }
     try {
-      const d = await api('/api/v1/commcalc/ma-product-class/confirm', { method: 'POST', body: JSON.stringify({ product_names: names }) })
-      flash(`Confirmed ${d?.confirmed_count ?? 0} name(s).`)
+      // `items` carries the class shown on screen, so confirming a proposal that was never saved
+      // CREATES it instead of silently matching nothing (owner report 2026-08-11: "Subsidy is not
+      // going away"). product_names stays for backward compatibility with any older caller.
+      const d = await api('/api/v1/commcalc/ma-product-class/confirm', {
+        method: 'POST',
+        body: JSON.stringify({
+          product_names: items.map(i => i.product_name),
+          items: items.map(i => ({ product_name: i.product_name, product_class: i.product_class })),
+        }),
+      })
+      const made = d?.created_count ?? 0
+      const missed = (d?.not_found || []).length
+      flash(`Confirmed ${d?.confirmed_count ?? 0} name(s)${made ? ` (${made} newly saved)` : ''}`
+        + (missed ? ` · ${missed} could not be confirmed — assign a class first: ${(d.not_found || []).slice(0, 3).join(', ')}` : ''))
       loadNames(); if (tab === 'preview') loadPreview()
     } catch (e: any) { flash(e?.message || 'Confirm failed — is migration 254 applied?') }
   }
@@ -165,7 +177,9 @@ export default function MaProductClassPage() {
     return true
   }), [items, status, klass, search])
 
-  const proposedShown = useMemo(() => shown.filter(i => i.product_class !== UNMAPPED && i.status === 'proposed').map(i => i.product_name), [shown])
+  // Send the WHOLE item, not just the name: a proposal the user can see but that has no saved row yet
+  // needs its class to travel with the confirm, otherwise the server has nothing to create.
+  const proposedShown = useMemo(() => shown.filter(i => i.product_class !== UNMAPPED && i.status === 'proposed'), [shown])
 
   const nameCols: ExportColumn[] = [
     { header: 'Product name', field: 'product_name', get: r => r.product_name },
@@ -372,7 +386,7 @@ export default function MaProductClassPage() {
                     </td>
                     <td style={td}>
                       {it.product_class !== UNMAPPED && it.status !== 'confirmed' && (
-                        <button onClick={() => confirm([it.product_name])} style={{ ...sel, cursor: 'pointer', fontWeight: 600 }}>✓ Confirm</button>
+                        <button onClick={() => confirm([it])} style={{ ...sel, cursor: 'pointer', fontWeight: 600 }}>✓ Confirm</button>
                       )}
                     </td>
                   </tr>
