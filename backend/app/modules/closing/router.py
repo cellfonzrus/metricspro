@@ -546,15 +546,55 @@ def closing_submissions(date_from: str = None, date_to: str = None,
 
 
 # ── Stores (for the rep submission form's store picker) ────────────────────────────────────
+def _norm_addr(v):
+    """Address as a comparison key: case/whitespace-insensitive. Deliberately NOT a street-suffix
+    normalizer ('Ave' vs 'Avenue' stay different) — this only has to collapse rows that carry the
+    SAME address string, which is exactly how a duplicate store_code twin presents."""
+    return " ".join(str(v or "").split()).strip().lower()
+
+
 @router.get("/stores")
 def closing_stores(org_id: str = ORG_ID):
-    """Store options for the in-app closing form — SFID + canonical store + market."""
+    """Store options for the in-app closing form — SFID + canonical store + market.
+
+    ⚠️ ONE OPTION PER PHYSICAL STORE. A tenant's store vocabulary splits routinely (an onboarding
+    import invents structured codes like 'LUX-NY-PENN' for stores already keyed '957'), and this
+    endpoint used to key purely on store_code — so the SAME shop appeared TWICE in the Daily Closing
+    picker, once under each spelling. That is not cosmetic: luxelink 2026-08-05..08-10 filed 29
+    closings / $9,413.16 of declared cash against the twin nobody else reads, and its cash-on-hand,
+    pickups and envelope payouts silently split across two identities.
+
+    Collapse rule, in priority order:
+      1. an EXPLICIT commcalc.store_aliases row (alias -> store_code) — an admin has confirmed the two
+         spellings are one store; the alias never gets its own option.
+      2. same normalized store_address inside store_mapping — the twin case above.
+    The survivor of a collapsed group is the code storeops.stores (the store MASTER) knows, so the
+    option always carries the identity the rest of the platform writes. The absorbed spellings ride
+    along in `aliases` rather than vanishing, so this is diagnosable from the response alone.
+
+    SAFETY: if two codes at one address are BOTH in the store master, they are two real stores the
+    admin created deliberately (a suite split) and BOTH are emitted — collapsing only ever happens
+    toward a single canonical code, never between two of them."""
     client = sb()
     sm = (client.schema("commcalc").table("store_mapping")
           .select("salesforce_id,store_code,store_address").eq("org_id", org_id).execute().data) or []
     stores = (client.schema("storeops").table("stores").select("store_code,address,market").eq("org_id", org_id).execute().data) or []
     mkt = {s.get("store_code"): s.get("market") for s in stores if s.get("store_code")}
     addr = {s.get("store_code"): s.get("address") for s in stores if s.get("store_code")}
+    canonical = {c for c in ((s.get("store_code") or "").strip() for s in stores) if c}
+
+    # (1) explicit alias map — read defensively: a tenant with no Store-Matching rows, or the table
+    # absent entirely, must degrade to the address rule, never 500 the closing form.
+    alias_to_code = {}
+    try:
+        for a in (client.schema("commcalc").table("store_aliases").select("alias,store_code")
+                  .eq("org_id", org_id).limit(5000).execute().data) or []:
+            al, tgt = str(a.get("alias") or "").strip(), str(a.get("store_code") or "").strip()
+            if al and tgt and al.lower() != tgt.lower():
+                alias_to_code[al.lower()] = tgt
+    except Exception as e:
+        print(f"WARN closing_stores store_aliases read failed (falling back to address rule): {e}")
+
     by_code = {}
     for r in sm:
         code = (r.get("store_code") or "").strip()
@@ -570,7 +610,33 @@ def closing_stores(org_id: str = ORG_ID):
         if code and code not in by_code:
             by_code[code] = {"sfid": "", "store_code": code,
                              "store_address": s.get("address") or code, "market": s.get("market") or ""}
-    out = list(by_code.values())
+
+    # ── collapse ──
+    groups = {}          # group key -> [code, ...]
+    for code in by_code:
+        # An alias must group under the key its TARGET computes, not under a key of its own — otherwise
+        # 'PENN-OLD' -> '957' lands in ("code","957") while '957' lands in ("addr","957 pennsylvania
+        # avenue") and the two never meet. Resolve to the root FIRST, then key off the root's address.
+        # One hop only (store_aliases is UNIQUE on the alias, so chains are not a supported shape).
+        tgt = alias_to_code.get(code.lower())
+        root = tgt if (tgt and tgt in by_code) else code
+        root_addr = by_code[root]["store_address"]
+        key = ("addr", _norm_addr(root_addr)) if root_addr else ("code", root)
+        groups.setdefault(key, []).append(code)
+
+    out = []
+    for key, codes in groups.items():
+        masters = [c for c in codes if c in canonical]
+        if len(codes) == 1 or len(masters) > 1:
+            out.extend(by_code[c] for c in codes)     # nothing to collapse, or two real stores
+            continue
+        # deterministic survivor: the store master's code, else the SFID-bearing one, else sorted-first
+        winner = masters[0] if masters else next(
+            (c for c in sorted(codes) if by_code[c]["sfid"]), sorted(codes)[0])
+        row = dict(by_code[winner])
+        row["aliases"] = sorted(c for c in codes if c != winner)
+        out.append(row)
+
     out.sort(key=lambda s: str(s.get("store_address") or ""))
     return out
 
@@ -5493,7 +5559,31 @@ CLOSING_INTERNAL_API_BASE = os.environ.get("INTERNAL_API_BASE_URL") or "http://1
 #    connection error means it's down — EITHER degrades to (None, <note>) / {"posted/pushed": False,...},
 #    never a raised exception, so this module's own endpoints stay usable while a sibling package is
 #    still in flight. ──
-def _get_commission_accrued(org_id, as_of, employee_key=None, store_code=None):
+# ⚠️ EVERY sibling call below MUST carry the caller's own bearer token.
+# `app/core/tenant_middleware` rejects an unauthenticated request with 401 BEFORE it reaches the route
+# handler, so a header-less self-call never runs — it just comes back "401 Unauthorized" and, because
+# each helper here is degrade-safe, that surfaced as a quiet note and a **$0 amount** rather than an
+# error. Net effect in production: commission_due and salary_due read $0 for every store and the DM
+# could not pay anyone from the envelope. Forwarding the CALLER'S token (never a service token) is also
+# what keeps the sibling's own span scoping honest — a DM still sees only their stores' figures.
+# Same class as the in-process Header()-sentinel 401: adding a gate to a shared route silently breaks
+# every internal caller, and it leaves no failure_log row.
+def _sib_headers(authorization):
+    return {"Authorization": authorization} if authorization else {}
+
+
+def _sib_note(r, what, sibling):
+    """404 -> that package isn't deployed; 401/403 -> we called it without (or with a too-narrow)
+    token. Naming the status is the difference between a 10-minute fix and another blind hunt."""
+    if r.status_code == 404:
+        return f"{what} endpoint not deployed yet ({sibling} package pending)"
+    if r.status_code in (401, 403):
+        return (f"{what} refused the internal call ({r.status_code}) — the caller's Authorization "
+                f"header was missing or out of scope, so this figure is NOT $0, it is UNKNOWN")
+    return None
+
+
+def _get_commission_accrued(org_id, as_of, employee_key=None, store_code=None, authorization=""):
     url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/commcalc/payout/accrued"
     params = {"org_id": org_id, "as_of": as_of}
     if employee_key:
@@ -5501,16 +5591,17 @@ def _get_commission_accrued(org_id, as_of, employee_key=None, store_code=None):
     if store_code:
         params["store_code"] = store_code
     try:
-        r = requests.get(url, params=params, timeout=10)
-        if r.status_code == 404:
-            return None, "commission accrual endpoint not deployed yet (mod-commission package pending)"
+        r = requests.get(url, params=params, headers=_sib_headers(authorization), timeout=10)
+        note = _sib_note(r, "commission accrual", "mod-commission")
+        if note:
+            return None, note
         r.raise_for_status()
         return r.json(), None
     except Exception as e:
         return None, f"commission accrual fetch failed ({type(e).__name__}: {e})"
 
 
-def _get_salary_owed(org_id, start, end, store_code=None, employee_id=None):
+def _get_salary_owed(org_id, start, end, store_code=None, employee_id=None, authorization=""):
     url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/storeops/salary-owed"
     params = {"org_id": org_id, "start": start, "end": end}
     if store_code:
@@ -5518,21 +5609,30 @@ def _get_salary_owed(org_id, start, end, store_code=None, employee_id=None):
     if employee_id:
         params["employee_id"] = employee_id
     try:
-        r = requests.get(url, params=params, timeout=10)
-        if r.status_code == 404:
-            return None, "salary-owed endpoint not deployed yet (mod-people package pending)"
+        r = requests.get(url, params=params, headers=_sib_headers(authorization), timeout=10)
+        note = _sib_note(r, "salary-owed", "mod-people")
+        if note:
+            return None, note
         r.raise_for_status()
         return r.json(), None
     except Exception as e:
         return None, f"salary-owed fetch failed ({type(e).__name__}: {e})"
 
 
-def _post_commission_payout(org_id, employee_key, amount, paid_date, store_code, withdrawal_ref, recorded_by):
+def _post_commission_payout(org_id, employee_key, amount, paid_date, store_code, withdrawal_ref,
+                            recorded_by, authorization=""):
     url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/commcalc/payout/record"
     body = {"employee_key": employee_key, "amount": amount, "paid_date": paid_date,
             "store_code": store_code, "withdrawal_ref": withdrawal_ref, "recorded_by": recorded_by}
     try:
-        r = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        r = requests.post(url, params={"org_id": org_id}, json=body,
+                          headers=_sib_headers(authorization), timeout=10)
+        if r.status_code in (401, 403):
+            # ⚠️ THE DANGEROUS ONE: the cash withdrawal IS persisted by the caller, so an unrecorded
+            # payout means the rep's ledger still shows the money owed and they can be paid TWICE.
+            return {"posted": False, "status": r.status_code,
+                    "note": f"commission payout/record refused the internal call ({r.status_code}) — "
+                            "cash was taken but the commission ledger did NOT record it; reconcile before re-paying"}
         if r.status_code == 404:
             return {"posted": False, "status": 404,
                     "note": "commission payout/record endpoint not deployed yet — withdrawal is still persisted"}
@@ -5544,12 +5644,19 @@ def _post_commission_payout(org_id, employee_key, amount, paid_date, store_code,
                 "note": f"commission payout push failed ({type(e).__name__}: {e}) — withdrawal is still persisted"}
 
 
-def _post_salary_advance(org_id, employee_id, amount, paid_date, store_code, withdrawal_ref, recorded_by):
+def _post_salary_advance(org_id, employee_id, amount, paid_date, store_code, withdrawal_ref,
+                         recorded_by, authorization=""):
     url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/storeops/salary-advance/record"
     body = {"employee_id": employee_id, "amount": amount, "paid_date": paid_date,
             "store_code": store_code, "withdrawal_ref": withdrawal_ref, "recorded_by": recorded_by}
     try:
-        r = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        r = requests.post(url, params={"org_id": org_id}, json=body,
+                          headers=_sib_headers(authorization), timeout=10)
+        if r.status_code in (401, 403):
+            # Same double-pay exposure as the commission twin above — cash out, ledger unaware.
+            return {"posted": False, "status": r.status_code,
+                    "note": f"salary-advance/record refused the internal call ({r.status_code}) — "
+                            "cash was taken but the salary ledger did NOT record it; reconcile before re-paying"}
         if r.status_code == 404:
             return {"posted": False, "status": 404,
                     "note": "salary-advance/record endpoint not deployed yet — withdrawal is still persisted"}
@@ -5709,7 +5816,7 @@ def _insert_expense_lines(client, org_id, store_code, close_date, closing_row_id
         return []
 
 
-def _push_expense_category_pl(client, org_id, period, category_id, category_name):
+def _push_expense_category_pl(client, org_id, period, category_id, category_name, authorization=""):
     """Recompute + push the WHOLE per-store aggregate of APPROVED 'expense'-kind lines for
     (org, period, category) to mod-commission's Store Expenses system-line receiver. Idempotent full
     recompute (never an incremental delta) — the receiver already replaces-by-source_key, so re-running
@@ -5734,9 +5841,16 @@ def _push_expense_category_pl(client, org_id, period, category_id, category_name
     url = f"{CLOSING_INTERNAL_API_BASE}/api/v1/commcalc/expenses/{period}/system-line"
     body = {"source_key": f"closing_expense:{category_id}", "label": category_name, "cells": cells}
     try:
-        resp = requests.post(url, params={"org_id": org_id}, json=body, timeout=10)
+        resp = requests.post(url, params={"org_id": org_id}, json=body,
+                             headers=_sib_headers(authorization), timeout=10)
         if resp.status_code == 404:
             return {"pushed": False, "status": 404, "note": "system-line endpoint not deployed yet"}
+        if resp.status_code in (401, 403):
+            # An approved store expense that never reaches the receiver is simply ABSENT from the P&L —
+            # the period looks cheaper than it was, with nothing on screen to say a push was refused.
+            return {"pushed": False, "status": resp.status_code,
+                    "note": f"system-line receiver refused the internal call ({resp.status_code}) — "
+                            "this category is NOT on the P&L for the period"}
         resp.raise_for_status()
         return {"pushed": True, "status": resp.status_code, "stores": len(cells)}
     except Exception as e:
@@ -5960,7 +6074,8 @@ def payout_due(store_code: str = "", as_of: str = "", org_id: str = ORG_ID,
 
     commission_due, commission_employees = 0.0, []
     if cfg["take_commission"]:
-        data, err = _get_commission_accrued(org_id, d, store_code=store_code or None)
+        data, err = _get_commission_accrued(org_id, d, store_code=store_code or None,
+                                            authorization=authorization)
         if err:
             notes.append(f"commission: {err}")
         elif data:
@@ -5986,7 +6101,8 @@ def payout_due(store_code: str = "", as_of: str = "", org_id: str = ORG_ID,
         # 60-day lookback window so `balance` reflects the FULL unpaid-to-date snapshot, not just today
         # (matches how commission's own `unpaid_balance` is already a running total, not a single day).
         win_start = (dateparser.parse(d) - timedelta(days=60)).date().isoformat()
-        data, err = _get_salary_owed(org_id, win_start, d, store_code=store_code or None)
+        data, err = _get_salary_owed(org_id, win_start, d, store_code=store_code or None,
+                                     authorization=authorization)
         if err:
             notes.append(f"salary: {err}")
         elif data:
@@ -6125,10 +6241,10 @@ def record_envelope_withdrawal(payload: dict, org_id: str = ORG_ID, authorizatio
             print(f"WARN could not mark closing_expense paid: {e}")
     elif purpose == "commission_payout" and row["employee_id"]:
         sibling = _post_commission_payout(org_id, row["employee_id"], amount, today_iso,
-                                          row["store_code"], wid, taken_by)
+                                          row["store_code"], wid, taken_by, authorization=authorization)
     elif purpose == "salary_payout" and row["employee_id"]:
         sibling = _post_salary_advance(org_id, row["employee_id"], amount, today_iso,
-                                       row["store_code"], wid, taken_by)
+                                       row["store_code"], wid, taken_by, authorization=authorization)
 
     if sibling and sibling.get("posted") and isinstance(sibling.get("data"), dict) and sibling["data"].get("id"):
         try:
