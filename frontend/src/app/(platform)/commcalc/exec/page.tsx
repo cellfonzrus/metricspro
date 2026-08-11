@@ -58,6 +58,16 @@ export default function ExecOverviewPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📊 Owner Overview — {period}</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Business health at a glance — commissions, money at risk, chargebacks, flags, and the store leaderboard.</p>
+        {/* WHY THERE IS NO DATE RANGE HERE (owner asked 2026-08-11 for a date-range filter on
+            "Executive MTD / Owner Overview"): every tile on this page is MONTH-GRAINED at the source —
+            commissions paid / at-risk / chargebacks come from the per-rep commission run, and the three
+            P&L tiles from that month's account_statements snapshot. Neither exists at day grain, so a
+            date range here could only ever relabel a whole-month number as a week's. Executive MTD is
+            built from individual sales lines, which is why the range lives there. */}
+        <p style={{ color: 'var(--text3)', fontSize: 12.5, margin: '6px 0 0' }}>
+          Monthly by nature — commissions and the P&amp;L are computed per month. For a day-level slice
+          (any From → To inside the month), use <Link href="/commcalc/exec/mtd">Executive MTD →</Link>
+        </p>
       </div>
 
       {loading ? (

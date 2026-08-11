@@ -19575,7 +19575,8 @@ def _exec_act_class(ct, rules):
     return 'activation'
 
 
-def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, today=None):
+def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, today=None,
+              date_from=None, date_to=None):
     """Executive Month-To-Date summary — the b2bsoft 'Month To Date Location/Employee Sales Report',
     now DERIVED FROM the EXACT SAME aggregation the Sales Report uses (owner directive 2026-07-16: "the
     Sales Report is correct — Exec MTD should take its cumulative numbers from there"). Reads the SAME
@@ -19610,7 +19611,22 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                             separate PAY item, never folded into the accessory$ number, but it DOES
                             count toward the accessory TARGET).
     Neither is "the" answer; showing both, labelled, is what makes the two pages reconcile to the cent.
-    `setup_fee` is the bridge between them. DISPLAY-ONLY — no payout reads any of this."""
+    `setup_fee` is the bridge between them. DISPLAY-ONLY — no payout reads any of this.
+
+    DATE RANGE (owner directive 2026-08-11, "Executive MTD is missing the date-range filter"):
+    optional `date_from` / `date_to` (YYYY-MM-DD, inclusive) narrow the report to a slice of the month
+    being viewed. The range is CLAMPED to that month rather than silently spanning others — the report
+    is built from ONE period's union (`_sales_rows_union(period)`), so a range reaching outside it could
+    only ever return the part that is loaded, and a truncated answer that does not say it was truncated
+    is the failure mode worth avoiding. `date_range.clamped` reports it when that happens, and
+    `date_range.no_overlap` when the requested window misses the month entirely (every table is then
+    legitimately empty rather than quietly showing the whole month).
+    TRENDING follows the window: the factor stays "project to a FULL month" (× days_in_month) but the
+    divisor becomes the COMPLETE days inside the selected range, so a 7-day slice projects off 7 days,
+    not off the month-to-date. `trending.basis` says which of the two is in force, because the same
+    column meaning two different things without saying so is how two surfaces stop reconciling.
+    Rows with NO date cannot be placed in a window: they are excluded while a range is active and
+    counted in `date_range.undated_excluded` (they are included, as before, when it is not)."""
     cfg = _exec_metric_config(client, org_id)
     acfg = _accessory_config(client, org_id)
     rows, meta = _sales_rows_union(client, org_id, period)
@@ -19719,6 +19735,40 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     open_m = _is_open_month(period)
     elapsed = max(1, _today.day - 1) if open_m else dim
     trend_factor = (dim / elapsed) if elapsed else 1.0
+
+    # ── DATE RANGE (owner 2026-08-11) — an optional [from, to] window INSIDE the month being viewed.
+    #    Parsed defensively: a malformed date is treated as "not supplied" (never 500 a report over a
+    #    querystring). Either bound alone is legal — the missing one becomes the month's own bound.
+    def _pdate(v):
+        try:
+            return _date.fromisoformat(str(v)[:10])
+        except Exception:
+            return None
+
+    m_start = _date(yr, mo, 1) if (1 <= mo <= 12 and yr) else None
+    m_end = _date(yr, mo, dim) if m_start else None
+    rq_from, rq_to = _pdate(date_from), _pdate(date_to)
+    rng_on = bool(m_start) and (rq_from is not None or rq_to is not None)
+    eff_from = eff_to = None
+    clamped = no_overlap = False
+    if rng_on:
+        eff_from = rq_from or m_start
+        eff_to = rq_to or m_end
+        clamped = (eff_from < m_start) or (eff_to > m_end)
+        eff_from = max(eff_from, m_start)
+        eff_to = min(eff_to, m_end)
+        # A backwards or fully-outside window selects nothing. Say so instead of falling back to the
+        # whole month — a filter that silently ignores itself is worse than an empty table.
+        no_overlap = eff_from > eff_to
+        # Trending divisor = COMPLETE days inside the window. For the open month "complete" still means
+        # strictly before today (today is in progress), exactly as the MTD divisor does.
+        last_complete = min(eff_to, _today - _timedelta(days=1)) if open_m else eff_to
+        elapsed = 0 if no_overlap else max(0, (last_complete - eff_from).days + 1)
+        elapsed = max(1, elapsed)
+        trend_factor = (dim / elapsed) if elapsed else 1.0
+    rng_from_s = eff_from.isoformat() if (rng_on and eff_from) else None
+    rng_to_s = eff_to.isoformat() if (rng_on and eff_to) else None
+    undated_excluded = 0
     # MTD DATE-CUT — an OPEN month is cumulative THROUGH TODAY (a line dated after today is excluded, so the
     # cumulative is a true month-to-date). Real sales are never future-dated, so this is a no-op on live
     # data; it is the ONE intentional difference from the Sales Report's whole-month total (proof case b).
@@ -19743,6 +19793,14 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     for (st, rep, date), a in cells.items():
         if cut and date and date > cut:
             continue
+        if rng_on:
+            if no_overlap:
+                continue
+            if not date:
+                undated_excluded += 1     # cannot be placed in a window; counted, never silently dropped
+                continue
+            if date < rng_from_s or date > rng_to_s:
+                continue
         prem, port = len(a['_prem']), len(a['_port'])
         # by_store is keyed on the CANONICAL store key `st` (so spelling variants collapse to one row),
         # but LABELLED with the first-seen RAW display spelling `a['store']` (not the lowercased key).
@@ -19837,13 +19895,22 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     emps = _finish(by_emp, 'employee')
     return {'period': period, 'source': meta,
             'filters': filters, 'applied': applied,
-            'trending': {'elapsed_days': elapsed, 'days_in_month': dim, 'factor': round(trend_factor, 6)},
+            'date_range': {'active': rng_on, 'from': rng_from_s, 'to': rng_to_s,
+                           'requested_from': (str(date_from)[:10] or None) if date_from else None,
+                           'requested_to': (str(date_to)[:10] or None) if date_to else None,
+                           'month_from': m_start.isoformat() if m_start else None,
+                           'month_to': m_end.isoformat() if m_end else None,
+                           'clamped': clamped, 'no_overlap': no_overlap,
+                           'undated_excluded': undated_excluded},
+            'trending': {'elapsed_days': elapsed, 'days_in_month': dim, 'factor': round(trend_factor, 6),
+                         'basis': 'range' if rng_on else ('mtd' if open_m else 'month')},
             'by_location': {'rows': store_rows, 'total': _totals(store_rows, 'store')},
             'by_employee': {'rows': emps, 'total': _totals(emps, 'employee')}}
 
 
 @router.get("/exec-mtd/{period}")
 def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
+             date_from: str = "", date_to: str = "",
              stores: Optional[List[str]] = Query(default=None),
              markets: Optional[List[str]] = Query(default=None),
              reps: Optional[List[str]] = Query(default=None)):
@@ -19860,7 +19927,12 @@ def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
     SERVER's UTC clock while the Targets pages resolved it on the browser's, so on an evening sales
     floor (after ~8pm ET, UTC has rolled over) the two surfaces used a different MTD cut and a
     different trending divisor and could not agree. Omitted/malformed -> the server date, byte-identical
-    to before."""
+    to before.
+
+    `date_from` / `date_to` (YYYY-MM-DD, inclusive, optional) narrow the report to a slice of `period`.
+    Both omitted -> the whole month-to-date, byte-identical to before. The window is clamped to the
+    month and reported back in `date_range`; trending then projects from the window's own complete
+    days (`trending.basis == 'range'`)."""
     require_org(org_id)
     _t = None
     if today:
@@ -19868,7 +19940,8 @@ def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
             _t = _date.fromisoformat(str(today)[:10])
         except Exception:
             _t = None      # malformed override -> server date (never 500 a report over it)
-    return _exec_mtd(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=_t)
+    return _exec_mtd(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=_t,
+                     date_from=date_from or None, date_to=date_to or None)
 
 
 @router.get("/exec-metric-config")
