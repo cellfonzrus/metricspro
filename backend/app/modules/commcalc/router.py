@@ -5055,12 +5055,34 @@ def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: st
     require_org(org_id)
     sr = (body.get("source_report") or "ma_daily_tx").strip()
     names = [ma_product_class.normalize(n) for n in (body.get("product_names") or []) if str(n).strip()]
+    # OWNER REPORT 2026-08-11: "the proposed mapping when you hit confirm does not save it and the
+    # subsidy is not going away". CONFIRM USED TO ONLY *UPDATE* ROWS THAT ALREADY EXISTED. The page
+    # lists every distinct product_name in the feed and shows the built-in PROPOSAL beside it — but a
+    # proposal is not a row until someone assigns it. So confirming a suggested mapping matched
+    # nothing, reported it in `not_found`, saved NOTHING, and the name stayed on the list forever.
+    # MEASURED on luxelink: 111 confirmed rows, while `Subsidy` (2,135 feed rows) and `Trac Autopay
+    # Residual` (9,272) had no row at all — both are in DEFAULT_PROPOSALS.
+    # Confirm now CREATES the row it is confirming. The class is never invented: it comes from the
+    # caller's own `items` (what the UI displayed), else from the built-in proposal for that exact
+    # name. A name with neither is still reported in `not_found` rather than guessed at.
+    items = {}
+    for it in (body.get("items") or []):
+        n = ma_product_class.normalize((it or {}).get("product_name"))
+        c = ma_product_class.normalize((it or {}).get("product_class"))
+        if n and c:
+            items[n] = c
+            if n not in names:
+                names.append(n)
     if not names and not body.get("all"):
-        raise HTTPException(400, "product_names[] or all=true is required")
+        raise HTTPException(400, "product_names[], items[] or all=true is required")
     client = sb()
     map_rows, ready = _mpc_map_rows(client, org_id, sr)
     if not ready:
         raise HTTPException(400, "Run migration 254_commission_ma_product_class.sql first.")
+    classes, _r = _mpc_classes(client, org_id)
+    allowed = ma_product_class.assignable(classes)
+    proposal_class = {ma_product_class.normalize(n): c
+                      for (n, c, _note) in ma_product_class.DEFAULT_PROPOSALS}
     who, now = _mpc_who(authorization), column_mapping.now_iso()
     targets = [r for r in map_rows
                if (r.get("status") or "proposed") != "confirmed"
@@ -5075,10 +5097,31 @@ def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: st
             done.append(ma_product_class.normalize(r.get("product_name")))
         except Exception:
             pass
-    missing = [n for n in names if n not in {ma_product_class.normalize(r.get("product_name")) for r in map_rows}]
+
+    # …then CREATE + confirm the requested names that had no row yet.
+    have = {ma_product_class.normalize(r.get("product_name")) for r in map_rows}
+    created, unresolved = [], []
+    for n in names:
+        if n in have:
+            continue
+        cls = items.get(n) or proposal_class.get(n)
+        if not cls or cls == ma_product_class.UNMAPPED or cls not in allowed:
+            unresolved.append(n)          # no defensible class ⇒ report it, never guess
+            continue
+        try:
+            (client.schema("commcalc").table(ma_product_class.MAP_TABLE).upsert(
+                {"org_id": org_id, "source_report": sr, "product_name": n, "product_class": cls,
+                 "status": "confirmed", "confirmed_by": who, "confirmed_at": now, "updated_at": now},
+                on_conflict="org_id,source_report,product_name").execute())
+            created.append(n)
+            done.append(n)
+        except Exception as e:
+            print(f"WARN ma-product-class confirm-create failed for {n!r}: {e}")
+            unresolved.append(n)
     return {"ok": True, "confirmed": done, "confirmed_count": len(done),
+            "created": created, "created_count": len(created),
             "already_confirmed": len([r for r in map_rows if (r.get("status") or "") == "confirmed"]),
-            "not_found": missing}
+            "not_found": unresolved}
 
 
 @router.post("/ma-product-class/seed-proposals")
