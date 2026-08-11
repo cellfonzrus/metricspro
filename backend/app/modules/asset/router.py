@@ -3163,4 +3163,12 @@ from app.modules.asset import attention as _asset_attention  # noqa: F401,E402
 from app.modules.asset.oninv_recon import router as _oninv_recon_router  # noqa: E402
 router.include_router(_oninv_recon_router)
 
+# ── Upcoming Invoice Payment Due (2026-08-05, OWNER DIRECTIVE) — own file (same precedent as
+# purchase_orders.py/oninv_recon.py) so this router.py diff stays a 2-line mount; every endpoint
+# lands under the SAME /api/v1/asset prefix. See invoice_due.py's module docstring for the
+# Phase-1 feasibility finding (the named "handset ordering report" cannot source this; built
+# instead against vip_invoices/vip_invoice_devices + asset_ledger + raw_payment_detail).
+from app.modules.asset.invoice_due import router as _invoice_due_router  # noqa: E402
+router.include_router(_invoice_due_router)
+
 
