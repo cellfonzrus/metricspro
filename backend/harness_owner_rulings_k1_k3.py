@@ -401,7 +401,35 @@ def test_k3_invoice_honest_zero():
     check_true("the NEGATIVE POS figure was refused",
                not approx(line(L, "device_cost"), -100.00),
                "POS cost on a subsidised handset is negative — never a fallback in 'invoice' mode")
+    # 2026-08-11 (owner ruling): the reason must REACH A READER, not just sit in `meta`. `meta` is
+    # dropped by `engine._assemble`, so before this the declared zero rendered exactly like a measured
+    # zero — the defect Gate-1 caught. `note` is the passthrough the statement actually carries.
+    check_true("coa records the reason on the line",
+               bool((L["device_cost"] or {}).get("note")),
+               "the input side of the passthrough")
+    # THE ACTUAL GAP: assert against the ASSEMBLED statement, not the inputs. `meta` was set here too
+    # and still reached no reader, because `_assemble` rebuilds every line from
+    # key/label/amount/kind/detail. Testing `L` alone would have passed against the broken code.
+    from app.modules.account import engine as _engine, coa as _coa
+    _pl = _engine._assemble(L, [], _coa.PL_SPEC, _coa.PL_LABEL,
+                            [("Revenue", "revenue"), ("Cost of Goods Sold", "cogs"),
+                             ("Operating Expenses", "opex"), ("Other", "other")],
+                            "consolidated", None, True)
+    _dc = next((ln for sec in _pl["sections"] for ln in sec["lines"] if ln["key"] == "device_cost"), None)
+    check_true("the reason SURVIVES engine._assemble onto the statement",
+               bool(_dc and _dc.get("note")),
+               "this is the assertion that fails against the pre-fix code")
+    check_true("...and it says the POS was refused on purpose",
+               "not by measurement" in ((_dc or {}).get("note") or ""),
+               "the note has to explain the zero, not merely exist")
+    check("the declared zero is still $0.00 on the statement", (_dc or {}).get("amount"), 0.00,
+          "a note must not disturb the figure")
     MA_COMMISSION[:] = saved
+    # ...and a MEASURED zero must carry NO note, or the label means nothing.
+    set_config(device_cogs_mode="off")
+    L = build()
+    check_true("a measured line carries no note", not (L["device_cost"] or {}).get("note"),
+               "'not measured' must be a real distinction, not decoration")
 
 
 # ── 7 · store_borrowings — the 3-wrong-column bug ─────────────────────────────────────────────────

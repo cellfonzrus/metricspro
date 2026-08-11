@@ -109,17 +109,17 @@ COMMENT ON COLUMN commcalc.account_config.device_cogs_mode IS
 -- VALUES ('854f6d7b-6590-4e4d-88ab-646f560d4f4c',
 --         ARRAY['Employee Salaries','DM Salaries','Owner / Mgmt Salaries'],
 --         '{}'::jsonb,
---         'auto')
+--         'invoice')
 -- Names VERIFIED against luxelink's own July rows at Gate-1 (2026-08-11): 'Employee Salaries'
 -- $72,930.58 + 'DM Salaries' $25,500.01 + 'Owner / Mgmt Salaries' $10,000.00 = $108,430.59, which is
 -- ruling K2's figure to the cent. A mistyped name would match NOTHING and silently change nothing.
 --
--- ⚠️ MODE CHOICE, decide before uncommenting: 'auto' falls back to the POS when no distributor
--- invoice covers a period, and POS device cost on a subsidised handset is NEGATIVE. For July it is
--- identical either way (the MA source answers, so the POS is never reached). If this tenant is ever
--- swept over months with no `raw_ma_commission`, 'invoice' is the mode that honours ruling K3(b)'s
--- honest-zero and refuses to book a negative cost. Feb-May carry no raw_sales at all, so the two
--- modes are also identical there TODAY - but that stops being true the moment sales are backloaded.
+-- MODE = 'invoice', OWNER RULING 2026-08-11 (was 'auto' as first drafted). 'auto' falls back to the
+-- POS when no distributor invoice covers a period, and POS device cost on a subsidised handset is
+-- NEGATIVE. For July the two are identical (the MA source answers, so the POS is never reached), but
+-- the owner then ruled ALL HISTORY is to be recomputed - which sweeps Feb-May, where there is no
+-- `raw_ma_commission` at all. 'invoice' is the mode that honours ruling K3(b): those months report a
+-- LABELLED honest zero instead of a negative cost the moment their sales are backloaded.
 -- ON CONFLICT (org_id) DO UPDATE
 --   SET payroll_expense_names  = EXCLUDED.payroll_expense_names,
 --       payroll_expense_routes = EXCLUDED.payroll_expense_routes,

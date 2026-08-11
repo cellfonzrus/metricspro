@@ -735,6 +735,16 @@ def build_inputs(client, org_id, period):
         for _st, _amt in pos_device_cost.items():
             add("device_cost", _st, _amt)
     L["device_cost"]["meta"] = _dev.get("meta") or {}
+    # RULING K3(b) — a DECLARED zero must say so on the statement. `meta` alone never reached a reader
+    # (`engine._assemble` rebuilds each line from key/label/amount/kind/detail, and `_scoped` drops
+    # zero-valued detail), so an honest zero rendered identically to a measured one. `note` is the
+    # passthrough; it is set ONLY here and ONLY in this case, so every other line stays byte-identical.
+    if (_dev.get("meta") or {}).get("honest_zero"):
+        L["device_cost"]["note"] = (
+            "No distributor invoice covers this period, so device cost is $0.00 BY DECLARATION, not by "
+            "measurement. The point-of-sale figure is deliberately not used as a fallback because it "
+            "records cost AFTER the carrier subsidy and is negative on a subsidised handset. Upload the "
+            "distributor's commission/fulfillment sheets for this period to measure it.")
 
     # asset_ledger — reimbursement income (cash, by reimbursement_date), VIP fees (COGS),
     # inventory value (BS), owed-to-VIP (BS). One scan, multiple lines.

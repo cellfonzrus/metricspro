@@ -59,8 +59,17 @@ def _assemble(inputs, journal_rows, spec, label_map, sections_def, scope, stores
         # tenant that never pushes them shows no empty line — byte-identical to before the line existed.
         if kind == "auto_opt" and not amt and not detail:
             continue
-        lines_by_section[section].append(
-            {"key": key, "label": disp, "amount": amt, "kind": kind, "detail": detail})
+        row = {"key": key, "label": disp, "amount": amt, "kind": kind, "detail": detail}
+        # A line may carry a NOTE explaining a figure the number alone cannot explain — specifically a
+        # DECLARED zero. Ruling K3(b) requires that a period with no distributor invoice report device
+        # COGS as an honest zero "with reason"; without this passthrough that zero rendered exactly
+        # like a measured zero, because `detail` drops zero-valued entries and nothing else survives
+        # `_assemble`. Only emitted when `coa` actually set one, so every other line and every other
+        # tenant keeps a byte-identical payload.
+        note = (inputs.get(key) or {}).get("note")
+        if note:
+            row["note"] = note
+        lines_by_section[section].append(row)
 
     # fold in manual journal entries (match by label to a spec line, else append)
     for je in journal_rows:
