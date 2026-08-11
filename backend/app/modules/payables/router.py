@@ -36,6 +36,50 @@ def _canon(s, alias):
     return alias.get(base.lower(), base) or base
 
 
+# ── STORE / MARKET VOCABULARY (owner report 2026-08-11: "Device Forecasting & Vendor Payables does
+#    not pull up anything under market ny and chicago") ───────────────────────────────────────────────
+#
+# TWO separate defects made every market filter return zero rows:
+#
+#   1. The rows carried NO `market` FIELD AT ALL. The page's market picker was populated from the org
+#      roster (which has markets) while the filter predicate read `row.market` — undefined on every
+#      forecast/payables row — so picking NY or Chicago filtered the whole table away.
+#
+#   2. VOCABULARY SPLIT. `storeops.stores.address` holds "4640 Diversey Chicago" / "2317 Cicero
+#      Cicero" / "21880 Hempstead Ave"; the report rows hold "4640-A W Diversey Ave" / "2317 S Cicero
+#      Ave STE A" / "218-80 Hempstead Avenue". MEASURED 2026-08-11: **0 of 20 match.** So a store
+#      option taken from the roster could never match a row either.
+#
+# `commcalc.store_mapping` is the resolver for BOTH: its `store_address` is byte-identical to what the
+# rows carry (all 20 luxelink values verified present in `raw_sales.store`) AND it carries `market`.
+# Same class as the store-code twins and the span keyset vocabulary split — when two tables spell a
+# store differently, resolve through the one the DATA uses, never the one the admin UI shows.
+def _market_by_store(client, org_id):
+    """{store_address -> market} in the SAME spelling the report rows use. Also keyed case/space-
+    insensitively so a stray double space in a sales export still resolves. Degrades to {} — an
+    unresolved store renders "(no market)" and stays SELECTABLE, never silently dropped."""
+    out = {}
+    try:
+        rows = (client.schema("commcalc").table("store_mapping")
+                .select("store_address,market").eq("org_id", org_id).limit(5000).execute().data) or []
+    except Exception as e:
+        print(f"WARN payables _market_by_store failed (markets will be blank): {e}")
+        return out
+    for r in rows:
+        addr, mkt = (r.get("store_address") or "").strip(), (r.get("market") or "").strip()
+        if addr and mkt:
+            out[addr] = mkt
+            out[" ".join(addr.split()).lower()] = mkt
+    return out
+
+
+def _market_of(mmap, store):
+    if not store:
+        return None
+    s = str(store).strip()
+    return mmap.get(s) or mmap.get(" ".join(s.split()).lower())
+
+
 def _fetch_all(make_query, cap=80):
     out, page = [], 0
     while True:
@@ -155,12 +199,16 @@ def forecast(lookback: int = 7, horizon: int = 7, days: int = 0, store: str = ""
             continue
         _bucket(r.get("device_model"), boost_id, boost_name, r.get("store"))["on_hand"] += 1
 
+    # RULE FIVE: the market filter needs a real value ON THE ROW to filter. Without this the picker
+    # offered NY/Chicago and then matched nothing, because `market` did not exist on any row.
+    mmap = _market_by_store(client, org_id)
     out = []
     for e in agg.values():
         rate = e["units"] / lookback
         e["avg_daily_velocity"] = round(rate, 2)
         e["projected_demand"] = int(round(rate * horizon))
         e["recommend_order"] = max(0, e["projected_demand"] - e["on_hand"])
+        e["market"] = _market_of(mmap, e.get("store"))
         out.append(e)
     if carrier:
         out = [r for r in out if (r["carrier"] or "").lower() == carrier.lower()]
@@ -188,10 +236,42 @@ def list_payables(store: str = "", carrier_id: str = "", status: str = "", limit
     rows = q.order("net_owed", desc=True).limit(limit).execute().data or []
     # decorate with the VIP invoice #/date (join by IMEI == serial)
     vip = _vip_invoice_map(client, org_id, [r.get("imei") for r in rows])
+    mmap = _market_by_store(client, org_id)
     for r in rows:
         v = vip.get(_norm_imei(r.get("imei")))
         r["vip_invoice_number"] = v["vip_invoice_number"] if v else None
-    return {"rows": rows, "total": len(rows)}
+        r["market"] = _market_of(mmap, r.get("store"))   # RULE FIVE — see _market_by_store
+    return {"rows": rows, "total": len(rows),
+            "unassigned_store": sum(1 for r in rows if not (r.get("store") or "").strip())}
+
+
+@router.get("/filter-options")
+def payables_filter_options(org_id: str = ORG_ID):
+    """Store + market options for THIS module's filter bar, in the vocabulary the rows actually use.
+
+    Deliberately NOT `/core/filter-options`: that one keys on `storeops.stores.address`, and MEASURED
+    2026-08-11 **0 of luxelink's 20 stores** match what the payables/forecast rows carry — so every
+    option it offered was unselectable here. `commcalc.store_mapping.store_address` is the spelling the
+    data uses. Pick-don't-type (RULE THREE): every value is a real org row."""
+    client = sb()
+    try:
+        rows = (client.schema("commcalc").table("store_mapping")
+                .select("store_address,market").eq("org_id", org_id).limit(5000).execute().data) or []
+    except Exception as e:
+        print(f"WARN payables filter-options failed: {e}")
+        return {"stores": [], "markets": [], "source": "unavailable"}
+    seen, stores, markets = set(), [], set()
+    for r in rows:
+        addr = (r.get("store_address") or "").strip()
+        if not addr or addr.lower() in seen:
+            continue
+        seen.add(addr.lower())
+        mkt = (r.get("market") or "").strip() or None
+        stores.append({"store": addr, "market": mkt})
+        if mkt:
+            markets.add(mkt)
+    stores.sort(key=lambda s: s["store"])
+    return {"stores": stores, "markets": sorted(markets), "source": "store_mapping"}
 
 
 @router.get("/offsets/{imei}")
