@@ -372,9 +372,34 @@ def gather(org_id, employee_id, employee_name, start, end):
                                  .gte("work_date", lo).lte("work_date", hi)
                                  .limit(20000).execute().data) or [], None)
 
-    # Independent proof of presence: a daily closing they filed. (POS sales live in another module's
-    # schema and vary by tenant vocabulary; the closing is the reliable, storeops-adjacent signal.)
+    # Independent proof of presence. SALES ARE THE STRONGEST SIGNAL AND THE REASON THIS EXISTS:
+    # measured 2026-08-11, four Luxelink employees (Chavez, Lopez, Navarrete, Perez) rang 27 days of
+    # sales inside 07/23-08/05 while holding ZERO punches and ZERO shifts — completely invisible to
+    # payroll. Without this loader the check would have called those days "no record" and quietly
+    # implied nobody worked them.
+    #
+    # ⚠️ NAME VOCABULARY: raw_sales stores "Last, First" ("Lopez, Zuleicka") while storeops stores
+    # "First Last" ("Zuliecka Lopez") — AND the two spellings of that surname differ. A plain equality
+    # join finds nothing, so the match runs through commission_engine._canon_person, the SAME
+    # canonicalizer the commission side already uses for this exact problem, and is compared per row
+    # rather than filtered in the query.
     activity = []
+    try:
+        from app.modules.commcalc.commission_engine import _canon_person as _canon
+    except Exception:
+        def _canon(s):
+            return " ".join(_s(s).lower().split())
+    want = _canon(employee_name)
+    for row in _try(lambda: (client.schema("commcalc").table("raw_sales")
+                             .select("salesperson,trans_date,store")
+                             .eq("org_id", org_id)
+                             .gte("trans_date", lo).lte("trans_date", hi)
+                             .limit(200000).execute().data) or [], []) or []:
+        if _canon(row.get("salesperson")) != want:
+            continue
+        activity.append({"work_date": row.get("trans_date"), "kind": "rang sales",
+                         "detail": _s(row.get("store"))})
+
     for row in _try(lambda: (client.schema("commcalc").table("daily_closing")
                              .select("close_date,employee_name,store_code")
                              .eq("org_id", org_id).eq("employee_name", employee_name)
