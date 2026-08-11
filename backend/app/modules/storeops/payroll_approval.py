@@ -248,9 +248,17 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
             continue
 
         row = saved.get(eid) or {}
+        # ⚠️ `actual_hours` arrives ALREADY NET of the lunch deduction (router.py subtracts it and
+        # reports what it took in `lunch_deduction_hours`). Treating it as gross and subtracting
+        # lunch again here would short every shift by the deduction — 30 minutes a day on luxelink.
         src = _num(h.get("actual_hours"))
+        lunch = _num(h.get("lunch_deduction_hours")) or 0.0
+        worked_gross = round((src or 0.0) + lunch, 2)
+        adj = _num(row.get("adjustment_hours")) or 0.0
+        payable = round((src or 0.0) + adj, 2)      # ≡ worked_gross − lunch + adj, without the double count
         approved = _num(row.get("hours_approved"))
-        effective = approved if approved is not None else src
+        # The DM approves the PAYABLE figure; an explicit hours_approved override still wins over it.
+        effective = approved if approved is not None else payable
         payer, payer_from = _resolve_payer(row.get("payer_id"), st, store_map, by_id, default_payer)
         rate = _num(h.get("pay_rate")) or 0.0
         dm_s = row.get("dm_status") or "pending"
@@ -263,6 +271,19 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
             "scheduled_hours": _num(h.get("scheduled_hours")),
             "hours_source": src, "hours_approved": approved, "hours_effective": effective,
             "hours_corrected": approved is not None and src is not None and approved != src,
+            # The four columns the owner asked for, in the order they read on the board.
+            "hours_worked": worked_gross,          # gross, before the lunch deduction
+            "lunch_hours": round(lunch, 2),        # what the previous screen already took out
+            "adjustment_hours": round(adj, 2),
+            "adjustment_reason": row.get("adjustment_reason"),
+            "hours_payable": payable,              # worked − lunch + adjustment = what gets approved
+            # A punch or lunch-config edit AFTER sign-off would otherwise restate an approved week
+            # in silence; report the drift instead of hiding it.
+            "worked_at_approval": _num(row.get("worked_at_approval")),
+            "lunch_at_approval": _num(row.get("lunch_at_approval")),
+            "hours_drifted": bool(
+                row.get("worked_at_approval") is not None
+                and abs((_num(row.get("worked_at_approval")) or 0.0) - worked_gross) > 0.001),
             "pay_rate": rate,
             "pay_effective": round((effective or 0) * rate, 2),
             "dm_status": dm_s, "dm_by": row.get("dm_by"), "dm_at": row.get("dm_at"), "dm_note": row.get("dm_note"),
@@ -292,6 +313,8 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
     totals = {
         "employees": len(out),
         "hours": round(sum(r["hours_effective"] or 0 for r in out), 2),
+        "lunch_hours": round(sum(r["lunch_hours"] or 0 for r in out), 2),
+        "adjustment_hours": round(sum(r["adjustment_hours"] or 0 for r in out), 2),
         "pay": round(sum(r["pay_effective"] or 0 for r in out), 2),
         "pending_dm": sum(1 for r in out if r["dm_status"] == "pending"),
         "pending_hr": sum(1 for r in out if r["dm_status"] == "approved" and r["hr_status"] == "pending"),
@@ -362,7 +385,38 @@ def decide(body: dict, authorization: str = Header(default=""), org_id: str = OR
             continue
 
         src = _num(h.get("actual_hours"))
+        lunch = _num(h.get("lunch_deduction_hours")) or 0.0
+        worked_gross = round((src or 0.0) + lunch, 2)
         row = _base_row(org_id, s, e, eid, h.get("store"), src)
+
+        # ── adjustment (DM only) ──────────────────────────────────────────────────────────────────
+        # Same gate as a correction: it moves a payroll number, so it needs a name and a reason.
+        # Carried forward when this call doesn't mention it, so an HR approval cannot quietly drop
+        # the DM's adjustment back to zero.
+        adj = _num(cur.get("adjustment_hours")) or 0.0
+        if stage == "dm" and "adjustment_hours" in r:
+            new_adj = _num(r.get("adjustment_hours"))
+            if new_adj is None:
+                new_adj = 0.0
+            a_reason = (r.get("adjustment_reason") or r.get("reason") or "").strip()
+            if new_adj != adj and not a_reason:
+                errors.append({"employee_id": eid,
+                               "error": "an hours adjustment needs a reason — it moves a payroll number"})
+                continue
+            if (src or 0.0) + new_adj < 0:
+                errors.append({"employee_id": eid,
+                               "error": "that adjustment would make payable hours negative"})
+                continue
+            if new_adj != adj:
+                _log_payroll_change(
+                    org_id, field="adjustment_hours", entry_point="payroll_approval",
+                    employee_id=eid, employee_name=h.get("name"), store_code=h.get("store"),
+                    work_date=e, before=adj, after=new_adj,
+                    source_table="payroll_approval", source_id=cur.get("id"),
+                    who=who, reason=a_reason)
+            adj = new_adj
+            row["adjustment_reason"] = a_reason or cur.get("adjustment_reason")
+        row["adjustment_hours"] = adj
 
         # ── correction (DM only) ──────────────────────────────────────────────────────────────────
         if stage == "dm" and "hours_approved" in r and r.get("hours_approved") not in ("", None):
@@ -383,6 +437,17 @@ def decide(body: dict, authorization: str = Header(default=""), org_id: str = OR
                     work_date=e, before=src, after=new_hours,
                     source_table="payroll_approval", source_id=cur.get("id"),
                     who=who, reason=reason)
+
+        # Freeze the figures behind a DM sign-off. Punches and lunch config both change after the
+        # fact; without this an approved week silently restates itself and nobody can tell what the
+        # DM actually approved. Cleared on reset so a re-approval snapshots afresh.
+        if stage == "dm":
+            if action == "approve":
+                row["worked_at_approval"] = worked_gross
+                row["lunch_at_approval"] = round(lunch, 2)
+            elif action == "reset":
+                row["worked_at_approval"] = None
+                row["lunch_at_approval"] = None
 
         stamp = {"approve": "approved", "send_back": "sent_back", "reset": "pending"}[action]
         row[f"{stage}_status"] = stamp

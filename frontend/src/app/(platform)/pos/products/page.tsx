@@ -16,8 +16,10 @@ interface Product {
 }
 interface Department { id: string; short_name: string; full_name: string | null }
 interface Category { id: string; name: string; department_id: string | null }
-
-const SYSTEM_CATEGORIES = ['Accessory', 'Cell Phone', 'Regular', 'Service']
+// Tenant-configurable since migration 745. The four originals are seeded as builtins (renameable
+// and switch-off-able, never deletable) — a tenant selling tablets can now add "Tablet" instead of
+// dropping everything into the catch-all "Regular", which is where 96 of 118 products had landed.
+interface SysCat { id: string; name: string; sort_order: number; is_active: boolean; is_builtin: boolean }
 const BODY_STYLES = ['Not Set', 'Bar', 'Flip', 'Slider', 'Tablet']
 
 const emptyForm = {
@@ -53,6 +55,8 @@ export default function PosProductsPage() {
   const [newCatName, setNewCatName] = useState('')
   const [newCatDept, setNewCatDept] = useState('')
   const [deptCatBusy, setDeptCatBusy] = useState(false)
+  const [sysCats, setSysCats] = useState<SysCat[]>([])
+  const [newSysCatName, setNewSysCatName] = useState('')
 
   const filteredCats = formData.department_id
     ? categories.filter(c => c.department_id === formData.department_id)
@@ -61,6 +65,43 @@ export default function PosProductsPage() {
   async function loadCatalog() {
     const c = await api('/api/v1/pos/catalog')
     setDepartments(c.departments || []); setCategories(c.categories || [])
+    // Separate call: the endpoint SEEDS the four builtins on first read, so a tenant that has
+    // never opened this page still gets a working dropdown rather than an empty one.
+    try {
+      const s = await api('/api/v1/pos/system-categories')
+      setSysCats(s.system_categories || [])
+    } catch { setSysCats([]) }
+  }
+
+  // The picker only ever offers ACTIVE ones; a switched-off category stays on its existing
+  // products (nothing is silently recategorised) but can't be chosen again.
+  const activeSysCats = sysCats.filter(s => s.is_active)
+
+  async function addSystemCategory() {
+    if (!newSysCatName.trim()) return
+    setDeptCatBusy(true); setMsg('')
+    try { await api('/api/v1/pos/system-categories', { method: 'POST', body: JSON.stringify({ name: newSysCatName.trim() }) }); setNewSysCatName(''); await loadCatalog() }
+    catch (err: any) { setMsg('Failed to add system category: ' + (err?.message || err)) }
+    finally { setDeptCatBusy(false) }
+  }
+
+  async function renameSystemCategory(c: SysCat) {
+    const name = prompt(`Rename system category:\n(every product using "${c.name}" moves with it)`, c.name)
+    if (!name?.trim() || name.trim() === c.name) return
+    setDeptCatBusy(true); setMsg('')
+    try {
+      const r = await api(`/api/v1/pos/system-categories/${c.id}`, { method: 'PATCH', body: JSON.stringify({ name: name.trim() }) })
+      await loadCatalog(); await loadProducts()
+      if (r?.products_moved) setMsg(`Renamed — ${r.products_moved} product(s) moved to "${name.trim()}".`)
+    } catch (err: any) { setMsg('Failed to rename: ' + (err?.message || err)) }
+    finally { setDeptCatBusy(false) }
+  }
+
+  async function toggleSystemCategory(c: SysCat) {
+    setDeptCatBusy(true); setMsg('')
+    try { await api(`/api/v1/pos/system-categories/${c.id}`, { method: 'PATCH', body: JSON.stringify({ is_active: !c.is_active }) }); await loadCatalog() }
+    catch (err: any) { setMsg('Failed to update: ' + (err?.message || err)) }
+    finally { setDeptCatBusy(false) }
   }
 
   async function loadProducts(q = { search, filterDept, filterSysCat, activeOnly }) {
@@ -171,7 +212,7 @@ export default function PosProductsPage() {
         </select>
         <select value={filterSysCat} onChange={e => setFilterSysCat(e.target.value)} style={{ ...input, width: 190 }}>
           <option value="">System category: any</option>
-          {SYSTEM_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+          {sysCats.map(c => <option key={c.id}>{c.name}</option>)}
         </select>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }}>
           <input type="checkbox" checked={activeOnly} onChange={e => setActiveOnly(e.target.checked)} />
@@ -290,7 +331,12 @@ export default function PosProductsPage() {
                     <div>
                       <label style={label}>System Category</label>
                       <select value={formData.system_category} onChange={e => setFormData(f => ({ ...f, system_category: e.target.value }))} style={input}>
-                        {SYSTEM_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                        {activeSysCats.map(c => <option key={c.id}>{c.name}</option>)}
+                        {/* Keep an inactive value the product already carries selectable, or
+                            opening the form would silently re-stamp it to the first option. */}
+                        {formData.system_category && !activeSysCats.some(c => c.name === formData.system_category) && (
+                          <option key="current">{formData.system_category}</option>
+                        )}
                       </select>
                     </div>
                     <div>
@@ -376,7 +422,7 @@ export default function PosProductsPage() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 700, maxHeight: '85vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <b style={{ fontSize: 14 }}>Departments &amp; Categories</b>
+              <b style={{ fontSize: 14 }}>Departments, Categories &amp; System Categories</b>
               <button onClick={() => setShowDeptCat(false)} style={{ background: 'none', border: 'none', color: 'var(--text2)', fontSize: 20, cursor: 'pointer' }}>×</button>
             </div>
             {msg && <div style={{ margin: '12px 20px 0', fontSize: 12, color: '#dc2626' }}>{msg}</div>}
@@ -415,6 +461,35 @@ export default function PosProductsPage() {
                     <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
                       <span>{c.name}<span style={{ color: 'var(--text3)', fontSize: 11 }}>{c.department_id ? ` — ${departments.find(d => d.id === c.department_id)?.short_name || ''}` : ''}</span></span>
                       <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => renameCategory(c)}>Rename</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: '0 20px 20px' }}>
+              <div style={panel}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text2)', marginBottom: 4, textTransform: 'uppercase' }}>System Categories</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 10 }}>
+                  The broad type a product is treated as. Built-in ones can be renamed or switched
+                  off, not deleted. Renaming moves every product using it.
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                  <input value={newSysCatName} onChange={e => setNewSysCatName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addSystemCategory()} placeholder="New system category (e.g. Tablet)" style={input} />
+                  <button className="btn btn-primary" disabled={deptCatBusy || !newSysCatName.trim()} onClick={addSystemCategory}>Add</button>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+                  {sysCats.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)', padding: 8 }}>None configured</div>}
+                  {sysCats.map(c => (
+                    <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, opacity: c.is_active ? 1 : 0.55 }}>
+                      <span>
+                        {c.name}
+                        {c.is_builtin && <span style={{ color: 'var(--text3)', fontSize: 11 }}> — built-in</span>}
+                        {!c.is_active && <span style={{ color: 'var(--text3)', fontSize: 11 }}> — off</span>}
+                      </span>
+                      <span style={{ display: 'flex', gap: 6 }}>
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} disabled={deptCatBusy} onClick={() => renameSystemCategory(c)}>Rename</button>
+                        <button className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }} disabled={deptCatBusy} onClick={() => toggleSystemCategory(c)}>{c.is_active ? 'Switch off' : 'Switch on'}</button>
+                      </span>
                     </div>
                   ))}
                 </div>

@@ -118,6 +118,135 @@ def update_category(cat_id: str, body: dict, org_id: str = ORG_ID):
     return {"category": r.data[0]}
 
 
+# ── System categories (tenant-configurable; migration 745) ──────────────────────────────────────────
+# `system_category` used to be four values frozen in FOUR places at once: a CHECK constraint on
+# pos.products, SYSTEM_CATEGORIES in the products page, _sys_cat() in the importer, and the filter
+# below. A tenant could not add "Tablet" or "Watch", which is why 96 of luxelink's 118 products sat
+# in the catch-all "Regular". It is now a per-org config table ([[saas-sap-configurable-directive]]).
+# The original 4 are seeded as BUILTINS: renameable and deactivatable, never deletable, so an
+# existing catalog cannot be orphaned by one careless click.
+BUILTIN_SYSTEM_CATEGORIES = (("Accessory", 10), ("Cell Phone", 20), ("Regular", 30), ("Service", 40))
+
+
+def _system_categories(org_id: str, active_only: bool = False) -> list:
+    """The org's list, seeding the 4 builtins the first time it is asked.
+
+    Lazy-seeding here rather than in core/onboarding.py means a tenant provisioned BEFORE 745 and
+    one provisioned after both get a working list, and no shared core file has to change."""
+    client = sb()
+    rows = (client.schema("pos").table("system_categories").select("*")
+            .eq("org_id", org_id).order("sort_order").order("name").limit(200).execute().data) or []
+    if not rows:
+        try:
+            client.schema("pos").table("system_categories").insert(
+                [{"org_id": org_id, "name": n, "sort_order": s, "is_builtin": True}
+                 for n, s in BUILTIN_SYSTEM_CATEGORIES]).execute()
+        except Exception:
+            pass   # a concurrent first load already seeded it; the re-read settles who won
+        rows = (client.schema("pos").table("system_categories").select("*")
+                .eq("org_id", org_id).order("sort_order").order("name")
+                .limit(200).execute().data) or []
+    return [r for r in rows if r.get("is_active")] if active_only else rows
+
+
+def _valid_system_category(org_id: str, value) -> None:
+    """Reject a system_category that is not one of the org's own ACTIVE names.
+
+    Migration 745 dropped the CHECK constraint, so without this the column would be free text and
+    the next import could invent a fifth spelling of "Accessory" that no dropdown ever offers."""
+    if value in (None, ""):
+        return
+    names = {(r.get("name") or "") for r in _system_categories(org_id, active_only=True)}
+    if value not in names:
+        raise HTTPException(
+            400, f"'{value}' is not one of this company's system categories "
+                 f"({', '.join(sorted(names)) or 'none configured'}) — add it first under "
+                 f"Depts / Categories")
+
+
+@router.get("/system-categories")
+def list_system_categories(active_only: bool = False, org_id: str = ORG_ID):
+    return {"system_categories": _system_categories(org_id, active_only)}
+
+
+@router.post("/system-categories")
+def create_system_category(body: dict, org_id: str = ORG_ID):
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    existing = _system_categories(org_id)
+    if any((r.get("name") or "").lower() == name.lower() for r in existing):
+        raise HTTPException(400, f"'{name}' already exists")
+    nxt = max([int(r.get("sort_order") or 0) for r in existing] or [0]) + 10
+    row = {"org_id": org_id, "name": name, "is_builtin": False,
+           "sort_order": int(body.get("sort_order") or nxt)}
+    r = sb().schema("pos").table("system_categories").insert(row).execute()
+    return {"system_category": (r.data or [{}])[0]}
+
+
+@router.patch("/system-categories/{cat_id}")
+def update_system_category(cat_id: str, body: dict, org_id: str = ORG_ID):
+    """Rename / reorder / deactivate.
+
+    A RENAME carries its products with it. pos.products stores the NAME, not a foreign key, so
+    renaming the row alone would leave every product pointing at a value the dropdown no longer
+    offers — the product would read as uncategorised without anyone touching it."""
+    client = sb()
+    cur = (client.schema("pos").table("system_categories").select("*")
+           .eq("org_id", org_id).eq("id", cat_id).limit(1).execute().data) or []
+    if not cur:
+        raise HTTPException(404, "not found")
+    cur = cur[0]
+    upd = {}
+    if "name" in body:
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise HTTPException(400, "name cannot be blank")
+        if name.lower() != (cur.get("name") or "").lower() and any(
+                (r.get("name") or "").lower() == name.lower() for r in _system_categories(org_id)):
+            raise HTTPException(400, f"'{name}' already exists")
+        upd["name"] = name
+    if "sort_order" in body:
+        upd["sort_order"] = int(body.get("sort_order") or 0)
+    if "is_active" in body:
+        upd["is_active"] = bool(body.get("is_active"))
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (client.schema("pos").table("system_categories").update(upd)
+         .eq("org_id", org_id).eq("id", cat_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    moved = 0
+    if upd.get("name") and upd["name"] != cur.get("name"):
+        m = (client.schema("pos").table("products").update({"system_category": upd["name"]})
+             .eq("org_id", org_id).eq("system_category", cur.get("name")).execute())
+        moved = len(m.data or [])
+    return {"system_category": r.data[0], "products_moved": moved}
+
+
+@router.delete("/system-categories/{cat_id}")
+def delete_system_category(cat_id: str, org_id: str = ORG_ID):
+    """Only an UNUSED, non-builtin category can be deleted; anything else is deactivated instead.
+
+    Deleting one still in use would strand its products on a name no dropdown offers — the same
+    orphaning the rename path above is careful to avoid."""
+    client = sb()
+    cur = (client.schema("pos").table("system_categories").select("*")
+           .eq("org_id", org_id).eq("id", cat_id).limit(1).execute().data) or []
+    if not cur:
+        raise HTTPException(404, "not found")
+    cur = cur[0]
+    if cur.get("is_builtin"):
+        raise HTTPException(400, "a built-in category can be renamed or switched off, not deleted")
+    used = (client.schema("pos").table("products").select("id")
+            .eq("org_id", org_id).eq("system_category", cur.get("name")).limit(1).execute().data) or []
+    if used:
+        raise HTTPException(400, f"'{cur.get('name')}' is still in use — switch it off instead")
+    (client.schema("pos").table("system_categories").delete()
+     .eq("org_id", org_id).eq("id", cat_id).execute())
+    return {"ok": True}
+
+
 # ── Products ───────────────────────────────────────────────────────────────────────────────────────
 @router.get("/products")
 def list_products(search: str = "", department_id: str = "", system_category: str = "",
@@ -150,6 +279,7 @@ def create_product(body: dict, org_id: str = ORG_ID):
     ins = _clean(body)
     if not (ins.get("short_name") or "").strip():
         raise HTTPException(400, "short_name required")
+    _valid_system_category(org_id, ins.get("system_category"))
     ins["org_id"] = org_id
     r = sb().schema("pos").table("products").insert(ins).execute()
     return {"product": (r.data or [{}])[0]}
@@ -160,6 +290,8 @@ def update_product(product_id: str, body: dict, org_id: str = ORG_ID):
     upd = _clean(body)
     if not upd:
         raise HTTPException(400, "nothing to update")
+    if "system_category" in upd:
+        _valid_system_category(org_id, upd.get("system_category"))
     r = (sb().schema("pos").table("products").update(upd)
          .eq("org_id", org_id).eq("id", product_id).execute())
     if not r.data:
@@ -912,6 +1044,13 @@ def checkout(body: dict, authorization: str = Header(default=""), org_id: str = 
         raise HTTPException(403, "your login isn't linked to an employee record — "
                                  "ask an admin to set your Employee ID in Roles & Access")
     sale["employee_id"] = eid   # never trust a body-supplied rep on the money path
+    # The register may now edit unit_price (owner directive 2026-08-11). Keep what the product was
+    # LISTED at so an override is visible afterwards as list_price <> unit_price — a line that
+    # records only what was charged makes a discounted sale indistinguishable from a cheap product.
+    # A client that sends no list_price is recorded as "no override" by pos.checkout's COALESCE.
+    for _it in items:
+        if isinstance(_it, dict) and _it.get("list_price") in (None, ""):
+            _it["list_price"] = _it.get("unit_price")
     try:
         r = sb().schema("pos").rpc("checkout", {
             "p_org": org_id, "p_sale": sale, "p_items": items, "p_payments": payments,
