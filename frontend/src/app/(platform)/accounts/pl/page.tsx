@@ -206,6 +206,15 @@ function Section({ s, open, setOpen }: { s: any; open: Record<string, boolean>; 
                 {l.label}
                 {l.kind === 'manual' && <span style={{ marginLeft: 6, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999 }}>manual</span>}
                 {l.kind === 'auto*' && <span style={{ marginLeft: 6, fontSize: 10, color: '#3730a3', background: '#e0e7ff', padding: '1px 5px', borderRadius: 999 }}>auto*</span>}
+                {/* Owner ruling K3(b): a DECLARED zero must say so. A $0 with a reason is a different
+                    statement from a $0 that was measured, and the reader cannot tell them apart from
+                    the number. Only rendered when the backend actually attached a note. */}
+                {l.note && (
+                  <div style={{ marginTop: 3, fontSize: 11.5, lineHeight: 1.45, color: 'var(--text3)', maxWidth: 620 }}>
+                    <span style={{ marginRight: 5, fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 999, whiteSpace: 'nowrap' }}>not measured</span>
+                    {l.note}
+                  </div>
+                )}
               </td>
               <td style={{ padding: '7px 16px', textAlign: 'right', fontSize: 13, color: l.amount ? 'var(--text)' : 'var(--text3)' }}>{l.amount ? fmt(l.amount) : '—'}</td>
             </tr>
