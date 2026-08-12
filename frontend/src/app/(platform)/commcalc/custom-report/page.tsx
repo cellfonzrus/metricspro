@@ -15,12 +15,26 @@ function thisMonth() { return new Date().toISOString().slice(0, 7) }
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
 type DsCol = { field: string; label: string; type: string; numeric: boolean; money: boolean; group: boolean }
-type Dataset = { key: string; name: string; columns: DsCol[]; group_dims: string[]; backing_tables: string[]; has_gated_hidden: boolean }
+type PivotAxis = { field: string; label: string; type?: string; agg?: string }
+type Dataset = {
+  key: string; name: string; columns: DsCol[]; group_dims: string[]; backing_tables: string[]
+  has_gated_hidden: boolean; pivot_dims?: PivotAxis[]; pivot_measures?: PivotAxis[]
+}
 type SecCol = { field: string; label: string; type: string; numeric: boolean; money: boolean; agg: string }
+type Pivot = {
+  available: boolean; reason?: string
+  row_field?: string; col_field?: string; measure?: string; measure_label?: string
+  measure_type?: string; agg?: string
+  row_keys?: string[]; col_keys?: string[]
+  cells?: Record<string, Record<string, number>>
+  counts?: Record<string, Record<string, number>>
+  row_totals?: Record<string, number>; col_totals?: Record<string, number>; grand_total?: number
+  truncated_cols?: boolean; dropped_cols?: string[]
+}
 type Section = {
   key: string; name: string; available: boolean; reason?: string; grouped_by?: string | null
   columns: SecCol[]; rows: any[]; totals: Record<string, number>; row_count?: number
-  gated_columns_hidden?: string[]
+  gated_columns_hidden?: string[]; pivot?: Pivot | null
 }
 
 // A universal group-by dim's friendly label (RULE FIVE naming) — else fall back to the column label.
@@ -39,6 +53,10 @@ export default function CustomReportPage() {
   const [selReps, setSelReps] = useState<string[]>([])
   const [selCols, setSelCols] = useState<Record<string, string[]>>({})   // per-dataset chosen fields (empty = all)
   const [groupBy, setGroupBy] = useState('')
+  // Pivot axes (roadmap #4). Empty rows/cols = no pivot, and the page behaves exactly as before.
+  const [pivotRows, setPivotRows] = useState('')
+  const [pivotCols, setPivotCols] = useState('')
+  const [pivotMeasure, setPivotMeasure] = useState('')
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [options, setOptions] = useState<{ stores: string[]; markets: string[]; reps: string[] }>({ stores: [], markets: [], reps: [] })
@@ -69,17 +87,33 @@ export default function CustomReportPage() {
       datasets: selDatasets.join(','), period,
       stores: selStores.join(','), markets: selMarkets.join(','), reps: selReps.join(','),
       group_by: groupBy, columns: cols.join(','),
+      pivot_rows: pivotRows, pivot_cols: pivotCols, pivot_measure: pivotMeasure,
     })
     api(`/api/v1/commcalc/custom-report?${qs.toString()}${orgParam()}`)
       .then((r: any) => { setData(r); if (r.filter_options) setOptions(r.filter_options) })
       .catch((e: any) => setData({ sections: [], error: String(e?.message || e) }))
       .finally(() => setLoading(false))
-  }, [selDatasets, period, selStores, selMarkets, selReps, groupBy, selCols])
+  }, [selDatasets, period, selStores, selMarkets, selReps, groupBy, selCols, pivotRows, pivotCols, pivotMeasure])
   useEffect(() => { run() }, [run])
 
   const regByKey = useMemo(() => Object.fromEntries(registry.map(d => [d.key, d])), [registry])
 
   // Group-by options — the union of the selected datasets' group_dims (universal dims first, RULE FIVE).
+  // Pivot axes offered = the UNION across the selected datasets, de-duped by field. The server
+  // validates per dataset anyway and reports "cannot pivot by that field" for one that lacks it, so a
+  // union here is honest: it offers what SOME selected dataset can do rather than the intersection,
+  // which would silently hide a usable axis whenever a second dataset is added.
+  const pivotDims = useMemo(() => {
+    const seen = new Map<string, PivotAxis>()
+    for (const k of selDatasets) for (const d of (regByKey[k]?.pivot_dims || [])) if (!seen.has(d.field)) seen.set(d.field, d)
+    return Array.from(seen.values())
+  }, [selDatasets, regByKey])
+  const pivotMeasures = useMemo(() => {
+    const seen = new Map<string, PivotAxis>()
+    for (const k of selDatasets) for (const m of (regByKey[k]?.pivot_measures || [])) if (!seen.has(m.field)) seen.set(m.field, m)
+    return Array.from(seen.values())
+  }, [selDatasets, regByKey])
+
   const groupOptions = useMemo(() => {
     const seen = new Map<string, string>()
     for (const k of selDatasets) {
@@ -105,6 +139,11 @@ export default function CustomReportPage() {
     setSelDatasets(c.datasets || [])
     setSelCols(c.columns || {})
     setGroupBy(typeof c.group_by === 'string' ? c.group_by : '')
+    // A saved report predating the pivot has no pivot keys — it loads with the pivot cleared, exactly
+    // as it was saved, rather than inheriting whatever was on screen.
+    setPivotRows(typeof c.pivot_rows === 'string' ? c.pivot_rows : '')
+    setPivotCols(typeof c.pivot_cols === 'string' ? c.pivot_cols : '')
+    setPivotMeasure(typeof c.pivot_measure === 'string' ? c.pivot_measure : '')
     const f = c.filters || {}
     if (f.period) setPeriod(f.period)
     setSelStores(f.stores || []); setSelMarkets(f.markets || []); setSelReps(f.reps || [])
@@ -121,6 +160,7 @@ export default function CustomReportPage() {
         method: 'POST', body: JSON.stringify({
           name, config: {
             datasets: selDatasets, columns: selCols, group_by: groupBy,
+            pivot_rows: pivotRows, pivot_cols: pivotCols, pivot_measure: pivotMeasure,
             filters: { period, stores: selStores, markets: selMarkets, reps: selReps },
           },
         }),
@@ -162,6 +202,29 @@ export default function CustomReportPage() {
             {groupOptions.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
           </select>
         </label>
+        {/* PIVOT (roadmap #4) — rows x columns cross-tab. Dropdowns are populated from the server's
+            GATED axis lists, so a column the caller may not see is never offered as an axis. */}
+        <label style={{ fontSize: 12, color: 'var(--text2)' }}>Pivot rows{' '}
+          <select style={sel} value={pivotRows} onChange={e => setPivotRows(e.target.value)}>
+            <option value="">— none —</option>
+            {pivotDims.map(d => <option key={d.field} value={d.field}>{d.label}</option>)}
+          </select>
+        </label>
+        <label style={{ fontSize: 12, color: 'var(--text2)' }}>×&nbsp;columns{' '}
+          <select style={sel} value={pivotCols} onChange={e => setPivotCols(e.target.value)}>
+            <option value="">— none —</option>
+            {pivotDims.filter(d => d.field !== pivotRows).map(d => <option key={d.field} value={d.field}>{d.label}</option>)}
+          </select>
+        </label>
+        {pivotRows && pivotCols && (
+          <label style={{ fontSize: 12, color: 'var(--text2)' }}>Measure{' '}
+            <select style={sel} value={pivotMeasure} onChange={e => setPivotMeasure(e.target.value)}>
+              {pivotMeasures.map(m => <option key={m.field} value={m.field}>{m.label}</option>)}
+            </select>
+          </label>
+        )}
+        {(pivotRows || pivotCols) && <button className="btn btn-secondary" style={{ fontSize: 12 }}
+          onClick={() => { setPivotRows(''); setPivotCols(''); setPivotMeasure('') }}>Clear pivot</button>}
         {anyFilter && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setSelStores([]); setSelMarkets([]); setSelReps([]) }}>Clear filters</button>}
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setShowBuilder(s => !s)}>{showBuilder ? '▾' : '▸'} Datasets & columns</button>
       </div>
@@ -246,6 +309,69 @@ export default function CustomReportPage() {
   )
 }
 
+/** The cross-tab. Every number here is computed server-side from the raw rows — including the
+ *  subtotals, which is the point: a percentage subtotal is the mean of the underlying values, never
+ *  the mean of the cells above it. Rendering does no arithmetic of its own. */
+function PivotView({ pivot }: { pivot: Pivot }) {
+  if (!pivot.available) {
+    return <div style={{ fontSize: 12.5, color: '#b45309', marginBottom: 10 }}>⚠️ Pivot: {pivot.reason}</div>
+  }
+  const rk = pivot.row_keys || [], ck = pivot.col_keys || []
+  const money = pivot.measure_type === 'money'
+  const pct = pivot.measure_type === 'pct'
+  const fmt = (v: number | null | undefined) => {
+    if (v === null || v === undefined) return <span style={{ color: 'var(--text3)' }}>·</span>
+    const n = money ? '$' + v.toLocaleString('en-US', { maximumFractionDigits: 0 })
+      : pct ? v.toLocaleString('en-US', { maximumFractionDigits: 1 }) + '%'
+      : v.toLocaleString('en-US', { maximumFractionDigits: 2 })
+    return n
+  }
+  const th: React.CSSProperties = { padding: '6px 10px', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--text3)', fontWeight: 700, textAlign: 'right', whiteSpace: 'nowrap' }
+  const td: React.CSSProperties = { padding: '6px 10px', fontSize: 13, textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', borderTop: '1px solid var(--border)' }
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>
+        <b>{pivot.measure_label}</b> by <b>{pivot.row_field}</b> × <b>{pivot.col_field}</b>
+        <span style={{ color: 'var(--text3)' }}> · {pivot.agg === 'avg' ? 'averaged' : pivot.agg === 'count' ? 'counted' : 'summed'}</span>
+      </div>
+      {pivot.truncated_cols && (
+        <div style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>
+          ⚠️ Showing the {ck.length} largest columns — {(pivot.dropped_cols || []).length} more are not
+          displayed, and the totals below cover only what is shown. Narrow the filters or pick a
+          coarser column field.
+        </div>
+      )}
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', minWidth: '100%' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left', position: 'sticky', left: 0, background: 'var(--surface)' }}>{pivot.row_field}</th>
+            {ck.map(c => <th key={c} style={th}>{c}</th>)}
+            <th style={{ ...th, borderLeft: '2px solid var(--border)' }}>Total</th>
+          </tr></thead>
+          <tbody>
+            {rk.map(r => (
+              <tr key={r}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 600, position: 'sticky', left: 0, background: 'var(--surface)' }}>{r}</td>
+                {ck.map(c => (
+                  <td key={c} style={td} title={pivot.counts?.[r]?.[c] ? `${pivot.counts[r][c]} row(s)` : 'no rows'}>
+                    {fmt(pivot.cells?.[r]?.[c])}
+                  </td>
+                ))}
+                <td style={{ ...td, fontWeight: 700, borderLeft: '2px solid var(--border)' }}>{fmt(pivot.row_totals?.[r])}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot><tr>
+            <td style={{ ...td, textAlign: 'left', fontWeight: 700, borderTop: '2px solid var(--border)', position: 'sticky', left: 0, background: 'var(--surface)' }}>Total</td>
+            {ck.map(c => <td key={c} style={{ ...td, fontWeight: 700, borderTop: '2px solid var(--border)' }}>{fmt(pivot.col_totals?.[c])}</td>)}
+            <td style={{ ...td, fontWeight: 800, borderTop: '2px solid var(--border)', borderLeft: '2px solid var(--border)' }}>{fmt(pivot.grand_total)}</td>
+          </tr></tfoot>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 function SectionView({ section, period }: { section: Section; period: string }) {
   const cols: ExportColumn[] = useMemo(() => (section.columns || []).map(c => ({
     header: c.label, field: c.field, get: (r: any) => r[c.field],
@@ -267,12 +393,17 @@ function SectionView({ section, period }: { section: Section; period: string }) 
           <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12, marginLeft: 8 }}>
             {section.row_count ?? section.rows.length} row{(section.row_count ?? section.rows.length) === 1 ? '' : 's'}
             {section.grouped_by ? ` · grouped by ${section.grouped_by}` : ''}
+            {section.pivot?.available ? ' · pivoted' : ''}
           </span>
         </div>
         {(section.gated_columns_hidden || []).length > 0 && (
           <span style={{ fontSize: 11, color: 'var(--text3)' }}>🔒 {section.gated_columns_hidden!.length} restricted column(s) hidden</span>
         )}
       </div>
+      {/* The cross-tab sits ABOVE the detail table, and the table stays: the pivot is the summary and
+          the rows underneath it are the evidence, so a number you don't believe is one scroll from
+          the lines that produced it. */}
+      {section.pivot && <PivotView pivot={section.pivot} />}
       {section.rows.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 30, color: 'var(--text3)', fontSize: 13 }}>No rows for this dataset with the current filters.</div>
       ) : (
