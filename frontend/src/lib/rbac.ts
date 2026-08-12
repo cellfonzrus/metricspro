@@ -198,7 +198,15 @@ export function hasDataGrant(perms: Permissions, key: string): boolean {
 // the tenant's capability is explicitly false (e.g. asset_lending=false → no consignment distributor).
 // Unknown/true → shown, so it never hides anything by default. RBAC (module/scopes) still applies first.
 export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string }
-export type NavGroup = { group: string; module: string; items: NavItem[] }
+// A named sub-category INSIDE a group (owner directive 2026-08-12 — roadmap #5). Sub-groups are a
+// LAYOUT-level concept only: the built-in NAV literal below stays structurally two-level, so a
+// newly-shipped item still lands in its group with no code change and no tenant re-configuration.
+// INVARIANT: `NavGroup.items` always carries EVERY item in the group, including the ones a sub claims.
+// The search index and the active-group detection in (platform)/layout.tsx both read `.items`, so
+// widening it would change what they see. `subs` is therefore an ADDITIONAL view over the same objects
+// and the renderer treats anything no sub claims as loose (rendered directly under the group header).
+export type NavSub = { name: string; items: NavItem[] }
+export type NavGroup = { group: string; module: string; items: NavItem[]; subs?: NavSub[] }
 
 // scopes (when present) further restricts an item to those scope tiers, e.g. settings = admin only.
 // ── NAV taxonomy (reorganized 2026-06-28) ──────────────────────────────────────────────
@@ -513,8 +521,15 @@ export const NAV: NavGroup[] = [
 // tenant that doesn't want the duplicate categorized copies. Default OFF (every tenant gets the directory).
 // It flows through the existing nav-layout JSON; wiring a designer toggle for it is an optional follow-up.
 export type NavLayout = {
-  items?: Record<string, { group?: string; hidden?: boolean; also?: string[] }>
+  // `sub` nests the item under a named sub-category within its group. Empty/absent ⇒ loose, as today.
+  items?: Record<string, { group?: string; sub?: string; hidden?: boolean; also?: string[] }>
   groups?: string[]
+  // Explicit drag-and-drop ordering. Each is OPTIONAL and ADDITIVE: anything a list does not name keeps
+  // its natural (code-default) position, after the named entries. All three absent ⇒ applyNavLayout
+  // returns exactly what it returned before sub-categories existed.
+  groupOrder?: string[]                     // sidebar order of groups
+  subOrder?: Record<string, string[]>       // group  → order of its sub-category names
+  itemOrder?: Record<string, string[]>      // group  → order of its item hrefs
   hideReportsDirectory?: boolean
 }
 
@@ -644,11 +659,44 @@ export function applyNavLayout(groups: NavGroup[], layout?: NavLayout): NavGroup
   const seen = new Set<string>(); const order: string[] = []
   defaultOrder.forEach(g => { if (targets.some(t => t.group === g)) { order.push(g); seen.add(g) } })
   targets.forEach(t => { if (!seen.has(t.group)) { order.push(t.group); seen.add(t.group) } })
-  return order.map(group => ({
-    group,
-    module: moduleByGroup[group] || (targets.find(t => t.group === group)?.it.module || ''),
-    items: targets.filter(t => t.group === group).map(t => t.it),
-  })).filter(g => g.items.length > 0)
+  // Stable "listed first, in the listed order; everything else keeps its natural order after them".
+  // Used for groups, sub-names and items alike. An EMPTY/absent list returns the input untouched, which
+  // is what keeps the no-layout path byte-identical to the pre-sub-category behaviour.
+  const rank = <T,>(arr: T[], want: string[] | undefined, key: (t: T) => string): T[] => {
+    if (!want || !want.length) return arr
+    const nat = new Map(arr.map((t, i) => [key(t), i]))
+    return [...arr].sort((a, b) => {
+      const ia = want.indexOf(key(a)), ib = want.indexOf(key(b))
+      if (ia === -1 && ib === -1) return (nat.get(key(a)) ?? 0) - (nat.get(key(b)) ?? 0)
+      if (ia === -1) return 1
+      if (ib === -1) return -1
+      return ia - ib
+    })
+  }
+  const ordered = rank(order, layout?.groupOrder, g => g)
+  return ordered.map(group => {
+    const items = rank(targets.filter(t => t.group === group).map(t => t.it), layout?.itemOrder?.[group], it => it.href)
+    // Sub-categories. An item nests when ITS OWN override names a `sub`; a sub therefore cannot capture
+    // an item the admin never assigned, and an unknown/stale sub name simply reappears as its own
+    // sub-category rather than swallowing the item. `items` above is left complete on purpose.
+    const subOf = new Map<string, string>()
+    for (const it of items) { const s = (ov?.[it.href]?.sub || '').trim(); if (s) subOf.set(it.href, s) }
+    let subs: NavSub[] | undefined
+    if (subOf.size) {
+      const names: string[] = []
+      for (const it of items) { const s = subOf.get(it.href); if (s && !names.includes(s)) names.push(s) }
+      subs = rank(names, layout?.subOrder?.[group], n => n)
+        .map(name => ({ name, items: items.filter(it => subOf.get(it.href) === name) }))
+    }
+    return {
+      group,
+      module: moduleByGroup[group] || (targets.find(t => t.group === group)?.it.module || ''),
+      items,
+      // Spread so the key is ABSENT (not `undefined`) when the group has no sub-categories — the
+      // returned object stays shape-identical to the old one for every untouched tenant.
+      ...(subs ? { subs } : {}),
+    }
+  }).filter(g => g.items.length > 0)
 }
 
 export function moduleForPath(path: string): string {

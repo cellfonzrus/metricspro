@@ -12337,9 +12337,13 @@ def set_nav_label(body: dict, org_id: str = ORG_ID):
 @router.post("/nav-layout")
 def set_nav_layout(body: dict, org_id: str = ORG_ID):
     """Save the per-tenant sidebar LAYOUT (admin config): which group each nav item appears under, plus
-    hidden items. Body = {items: {<href>: {group?: str, hidden?: bool, also?: [str]}}, groups?: [str]}.
+    hidden items, SUB-CATEGORIES and explicit drag-and-drop order.
+    Body = {items: {<href>: {group?: str, sub?: str, hidden?: bool, also?: [str]}}, groups?: [str],
+            groupOrder?: [str], subOrder?: {group: [str]}, itemOrder?: {group: [href]}}.
       · group  — the item's PRIMARY group (a MOVE from its built-in group)
       · also   — ADDITIONAL groups the SAME item is DUPLICATED into (extra sidebar links to one href)
+      · sub    — nest the item under a NAMED SUB-CATEGORY inside its group (roadmap #5). Layout-level
+                 only: NAV itself stays two-level, so a newly-shipped item still lands in its group.
       · hidden — remove the item everywhere
       · groups — admin-created group names that may have NO items yet (so the designer can keep an empty
                  group; the sidebar itself ignores empty groups)
@@ -12362,12 +12366,16 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
             a = (a or '').strip() if isinstance(a, str) else ''
             if a and a != g and a not in also:
                 also.append(a)
-        # keep only meaningful overrides (a move, a hide, or a duplicate)
-        if not (g or v.get('hidden') or also):
+        # sub-category name inside the item's group; blank/whitespace ⇒ loose (no key written)
+        sub = (v.get('sub') or '').strip() if isinstance(v.get('sub'), str) else ''
+        # keep only meaningful overrides (a move, a hide, a duplicate, or a nesting)
+        if not (g or v.get('hidden') or also or sub):
             continue
         entry = {}
         if g:
             entry['group'] = g
+        if sub:
+            entry['sub'] = sub
         if v.get('hidden'):
             entry['hidden'] = True
         if also:
@@ -12379,9 +12387,35 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
         gname = (gname or '').strip() if isinstance(gname, str) else ''
         if gname and gname not in groups:
             groups.append(gname)
+    # Explicit drag-and-drop order. Each is OPTIONAL and ADDITIVE — an absent/empty list means "keep the
+    # built-in order", which is why an empty list is never written (it would be indistinguishable from a
+    # deliberate wipe on the way back in).
+    def _names(seq):
+        out = []
+        for s in (seq or []):
+            s = (s or '').strip() if isinstance(s, str) else ''
+            if s and s not in out:
+                out.append(s)
+        return out
+
+    group_order = _names((body or {}).get('groupOrder'))
+
+    def _order_map(raw):
+        out = {}
+        if isinstance(raw, dict):
+            for gname, seq in raw.items():
+                gname = (gname or '').strip() if isinstance(gname, str) else ''
+                vals = _names(seq)
+                if gname and vals:
+                    out[gname] = vals
+        return out
+
+    sub_order = _order_map((body or {}).get('subOrder'))
+    item_order = _order_map((body or {}).get('itemOrder'))
+
     client = sb()
     try:
-        if not items and not groups and not hide:
+        if not items and not groups and not hide and not group_order and not sub_order and not item_order:
             client.schema('commcalc').table('ui_label_override').delete() \
                 .eq('org_id', org_id).eq('scope', 'layout').eq('key', '__nav__').execute()
             return {"ok": True, "cleared": True}
@@ -12390,6 +12424,12 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
             payload["groups"] = groups
         if hide:
             payload["hideReportsDirectory"] = True
+        if group_order:
+            payload["groupOrder"] = group_order
+        if sub_order:
+            payload["subOrder"] = sub_order
+        if item_order:
+            payload["itemOrder"] = item_order
         client.schema('commcalc').table('ui_label_override').upsert(
             {"org_id": org_id, "scope": "layout", "key": "__nav__",
              "label": _json.dumps(payload),
@@ -12397,7 +12437,8 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
             on_conflict="org_id,scope,key").execute()
     except Exception as e:
         raise HTTPException(400, f"Could not save menu layout — run migration 068_ui_label_override.sql first. [{e}]")
-    return {"ok": True, "items": items, "groups": groups}
+    return {"ok": True, "items": items, "groups": groups,
+            "groupOrder": group_order, "subOrder": sub_order, "itemOrder": item_order}
 
 
 @router.get("/distributors")
