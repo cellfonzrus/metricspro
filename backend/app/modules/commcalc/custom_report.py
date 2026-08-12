@@ -417,6 +417,119 @@ def group_and_aggregate(rows, columns, group_field):
     return out, out_cols
 
 
+# ── PIVOT (roadmap #4 — rows × columns cross-tab) ───────────────────────────────────────────────────
+# A pivot is `group_and_aggregate` on TWO axes at once. It stays here, pure, for the same reason the
+# rest of the math does: a cross-tab is exactly the shape where a subtle aggregation error looks
+# plausible on screen, so it has to be testable without a live DB.
+#
+# THE TRAP THIS FUNCTION EXISTS TO AVOID — averaging averages. A `pct` measure aggregates with MEAN.
+# A subtotal computed from the CELLS would be a mean of means, which is only correct when every cell
+# holds the same number of rows. Real data never does. So every level (cell, row subtotal, column
+# subtotal, grand total) is computed from the RAW VALUES it covers, never from the level below it.
+# Sums are associative and would survive the shortcut; means are not, and mixing the two silently
+# produces a grand total that disagrees with its own row.
+COUNT_MEASURE = "_count"
+
+
+def pivot(rows, columns, row_field, col_field, measure_field, max_cols=40):
+    """Cross-tabulate `rows`: one output row per distinct `row_field` value, one column per distinct
+    `col_field` value, each cell aggregating `measure_field`.
+
+    `measure_field` is a numeric column's field, or COUNT_MEASURE ('_count') for a plain row count —
+    which is the only measure guaranteed to exist on every dataset, so it is the safe default.
+
+    Returns a dict:
+      {row_field, col_field, measure, agg, row_keys[], col_keys[], cells{rk:{ck:value}},
+       counts{rk:{ck:n}}, row_totals{rk}, col_totals{ck}, grand_total, truncated_cols, dropped_cols}
+
+    Wide pivots are capped at `max_cols` distinct column values — the widest by row count survive and
+    the rest are REPORTED in `dropped_cols`, never silently swallowed: a cross-tab that quietly drops
+    columns reads as complete when it isn't. Pure — no I/O.
+    """
+    blank = "(blank)"
+    measure_col = next((c for c in columns if c["field"] == measure_field), None)
+    is_count = (measure_field == COUNT_MEASURE) or measure_col is None
+    agg = "count" if is_count else col_agg(measure_col)
+    if agg == "none":                      # a text/date column is not a measure — fall back to counting
+        is_count, agg = True, "count"
+
+    # Bucket the RAW values per (row, col). Every later number is derived from these lists, never from
+    # another derived number — see the note above this function.
+    cells_raw: dict = {}
+    row_keys, col_keys, col_n = [], [], {}
+    for r in rows:
+        rk = _norm(r.get(row_field)) or blank
+        ck = _norm(r.get(col_field)) or blank
+        if rk not in cells_raw:
+            cells_raw[rk] = {}
+            row_keys.append(rk)
+        if ck not in cells_raw[rk]:
+            cells_raw[rk][ck] = []
+        if ck not in col_n:
+            col_n[ck] = 0
+            col_keys.append(ck)
+        col_n[ck] += 1
+        if is_count:
+            cells_raw[rk][ck].append(1.0)
+        else:
+            n = _num(r.get(measure_field))
+            if n is not None:
+                cells_raw[rk][ck].append(n)
+
+    dropped_cols = []
+    if len(col_keys) > max_cols:
+        keep = sorted(col_keys, key=lambda k: -col_n[k])[:max_cols]
+        keep_set = set(keep)
+        dropped_cols = sorted([k for k in col_keys if k not in keep_set], key=lambda k: -col_n[k])
+        col_keys = [k for k in col_keys if k in keep_set]
+
+    def _agg(vals):
+        if not vals:
+            return None
+        if agg == "avg":
+            return round(sum(vals) / len(vals), 2)
+        return round(sum(vals), 2)
+
+    cells, counts = {}, {}
+    for rk in row_keys:
+        cells[rk], counts[rk] = {}, {}
+        for ck in col_keys:
+            vals = cells_raw[rk].get(ck)
+            if vals:
+                cells[rk][ck] = _agg(vals)
+                counts[rk][ck] = len(vals)
+
+    # Subtotals from the RAW values each covers. `dropped_cols` are excluded from every total so the
+    # totals always reconcile with what is actually on screen.
+    row_totals = {rk: _agg([v for ck in col_keys for v in cells_raw[rk].get(ck, [])]) for rk in row_keys}
+    col_totals = {ck: _agg([v for rk in row_keys for v in cells_raw[rk].get(ck, [])]) for ck in col_keys}
+    grand = _agg([v for rk in row_keys for ck in col_keys for v in cells_raw[rk].get(ck, [])])
+
+    return {
+        "row_field": row_field, "col_field": col_field,
+        "measure": COUNT_MEASURE if is_count else measure_field,
+        "measure_label": "Rows" if is_count else measure_col["label"],
+        "measure_type": "count" if is_count else measure_col["type"],
+        "agg": agg,
+        "row_keys": row_keys, "col_keys": col_keys,
+        "cells": cells, "counts": counts,
+        "row_totals": row_totals, "col_totals": col_totals, "grand_total": grand,
+        "truncated_cols": bool(dropped_cols), "dropped_cols": dropped_cols,
+    }
+
+
+def pivot_axes(dataset, grants=None):
+    """What this dataset can pivot BY and what it can measure — derived from the same column catalog the
+    table renders from, so the pickers can never offer a column the caller isn't allowed to see (the
+    gate is applied first). Returns (dimensions, measures); measures always include the row count."""
+    cols = visible_columns(dataset, grants)
+    dims = [{"field": c["field"], "label": c["label"]} for c in cols if c.get("group")]
+    measures = [{"field": c["field"], "label": c["label"], "type": c["type"], "agg": col_agg(c)}
+                for c in cols if is_numeric(c)]
+    measures.insert(0, {"field": COUNT_MEASURE, "label": "Rows", "type": "count", "agg": "count"})
+    return dims, measures
+
+
 def compute_totals(rows, columns):
     """Totals row over `rows`: money/count columns SUM, pct columns MEAN, text/date blank. Returns a dict
     field -> number (only for aggregating columns). Pure."""
@@ -492,5 +605,11 @@ def validate_definition(body, known_keys):
         "columns": cfg.get("columns") if isinstance(cfg.get("columns"), dict) else {},
         "group_by": cfg.get("group_by") if isinstance(cfg.get("group_by"), (str, dict)) else "",
         "filters": cfg.get("filters") if isinstance(cfg.get("filters"), dict) else {},
+        # Pivot axes (roadmap #4). This dict is a WHITELIST — a key not listed here is dropped, which
+        # means the UI would have shown "Saved ✓" and lost the pivot on reload. Any future config field
+        # must be added here too.
+        "pivot_rows": _norm(cfg.get("pivot_rows")),
+        "pivot_cols": _norm(cfg.get("pivot_cols")),
+        "pivot_measure": _norm(cfg.get("pivot_measure")),
     }
     return True, {"name": name[:120], "config": cleaned}

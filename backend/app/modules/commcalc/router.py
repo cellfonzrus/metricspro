@@ -25145,6 +25145,10 @@ def custom_report_datasets(authorization: str = Header(default=""), org_id: str 
                          "numeric": custom_report.is_numeric(c), "money": c["type"] == "money",
                          "group": bool(c.get("group"))} for c in cols],
             "group_dims": universal + group_extra,
+            # Pivot pickers (roadmap #4) — derived from the SAME gated catalog the table renders from,
+            # so the UI can never offer an axis the caller is not allowed to see.
+            "pivot_dims": custom_report.pivot_axes(d, grants)[0],
+            "pivot_measures": custom_report.pivot_axes(d, grants)[1],
             "has_gated_hidden": any(c.get("gate") and c["gate"] not in grants for c in d["columns"]),
         })
     return {"datasets": out, "org_id": org_id, "grants": sorted(grants),
@@ -25155,11 +25159,14 @@ def custom_report_datasets(authorization: str = Header(default=""), org_id: str 
 async def custom_report_run(datasets: str = "", period: str = "", date_from: str = "", date_to: str = "",
                             stores: str = "", markets: str = "", reps: str = "",
                             group_by: str = "", columns: str = "",
+                            pivot_rows: str = "", pivot_cols: str = "", pivot_measure: str = "",
                             authorization: str = Header(default=""), org_id: str = ORG_ID):
     """THE universal Custom Report. Params: `datasets` (comma-sep registry keys), `period` (or
     `date_from`/`date_to`), the RULE FIVE core filters `stores`/`markets`/`reps` (comma-sep selected
     values, applied SERVER-SIDE before aggregation), optional `group_by` (a universal dim store/rep/market/
-    day OR a groupable column field), optional `columns` (comma-sep field names to keep). Returns one
+    day OR a groupable column field), and the optional PIVOT axes `pivot_rows`/`pivot_cols`/`pivot_measure`
+    (roadmap #4 — a rows x columns cross-tab computed from the SAME RULE FIVE-filtered rows the table
+    shows, so the pivot and the table can never disagree). Optional `columns` (comma-sep fields to keep). Returns one
     SECTION per dataset (honest side-by-side; NO cross-dataset joins in v1) with rows + column metadata +
     totals + availability, plus the pick-don't-type filter options unioned across datasets. Multi-tenant:
     org-scoped reads, span-scope honored, gated columns dropped for a caller without the grant."""
@@ -25232,8 +25239,31 @@ async def custom_report_run(datasets: str = "", period: str = "", date_from: str
         rows_out, cols_out = custom_report.group_and_aggregate(filt, vis, grp_field)
         proj = custom_report.project_rows(rows_out, cols_out)   # drop any non-visible field before it ships
         totals = custom_report.compute_totals(proj, cols_out)
+        # PIVOT (roadmap #4). Built from `filt` — the RULE FIVE-filtered, span-scoped rows — NOT from the
+        # grouped output, so the cross-tab reflects the same population the table does and a group-by does
+        # not silently pre-aggregate it. Axes are validated against the GATED catalog: a caller who cannot
+        # see a column cannot pivot by it or measure it either, so the pivot is not a second permission
+        # surface (same rule as the row payload and the export).
+        pv = None
+        if pivot_rows and pivot_cols:
+            dims, meas = custom_report.pivot_axes(d, grants)
+            dim_fields = {x["field"] for x in dims}
+            meas_fields = {x["field"] for x in meas}
+            rf = custom_report.resolve_group_field(d, pivot_rows) or (pivot_rows if pivot_rows in dim_fields else None)
+            cf = custom_report.resolve_group_field(d, pivot_cols) or (pivot_cols if pivot_cols in dim_fields else None)
+            mf = pivot_measure if pivot_measure in meas_fields else custom_report.COUNT_MEASURE
+            if not rf or not cf:
+                pv = {"available": False,
+                      "reason": "this dataset cannot pivot by that field"}
+            elif rf == cf:
+                pv = {"available": False,
+                      "reason": "rows and columns must use different fields"}
+            else:
+                pv = custom_report.pivot(filt, allvis, rf, cf, mf)
+                pv["available"] = True
         sections.append({
             "key": key, "name": d["name"], "available": True, "grouped_by": grp_field or None,
+            "pivot": pv,
             "columns": [{"field": c["field"], "label": c["label"], "type": c["type"],
                          "numeric": custom_report.is_numeric(c), "money": c["type"] == "money",
                          "agg": custom_report.col_agg(c)} for c in cols_out],
@@ -25246,7 +25276,9 @@ async def custom_report_run(datasets: str = "", period: str = "", date_from: str
     return {"org_id": org_id, "period": period, "date_from": date_from or None, "date_to": date_to or None,
             "datasets": want_keys, "sections": sections, "filter_options": opts,
             "applied_filters": {"stores": sel_stores, "markets": sel_markets, "reps": sel_reps,
-                                "group_by": group_by or None},
+                                "group_by": group_by or None,
+                                "pivot_rows": pivot_rows or None, "pivot_cols": pivot_cols or None,
+                                "pivot_measure": pivot_measure or None},
             "registry_source": "config" if reg_present else "code-default"}
 
 
