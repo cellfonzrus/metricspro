@@ -36,6 +36,15 @@ ENGINE FUNCTIONS THE RESULT COMES FROM (all reached via that one preview() call,
 The endpoint returns the engine's OWN `by_rep` row (base_payout / tiered_payout / tier_multiplier /
 setup_fee_comm / total_payout / per-rule breakdown) — not a re-derived total.
 
+THE SECOND ENGINE (added 2026-08-12, owner: "what would I make does not include the multi month"): a
+plan-mode tenant is paid by TWO engines. The plan RULES above pay on this month's sales; the
+SALE-TRIGGERED CHAIN (`sale_installment_engine.compute_sale_installments`) pays an activation its
+M1..MN residual over the following months. Projecting only the first one told a rep an activation was
+worth its one-off rule and nothing else. The chain is now projected the same way — synthetic
+activations handed to the REAL installment engine through its read-only `_sales_override`, once per
+month of the chain — and reported SEPARATELY (`multi_month`), never folded into `total_payout`. See
+the MULTI-MONTH section below for why it reads the engine's pre-gate `expected_amount` column.
+
 SELF-ONLY (RULE: an employee must not simulate a coworker). `resolve_self()` reads the identity from
 the bearer token via `app_users.auth_id` — the same rule storeops uses for every self-service view
 (/timeclock/status, /my-chargebacks). A `rep` query param is accepted ONLY so the 403 is explicit:
@@ -445,9 +454,20 @@ _KIND_INPUT = {
     "flat_per_unit": (False, None, "units"),
     "flat": (False, None, "units"),
     "pct_gp": (True, "gp", "units"),
+    # % OF THE SALE PRICE — the kind the owner's own accessory rules use (owner 2026-08-04: accessory
+    # pay tracks what the rep actually sold it for, not GP). It was MISSING from this map, and a kind
+    # that isn't here falls to the (False, None) default: no price input is rendered, so every
+    # simulated line is minted at ext_price 0 and the rule pays 17.5% of nothing. That is the "$0 for
+    # accessories" defect — the engine was right, the simulator never gave it a price to work with.
+    # It is also why accessories had no per-item / per-month choice: `basis_options` only attach to a
+    # lever with an amount input.
+    "pct_price": (True, "ext_price", "units"),
     "pct_price_over_cost": (True, "ext_price", "units"),
     "pct_mrc": (True, "mrc", "lines"),
 }
+# Every payout kind the ENGINE pays on. A rule whose kind is not in _KIND_INPUT above pays $0 in a
+# simulation no matter what the rep types, so the lever says so out loud instead of quoting zero.
+_ENGINE_KINDS = {"flat_per_unit", "flat", "pct_gp", "pct_price", "pct_price_over_cost", "pct_mrc"}
 
 
 def _match_target(rule):
@@ -559,6 +579,15 @@ def build_levers(client, org_id, plan):
         }
         if kind == "flat":
             lever["note"] = "Bonus — paid once for the month as soon as you have at least one."
+        if kind not in _KIND_INPUT:
+            # NEVER a silent $0 again (the pct_price defect). A kind this module can't mint a line for
+            # is reported as unsimulatable, whether or not the engine knows how to pay it.
+            lever["simulatable"] = False
+            lever["note"] = (f"This rule pays on '{kind}', which the simulator can't model yet"
+                             + (" — it is paid normally, it just can't be projected here."
+                                if kind in _ENGINE_KINDS else
+                                " and which the pay engine does not recognise either — check the rule "
+                                "under Commission Plans."))
         # The two SYNTHETIC match fields can't simply be stamped on the line: preview() OVERWRITES
         # them with the tenant's own classifier/resolver output. Probe for a real line shape that the
         # tenant's config genuinely classifies that way; if none exists, say so instead of silently
@@ -594,6 +623,276 @@ def build_levers(client, org_id, plan):
                       for t in sorted(tiers, key=lambda x: int(x.get("min_count") or 0))],
         }
     return levers, tier
+
+
+# ══ THE MULTI-MONTH (RESIDUAL) HALF OF THE PAY ═════════════════════════════════════════════════════
+# Owner 2026-08-12: "what would I make does not include the multi month".
+#
+# A tenant on the plan engine is paid by TWO engines, not one (the same two the commission drill-down
+# explains): `commission_engine.preview` pays the plan's RULES on the month's sales, and
+# `sale_installment_engine.compute_sale_installments` pays the SALE-TRIGGERED chain — the 3MR/M1-M6
+# residual a qualifying activation earns over the following months. The simulator only ever called the
+# first one, so an activation showed whatever its one-off rule pays and NOTHING for the months it keeps
+# earning: on luxelink's Chicago plan the 3MR chain (M1 5% of MRC, M3 13% of MRC) was simply invisible.
+#
+# SAME DESIGN RULE AS THE REST OF THIS MODULE: the math is the engine's. We mint synthetic activations
+# and hand them to `compute_sale_installments` through its read-only `_sales_override`, once per month of
+# the chain, then read the ENGINE's own `expected_amount` off the ledger rows it produced.
+#
+# WHY `expected_amount` AND NOT `amount`: months 2..N are GATED on proof the carrier actually paid the
+# dealer that month (gate_mode 'paid_residual'/'ma_residual' — "we pay as we get paid"). A sale that has
+# not happened yet can have no such proof, so every gate is unmet and `amount` is $0 by design. The
+# engine already carries the PRE-GATE figure on every ledger row for exactly this question (mig 258,
+# "calculate the expected commission as a separate column but not use that to pay out"), so the
+# projection reads that column instead of asking the engine to pretend a gate was met. The number is
+# therefore honestly labelled: what the chain is WORTH if the line stays active and the carrier pays.
+MAX_MULTIMONTH_UNITS = 999
+
+
+def load_schedules(client, org_id, plan_id):
+    """(schedules, {schedule_id: [installment_line, ...]}) for ONE plan — the tenant's own multi-month
+    config, org-scoped. [] when migration 201 isn't applied or the plan has no chain. Never raises."""
+    try:
+        from app.modules.commcalc.sale_installment_engine import _load_schedules
+        scheds, lines_by = _load_schedules(client, org_id)
+    except Exception:
+        return [], {}
+    mine = [s for s in scheds if str(s.get("plan_id") or "") == str(plan_id or "")]
+    return mine, lines_by
+
+
+def _schedule_month_rows(sched, ilines):
+    """The schedule's own per-month rate card, month 1..N, straight off `plan_installment_line`."""
+    n = min(12, int(sched.get("num_months") or 1))
+    by_idx = {int(l.get("month_index") or 0): l for l in (ilines or [])}
+    out = []
+    for m in range(1, n + 1):
+        il = by_idx.get(m)
+        kind = (str((il or {}).get("payout_kind") or "flat").strip().lower())
+        out.append({
+            "month_index": m,
+            "payout_kind": kind if il else None,
+            "pct": safe_float((il or {}).get("mrc_pct")) if kind == "pct_mrc" else 0.0,
+            "flat": safe_float((il or {}).get("flat_amount")) if kind != "pct_mrc" else 0.0,
+            "configured": il is not None,
+        })
+    return out
+
+
+def build_multimonth_levers(client, org_id, plan):
+    """One lever per ACTIVE multi-month schedule on this plan: how many qualifying activations, and the
+    rate plan's MRC. Everything shown — the label, the trigger, the number of months, each month's
+    percentage — is read from the tenant's own schedule rows (RULE TWO: nothing hard-coded)."""
+    scheds, lines_by = load_schedules(client, org_id, plan.get("id"))
+    levers = []
+    bucket_cts = None
+    for s in scheds:
+        field = str(s.get("trigger_match_field") or "").strip().lower()
+        op = str(s.get("trigger_match_op") or "equals").strip().lower()
+        raw = str(s.get("trigger_match_value") or "").strip()
+        value = ([x.strip() for x in raw.split(",") if x.strip()] or [raw])[0] if op == "in" else raw
+        months = _schedule_month_rows(s, lines_by.get(s.get("id")))
+        lever = {
+            "key": f"sched:{s.get('id')}",
+            "schedule_id": s.get("id"),
+            "kind": "multi_month",
+            "label": s.get("name") or "Multi-month commission",
+            "num_months": min(12, int(s.get("num_months") or 1)),
+            "trigger_field": field or "any",
+            "trigger_value": raw,
+            "count_unit": "activations",
+            "amount_label": "Plan MRC $/mo",
+            "months": months,
+            "gate_mode": s.get("gate_mode"),
+            "simulatable": True,
+            "note": None,
+        }
+        if field == "activation_bucket":
+            if bucket_cts is None:
+                bucket_cts = _bucket_contract_types(client, org_id)
+            if (value or "").strip().lower() not in bucket_cts:
+                lever["simulatable"] = False
+                lever["note"] = ("This chain starts on the activation bucket '%s', and no contract type "
+                                 "in your tenant's classification map resolves to it yet." % (value or "?"))
+        elif not field or field == "any":
+            lever["simulatable"] = False
+            lever["note"] = "This chain has no trigger configured, so there is nothing to model."
+        if not any(m["configured"] for m in months):
+            lever["simulatable"] = False
+            lever["note"] = ("This chain has no month rows configured under Plan Installments, so it "
+                             "pays nothing yet.")
+        levers.append(lever)
+    return levers
+
+
+def build_multimonth_lines(client, org_id, lever, rep_name, store, period, spec):
+    """Synthetic ACTIVATIONS for one multi-month lever, raw_sales-shaped. Never written anywhere.
+
+    ONE TRANSACTION AND ONE MDN PER ACTIVATION, deliberately: the installment engine collapses a
+    transaction to ONE chain per subscriber (the 2026-07-25 money fix), so N activations sharing a
+    trans_id would pay ONCE and the projection would under-quote the rep by a factor of N.
+
+    The typed MRC rides on the line under `SIM_MRC_KEY` rather than being written into a description for
+    the engine's extractor to re-read — a round-trip through text is a second place for the number to
+    change meaning."""
+    from app.modules.commcalc.sale_installment_engine import SIM_MRC_KEY
+    units = int(max(0, min(MAX_MULTIMONTH_UNITS, int(safe_float((spec or {}).get("units"))))))
+    mrc = safe_float((spec or {}).get("amount"))
+    if units <= 0:
+        return [], None
+    field = (lever.get("trigger_field") or "").strip().lower()
+    op_raw = str(lever.get("trigger_value") or "")
+    base = {
+        "salesperson": rep_name, "store": store, "period": _canon_period(period),
+        "trans_date": _period_midpoint(period), "voided": None, "trans_type": "Sale",
+        "department": "", "category": "", "product_desc": f"Projected {lever.get('label') or 'activation'}",
+        "contract_type": "", "ext_price": 0.0, "gp": 0.0, "product_id": None, "subscriber_id": "",
+        SIM_MRC_KEY: mrc, "_simulated": True,
+    }
+    if field == "activation_bucket":
+        cts = _bucket_contract_types(client, org_id)
+        want = ([x.strip() for x in op_raw.split(",") if x.strip()] or [op_raw])[0].strip().lower()
+        ct = cts.get(want)
+        if not ct:
+            return [], ("No contract type in your classification map resolves to activation bucket "
+                        f"'{want}', so this chain could not be projected.")
+    elif field and field != "any":
+        base[field] = ([x.strip() for x in op_raw.split(",") if x.strip()] or [op_raw])[0]
+        ct = None
+    else:
+        return [], "This chain has no trigger configured, so there is nothing to model."
+    if field == "activation_bucket":
+        base["contract_type"] = ct
+    out = []
+    for i in range(units):
+        # The MDN is what the engine splits subscribers on; the serial keeps months 2..N joinable in the
+        # real world, so a simulated chain carries one too rather than tripping the no-identity warning.
+        # It is 15 DIGITS on purpose: `installment_category.serial_kind` reads 14-17 digits as an IMEI,
+        # which resolves the chain's device category to 'phone' — what a premium activation actually is.
+        # A non-numeric placeholder would resolve to 'unknown', and a tenant that switches the unknown
+        # category off would then see the whole projection silently drop to $0.
+        out.append(dict(base, trans_id=f"SIMMM-{str(lever.get('schedule_id'))[:8]}-{i + 1:04d}",
+                        mdn=f"{_SIM_MDN_PREFIX}{i + 1:03d}"[-10:],
+                        serial_1=f"99900000000{i + 1:04d}"[-15:]))
+    return out, None
+
+
+def simulate_multimonth(client, org_id, period, rep_name, store, plan, inputs):
+    """{levers, months, total_chain, total_this_month, warnings} — what the multi-month chains this
+    month's simulated activations are worth, month by month, computed BY THE INSTALLMENT ENGINE.
+
+    One engine call per month of the chain: the same synthetic sale is fed as the sale period, and the
+    pay period walks forward, which is exactly how a real sale earns month 1 now, month 2 next month and
+    so on. Read-only — `_sales_override` refuses to persist."""
+    from app.modules.commcalc import sale_installment_engine as sie
+    from app.modules.commcalc.installment_engine import _shift_period
+    from app.modules.commcalc.commission_engine import _canon_person
+    levers = build_multimonth_levers(client, org_id, plan)
+    sale_period = _canon_period(period)
+    warnings, out_levers = [], []
+    lines_by_lever, want_months = {}, 1
+    for lv in levers:
+        spec = (inputs or {}).get(lv["key"]) or {}
+        if not lv.get("simulatable"):
+            if int(safe_float(spec.get("units"))) > 0:
+                warnings.append({"lever": lv["key"], "code": "chain_unsimulatable",
+                                 "message": f"'{lv['label']}' — {lv.get('note')}"})
+            continue
+        lines, err = build_multimonth_lines(client, org_id, lv, rep_name, store, sale_period, spec)
+        if err:
+            warnings.append({"lever": lv["key"], "code": "chain_no_trigger",
+                             "message": f"'{lv['label']}' — {err}"})
+            continue
+        if not lines:
+            continue
+        lines_by_lever[lv["key"]] = lines
+        want_months = max(want_months, int(lv.get("num_months") or 1))
+    if not lines_by_lever:
+        return {"levers": levers, "months": [], "by_lever": [], "total_chain": 0.0,
+                "total_this_month": 0.0, "warnings": warnings, "engine": _MM_ENGINE}
+
+    all_lines = [ln for lns in lines_by_lever.values() for ln in lns]
+    by_month, by_lever_month = [], {}
+    for k in range(want_months):
+        pay_period = _shift_period(sale_period, k) if k else sale_period
+        try:
+            res = sie.compute_sale_installments(client, org_id, pay_period, persist=False,
+                                                _sales_override={sale_period: all_lines})
+        except Exception as e:
+            warnings.append({"lever": None, "code": "installment_engine_failed",
+                             "message": f"The multi-month engine could not project month {k + 1}: {e}"})
+            continue
+        rows = [r for r in (res.get("ledger") or [])
+                if _canon_person(r.get("epay_salesperson")) == _canon_person(rep_name)]
+        # `expected_amount` is the PRE-GATE figure the engine itself carries — see the section header.
+        amt = round(sum(safe_float(r.get("expected_amount")) for r in rows), 2)
+        by_month.append({"month_index": k + 1, "pay_period": pay_period,
+                         "amount": amt, "chains": len(rows)})
+        for r in rows:
+            per = by_lever_month.setdefault(f"sched:{r.get('schedule_id')}", {})
+            per[k + 1] = round(per.get(k + 1, 0.0) + safe_float(r.get("expected_amount")), 2)
+        if k == 0 and not rows and all_lines:
+            # A month-1 miss is the one worth explaining: the activations were minted but the engine
+            # enrolled none of them, so the projection would otherwise read as an honest $0.
+            warnings.append({"lever": None, "code": "no_chain_enrolled",
+                             "message": ("The multi-month engine enrolled none of the simulated "
+                                         "activations. Usually this means the plan that pays this rep "
+                                         "has no active installment schedule, or the schedule's "
+                                         "effective dates exclude this month.")})
+    for lv in levers:
+        months = by_lever_month.get(lv["key"]) or {}
+        out_levers.append(dict(lv, projected={
+            "by_month": [{"month_index": m, "amount": months.get(m, 0.0)}
+                         for m in range(1, int(lv.get("num_months") or 1) + 1)],
+            "total": round(sum(months.values()), 2),
+            "this_month": round(months.get(1, 0.0), 2)}))
+    return {
+        "levers": out_levers, "months": by_month, "by_lever": out_levers,
+        "total_chain": round(sum(m["amount"] for m in by_month), 2),
+        "total_this_month": round(by_month[0]["amount"] if by_month else 0.0, 2),
+        "warnings": warnings,
+        "engine": _MM_ENGINE,
+        "gated": True,
+    }
+
+
+_MM_ENGINE = "sale_installment_engine.compute_sale_installments (read-only, _sales_override)"
+
+
+def multimonth_actuals(client, org_id, period, plan, rep_name):
+    """{lever_key: {units, amount, from_actuals}} — the rep's REAL activations this period and the MRC
+    they actually carried, read off `sale_installment_ledger` (the engine's own output, month 1 rows for
+    sales made in this period). Same principle as `current_actuals`: seed from what happened, never from
+    an invented default. Never raises."""
+    out = {}
+    scheds, _lines_by = load_schedules(client, org_id, plan.get("id"))
+    if not scheds:
+        return out
+    try:
+        from app.modules.commcalc.commission_engine import _canon_person
+        from app.modules.commcalc.installment_engine import _pvariants
+        rows = (client.schema("commcalc").table("sale_installment_ledger")
+                .select("schedule_id,epay_salesperson,sale_period,month_index,mrc_at_pay,expected_amount")
+                .eq("org_id", org_id).in_("sale_period", list(_pvariants(_canon_period(period))))
+                .eq("month_index", 1).limit(20000).execute().data) or []
+    except Exception as e:
+        print(f"WARN pay_simulator.multimonth_actuals failed (chain levers seed empty): {e}")
+        return out
+    key = _canon_person(rep_name)
+    agg = {}
+    for r in rows:
+        if _canon_person(r.get("epay_salesperson")) != key:
+            continue
+        a = agg.setdefault(f"sched:{r.get('schedule_id')}", {"units": 0, "mrc": []})
+        a["units"] += 1
+        m = safe_float(r.get("mrc_at_pay"))
+        if m:
+            a["mrc"].append(m)
+    for k, a in agg.items():
+        out[k] = {"units": a["units"],
+                  "amount": round(sum(a["mrc"]) / len(a["mrc"]), 2) if a["mrc"] else 0.0,
+                  "from_actuals": True}
+    return out
 
 
 # ── synthetic lines: the ONLY thing this module builds. The dollars come from the engine. ─────────
@@ -764,13 +1063,23 @@ def simulate(client, org_id, period, rep_name, store, market, inputs):
     levers, tier = build_levers(client, org_id, plan)
     lines, mrc_override, applied, warnings = build_lines(
         client, org_id, plan, rep_name, store, _canon_period(period), inputs)
+    # THE SECOND ENGINE. A plan-mode tenant is paid by the plan rules AND by the sale-triggered chain,
+    # so a projection that runs only the first one under-quotes every activation by its whole residual.
+    mm = simulate_multimonth(client, org_id, _canon_period(period), rep_name, store, plan, inputs)
 
     if not lines:
-        return {"ok": True, "ready": True, "reason": None, "no_input": True,
+        return {"ok": True, "ready": True, "reason": None,
+                "no_input": not (mm.get("total_chain") or 0),
                 "plan": {"id": plan.get("id"), "name": plan.get("name")},
-                "levers": levers, "tier": tier, "applied": applied, "warnings": warnings,
+                "levers": levers, "tier": tier, "applied": applied,
+                "warnings": warnings + (mm.get("warnings") or []),
+                "multi_month": mm,
                 "result": {"total_payout": 0.0, "base_payout": 0.0, "tiered_payout": 0.0,
-                           "tier_multiplier": 1.0, "qualifying_units": 0, "rules": []},
+                           "tier_multiplier": 1.0, "qualifying_units": 0, "rules": [],
+                           "multimonth_this_month": mm.get("total_this_month") or 0.0,
+                           "multimonth_chain_total": mm.get("total_chain") or 0.0,
+                           "this_month_total": mm.get("total_this_month") or 0.0,
+                           "chain_grand_total": mm.get("total_chain") or 0.0},
                 "engine": "commission_engine.preview (read-only, sales_override)"}
 
     pv = ce.preview(client, org_id, _canon_period(period), plan_id=plan.get("id"),
@@ -788,7 +1097,8 @@ def simulate(client, org_id, period, rep_name, store, market, inputs):
                 "reason": ("The engine produced no payout row for you — usually this means no "
                            "commission plan is attached to your name/store."),
                 "plan": {"id": plan.get("id"), "name": plan.get("name")},
-                "levers": levers, "tier": tier, "applied": applied, "warnings": warnings,
+                "levers": levers, "tier": tier, "applied": applied,
+                "warnings": warnings + (mm.get("warnings") or []), "multi_month": mm,
                 "result": None, "engine": "commission_engine.preview (read-only, sales_override)"}
 
     # A rule the engine matched ZERO lines for, despite the rep asking for units, is reported LOUDLY:
@@ -804,8 +1114,10 @@ def simulate(client, org_id, period, rep_name, store, market, inputs):
         "ok": True, "ready": True, "reason": None,
         "plan": {"id": plan.get("id"), "name": plan.get("name"),
                  "carrier_id": plan.get("carrier_id")},
-        "levers": levers, "tier": tier, "applied": applied, "warnings": warnings,
+        "levers": levers, "tier": tier, "applied": applied,
+        "warnings": warnings + (mm.get("warnings") or []),
         "lines_simulated": len(lines),
+        "multi_month": mm,
         "result": {
             "total_payout": row.get("total_payout"),
             "base_payout": row.get("base_payout"),
@@ -822,6 +1134,15 @@ def simulate(client, org_id, period, rep_name, store, market, inputs):
                        "qualifying_units": rb.get("qualifying_units"),
                        "payout": rb.get("payout")}
                       for rb in (row.get("rules") or [])],
+            # BOTH ENGINES, kept as separate named figures so nothing is double-counted downstream:
+            # `total_payout` stays exactly what the plan rules pay (the number this page has always
+            # shown), and the chain is added alongside it.
+            "multimonth_this_month": mm.get("total_this_month") or 0.0,
+            "multimonth_chain_total": mm.get("total_chain") or 0.0,
+            "this_month_total": round(safe_float(row.get("total_payout"))
+                                      + safe_float(mm.get("total_this_month")), 2),
+            "chain_grand_total": round(safe_float(row.get("total_payout"))
+                                       + safe_float(mm.get("total_chain")), 2),
         },
         "pay_gate": pv.get("pay_gate"),
         "engine": "commission_engine.preview (read-only, sales_override)",
@@ -874,21 +1195,37 @@ def context(client, authorization, period, requested_rep="", requested_org=""):
         else:
             lv["current"] = {"units": 0, "amount": 0.0, "month_total": 0.0, "payout": 0.0,
                              "from_actuals": False}
-        # The accessory/percent levers are the ones the owner asked to be able to express two ways.
+        # The accessory/percent levers are the ones the owner asked to be able to express two ways
+        # (owner 2026-08-11 + 2026-08-12: "$30 x 50 = 1500 * 17.5% … or $6000*17.5% — the user should
+        # be able to use both to assess"). BOTH readings are offered on every percent lever, and the
+        # month total is spread across the count so the tier still sees the units.
         if lv.get("amount_input"):
+            _each = {"gp": "GP $ per item", "ext_price": "$ per item",
+                     "mrc": "Plan MRC $/mo"}.get(lv.get("amount_meaning") or "",
+                                                 lv.get("amount_label") or "$ each")
             lv["basis_options"] = [
-                {"value": "item", "label": f"Per {lv.get('count_unit') or 'unit'}",
-                 "amount_label": lv.get("amount_label") or "$ each"},
-                {"value": "month", "label": "Per month (total $)",
+                {"value": "item", "label": "Per item", "amount_label": _each},
+                {"value": "month", "label": "Monthly goal",
                  "amount_label": "This month's total $"},
             ]
+    # THE MULTI-MONTH CHAINS (owner 2026-08-12). Their own levers, seeded from the rep's real
+    # activations, because the residual is a separate engine — see the section header above.
+    mm_levers = build_multimonth_levers(client, org_id, plan)
+    mm_cur = multimonth_actuals(client, org_id, _canon_period(period), plan, me["rep_name"]) if mm_levers else {}
+    for lv in mm_levers:
+        c = mm_cur.get(lv["key"])
+        lv["current"] = c or {"units": 0, "amount": 0.0, "from_actuals": False}
+        if c:
+            seeded += 1
     return {**base, "ok": True, "ready": True, "reason": None,
             "plan": {"id": plan.get("id"), "name": plan.get("name"),
                      "carrier_id": plan.get("carrier_id")},
             "levers": levers, "tier": tier,
+            "multimonth_levers": mm_levers,
             "seeded_from_actuals": seeded,
             "seed_note": (f"Starting numbers are {me['display_name']}'s actual {_canon_period(period)} "
-                          f"figures from the pay engine ({seeded} of {len(levers)} levers). Change any "
+                          f"figures from the pay engine ({seeded} of "
+                          f"{len(levers) + len(mm_levers)} levers). Change any "
                           f"of them to model a different month."
                           if seeded else
                           "No paid activity found for this period, so every lever starts at zero — "

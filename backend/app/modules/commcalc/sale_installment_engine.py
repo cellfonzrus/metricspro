@@ -52,6 +52,17 @@ from app.modules.commcalc import expected_commission as xcomm
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
+# ── READ-ONLY SIMULATION KEY ────────────────────────────────────────────────────────────────────────
+# The employee pay simulator ("what would I make?") has to ask this engine what a sale it has NOT MADE
+# YET would pay. It hands compute_sale_installments a `_sales_override` of synthetic activations, each
+# carrying its own typed rate-plan MRC under this key — because a line that does not exist has no
+# product-catalog row and no description to extract an MRC from, and the engine would otherwise
+# correctly resolve it to $0 (rank 4, 'none') and the rep would be told the residual is worth nothing.
+# NOTHING that comes out of raw_sales carries this key, so every real activation resolves exactly as it
+# does today. persist=True with an override is REFUSED below: a simulated line must never reach the
+# ledger.
+SIM_MRC_KEY = "_sim_mrc"
+
 # The line classifications the user chooses from (§7b decision 1). Carrier-agnostic; reuse the existing
 # classifier CONFIG to auto-suggest — never a new sixth classifier.
 CLASSIFICATIONS = ("accessory", "activation", "upgrade", "swap", "bill_payment", "rebate", "misc_other")
@@ -491,6 +502,11 @@ def _mrc_candidate(line, catalog, carrier_id, matcher, acc=None, ccmap=None, hw=
     Ranks 3/4/9 deliberately resolve to $0 rather than to the line's PRICE: paying 5% of a $575 handset
     because its description happened to contain a $ amount is exactly the bug this fixes. An activation
     that lands there is counted + reported in the result's `warnings` so it is never a SILENT zero."""
+    if line.get(SIM_MRC_KEY) is not None:
+        # READ-ONLY SIMULATION ONLY (pay_simulator): the line IS the rep's typed "plan MRC $/mo", so it
+        # is the authoritative rate-plan source for its own chain. No row that ever came out of
+        # raw_sales carries this key, so every real activation resolves exactly as before.
+        return 0, round(safe_float(line.get(SIM_MRC_KEY)), 2), "simulated"
     desc_key = str(line.get("customer_plan") or line.get("product_desc") or "").strip()
     cat_mrc = _catalog_mrc(catalog, carrier_id, desc_key)
     if cat_mrc is not None:
@@ -977,7 +993,9 @@ def _line_amount(sale_line, iline, catalog, carrier_id, mrc_override=None):
     kind = (iline.get("payout_kind") or "flat").strip().lower()
     if kind != "pct_mrc":
         return round(safe_float(iline.get("flat_amount")), 2), 0.0, "flat"
-    if mrc_override is not None:
+    if sale_line.get(SIM_MRC_KEY) is not None:
+        mrc, src = safe_float(sale_line.get(SIM_MRC_KEY)), "simulated"
+    elif mrc_override is not None:
         mrc, src = mrc_override[0], mrc_override[1]
     else:
         plan = str(sale_line.get("customer_plan") or sale_line.get("product_desc") or "").strip()
@@ -1037,7 +1055,7 @@ def _acc_sets(client, org_id):
 
 # ── main compute ────────────────────────────────────────────────────────────────────────────────
 def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_source_override=None,
-                              _config_override=None):
+                              _config_override=None, _sales_override=None):
     """Sale-triggered installments that LAND in `pay_period`. Read-only unless persist=True.
     Returns {pay_period, by_rep:{REPUPPER:amount}, ledger:[...], flags:[...], totals, schedules, note}.
 
@@ -1053,7 +1071,16 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
 
     L2 KILL SWITCH: env INSTALLMENT_GATE_LEGACY truthy forces the vendored LEGACY raw_mi gate for EVERY
     org/mode (bypassing config resolution entirely) → the exact pre-mig-223 behavior, instant Railway toggle
-    with no redeploy."""
+    with no redeploy.
+
+    `_sales_override` = {sale_period: [line, ...]} — READ-ONLY PROJECTION ONLY (the employee pay
+    simulator). When set, the period's sold lines come from the caller instead of raw_sales; a period the
+    caller did not supply reads as EMPTY rather than falling back to the database, so a projection can
+    never mix invented lines with real ones. Writing is REFUSED outright: a simulated activation must
+    never reach sale_installment_ledger. Unset (every calculate, every report) → byte-identical."""
+    if _sales_override is not None and persist:
+        raise ValueError("compute_sale_installments: _sales_override is a read-only projection hook and "
+                         "cannot be persisted.")
     scheds, lines_by = _load_schedules(client, org_id)
     if not scheds:
         return {"pay_period": pay_period, "by_rep": {}, "ledger": [], "flags": [], "schedules": 0,
@@ -1203,7 +1230,8 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
         month_index = (pay_idx - s_idx) + 1
         if month_index < 1:
             continue
-        sales = _read_sales(client, org_id, sale_period)
+        sales = (list((_sales_override or {}).get(sale_period) or [])
+                 if _sales_override is not None else _read_sales(client, org_id, sale_period))
         # month_index 1 <=> sale_period == pay_period (k=0), so the activation-payment gate only ever
         # needs the trans index for that period. Built from the FULL read (payment/System lines included).
         trans_index = _build_trans_index(sales) if (any_activation and sale_period == pay_period) else None
