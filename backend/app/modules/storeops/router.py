@@ -1033,10 +1033,75 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
             rows = payroll_salary.synthesize_zero_activity_rows(rows, employees, pp_settings, lo_d, hi_d)
         except Exception as e:
             _warn_salary_override_failed(response, org_id, "GET /payroll", e)
+    # APPROVED HOURS WIN (owner directive 2026-08-11: "apply the fixes and the payroll approved as
+    # Gina runs payroll which will eventually touch the p&l").
+    #
+    # `storeops.payroll_approval.hours_approved` was written by the Hours Approval board and read by
+    # NOTHING — grep the backend and the only consumer was payroll_approval.py itself. So a DM could
+    # correct someone's hours, the correction was stored and logged, and this report — the one payroll
+    # is actually run from, and the one that feeds the P&L — went on showing the recomputed figure.
+    # MEASURED on luxelink 2026-07-23..08-05: 25 approved rows totalling 1,789.11 h against 1,711.02 h
+    # computed, so 78.09 h of human decisions were being discarded at the moment they mattered most.
+    #
+    # Applied LAST, deliberately: after lunch, after identity reconciliation, after the salary
+    # override — an approved figure is a human's final word on the hours, so nothing may silently
+    # recompute on top of it. `actual_pay` is re-derived from the approved hours for the same reason.
+    if lo and hi:
+        try:
+            rows = _apply_approved_hours(org_id, lo, hi, rows)
+        except Exception as e:
+            # Never break payroll over this, but never fail silently either (Gate-1 N5).
+            _warn_salary_override_failed(response, org_id, "GET /payroll (approved hours)", e)
     ks = scope_keyset(authorization, org_id)
     if ks is not None:
         rows = [r for r in rows if in_keyset(ks, r.get("store"))]
     return sorted(rows, key=lambda x: x["name"])
+
+
+def _apply_approved_hours(org_id, lo, hi, rows):
+    """Overlay `payroll_approval` decisions onto payroll rows for the period [lo, hi).
+
+    EXACT-PERIOD RULE. An approval belongs to the period it was made for, so it is applied only when
+    the requested range IS that period. Without this a month view (or any wider window) would absorb a
+    fortnight's approvals and report them as the month's hours — a silently wrong number on the report
+    payroll is run from. A non-matching range therefore returns the rows untouched.
+
+    The effective figure is the SAME one the approval board shows — approved if a human set one, else
+    computed + adjustment — so the board and the payroll report cannot state different hours for the
+    same person. Rows gain `hours_from_approval`, `hours_computed`, `dm_status` and `hr_status` so the
+    change is visible and auditable, never a silent restatement.
+    """
+    from datetime import date as _d
+    start, end = _d.fromisoformat(lo), _d.fromisoformat(hi) - timedelta(days=1)
+    try:
+        appr = (sb().table("payroll_approval").select("*").eq("org_id", org_id)
+                .eq("period_start", start.isoformat()).eq("period_end", end.isoformat())
+                .execute().data) or []
+    except Exception:
+        return rows                      # migration 431 not applied — nothing to overlay
+    if not appr:
+        return rows
+    by_emp = {a.get("employee_id"): a for a in appr if a.get("employee_id")}
+    for r in rows:
+        a = by_emp.get(r.get("employee_id"))
+        if not a:
+            continue
+        computed = float(r.get("actual_hours") or 0)
+        adj = _safe_float(a.get("adjustment_hours")) or 0.0
+        approved = a.get("hours_approved")
+        effective = (_safe_float(approved) if approved not in (None, "")
+                     else round(computed + adj, 2))
+        r["hours_computed"] = computed
+        r["dm_status"] = a.get("dm_status") or "pending"
+        r["hr_status"] = a.get("hr_status") or "pending"
+        r["adjustment_hours"] = adj
+        r["hours_from_approval"] = abs(effective - computed) > 0.001
+        r["actual_hours"] = round(effective, 2)
+        # Pay follows the approved hours — the whole point is that what Gina pays matches what was
+        # approved. Salaried rows are left alone: their pay is not hours-derived (payroll_salary.py).
+        if (r.get("pay_basis") or "hourly") != "salary":
+            r["actual_pay"] = round(r["actual_hours"] * float(r.get("pay_rate") or 0), 2)
+    return rows
 
 
 @router.get("/payroll-by-store")
@@ -6937,3 +7002,11 @@ except Exception as _attn_e:
 # all sit INSIDE functions. By the time this line runs, everything it needs is defined.
 from app.modules.storeops.payroll_approval import router as _payroll_approval_router  # noqa: E402
 router.include_router(_payroll_approval_router)
+
+# ── Clock-in self check (owner directive 2026-08-11) ──────────────────────────────────────────────
+# "create a self check module for the failed clockin attempts to verify if the employee is lying or
+# actual issue was there." Mounted here for the same reason as the block above: main.py is shared and
+# no agent edits it (AGENT_CONTRACT §1). Imports payroll_approval.previous_pay_period lazily, inside
+# the endpoint, so this line's position stays irrelevant to import order.
+from app.modules.storeops.clockin_evidence import router as _clockin_evidence_router  # noqa: E402
+router.include_router(_clockin_evidence_router)
