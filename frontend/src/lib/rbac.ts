@@ -303,6 +303,9 @@ export const NAV: NavGroup[] = [
   { group: 'Targets & Coaching', module: 'targets', items: [
     { href: '/commcalc/targets', label: 'Daily Targets', icon: '📈', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/financing', label: 'Financing', icon: '💳', module: 'commissions', scopes: ['all', 'market', 'store'] },
+    // Autopay opportunity (owner 2026-08-12). Sits in Targets & Coaching, not Commissions: it states
+    // revenue NOT collected and is a thing a rep is COACHED to fix, not a payout anyone is owed.
+    { href: '/commcalc/atu-opportunity', label: 'Autopay Opportunity', icon: '🔁', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/action-plan', label: 'Action Plan', icon: '✅', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'] },
@@ -572,6 +575,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/expected-commission', 'comm'], ['/commcalc/daily-commission', 'comm'],
   // Targets & Coaching
   ['/commcalc/targets', 'targets'], ['/commcalc/targets/action-plan', 'targets'],
+  ['/commcalc/atu-opportunity', 'targets'],
   ['/commcalc/targets/accessories', 'targets'], ['/commcalc/targets/my', 'targets'],
   ['/commcalc/kpi', 'targets'], ['/commcalc/productivity', 'targets'], ['/commcalc/coaching', 'targets'],
   // Assets & Inventory (incl. Distributors/VIP consignment)

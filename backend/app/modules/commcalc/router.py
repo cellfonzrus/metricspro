@@ -52,6 +52,7 @@ from app.modules.commcalc import expected_commission
 from app.modules.commcalc import device_history
 from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
+from app.modules.commcalc import atu_opportunity as _atu
 from app.modules.commcalc import productivity as _prod
 from app.modules.commcalc import payout_accrual
 from app.core.config import settings
@@ -27754,3 +27755,135 @@ def financing_report(period: str, org_id: str = ORG_ID):
         1 for v in vendors if v.get("detection_status") == "inherited_default")
     out["ready"] = True
     return out
+
+
+# ═══ ATU (AUTOPAY) OPPORTUNITY ══════════════════════════════════════════════════════════════════════
+# Owner directive 2026-08-12: card-paying customers vs those on ATU, and the % of revenue forgone by
+# not converting them. The four assumptions (customer saving, Boost rate, Total rate, Total recharge
+# base) are TENANT CONFIG, never constants — the owner stated plainly that they change. All math lives
+# in commcalc/atu_opportunity.py (pure, harness_atu_opportunity.py 43/43, reproduces the measured July
+# figures exactly: 617 card customers / 315 on ATU / 51.1% / $24,766 open recharge).
+_ATU_DEFAULTS = {"saving_per_month": 9.0, "boost_rate_pct": 5.0, "total_rate_pct": 8.5,
+                 "total_recharge_base": 0.0}
+
+
+def _atu_cfg(client, org_id):
+    """This tenant's assumptions. Degrades to the owner's stated defaults when mig 295 has not run, so
+    the page renders rather than 500-ing on a tenant that is one migration behind."""
+    try:
+        rows = (client.schema("commcalc").table("atu_config").select("*")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+    except Exception:
+        return dict(_ATU_DEFAULTS), False
+    if not rows:
+        return dict(_ATU_DEFAULTS), True
+    r = rows[0]
+    out = {}
+    for k, dv in _ATU_DEFAULTS.items():
+        try:
+            out[k] = float(r.get(k)) if r.get(k) is not None else dv
+        except (TypeError, ValueError):
+            out[k] = dv
+    return out, True
+
+
+@router.get("/atu-config")
+def atu_config_get(org_id: str = ORG_ID):
+    """The tenant's ATU assumptions (RULE: config, not constants)."""
+    require_org(org_id)
+    cfg, present = _atu_cfg(sb(), org_id)
+    return {"org_id": org_id, "config": cfg, "table_present": present, "defaults": _ATU_DEFAULTS}
+
+
+@router.post("/atu-config")
+def atu_config_set(body: dict, org_id: str = ORG_ID):
+    """Save the assumptions. org_id is STAMPED (RULE ONE). Values are clamped to >= 0 — a negative rate
+    would silently flip the sign of the whole report."""
+    require_org(org_id)
+    payload = {"org_id": org_id}
+    for k in _ATU_DEFAULTS:
+        if k in (body or {}):
+            try:
+                payload[k] = max(0.0, float((body or {}).get(k)))
+            except (TypeError, ValueError):
+                continue
+    payload["updated_at"] = _datetime.now(_timezone.utc).isoformat()
+    try:
+        sb().schema("commcalc").table("atu_config").upsert(payload, on_conflict="org_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save ATU settings — run migration 295_atu_opportunity_config.sql first. [{e}]")
+    cfg, _ = _atu_cfg(sb(), org_id)
+    return {"ok": True, "config": cfg}
+
+
+@router.get("/atu-opportunity")
+def atu_opportunity_report(period: str = "", start: str = "", end: str = "",
+                           stores: str = "", markets: str = "",
+                           authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """ATU opportunity for a period, optionally narrowed to a date range / stores / markets (RULE FIVE).
+
+    Reads the TRANSACTION-grain sales union, because enrolment is a department-less $0 `Autopay` LINE and
+    can only be seen by reducing across every line of a transaction — filtering rows before that returns
+    a confident 0% attach for every store. Span-scoped like every other report: a store-scoped user never
+    sees an out-of-scope store."""
+    require_org(org_id)
+    client = sb()
+    if not period:
+        n = _datetime.now(_timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    cfg, table_present = _atu_cfg(client, org_id)
+    rows, _meta = _sales_rows_union_txn(
+        client, org_id, period,
+        cols="trans_id,trans_date,store,tender_type,product_desc,ext_price,mdn,contract_type,voided")
+    rows = [r for r in rows if str(r.get("voided") or "").strip().lower() not in ("true", "yes", "y", "1")]
+
+    s0, s1 = (start or "").strip()[:10], (end or "").strip()[:10]
+    if s0 or s1:
+        def _in(r):
+            d = str(r.get("trans_date") or "")[:10]
+            return (not s0 or d >= s0) and (not s1 or d <= s1)
+        rows = [r for r in rows if _in(r)]
+
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    sel_stores = [s for s in (stores or "").split(",") if s.strip()]
+    sel_markets = [s for s in (markets or "").split(",") if s.strip()]
+    if sel_stores:
+        keep = set(sel_stores)
+        rows = [r for r in rows if str(r.get("store") or "") in keep]
+    if sel_markets:
+        keep = set(sel_markets)
+        rows = [r for r in rows if resolve_market(r.get("store")) in keep]
+
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+        if ks is not None:
+            rows = [r for r in rows if in_keyset(ks, r.get("store"))]
+    except Exception:
+        pass
+
+    txs = _atu.fold_transactions(rows)
+    summary = _atu.summarize(txs, cfg["saving_per_month"], cfg["boost_rate_pct"],
+                             cfg["total_rate_pct"], cfg["total_recharge_base"])
+    stores_out = _atu.by_store(txs, cfg["boost_rate_pct"])
+    for s in stores_out:
+        s["market"] = resolve_market(s["store"])
+    store_opts = sorted({str(r.get("store") or "") for r in rows if r.get("store")})
+    return {
+        "org_id": org_id, "period": period, "start": s0 or None, "end": s1 or None,
+        "config": cfg, "table_present": table_present,
+        "summary": summary, "stores": stores_out,
+        "transactions": len(txs),
+        "filter_options": {"stores": store_opts, "markets": sorted(all_markets)},
+        "applied_filters": {"stores": sel_stores, "markets": sel_markets},
+        # Stated on the page, not buried: enrolment is observed at ACTIVATION only, so a customer who
+        # enrols later via the carrier app is invisible here and the open position is an UPPER BOUND.
+        "caveats": [
+            "Enrolment is observed at activation in the POS feed. A customer who enrols later through "
+            "the carrier app does not appear here, so the open position is an upper bound.",
+            "Customer counts use the mobile number (autopay attaches per line); the recharge base is "
+            "per transaction. The two denominators differ by design.",
+            "Total/VidaPay recharges do not reach the POS export, so the Total side uses the recharge "
+            "base entered in Settings.",
+        ],
+    }
