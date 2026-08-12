@@ -180,6 +180,10 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
     help: 'The 📶 BYOD → Residuals tab of /commcalc/whatif. DEFAULT-CLOSED — admin-only until granted; the raw carrier-residual money additionally rides "carrier_residual" when the tenant sets residual visibility to "permissioned".' },
   { key: 'whatif_accessory_corr', label: 'What-If — Accessories ↔ BYOD ↔ Revenue',
     help: 'The 🔗 correlation tab of /commcalc/whatif (per store/period BYOD activations vs accessory revenue vs total revenue). DEFAULT-CLOSED — admin-only until granted.' },
+  { key: 'customer_360', label: 'Customer lookup (full customer history by phone)',
+    help: 'Access to /crm/lookup — type a phone number and see everything we know about that customer: purchases, devices, plan, tickets and CRM history (backend crm `customer_360_allowed`). DEFAULT-CLOSED — admin / company-wide only until granted. A tenant can open it to everyone by turning OFF "lookup requires permission" in CRM Settings. Every lookup is written to the audit trail either way.' },
+  { key: 'customer_360_financial', label: 'Customer lookup — money columns',
+    help: 'The $ inside a customer lookup: margin, cost, extended price, lifetime value (backend crm `customer_360_financial_allowed`). DEFAULT-CLOSED with NO tenant toggle. Without it the lookup still shows what/when/where/who-sold-it — the money is listed as withheld, never shown as zero.' },
   { key: 'whatif_carrier_income', label: 'What-If — Company Payout / Carrier Income',
     help: 'The 💵 Company Payout / Carrier Income tab of /commcalc/whatif — what the carrier / master-agent pays the COMPANY. DEFAULT-CLOSED — admin-only until granted; also rides "carrier_residual" when the tenant sets residual visibility to "permissioned".' },
 ]
@@ -237,6 +241,22 @@ export const NAV: NavGroup[] = [
     { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
     { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'] },
+  ]},
+  // CRM (mig 800, owner directive 2026-08-12) — the sales pipeline + follow-up system + the
+  // phone-number Customer 360. Placed directly after Point of Sale: it is the surface a rep touches
+  // BEFORE a sale exists, and the register is where it ends up.
+  // 'Customer Lookup' carries no extra nav scope on purpose — the real gate is the server-side
+  // `customer_360` data grant (default-closed), so widening the nav here cannot widen access.
+  { group: 'CRM', module: 'crm', items: [
+    { href: '/crm', label: 'Dashboard', icon: '🎯', module: 'crm', scopes: ['all', 'market', 'store'] },
+    { href: '/crm/my-followups', label: 'My Follow-ups', icon: '🔔', module: 'crm' },
+    { href: '/crm/leads', label: 'Leads', icon: '📇', module: 'crm', scopes: ['all', 'market', 'store'] },
+    { href: '/crm/leads/new', label: 'Log a Lead', icon: '➕', module: 'crm' },
+    { href: '/crm/pipeline', label: 'Pipeline Board', icon: '🗂️', module: 'crm', scopes: ['all', 'market', 'store'] },
+    { href: '/crm/lookup', label: 'Customer Lookup', icon: '🔎', module: 'crm' },
+    { href: '/crm/agencies', label: 'Outside Agencies', icon: '🤝', module: 'crm', scopes: ['all', 'market'] },
+    { href: '/crm/reports', label: 'CRM Reports', icon: '📈', module: 'crm', scopes: ['all', 'market'] },
+    { href: '/crm/settings', label: 'CRM Settings', icon: '⚙️', module: 'crm', scopes: ['all'] },
   ]},
   { group: 'Commissions', module: 'commissions', items: [
       { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
@@ -563,6 +583,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   // Sales
   ['/commcalc/sales-report', 'sales'], ['/commcalc/custom-report', 'sales'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
+  ['/crm/reports', 'sales'],
   // Commissions & Pay
   ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'],
   ['/commcalc/reports', 'comm'], ['/commcalc/comp-trend', 'comm'], ['/commcalc/commission-ledger', 'comm'],
@@ -715,6 +736,7 @@ export function moduleForPath(path: string): string {
   if (path.startsWith('/accounts')) return 'accounts'
   if (path.startsWith('/notify')) return 'notify'
   if (path.startsWith('/helpdesk')) return 'helpdesk'
+  if (path.startsWith('/crm')) return 'crm'
   if (path.startsWith('/remediation')) return 'helpdesk'
   if (path.startsWith('/commcalc/targets')) return 'targets'
   if (path.startsWith('/commcalc/asset')) return 'asset'

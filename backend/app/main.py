@@ -25,6 +25,7 @@ from app.modules.payables.router import router as payables_router
 from app.modules.remediation.router import router as remediation_router
 from app.modules.recovery.router import router as recovery_router
 from app.modules.pos.router import router as pos_router
+from app.modules.crm.router import router as crm_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -154,6 +155,7 @@ app.include_router(payables_router, prefix="/api/v1/payables")  # Device Forecas
 app.include_router(remediation_router, prefix="/api/v1")  # router carries its own /remediation prefix (mig 097)
 app.include_router(recovery_router, prefix="/api/v1")     # Denied-Appeal Commission Recovery (mig 098)
 app.include_router(pos_router, prefix="/api/v1")          # POS module — Phase 0 product catalog (mig 724)
+app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
 
 @app.get("/health")
 def health():
