@@ -347,10 +347,28 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                 </span>
               </button>
             ))
-          ) : groups.map(({ group, items }) => {
+          ) : groups.map(({ group, items, subs }) => {
             // In the icon rail (collapsed) every item shows as an icon (no headers); in the full
             // sidebar only the open group's items render.
             const isOpen = collapsed || openGroup === group
+            // Sub-categories (tenant layout, roadmap #5). `items` carries EVERY item in the group, so
+            // the loose list is whatever no sub claimed — that keeps a group with no subs identical to
+            // before, and an item whose sub was deleted still renders instead of vanishing.
+            const claimed = new Set((subs || []).flatMap(s => s.items.map(i => i.href)))
+            const loose = subs?.length ? items.filter(i => !claimed.has(i.href)) : items
+            const renderItem = ({ href, label, icon }: NavItem, inSub = false) => {
+              const active = pathname === href || pathname.startsWith(href + '/')
+              return (
+                <Link key={href} href={href} title={collapsed ? labelOf(href, label) : undefined}
+                  className={'mp-nav-item' + (active ? ' is-active' : '')}
+                  style={collapsed ? { justifyContent: 'center', padding: '9px 0' }
+                                   : (inSub ? { paddingLeft: 30 } : undefined)}>
+                  <span className="mp-nav-icon">{icon}</span>
+                  {!collapsed && <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap' }}>{labelOf(href, label)}</span>}
+                </Link>
+              )
+            }
             return (
             <div key={group} style={{ marginBottom: collapsed ? 0 : 1 }}>
               {!collapsed && (
@@ -363,18 +381,22 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                     transition: 'transform 0.15s ease', transform: isOpen ? 'rotate(90deg)' : 'none' }}>▶</span>
                 </button>
               )}
-              {isOpen && items.map(({ href, label, icon }) => {
-                const active = pathname === href || pathname.startsWith(href + '/')
-                return (
-                  <Link key={href} href={href} title={collapsed ? labelOf(href, label) : undefined}
-                    className={'mp-nav-item' + (active ? ' is-active' : '')}
-                    style={collapsed ? { justifyContent: 'center', padding: '9px 0' } : undefined}>
-                    <span className="mp-nav-icon">{icon}</span>
-                    {!collapsed && <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap' }}>{labelOf(href, label)}</span>}
-                  </Link>
-                )
-              })}
+              {isOpen && loose.map(it => renderItem(it))}
+              {/* Sub-categories render AFTER the loose items so an unassigned page never hides below a
+                  heading. In the icon rail there are no headings at all — only the icons, in order. */}
+              {isOpen && !!subs?.length && subs.map(s => (
+                <div key={s.name}>
+                  {!collapsed && (
+                    <div className="mp-nav-sub" style={{ padding: '7px 14px 3px 22px', fontSize: 10,
+                      letterSpacing: '.08em', textTransform: 'uppercase', fontWeight: 600,
+                      color: 'rgba(255,255,255,0.38)', overflow: 'hidden', textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap' }}>
+                      {labelOf('sub:' + group + ':' + s.name, s.name)}
+                    </div>
+                  )}
+                  {s.items.map(it => renderItem(it, true))}
+                </div>
+              ))}
             </div>
           )})}
         </nav>

@@ -9,7 +9,7 @@ import { NAV } from '@/lib/rbac'
 // (platform)/layout.tsx via applyNavLayout. Items you don't touch keep their default place, and a
 // newly-shipped item still appears automatically. A duplicate is a SECOND LINK to the SAME href — it
 // carries the identical permission gate (never a second permission surface).
-type ItemOv = { group?: string; hidden?: boolean; also?: string[] }
+type ItemOv = { group?: string; sub?: string; hidden?: boolean; also?: string[] }
 type Ov = Record<string, ItemOv>
 const inp: React.CSSProperties = { padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 
@@ -29,6 +29,13 @@ export default function MenuLayoutPage() {
 
   const [ov, setOv] = useState<Ov>({})
   const [extraGroups, setExtraGroups] = useState<string[]>([])
+  // Explicit drag-and-drop order (roadmap #5). All three are ADDITIVE: a group/sub/item the list does not
+  // name keeps its built-in position AFTER the named ones, so a newly-shipped page still appears on its
+  // own and an admin who drags one group has not implicitly frozen the rest of the menu.
+  const [groupOrder, setGroupOrder] = useState<string[]>([])
+  const [itemOrder, setItemOrder] = useState<Record<string, string[]>>({})
+  const [subOrder, setSubOrder] = useState<Record<string, string[]>>({})
+  const [drag, setDrag] = useState<{ kind: 'group' | 'item'; group?: string; key: string } | null>(null)
   // OWNER DIRECTIVE 2026-07-18: hide the categorized "Reports ·" directory entirely. Persisted as
   // layout.hideReportsDirectory in the SAME nav-layout JSON; honored by applyNavLayout. Default = shown.
   const [hideReports, setHideReports] = useState(false)
@@ -55,6 +62,10 @@ export default function MenuLayoutPage() {
       const saved: string[] = Array.isArray(c?.layout?.groups) ? c.layout.groups : []
       const extra = Array.from(new Set([...saved, ...referenced].filter(g => g && !defaultGroups.includes(g)))) as string[]
       setExtraGroups(extra)
+      setGroupOrder(Array.isArray(c?.layout?.groupOrder) ? c.layout.groupOrder : [])
+      const om = (x: any) => (x && typeof x === 'object' && !Array.isArray(x)) ? x : {}
+      setItemOrder(om(c?.layout?.itemOrder))
+      setSubOrder(om(c?.layout?.subOrder))
     }).catch(() => {}).finally(() => setLoading(false))
   }, [defaultGroups])
 
@@ -84,6 +95,29 @@ export default function MenuLayoutPage() {
     return { ...o, [href]: { ...cur, also: also.length ? also : undefined } }
   })
   const setHidden = (href: string, h: boolean) => setOv(o => ({ ...o, [href]: { ...o[href], hidden: h || undefined } }))
+  const subOf = (href: string) => ov[href]?.sub || ''
+  const setSub = (href: string, s: string) => setOv(o => ({ ...o, [href]: { ...o[href], sub: s.trim() || undefined } }))
+
+  // The SAME "listed first, unlisted keep their natural place after" rule applyNavLayout uses. Sharing
+  // the rule is the point: the editor must show exactly what the sidebar will render, or the admin is
+  // dragging against a preview that lies.
+  const rank = (arr: string[], want?: string[]) => {
+    if (!want || !want.length) return arr
+    return [...arr].sort((a, b) => {
+      const ia = want.indexOf(a), ib = want.indexOf(b)
+      if (ia === -1 && ib === -1) return arr.indexOf(a) - arr.indexOf(b)
+      if (ia === -1) return 1
+      if (ib === -1) return -1
+      return ia - ib
+    })
+  }
+  // Drop `from` at `to`'s position. Returns the FULL list so the saved order is explicit and stable —
+  // saving only the moved key would leave the rest at the mercy of a future code-default change.
+  const reorder = (list: string[], from: string, to: string) => {
+    const a = [...list]; const i = a.indexOf(from), j = a.indexOf(to)
+    if (i < 0 || j < 0 || i === j) return a
+    a.splice(j, 0, a.splice(i, 1)[0]); return a
+  }
 
   // When the Group dropdown targets a DIFFERENT group, ASK move-or-duplicate (RULE THREE explicit pick).
   const onGroupPick = (href: string, g: string) => {
@@ -115,20 +149,36 @@ export default function MenuLayoutPage() {
   }
 
   const allHrefs = useMemo(() => NAV.flatMap(g => g.items.map(it => it.href)), [])
-  const dirty = Object.values(ov).filter(v => v && ((v.group || '').trim() || v.hidden || (v.also && v.also.length))).length
+  const dirty = Object.values(ov).filter(v => v && ((v.group || '').trim() || (v.sub || '').trim() || v.hidden || (v.also && v.also.length))).length
+    + (groupOrder.length ? 1 : 0) + Object.keys(itemOrder).length + Object.keys(subOrder).length
 
   function buildPayload() {
     const items: Ov = {}
     Object.entries(ov).forEach(([h, v]) => {
       const g = (v?.group || '').trim()
+      const sub = (v?.sub || '').trim()
       const also = (v?.also || []).map(x => (x || '').trim()).filter((x, i, a) => x && x !== g && a.indexOf(x) === i)
-      if (g || v?.hidden || also.length) {
-        items[h] = { ...(g ? { group: g } : {}), ...(v?.hidden ? { hidden: true } : {}), ...(also.length ? { also } : {}) }
+      if (g || sub || v?.hidden || also.length) {
+        items[h] = { ...(g ? { group: g } : {}), ...(sub ? { sub } : {}), ...(v?.hidden ? { hidden: true } : {}), ...(also.length ? { also } : {}) }
       }
     })
+    // Emit an order ONLY where the admin actually set one. An empty array would be indistinguishable from
+    // a deliberate wipe on the way back in, and would freeze the menu against future shipped pages.
+    const om = (m: Record<string, string[]>) => {
+      const out: Record<string, string[]> = {}
+      Object.entries(m).forEach(([k, v]) => { if (k && v?.length) out[k] = v })
+      return out
+    }
+    const io = om(itemOrder), so = om(subOrder)
     // hideReportsDirectory rides in the SAME layout object (no new storage). Only emitted when true, so a
     // tenant that never toggles it stores byte-identically to before.
-    return { items, groups: extraGroups, ...(hideReports ? { hideReportsDirectory: true } : {}) }
+    return {
+      items, groups: extraGroups,
+      ...(hideReports ? { hideReportsDirectory: true } : {}),
+      ...(groupOrder.length ? { groupOrder } : {}),
+      ...(Object.keys(so).length ? { subOrder: so } : {}),
+      ...(Object.keys(io).length ? { itemOrder: io } : {}),
+    }
   }
 
   async function save() {
@@ -140,7 +190,7 @@ export default function MenuLayoutPage() {
   async function resetAll() {
     if (!confirm('Reset the whole menu back to the built-in layout?')) return
     setSaving(true); setMsg('')
-    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items: {}, groups: [] }) }); setOv({}); setExtraGroups([]); setHideReports(false); setMsg('Reset to defaults — reload to see it.') }
+    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items: {}, groups: [] }) }); setOv({}); setExtraGroups([]); setHideReports(false); setGroupOrder([]); setItemOrder({}); setSubOrder({}); setMsg('Reset to defaults — reload to see it.') }
     catch (e: any) { setMsg('Reset failed: ' + (e?.message || e)) }
     setSaving(false)
   }
@@ -157,17 +207,42 @@ export default function MenuLayoutPage() {
     const also = alsoOf(href)
     const hidden = hiddenOf(href)
     const moved = primary !== homeGroup
+    const sub = subOf(href)
+    const being = drag?.kind === 'item' && drag.key === href
     return (
-      <div key={href} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)', opacity: hidden ? 0.55 : 1, flexWrap: 'wrap' }}>
+      <div key={href} draggable
+        onDragStart={e => { e.stopPropagation(); setDrag({ kind: 'item', group: homeGroup, key: href }) }}
+        onDragEnd={() => setDrag(null)}
+        // Reordering is confined to one group on purpose: a cross-group drag is a MOVE, and a move must
+        // go through the move-or-duplicate dialog rather than being inferred from where a row was dropped.
+        onDragOver={e => { if (drag?.kind === 'item' && drag.group === homeGroup && drag.key !== href) e.preventDefault() }}
+        onDrop={e => {
+          if (drag?.kind !== 'item' || drag.group !== homeGroup || drag.key === href) return
+          e.preventDefault(); e.stopPropagation()
+          setItemOrder(m => ({ ...m, [homeGroup]: reorder(orderedItems(homeGroup), drag.key, href) }))
+          setDrag(null)
+        }}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)', opacity: hidden ? 0.55 : (being ? 0.35 : 1), flexWrap: 'wrap' }}>
+        <span title="Drag to reorder within this group" aria-hidden
+          style={{ cursor: 'grab', color: 'var(--text3)', userSelect: 'none', fontSize: 13 }}>⠿</span>
         <span style={{ width: 22, textAlign: 'center' }}>{meta.icon}</span>
         <span style={{ flex: 1, fontSize: 13, minWidth: 160 }}>
           {meta.label}
           {moved && <span style={{ fontSize: 11, color: 'var(--accent)', marginLeft: 6 }}>→ {primary}</span>}
+          {sub && <span style={{ marginLeft: 6 }}>{chip('in: ' + sub, () => setSub(href, ''))}</span>}
           {also.map(g => <span key={g} style={{ marginLeft: 6 }}>{chip('also: ' + g, () => removeAlso(href, g))}</span>)}
         </span>
         <label style={{ fontSize: 12, color: 'var(--text3)' }}>Group&nbsp;
           <select style={inp} value={primary} onChange={e => onGroupPick(href, e.target.value)}>
             {groupOptions.map(gn => <option key={gn} value={gn}>{gn}</option>)}
+          </select>
+        </label>
+        <label style={{ fontSize: 12, color: 'var(--text3)' }}>Sub&nbsp;
+          <select style={inp} value={sub} onChange={e => onSubPick(href, e.target.value)}
+            title="Nest this item under a sub-heading inside its group">
+            <option value="">— none —</option>
+            {subsIn(primary).map(s => <option key={s} value={s}>{s}</option>)}
+            <option value="__new__">＋ New sub-category…</option>
           </select>
         </label>
         <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
@@ -177,16 +252,29 @@ export default function MenuLayoutPage() {
     )
   }
 
-  // items whose PRIMARY group is an extra (admin-created) group, so a moved item shows under it too.
+  // items whose PRIMARY group is this group (built-in or admin-created), in the admin's saved order.
   const itemsWithPrimary = (g: string) => allHrefs.filter(h => primaryOf(h) === g)
+  const orderedItems = (g: string) => rank(itemsWithPrimary(g), itemOrder[g])
   const itemsAlsoIn = (g: string) => allHrefs.filter(h => primaryOf(h) !== g && alsoOf(h).includes(g))
+  // Sub-category names actually in use inside a group — derived from the items, never stored separately,
+  // so a sub cannot outlive its last item and go stale.
+  const subsIn = (g: string) => {
+    const names: string[] = []
+    orderedItems(g).forEach(h => { const s = subOf(h); if (s && !names.includes(s)) names.push(s) })
+    return rank(names, subOrder[g])
+  }
+  const onSubPick = (href: string, v: string) => {
+    if (v === '__new__') { const n = (prompt('Name the new sub-category') || '').trim(); if (n) setSub(href, n); return }
+    setSub(href, v)
+  }
+  const allGroupsOrdered = rank([...defaultGroups, ...extraGroups], groupOrder)
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Menu Layout</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Move any sidebar item to a different group, show a duplicate copy in another group, hide it, or create new groups — applies to everyone in your company.</p>
+          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Drag <b>⠿</b> to reorder groups and the items inside them, nest items under a <b>sub-category</b>, move an item to another group, show a duplicate copy, or hide it — applies to everyone in your company. Anything you don&apos;t touch keeps its usual place, and newly released pages still appear on their own.</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}
@@ -217,36 +305,49 @@ export default function MenuLayoutPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
         <>
-          {NAV.map(g => (
-            <div key={g.group} className="card" style={{ marginBottom: 14, padding: 14 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>{g.group}</div>
-              {g.items.map(it => itemRow(it.href, g.group))}
-            </div>
-          ))}
-
-          {extraGroups.map(g => {
-            const primaries = itemsWithPrimary(g)
-            const dups = itemsAlsoIn(g)
+          {/* ONE ordered list of every group — built-in and admin-created alike. The sidebar renders a
+              single ordered list too (applyNavLayout), so splitting them here would let an admin drag a
+              group into a position the sidebar cannot reproduce. */}
+          {allGroupsOrdered.map(gname => {
+            const isExtra = extraGroups.includes(gname)
+            const primaries = orderedItems(gname)
+            const dups = itemsAlsoIn(gname)
+            const subs = subsIn(gname)
+            const beingG = drag?.kind === 'group' && drag.key === gname
             return (
-              <div key={g} className="card" style={{ marginBottom: 14, padding: 14, borderColor: 'var(--accent)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{g}</span>
-                  <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--bg2)', borderRadius: 8, padding: '0 6px' }}>new group</span>
+              <div key={gname} className="card"
+                onDragOver={e => { if (drag?.kind === 'group' && drag.key !== gname) e.preventDefault() }}
+                onDrop={e => {
+                  if (drag?.kind !== 'group' || drag.key === gname) return
+                  e.preventDefault()
+                  setGroupOrder(reorder(allGroupsOrdered, drag.key, gname))
+                  setDrag(null)
+                }}
+                style={{ marginBottom: 14, padding: 14, opacity: beingG ? 0.4 : 1, ...(isExtra ? { borderColor: 'var(--accent)' } : {}) }}>
+                <div draggable
+                  onDragStart={() => setDrag({ kind: 'group', key: gname })}
+                  onDragEnd={() => setDrag(null)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, cursor: 'grab' }}>
+                  <span title="Drag to reorder this group in the sidebar" aria-hidden
+                    style={{ color: 'var(--text3)', userSelect: 'none', fontSize: 13 }}>⠿</span>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{gname}</span>
+                  {isExtra && <span style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--bg2)', borderRadius: 8, padding: '0 6px' }}>new group</span>}
+                  {subs.length > 0 && <span style={{ fontSize: 11, color: 'var(--text3)' }}>{subs.length} sub-categor{subs.length === 1 ? 'y' : 'ies'}: {subs.join(' · ')}</span>}
                   <span style={{ flex: 1 }} />
-                  <button className="btn btn-sm" onClick={() => removeGroup(g)}>🗑 Remove group</button>
+                  {isExtra && <button className="btn btn-sm" onClick={() => removeGroup(gname)}>🗑 Remove group</button>}
                 </div>
                 {primaries.length === 0 && dups.length === 0
-                  ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>No items yet — use an item&apos;s <b>Group</b> dropdown above to <b>move</b> or add a <b>duplicate</b> here. This empty group is saved and will still be here next time.</div>
+                  ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>No items yet — use an item&apos;s <b>Group</b> dropdown to <b>move</b> or add a <b>duplicate</b> here. This empty group is saved and will still be here next time.</div>
                   : (
                     <>
-                      {primaries.map(h => itemRow(h, g))}
+                      {primaries.map(h => itemRow(h, gname))}
                       {dups.map(h => {
                         const meta = labelByHref[h] || { label: h, icon: '•' }
                         return (
                           <div key={'dup-' + h} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
                             <span style={{ width: 22, textAlign: 'center' }}>{meta.icon}</span>
                             <span style={{ flex: 1, fontSize: 13 }}>{meta.label} {chip('duplicate — primary in ' + primaryOf(h))}</span>
-                            <button className="btn btn-sm" onClick={() => removeAlso(h, g)}>Remove copy</button>
+                            <button className="btn btn-sm" onClick={() => removeAlso(h, gname)}>Remove copy</button>
                           </div>
                         )
                       })}
