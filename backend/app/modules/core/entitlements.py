@@ -27,7 +27,15 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 10  # bumped: 10 = the 2026-08-10 training pack (v2 of app/data/training_tours_seed.json)
+SEED_VERSION = 11  # bumped: 11 = mig 800 registered the "crm" module (sales pipeline + follow-up +
+                   #              Customer 360), so every EXISTING tenant self-provisions a crm
+                   #              tenant_modules entitlement row on its next login. The CRM's own
+                   #              default CONTENT (pipeline, stages, dispositions, cadence) is seeded
+                   #              by core.seed_crm_defaults(), which migration 800 ran for every
+                   #              tenant that existed and crm/router.py re-runs lazily on first touch
+                   #              — so a tenant created later still lands on a working pipeline. No
+                   #              money code, no payout column: leads are not money.
+                   #         10 = the 2026-08-10 training pack (v2 of app/data/training_tours_seed.json)
                    #              adds the Point of Sale walk-throughs — setup wizard, sales tax, the
                    #              register, stock + activations, who can use it — plus imports/daily
                    #              uploads. The tours live on the HOUSE org and every tenant READS them,
@@ -86,6 +94,7 @@ MODULE_CATALOG = {
     "ai_assistant": "AI Assistant",
     "support": "Tech Support",
     "training": "Training Center",
+    "crm": "CRM / Sales Pipeline",
 }
 ALL_MODULES = list(MODULE_CATALOG.keys())
 
