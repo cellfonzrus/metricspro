@@ -34,6 +34,7 @@ from app.modules.commcalc import sale_installment_engine
 from app.modules.commcalc import plan_impact
 from app.modules.commcalc import b2b_sweep
 from app.modules.commcalc import sales_analyzer
+from app.modules.commcalc import sales_comparison as _salescmp
 from app.modules.commcalc import sales_recon
 from app.modules.commcalc import sales_derive
 from app.modules.commcalc import ingest_store_guard as _isg
@@ -15718,6 +15719,117 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
         t["device"] = " · ".join(devs) if devs else None
     return {"store": store, "salesperson": salesperson, "date": date, "period": period,
             "transactions": out, "txn_count": len(out)}
+
+
+# ═══ SALES COMPARISON (period-over-period % change by category) ══════════════════════════════════════
+@router.get("/sales-comparison")
+def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = "",
+                     as_of_day: int = -1, week: int = 0, stores: str = "", markets: str = "",
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Period-over-period sales comparison, ALL stores, % change per item sold — Phones, BYOD,
+    Accessories, Tablets and each Financing vendor (ACIMA / TW / Edge…).
+
+    Scenarios (`mode`): `mom` = vs last month · `yoy` = vs the same month last year · `custom` = vs the
+    explicit `compare_period`. `week` (1-5) compares one week-of-month across BOTH periods (week-1 over
+    week-1). `as_of_day` cuts BOTH windows to day ≤ N (compare a mid-month base to the SAME first-N-days
+    of the other period, never a partial month vs a full one); -1 = auto (today's day when the base is
+    the current month, else the full month). `stores` / `markets` are comma-separated filters; the read
+    is RBAC store-scoped like every other sales report."""
+    require_org(org_id)
+    if week and not (1 <= week <= 5):
+        week = 0
+    client = sb()
+    n = datetime.now(timezone.utc)
+    by, bm = _salescmp.period_ym(period) or (n.year, n.month)
+    mode = (mode or "mom").strip().lower()
+    cp = _salescmp.period_ym(compare_period)
+    if mode == "yoy":
+        cy, cm = by - 1, bm
+    elif mode == "custom" and cp:
+        cy, cm = cp
+    else:
+        mode = "mom"                       # default / custom-with-no-compare → previous month
+        cy, cm = _salescmp.shift_month(by, bm, 1)
+    base_p = f"{by}-{bm:02d}"
+    cmp_p = f"{cy}-{cm:02d}"
+
+    # effective day-slice: week wins; else explicit as_of_day; else AUTO (today when base = this month).
+    if week:
+        eff_as_of = 0
+    elif as_of_day >= 0:
+        eff_as_of = as_of_day
+    else:
+        eff_as_of = n.day if (by, bm) == (n.year, n.month) else 0
+    if week:
+        lo, hi = _salescmp.week_bounds(week)
+        window_label = f"Week {week} (days {lo}–{hi})"
+    elif eff_as_of:
+        window_label = f"Through day {eff_as_of} (month-to-date)"
+    else:
+        window_label = "Full month"
+
+    try:
+        brows, bmeta = _sales_rows_union(client, org_id, base_p, cols=_FIN_SALES_COLS)
+        crows, cmeta = _sales_rows_union(client, org_id, cmp_p, cols=_FIN_SALES_COLS)
+    except Exception as e:
+        raise HTTPException(500, f"sales-comparison read failed: {type(e).__name__}: {e}")
+    brows = [r for r in brows if _salescmp.in_day_window(r.get("trans_date"), eff_as_of, week)]
+    crows = [r for r in crows if _salescmp.in_day_window(r.get("trans_date"), eff_as_of, week)]
+
+    resolve_market, all_markets = _store_market_resolver(client, org_id)
+    # Scope + explicit filters, applied to the ROW SET before the math so every tile/total agrees with
+    # the filtered table (RBAC keyset is the same one the Sales Report uses).
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+    except Exception:
+        ks, in_keyset = None, None
+    sel_stores = {s.strip() for s in (stores or "").split(",") if s.strip()}
+    sel_markets = {m.strip() for m in (markets or "").split(",") if m.strip()}
+
+    def _keep(store):
+        st = str(store or "").strip()
+        if ks is not None and in_keyset is not None and not in_keyset(ks, st):
+            return False
+        if sel_stores and st not in sel_stores:
+            return False
+        if sel_markets and (resolve_market(st) or "") not in sel_markets:
+            return False
+        return True
+
+    # Filter-option lists reflect what THIS caller may see (post-RBAC), independent of the current pick.
+    def _scope_only(store):
+        st = str(store or "").strip()
+        return not (ks is not None and in_keyset is not None and not in_keyset(ks, st))
+    opt_stores = sorted({str(r.get("store") or "").strip() for r in (brows + crows)
+                         if r.get("store") and _scope_only(r.get("store"))})
+    opt_markets = sorted({m for m in ([resolve_market(s) for s in opt_stores] + list(all_markets)) if m})
+
+    brows = [r for r in brows if _keep(r.get("store"))]
+    crows = [r for r in crows if _keep(r.get("store"))]
+
+    from app.modules.commcalc import installment_category as icat
+    rules = icat.load_category_rules(client, org_id)
+    vendors = _finreg.resolve_vendors(client, org_id)
+    acfg = _accessory_config(client, org_id)
+    is_acc = lambda r: _is_accessory(r.get("department"), r.get("category"), r.get("product_desc"), acfg)  # noqa: E731
+
+    try:
+        out = _salescmp.build(
+            brows, crows, rules, is_acc, vendors,
+            base_period=base_p, compare_period=cmp_p, mode=mode, window_label=window_label,
+            resolve_market=resolve_market,
+            params={"period": base_p, "mode": mode, "compare_period": cmp_p,
+                    "as_of_day": eff_as_of, "week": week,
+                    "stores": sorted(sel_stores), "markets": sorted(sel_markets)})
+    except Exception as e:
+        raise HTTPException(500, f"sales-comparison failed: {type(e).__name__}: {e}")
+    out["stores"] = opt_stores
+    out["markets"] = opt_markets
+    out["source_meta"] = {"base": bmeta, "compare": cmeta,
+                          "base_rows": len(brows), "compare_rows": len(crows)}
+    out["org_id"] = org_id
+    return out
 
 
 @router.get("/sales-diagnostics")

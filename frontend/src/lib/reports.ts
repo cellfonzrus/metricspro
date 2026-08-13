@@ -14,6 +14,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/kpi', label: 'KPI Metrics', module: 'commissions' },
     { href: '/commcalc/coaching', label: 'Rep Coaching', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', module: 'commissions', scopes: ['all', 'market', 'store'] },
+    { href: '/commcalc/sales-comparison', label: 'Sales Comparison', module: 'commissions', desc: 'Month-over-month / year-over-year % change per item sold (phones, BYOD, accessories, tablets, financing) across all stores' },
     { href: '/commcalc/comp-trend', label: 'Total Compensation', module: 'commissions', scopes: ['all', 'market'] },
     // DM GATE — mirrors the rbac.ts NAV row 1:1 (owner directive 2026-08-07). This catalog is the
     // SECOND door to the same page (Report Center /reports + the employee portal), and clearedFor()
