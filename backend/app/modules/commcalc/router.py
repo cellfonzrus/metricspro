@@ -12598,6 +12598,102 @@ def payout_structure_document(fmt: str = "pdf", plan_id: str = "", org_id: str =
                              f'attachment; filename="{_ps.filename_for(doc)}"'})
 
 
+# ── INDIVIDUAL COMMISSION STATEMENT DOCUMENT (companion to the Payout Structure PDF) ───────────────
+# The payout-structure doc above describes HOW commission is earned; this is the per-employee STATEMENT
+# of what ONE employee earned for ONE period, itemized. READ-ONLY: it computes no pay and writes nothing
+# — every dollar is sourced from commission_drilldown.explain_rep (whose plan half is
+# commission_engine.preview(detail=True) — the same resolution the live calc uses), the sale-installment
+# ledger it reads, rep_commissions.total_payout (the paid number, via the drill-down's reconciliation),
+# and the five canonical commission_ledger buckets. See commission_statement.py's header.
+def _statement_buckets(client, org_id, period, rep, source_report="ma_daily_tx"):
+    """The five canonical commission_ledger buckets for ONE rep + period, or None. READ-ONLY, org-scoped.
+    Mirrors the /commission-ledger/by-rep rollup but keeps only the requested rep (canon-matched).
+    Degrades to None on any error / unapplied migration 071 / no rows — never raises."""
+    from app.modules.commcalc.commission_engine import _canon_person
+    CATS = commission_ledger.CATEGORIES
+    try:
+        q = (client.schema("commcalc").table("commission_ledger")
+             .select("rep_user," + ",".join(CATS))
+             .eq("org_id", org_id).eq("source_report", source_report))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        lrows = q.limit(100000).execute().data or []
+    except Exception:
+        return None
+    if not lrows:
+        return None
+    cmap = _rep_canon_map(client, org_id)
+    want = _canon_person(rep)
+    agg, hit = {c: 0.0 for c in CATS}, False
+    for r in lrows:
+        canon = _canon((r.get("rep_user") or "").strip(), cmap)
+        if _canon_person(canon) != want:
+            continue
+        hit = True
+        for c in CATS:
+            agg[c] = round(agg[c] + safe_float(r.get(c)), 2)
+    return agg if hit else None
+
+
+@router.get("/commission-statement")
+def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
+                                  source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+    """The individual per-employee Commission Statement — what YOU earned, line by line.
+
+    fmt=pdf (default) downloads it; fmt=json returns the SAME document model so an on-screen preview and
+    the PDF can never disagree (same contract as payout-structure). Every number is re-stated from the
+    read-only drill-down; nothing is computed or written here.
+    """
+    require_org(org_id)
+    if not rep:
+        raise HTTPException(400, "rep required")
+    if not period:
+        raise HTTPException(400, "period required")
+    from fastapi import Response
+    from app.modules.commcalc import commission_statement as _cst
+    from app.modules.commcalc import commission_drilldown as _dd
+    from app.modules.commcalc import plan_pay_gate as _ppg
+
+    client = sb()
+    # Same carrier-mode resolution the /commission-explain endpoint uses, so the drill-down narrates
+    # this tenant's engine correctly. Degrades to the plan engine on any error.
+    try:
+        carriers = (client.schema('commcalc').table('carrier').select('*')
+                    .eq('org_id', org_id).execute().data) or []
+        mode = _resolve_carrier_mode(carriers)
+    except Exception:
+        mode = "plan"
+    # SINGLE SOURCE OF TRUTH for this rep's earnings (plan component + multi-month ledger + the
+    # rep_commissions reconciliation). This read is what makes the statement read-only.
+    try:
+        explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=mode)
+    except Exception as e:
+        raise HTTPException(500, f"commission-statement drill-down failed: {e}")
+    # Optional five-bucket rollup + gate config both degrade to None so a missing optional migration
+    # (071 ledger / 260 pay gate) yields a valid document rather than a 500.
+    buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
+    try:
+        gate_cfg = _ppg.load_gate_config(client, org_id)
+    except Exception:
+        gate_cfg = None
+    # The tenant's real name heads the document; a tenant with no storeops row still gets a valid one.
+    tenant = ""
+    try:
+        _t = (client.schema("storeops").table("tenants").select("name")
+              .eq("org_id", org_id).limit(1).execute().data) or []
+        tenant = (_t[0].get("name") or "") if _t else ""
+    except Exception:
+        tenant = ""
+
+    doc = _cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
+                               period=period, gate_cfg=gate_cfg)
+    if (fmt or "pdf").strip().lower() == "json":
+        return doc
+    return Response(content=_cst.render_pdf(doc), media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{_cst.filename_for(doc)}"'})
+
+
 @router.post("/commission-plans")
 async def save_commission_plan(body: dict, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
