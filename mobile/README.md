@@ -3,9 +3,10 @@
 Native iOS + Android app for MetricsPro, built with **Expo (React Native) + TypeScript** and shipped
 to the **Apple App Store** and **Google Play Store**.
 
-This first release delivers the three frontline modules — **Time Clock**, **Point of Sale (POS)**, and
-**CRM** — on top of the existing platform backend, with a module registry designed so the remaining
-back-office modules can be added incrementally without re-architecting the app.
+This first release delivers the frontline modules — **Time Clock**, **Point of Sale (POS)**, **CRM**,
+and **Earnings** (commissions, targets & achievement) — on top of the existing platform backend, with a
+module registry designed so the remaining back-office modules can be added incrementally without
+re-architecting the app.
 
 ```
 mobile/
@@ -19,9 +20,11 @@ mobile/
         timeclock.tsx        Time Clock
         pos.tsx              POS catalog + cart
         crm.tsx              CRM leads + tasks
+        earnings.tsx         Commissions, tier/KPIs, targets, history
         settings.tsx         Account, company switch, security, sync
       pos/checkout.tsx       Checkout (modal)
       crm/[leadId].tsx       Lead detail
+      earnings/targets.tsx   Schedule-weighted target pace & achievement
   src/
     api/                     Supabase client, secure storage, HTTP client, per-module APIs
     auth/                    AuthContext, tokens, biometric app lock

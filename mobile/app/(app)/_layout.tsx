@@ -30,6 +30,7 @@ export default function AppLayout() {
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="pos/checkout" options={{ title: 'Checkout', presentation: 'modal' }} />
       <Stack.Screen name="crm/[leadId]" options={{ title: 'Lead' }} />
+      <Stack.Screen name="earnings/targets" options={{ title: 'Targets' }} />
     </Stack>
   )
 }

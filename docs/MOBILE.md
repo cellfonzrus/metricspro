@@ -20,6 +20,21 @@ added — so identity, tenancy, RBAC and the business logic all remain in one pl
 | **Time Clock** | status, clock in/out, store picker, GPS | `storeops /timeclock/*` |
 | **POS** | catalog search, cart, checkout, register | `pos /*` |
 | **CRM** | leads list/detail, tasks, stage moves, activity | `crm /*` |
+| **Earnings** (Commissions & Targets) | commission/tier/KPI dashboard, history, accessory attainment, schedule-weighted target pace & achievement by category, conversion | `core /employee-dashboard`, `commcalc /targets/{period}/calendar`, `commcalc /coaching/{period}` |
+
+### Earnings module notes
+
+The Earnings module is the employee-facing view of the commission engine. It reuses the exact
+self-service bundle the web portal uses (`GET /core/employee-dashboard`) and pins `employee_id` to the
+**signed-in** rep from `/core/me` — a rep only ever sees their own numbers. Achievement/pace comes
+from the schedule-weighted target calendar (`/targets/{period}/calendar?scope=rep`), scoped by the
+rep's sales-data name and home store returned in the dashboard bundle.
+
+> Note: `GET /core/employee-dashboard` currently takes `employee_id` as a query param without a
+> server-side "is this you?" check (same contract the web portal relies on). The mobile client always
+> sends the caller's own id, but hardening that endpoint to derive identity from the token (like
+> `/timeclock/*` does) is a recommended backend follow-up before this data is considered
+> defense-in-depth safe.
 
 Back-office/admin modules (Commission Intelligence, Scheduling & HR, Assets, Closing, …) are shown as
 **"coming soon"** on Home and are added later via the module registry (see below). This is the

@@ -47,6 +47,10 @@ export default function TabsLayout() {
         name="crm"
         options={{ title: 'CRM', tabBarIcon: icon('📇'), href: can('crm') ? undefined : null }}
       />
+      <Tabs.Screen
+        name="earnings"
+        options={{ title: 'Earnings', tabBarIcon: icon('💰'), href: can('earnings') ? undefined : null }}
+      />
       <Tabs.Screen name="settings" options={{ title: 'Settings', tabBarIcon: icon('⚙️') }} />
     </Tabs>
   )

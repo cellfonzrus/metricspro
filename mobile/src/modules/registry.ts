@@ -11,7 +11,7 @@ import type { MePayload } from '@/api/core'
 // provisioned user; fine-grained actions (PII reveal, void) still gate at the action. When the
 // backend `modules.<key>` entitlement is seeded, tighten `visible` to check it — the UI is already
 // wired to respect it.
-export type ModuleKey = 'timeclock' | 'pos' | 'crm'
+export type ModuleKey = 'timeclock' | 'pos' | 'crm' | 'earnings'
 
 export type ModuleDef = {
   key: ModuleKey
@@ -68,6 +68,17 @@ export const MODULES: ModuleDef[] = [
     visible: provisioned,
     entitlementKey: 'modules.crm',
   },
+  {
+    key: 'earnings',
+    title: 'Earnings',
+    short: 'Earnings',
+    route: '/earnings',
+    icon: '💰',
+    description: 'Your commission, targets and how close you are to hitting them.',
+    primaryTab: true,
+    visible: provisioned,
+    entitlementKey: 'modules.commcalc',
+  },
 ]
 
 // ── Roadmap ──────────────────────────────────────────────────────────────────────────────────────
@@ -76,7 +87,7 @@ export const MODULES: ModuleDef[] = [
 // items eventually) without pretending they exist yet.
 export type RoadmapModule = { id: string; title: string; icon: string; description: string }
 export const ROADMAP_MODULES: RoadmapModule[] = [
-  { id: 'commcalc', title: 'Commission Intelligence', icon: '📊', description: 'CommCalc reports & payouts' },
+  { id: 'commcalc', title: 'Commission Admin', icon: '📊', description: 'CommCalc reports, payouts & rates' },
   { id: 'storeops', title: 'Scheduling & HR', icon: '🗓️', description: 'Shifts, PTO, payroll' },
   { id: 'assets', title: 'Assets & Inventory', icon: '📦', description: 'Phone lending, transfers' },
   { id: 'closing', title: 'Store Visits & Closing', icon: '✅', description: 'Daily closing, audits' },
