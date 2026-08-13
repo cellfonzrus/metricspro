@@ -6,9 +6,14 @@ Commission Intelligence & Business Operations Suite for Boost Mobile Retailers.
 
 ```
 frontend/    Next.js 14 + TypeScript + Tailwind  →  Vercel
+mobile/      Expo (React Native) + TypeScript     →  App Store & Play Store
 backend/     Python FastAPI                       →  Railway
 database/    PostgreSQL migrations                →  Supabase Pro
 ```
+
+The native mobile app (`mobile/`) ships the frontline modules — **Time Clock, POS, CRM** — on top of
+the same backend, with a module registry so back-office modules are added incrementally. See
+[`mobile/README.md`](mobile/README.md) and [`docs/MOBILE.md`](docs/MOBILE.md).
 
 ## Modules
 

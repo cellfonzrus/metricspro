@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+/ios
+/android
+
+# Metro
+.metro-health-check*
+
+# Secrets & local env — NEVER commit these
+.env
+.env.local
+.env.*.local
+google-services.json
+GoogleService-Info.plist
+play-service-account.json
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Typescript
+*.tsbuildinfo
