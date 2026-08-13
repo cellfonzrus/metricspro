@@ -18,3 +18,5 @@ anthropic>=0.69.0
 cryptography>=42.0.0
 google-auth>=2.30.0
 google-api-python-client>=2.130.0
+segno>=1.6.0
+

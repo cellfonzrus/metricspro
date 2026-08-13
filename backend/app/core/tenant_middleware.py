@@ -128,6 +128,12 @@ _PUBLIC_PREFIXES = (
     "/api/v1/hr/public/onboarding",       # HR onboarding public token endpoints (the link token IS the auth)
     "/api/v1/notify/dl",                   # no-login report download: the HMAC token IS the auth; reaches
                                            # ONLY the one artifact it signs (uniform 404 on any bad token)
+    "/api/v1/referral/redeem",             # PUBLIC QR redemption (mig 850): the HMAC capability token IS
+                                           # the auth — it authorizes redeeming ONLY the one referral it
+                                           # signs. Boundary-matched, so ONLY /api/v1/referral/redeem[/…]
+                                           # is public; every other /referral/* route keeps full auth +
+                                           # org_id rewrite. Any bad/expired/used token → uniform 404
+                                           # (no enumeration oracle), exactly like /notify/dl above.
     "/api/v1/core/fix-pipeline",            # Auto-Fix Pipeline (mig 718): DUAL-AUTH, same shape as
                                            # /core/tenants/sync + the */run-due sweeps. The scheduled
                                            # triage routine carries NO JWT — it authenticates with the
