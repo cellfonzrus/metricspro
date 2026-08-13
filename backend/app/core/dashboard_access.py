@@ -1,42 +1,71 @@
 """Pure access-decision for the employee self-service dashboard (GET /core/employee-dashboard).
 
 Kept dependency-free (no FastAPI / no DB) so the rule is unit-testable in isolation
-(backend/harness_employee_dashboard_access.py) — the router wraps this with the actual
-employees_visible() lookup and turns a False into a 403.
+(backend/harness_employee_dashboard_access.py) — the router resolves the inputs (auth token →
+caller identity + EXPLICIT role scope + span roster) and turns a False into a 403.
 
 The employee-dashboard bundle carries a rep's private compensation (commission $, pay rate, KPIs,
 chargebacks). The endpoint historically trusted the `employee_id` QUERY PARAM, so any signed-in rep
-could read a colleague's numbers by changing the id (an IDOR). This rule restores the intended
-boundary and deliberately MATCHES the employee-picker visibility (/storeops/employees/visible) so the
-server allows exactly what the dropdown offers.
+could read a colleague's numbers by changing the id (an IDOR).
+
+IMPORTANT — why this does NOT key off the generic role "scope" string: `_role_scope()` (and the
+employee picker built on it) DEFAULTS to "all" whenever a caller's role is blank, missing, or has no
+`scope` key. That default is fine for populating a dropdown, but using it for a DATA-AUTHORIZATION
+decision would leave the IDOR wide open for any authenticated rep with an unconfigured role. So this
+rule only grants org-wide access on an EXPLICIT admin scope (a real roles row whose permissions say
+`scope == "all"`), and grants cross-employee access to a manager only for employees actually inside
+their resolved span roster. A blank/unknown role → self only.
 """
-from typing import Any, Mapping
+from typing import Iterable, Optional
+
+# Role scopes that legitimately let a caller view OTHER employees (when positively set on a real role).
+_MANAGER_SCOPES = ("store", "market", "region", "dm", "area")
 
 
-def dashboard_access_allowed(visible: Mapping[str, Any] | None, employee_id: str) -> bool:
-    """True iff the caller (described by `visible`, the /storeops/employees/visible result) may read
-    `employee_id`'s dashboard.
+def dashboard_access_allowed(
+    *,
+    authenticated: bool,
+    own_employee_id: str,
+    target_employee_id: str,
+    explicit_scope: Optional[str],
+    visible_roster_ids: Optional[Iterable[str]] = None,
+) -> bool:
+    """True iff the caller may read `target_employee_id`'s dashboard.
 
-    `visible` shape (only these keys are read):
-        {"employee_id": <caller's own emp id>, "scope": <role scope>, "employees": [{"employee_id": ...}, ...]}
+    Args:
+        authenticated: whether the request carried a resolvable auth token. When False the caller is
+            in the platform's login-enforcement-OFF / open-app mode (an unauthenticated request in an
+            ENFORCING tenant is already rejected upstream by TenantScopeMiddleware and never reaches
+            here), so behaviour is left unchanged — allowed.
+        own_employee_id: the caller's own employee_id (from their app_user row).
+        target_employee_id: the requested employee_id.
+        explicit_scope: the caller role's EXPLICITLY-SET permissions.scope (None when the role is
+            blank / missing / has no scope key — deliberately NOT defaulted to "all" here).
+        visible_roster_ids: employee_ids inside the caller's span (only consulted for a manager scope).
 
     Rules, in order:
-      1. Own dashboard (target == caller's own employee_id)                → allow
-      2. scope == 'all' (admin / RBAC master-switch off / open-app mode)   → allow (behaviour unchanged)
-      3. target is inside the caller's visible roster (manager's span)     → allow
-      4. otherwise                                                          → deny
+      1. Unauthenticated (open-app mode)                          → allow (unchanged behaviour)
+      2. Own dashboard (target == own)                            → allow
+      3. Explicit admin role (explicit_scope == 'all')           → allow
+      4. Explicit manager scope AND target inside span roster    → allow
+      5. otherwise                                                → deny
     """
-    v = visible or {}
-    my_eid = str(v.get("employee_id") or "").strip()
-    target = str(employee_id or "").strip()
+    if not authenticated:
+        return True
 
-    if target and target == my_eid:
+    target = str(target_employee_id or "").strip()
+    own = str(own_employee_id or "").strip()
+
+    if target and target == own:
         return True
-    if v.get("scope") == "all":
+
+    scope = (explicit_scope or "").strip().lower()
+    if scope == "all":
         return True
-    allowed = {
-        str(e.get("employee_id")).strip()
-        for e in (v.get("employees") or [])
-        if isinstance(e, Mapping) and e.get("employee_id")
-    }
-    return target in allowed
+
+    if scope in _MANAGER_SCOPES:
+        roster = {str(x).strip() for x in (visible_roster_ids or []) if str(x).strip()}
+        if target in roster:
+            return True
+
+    return False

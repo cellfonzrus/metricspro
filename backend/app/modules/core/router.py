@@ -3772,15 +3772,38 @@ def _enforce_dashboard_access(authorization: str, org_id: str, employee_id: str)
       • anyone else asking for someone else → 403.
     """
     from app.core.dashboard_access import dashboard_access_allowed
-    try:
-        from app.modules.storeops.router import employees_visible
-        vis = employees_visible(authorization, org_id)
-    except Exception:
-        # Scoping lookup failed — fail CLOSED (deny). We deliberately do not fall back to "allow":
-        # this endpoint returns private compensation, so an unresolved scope must not become an open
-        # door. The pure rule below then denies (empty scope matches nothing, not even self).
-        vis = {}
-    if not dashboard_access_allowed(vis, employee_id):
+    from app.modules.storeops.router import _caller_app_user, _role_permissions, employees_visible
+
+    # Authenticated? (unauth requests in an enforcing tenant are already rejected by the tenant
+    # middleware before this handler; an unauth request here means open-app mode → unchanged behaviour)
+    authenticated = bool(_uid_from_token(authorization))
+    au = _caller_app_user(authorization, org_id) if authenticated else {}
+    own_eid = str((au or {}).get("employee_id") or "").strip()
+    role = str((au or {}).get("role") or "").strip()
+
+    # EXPLICIT scope only — do NOT use the picker's default-to-"all". A blank/missing/scope-less role
+    # yields None here, so such a caller is confined to their own dashboard.
+    explicit_scope = None
+    roster_ids: set[str] = set()
+    if authenticated:
+        try:
+            explicit_scope = (_role_permissions(org_id, role) or {}).get("scope")
+        except Exception:
+            explicit_scope = None
+        # Only a positively-scoped manager consults the span roster (reuses the picker's span logic,
+        # incl. store-address aliasing) — never the default-"all" path.
+        if isinstance(explicit_scope, str) and explicit_scope.strip().lower() in (
+            "store", "market", "region", "dm", "area"):
+            try:
+                vis = employees_visible(authorization, org_id)
+                roster_ids = {str(e.get("employee_id")).strip()
+                              for e in (vis.get("employees") or []) if e.get("employee_id")}
+            except Exception:
+                roster_ids = set()
+
+    if not dashboard_access_allowed(authenticated=authenticated, own_employee_id=own_eid,
+                                    target_employee_id=employee_id, explicit_scope=explicit_scope,
+                                    visible_roster_ids=roster_ids):
         raise HTTPException(403, "You can only view your own dashboard.")
 
 

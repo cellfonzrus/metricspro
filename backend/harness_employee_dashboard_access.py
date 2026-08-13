@@ -1,16 +1,19 @@
 """Harness — app/core/dashboard_access.py (the IDOR gate for GET /core/employee-dashboard).
 
 Proves, WITHOUT a database or FastAPI, that dashboard_access_allowed() enforces the intended
-boundary on a rep's private compensation bundle:
+boundary on a rep's private compensation bundle (commission $, pay rate, KPIs, chargebacks):
 
   A. A rep may read their OWN dashboard.
-  B. A self-scoped rep may NOT read a colleague's dashboard  (the IDOR that existed before the fix).
-  C. An admin (scope 'all') may read anyone's dashboard      (behaviour unchanged for admins).
-  D. An unidentifiable caller (scope 'all' fallback / open-app mode) is allowed (behaviour unchanged).
+  B. A self-scoped rep may NOT read a colleague's dashboard          (the original IDOR).
+  C. An EXPLICIT admin (permissions.scope == 'all') may read anyone.
+  D. Unauthenticated / open-app mode is allowed                       (behaviour unchanged).
   E. A store/market manager may read employees INSIDE their span…
   F. …but NOT employees outside it.
-  G. Empty/failed scope lookup ({}) denies everything — fail CLOSED, even for a would-be self view.
-  H. Type hygiene: numeric vs string employee ids compare equal; whitespace is trimmed.
+  G. THE CLOSED GAP: an authenticated rep whose role does NOT explicitly set scope (blank / missing
+     role / role with no scope key → explicit_scope is None) is confined to SELF — even though the
+     legacy picker would have defaulted them to scope 'all'. This is the residual IDOR the first
+     version of the fix left open.
+  H. Type hygiene: numeric vs string employee ids compare equal; whitespace trimmed; scope casing.
 
 Run: python3 backend/harness_employee_dashboard_access.py
 """
@@ -34,48 +37,61 @@ def ok(name, cond, extra=""):
         print(f"  ✗ {name} {extra}")
 
 
-# ── Scenarios ──────────────────────────────────────────────────────────────────────────────────
-self_scope = {"employee_id": "E100", "scope": "self", "employees": [{"employee_id": "E100"}]}
-admin_scope = {"employee_id": "E001", "scope": "all", "employees": []}
-unresolved = {"employee_id": "", "scope": "all", "employees": []}   # caller not identified → visible() = 'all'
-mgr_scope = {
-    "employee_id": "M50",
-    "scope": "store",
-    "employees": [{"employee_id": "M50"}, {"employee_id": "E200"}, {"employee_id": "E201"}],
-}
+def allowed(**kw):
+    # small helper with sensible defaults
+    base = dict(authenticated=True, own_employee_id="E100", target_employee_id="E100",
+                explicit_scope=None, visible_roster_ids=None)
+    base.update(kw)
+    return dashboard_access_allowed(**base)
+
 
 # A. self
-ok("A self can read self", dashboard_access_allowed(self_scope, "E100") is True)
+ok("A self can read self", allowed(target_employee_id="E100") is True)
 
-# B. the IDOR: self-scope rep asking for a colleague
-ok("B self CANNOT read a colleague", dashboard_access_allowed(self_scope, "E999") is False,
+# B. the original IDOR: a rep asking for a colleague (self scope)
+ok("B self-scope CANNOT read a colleague",
+   allowed(explicit_scope="self", target_employee_id="E999") is False,
    "self-scoped rep read another rep's compensation")
 
-# C. admin
-ok("C admin reads anyone", dashboard_access_allowed(admin_scope, "E777") is True)
+# C. explicit admin
+ok("C explicit admin reads anyone",
+   allowed(own_employee_id="E001", explicit_scope="all", target_employee_id="E777") is True)
 
-# D. unidentified caller / open-app mode (unchanged behaviour)
-ok("D unresolved caller allowed (open mode)", dashboard_access_allowed(unresolved, "E777") is True)
+# D. unauthenticated / open-app mode
+ok("D unauthenticated allowed (open mode)",
+   allowed(authenticated=False, own_employee_id="", explicit_scope=None, target_employee_id="E777") is True)
 
 # E/F. manager span
-ok("E manager reads self", dashboard_access_allowed(mgr_scope, "M50") is True)
-ok("E manager reads in-span report", dashboard_access_allowed(mgr_scope, "E200") is True)
-ok("F manager CANNOT read out-of-span", dashboard_access_allowed(mgr_scope, "E999") is False,
+ok("E manager reads in-span report",
+   allowed(own_employee_id="M50", explicit_scope="store", target_employee_id="E200",
+           visible_roster_ids=["M50", "E200", "E201"]) is True)
+ok("F manager CANNOT read out-of-span",
+   allowed(own_employee_id="M50", explicit_scope="store", target_employee_id="E999",
+           visible_roster_ids=["M50", "E200", "E201"]) is False,
    "manager read an employee outside their span")
 
-# G. fail closed on empty scope
-ok("G empty scope denies (fail closed)", dashboard_access_allowed({}, "E100") is False)
-ok("G None scope denies (fail closed)", dashboard_access_allowed(None, "E100") is False)
+# G. THE CLOSED GAP — blank / unresolved role must be self-only, NOT org-wide.
+ok("G blank role (explicit_scope None) CANNOT read a colleague",
+   allowed(explicit_scope=None, target_employee_id="E999") is False,
+   "blank-role rep read another rep's compensation — IDOR still open!")
+ok("G blank role can still read SELF", allowed(explicit_scope=None, target_employee_id="E100") is True)
+# A defaulted-'all' must NEVER be passed as explicit; if a manager scope has an EMPTY roster, deny others.
+ok("G manager with empty roster denies others",
+   allowed(own_employee_id="M1", explicit_scope="store", target_employee_id="E2",
+           visible_roster_ids=[]) is False)
 
-# H. type hygiene — numeric vs string ids, whitespace
-num_self = {"employee_id": 100, "scope": "self", "employees": [{"employee_id": 100}]}
-ok("H numeric own id matches string query", dashboard_access_allowed(num_self, "100") is True)
-ok("H whitespace trimmed on target", dashboard_access_allowed(self_scope, "  E100 ") is True)
-num_mgr = {"employee_id": "M1", "scope": "store", "employees": [{"employee_id": 200}]}
-ok("H numeric in-span id matches string query", dashboard_access_allowed(num_mgr, "200") is True)
+# H. type hygiene
+ok("H numeric own id matches string target", allowed(own_employee_id=100, target_employee_id="100") is True)
+ok("H whitespace trimmed on target", allowed(target_employee_id="  E100 ") is True)
+ok("H numeric in-span id matches string target",
+   allowed(own_employee_id="M1", explicit_scope="store", target_employee_id="200",
+           visible_roster_ids=[200]) is True)
+ok("H scope casing normalised ('ALL')",
+   allowed(own_employee_id="E1", explicit_scope="ALL", target_employee_id="E9") is True)
 
-# Negative control: empty target never matches an empty own id (guards the `target and ...` clause)
-ok("neg empty target denied", dashboard_access_allowed({"employee_id": "", "scope": "self"}, "") is False)
+# Negative control: empty target never matches an empty own id
+ok("neg empty target denied",
+   allowed(own_employee_id="", explicit_scope="self", target_employee_id="") is False)
 
 
 print(f"\n{PASS} passed, {FAIL} failed")
