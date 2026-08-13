@@ -258,6 +258,20 @@ export const NAV: NavGroup[] = [
     { href: '/crm/reports', label: 'CRM Reports', icon: '📈', module: 'crm', scopes: ['all', 'market'] },
     { href: '/crm/settings', label: 'CRM Settings', icon: '⚙️', module: 'crm', scopes: ['all'] },
   ]},
+  // Referral (mig 850, owner directive 2026-08-13) — QR-code customer referrals + activation-gated,
+  // approval-gated commission. Placed after CRM: it is a sibling top-of-funnel surface (a rep hands a
+  // referrer a QR before any sale exists). Same shape as the CRM block, so regrouping/relabeling is a
+  // ZERO-RBAC-CHANGE move as long as each item keeps its `module: 'referral'` + scopes.
+  // Approvals is scoped ['all','market']: approving a payout is a manager act, and the backend
+  // (_can_approve) is the real gate — the nav scope only decides who sees the tab. Settings is 'all'
+  // only, like every other module's config surface.
+  { group: 'Referral', module: 'referral', items: [
+    { href: '/referral', label: 'Dashboard', icon: '🎁', module: 'referral', scopes: ['all', 'market', 'store'] },
+    { href: '/referral/new', label: 'New Referral', icon: '➕', module: 'referral', scopes: ['all', 'market', 'store'] },
+    { href: '/referral/list', label: 'Referrals', icon: '📇', module: 'referral', scopes: ['all', 'market', 'store'] },
+    { href: '/referral/approvals', label: 'Approvals', icon: '✅', module: 'referral', scopes: ['all', 'market'] },
+    { href: '/referral/settings', label: 'Referral Settings', icon: '⚙️', module: 'referral', scopes: ['all'] },
+  ]},
   { group: 'Commissions', module: 'commissions', items: [
       { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
