@@ -172,6 +172,34 @@ check("E5 has_buckets true when the ledger has data", DOC["summary"]["has_bucket
 d_nob = cs.build_statement(EXPLAIN, buckets=None)
 check("E6 no ledger => has_buckets false", d_nob["summary"]["has_buckets"], False)
 
+section("Fs. Carrier-STATEMENT-mode rep — the buckets ARE the breakup (no plan rules)")
+
+# Luxelink runs mixed engines. A rep paid from the carrier statement has NO plan rules, so plan_component
+# comes back with empty rules and no installments — the five ledger buckets are their only itemization.
+# The complaint was that such a rep saw only a headline number. The statement must NOT be flagged empty
+# and must show the per-category breakup.
+STMT_EXPLAIN = {"period": "2026-07", "rep": "Carmen Ruiz",
+                "plan_component": {"rules": [], "total_payout": 0.0, "plan_name": None},
+                "multimonth_component": {"devices": [], "totals": {"paid": 0, "withheld": 0, "amount": 0.0}},
+                "reconciliation": {"total_payout": 412.75, "source": "rep_commissions (last Run Calculation)"},
+                "zero_explanation": [], "note": None}
+STMT_BUCKETS = {"commission": 300.0, "spiff": 62.75, "equipment_rebate": 0.0,
+                "residual_monthly": 50.0, "autopay_residual": 0.0}
+d_stmt = cs.build_statement(STMT_EXPLAIN, buckets=STMT_BUCKETS, tenant_name="Luxelink Wireless LLC",
+                            rep_name="Carmen Ruiz", period="2026-07")
+check("Fs1 a statement-mode rep with real earnings is NOT flagged empty", d_stmt["empty"], False)
+check("Fs2 ... the headline total still shows", d_stmt["summary"]["total_payout"], "$412.75")
+check("Fs3 ... the category buckets are present as the breakup", d_stmt["summary"]["has_buckets"], True)
+stmt_b = {b["label"]: b["amount"] for b in d_stmt["summary"]["buckets"]}
+check("Fs4 ... commission bucket itemized", stmt_b["Commission"], "$300.00")
+check("Fs5 ... spiff bucket itemized", stmt_b["Spiff"], "$62.75")
+check("Fs6 ... bucket total sums to the breakup", d_stmt["summary"]["bucket_total"], "$412.75")
+check("Fs7 ... and there are no plan line items (buckets carry it)", d_stmt["earned"], [])
+
+# The SAME rep with NO ledger buckets and no earnings IS empty (nothing to itemize at all).
+d_bare = cs.build_statement(dict(STMT_EXPLAIN, reconciliation={"total_payout": 0.0}), buckets=None)
+check("Fs8 no rules + no buckets + no total => genuinely empty", d_bare["empty"], True)
+
 section("F. Honest degradation")
 
 # A rep with sales but no plan match / no earnings — the drill-down's zero_explanation carries the WHY.
@@ -238,6 +266,15 @@ else:
                                period="2026-07")
     check("G4 markup in tenant/product/label renders instead of crashing", cs.render_pdf(h_doc)[:5], b"%PDF-")
     check("G5 an empty document still renders", cs.render_pdf(cs.build_statement({}))[:5], b"%PDF-")
+
+    # BATCH renderer — N reps into ONE multi-page PDF (the "every rep in one document" ask).
+    batch_pdf = cs.render_statements_pdf(batch + [d_stmt])
+    check("G6 the batch renderer emits a real PDF", batch_pdf[:5], b"%PDF-")
+    check("G7 ... larger than a single statement (multiple pages)", len(batch_pdf) > len(pdf), True)
+    check("G8 an empty rep list still yields a valid one-page PDF",
+          cs.render_statements_pdf([])[:5], b"%PDF-")
+    check("G9 render_pdf(doc) == render_statements_pdf([doc]) shape (both valid PDFs)",
+          cs.render_statements_pdf([DOC])[:5], b"%PDF-")
 
 section("H. ARMED negative control — these MUST fail if the checks are real")
 

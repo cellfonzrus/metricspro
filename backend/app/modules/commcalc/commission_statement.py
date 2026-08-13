@@ -187,7 +187,11 @@ def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="
         notes.append(_s(explain.get("note")))
 
     plan_name = _s(pc.get("plan_name")) or None
-    is_empty = not earned and not held
+    # A carrier-STATEMENT-mode rep (Luxelink runs mixed engines) has no plan rules, so `earned`/`held`
+    # come back empty — but the five canonical buckets ARE their per-line breakup. Treat the statement
+    # as empty only when there is nothing at all to itemize, so a statement-mode rep with real earnings
+    # sees the category breakup rather than a bare headline number (the "breakup not showing" report).
+    is_empty = not earned and not held and not has_buckets
 
     return {
         "title": "Commission Statement",
@@ -250,7 +254,20 @@ _GREEN = (0.10, 0.42, 0.28)      # the earned-total figure
 
 
 def render_pdf(doc):
-    """Render the statement model to PDF bytes. reportlab is imported lazily (payout_structure pattern)."""
+    """Render ONE statement model to PDF bytes. reportlab imported lazily (payout_structure pattern)."""
+    return _render_docs([doc])
+
+
+def render_statements_pdf(docs):
+    """Render a LIST of statement models into ONE multi-page PDF, one rep per page (PageBreak between).
+    Reuses the exact single-statement story so a batch page is byte-for-byte a single page. An empty
+    list yields a valid one-page 'no reps' document rather than a crash. reportlab imported lazily."""
+    return _render_docs(list(docs or []))
+
+
+def _render_docs(docs):
+    """Shared renderer for one-or-many statements. Builds the styles + story helpers ONCE, then emits
+    each doc's flowables (separated by a page break) into a single SimpleDocTemplate."""
     from io import BytesIO
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_RIGHT
@@ -258,7 +275,9 @@ def render_pdf(doc):
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-                                    HRFlowable)
+                                    HRFlowable, PageBreak)
+
+    docs = list(docs or [])
 
     def C(rgb):
         return colors.Color(*rgb)
@@ -301,68 +320,6 @@ def render_pdf(doc):
     st_total_lbl = ParagraphStyle("totl", parent=ss["Normal"], fontSize=8.5, textColor=C(_MUTED),
                                   leading=11)
 
-    title = _s(doc.get("title")) or "Commission Statement"
-    tenant = _s(doc.get("tenant"))
-    employee = _s(doc.get("employee"))
-    period = _s(doc.get("period"))
-
-    def on_page(canvas, _doc):
-        """Footer: page numbers + the standing caveat handled at the end of the story."""
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7.5)
-        canvas.setFillColor(C(_MUTED))
-        foot = f"{employee + ' — ' if employee else ''}{title}{' — ' + period if period else ''}"
-        canvas.drawString(margin, margin * 0.55, foot)
-        canvas.drawRightString(page_w - margin, margin * 0.55, f"Page {canvas.getPageNumber()}")
-        canvas.restoreState()
-
-    pdf = SimpleDocTemplate(buf, pagesize=LETTER, leftMargin=margin, rightMargin=margin,
-                            topMargin=margin, bottomMargin=margin * 0.9,
-                            title=f"{title}{' — ' + employee if employee else ''}",
-                            author=tenant or "MetricsPro", subject=title)
-
-    story = []
-    # ── masthead ──
-    if tenant:
-        story.append(Paragraph(esc(tenant), st_tenant))
-    story.append(Paragraph(esc(title), st_title))
-    who = " · ".join(p for p in [employee, (f"Period {period}" if period else "")] if p)
-    if who:
-        story.append(Paragraph(esc(who), st_meta))
-    story.append(Paragraph(f"Generated {esc(doc.get('generated_at'))}", st_meta))
-    story.append(Spacer(1, 6))
-    story.append(HRFlowable(width="100%", thickness=1.6, color=C(_NAVY), spaceAfter=10))
-
-    summary = doc.get("summary") or {}
-
-    # ── summary band: the headline total + how it splits ──
-    left = []
-    if summary.get("plan_name"):
-        left.append(Paragraph(f"<b>Plan:</b> {esc(summary.get('plan_name'))}", st_cell))
-    left.append(Paragraph(f"Plan commission: {esc(summary.get('plan_subtotal'))}", st_cell))
-    _ip = summary.get("installments_paid") or 0
-    _ih = summary.get("installments_held") or 0
-    if summary.get("installment_subtotal") and (_ip or _ih):
-        left.append(Paragraph(
-            f"Multi-month residual: {esc(summary.get('installment_subtotal'))} "
-            f"({_ip} paid, {_ih} held)", st_cell))
-    right = [Paragraph("Total earned this period", st_total_lbl),
-             Paragraph(esc(summary.get("total_payout")), st_total)]
-    band = Table([[left, right]], colWidths=[avail * 0.6, avail * 0.4], hAlign="LEFT")
-    band.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), C(_BAND)),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-        ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ("LINEBELOW", (0, 0), (-1, -1), 1.4, C(_NAVY)),
-    ]))
-    story.append(band)
-    story.append(Paragraph(esc(summary.get("total_source")), st_cap))
-
-    story.append(Paragraph("About this statement", st_h2))
-    for b in doc.get("intro") or []:
-        story.append(Paragraph(esc(b), st_bullet, bulletText="•"))
-
     def table(data, widths, aligns=None, header_rows=1):
         h = header_rows
         t = Table(data, colWidths=widths, repeatRows=h, hAlign="LEFT")
@@ -379,86 +336,172 @@ def render_pdf(doc):
         t.setStyle(TableStyle(style + (aligns or [])))
         return t
 
-    # ── what you earned ──
-    earned = doc.get("earned") or []
-    if earned:
-        story.append(Paragraph("What you earned", st_h2))
-        rows = [[Paragraph("Item", st_head), Paragraph("What qualified it", st_head),
-                 Paragraph("Rate", st_head_r), Paragraph("How often", st_head),
-                 Paragraph("Amount", st_head_r)]]
-        for it in earned:
-            cond = esc(it["condition"])
-            if it.get("units"):
-                cond += f"<br/><font size=7 color='#6b7280'>{it['units']} qualifying item(s)</font>"
-            rows.append([Paragraph(esc(it["what"]), st_cell_b), Paragraph(cond, st_cell),
-                         Paragraph(esc(it["rate"]), st_cell_r), Paragraph(esc(it["frequency"]), st_cell),
-                         Paragraph(esc(it["amount"]), st_cell_r)])
-        rows.append([Paragraph("Total earned", st_cell_b), "", "", "",
-                     Paragraph(esc(summary.get("total_payout")), st_cell_r)])
-        n = len(rows) - 1
-        story.append(table(
-            rows, [avail * 0.22, avail * 0.34, avail * 0.16, avail * 0.13, avail * 0.15],
-            [("ALIGN", (2, 0), (2, -1), "RIGHT"), ("ALIGN", (4, 0), (4, -1), "RIGHT"),
-             ("SPAN", (0, n), (3, n)),
-             ("BACKGROUND", (0, n), (-1, n), C(_BAND)),
-             ("LINEABOVE", (0, n), (-1, n), 0.8, C(_NAVY)),
-             ("FONTNAME", (4, n), (4, n), "Helvetica-Bold")]))
-        if summary.get("total_source"):
-            story.append(Paragraph(f"Payout of record: {esc(summary.get('total_source'))}", st_cap))
-    elif doc.get("empty"):
-        story.append(Paragraph("What you earned", st_h2))
-        story.append(Paragraph("No commission was earned for this period. The reasons below explain why.",
-                               st_body))
+    def emit(doc, story):
+        """Append ONE statement's flowables to `story`. Shared by the single- and multi-rep renderers."""
+        title = _s(doc.get("title")) or "Commission Statement"
+        tenant = _s(doc.get("tenant"))
+        employee = _s(doc.get("employee"))
+        period = _s(doc.get("period"))
+        summary = doc.get("summary") or {}
 
-    # ── held / not yet paid ──
-    held = doc.get("held") or []
-    if held:
-        story.append(Paragraph("Held or not yet paid", st_h2))
-        story.append(Paragraph("These items did not pay this period. Each shows the reason; a held "
-                               "residual can pay in a later period once the reason clears.", st_cap))
-        rows = [[Paragraph("Item", st_head), Paragraph("When", st_head),
-                 Paragraph("Why it did not pay", st_head), Paragraph("Amount held", st_head_r)]]
-        for it in held:
-            rows.append([Paragraph(esc(it["what"]), st_cell_b), Paragraph(esc(it["when"]), st_cell),
-                         Paragraph(esc(it["reason"]), st_cell),
-                         Paragraph(esc(it["amount"] or "—"), st_cell_r)])
-        story.append(table(rows, [avail * 0.20, avail * 0.18, avail * 0.47, avail * 0.15],
-                           [("ALIGN", (3, 0), (3, -1), "RIGHT")]))
+        # ── masthead ──
+        if tenant:
+            story.append(Paragraph(esc(tenant), st_tenant))
+        story.append(Paragraph(esc(title), st_title))
+        who = " · ".join(p for p in [employee, (f"Period {period}" if period else "")] if p)
+        if who:
+            story.append(Paragraph(esc(who), st_meta))
+        story.append(Paragraph(f"Generated {esc(doc.get('generated_at'))}", st_meta))
+        story.append(Spacer(1, 6))
+        story.append(HRFlowable(width="100%", thickness=1.6, color=C(_NAVY), spaceAfter=10))
 
-    # ── canonical payout categories (commission ledger) ──
-    if summary.get("has_buckets"):
-        story.append(Paragraph("Payout by category", st_h2))
-        story.append(Paragraph("The same payout, grouped into the standard commission ledger buckets.",
-                               st_cap))
-        rows = [[Paragraph("Category", st_head), Paragraph("Amount", st_head_r)]]
-        for b in summary.get("buckets") or []:
-            rows.append([Paragraph(esc(b["label"]), st_cell_b), Paragraph(esc(b["amount"]), st_cell_r)])
-        rows.append([Paragraph("Total", st_cell_b), Paragraph(esc(summary.get("bucket_total")), st_cell_r)])
-        n = len(rows) - 1
-        story.append(table(rows, [avail * 0.6, avail * 0.4],
-                           [("ALIGN", (1, 0), (1, -1), "RIGHT"),
-                            ("BACKGROUND", (0, n), (-1, n), C(_BAND)),
-                            ("LINEABOVE", (0, n), (-1, n), 0.8, C(_NAVY)),
-                            ("FONTNAME", (1, n), (1, n), "Helvetica-Bold")]))
+        # ── summary band: the headline total + how it splits ──
+        left = []
+        if summary.get("plan_name"):
+            left.append(Paragraph(f"<b>Plan:</b> {esc(summary.get('plan_name'))}", st_cell))
+        left.append(Paragraph(f"Plan commission: {esc(summary.get('plan_subtotal'))}", st_cell))
+        _ip = summary.get("installments_paid") or 0
+        _ih = summary.get("installments_held") or 0
+        if summary.get("installment_subtotal") and (_ip or _ih):
+            left.append(Paragraph(
+                f"Multi-month residual: {esc(summary.get('installment_subtotal'))} "
+                f"({_ip} paid, {_ih} held)", st_cell))
+        right = [Paragraph("Total earned this period", st_total_lbl),
+                 Paragraph(esc(summary.get("total_payout")), st_total)]
+        band = Table([[left, right]], colWidths=[avail * 0.6, avail * 0.4], hAlign="LEFT")
+        band.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), C(_BAND)),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10), ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 8), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("LINEBELOW", (0, 0), (-1, -1), 1.4, C(_NAVY)),
+        ]))
+        story.append(band)
+        story.append(Paragraph(esc(summary.get("total_source")), st_cap))
 
-    # ── notes (why $0 / partial) ──
-    if doc.get("notes"):
-        story.append(Paragraph("Notes", st_h2))
-        for nnote in doc["notes"]:
-            story.append(Paragraph(esc(nnote), st_bullet, bulletText="•"))
+        story.append(Paragraph("About this statement", st_h2))
+        for b in doc.get("intro") or []:
+            story.append(Paragraph(esc(b), st_bullet, bulletText="•"))
 
-    if doc.get("footnotes"):
-        for fn in doc["footnotes"]:
-            story.append(Paragraph(esc(fn), st_cap))
+        # ── what you earned ──
+        earned = doc.get("earned") or []
+        if earned:
+            story.append(Paragraph("What you earned", st_h2))
+            rows = [[Paragraph("Item", st_head), Paragraph("What qualified it", st_head),
+                     Paragraph("Rate", st_head_r), Paragraph("How often", st_head),
+                     Paragraph("Amount", st_head_r)]]
+            for it in earned:
+                cond = esc(it["condition"])
+                if it.get("units"):
+                    cond += f"<br/><font size=7 color='#6b7280'>{it['units']} qualifying item(s)</font>"
+                rows.append([Paragraph(esc(it["what"]), st_cell_b), Paragraph(cond, st_cell),
+                             Paragraph(esc(it["rate"]), st_cell_r), Paragraph(esc(it["frequency"]), st_cell),
+                             Paragraph(esc(it["amount"]), st_cell_r)])
+            rows.append([Paragraph("Total earned", st_cell_b), "", "", "",
+                         Paragraph(esc(summary.get("total_payout")), st_cell_r)])
+            n = len(rows) - 1
+            story.append(table(
+                rows, [avail * 0.22, avail * 0.34, avail * 0.16, avail * 0.13, avail * 0.15],
+                [("ALIGN", (2, 0), (2, -1), "RIGHT"), ("ALIGN", (4, 0), (4, -1), "RIGHT"),
+                 ("SPAN", (0, n), (3, n)),
+                 ("BACKGROUND", (0, n), (-1, n), C(_BAND)),
+                 ("LINEABOVE", (0, n), (-1, n), 0.8, C(_NAVY)),
+                 ("FONTNAME", (4, n), (4, n), "Helvetica-Bold")]))
+            if summary.get("total_source"):
+                story.append(Paragraph(f"Payout of record: {esc(summary.get('total_source'))}", st_cap))
+        elif doc.get("empty"):
+            story.append(Paragraph("What you earned", st_h2))
+            story.append(Paragraph("No commission was earned for this period. The reasons below explain why.",
+                                   st_body))
 
-    story.append(Spacer(1, 10))
-    story.append(HRFlowable(width="100%", thickness=0.6, color=colors.Color(0.8, 0.83, 0.87),
-                            spaceAfter=6))
-    story.append(Paragraph(
-        "This statement summarises commission calculated for the period shown, from the figures produced "
-        "by the last commission run. It is provided for your reference. The commission structure it is "
-        "based on is described in your Payout Structure document. If a figure looks wrong, raise it with "
-        "your manager before the period closes.", st_cap))
+        # ── held / not yet paid ──
+        held = doc.get("held") or []
+        if held:
+            story.append(Paragraph("Held or not yet paid", st_h2))
+            story.append(Paragraph("These items did not pay this period. Each shows the reason; a held "
+                                   "residual can pay in a later period once the reason clears.", st_cap))
+            rows = [[Paragraph("Item", st_head), Paragraph("When", st_head),
+                     Paragraph("Why it did not pay", st_head), Paragraph("Amount held", st_head_r)]]
+            for it in held:
+                rows.append([Paragraph(esc(it["what"]), st_cell_b), Paragraph(esc(it["when"]), st_cell),
+                             Paragraph(esc(it["reason"]), st_cell),
+                             Paragraph(esc(it["amount"] or "—"), st_cell_r)])
+            story.append(table(rows, [avail * 0.20, avail * 0.18, avail * 0.47, avail * 0.15],
+                               [("ALIGN", (3, 0), (3, -1), "RIGHT")]))
+
+        # ── canonical payout categories (commission ledger) — for a carrier-STATEMENT-mode rep with no
+        #    plan rules, THIS is the per-line breakup, so it is deliberately shown as such. ──
+        if summary.get("has_buckets"):
+            story.append(Paragraph("Payout by category", st_h2))
+            _cap = ("Your earnings for the period, itemized by commission category." if not earned
+                    else "The same payout, grouped into the standard commission ledger buckets.")
+            story.append(Paragraph(_cap, st_cap))
+            rows = [[Paragraph("Category", st_head), Paragraph("Amount", st_head_r)]]
+            for b in summary.get("buckets") or []:
+                rows.append([Paragraph(esc(b["label"]), st_cell_b), Paragraph(esc(b["amount"]), st_cell_r)])
+            rows.append([Paragraph("Total", st_cell_b), Paragraph(esc(summary.get("bucket_total")), st_cell_r)])
+            n = len(rows) - 1
+            story.append(table(rows, [avail * 0.6, avail * 0.4],
+                               [("ALIGN", (1, 0), (1, -1), "RIGHT"),
+                                ("BACKGROUND", (0, n), (-1, n), C(_BAND)),
+                                ("LINEABOVE", (0, n), (-1, n), 0.8, C(_NAVY)),
+                                ("FONTNAME", (1, n), (1, n), "Helvetica-Bold")]))
+
+        # ── notes (why $0 / partial) ──
+        if doc.get("notes"):
+            story.append(Paragraph("Notes", st_h2))
+            for nnote in doc["notes"]:
+                story.append(Paragraph(esc(nnote), st_bullet, bulletText="•"))
+
+        if doc.get("footnotes"):
+            for fn in doc["footnotes"]:
+                story.append(Paragraph(esc(fn), st_cap))
+
+        story.append(Spacer(1, 10))
+        story.append(HRFlowable(width="100%", thickness=0.6, color=colors.Color(0.8, 0.83, 0.87),
+                                spaceAfter=6))
+        story.append(Paragraph(
+            "This statement summarises commission calculated for the period shown, from the figures produced "
+            "by the last commission run. It is provided for your reference. The commission structure it is "
+            "based on is described in your Payout Structure document. If a figure looks wrong, raise it with "
+            "your manager before the period closes.", st_cap))
+
+    # ── footer identity + document metadata (batch-aware) ──
+    _first = docs[0] if docs else {}
+    tenant0 = _s(_first.get("tenant"))
+    subject = "Commission Statement" if len(docs) <= 1 else "Commission Statements"
+    if len(docs) == 1:
+        _emp, _per = _s(_first.get("employee")), _s(_first.get("period"))
+        _title0 = _s(_first.get("title")) or subject
+        footer_txt = f"{_emp + ' — ' if _emp else ''}{_title0}" + (f" — {_per}" if _per else "")
+        pdf_title = f"{_title0}{' — ' + _emp if _emp else ''}"
+    else:
+        footer_txt = f"{tenant0 + ' — ' if tenant0 else ''}Commission Statements"
+        pdf_title = f"Commission Statements{' — ' + tenant0 if tenant0 else ''}"
+
+    def on_page(canvas, _doc):
+        """Footer: identity + page numbers. The standing caveat rides at the end of each rep's story."""
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(C(_MUTED))
+        canvas.drawString(margin, margin * 0.55, footer_txt)
+        canvas.drawRightString(page_w - margin, margin * 0.55, f"Page {canvas.getPageNumber()}")
+        canvas.restoreState()
+
+    pdf = SimpleDocTemplate(buf, pagesize=LETTER, leftMargin=margin, rightMargin=margin,
+                            topMargin=margin, bottomMargin=margin * 0.9,
+                            title=pdf_title, author=tenant0 or "MetricsPro", subject=subject)
+
+    story = []
+    if not docs:
+        # A period with no reps still yields a valid one-page document, never a crash.
+        story.append(Paragraph("Commission Statements", st_title))
+        story.append(Paragraph("No reps with commission for this period.", st_body))
+    else:
+        for _i, _d in enumerate(docs):
+            if _i:
+                story.append(PageBreak())
+            emit(_d, story)
 
     pdf.build(story, onFirstPage=on_page, onLaterPages=on_page)
     return buf.getvalue()

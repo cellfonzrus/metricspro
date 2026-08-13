@@ -392,6 +392,41 @@ export async function apiUpload(path: string, form: FormData) {
   return res.json()
 }
 
+// Server-rendered FILE download (PDF/XLSX/…). Same choke point as api(): identical org-scoping and auth
+// headers, identical dead-session / impersonation / tenant-choice latches and error contract — but it
+// reads the response as BYTES and triggers a browser download instead of parsing JSON. Used for endpoints
+// that return a file body (e.g. the commission-statement PDFs). `filename` overrides the server's
+// Content-Disposition name when given.
+export async function apiDownload(path: string, filename?: string) {
+  const authHeader = await bearer()
+  const res = await fetch(`${API_URL}${withOrgScope(path)}`, {
+    headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...impersonationHeader(path) },
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    if (res.status === 401) markSessionInvalid(path, (err as { detail?: unknown })?.detail, !!authHeader.Authorization)
+    if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
+    if (res.status === 409) markTenantChoiceRequired(err)
+    throw new Error(errMsg(err, res.status))
+  }
+  const blob = await res.blob()
+  // Fall back to the server's Content-Disposition filename, then a generic one.
+  let name = filename
+  if (!name) {
+    const cd = res.headers.get('Content-Disposition') || ''
+    const m = /filename="?([^"]+)"?/.exec(cd)
+    name = m ? m[1] : 'download'
+  }
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
 export const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n || 0)
 

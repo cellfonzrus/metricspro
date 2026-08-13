@@ -12694,6 +12694,99 @@ def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
                              f'attachment; filename="{_cst.filename_for(doc)}"'})
 
 
+def _statement_period_reps(client, org_id, period, store="", market=""):
+    """The reps to include in an all-reps batch when the caller passes no explicit list: everyone with a
+    rep_commissions row for the period (the SAME source the /commissions reports page enumerates), highest
+    payout first, optionally narrowed by store / market. Returns display names (storeops_name preferred).
+    READ-ONLY; degrades to [] on any error."""
+    try:
+        rows = (client.schema("commcalc").table("rep_commissions")
+                .select("epay_salesperson,storeops_name,store,total_payout")
+                .eq("org_id", org_id).in_("period", _pvariants(period))
+                .order("total_payout", desc=True).limit(5000).execute().data) or []
+    except Exception:
+        return []
+    _resolve_market, _ = _store_market_resolver(client, org_id)
+    out, seen = [], set()
+    for r in rows:
+        st = str(r.get("store") or "").strip()
+        if store and st != store:
+            continue
+        if market and (_resolve_market(st) or "") != market:
+            continue
+        name = str(r.get("storeops_name") or r.get("epay_salesperson") or "").strip()
+        key = name.upper()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+    return out
+
+
+@router.get("/commission-statements")
+def commission_statements_batch(period: str, reps: str = "", store: str = "", market: str = "",
+                                fmt: str = "pdf", source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+    """EVERY rep's Commission Statement for a period, in ONE multi-page PDF (one rep per page).
+
+    `reps` (comma-separated) renders exactly those, in that order — the reports page passes its filtered/
+    on-screen rep set here so the batch matches WYSIWYG scope. When `reps` is omitted the rep list is
+    derived from rep_commissions for the period (optionally narrowed by store/market). fmt=json returns
+    the list of document models the PDF renders from. READ-ONLY throughout; a rep whose drill-down fails
+    is SKIPPED (never 500s the whole batch), and a period with no reps yields a valid one-page PDF.
+    """
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    from fastapi import Response
+    from app.modules.commcalc import commission_statement as _cst
+    from app.modules.commcalc import commission_drilldown as _dd
+    from app.modules.commcalc import plan_pay_gate as _ppg
+
+    client = sb()
+    rep_list = [r.strip() for r in (reps or "").split(",") if r.strip()]
+    if not rep_list:
+        rep_list = _statement_period_reps(client, org_id, period, store=store, market=market)
+
+    try:
+        carriers = (client.schema('commcalc').table('carrier').select('*')
+                    .eq('org_id', org_id).execute().data) or []
+        mode = _resolve_carrier_mode(carriers)
+    except Exception:
+        mode = "plan"
+    try:
+        gate_cfg = _ppg.load_gate_config(client, org_id)
+    except Exception:
+        gate_cfg = None
+    tenant = ""
+    try:
+        _t = (client.schema("storeops").table("tenants").select("name")
+              .eq("org_id", org_id).limit(1).execute().data) or []
+        tenant = (_t[0].get("name") or "") if _t else ""
+    except Exception:
+        tenant = ""
+
+    docs = []
+    for rep in rep_list:
+        try:
+            explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=mode)
+        except Exception:
+            continue   # one bad rep must not sink the whole batch
+        buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
+        docs.append(_cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
+                                         period=period, gate_cfg=gate_cfg))
+
+    if (fmt or "pdf").strip().lower() == "json":
+        return {"period": period, "count": len(docs), "statements": docs}
+    parts = [p for p in [tenant, period, "commission-statements"] if p]
+    slug = "-".join(parts).lower()
+    fname = "".join(c if (c.isalnum() or c == "-") else "-" for c in slug)
+    while "--" in fname:
+        fname = fname.replace("--", "-")
+    fname = (fname.strip("-") or "commission-statements") + ".pdf"
+    return Response(content=_cst.render_statements_pdf(docs), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.post("/commission-plans")
 async def save_commission_plan(body: dict, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
