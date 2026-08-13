@@ -17398,7 +17398,10 @@ _BILLPAY_DEFAULT_TOKENS = ('boost rtr', 'xfinity prepaid refill')
 # Month-To-Date report counts these as activations, so the store total has to as well. Substring, lower-cased
 # — deliberately keyword-shaped (never "any non-blank label") so a stray non-activation type can't be swept
 # in. See _resolve_ct_bucket for the strict gating that keeps the house/Boost org byte-identical.
-_AUTO_ACT_CATEGORY_KEYS = ('home internet', 'home-internet', 'fixed wireless', 'fwa', 'fios', 'tablet')
+# 'edge' = a carrier early-upgrade / device-lease activation (e.g. Verizon Edge); the b2bsoft MTD report
+# counts it in Total Activation, so it belongs here (owner's Diversey breakdown 2026-08-13: 7 new act + 18
+# port + 6 byod + 12 tablet + 5 home internet + 1 edge = 49).
+_AUTO_ACT_CATEGORY_KEYS = ('home internet', 'home-internet', 'fixed wireless', 'fwa', 'fios', 'tablet', 'edge')
 
 
 def _resolve_ct_bucket(ct, ct_map=None):
