@@ -72,8 +72,8 @@ export function RunCommissionPanel({ state, onConfirm, onCancel, onDismiss, repo
         </div>
         <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>
           Nothing was started by this press. Two recomputes of {s.period} at once would interleave the
-          delete-and-rewrite of the commission rows. Watch{' '}
-          <a href={reportHref} style={{ color: 'var(--accent)' }}>the Rep Commission report</a> — it updates when the
+          delete-and-rewrite of the incentive rows. Watch{' '}
+          <a href={reportHref} style={{ color: 'var(--accent)' }}>the Rep Incentive report</a> — it updates when the
           running one finishes.
         </div>
         <button className="btn btn-secondary" style={{ marginTop: 8, fontSize: 12 }} onClick={onDismiss}>Dismiss</button>
@@ -107,7 +107,7 @@ export function RunCommissionPanel({ state, onConfirm, onCancel, onDismiss, repo
         <div style={{ fontWeight: 700, color: 'var(--red)', marginBottom: 4 }}>⚠ {s.period} — recalculation did not confirm</div>
         <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>{s.message}</div>
         <div style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center' }}>
-          <a href={reportHref} style={{ color: 'var(--accent)', fontSize: 12 }}>Open the Rep Commission report →</a>
+          <a href={reportHref} style={{ color: 'var(--accent)', fontSize: 12 }}>Open the Rep Incentive report →</a>
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onDismiss}>Dismiss</button>
         </div>
       </div>
@@ -125,7 +125,7 @@ export function RunCommissionPanel({ state, onConfirm, onCancel, onDismiss, repo
         {delta ? <span data-testid="run-commission-delta" style={{ marginLeft: 8, color: 'var(--text3)' }}>({delta})</span> : null}
       </div>
       <div style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center' }}>
-        <a href={reportHref} style={{ color: 'var(--accent)', fontSize: 12 }}>Open the Rep Commission report →</a>
+        <a href={reportHref} style={{ color: 'var(--accent)', fontSize: 12 }}>Open the Rep Incentive report →</a>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={onDismiss}>Dismiss</button>
       </div>
     </div>
@@ -134,7 +134,7 @@ export function RunCommissionPanel({ state, onConfirm, onCancel, onDismiss, repo
 
 // ── container ────────────────────────────────────────────────────────────────────────────────────
 export default function RunCommissionButton({
-  period, onPeriodChange, periodOptions, label = '⚡ Run Commission', note, compact = false,
+  period, onPeriodChange, periodOptions, label = '⚡ Run Incentive', note, compact = false,
 }: {
   /** The page's own period context, when it has one. The control never targets anything else silently. */
   period?: string

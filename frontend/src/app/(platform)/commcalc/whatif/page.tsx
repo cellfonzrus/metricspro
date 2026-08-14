@@ -52,7 +52,7 @@ function CarrierPicker({ carriers, carrierId, setCarrierId, mode }:
       </select>
       <span style={{ fontSize: 12, padding: '3px 9px', borderRadius: 20, fontWeight: 600,
         background: mode === 'boost' ? '#eef2ff' : '#ecfdf5', color: mode === 'boost' ? '#4338ca' : '#047857' }}>
-        {mode === 'boost' ? 'Boost engine (rates)' : 'Commission-Plan engine'}
+        {mode === 'boost' ? 'Boost engine (rates)' : 'Incentive-Plan engine'}
       </span>
     </div>
   )
@@ -120,7 +120,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
         <p style={{ color: '#92400e', fontSize: 13, margin: '0 0 12px' }}>{tpl.reason}</p>
         <a href={tpl.configure_url || '/commcalc/commission-plans'}
           style={{ display: 'inline-block', padding: '8px 14px', borderRadius: 8, background: 'var(--accent)', color: '#fff', fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
-          Configure commission plans →</a>
+          Configure incentive plans →</a>
       </div>
     </div>
   )
@@ -261,7 +261,7 @@ function ActivationMix({ carrierId }: { carrierId: string }) {
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 14 }}>
         {tpl.source_kind === 'boost_rates'
           ? <>Rates pre-filled from your <b>payout_config</b> for {period}; quantities from actual <b>rep_commissions</b>. Payout = Σ(qty × rate) × tier — the exact engine formula. Accessory / Setup rates are a fraction of sales $ (0.10 = 10%), which is why those rows carry a <b>basis</b>: <b>per month</b> treats the quantity as the month's sales $ (×1), <b>per accessory</b> treats it as a COUNT and multiplies by the $/item you set (default ${DEFAULT_ITEM_PRICE}).</>
-          : <>Components auto-populated from <b>{data.carrier?.name}</b>'s configured Commission Plans / rules / tiers + payout schedules; baseline quantities from the read-only plan preview for {period}. Payout = Σ(qty × rate) × tier.</>}
+          : <>Components auto-populated from <b>{data.carrier?.name}</b>'s configured Incentive Plans / rules / tiers + payout schedules; baseline quantities from the read-only plan preview for {period}. Payout = Σ(qty × rate) × tier.</>}
       </p>
     </div>
   )

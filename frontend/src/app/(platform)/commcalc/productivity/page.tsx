@@ -381,7 +381,7 @@ function ConfigPanel() {
       <div style={{ marginTop: 12, padding: '9px 11px', background: 'var(--surface2)', borderRadius: 8, fontSize: 12, color: 'var(--text2)' }}>
         <b>Commission tie-in (inert):</b> this module exposes each rep&apos;s <code>performance_score</code> and
         per-item <code>perf:&lt;item&gt;</code> attainment as KPI inputs the payout engine can reference. It is
-        <b> inert</b> — no payout changes unless a Commission Plan explicitly references one of these keys and the
+        <b> inert</b> — no payout changes unless an Incentive Plan explicitly references one of these keys and the
         owner re-runs the calc.
       </div>
     </div>

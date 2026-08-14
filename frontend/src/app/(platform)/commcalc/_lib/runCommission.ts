@@ -121,7 +121,7 @@ export const paths = {
 
 export function confirmText(period: string, tenant: string): string {
   const who = (tenant || '').trim()
-  return `Recalculate commissions for ${period}${who ? ` (${who})` : ''}? ` +
+  return `Recalculate incentives for ${period}${who ? ` (${who})` : ''}? ` +
     `This replaces the stored payout numbers for that month.`
 }
 
@@ -212,7 +212,7 @@ export function createRunCommission(deps: RunDeps): RunController {
       return set({
         phase: 'failed',
         message: `Still running after ${Math.round(maxPoll / 60000)} minutes — the recalculation was NOT re-sent. ` +
-          `Open the Rep Commission report for ${period} to see the result when it lands.`,
+          `Open the Rep Incentive report for ${period} to see the result when it lands.`,
       })
     }
 

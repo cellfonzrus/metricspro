@@ -102,7 +102,7 @@ for (const target of REPS) {
   ok(`${target.storeops_name}: filename names the rep`,
     p.filename.startsWith('commission-') && p.filename.includes(target.storeops_name.split(' ')[0].toLowerCase()),
     p.filename)
-  ok(`${target.storeops_name}: title names the rep`, p.title === `Commission Statement — ${target.storeops_name}`, p.title)
+  ok(`${target.storeops_name}: title names the rep`, p.title === `Incentive Statement — ${target.storeops_name}`, p.title)
 }
 {
   // the chargeback sheets are the sharpest leak surface: cb2 belongs to Carol only

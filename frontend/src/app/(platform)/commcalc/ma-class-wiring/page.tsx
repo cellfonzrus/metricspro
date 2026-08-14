@@ -459,7 +459,7 @@ export default function MaClassWiringPage() {
         sale are revenue <i>with a cost</i>, a fee is an expense and a memo is a correction — feeding the
         classes there depends on the device-cost recognition policy and is a separate, owner-gated change.
         Nothing on this page touches the P&amp;L. Rep pay is never affected by any of this: it comes from
-        POS sales × Commission Plans, not from the MA daily file.
+        POS sales × Incentive Plans, not from the MA daily file.
       </p>
     </div>
   )

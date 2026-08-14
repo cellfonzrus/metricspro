@@ -60,7 +60,7 @@ export default function ExecOverviewPage() {
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Business health at a glance — commissions, money at risk, chargebacks, flags, and the store leaderboard.</p>
         {/* WHY THERE IS NO DATE RANGE HERE (owner asked 2026-08-11 for a date-range filter on
             "Executive MTD / Owner Overview"): every tile on this page is MONTH-GRAINED at the source —
-            commissions paid / at-risk / chargebacks come from the per-rep commission run, and the three
+            commissions paid / at-risk / chargebacks come from the per-rep incentive run, and the three
             P&L tiles from that month's account_statements snapshot. Neither exists at day grain, so a
             date range here could only ever relabel a whole-month number as a week's. Executive MTD is
             built from individual sales lines, which is why the range lives there. */}
@@ -99,7 +99,7 @@ export default function ExecOverviewPage() {
             </div>
           </div>
           {stores.length === 0 ? (
-            <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No commission data for {period}. (Run the commission calc.)</div>
+            <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>No incentive data for {period}. (Run the incentive calc.)</div>
           ) : (
             <div className="card table-wrapper" style={{ padding: 0 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>

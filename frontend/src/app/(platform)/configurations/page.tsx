@@ -44,7 +44,7 @@ const GROUPS: Group[] = [
     items: [
       { href: '/commcalc/settings', icon: '⚙️', label: 'Commission Rates', desc: 'SPIFFs, tiered comp, KPI targets, custom payment components.' },
       { href: '/commcalc/payout-schedules', icon: '📆', label: 'Payout Schedules', desc: 'Multi-month carrier payout schedules + observed-plan MRC.' },
-      { href: '/commcalc/commission-plans', icon: '🧮', label: 'Commission Plans', desc: 'Configurable payout engine — user-defined line-match → payout kinds + tiers.' },
+      { href: '/commcalc/commission-plans', icon: '🧮', label: 'Incentive Plans', desc: 'Configurable payout engine — user-defined line-match → payout kinds + tiers.' },
       { href: '/commcalc/accessory-flags', icon: '🔖', label: 'Accessory Flag Rules', desc: 'Threshold + default chargeback for accessories sold over $X.' },
       { href: '/commcalc/mapping', icon: '🗂️', label: 'Mappings (stores, carriers, items, reps)', desc: 'All mapping & alias screens in one place.' },
       { href: '/commcalc/expenses', icon: '🏪', label: 'Store Expenses', desc: 'Per-store fixed & variable expense lines (carry forward monthly).' },

@@ -134,7 +134,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
       )}
 
       {on('commission') && (
-        <Card title="Commission Earned" icon="💰" right={c ? <span className="badge" style={{ fontSize: 11 }}>tier {Math.round((c.tier || 0) * 100)}%</span> : null}>
+        <Card title="Incentive Earned" icon="💰" right={c ? <span className="badge" style={{ fontSize: 11 }}>tier {Math.round((c.tier || 0) * 100)}%</span> : null}>
           {c ? (
             <>
               <div style={{ textAlign: 'center', marginBottom: 12 }}>
@@ -172,7 +172,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
                 </tbody>
               </table>
             </>
-          ) : <div style={{ color: 'var(--text3)', fontSize: 13 }}>No commission for {data.period}.</div>}
+          ) : <div style={{ color: 'var(--text3)', fontSize: 13 }}>No incentive for {data.period}.</div>}
         </Card>
       )}
 
@@ -197,7 +197,7 @@ export default function EmployeeWidgets({ data, coach, repTargets }: { data: any
         <Card title="Report Card" icon="🏅" right={<span className="badge" style={{ fontSize: 11 }}>{Math.round((data.report_card.tier || 0) * 100)}% tier</span>}>
           <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 12 }}>
             <Stat label="KPIs Met" value={`${data.report_card.kpis_met ?? '—'}/${data.report_card.total_kpis ?? 7}`} />
-            <Stat label="Commission" value={fmt(data.report_card.commission_earned || 0)} />
+            <Stat label="Incentive" value={fmt(data.report_card.commission_earned || 0)} />
             <Stat label="Flags" value={data.report_card.flags_count} color={data.report_card.flags_count ? 'var(--red)' : undefined} />
             <Stat label="Chargebacks" value={data.report_card.chargebacks_count} color={data.report_card.chargebacks_count ? 'var(--red)' : undefined} />
           </div>

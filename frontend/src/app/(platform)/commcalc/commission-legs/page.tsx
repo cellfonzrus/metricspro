@@ -249,7 +249,7 @@ export default function CommissionLegsPage() {
           ) : !bo || !streams.length ? (
             <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 16, fontSize: 13, color: 'var(--text2)', lineHeight: 1.7 }}>
               No carrier money in this window yet. Import a commission file for {period} — or, if this tenant is
-              paid only through its Commission Plans, this is correct and there is nothing to show here.
+              paid only through its Incentive Plans, this is correct and there is nothing to show here.
               {(bo?.gaps || []).length > 0 && (
                 <ul style={{ marginTop: 8 }}>
                   {(bo.gaps || []).map((g: any) => (

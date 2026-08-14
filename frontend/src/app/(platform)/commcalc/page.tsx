@@ -88,7 +88,7 @@ export default function CommCalcDashboard() {
   })
 
   const KPI_CARDS = [
-    { label: 'Total Commission Payout', value: fmt(totalPayout), color: 'var(--accent)', icon: '💰' },
+    { label: 'Total Incentive Payout', value: fmt(totalPayout), color: 'var(--accent)', icon: '💰' },
     { label: 'Total Activations', value: totalActs.toString(), color: 'var(--green)', icon: '📱' },
     { label: 'Total Upgrades', value: totalUpgrades.toString(), color: '#7c3aed', icon: '🔄' },
     { label: 'Reps Calculated', value: reps.length.toString(), color: 'var(--amber)', icon: '👥' },
@@ -155,12 +155,12 @@ export default function CommCalcDashboard() {
       {/* Calc refused / error banner — surfaces the R1 unconfigured-tenant guard with a fix link */}
       {calcError && (
         <div className="card" style={{ borderLeft: '4px solid var(--red)', background: 'var(--surface2)', marginBottom: 24 }}>
-          <div style={{ fontWeight: 700, color: 'var(--red)', marginBottom: 6 }}>⚠ Commission calculation refused — last good snapshot kept</div>
+          <div style={{ fontWeight: 700, color: 'var(--red)', marginBottom: 6 }}>⚠ Incentive calculation refused — last good snapshot kept</div>
           <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{calcError}</div>
           {/REFUSED|no commission source|plan mode/i.test(calcError) && (
             <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
               <a href="/commcalc/commission-plans" className="btn btn-primary" style={{ textDecoration: 'none' }}>
-                Configure Commission Plans →
+                Configure Incentive Plans →
               </a>
               <a href="/commcalc/plan-installments" style={{ color: 'var(--accent)', fontSize: 13 }}>
                 Multi-month schedules & pay settings
@@ -178,7 +178,7 @@ export default function CommCalcDashboard() {
             {calcWarn.counts?.unassigned_reps ? ` and ${calcWarn.counts.unassigned_reps} seller(s) have no plan attached` : ''}
           </div>
           <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
-            These activations matched no Commission-Plan rule and no multi-month schedule trigger, so no
+            These activations matched no Incentive-Plan rule and no multi-month schedule trigger, so no
             configured source pays them. That is usually a rule keyed on the wrong field (an item-description
             keyword instead of the tender / contract type), or a missing multi-month trigger.
           </div>
@@ -194,7 +194,7 @@ export default function CommCalcDashboard() {
             ))}
           </ul>
           <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
-            <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)', fontSize: 13 }}>Review Commission Plans →</a>
+            <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)', fontSize: 13 }}>Review Incentive Plans →</a>
             <a href="/commcalc/plan-installments" style={{ color: 'var(--accent)', fontSize: 13 }}>Multi-month schedules →</a>
             <a href="/commcalc/commission-explain" style={{ color: 'var(--accent)', fontSize: 13 }}>Explain a rep's pay →</a>
             <a href="/commcalc/accessory-cost-audit" style={{ color: 'var(--accent)', fontSize: 13 }}>Accessory cost audit →</a>
@@ -219,9 +219,9 @@ export default function CommCalcDashboard() {
           <div style={{ fontWeight: 600, marginBottom: 16 }}>{isBoost ? 'Tier Distribution' : 'Payout Basis'}</div>
           {!isBoost && (
             <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
-              Reps on this carrier are paid from their assigned <b>Commission Plan</b> — the Boost KPI‑tier
+              Reps on this carrier are paid from their assigned <b>Incentive Plan</b> — the Boost KPI‑tier
               multiplier does not apply. Manage pay under{' '}
-              <a href="/commcalc/payout-plans" style={{ color: 'var(--accent)' }}>Commission Payout Plans</a>.
+              <a href="/commcalc/payout-plans" style={{ color: 'var(--accent)' }}>Incentive Payout Plans</a>.
             </div>
           )}
           {isBoost && [{pct: 100, color: '#16a34a'}, {pct: 75, color: '#d97706'}, {pct: 50, color: '#dc2626'}].map(({ pct, color }) => (

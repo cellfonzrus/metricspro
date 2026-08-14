@@ -170,7 +170,7 @@ check("D1 the $0 upgrade rule is not presented as paying", "Upgrade" in paid, Fa
 check("D2 ... it is disclosed as not paying", "Upgrade" in unpaid, True)
 check("D3 the paying rules are listed", paid, {"Accessory", "Edge"})
 check("D4 a $0 rule says why",
-      p["no_pay_items"][0]["why"], "Currently set to zero — earns no commission.")
+      p["no_pay_items"][0]["why"], "Currently set to zero — earns no incentive.")
 
 nq = dict(R_DM_VHI, qualifies=False, label="tracked only")
 doc_nq = ps.build_doc([dict(plan_chi, rules=[R_CHI_ACC, nq])])

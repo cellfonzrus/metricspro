@@ -289,7 +289,7 @@ async def _flags(org_id, f, authorization=""):
 async def _commissions(org_id, f, authorization=""):
     period = _resolve_period(f)
     rows = await C.get_commissions(period=period, org_id=org_id, authorization=authorization)
-    return {"title": "Commissions", "subtitle": period, "filename": f"commissions-{period.replace(' ', '-')}",
+    return {"title": "Incentives", "subtitle": period, "filename": f"commissions-{period.replace(' ', '-')}",
             "sheets": [{"name": "Rep Payouts", "rows": rows or [], "columns": [
                 {"header": "Rep", "key": "epay_salesperson"},
                 {"header": "Name", "key": "storeops_name"},
@@ -642,7 +642,7 @@ REPORTS = {
         "label": "Flags", "filters": ["period"],
         "live_path": lambda f: "/commcalc/flags", "build": _flags, "wants_auth": True},
     "commissions": {
-        "label": "Commissions", "filters": ["period"],
+        "label": "Incentives", "filters": ["period"],
         "live_path": lambda f: "/commcalc/reports", "build": _commissions, "wants_auth": True},
     "gp": {
         "label": "Gross Profit", "filters": ["period", "market"],
