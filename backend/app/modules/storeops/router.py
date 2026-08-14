@@ -2616,16 +2616,31 @@ def _caller_identity(authorization: str):
     return org, eid
 
 
+def _pending_permissions_for(org_id, employee_id):
+    """This employee's own PENDING time-clock permissions (migration 432), for the kiosk's
+    '⏳ Pending your DM's permission' banner. Best-effort — degrades to [] if migration 432 hasn't run
+    yet (never break /timeclock/status, which the kiosk polls, on a pre-migration tenant)."""
+    try:
+        return (sb().table("timeclock_permission").select("*").eq("org_id", org_id)
+                .eq("employee_id", employee_id).eq("status", "pending")
+                .order("requested_at", desc=True).limit(20).execute().data) or []
+    except Exception:
+        return []
+
+
 @router.get("/timeclock/status")
 def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Is the SIGNED-IN employee currently clocked in? Identity AND tenant come from the auth token."""
+    """Is the SIGNED-IN employee currently clocked in? Identity AND tenant come from the auth token.
+    Also carries the employee's own pending DM-permission requests (migration 432) so the kiosk can
+    show a '⏳ Pending your DM's permission' banner whether or not they're currently on the clock."""
     org_id, employee_id = _caller_identity(authorization)
+    pending = _pending_permissions_for(org_id, employee_id)
     rows = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
             .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
     if rows:
         e = rows[0]; e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
-        return {"clockedIn": True, "entry": e}
-    return {"clockedIn": False, "entry": None}
+        return {"clockedIn": True, "entry": e, "pending_permissions": pending}
+    return {"clockedIn": False, "entry": None, "pending_permissions": pending}
 
 
 @router.post("/timeclock/clock-in")
@@ -2666,6 +2681,19 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
                             "message": "Acknowledge the phones to prioritize selling today, then clock in."}
         except Exception:
             pass
+    # Re-clock-in after an auto-clock-out earlier TODAY = a genuine SECOND session (migration 432):
+    # allow it, but hold it 'pending your DM's permission' so it does not count toward pay until the DM
+    # approves. Signalled by any PRIOR punch today flagged auto_clocked_out (the sweep / a late-clockout
+    # cap / a stale-close). A normal lunch-break second session (prior close was a manual clock-out,
+    # auto_clocked_out=false) is NOT gated — it never needs permission. Any lookup gap → treat as a
+    # normal punch (never trap the rep on a config/migration miss — mirrors the closing gate posture).
+    is_reclock_pending = False
+    try:
+        prior_auto = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
+                      .eq("work_date", work_date).eq("auto_clocked_out", True).limit(1).execute().data) or []
+        is_reclock_pending = bool(prior_auto)
+    except Exception:
+        is_reclock_pending = False
     selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
     row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name,
            "store_code": req_store,
@@ -2673,6 +2701,8 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
            "device": body.get("device"), "selfie_path": selfie_path,
            "gps_lat": body.get("gps_lat"), "gps_lng": body.get("gps_lng"),
            "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct")}
+    if is_reclock_pending:
+        row["permission_status"] = "pending"
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
     if body.get("priority_ack"):   # record the "I will prioritize these phones" acknowledgment (module 095)
@@ -2684,6 +2714,14 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
             pass
     resp = {"success": True, "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"),
                                       "store_code": req_store}}
+    if is_reclock_pending:
+        perm = _create_timeclock_permission(org_id, kind="reclock_in", punch=saved,
+                                             reason=(body.get("reason") or "Re-clock-in after auto clock-out"))
+        resp["needs_dm_permission"] = True
+        resp["permission_status"] = "pending"
+        resp["pending_permission"] = perm
+        resp["message"] = ("You're clocked in, but this second session is pending your DM's permission "
+                           "and won't count toward your hours until they approve it.")
     notice = _missed_closing_notice(org_id, employee_id)
     if notice:
         resp["missed_closing_notice"] = notice
@@ -2918,47 +2956,89 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     now = datetime.now(timezone.utc)
     out_at = now
     note_add = None
-    # Stale punch (opened on a previous business day, e.g. the force-clockout sweep had no scheduled
-    # shift to close it against): stamp the clock-out at the SCHEDULED shift end when one exists —
-    # the same paid-=-scheduled semantics as _do_force_clockout — instead of inflating hours to
-    # now-minus-clock-in across days.
     today = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
     wdate = str(entry.get("work_date") or "")[:10]
+    grace = timedelta(minutes=FORCE_CLOCKOUT_GRACE_MIN)
+    sched_end = _scheduled_end_for_punch(org_id, entry)
     auto_stamped = False
-    if wdate and wdate != today:
-        end_dt = _scheduled_end_for_punch(org_id, entry)
-        if end_dt and end_dt < now:
-            out_at = end_dt
-            note_add = "auto clock-out at scheduled end (stale punch closed from kiosk)"
+    log_entry_point = "clock_out_stale_auto"
+    late_cap = False            # worked past scheduled_end + grace on a same-day punch
+    hold_hours_pending = False  # a pending second session — hours held NULL until the DM approves
+    if str(entry.get("permission_status") or "") == "pending":
+        # A SECOND session still awaiting the DM (migration 432): record the clock-out but DO NOT stamp
+        # hours — it must not count toward pay until the DM approves (approval computes + stamps then).
+        hold_hours_pending = True
+        note_add = "second session — pending DM permission (hours held until approved)"
+    elif wdate and wdate != today:
+        # Stale punch (opened on a previous business day, e.g. the sweep had no scheduled shift to close
+        # it against): stamp at scheduled_end + grace when one exists — the same owner semantics as
+        # _do_force_clockout — instead of inflating hours to now-minus-clock-in across days.
+        if sched_end and sched_end < now:
+            out_at = sched_end + grace
+            note_add = "auto clock-out at scheduled end + grace (stale punch closed from kiosk)"
             auto_stamped = True
         else:
             note_add = f"stale punch (opened {wdate}) closed from kiosk — review hours"
+    elif sched_end and now > sched_end + grace:
+        # Worked PAST scheduled_end + grace (owner directive 2026-08-14): cap the COUNTED clock-out at
+        # end+grace (auto-clocked-out there) and raise a rep-initiated late_clockout permission for the
+        # EXTRA time — the base scheduled-through-grace time counts now, the extra only once approved.
+        out_at = sched_end + grace
+        note_add = "auto clock-out at scheduled end + grace; extra time pending DM permission"
+        auto_stamped = True
+        late_cap = True
+        log_entry_point = "clock_out_grace_cap"
     try:
         ci = datetime.fromisoformat(str(entry["clock_in"]).replace("Z", "+00:00"))
-        hours = round((out_at - ci).total_seconds() / 3600.0, 2)
-        if hours < 0:
-            hours = 0.0
     except Exception:
-        hours = None
+        ci = None
+    if hold_hours_pending:
+        hours = None   # excluded from every payroll reader (all require hours IS NOT NULL)
+    else:
+        try:
+            hours = round((out_at - ci).total_seconds() / 3600.0, 2) if ci is not None else None
+            if hours is not None and hours < 0:
+                hours = 0.0
+        except Exception:
+            hours = None
     upd = {"clock_out": out_at.isoformat(), "hours": hours}
+    if auto_stamped:
+        upd["auto_clocked_out"] = True
     if note_add:
         upd["notes"] = ((entry.get("notes") or "") + " | " + note_add).strip(" |")
     sb().table("timelog").update(upd).eq("id", entry["id"]).execute()
-    # Gate-1 N3 (2026-07-27): this branch auto-stamps hours away from a raw clock-in/out diff exactly
-    # like _do_force_clockout (which IS logged) — log it here too, system-attributed (the employee's
-    # own self-service clock-out triggered it, but the HOURS value itself is a system computation,
-    # not something they typed in).
+    # Raise the late-clockout permission AFTER the punch is capped, so it references the finalized
+    # anchor (scheduled_end + grace). The base hours are already counted; only the extra is pending.
+    extra_permission = None
+    if late_cap:
+        entry_after = {**entry, "clock_out": out_at.isoformat()}
+        extra_permission = _create_timeclock_permission(
+            org_id, kind="late_clockout", punch=entry_after,
+            anchor_at=out_at, requested_clock_out=now,
+            reason=(body.get("reason") or "Worked past scheduled shift end"))
+    # Gate-1 N3 (2026-07-27): an auto-stamped branch moves hours away from a raw clock-in/out diff
+    # exactly like _do_force_clockout (which IS logged) — log it here too, system-attributed (the
+    # employee's own self-service clock-out triggered it, but the HOURS value is a system computation).
     if auto_stamped:
         try:
-            _log_payroll_change(org_id, field="clock_out", entry_point="clock_out_stale_auto",
+            _log_payroll_change(org_id, field="clock_out", entry_point=log_entry_point,
                                  employee_id=employee_id, employee_name=entry.get("employee_name"),
                                  store_code=entry.get("store_code"), work_date=wdate,
-                                 before=None, after=f"{out_at.isoformat()} ({hours}h, auto at scheduled end)",
+                                 before=None, after=f"{out_at.isoformat()} ({hours}h, auto at scheduled end + grace)",
                                  source_table="timelog", source_id=entry.get("id"))
         except Exception:
             pass
     resp = {"success": True, "data": {"time": _fmt_time(out_at.isoformat(), org_id), "hours": hours,
                                       "clock_in": _fmt_time(entry.get("clock_in"), org_id)}}
+    if hold_hours_pending:
+        resp["permission_status"] = "pending"
+        resp["message"] = ("Clocked out — this second session is pending your DM's permission and won't "
+                           "count toward your hours until they approve it.")
+    if extra_permission is not None:
+        resp["extra_pending"] = True
+        resp["pending_permission"] = extra_permission
+        resp["message"] = ("Clocked out. You were auto-clocked-out at your scheduled end + grace; the "
+                           "extra time you worked is pending your DM's permission before it counts.")
     notice = _missed_closing_notice(org_id, employee_id)
     if notice:
         resp["missed_closing_notice"] = notice
@@ -3665,11 +3745,15 @@ def save_face(body: dict, authorization: str = Header(default=""), org_id: str =
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# FORCED CLOCK-OUT AT SCHEDULED END + SHIFT-EXTENSION (DM approval) WORKFLOW (migration 086)
-# At a shift's scheduled end an open punch is auto-closed (stamped at the scheduled end, so paid
-# hours match the schedule) UNLESS an extension was APPROVED ahead of time by the District Manager.
+# FORCED CLOCK-OUT AT SCHEDULED END + GRACE + SHIFT-EXTENSION (DM approval) WORKFLOW (migrations 086, 432)
+# Owner-approved 2026-08-14: an open punch is auto-closed once now >= scheduled_end + GRACE, and the
+# clock-out is STAMPED AT scheduled_end + GRACE (owner's explicit choice — not the bare scheduled end),
+# flagged auto_clocked_out. An APPROVED shift-extension pushes the scheduled end later first. Time worked
+# BEYOND end+grace needs a rep-initiated DM permission (migration 432) before it counts.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-FORCE_CLOCKOUT_GRACE_MIN = 15
+# The grace window (minutes) added to the scheduled end for BOTH the trigger (fire only once now is past
+# end+grace) AND the stamp (clock_out recorded at end+grace). Owner set this to 5 minutes.
+FORCE_CLOCKOUT_GRACE_MIN = 5
 
 
 def _emp_id_variants(org_id, employee_id):
@@ -3751,8 +3835,13 @@ def _scheduled_end_for_punch(org_id, punch):
 
 
 def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=None):
-    """Close every open punch whose scheduled shift end (+ grace) has passed, stamping the clock-out
-    at the SCHEDULED END (paid hours = scheduled). Punches with no scheduled shift are left open.
+    """Close every open punch whose scheduled shift end + GRACE has passed, stamping the clock-out AT
+    scheduled_end + grace (owner directive 2026-08-14 — NOT the bare scheduled end) and flagging the
+    row auto_clocked_out. Punches with no scheduled shift are left open.
+
+    A punch that STARTED at/after its own scheduled end is a SECOND session (a re-clock-in after an
+    earlier auto-clock-out); it has no future scheduled end to close against, so the sweep leaves it
+    open — its clock-out is the rep's own, and its DM-permission status (migration 432) governs pay.
 
     `actor` = a manager dict (from `_require_manager`) when a DM clicked "run now", or None for the
     unattended pg_cron sweep — either way every punch this closes stamps hours away from a raw
@@ -3770,28 +3859,36 @@ def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=No
         end_dt = _scheduled_end_for_punch(oid, p)
         if not end_dt:
             continue
-        if now < end_dt + timedelta(minutes=grace_min):
+        stamp_at = end_dt + timedelta(minutes=grace_min)   # owner: stamp AT scheduled end + grace
+        if now < stamp_at:
             continue  # still within the shift + grace
         try:
             ci = datetime.fromisoformat(str(p["clock_in"]).replace("Z", "+00:00"))
-            hours = round((end_dt - ci).total_seconds() / 3600.0, 2)
-            if hours < 0:
+        except Exception:
+            ci = None
+        # A re-clock-in second session starts after the scheduled end — never force it back to end+grace
+        # (that would be BEFORE its own clock-in). Leave it open for the rep / its permission to resolve.
+        if ci is not None and ci >= end_dt:
+            continue
+        try:
+            hours = round((stamp_at - ci).total_seconds() / 3600.0, 2) if ci is not None else None
+            if hours is not None and hours < 0:
                 hours = 0.0
         except Exception:
             hours = None
-        note = ((p.get("notes") or "") + " | auto clock-out at scheduled end (system)").strip(" |")
+        note = ((p.get("notes") or "") + " | auto clock-out at scheduled end + grace (system)").strip(" |")
         try:
             client.table("timelog").update(
-                {"clock_out": end_dt.isoformat(), "hours": hours, "notes": note}
+                {"clock_out": stamp_at.isoformat(), "hours": hours, "notes": note, "auto_clocked_out": True}
             ).eq("id", p["id"]).execute()
             closed.append({"employee_id": p.get("employee_id"), "store_code": p.get("store_code"),
-                           "clock_out": end_dt.isoformat(), "hours": hours})
+                           "clock_out": stamp_at.isoformat(), "hours": hours, "auto_clocked_out": True})
             try:
                 _log_payroll_change(
                     oid, field="clock_out", entry_point=("force_clockout_manual" if actor else "force_clockout_cron"),
                     employee_id=p.get("employee_id"), employee_name=p.get("employee_name"),
                     store_code=p.get("store_code"), work_date=p.get("work_date"),
-                    before=None, after=f"{end_dt.isoformat()} ({hours}h, auto at scheduled end)",
+                    before=None, after=f"{stamp_at.isoformat()} ({hours}h, auto at scheduled end + {grace_min}m grace)",
                     source_table="timelog", source_id=p.get("id"), who=actor)
             except Exception:
                 pass
@@ -3953,6 +4050,182 @@ def decide_shift_extension(ext_id: str, body: dict, authorization: str = Header(
            "decision_note": body.get("note")}
     sb().table("shift_extension").update(upd).eq("id", ext_id).eq("org_id", org_id).execute()
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
+
+
+# ── Rep-initiated time-clock PERMISSIONS → DM approval (migration 432) ──────────────────────────
+# The auto-clock-out (scheduled_end + grace) is unconditional; these are the two REP-initiated
+# after-the-fact requests to get time that the cap would otherwise drop to count:
+#   • reclock_in    — a second session after an auto-clock-out; the whole session is held pending.
+#   • late_clockout — extra time worked past scheduled_end + grace; only the extra is held pending.
+# Reuses _dm_for_store (the SAME DM resolver the shift-extension workflow uses). Approving is what
+# makes the held time COUNT; until then it stays out of every payroll reader (hours held NULL for a
+# pending/denied second session; the extra simply not yet on the punch for a late_clockout).
+def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, requested_clock_out=None,
+                                 reason=None, requested_by=None):
+    """Insert a pending timeclock_permission linked to `punch`, resolving the store's District Manager.
+    Degrades to a DM-less pending row (any admin/DM can still act) when the org tree isn't configured.
+    NEVER raises — a permission-log miss must not fail the punch that already happened."""
+    try:
+        store_code = punch.get("store_code")
+        dm_eid, dm_email, _dm_name = _dm_for_store(org_id, store_code)
+        row = {"org_id": org_id, "employee_id": punch.get("employee_id"),
+               "employee_name": punch.get("employee_name"), "store_code": store_code,
+               "work_date": (str(punch.get("work_date") or "")[:10] or None),
+               "timelog_id": punch.get("id"), "kind": kind, "status": "pending",
+               "reason": reason, "requested_by": requested_by or punch.get("employee_id"),
+               "dm_employee_id": dm_eid, "dm_email": dm_email}
+        if anchor_at is not None:
+            row["anchor_at"] = anchor_at.isoformat() if hasattr(anchor_at, "isoformat") else anchor_at
+        if requested_clock_out is not None:
+            row["requested_clock_out"] = (requested_clock_out.isoformat()
+                                          if hasattr(requested_clock_out, "isoformat") else requested_clock_out)
+            try:
+                if anchor_at is not None:
+                    row["extra_minutes"] = max(0, int(round((requested_clock_out - anchor_at).total_seconds() / 60.0)))
+            except Exception:
+                pass
+        r = sb().table("timeclock_permission").insert(row).execute()
+        saved = (r.data or [row])[0]
+        pid = saved.get("id")
+        if pid and punch.get("id"):
+            try:
+                sb().table("timelog").update({"permission_id": pid}).eq("id", punch.get("id")).execute()
+            except Exception:
+                pass
+        return {"id": pid, "kind": kind, "status": "pending",
+                "dm": {"employee_id": dm_eid, "email": dm_email},
+                "note": None if dm_eid else "No District Manager is configured for this store — an admin or DM can still approve it."}
+    except Exception as e:
+        return {"id": None, "kind": kind, "status": "pending", "error": str(e)}
+
+
+@router.get("/timeclock/permissions")
+def list_timeclock_permissions(status: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Rep-initiated time-clock permissions for the caller's tenant, narrowed to the caller's store
+    span (the SAME RBAC keyset every sibling timeclock surface applies) — powers the DM/admin approval
+    board. Optional ?status=pending|approved|denied. Newest first."""
+    org_id, _eid = _caller_identity(authorization) if authorization else (org_id, None)
+    q = sb().table("timeclock_permission").select("*").eq("org_id", org_id)
+    if status:
+        q = q.eq("status", status)
+    rows = q.order("requested_at", desc=True).limit(300).execute().data or []
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"))]
+    return {"permissions": rows}
+
+
+@router.post("/timeclock/permissions/{perm_id}/decision")
+def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
+    approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
+    held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
+    stamped if it already closed while pending); a late_clockout punch's clock_out is extended to the
+    approved actual departure and its hours recomputed. Denying leaves the held time uncounted."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    decision = (body.get("decision") or "").strip().lower()
+    if decision not in ("approve", "deny"):
+        raise HTTPException(400, "decision must be 'approve' or 'deny'")
+    rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
+            .limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown request")
+    perm = rows[0]
+    if perm.get("status") != "pending":
+        raise HTTPException(409, f"already {perm.get('status')}")
+    now = datetime.now(timezone.utc)
+    new_status = "approved" if decision == "approve" else "denied"
+    sb().table("timeclock_permission").update(
+        {"status": new_status, "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
+         "decided_at": now.isoformat(), "decision_note": body.get("note")}
+    ).eq("id", perm_id).eq("org_id", org_id).execute()
+
+    tlid = perm.get("timelog_id")
+    punch = None
+    if tlid:
+        pr = (sb().table("timelog").select("*").eq("id", tlid).eq("org_id", org_id).limit(1).execute().data) or []
+        punch = pr[0] if pr else None
+    if punch and perm.get("kind") == "reclock_in":
+        if new_status == "approved":
+            p_upd = {"permission_status": "approved"}
+            if punch.get("clock_out") and punch.get("hours") is None:
+                try:
+                    ci = datetime.fromisoformat(str(punch["clock_in"]).replace("Z", "+00:00"))
+                    co = datetime.fromisoformat(str(punch["clock_out"]).replace("Z", "+00:00"))
+                    p_upd["hours"] = max(0.0, round((co - ci).total_seconds() / 3600.0, 2))
+                except Exception:
+                    pass
+            sb().table("timelog").update(p_upd).eq("id", tlid).execute()
+            try:
+                _log_payroll_change(org_id, field="permission", entry_point="timeclock_permission_approve",
+                                    employee_id=punch.get("employee_id"), employee_name=punch.get("employee_name"),
+                                    store_code=punch.get("store_code"), work_date=str(punch.get("work_date") or "")[:10],
+                                    before="pending (second session)", after=f"approved ({p_upd.get('hours')}h counts)",
+                                    source_table="timelog", source_id=tlid, who=mgr)
+            except Exception:
+                pass
+        else:
+            sb().table("timelog").update({"permission_status": "denied", "hours": None}).eq("id", tlid).execute()
+    elif punch and perm.get("kind") == "late_clockout" and new_status == "approved":
+        rc = perm.get("requested_clock_out")
+        if rc:
+            try:
+                ci = datetime.fromisoformat(str(punch["clock_in"]).replace("Z", "+00:00"))
+                co = datetime.fromisoformat(str(rc).replace("Z", "+00:00"))
+                h = max(0.0, round((co - ci).total_seconds() / 3600.0, 2))
+                sb().table("timelog").update({"clock_out": co.isoformat(), "hours": h,
+                                              "auto_clocked_out": False}).eq("id", tlid).execute()
+                _log_payroll_change(org_id, field="clock_out", entry_point="timeclock_permission_approve",
+                                    employee_id=punch.get("employee_id"), employee_name=punch.get("employee_name"),
+                                    store_code=punch.get("store_code"), work_date=str(punch.get("work_date") or "")[:10],
+                                    before="capped at scheduled end + grace", after=f"{co.isoformat()} ({h}h, DM-approved extra)",
+                                    source_table="timelog", source_id=tlid, who=mgr)
+            except Exception:
+                pass
+    return {"ok": True, "status": new_status, "decided_by": mgr.get("email")}
+
+
+@router.post("/timeclock/request-extra")
+def request_extra_time(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """A rep asks for the time they worked PAST their auto-clock-out to be counted (migration 432) —
+    the sweep case where they were auto-clocked-out at scheduled_end + grace while still working, so no
+    manual clock-out raised the request. Body: {entry_id?, requested_clock_out?(ISO), reason?}. Creates
+    a pending late_clockout permission for the DM. Idempotent per punch (a pending one is returned as-is)."""
+    org_id, employee_id = _caller_identity(authorization)
+    now = datetime.now(timezone.utc)
+    today = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
+    entry_id = body.get("entry_id")
+    q = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+         .eq("auto_clocked_out", True))
+    if entry_id:
+        q = q.eq("id", entry_id)
+    else:
+        q = q.eq("work_date", today)
+    punches = q.order("clock_in", desc=True).limit(1).execute().data or []
+    if not punches:
+        raise HTTPException(404, "No auto-clocked-out punch found to request extra time for.")
+    punch = punches[0]
+    existing = (sb().table("timeclock_permission").select("*").eq("org_id", org_id)
+                .eq("timelog_id", punch.get("id")).eq("kind", "late_clockout").eq("status", "pending")
+                .limit(1).execute().data) or []
+    if existing:
+        return {"ok": True, "already_pending": True, "id": existing[0].get("id"), "status": "pending"}
+    anchor = punch.get("clock_out")   # the auto-clockout stamp = scheduled_end + grace
+    try:
+        anchor_dt = datetime.fromisoformat(str(anchor).replace("Z", "+00:00")) if anchor else None
+    except Exception:
+        anchor_dt = None
+    rc = body.get("requested_clock_out")
+    try:
+        rc_dt = datetime.fromisoformat(str(rc).replace("Z", "+00:00")) if rc else now
+    except Exception:
+        rc_dt = now
+    perm = _create_timeclock_permission(org_id, kind="late_clockout", punch=punch,
+                                        anchor_at=anchor_dt, requested_clock_out=rc_dt,
+                                        reason=(body.get("reason") or "Worked past auto clock-out"),
+                                        requested_by=employee_id)
+    return {"ok": True, "status": "pending", "permission": perm}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════

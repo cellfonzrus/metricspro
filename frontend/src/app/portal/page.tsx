@@ -372,6 +372,10 @@ export default function PortalPage() {
         setPrio({ store_code: res.store_code || selStore, priority: res.priority || [], selfie, g, matchPct })
         setPrioChecked(false)
         setMsg(res.message || 'Acknowledge the priority phones to clock in.')
+      } else if (res?.needs_dm_permission) {
+        // second session after an auto-clock-out earlier today → recorded, but held pending the DM
+        setMsg(res.message || '⏳ Clocked in — this second session is pending your DM’s permission and won’t count until they approve it.')
+        setMissedClosing(res?.missed_closing_notice || null)
       } else {
         setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
         setMissedClosing(res?.missed_closing_notice || null)
@@ -402,6 +406,10 @@ export default function PortalPage() {
       if (res?.success === false || res?.needs_closing) {
         // blocked (e.g. closing gate) — the punch is still OPEN; never show a fake "clocked out"
         setMsg('⛔ ' + (res?.message || 'Clock-out blocked — you are still clocked in.'))
+      } else if (res?.extra_pending || res?.permission_status === 'pending') {
+        // worked past the scheduled end + grace, or closed a pending second session → part is pending the DM
+        setMsg('⏳ ' + (res?.message || `Clocked out at ${res?.data?.time || ''} — extra time is pending your DM’s permission.`))
+        setMissedClosing(res?.missed_closing_notice || null)
       } else {
         setMsg(`✅ Clocked out at ${res?.data?.time || ''} — ${res?.data?.hours ?? '?'} hrs.`)
         setMissedClosing(res?.missed_closing_notice || null)
@@ -596,7 +604,29 @@ export default function PortalPage() {
           )
         )}
 
-        {msg && <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: msg.startsWith('✅') ? '#e7f6ec' : '#fdeaea', fontSize: 14, textAlign: 'center' }}>{msg}</div>}
+        {msg && <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: msg.startsWith('✅') ? '#e7f6ec' : msg.startsWith('⏳') ? '#fff7e6' : '#fdeaea', fontSize: 14, textAlign: 'center' }}>{msg}</div>}
+
+        {/* ⏳ persistent banner: this employee's own time-clock requests awaiting the DM's permission
+            (second session after an auto-clock-out, or extra time worked past the scheduled end + grace).
+            Shows on BOTH the kiosk here AND the DM's approval board; counts toward hours only once approved. */}
+        {Array.isArray(status?.pending_permissions) && status.pending_permissions.length > 0 && (
+          <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: '#fff7e6', border: '1px solid #f5a623' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+              ⏳ Pending your DM’s permission ({status.pending_permissions.length})
+            </div>
+            <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#78350f' }}>
+              {status.pending_permissions.slice(0, 5).map((p: any) => (
+                <li key={p.id}>
+                  {p.kind === 'reclock_in'
+                    ? 'Second session after auto clock-out'
+                    : `Extra time past your shift${p.extra_minutes ? ` (~${p.extra_minutes} min)` : ''}`}
+                  {p.work_date ? ` — ${p.work_date}` : ''}
+                </li>
+              ))}
+            </ul>
+            <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>This time counts toward your hours only after your DM approves it.</div>
+          </div>
+        )}
 
         {/* ⚠ non-blocking notice: open pending missed-closing items for this employee (never blocks
             the punch that just succeeded — informational only, so they know to go complete it). */}
