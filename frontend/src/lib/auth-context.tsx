@@ -428,31 +428,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let mounted = true
-    supabase.auth.getSession().then(async ({ data }) => {
+    // HARD GUARANTEE that the loading splash is ALWAYS released — whatever loadProfile does: resolve,
+    // reject, or hang. The SIGNED_IN handler below re-arms `loading` to true to close the "no access on
+    // login until refresh" race, so a loadProfile that throws (transient bootstrap/network error) or
+    // stalls (slow/unreachable backend, no fetch timeout) would otherwise strand the app on an INFINITE
+    // spinner ("stuck on loading"). try/finally covers throw/reject; the timeout race is a safety valve
+    // so a slow/hung profile load can never spin more than ~15s — the app then renders and the profile
+    // state fills in if the call lands later. This releases the gate; it never blocks the profile load.
+    const settle = async (sess: any) => {
+      try {
+        await Promise.race([
+          loadProfile(sess),
+          new Promise<void>(resolve => setTimeout(resolve, 15000)),
+        ])
+      } catch {
+        /* loadProfile's own paths are guarded; this only catches an unexpected rejection */
+      } finally {
+        if (mounted) setLoading(false)
+      }
+    }
+    supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return
       setSession(data.session)
-      await loadProfile(data.session)
-      setLoading(false)
+      settle(data.session)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange(async (event, sess) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
       if (!mounted) return
       setSession(sess)
-      // RE-ARM `loading` while the new session's profile is resolved. Without this, a fresh sign-in
-      // exposed the "no access on login until refresh" race: the initial getSession() above has
-      // already flipped `loading` to false, so when SIGNED_IN fires this handler set `session` (truthy)
-      // and only populated `provisioned`/`permissions` AFTER the awaited loadProfile — leaving a window
-      // where `loading` is false, `session` is set and `provisioned` is still false. Consumers that gate
-      // on `loading` (the login page's redirect + its "No access yet" card, the platform Guard) read
-      // that window as "authenticated but unprovisioned" and flash a denied screen until loadProfile
-      // lands; a manual refresh took the getSession() path (loading held true until the profile loaded)
-      // and so appeared to "fix" it. Holding loading true here makes both paths identical.
-      //
-      // EXCEPT a background TOKEN_REFRESHED, which only swaps the access token for the SAME signed-in
-      // user whose profile is already loaded — re-arming loading there would flash the whole app into a
-      // spinner every time the token auto-refreshes (~hourly). Its profile reload stays as-is.
+      // RE-ARM `loading` while the new session's profile resolves — closes the "no access on login
+      // until refresh" race (a fresh SIGNED_IN otherwise left loading=false with provisioned not yet
+      // populated, flashing a denied screen). EXCEPT a background TOKEN_REFRESHED (same already-loaded
+      // user), which would flash the whole app into a spinner on every ~hourly auto-refresh.
       if (event !== 'TOKEN_REFRESHED') setLoading(true)
-      await loadProfile(sess)
-      setLoading(false)
+      settle(sess)
     })
     return () => { mounted = false; sub.subscription.unsubscribe() }
   }, [loadProfile])
