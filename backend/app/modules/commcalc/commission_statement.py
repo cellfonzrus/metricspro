@@ -50,6 +50,34 @@ from app.modules.commcalc import plan_pay_gate as _gate
 from app.modules.commcalc.commission_ledger import CATEGORIES, CATEGORY_LABELS
 
 
+# ── ACCESS GATE for the "Held / not yet paid" section (DATA_GRANT 'statement_held') ─────────────────
+# Owner directive: the held itemization (matched-but-suppressed plan lines + held installments, each with
+# its reason and would-have-paid $) is MANAGEMENT-ONLY and DEFAULT-CLOSED — off the PDF and the fmt=json
+# model for everyone until granted. This is the PURE allower over a resolved caller dict (no I/O), the same
+# shape as device_history.device_commission_allowed and the frontend hasDataGrant('statement_held'), so the
+# router's `_can_view_statement_held` degrades CLOSED and this rule stays unit-testable in the harness.
+STATEMENT_HELD_GRANT = "statement_held"
+
+
+def statement_held_allowed(caller):
+    """True iff the caller may see the statement's held section. PURE over a resolved caller dict:
+      super_admin / perms.scope=='all' / role=='admin'                          -> allow
+      'statement_held' in perms.modules, or perms.data.statement_held truthy    -> allow
+      else (including an unresolvable/None caller)                              -> deny (default-closed)."""
+    if not caller:
+        return False
+    if caller.get("super_admin"):
+        return True
+    perms = caller.get("perms") or {}
+    if (perms.get("scope") == "all") or ((caller.get("role") or "").lower() == "admin"):
+        return True
+    if STATEMENT_HELD_GRANT in (perms.get("modules") or []):
+        return True
+    if bool((perms.get("data") or {}).get(STATEMENT_HELD_GRANT)):
+        return True
+    return False
+
+
 # ── plan component: the Commission-Plan rules that paid this rep this period ────────────────────────
 def _plan_line_items(plan_component, ucfg):
     """(earned_rows, held_rows) from the plan component of a drill-down. PURE.
@@ -135,7 +163,7 @@ def _bucket_rows(buckets):
 
 # ── the document ───────────────────────────────────────────────────────────────────────────────────
 def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="",
-                    generated_at=None, gate_cfg=None, total_payout=None):
+                    generated_at=None, gate_cfg=None, total_payout=None, include_held=False):
     """Turn one rep's drill-down + bucket rollup into the STATEMENT DOCUMENT MODEL. PURE — no I/O.
 
     `explain`      : commission_drilldown.explain_rep(...) output for this rep+period (the single source
@@ -145,6 +173,11 @@ def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="
                      rule) so an unconfigured tenant's frequency column is still correct.
     `total_payout` : optional explicit headline (the caller's rep_commissions.total_payout). When None the
                      drill-down's own reconciliation block supplies it, falling back to the components.
+    `include_held` : whether to carry the "Held / not yet paid" section. DEFAULT-FALSE by owner directive —
+                     the held itemization (matched-but-suppressed plan lines + held installments, each with
+                     its reason) is OMITTED from BOTH the PDF and the fmt=json model unless the CALLER has
+                     the gated permission and passes this True. When False the model's `held` is [] (the
+                     renderer only draws the table when non-empty) and the intro never mentions held items.
 
     Every string the employee reads is decided HERE, where it can be tested, not in the renderer.
     """
@@ -160,7 +193,10 @@ def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="
     plan_earned, plan_held, footnotes = _plan_line_items(pc, ucfg)
     inst_earned, inst_held = _installment_items(mm)
     earned = plan_earned + inst_earned
-    held = plan_held + inst_held
+    # DEFAULT-OFF, GATED: the held section is dropped from the model entirely unless the caller was granted
+    # permission (the router computes include_held from the DATA_GRANT). Everything below — is_empty, the
+    # intro's held branch, the PDF section, the fmt=json array — then sees no held rows.
+    held = (plan_held + inst_held) if include_held else []
 
     plan_subtotal = round(_f(pc.get("total_payout")), 2)
     inst_subtotal = round(_f((mm.get("totals") or {}).get("amount")), 2)
@@ -232,9 +268,16 @@ def _intro(plan_name, earned, held, has_buckets):
     if plan_name:
         bullets.append(f"Your plan incentive is earned under “{plan_name}”. Each item below is a "
                        "rule from that plan that one or more of your sales matched.")
-    if any(i.get("source") == "installment" for i in earned) or held:
+    has_installment = any(i.get("source") == "installment" for i in earned)
+    if held:
+        # Held section is present (granted caller) — the intro may promise it.
         bullets.append("Residuals and multi-month items are paid over several months. An item can be held "
                        "for a month and pay in a later one; anything held is listed with the reason.")
+    elif has_installment:
+        # Multi-month earnings but the held section is off — describe the timing WITHOUT referencing held,
+        # so the intro never promises a section the page does not contain (held is default-off + gated).
+        bullets.append("Residuals and multi-month items are paid over several months, so an item can pay "
+                       "in a later period than the sale.")
     if has_buckets:
         bullets.append("The category summary groups the same payout into the standard commission, spiff, "
                        "rebate and residual buckets.")
@@ -520,13 +563,15 @@ def filename_for(doc):
 
 
 # ── batch: one model per employee for a period (so a zip/export is possible later) ─────────────────
-def build_statements(inputs, tenant_name="", period="", generated_at=None, gate_cfg=None):
+def build_statements(inputs, tenant_name="", period="", generated_at=None, gate_cfg=None,
+                     include_held=False):
     """Map `build_statement` over a list of per-employee inputs. PURE — the caller has already fetched
     each rep's drill-down + buckets.
 
-    `inputs` : [{"rep": name, "explain": <explain_rep dict>, "buckets": {cat->amt}?,
-                 "total_payout": float?}, ...]
-    Returns  : [statement doc model, ...] in the given order.
+    `inputs`       : [{"rep": name, "explain": <explain_rep dict>, "buckets": {cat->amt}?,
+                      "total_payout": float?}, ...]
+    `include_held` : gate for the "Held / not yet paid" section, threaded to every statement (default-off).
+    Returns        : [statement doc model, ...] in the given order.
     """
     out = []
     for row in inputs or []:
@@ -534,5 +579,5 @@ def build_statements(inputs, tenant_name="", period="", generated_at=None, gate_
             row.get("explain") or {}, buckets=row.get("buckets"),
             tenant_name=tenant_name, rep_name=_s(row.get("rep")),
             period=period, generated_at=generated_at, gate_cfg=gate_cfg,
-            total_payout=row.get("total_payout")))
+            total_payout=row.get("total_payout"), include_held=include_held))
     return out

@@ -165,6 +165,8 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
     help: 'Raw carrier/processor residual reports (raw_mi-derived). Only enforced when the tenant sets residual visibility to "permissioned".' },
   { key: 'device_commission', label: 'Device history commission amounts',
     help: 'Per-period commission & rebate $ on the Device History Lookup (backend commcalc `_can_view_device_commission`). DEFAULT-CLOSED — admin-only until granted; the device history / prompts / tenure stay visible to everyone regardless.' },
+  { key: 'statement_held', label: 'Incentive statement — held / not-yet-paid section',
+    help: 'Show the "Held / not yet paid" section on the incentive statement PDF + view (backend commcalc `_can_view_statement_held`). DEFAULT-CLOSED — hidden for everyone until granted; admins/company-wide always see it. The employee-facing statement omits held items entirely for ungranted callers, on both the PDF and the JSON view.' },
   { key: 'imei_rebates', label: 'IMEI rebate reconciliation report',
     help: 'Access to /commcalc/imei-rebates — the whole report, not just the $ (backend commcalc `_can_view_imei_rebates`). DEFAULT-CLOSED — admin-only until granted; money columns additionally ride the carrier-residual gate when the tenant sets residual visibility to "permissioned".' },
   { key: 'residual_per_sub', label: 'Residual per Subscriber report',

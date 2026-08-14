@@ -96,8 +96,11 @@ EXPLAIN = {"period": "2026-07", "rep": "Jose Utrera", "plan_component": PLAN_COM
 BUCKETS = {"commission": 225.0, "spiff": 0.0, "equipment_rebate": 0.0,
            "residual_monthly": 10.0, "autopay_residual": 0.0}
 
+# The held section is DEFAULT-OFF + gated (owner directive). This "full" fixture opts IN (include_held=True)
+# so the held-dependent sections (C, D) exercise the held content; section Fh proves the default omits it.
 DOC = cs.build_statement(EXPLAIN, buckets=BUCKETS, tenant_name="Luxelink Wireless LLC",
-                         rep_name="Jose Utrera", period="2026-07", generated_at="August 13, 2026")
+                         rep_name="Jose Utrera", period="2026-07", generated_at="August 13, 2026",
+                         include_held=True)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 section("A. The headline total is SOURCED, not re-summed")
@@ -200,6 +203,50 @@ check("Fs7 ... and there are no plan line items (buckets carry it)", d_stmt["ear
 d_bare = cs.build_statement(dict(STMT_EXPLAIN, reconciliation={"total_payout": 0.0}), buckets=None)
 check("Fs8 no rules + no buckets + no total => genuinely empty", d_bare["empty"], True)
 
+section("Fh. Held / not-yet-paid section is DEFAULT-OFF + gated (owner directive)")
+
+# DEFAULT (no include_held): the held section must be omitted from the MODEL (so both the PDF and the
+# fmt=json employee view carry no held rows), and the intro must not reference held items.
+d_off = cs.build_statement(EXPLAIN, buckets=BUCKETS, tenant_name="Luxelink Wireless LLC",
+                           rep_name="Jose Utrera", period="2026-07")
+check("Fh1 held is OMITTED by default", d_off["held"], [])
+check("Fh2 ... and the intro never mentions held when it is off",
+      any("held" in b.lower() for b in d_off["intro"]), False)
+check("Fh3 ... the multi-month timing bullet is still present (held-free)",
+      any("later period" in b for b in d_off["intro"]), True)
+# Earnings/buckets are unaffected — only the held section is gated, not the rest of the statement.
+check("Fh4 earned rows are unaffected by the held gate", "Accessory" in {i["what"] for i in d_off["earned"]}, True)
+check("Fh5 ... and the statement is not spuriously flagged empty", d_off["empty"], False)
+
+# GRANTED (include_held=True): behaves exactly as before — held present, intro promises it.
+d_on = cs.build_statement(EXPLAIN, buckets=BUCKETS, rep_name="Jose Utrera", period="2026-07",
+                          include_held=True)
+check("Fh6 held is INCLUDED when granted", len(d_on["held"]) > 0, True)
+check("Fh7 ... it carries the excluded plan line", any("exclusion" in h["reason"] for h in d_on["held"]), True)
+check("Fh8 ... and the held installment", any("dealer not shown paid" in h["reason"] for h in d_on["held"]), True)
+check("Fh9 ... and the intro promises the held section", any("anything held is listed" in b for b in d_on["intro"]), True)
+
+# build_statements threads include_held to every statement.
+b_off = cs.build_statements([{"rep": "Jose Utrera", "explain": EXPLAIN, "buckets": BUCKETS}], period="2026-07")
+b_on = cs.build_statements([{"rep": "Jose Utrera", "explain": EXPLAIN, "buckets": BUCKETS}], period="2026-07",
+                           include_held=True)
+check("Fh10 build_statements omits held by default", b_off[0]["held"], [])
+check("Fh11 build_statements threads include_held=True", len(b_on[0]["held"]) > 0, True)
+
+# The PURE allower (mirrors device_history.device_commission_allowed / hasDataGrant). DEFAULT-CLOSED.
+check("Fh12 allower: no caller => denied", cs.statement_held_allowed(None), False)
+check("Fh13 allower: empty perms => denied", cs.statement_held_allowed({"perms": {}}), False)
+check("Fh14 allower: super_admin => allowed", cs.statement_held_allowed({"super_admin": True}), True)
+check("Fh15 allower: company-wide scope 'all' => allowed",
+      cs.statement_held_allowed({"perms": {"scope": "all"}}), True)
+check("Fh16 allower: role admin => allowed", cs.statement_held_allowed({"role": "admin", "perms": {}}), True)
+check("Fh17 allower: grant under perms.modules => allowed",
+      cs.statement_held_allowed({"perms": {"modules": ["statement_held"]}}), True)
+check("Fh18 allower: grant under perms.data => allowed",
+      cs.statement_held_allowed({"perms": {"data": {"statement_held": True}}}), True)
+check("Fh19 allower: an unrelated grant does NOT open it",
+      cs.statement_held_allowed({"perms": {"modules": ["device_commission"]}}), False)
+
 section("F. Honest degradation")
 
 # A rep with sales but no plan match / no earnings — the drill-down's zero_explanation carries the WHY.
@@ -266,6 +313,9 @@ else:
                                period="2026-07")
     check("G4 markup in tenant/product/label renders instead of crashing", cs.render_pdf(h_doc)[:5], b"%PDF-")
     check("G5 an empty document still renders", cs.render_pdf(cs.build_statement({}))[:5], b"%PDF-")
+    # A held-OFF statement (default gate) renders fine, and its PDF is smaller than the held-ON one.
+    check("G5b a held-off statement renders", cs.render_pdf(d_off)[:5], b"%PDF-")
+    check("G5c ... and is smaller than the held-on statement", len(cs.render_pdf(d_off)) < len(cs.render_pdf(d_on)), True)
 
     # BATCH renderer — N reps into ONE multi-page PDF (the "every rep in one document" ask).
     batch_pdf = cs.render_statements_pdf(batch + [d_stmt])
