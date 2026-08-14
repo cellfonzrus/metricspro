@@ -123,6 +123,7 @@ const REPORT_EXACT: Record<string, string> = { '/commcalc': 'commissions', '/rep
 const REPORT_TREES: [string, string][] = [
   ['/commcalc/exec', 'commissions'], ['/commcalc/reports', 'commissions'], ['/commcalc/gp', 'commissions'],
   ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
+  ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
   ['/commcalc/asset', 'asset'], ['/commcalc/vip', 'vip'], ['/accounts', 'accounts'],
@@ -262,6 +263,7 @@ export const NAV: NavGroup[] = [
       { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
     { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions' },
+    { href: '/commcalc/sales-comparison', label: 'Sales Comparison', icon: '📈', module: 'commissions' },
     { href: '/commcalc/custom-report', label: 'Custom Report', icon: '🧩', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
@@ -582,6 +584,7 @@ export const REPORT_CATEGORIES: { key: string; label: string }[] = [
 export const REPORT_DIRECTORY: [string, string][] = [
   // Sales
   ['/commcalc/sales-report', 'sales'], ['/commcalc/custom-report', 'sales'],
+  ['/commcalc/sales-comparison', 'sales'],
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/crm/reports', 'sales'],
   // Commissions & Pay
