@@ -19,6 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.modules.storeops import face_recognition as F   # noqa: E402
 
+# The app-wide face-ID kill switch (F.FACE_ID_GLOBALLY_DISABLED) defaults ON whenever env FACE_ID_ENABLED
+# is unset — which is the case here — so exercise the per-tenant master-switch logic below with it OFF.
+# The kill switch itself is validated in section (7) at the end.
+F.FACE_ID_GLOBALLY_DISABLED = False
+
 PASS, FAIL = [], []
 
 
@@ -171,6 +176,16 @@ print("\n(6) the admin panel's summary counts")
 s = F.consent_summary({r["employee_id"]: r for r in rows if r["org_id"] == ORG})
 check("summary counts signed/declined/unrecorded", (s["signed"], s["declined"], s["unrecorded"]) == (3, 1, 0))
 check("summary counts assignment states", (s["assigned_on"], s["assigned_off"], s["unassigned"]) == (0, 0, 4))
+
+print("\n(7) app-wide kill switch (owner directive 2026-08-14) overrides every config path")
+F.FACE_ID_GLOBALLY_DISABLED = True
+check("kill switch forces the tenant master switch OFF even when the DB row says ON",
+      F.get_tenant_face_config(ORG, FakeClient([migrated_tenant(enabled=True)], []))[0]["enabled"] is False)
+check("kill switch resolves an assigned + consented employee to globally_disabled",
+      F.resolve_employee_face({"enabled": True, "default_for_employees": True},
+                              {"face_recognition_enabled": True, "face_consent_status": "signed"}, True)
+      == {"enabled": False, "reason": "globally_disabled"})
+F.FACE_ID_GLOBALLY_DISABLED = False
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
