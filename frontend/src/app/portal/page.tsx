@@ -279,9 +279,16 @@ export default function PortalPage() {
     return det?.descriptor ? Array.from(det.descriptor as Float32Array) : null
   }
   function captureSelfie(): string {
-    const v = videoRef.current!, c = canvasRef.current!
+    // The camera <video>/<canvas> may be gone when we reach here — e.g. the camera was denied or
+    // unavailable, so openCamera() showed its message and reset mode to 'idle' (unmounting the element),
+    // but the DEFERRED finalizeClockIn timer still fired. Capturing must NEVER throw and block the punch:
+    // that was the "cannot read properties of null (reading videoWidth)" clock-in crash. No frame → no
+    // selfie ('' ), and the punch still goes through photo-less (the backend accepts an empty selfie).
+    const v = videoRef.current, c = canvasRef.current
+    if (!v || !c) return ''
     c.width = v.videoWidth || 320; c.height = v.videoHeight || 240
-    const ctx = c.getContext('2d')!
+    const ctx = c.getContext('2d')
+    if (!ctx) return ''
     ctx.setTransform(-1, 0, 0, 1, c.width, 0)   // mirror to match the preview
     ctx.drawImage(v, 0, 0, c.width, c.height)
     return c.toDataURL('image/jpeg', 0.7)
