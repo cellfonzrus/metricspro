@@ -221,8 +221,8 @@ export default function ReportsPage() {
   }
   // Cheap title for the Send modal's header (buildPayload() itself only runs on click).
   const exportTitle = tab === 'individual'
-    ? `Commission Statement — ${currentRep ? repLabel(currentRep) : 'no rep selected'}`
-    : tab === 'compensation' ? 'Compensation by Line' : 'Rep Commission Report'
+    ? `Incentive Statement — ${currentRep ? repLabel(currentRep) : 'no rep selected'}`
+    : tab === 'compensation' ? 'Compensation by Line' : 'Rep Incentive Report'
 
   function openDrill(comp: string) {
     setDrillComp(comp)
@@ -317,7 +317,7 @@ export default function ReportsPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Rep Commission Report</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Rep Incentive Report</h1>
           <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {period} · {filtered.length}{filterActive ? ` of ${reps.length}` : ''} reps · Total: <strong style={{ color: 'var(--accent)' }}>{fmt(totalPayout)}</strong>
           </p>
@@ -332,12 +332,12 @@ export default function ReportsPage() {
               right, not a replacement for the proven WYSIWYG table export. */}
           {tab === 'individual' ? (
             <button className="btn btn-secondary" onClick={downloadStatement} disabled={!currentRep}
-              title="Download this rep's itemized commission statement (line-by-line, PDF)">
-              📄 Commission Statement
+              title="Download this rep's itemized incentive statement (line-by-line, PDF)">
+              📄 Incentive Statement
             </button>
           ) : (
             <button className="btn btn-secondary" onClick={downloadAllStatements} disabled={!filtered.length}
-              title="Download an itemized commission statement for every rep currently shown — one PDF">
+              title="Download an itemized incentive statement for every rep currently shown — one PDF">
               📄 All Statements (PDF)
             </button>
           )}
@@ -415,7 +415,7 @@ export default function ReportsPage() {
                       </button>
                       {' '}
                       <a href={`/commcalc/commission-explain?rep=${encodeURIComponent(r.storeops_name || r.epay_salesperson)}`}
-                        title="How was this commission calculated? (plan + multi-month drill-down)"
+                        title="How was this incentive calculated? (plan + multi-month drill-down)"
                         style={{ fontSize: 11, textDecoration: 'none' }}>🔬</a>
                     </td>
                     <td style={{ color: 'var(--text3)', fontSize: 12 }}>{r.store?.substring(0, 25)}</td>
@@ -472,12 +472,12 @@ export default function ReportsPage() {
                 on the Individual Rep tab (there is also a copy in the top export bar). */}
             {currentRep && (
               <button className="btn btn-secondary" onClick={downloadStatement}
-                title="Download this rep's itemized commission statement (line-by-line, PDF)">
-                📄 Commission Statement (PDF)
+                title="Download this rep's itemized incentive statement (line-by-line, PDF)">
+                📄 Incentive Statement (PDF)
               </button>
             )}
             {currentRep && (
-              <SendReportButton title={`Commission statement — ${repLabel(currentRep)} — ${period}`}
+              <SendReportButton title={`Incentive statement — ${repLabel(currentRep)} — ${period}`}
                 label="📤 Send statement" serverFiles={currentRepStatementFiles} />
             )}
             {/* This rep's Google store rating(s) — chips sit beside the person, exactly like on the
@@ -509,7 +509,7 @@ export default function ReportsPage() {
                 ) : (
                   <div className="card" style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 16, fontWeight: 700, marginTop: 6 }}>{currentRep.plan_name || '— no plan —'}</div>
-                    <div style={{ color: 'var(--text2)', fontSize: 12 }}>Commission Plan</div>
+                    <div style={{ color: 'var(--text2)', fontSize: 12 }}>Incentive Plan</div>
                   </div>
                 )}
               </div>
@@ -520,12 +520,12 @@ export default function ReportsPage() {
                   <div style={{ fontWeight: 600, marginBottom: 10 }}>Plan‑based Payout</div>
                   <table>
                     <tbody>
-                      <tr><td>Commission Plan</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{currentRep.plan_name || '— none assigned —'}</td></tr>
+                      <tr><td>Incentive Plan</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{currentRep.plan_name || '— none assigned —'}</td></tr>
                       {/* Clickable: same affordance as the Boost line items (🔍 + rs-clickable + pointer).
                           Amounts shown are UNCHANGED — the click only opens a read-only breakdown. */}
                       <tr className="rs-clickable" style={drillStyle} onClick={() => openPlanDrill('plan')}
-                        title="Show the per-rule sale lines this Commission Plan paid on">
-                        <td>🔍 Plan commission</td>
+                        title="Show the per-rule sale lines this Incentive Plan paid on">
+                        <td>🔍 Plan incentive</td>
                         <td style={{ textAlign: 'right', fontWeight: 600 }}>{fmt(currentRep.plan_comm ?? 0)}</td>
                       </tr>
                       {/* SALE-TRIGGERED installments — the component the drill modal itemizes, so this is
@@ -563,7 +563,7 @@ export default function ReportsPage() {
                   {!currentRep.plan_name && (
                     <div style={{ fontSize: 12, color: '#dc2626', marginTop: 8 }}>
                       No plan assigned to this rep — they calculate to $0. Assign one on{' '}
-                      <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}>Commission Plans</a>.
+                      <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}>Incentive Plans</a>.
                     </div>
                   )}
                 </div>
@@ -578,7 +578,7 @@ export default function ReportsPage() {
                       <th>Item</th>
                       <th style={{ textAlign: 'right' }}>Count</th>
                       <th style={{ textAlign: 'right' }}>Rate</th>
-                      <th style={{ textAlign: 'right' }}>Commission</th>
+                      <th style={{ textAlign: 'right' }}>Incentive</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -702,7 +702,7 @@ export default function ReportsPage() {
                 return (
                   <div className="card" style={{ padding: 0, marginTop: 20, border: '1px solid #fca5a5' }}>
                     <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, background: '#fef2f2', color: '#991b1b' }}>
-                      🔻 Ops Accountability Chargebacks — {lines.length} POSTED · deducted from commission
+                      🔻 Ops Accountability Chargebacks — {lines.length} POSTED · deducted from incentive
                     </div>
                     <table>
                       <thead>
@@ -752,7 +752,7 @@ export default function ReportsPage() {
             </div>
           ) : (
             <div style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>
-              Select a rep to view their commission breakdown
+              Select a rep to view their incentive breakdown
             </div>
           )}
         </div>
@@ -864,7 +864,7 @@ export default function ReportsPage() {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 8 }}>
                 <div>
                   <div style={{ fontSize: 16, fontWeight: 700 }}>
-                    {isPlanTab ? 'Plan commission' : 'Multi‑month installments'} · {rep || '— no rep selected —'}
+                    {isPlanTab ? 'Plan incentive' : 'Multi‑month installments'} · {rep || '— no rep selected —'}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text3)' }}>
                     {period}
@@ -909,8 +909,8 @@ export default function ReportsPage() {
                         </div>
                       ) : (
                         <div style={{ fontSize: 13, color: '#dc2626' }}>
-                          No Commission Plan attached to this rep → $0 on the plan component. Assign one on{' '}
-                          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}>Commission Plans</a>.
+                          No Incentive Plan attached to this rep → $0 on the plan component. Assign one on{' '}
+                          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}>Incentive Plans</a>.
                         </div>
                       )}
 

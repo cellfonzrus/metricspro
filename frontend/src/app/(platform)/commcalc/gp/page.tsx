@@ -332,7 +332,7 @@ export default function GPReportPage() {
           { label: 'Total Revenue', val: totals.total_rev, icon: '💰' },
           { label: '1st Month Commission', val: totals.comm_m1, icon: '①', sub: 'received in the activation month' },
           { label: 'M2–M12 Commission', val: totals.comm_m2_12, icon: '🔁', sub: 'received for an already-active number' },
-          { label: 'Rep Commissions', val: totals.rep_pay, icon: '👥', red: true },
+          { label: 'Rep Incentives', val: totals.rep_pay, icon: '👥', red: true },
           { label: 'Store Expenses', val: totals.exp_total, icon: '🏪', red: true },
           { label: 'Net Profit', val: totals.net_profit, icon: '📊', highlight: true },
         ] as { label: string; val: number; icon: string; sub?: string; red?: boolean; highlight?: boolean }[])

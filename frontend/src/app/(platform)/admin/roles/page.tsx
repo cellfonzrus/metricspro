@@ -47,9 +47,9 @@ const SCHEDULING_REACHES = [
 // Employee Dashboard widgets this role can see on their own dashboard (default on).
 const EMP_WIDGETS = [
   { k: 'schedule', label: 'Schedule' }, { k: 'timeoff', label: 'Request time off' },
-  { k: 'hours', label: 'Hours worked' }, { k: 'commission', label: 'Commission earned' },
+  { k: 'hours', label: 'Hours worked' }, { k: 'commission', label: 'Incentive earned' },
   { k: 'targets', label: 'Targets' }, { k: 'report_card', label: 'Report card' },
-  { k: 'commission_tracking', label: 'Commission tracking' }, { k: 'flags', label: 'Flags' },
+  { k: 'commission_tracking', label: 'Incentive tracking' }, { k: 'flags', label: 'Flags' },
   { k: 'chargebacks', label: 'Chargebacks' }, { k: 'device_history', label: 'Device history' },
 ]
 

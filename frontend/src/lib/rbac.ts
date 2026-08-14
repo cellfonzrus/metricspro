@@ -281,7 +281,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/custom-report', label: 'Custom Report', icon: '🧩', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/reports', label: 'Rep Commission Report', icon: '📋', module: 'commissions' },
+    { href: '/commcalc/reports', label: 'Rep Incentive Report', icon: '📋', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
     { href: '/commcalc/device-history', label: 'Device History', icon: '📱', module: 'commissions' },
     { href: '/commcalc/ma-handsets', label: 'Handset COGS', icon: '📦', module: 'commissions', scopes: ['all', 'market'] },
@@ -324,9 +324,9 @@ export const NAV: NavGroup[] = [
   // that actually pays it (Boost KPI-tier rates vs configurable Commission Plans / Payout Schedules).
   // Boost Rates is carrier-gated to Boost tenants (NAV_CARRIERS) so a Total-only tenant never sees the
   // hardcoded Boost tiers. Regroup is a ZERO-RBAC-CHANGE move — every item keeps its module + scopes.
-  { group: 'Commission Payout Plans', module: 'commissions', items: [
+  { group: 'Incentive Payout Plans', module: 'commissions', items: [
     { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/commission-plans', label: 'Commission Plans', icon: '🧮', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/commission-plans', label: 'Incentive Plans', icon: '🧮', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/plan-installments', label: 'Multi‑Month Installments', icon: '🗓️', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/payout-schedules', label: 'Payout Schedules', icon: '📆', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/settings', label: 'Boost Rates (KPI‑tier)', icon: '⚙️', module: 'commissions', scopes: ['all'] },

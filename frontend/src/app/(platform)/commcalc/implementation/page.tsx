@@ -60,7 +60,7 @@ export default function ImplementationWizard() {
         <button className="btn btn-secondary" style={{ fontSize: 13 }}
           onClick={() => apiDownload(`/api/v1/commcalc/commission-plans/payout-structure?fmt=pdf&org_id=${ORG_ID}`)
             .catch(e => setMsg('❌ Payout structure: ' + (e?.message || e)))}
-          title="Download the employee-facing Payout Structure PDF (how commission is earned)">
+          title="Download the employee-facing Payout Structure PDF (how incentive is earned)">
           📄 Payout Structure (PDF)
         </button>
         <Link href="/commcalc/onboarding" style={{ fontSize: 13 }}>Full onboarding →</Link>

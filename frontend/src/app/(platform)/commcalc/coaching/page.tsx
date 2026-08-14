@@ -89,7 +89,7 @@ export default function RepCoachingPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🎓 Rep Coaching — {period}</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Which KPIs each rep met vs missed, and the money they're leaving on the table (commission below tier + chargebacks). Sorted by biggest opportunity.
+          Which KPIs each rep met vs missed, and the money they're leaving on the table (incentive below tier + chargebacks). Sorted by biggest opportunity.
         </p>
       </div>
 
@@ -120,12 +120,12 @@ export default function RepCoachingPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : reps.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
-          {allReps.length === 0 ? `No rep commissions for ${period}. (Run the commission calc first.)` : 'No reps match the current filters.'}</div>
+          {allReps.length === 0 ? `No rep incentives for ${period}. (Run the commission calc first.)` : 'No reps match the current filters.'}</div>
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>
             <Tile label="Reps" value={`${s.reps || 0}`} sub={`${s.below_tier || 0} below full tier`} />
-            <Tile label="Commission at risk" value={fmt(s.total_at_risk)} tone="#b45309" />
+            <Tile label="Incentive at risk" value={fmt(s.total_at_risk)} tone="#b45309" />
             <Tile label="Chargebacks lost" value={fmt(s.total_chargebacks)} tone="#b42318" />
             <Tile label="Total left on table" value={fmt(s.total_money_on_table)} tone="#b42318" />
           </div>
@@ -168,7 +168,7 @@ export default function RepCoachingPage() {
                             </div>
                             {r.tier < 1 && (
                               <div style={{ fontSize: 13, color: 'var(--text2)' }}>
-                                💸 <b>{fmt(r.at_risk)}</b> of commission at risk — short on <b>{(r.short_kpis || []).join(', ') || '—'}</b>
+                                💸 <b>{fmt(r.at_risk)}</b> of incentive at risk — short on <b>{(r.short_kpis || []).join(', ') || '—'}</b>
                                 {r.need_for_full ? <> · hit <b>{r.need_for_full}</b> more KPI(s) for full payout</> : null}.
                                 {' '}Subtotal {fmt(r.subtotal)} → paid {fmt(r.final_payout)}.
                               </div>

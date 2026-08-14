@@ -169,7 +169,7 @@ export default function CommissionExplainPage() {
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Commission Explain — how was this calculated?</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Incentive Explain — how was this calculated?</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           {period} · read-only · plan component + multi-month installments (M1–M6) with gate status &amp; the MA-file cross-reference
         </p>
@@ -191,12 +191,12 @@ export default function CommissionExplainPage() {
             Shown once a rep is selected so it reads as tied to the explained rep. */}
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button className="btn btn-secondary" onClick={downloadStatement} disabled={!rep}
-            title="Download this rep's itemized commission statement (line-by-line, PDF)">
-            📄 Commission Statement (PDF)
+            title="Download this rep's itemized incentive statement (line-by-line, PDF)">
+            📄 Incentive Statement (PDF)
           </button>
           {rep && (
             <SendReportButton
-              title={`Commission statement — ${rep} — ${period}`}
+              title={`Incentive statement — ${rep} — ${period}`}
               label="📤 Send statement"
               serverFiles={statementFiles} />
           )}
@@ -232,7 +232,7 @@ export default function CommissionExplainPage() {
       {busy ? <div className="card" style={{ textAlign: 'center', padding: 40 }}><div className="spinner" style={{ margin: '0 auto' }} /></div>
         : data?.error ? <div className="card" style={{ color: 'var(--red)' }}>❌ {data.error}</div>
         : !data ? <div className="card" style={{ color: 'var(--text3)', textAlign: 'center', padding: 40 }}>
-            Select a rep above (or open this page from a rep row on the Rep Commission Report) to see how their commission was calculated.
+            Select a rep above (or open this page from a rep row on the Rep Incentive Report) to see how their incentive was calculated.
           </div>
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -248,7 +248,7 @@ export default function CommissionExplainPage() {
 
             {/* PLAN COMPONENT */}
             <div className="card">
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>1 · Commission-Plan component</div>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>1 · Incentive-Plan component</div>
               {pc?.plan_name ? (
                 <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 10 }}>
                   Plan <b style={{ color: 'var(--text)' }}>{pc.plan_name}</b> attached via{' '}
@@ -260,7 +260,7 @@ export default function CommissionExplainPage() {
                 </div>
               ) : (
                 <div style={{ fontSize: 13, color: 'var(--red)', marginBottom: 10 }}>
-                  No commission plan attached to this rep → $0 on the plan component.
+                  No incentive plan attached to this rep → $0 on the plan component.
                 </div>
               )}
               <AssignmentTrace considered={pc?.considered} />

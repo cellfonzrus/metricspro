@@ -320,7 +320,7 @@ def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_a
                                      "why": "Tracked for reporting only — does not pay."})
             elif zero:
                 no_pay_items.append({"what": what, "condition": cond,
-                                     "why": "Currently set to zero — earns no commission."})
+                                     "why": "Currently set to zero — earns no incentive."})
             else:
                 pay_items.append({"what": what, "condition": cond, "rate": rate, "frequency": freq,
                                   "scope": scope, "tiered": bool(r.get("tiered"))})
@@ -334,7 +334,7 @@ def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_a
                             "so they pay at the base rate shown.")
         if not pay_items:
             warnings.append("This plan has no paying items configured. Anyone assigned to it earns "
-                            "$0.00 in plan commission." if not no_pay_items else
+                            "$0.00 in plan incentive." if not no_pay_items else
                             "None of this plan's items currently pay.")
         if not applies["lines"]:
             warnings.append("This plan is not assigned to anyone yet.")
@@ -360,7 +360,7 @@ def build_doc(plans, tenant_name="", gate_cfg=None, exclusions=None, generated_a
                       "reason": _s(e.get("reason")) or None})
 
     return {
-        "title": "Commission Payout Structure",
+        "title": "Incentive Payout Structure",
         "tenant": _s(tenant_name),
         "generated_at": when,
         "plans": out_plans,
@@ -374,7 +374,7 @@ def _how_it_works(out_plans):
     """The opening explainer. Built FROM the resolved plans, so it never claims something the tenant's own
     configuration does not do. PURE."""
     bullets = [
-        "Commission is calculated from the sales recorded in the point-of-sale system. Every sale line is "
+        "Incentive is calculated from the sales recorded in the point-of-sale system. Every sale line is "
         "checked against the rules of the plan you are assigned to.",
         "When a line matches a rule, it earns that rule's rate. A single sale can earn from more than one "
         "rule — for example a device and its accessories.",
@@ -385,7 +385,7 @@ def _how_it_works(out_plans):
     if any(p["tiers"] for p in out_plans):
         bullets.append("Some plans pay more once you pass a volume tier. The tier you reach applies to the "
                        "items marked as tier-scaled.")
-    bullets.append("Returned, voided and refunded sales do not earn commission. Chargebacks are deducted "
+    bullets.append("Returned, voided and refunded sales do not earn incentive. Chargebacks are deducted "
                    "from the payout for the period in which they are applied.")
     return bullets
 
@@ -451,7 +451,7 @@ def render_pdf(doc):
     st_band_sub = ParagraphStyle("bs", parent=ss["Normal"], fontSize=8, textColor=C((0.72, 0.79, 0.88)),
                                  leading=11)
 
-    title = _s(doc.get("title")) or "Commission Payout Structure"
+    title = _s(doc.get("title")) or "Incentive Payout Structure"
     tenant = _s(doc.get("tenant"))
 
     def on_page(canvas, _doc):
@@ -478,7 +478,7 @@ def render_pdf(doc):
     story.append(Spacer(1, 6))
     story.append(HRFlowable(width="100%", thickness=1.6, color=C(_NAVY), spaceAfter=10))
 
-    story.append(Paragraph("How your commission works", st_h2))
+    story.append(Paragraph("How your incentive works", st_h2))
     for b in doc.get("how_it_works") or []:
         story.append(Paragraph(esc(b), st_bullet, bulletText="•"))
 
@@ -563,7 +563,7 @@ def render_pdf(doc):
             story.append(Paragraph(esc(w), st_warn))
 
     if doc.get("never_pays"):
-        story.append(Paragraph("What never earns commission", st_h2))
+        story.append(Paragraph("What never earns incentive", st_h2))
         story.append(Paragraph("These apply to every plan, regardless of the rules above.", st_cap))
         rows = [[Paragraph("Excluded", st_head), Paragraph("When it applies", st_head),
                  Paragraph("Reason", st_head)]]
@@ -581,9 +581,9 @@ def render_pdf(doc):
     story.append(HRFlowable(width="100%", thickness=0.6, color=colors.Color(0.8, 0.83, 0.87),
                             spaceAfter=6))
     story.append(Paragraph(
-        "This document describes the commission structure as configured on the date shown. It is not a "
+        "This document describes the incentive structure as configured on the date shown. It is not a "
         "statement of earnings and does not create an entitlement to any amount. Your own earnings for a "
-        "period are shown on your individual commission statement.", st_cap))
+        "period are shown on your individual incentive statement.", st_cap))
 
     pdf.build(story, onFirstPage=on_page, onLaterPages=on_page)
     return buf.getvalue()

@@ -212,7 +212,7 @@ export default function PlanInstallmentsPage() {
 
   async function saveSched() {
     setMsg('')
-    if (!draft.plan_id) { setMsg('Pick a Commission Plan for this schedule.'); return }
+    if (!draft.plan_id) { setMsg('Pick an Incentive Plan for this schedule.'); return }
     try {
       const body: any = {
         ...draft,
@@ -447,7 +447,7 @@ export default function PlanInstallmentsPage() {
           </select>
         </label>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
-          Contract-type matching in Commission Plans:
+          Contract-type matching in Incentive Plans:
           <select style={sel} value={settings.plan_ct_resolution || 'raw'}
             onChange={e => setSettings({ ...settings, plan_ct_resolution: e.target.value })}>
             <option value="raw">Raw Contract Type only (default)</option>
@@ -460,7 +460,7 @@ export default function PlanInstallmentsPage() {
           this to <b>mapped</b> and the same rule will ALSO match the line's resolved activation bucket
           (premium / upgrade / BYOD) from this tenant's own classification settings.
           <b> This can increase pay</b> — it takes effect on the next Run Calculation. Check
-          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Commission Plans → Plan coverage</a> first.
+          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Incentive Plans → Plan coverage</a> first.
         </p>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
           Store resolution (market + store-scope plan assignments):
@@ -480,7 +480,7 @@ export default function PlanInstallmentsPage() {
           <a href="/commcalc/store-match" style={{ color: 'var(--accent)' }}>Store matching</a>. It is a
           strict superset — it can only ATTACH a plan that attaches to nobody today, never detach one —
           so <b>this can increase pay</b> on the next Run Calculation. See exactly who it would move first:
-          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Commission Plans → Plan
+          <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}> Incentive Plans → Plan
           coverage</a> previews it per rep regardless of this setting.
         </p>
         <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 6 }}>
@@ -972,7 +972,7 @@ export default function PlanInstallmentsPage() {
           {draft.id && <button className="btn" onClick={() => { setDraft(blankSched()); setMsg('') }}>Cancel edit</button>}
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 12 }}>
-          <label style={{ fontSize: 12 }}>Commission Plan
+          <label style={{ fontSize: 12 }}>Incentive Plan
             <select style={{ ...sel, width: '100%' }} value={draft.plan_id} onChange={e => setDraft({ ...draft, plan_id: e.target.value })}>
               <option value="">— pick a plan —</option>
               {plans.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}

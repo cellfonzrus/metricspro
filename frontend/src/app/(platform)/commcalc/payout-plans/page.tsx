@@ -24,7 +24,7 @@ type Overview = {
 
 const PAYS: Record<string, { label: string; tone: string; href: string; cta: string }> = {
   boost_rates:      { label: 'Boost KPI‑tier rates (built‑in engine)', tone: 'var(--accent)',  href: '/commcalc/settings',         cta: 'Edit Boost Rates' },
-  commission_plans: { label: 'Configurable Commission Plans',          tone: '#16a34a',         href: '/commcalc/commission-plans', cta: 'Edit Plans' },
+  commission_plans: { label: 'Configurable Incentive Plans',          tone: '#16a34a',         href: '/commcalc/commission-plans', cta: 'Edit Plans' },
   unconfigured:     { label: 'Not configured yet',                     tone: '#dc2626',         href: '/commcalc/commission-plans', cta: 'Set up a plan' },
 }
 
@@ -72,16 +72,16 @@ export default function PayoutPlansHub() {
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💳 Commission Payout Plans</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💳 Incentive Payout Plans</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
           One home for how every carrier pays its reps. Each carrier below maps to the engine that
-          actually calculates its commission — this is exactly what <b>Run Calculation</b> uses.
+          actually calculates its incentive — this is exactly what <b>Run Calculation</b> uses.
         </p>
       </div>
 
       {/* configuration surfaces */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-        <Link href="/commcalc/commission-plans" className="btn btn-sm">🧮 Commission Plans</Link>
+        <Link href="/commcalc/commission-plans" className="btn btn-sm">🧮 Incentive Plans</Link>
         <Link href="/commcalc/payout-schedules" className="btn btn-sm">📆 Payout Schedules</Link>
         <Link href="/commcalc/settings" className="btn btn-sm">⚙️ Boost Rates</Link>
         <Link href="/commcalc/carrier-mapping" className="btn btn-sm">📡 Carrier Mapping</Link>
@@ -128,7 +128,7 @@ export default function PayoutPlansHub() {
 
                   {!c.is_boost && (
                     <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 10 }}>
-                      Commission plans: <b>{c.plan_count}</b> &nbsp;·&nbsp; Rep assignments: <b>{c.assignment_count}</b> &nbsp;·&nbsp; Payout schedules: <b>{c.schedule_count}</b>
+                      Incentive plans: <b>{c.plan_count}</b> &nbsp;·&nbsp; Rep assignments: <b>{c.assignment_count}</b> &nbsp;·&nbsp; Payout schedules: <b>{c.schedule_count}</b>
                       {!c.ready && (
                         <div style={{ color: '#dc2626', marginTop: 6 }}>
                           ⚠️ No plan assignment or schedule — reps on this carrier will calculate to <b>$0</b> until you add one.
@@ -152,7 +152,7 @@ export default function PayoutPlansHub() {
             <b>How pay is decided:</b> the calculator looks at this company’s <b>default carrier</b>
             {ov.default_carrier ? <> (<b>{ov.default_carrier.name}</b>)</> : ''}. If it’s Boost, reps are paid
             by the built‑in KPI‑tier rates. If it’s any other carrier, the Boost tiers are <b>skipped entirely</b>
-            {' '}and each rep is paid from the Commission Plan / Payout Schedule assigned to them. Current mode:{' '}
+            {' '}and each rep is paid from the Incentive Plan / Payout Schedule assigned to them. Current mode:{' '}
             <span style={chip(ov.org_carrier_mode === 'boost' ? 'var(--accent)' : '#16a34a')}>
               {ov.org_carrier_mode === 'boost' ? 'BOOST ENGINE' : 'CONFIGURABLE PLANS'}
             </span>
@@ -161,7 +161,7 @@ export default function PayoutPlansHub() {
           {/* Diagnostic — why aren't reps captured in the report? */}
           <div className="card" style={{ padding: 16, marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <div style={{ fontWeight: 700, fontSize: 15 }}>🔎 Why aren’t reps showing in the commission report?</div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>🔎 Why aren’t reps showing in the incentive report?</div>
               <button className="btn btn-sm btn-primary" disabled={diagBusy} onClick={runDiag}>
                 {diagBusy ? 'Checking…' : `Run diagnostic for ${period}`}
               </button>

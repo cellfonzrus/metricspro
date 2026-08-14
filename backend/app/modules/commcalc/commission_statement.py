@@ -194,7 +194,7 @@ def build_statement(explain, buckets=None, tenant_name="", rep_name="", period="
     is_empty = not earned and not held and not has_buckets
 
     return {
-        "title": "Commission Statement",
+        "title": "Incentive Statement",
         "tenant": _s(tenant_name),
         "employee": _s(rep_name) or _s(explain.get("rep")),
         "period": _s(period) or _s(explain.get("period")),
@@ -225,12 +225,12 @@ def _intro(plan_name, earned, held, has_buckets):
     """The opening explainer, built FROM this statement's own content so it never promises a section the
     page does not contain. PURE."""
     bullets = [
-        "This statement lists what you earned in commission for the period shown. Every amount is taken "
+        "This statement lists what you earned in incentive for the period shown. Every amount is taken "
         "from the same calculation that produced your payout — it is a summary of that result, not a new "
         "calculation.",
     ]
     if plan_name:
-        bullets.append(f"Your plan commission is earned under “{plan_name}”. Each item below is a "
+        bullets.append(f"Your plan incentive is earned under “{plan_name}”. Each item below is a "
                        "rule from that plan that one or more of your sales matched.")
     if any(i.get("source") == "installment" for i in earned) or held:
         bullets.append("Residuals and multi-month items are paid over several months. An item can be held "
@@ -238,7 +238,7 @@ def _intro(plan_name, earned, held, has_buckets):
     if has_buckets:
         bullets.append("The category summary groups the same payout into the standard commission, spiff, "
                        "rebate and residual buckets.")
-    bullets.append("Returned, voided and refunded sales do not earn commission, and chargebacks are "
+    bullets.append("Returned, voided and refunded sales do not earn incentive, and chargebacks are "
                    "deducted from the period in which they are applied.")
     return bullets
 
@@ -338,7 +338,7 @@ def _render_docs(docs):
 
     def emit(doc, story):
         """Append ONE statement's flowables to `story`. Shared by the single- and multi-rep renderers."""
-        title = _s(doc.get("title")) or "Commission Statement"
+        title = _s(doc.get("title")) or "Incentive Statement"
         tenant = _s(doc.get("tenant"))
         employee = _s(doc.get("employee"))
         period = _s(doc.get("period"))
@@ -359,7 +359,7 @@ def _render_docs(docs):
         left = []
         if summary.get("plan_name"):
             left.append(Paragraph(f"<b>Plan:</b> {esc(summary.get('plan_name'))}", st_cell))
-        left.append(Paragraph(f"Plan commission: {esc(summary.get('plan_subtotal'))}", st_cell))
+        left.append(Paragraph(f"Plan incentive: {esc(summary.get('plan_subtotal'))}", st_cell))
         _ip = summary.get("installments_paid") or 0
         _ih = summary.get("installments_held") or 0
         if summary.get("installment_subtotal") and (_ip or _ih):
@@ -411,7 +411,7 @@ def _render_docs(docs):
                 story.append(Paragraph(f"Payout of record: {esc(summary.get('total_source'))}", st_cap))
         elif doc.get("empty"):
             story.append(Paragraph("What you earned", st_h2))
-            story.append(Paragraph("No commission was earned for this period. The reasons below explain why.",
+            story.append(Paragraph("No incentive was earned for this period. The reasons below explain why.",
                                    st_body))
 
         # ── held / not yet paid ──
@@ -461,23 +461,23 @@ def _render_docs(docs):
         story.append(HRFlowable(width="100%", thickness=0.6, color=colors.Color(0.8, 0.83, 0.87),
                                 spaceAfter=6))
         story.append(Paragraph(
-            "This statement summarises commission calculated for the period shown, from the figures produced "
-            "by the last commission run. It is provided for your reference. The commission structure it is "
+            "This statement summarises incentive calculated for the period shown, from the figures produced "
+            "by the last commission run. It is provided for your reference. The incentive structure it is "
             "based on is described in your Payout Structure document. If a figure looks wrong, raise it with "
             "your manager before the period closes.", st_cap))
 
     # ── footer identity + document metadata (batch-aware) ──
     _first = docs[0] if docs else {}
     tenant0 = _s(_first.get("tenant"))
-    subject = "Commission Statement" if len(docs) <= 1 else "Commission Statements"
+    subject = "Incentive Statement" if len(docs) <= 1 else "Incentive Statements"
     if len(docs) == 1:
         _emp, _per = _s(_first.get("employee")), _s(_first.get("period"))
         _title0 = _s(_first.get("title")) or subject
         footer_txt = f"{_emp + ' — ' if _emp else ''}{_title0}" + (f" — {_per}" if _per else "")
         pdf_title = f"{_title0}{' — ' + _emp if _emp else ''}"
     else:
-        footer_txt = f"{tenant0 + ' — ' if tenant0 else ''}Commission Statements"
-        pdf_title = f"Commission Statements{' — ' + tenant0 if tenant0 else ''}"
+        footer_txt = f"{tenant0 + ' — ' if tenant0 else ''}Incentive Statements"
+        pdf_title = f"Incentive Statements{' — ' + tenant0 if tenant0 else ''}"
 
     def on_page(canvas, _doc):
         """Footer: identity + page numbers. The standing caveat rides at the end of each rep's story."""
@@ -495,8 +495,8 @@ def _render_docs(docs):
     story = []
     if not docs:
         # A period with no reps still yields a valid one-page document, never a crash.
-        story.append(Paragraph("Commission Statements", st_title))
-        story.append(Paragraph("No reps with commission for this period.", st_body))
+        story.append(Paragraph("Incentive Statements", st_title))
+        story.append(Paragraph("No reps with incentive for this period.", st_body))
     else:
         for _i, _d in enumerate(docs):
             if _i:

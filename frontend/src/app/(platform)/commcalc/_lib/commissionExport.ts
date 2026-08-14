@@ -170,7 +170,7 @@ function individualSheets(r: CommissionRow, i: CommissionExportInput): ExportPay
       ...(isBoost
         ? [{ k: 'Tier multiplier', v: `${Math.round((r.tier || 0) * 100)}%` },
            { k: 'KPIs met', v: `${r.kpis_met}/${r.total_kpis}` }]
-        : [{ k: 'Commission Plan', v: r.plan_name || '— none assigned —' }]),
+        : [{ k: 'Incentive Plan', v: r.plan_name || '— none assigned —' }]),
       { k: 'Subtotal (pre-tier)', v: fmt(r.subtotal) },
       { k: 'Total payout', v: fmt(r.total_payout) },
       { k: 'Chargebacks deducted', v: fmt(-cb.deducted) },
@@ -184,7 +184,7 @@ function individualSheets(r: CommissionRow, i: CommissionExportInput): ExportPay
       { header: 'Item', get: (x: LineRow) => x.item },
       { header: 'Count', get: (x: LineRow) => x.count, align: 'right' },
       { header: 'Rate', get: (x: LineRow) => x.rate, align: 'right' },
-      { header: 'Commission', get: (x: LineRow) => x.amount, money: true },
+      { header: 'Incentive', get: (x: LineRow) => x.amount, money: true },
     ]
     const rows: LineRow[] = [
       { item: 'Premium Activations', count: r.premium_acts, rate: `${fmt(cfg.premium_flat || 0)}/act`, amount: r.premium_comm },
@@ -207,7 +207,7 @@ function individualSheets(r: CommissionRow, i: CommissionExportInput): ExportPay
       { header: 'Amount', get: (x: LineRow) => x.amount, money: true },
     ]
     const iSale = r.installment_comm_sale || 0, iResid = r.residual_installment_comm || 0
-    const rows: LineRow[] = [{ item: `Plan commission — ${r.plan_name || 'no plan assigned'}`, amount: r.plan_comm ?? 0 }]
+    const rows: LineRow[] = [{ item: `Plan incentive — ${r.plan_name || 'no plan assigned'}`, amount: r.plan_comm ?? 0 }]
     // mirrors the card: the sale-triggered row renders even at $0 (it is the one with a drill path),
     // unless the residual engine is the only payer — then a second $0 row would be meaningless
     if (iSale !== 0 || iResid === 0) rows.push({ item: `Multi-month installments${iResid !== 0 ? ' (sale-triggered)' : ''}`, amount: iSale })
@@ -243,7 +243,7 @@ export function buildCommissionExport(i: CommissionExportInput): ExportPayload {
     const r = i.currentRep
     const who = r ? repLabel(r) : ''
     return {
-      title: `Commission Statement — ${who || 'no rep selected'}`,
+      title: `Incentive Statement — ${who || 'no rep selected'}`,
       subtitle: `${i.period}${r?.store ? ` · ${r.store}` : ''}${r && !i.isBoost && r.plan_name ? ` · plan: ${r.plan_name}` : ''}`,
       filename: `commission-${slug(who)}-${slug(i.period)}`,
       sheets: r ? individualSheets(r, i) : [],
@@ -253,7 +253,7 @@ export function buildCommissionExport(i: CommissionExportInput): ExportPayload {
   const active = !!fd
   const isComp = i.tab === 'compensation'
   return {
-    title: isComp ? 'Compensation by Line' : 'Rep Commission Report',
+    title: isComp ? 'Compensation by Line' : 'Rep Incentive Report',
     subtitle: `${i.period} · ${i.filtered.length}${active ? ` of ${i.reps.length}` : ''} reps${fd ? ` · ${fd}` : ''}`,
     filename: `commissions-${isComp ? 'by-line-' : ''}${slug(i.period)}${active ? '-filtered' : ''}`,
     sheets: [{

@@ -98,7 +98,7 @@ export default function PlanAssignmentAuditPage() {
         <div className="card" style={{ borderLeft: '4px solid var(--red)', marginBottom: 14, fontSize: 13.5 }}>
           <b style={{ color: 'var(--red)' }}>{counts.by_name_override}</b> employee(s) have a <b>by-name pin that overrides their store/market plan</b>.
           Fixing their location will NOT change their pay while the by-name assignment stands — remove the employee-scope assignment on
-          the <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}>Commission Plans</a> page.
+          the <a href="/commcalc/commission-plans" style={{ color: 'var(--accent)' }}>Incentive Plans</a> page.
         </div>
       )}
 

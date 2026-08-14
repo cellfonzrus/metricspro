@@ -654,7 +654,7 @@ export default function SalesReportPage() {
                     Use the product catalog to classify accessories
                   </label>
                   <div style={{ fontSize: 11, color: 'var(--text3)', margin: '4px 0 8px' }}>
-                    When on, a sale line whose product matches a catalog row carrying an accessory category counts as accessory sales (in addition to the department/category/keyword rules above). Upload the catalog under <a href="/commcalc/upload" style={{ color: 'var(--accent)' }}>Data Imports → Product Catalog</a>; recategorize items at <a href="/commcalc/catalog" style={{ color: 'var(--accent)' }}>Catalog Categories</a>. <b>Money-adjacent</b>: widens accessory revenue/target and (via a Commission Plan rule keyed on <code>accessory</code>) accessory pay — re-run Calculate to apply.
+                    When on, a sale line whose product matches a catalog row carrying an accessory category counts as accessory sales (in addition to the department/category/keyword rules above). Upload the catalog under <a href="/commcalc/upload" style={{ color: 'var(--accent)' }}>Data Imports → Product Catalog</a>; recategorize items at <a href="/commcalc/catalog" style={{ color: 'var(--accent)' }}>Catalog Categories</a>. <b>Money-adjacent</b>: widens accessory revenue/target and (via an Incentive Plan rule keyed on <code>accessory</code>) accessory pay — re-run Calculate to apply.
                   </div>
                   {catOn && (
                     <div>

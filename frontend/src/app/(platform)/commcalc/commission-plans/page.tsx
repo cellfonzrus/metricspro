@@ -485,7 +485,7 @@ export default function CommissionPlansPage() {
   function coveragePayload(): ExportPayload {
     const c = cov?.coverage || {}
     return {
-      title: 'Commission Plan Coverage', subtitle: `${cov?.period || period} — read-only diagnostic`,
+      title: 'Incentive Plan Coverage', subtitle: `${cov?.period || period} — read-only diagnostic`,
       filename: `commission-coverage-${String(cov?.period || period).replace(/\s+/g, '-')}`,
       sheets: [
         { name: 'Uncovered sellers', rows: c.unassigned_reps || [], columns: [
@@ -556,7 +556,7 @@ export default function CommissionPlansPage() {
 
   function previewPayload(): ExportPayload {
     return {
-      title: 'Commission Plan Preview (read-only)', subtitle: `${period} — does NOT change live commissions`,
+      title: 'Incentive Plan Preview (read-only)', subtitle: `${period} — does NOT change live incentives`,
       filename: `commission-preview-${period.replace(/\s+/g, '-')}`,
       sheets: [{
         name: 'By Rep', rows: preview?.by_rep || [],
@@ -575,11 +575,11 @@ export default function CommissionPlansPage() {
   return (
     <div style={{ maxWidth: 1140 }}>
       <div style={{ marginBottom: 14 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧮 Commission Plans</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧮 Incentive Plans</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Build your own commission plans. Any line on the sales transaction report can qualify for commission
+          Build your own incentive plans. Any line on the sales transaction report can qualify for incentive
           on rules YOU define — then assign each plan to employees / stores / markets. The preview shows what a
-          plan <strong>would</strong> pay; it is <strong>read-only</strong> and does not change live commissions.
+          plan <strong>would</strong> pay; it is <strong>read-only</strong> and does not change live incentives.
         </p>
         <p style={{ fontSize: 13, margin: '6px 0 0' }}>
           🕵️ <a href="/commcalc/plan-assignment-audit" style={{ color: 'var(--accent)' }}>Plan Assignment Audit</a>
@@ -593,7 +593,7 @@ export default function CommissionPlansPage() {
       <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ fontWeight: 700, fontSize: 13 }}>⚡ Apply these plans to live pay</div>
         <RunCommissionButton period={period} onPeriodChange={setPeriod} periodOptions={periodOptions}
-          note="Saving a plan, rule, tier or assignment does not change anyone's pay by itself. Recalculate the period to write the new numbers into the Rep Commission report." />
+          note="Saving a plan, rule, tier or assignment does not change anyone's pay by itself. Recalculate the period to write the new numbers into the Rep Incentive report." />
       </div>
 
       {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || 'Run migration 059_commission_plans.sql in Supabase to enable.'}</div>}
@@ -606,7 +606,7 @@ export default function CommissionPlansPage() {
         <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>📄 Payout Structure</div>
           <span style={{ fontSize: 12, color: 'var(--text2)', flex: '1 1 240px', minWidth: 200 }}>
-            The employee-facing “how commission is earned” document — what pays, at what rate, how often, and
+            The employee-facing “how incentive is earned” document — what pays, at what rate, how often, and
             what never pays. Hand it to staff before they start selling. Read-only.
           </span>
           <button className="btn btn-secondary" onClick={() => downloadPayoutStructure()}
@@ -936,7 +936,7 @@ export default function CommissionPlansPage() {
       {/* PREVIEW */}
       <div className="card" style={{ padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-          <div style={{ fontWeight: 700, fontSize: 14 }}>👁️ Preview <span style={{ fontWeight: 400, fontSize: 12, color: '#b45309' }}>(read-only — does NOT change live commissions)</span></div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>👁️ Preview <span style={{ fontWeight: 400, fontSize: 12, color: '#b45309' }}>(read-only — does NOT change live incentives)</span></div>
           <span style={{ flex: 1 }} />
           <EntityPicker options={periodOptions} value={period || null} width={170} allowCreate clearable={false}
             placeholder="pick a period…" onChange={v => setPeriod(v || '')} onCreate={v => setPeriod(v)}
@@ -1246,7 +1246,7 @@ export default function CommissionPlansPage() {
             <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
               <input type="checkbox" checked={!!sf.config?.default?.include_in_commission} disabled={sfBusy}
                 onChange={e => saveSf({ ...sf.config, default: { ...sf.config.default, include_in_commission: e.target.checked } })} />
-              <span>Part of employee commission</span>
+              <span>Part of employee incentive</span>
             </label>
             <label style={{ fontSize: 12 }}>
               <div style={{ color: 'var(--text3)', marginBottom: 2 }}>Employee % of fee collected</div>
@@ -1368,8 +1368,8 @@ export default function CommissionPlansPage() {
           {cov.snapshot?.stale && (
             <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 8, padding: '8px 10px', fontSize: 12.5, marginBottom: 10 }}>
               ⚠️ <b>Stored snapshot is stale.</b> The plans compute {fmt(cov.snapshot.engine_total)} for {cov.period} but
-              the saved commission rows total {fmt(cov.snapshot.stored_total)} across {cov.snapshot.stored_rows} rows.
-              The commission pages show the SAVED numbers — run <b>Calculate</b> for this period to apply the current configuration.
+              the saved incentive rows total {fmt(cov.snapshot.stored_total)} across {cov.snapshot.stored_rows} rows.
+              The incentive pages show the SAVED numbers — run <b>Calculate</b> for this period to apply the current configuration.
             </div>
           )}
           {(cov.coverage?.plan_warnings || []).length > 0 && (
