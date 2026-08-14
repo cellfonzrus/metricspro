@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { api, fmt, ORG_ID } from '@/lib/client'
+import { api, apiDownload, apiFetchBase64, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
@@ -190,6 +190,35 @@ export default function ReportsPage() {
     a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(payloadToCsv(p))
     a.download = `${p.filename}.csv`; a.click()
   }
+  // ── ITEMIZED COMMISSION STATEMENT PDF (server-rendered, richer than the jsPDF table export) ────────
+  // A DIFFERENT document from the CSV/Excel/PDF table above: the per-rep line-by-line "what YOU earned"
+  // statement (backend commission_statement.py). WYSIWYG scope is preserved — Individual tab downloads
+  // the selected rep ALONE; the team tabs download exactly the FILTERED rep set the CSV/Excel export uses,
+  // in the same order. The rep NAME passed is the SAME expression the explain/drill flow uses
+  // (repLabel = storeops_name || epay_salesperson), so it resolves identically in explain_rep.
+  function downloadStatement() {
+    const r = currentRep
+    if (!r) return
+    apiDownload(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(repLabel(r))}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`)
+      .catch(e => alert(`Could not generate statement: ${e?.message || e}`))
+  }
+  function downloadAllStatements() {
+    const names = filtered.map(repLabel).filter(Boolean)
+    if (!names.length) { alert('No reps to export for the current filter.'); return }
+    apiDownload(`/api/v1/commcalc/commission-statements?period=${encodeURIComponent(period)}&reps=${encodeURIComponent(names.join(','))}&org_id=${ORG_ID}`)
+      .catch(e => alert(`Could not generate statements: ${e?.message || e}`))
+  }
+  // Send the selected rep's server-rendered statement PDF through the shared /notify/send-file modal
+  // (SendReportButton serverFiles path). Same rep-name expression as downloadStatement, so it resolves
+  // identically in explain_rep.
+  async function currentRepStatementFiles() {
+    const r = currentRep
+    if (!r) return []
+    const name = repLabel(r)
+    const b64 = await apiFetchBase64(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(name)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`)
+    const safe = `${name}-${period}`.replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
+    return [{ filename: `commission-statement-${safe}.pdf`, mime: 'application/pdf', content_b64: b64 }]
+  }
   // Cheap title for the Send modal's header (buildPayload() itself only runs on click).
   const exportTitle = tab === 'individual'
     ? `Commission Statement — ${currentRep ? repLabel(currentRep) : 'no rep selected'}`
@@ -298,6 +327,20 @@ export default function ReportsPage() {
             /notify/send-file), NOT the old server report-key path (reportKey "commissions", period
             only) which re-queried the whole org and emailed every rep's pay. */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {/* Itemized per-rep statement PDF (server-rendered). Individual tab → the selected rep alone;
+              team tabs → every rep currently shown, in one multi-page PDF. Additional to the exports at
+              right, not a replacement for the proven WYSIWYG table export. */}
+          {tab === 'individual' ? (
+            <button className="btn btn-secondary" onClick={downloadStatement} disabled={!currentRep}
+              title="Download this rep's itemized commission statement (line-by-line, PDF)">
+              📄 Commission Statement
+            </button>
+          ) : (
+            <button className="btn btn-secondary" onClick={downloadAllStatements} disabled={!filtered.length}
+              title="Download an itemized commission statement for every rep currently shown — one PDF">
+              📄 All Statements (PDF)
+            </button>
+          )}
           <button className="btn btn-secondary" onClick={downloadCSV}>📥 CSV</button>
           <ExportButtons payload={buildPayload} compact />
           <SendReportButton exportPayload={buildPayload} title={exportTitle} compact />
@@ -424,6 +467,18 @@ export default function ReportsPage() {
                 title="Plan + multi-month drill-down: which assignment, per-rule lines, installment gates & MA cross-reference">
                 🔬 How was this calculated?
               </a>
+            )}
+            {/* This rep's itemized statement — co-located with the rep selector so it is reliably visible
+                on the Individual Rep tab (there is also a copy in the top export bar). */}
+            {currentRep && (
+              <button className="btn btn-secondary" onClick={downloadStatement}
+                title="Download this rep's itemized commission statement (line-by-line, PDF)">
+                📄 Commission Statement (PDF)
+              </button>
+            )}
+            {currentRep && (
+              <SendReportButton title={`Commission statement — ${repLabel(currentRep)} — ${period}`}
+                label="📤 Send statement" serverFiles={currentRepStatementFiles} />
             )}
             {/* This rep's Google store rating(s) — chips sit beside the person, exactly like on the
                 ranking/review scorecards. Renders nothing when there is no rating data. */}
