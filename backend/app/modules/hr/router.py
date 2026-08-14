@@ -945,11 +945,16 @@ def _require_hr_or_admin(authorization: str):
     role = (u.get("role") or "").lower()
     ok = bool(u.get("super_admin")) or role in ("admin",) or "hr" in role
     if not ok:
-        # allow a custom role explicitly scoped to HR management (permissions.hr == true)
+        # Allow a custom role granted HR management. The Roles UI writes the HR grant as
+        # permissions.modules.hr (the module toggle / "HR" template) — the SAME key the frontend
+        # route guard and the rest of the app gate `/hr` on. The older top-level permissions.hr is
+        # kept for backward-compatibility, but no UI path writes it, so a module-granted HR manager
+        # would otherwise reach every HR page yet be denied THIS sensitive-reveal endpoint alone.
         try:
             rr = (get_supabase().schema("storeops").table("roles").select("permissions")
                   .eq("org_id", u.get("org_id") or ORG_ID).eq("name", u.get("role")).limit(1).execute().data) or []
-            if ((rr[0].get("permissions") if rr else {}) or {}).get("hr"):
+            _perms = ((rr[0].get("permissions") if rr else {}) or {})
+            if _perms.get("hr") or (_perms.get("modules") or {}).get("hr"):
                 ok = True
         except Exception:
             pass
