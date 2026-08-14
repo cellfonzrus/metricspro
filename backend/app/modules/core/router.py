@@ -85,6 +85,22 @@ def set_auth_config(body: dict, org_id: str = ORG_ID, authorization: str = Heade
     house-org admin), exactly like the other platform-level operations."""
     _require_super_admin(authorization, x_active_org)
     enabled = bool(body.get("rbac_enabled"))
+    if enabled:
+        # LOCKOUT GUARD (2026-08-14 incident): turning enforcement ON while no active account holds the
+        # Admin role locks EVERYONE out — the "You're signed in, but no role has been assigned" self-
+        # lockout. Refuse unless at least one active app_users row has role='admin', so someone can
+        # always get back in to manage roles. (A super_admin flag alone is intentionally NOT sufficient:
+        # a super_admin with an empty role still hits the frontend "no role" gate — exactly how it broke.)
+        try:
+            urows = (sb().schema("storeops").table("app_users").select("role,is_active").execute().data) or []
+        except Exception:
+            urows = []
+        has_active_admin = any(u.get("is_active", True) is not False
+                               and str(u.get("role") or "").strip().lower() == "admin" for u in urows)
+        if not has_active_admin:
+            raise HTTPException(400, "Can't turn on login enforcement: no active user has the Admin role, "
+                                     "so everyone (including you) would be locked out. Assign the Admin role "
+                                     "to at least one active account first, then enable enforcement.")
     sb().schema("storeops").table("app_config").upsert(
         {"id": 1, "org_id": org_id, "rbac_enabled": enabled,
          "updated_at": datetime.now(timezone.utc).isoformat()}, on_conflict="id").execute()
