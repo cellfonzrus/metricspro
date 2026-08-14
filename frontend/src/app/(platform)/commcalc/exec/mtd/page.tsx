@@ -97,6 +97,14 @@ export default function ExecMtdPage() {
   // What the SERVER actually did with the requested window (clamped / no overlap / undated lines it had
   // to drop). A backend that predates the range simply omits it -> {} -> the status line never renders.
   const dr = data?.date_range || {}
+  // ACTIVATION-CLASSIFICATION GAP (mig 213/224). Total Activation counts only transactions whose Contract
+  // Type resolves to an activation bucket; a Contract Type the tenant's map doesn't cover (e.g. Home
+  // Internet / FiOS / Tablet activation labels) is silently EXCLUDED — the usual reason this total reads
+  // LOWER than the b2bsoft MTD number. The backend returns the unrecognized labels + a human note; a
+  // backend that predates this simply omits it -> {} -> the banner never renders. Fully-mapped tenant or
+  // the house org -> note null -> hidden.
+  const gaps = data?.classification_gaps || {}
+  const unrecCts: { contract_type: string; transactions: number; lines: number }[] = gaps.unrecognized_contract_types || []
 
   // 16-column layout, in the exact order of the owner's spreadsheet, THEN two appended reconciliation
   // columns (the spreadsheet's own order is preserved). Conv. exported as the raw ratio (as the file
@@ -231,6 +239,44 @@ export default function ExecMtdPage() {
             {src.stores_from_other > 0 && <> · <b>{src.stores_from_other}</b> store{src.stores_from_other === 1 ? '' : 's'} pulled from {src.other === 'raw_sales' ? 'raw_sales' : 'the feed'} that the primary didn’t carry</>}
             {src.filled_cells > 0 && <> · {src.filled_cells} filled + {src.richer_cells || 0} richer store-day cell(s)</>}
           </span>
+        </div>
+      )}
+
+      {/* ACTIVATION-CLASSIFICATION GAP (owner 2026-08-13, "luxelink activations don't match b2bsoft").
+          Total Activation = distinct transactions whose Contract Type resolves to an activation bucket
+          (Activation/Port/BYOD/Upgrade). A Contract Type the tenant's map doesn't cover — a Total-carrier
+          tenant's Home Internet / FiOS / Tablet activation labels are the usual culprits — resolves to None
+          and is EXCLUDED, so this total reads lower than the b2bsoft MTD count that includes them. Naming the
+          uncounted labels (and how many transactions each hides) turns a silent low number into a one-click
+          fix in Classification settings. Hidden when nothing is unmapped (note null). */}
+      {gaps.note && (
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#fffbeb', border: '1px solid #fde68a',
+          color: '#92400e', borderRadius: 8, padding: '9px 12px' }}>
+          <div style={{ fontWeight: 700, marginBottom: 3 }}>⚠️ Some activations aren’t being counted in Total Activation</div>
+          <div style={{ marginBottom: unrecCts.length ? 6 : 0 }}>
+            Home Internet, FiOS, FWA and Tablet activations are now counted automatically. These remaining
+            Contract Type labels still aren’t recognized, so their transactions fall out of the activation
+            count (this is why the total can read lower than the b2bsoft MTD report, which counts them).
+          </div>
+          {unrecCts.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+              {unrecCts.slice(0, 12).map((u) => (
+                <span key={u.contract_type} style={{ background: '#fef3c7', border: '1px solid #fcd34d',
+                  borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                  {u.contract_type} <b>×{u.transactions}</b>
+                </span>
+              ))}
+              {unrecCts.length > 12 && <span style={{ padding: '2px 4px' }}>+{unrecCts.length - 12} more…</span>}
+            </div>
+          )}
+          <div>
+            Map each label to <b>Activation</b>, <b>BYOD</b> or <b>Upgrade</b> (or <b>None</b> to exclude on
+            purpose) in{' '}
+            <Link href="/commcalc/sales-report" style={{ color: '#92400e', fontWeight: 700, textDecoration: 'underline' }}>
+              Sales Report → ⚙ Classification settings
+            </Link>{' '}
+            and this total will reconcile to b2bsoft. This changes reporting only — no commission pay is affected.
+          </div>
         </div>
       )}
 

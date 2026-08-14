@@ -12599,6 +12599,195 @@ def payout_structure_document(fmt: str = "pdf", plan_id: str = "", org_id: str =
                              f'attachment; filename="{_ps.filename_for(doc)}"'})
 
 
+# ── INDIVIDUAL COMMISSION STATEMENT DOCUMENT (companion to the Payout Structure PDF) ───────────────
+# The payout-structure doc above describes HOW commission is earned; this is the per-employee STATEMENT
+# of what ONE employee earned for ONE period, itemized. READ-ONLY: it computes no pay and writes nothing
+# — every dollar is sourced from commission_drilldown.explain_rep (whose plan half is
+# commission_engine.preview(detail=True) — the same resolution the live calc uses), the sale-installment
+# ledger it reads, rep_commissions.total_payout (the paid number, via the drill-down's reconciliation),
+# and the five canonical commission_ledger buckets. See commission_statement.py's header.
+def _statement_buckets(client, org_id, period, rep, source_report="ma_daily_tx"):
+    """The five canonical commission_ledger buckets for ONE rep + period, or None. READ-ONLY, org-scoped.
+    Mirrors the /commission-ledger/by-rep rollup but keeps only the requested rep (canon-matched).
+    Degrades to None on any error / unapplied migration 071 / no rows — never raises."""
+    from app.modules.commcalc.commission_engine import _canon_person
+    CATS = commission_ledger.CATEGORIES
+    try:
+        q = (client.schema("commcalc").table("commission_ledger")
+             .select("rep_user," + ",".join(CATS))
+             .eq("org_id", org_id).eq("source_report", source_report))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        lrows = q.limit(100000).execute().data or []
+    except Exception:
+        return None
+    if not lrows:
+        return None
+    cmap = _rep_canon_map(client, org_id)
+    want = _canon_person(rep)
+    agg, hit = {c: 0.0 for c in CATS}, False
+    for r in lrows:
+        canon = _canon((r.get("rep_user") or "").strip(), cmap)
+        if _canon_person(canon) != want:
+            continue
+        hit = True
+        for c in CATS:
+            agg[c] = round(agg[c] + safe_float(r.get(c)), 2)
+    return agg if hit else None
+
+
+@router.get("/commission-statement")
+def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
+                                  source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+    """The individual per-employee Commission Statement — what YOU earned, line by line.
+
+    fmt=pdf (default) downloads it; fmt=json returns the SAME document model so an on-screen preview and
+    the PDF can never disagree (same contract as payout-structure). Every number is re-stated from the
+    read-only drill-down; nothing is computed or written here.
+    """
+    require_org(org_id)
+    if not rep:
+        raise HTTPException(400, "rep required")
+    if not period:
+        raise HTTPException(400, "period required")
+    from fastapi import Response
+    from app.modules.commcalc import commission_statement as _cst
+    from app.modules.commcalc import commission_drilldown as _dd
+    from app.modules.commcalc import plan_pay_gate as _ppg
+
+    client = sb()
+    # Same carrier-mode resolution the /commission-explain endpoint uses, so the drill-down narrates
+    # this tenant's engine correctly. Degrades to the plan engine on any error.
+    try:
+        carriers = (client.schema('commcalc').table('carrier').select('*')
+                    .eq('org_id', org_id).execute().data) or []
+        mode = _resolve_carrier_mode(carriers)
+    except Exception:
+        mode = "plan"
+    # SINGLE SOURCE OF TRUTH for this rep's earnings (plan component + multi-month ledger + the
+    # rep_commissions reconciliation). This read is what makes the statement read-only.
+    try:
+        explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=mode)
+    except Exception as e:
+        raise HTTPException(500, f"commission-statement drill-down failed: {e}")
+    # Optional five-bucket rollup + gate config both degrade to None so a missing optional migration
+    # (071 ledger / 260 pay gate) yields a valid document rather than a 500.
+    buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
+    try:
+        gate_cfg = _ppg.load_gate_config(client, org_id)
+    except Exception:
+        gate_cfg = None
+    # The tenant's real name heads the document; a tenant with no storeops row still gets a valid one.
+    tenant = ""
+    try:
+        _t = (client.schema("storeops").table("tenants").select("name")
+              .eq("org_id", org_id).limit(1).execute().data) or []
+        tenant = (_t[0].get("name") or "") if _t else ""
+    except Exception:
+        tenant = ""
+
+    doc = _cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
+                               period=period, gate_cfg=gate_cfg)
+    if (fmt or "pdf").strip().lower() == "json":
+        return doc
+    return Response(content=_cst.render_pdf(doc), media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{_cst.filename_for(doc)}"'})
+
+
+def _statement_period_reps(client, org_id, period, store="", market=""):
+    """The reps to include in an all-reps batch when the caller passes no explicit list: everyone with a
+    rep_commissions row for the period (the SAME source the /commissions reports page enumerates), highest
+    payout first, optionally narrowed by store / market. Returns display names (storeops_name preferred).
+    READ-ONLY; degrades to [] on any error."""
+    try:
+        rows = (client.schema("commcalc").table("rep_commissions")
+                .select("epay_salesperson,storeops_name,store,total_payout")
+                .eq("org_id", org_id).in_("period", _pvariants(period))
+                .order("total_payout", desc=True).limit(5000).execute().data) or []
+    except Exception:
+        return []
+    _resolve_market, _ = _store_market_resolver(client, org_id)
+    out, seen = [], set()
+    for r in rows:
+        st = str(r.get("store") or "").strip()
+        if store and st != store:
+            continue
+        if market and (_resolve_market(st) or "") != market:
+            continue
+        name = str(r.get("storeops_name") or r.get("epay_salesperson") or "").strip()
+        key = name.upper()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        out.append(name)
+    return out
+
+
+@router.get("/commission-statements")
+def commission_statements_batch(period: str, reps: str = "", store: str = "", market: str = "",
+                                fmt: str = "pdf", source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+    """EVERY rep's Commission Statement for a period, in ONE multi-page PDF (one rep per page).
+
+    `reps` (comma-separated) renders exactly those, in that order — the reports page passes its filtered/
+    on-screen rep set here so the batch matches WYSIWYG scope. When `reps` is omitted the rep list is
+    derived from rep_commissions for the period (optionally narrowed by store/market). fmt=json returns
+    the list of document models the PDF renders from. READ-ONLY throughout; a rep whose drill-down fails
+    is SKIPPED (never 500s the whole batch), and a period with no reps yields a valid one-page PDF.
+    """
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    from fastapi import Response
+    from app.modules.commcalc import commission_statement as _cst
+    from app.modules.commcalc import commission_drilldown as _dd
+    from app.modules.commcalc import plan_pay_gate as _ppg
+
+    client = sb()
+    rep_list = [r.strip() for r in (reps or "").split(",") if r.strip()]
+    if not rep_list:
+        rep_list = _statement_period_reps(client, org_id, period, store=store, market=market)
+
+    try:
+        carriers = (client.schema('commcalc').table('carrier').select('*')
+                    .eq('org_id', org_id).execute().data) or []
+        mode = _resolve_carrier_mode(carriers)
+    except Exception:
+        mode = "plan"
+    try:
+        gate_cfg = _ppg.load_gate_config(client, org_id)
+    except Exception:
+        gate_cfg = None
+    tenant = ""
+    try:
+        _t = (client.schema("storeops").table("tenants").select("name")
+              .eq("org_id", org_id).limit(1).execute().data) or []
+        tenant = (_t[0].get("name") or "") if _t else ""
+    except Exception:
+        tenant = ""
+
+    docs = []
+    for rep in rep_list:
+        try:
+            explain = _dd.explain_rep(client, org_id, period, rep, carrier_mode=mode)
+        except Exception:
+            continue   # one bad rep must not sink the whole batch
+        buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
+        docs.append(_cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
+                                         period=period, gate_cfg=gate_cfg))
+
+    if (fmt or "pdf").strip().lower() == "json":
+        return {"period": period, "count": len(docs), "statements": docs}
+    parts = [p for p in [tenant, period, "commission-statements"] if p]
+    slug = "-".join(parts).lower()
+    fname = "".join(c if (c.isalnum() or c == "-") else "-" for c in slug)
+    while "--" in fname:
+        fname = fname.replace("--", "-")
+    fname = (fname.strip("-") or "commission-statements") + ".pdf"
+    return Response(content=_cst.render_statements_pdf(docs), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 @router.post("/commission-plans")
 async def save_commission_plan(body: dict, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
@@ -17503,6 +17692,18 @@ _VOID_TOKENS = _GP_VOID_TOKENS
 # (mig 214) — an empty per-org list falls back to these so the house/Boost conversion stays byte-identical.
 _BILLPAY_DEFAULT_TOKENS = ('boost rtr', 'xfinity prepaid refill')
 
+# DISPLAY-ONLY auto-recognition of NON-PHONE ACTIVATION categories whose Contract Type labels the phone
+# classifier (calculator.classify_contract_type, tuned to Boost handset labels) does not recognize (owner
+# 2026-08-13, "luxelink activations don't match b2bsoft" — Diversey read 30 vs 49 because Home Internet /
+# FiOS / Tablet activations resolved to None and dropped out of Total Activation). A Total-carrier B2B
+# Month-To-Date report counts these as activations, so the store total has to as well. Substring, lower-cased
+# — deliberately keyword-shaped (never "any non-blank label") so a stray non-activation type can't be swept
+# in. See _resolve_ct_bucket for the strict gating that keeps the house/Boost org byte-identical.
+# 'edge' = a carrier early-upgrade / device-lease activation (e.g. Verizon Edge); the b2bsoft MTD report
+# counts it in Total Activation, so it belongs here (owner's Diversey breakdown 2026-08-13: 7 new act + 18
+# port + 6 byod + 12 tablet + 5 home internet + 1 edge = 49).
+_AUTO_ACT_CATEGORY_KEYS = ('home internet', 'home-internet', 'fixed wireless', 'fwa', 'fios', 'tablet', 'edge')
+
 
 def _resolve_ct_bucket(ct, ct_map=None):
     """DISPLAY-path contract-type classification with a per-org override (mig 213). Returns
@@ -17514,14 +17715,35 @@ def _resolve_ct_bucket(ct, ct_map=None):
     empty map (the house/Boost default) is BYTE-IDENTICAL to calling classify_contract_type directly, and a
     tenant only needs to map the labels the hard-coded set misses. Pure; never raises.
 
+    NON-PHONE ACTIVATION AUTO-COUNT (owner 2026-08-13). After an explicit map miss AND a phone-classifier
+    miss, a CONFIG-DRIVEN tenant (one that maintains a non-empty contract_type_map) also gets the well-known
+    non-phone activation categories in _AUTO_ACT_CATEGORY_KEYS (Home Internet / FiOS / Tablet / FWA)
+    recognized as 'premium', so those activations count toward Total Activation the way the b2bsoft MTD report
+    counts them. Three guards keep this safe:
+      • The house/Boost org has an EMPTY map -> this branch is skipped -> BYTE-IDENTICAL (no house number
+        moves). Only a tenant that has already opted into config-driven classification is affected.
+      • It fires ONLY for a label the tenant did NOT explicitly map — so mapping a label to 'none' (or to any
+        bucket) still wins and is the escape hatch to exclude a category on purpose.
+      • It fires ONLY when the phone classifier found no signal, so 'Tablet Upgrade' stays 'upgrade' and
+        'BYOD Home Internet' stays 'byod' (byod/upgrade are decided first in classify_contract_type).
+
     DISPLAY ONLY: used by _sales_cell_agg (Sales Report / Executive MTD / Daily Targets). The Boost payout
-    path (calculator.classify_contract_type) and plan-mode payout (commission_engine) do NOT call this, so a
-    mapping never moves a commission/payout number."""
+    path (calculator.classify_contract_type) and plan-mode payout (commission_engine) do NOT call this, so
+    neither the map nor the auto-count ever moves a commission/payout number."""
     if ct_map:
         b = ct_map.get(str(ct or "").strip().lower())
         if b:
             return None if b == "none" else b
-    return classify_contract_type(ct)
+    base = classify_contract_type(ct)
+    if base:
+        return base
+    # Config-driven tenants only (non-empty map): auto-count the non-phone activation categories the phone
+    # classifier misses. Empty map (house/Boost) -> skipped -> byte-identical.
+    if ct_map:
+        cl = str(ct or "").strip().lower()
+        if cl and any(k in cl for k in _AUTO_ACT_CATEGORY_KEYS):
+            return 'premium'
+    return None
 
 
 def _line_cond_hit(cond, lines):
@@ -17690,7 +17912,11 @@ def _classification_gaps(rows, acfg, is_excluded=None):
             if tid:
                 txn_classed.add(tid)
         elif ct:
-            if 'swap' not in ct.lower():
+            # A label the tenant EXPLICITLY mapped to 'none' is a DELIBERATE exclusion, not a gap — don't
+            # nag them to "map it so it counts" (it resolves to None on purpose). Swaps are likewise not an
+            # activation gap. Everything else that resolves to None with a non-blank label is unrecognized.
+            _explicit_none = bool(ct_map) and ct_map.get(ct.lower()) == 'none'
+            if 'swap' not in ct.lower() and not _explicit_none:
                 unrec_lines[ct] += 1
                 if tid:
                     unrec_txn.setdefault(ct, set()).add(tid)
@@ -20099,7 +20325,31 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
     store_rows = _finish(by_store, 'store')
     emps = _finish(by_emp, 'employee')
+
+    # ── Activation-classification VISIBILITY (mig 213/224) — why "Total Activation" can read LOW.
+    #    Executive MTD's Total Activation counts DISTINCT transactions whose Contract Type resolves to an
+    #    activation bucket (premium / byod / upgrade) via the SHARED classifier + the tenant's contract-type
+    #    map. A Contract Type the map doesn't cover (e.g. a Total-carrier tenant's Home Internet / FiOS /
+    #    Tablet activation labels) resolves to None and is silently EXCLUDED from the count — the exact reason
+    #    the b2bsoft MTD total (which counts those) reads higher than this page. The Sales Report already
+    #    surfaces this over the SAME rows and the SAME `_classification_gaps`; carrying it here too means the
+    #    Exec MTD/trend surface names WHICH labels are uncounted (and by how many transactions) with a path to
+    #    map them, instead of showing a lower total with no explanation. Computed over the filter-applied
+    #    `rows` so a store/market/rep selection reports that scope's gaps. DISPLAY-ONLY; pure; never raises;
+    #    empty everything (house/Boost, or a fully-mapped tenant) → note None → the UI banner stays hidden.
+    try:
+        from app.modules.commcalc import plan_pay_gate as _ppg_ex
+        _exc_rules_ex, _ = _ppg_ex.load_exclusions(client, org_id)
+        _is_exc_ex = (lambda _r: _ppg_ex.exclusion_hit(_r, _exc_rules_ex) is not None) if _exc_rules_ex else None
+    except Exception:
+        _is_exc_ex = None
+    try:
+        _cls_gaps_ex = _classification_gaps(rows, acfg, is_excluded=_is_exc_ex)
+    except Exception:
+        _cls_gaps_ex = {'note': None}
+
     return {'period': period, 'source': meta,
+            'classification_gaps': _cls_gaps_ex,
             'filters': filters, 'applied': applied,
             'date_range': {'active': rng_on, 'from': rng_from_s, 'to': rng_to_s,
                            'requested_from': (str(date_from)[:10] or None) if date_from else None,
