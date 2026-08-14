@@ -345,10 +345,48 @@ function errMsg(err: any, status?: number): string {
   return String(d ?? (status ? `API error ${status}` : 'Request failed'))
 }
 
+// ── SESSION TOKEN MEMO (login/nav-perf) ──────────────────────────────────────────────────────────
+// bearer() runs on EVERY api()/apiUpload()/authedFileGet() call, and a typical page fires several of
+// them. It used to call supabase.auth.getSession() each time — an operation that takes the auth
+// client's lock, reads + JSON-parses the session out of localStorage and, when concurrent calls
+// queue behind the auth library's own refresh, serializes them. On a page that fires 5–10 api()
+// calls that is 5–10 serialized lock acquisitions before the first request even leaves the browser.
+//
+// The token itself only changes on sign-in, sign-out and background refresh — all of which
+// supabase.auth.onAuthStateChange delivers (INITIAL_SESSION / SIGNED_IN / TOKEN_REFRESHED /
+// SIGNED_OUT). So we mirror the current access_token here from that ONE listener and hand it out
+// synchronously, keeping the exact { Authorization: 'Bearer …' } contract bearer() always returned.
+//
+// CORRECTNESS: the cached token is trusted only while it is still comfortably before its own expiry
+// (expires_at, epoch seconds). Within the skew window — or when we have no cached token yet (very
+// first call before the listener fires, SSR) — we fall back to getSession(), which refreshes an
+// expired token exactly as before. So an expired/near-expired token is never sent; the fast path is
+// simply "a valid, non-expiring token we already hold".
+let _cachedToken: string | null = null
+let _cachedTokenExp = 0                    // access_token exp (epoch seconds); 0 = unknown ⇒ never trusted
+const _TOKEN_SKEW_S = 30                    // stop trusting the cached token this many seconds before exp
+
+if (typeof window !== 'undefined') {
+  supabase.auth.onAuthStateChange((_event, session) => {
+    _cachedToken = session?.access_token || null
+    _cachedTokenExp = session?.expires_at || 0
+  })
+}
+
 async function bearer(): Promise<Record<string, string>> {
   try {
+    const now = Date.now() / 1000
+    // Fast path: a token we already hold that is verified-fresh — no lock, no storage read, no await
+    // on the auth library. Requires a real future exp so an unknown/0 exp is never trusted forever.
+    if (_cachedToken && _cachedTokenExp - now > _TOKEN_SKEW_S) {
+      return { Authorization: `Bearer ${_cachedToken}` }
+    }
+    // Slow path (first call, or token near/at expiry): let the auth library read + refresh as before,
+    // and refresh our memo from the authoritative result.
     const { data } = await supabase.auth.getSession()
     const tok = data?.session?.access_token
+    _cachedToken = tok || null
+    _cachedTokenExp = data?.session?.expires_at || 0
     if (tok) return { Authorization: `Bearer ${tok}` }
   } catch { /* not signed in / open mode */ }
   return {}

@@ -434,9 +434,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await loadProfile(data.session)
       setLoading(false)
     })
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_e, sess) => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, sess) => {
       if (!mounted) return
       setSession(sess)
+      // RE-ARM `loading` while the new session's profile is resolved. Without this, a fresh sign-in
+      // exposed the "no access on login until refresh" race: the initial getSession() above has
+      // already flipped `loading` to false, so when SIGNED_IN fires this handler set `session` (truthy)
+      // and only populated `provisioned`/`permissions` AFTER the awaited loadProfile — leaving a window
+      // where `loading` is false, `session` is set and `provisioned` is still false. Consumers that gate
+      // on `loading` (the login page's redirect + its "No access yet" card, the platform Guard) read
+      // that window as "authenticated but unprovisioned" and flash a denied screen until loadProfile
+      // lands; a manual refresh took the getSession() path (loading held true until the profile loaded)
+      // and so appeared to "fix" it. Holding loading true here makes both paths identical.
+      //
+      // EXCEPT a background TOKEN_REFRESHED, which only swaps the access token for the SAME signed-in
+      // user whose profile is already loaded — re-arming loading there would flash the whole app into a
+      // spinner every time the token auto-refreshes (~hourly). Its profile reload stays as-is.
+      if (event !== 'TOKEN_REFRESHED') setLoading(true)
       await loadProfile(sess)
       setLoading(false)
     })
