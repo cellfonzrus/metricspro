@@ -2991,7 +2991,28 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
     rows = q.order("clock_in", desc=True).limit(5000).execute().data or []
     eids = scope_emp_ids(authorization, org_id, since=start or None, until=end or None)   # None = unrestricted
     if eids is not None:
-        rows = [e for e in rows if str(e.get("employee_id")) in eids]
+        # DETECTION FIX (2026-08-14, mod-people): canonicalize BOTH the span's employee_ids and each
+        # punch's employee_id to the BUSINESS id before comparing — the SAME numeric-vs-business
+        # reconciliation GET /timeclock/attendance-exceptions (this file, ~30 lines below) and
+        # payroll_identity.business_id_alias_map already apply, so the two admin reads finally resolve
+        # identity the SAME robust way the token-scoped /timeclock/status read does.
+        #
+        # WHY: scope_emp_ids -> core.scope.reporting_employee_ids builds the span from THREE sources —
+        # the roster (business id "E45"), timelog (business id), and SHIFTS. A Schedule-page shift
+        # stores employee_id as the NUMERIC employees.id ("45"), so a rep whose ONLY evidence of span
+        # membership is such a shift lands in `eids` as "45" while her real punch row carries "E45".
+        # Raw `str(employee_id) in eids` then DROPS a genuine, in-scope, registered punch — the exact
+        # "her kiosk says clocked-in since 9:56 but the admin Time Clock list shows no punch" divergence.
+        # Canonicalizing NEVER widens the span across tenants or stores (still org- + keyset-scoped);
+        # it only stops an id-FORM mismatch from hiding a punch the span already meant to include.
+        try:
+            _emps = sb().table("employees").select("id,employee_id").eq("org_id", org_id).execute().data or []
+        except Exception:
+            _emps = []
+        _alias = _business_id_alias_map(_emps)
+        _canon_eids = {_alias.get(str(x), str(x)) for x in eids}
+        rows = [e for e in rows
+                if _alias.get(str(e.get("employee_id")), str(e.get("employee_id"))) in _canon_eids]
     for e in rows:
         e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
     if start and end:
