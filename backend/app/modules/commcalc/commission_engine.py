@@ -248,6 +248,59 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=Fal
     return best
 
 
+def audit_flags(winner, considered, rep_market=None, known_markets=None):
+    """PURE flag logic for the Plan Assignment Audit — no I/O, so it is unit-testable in isolation.
+
+    It consumes ONLY the `winner` + `considered` structures `_resolve_plan_for(explain=True)` returns
+    (the single source of truth for what pays), so the audit can never disagree with the live matcher.
+
+    Flags returned (a list of {"flag": ..., ...} dicts):
+      • no_plan          — nothing matched; the rep resolves to no plan (winner is None).
+      • by_name_override — THE SILVIA CASE. The winner is an EMPLOYEE-scope (by-name) pin AND a
+                           DIFFERENT plan ALSO matched this rep on store or market. The by-name pin
+                           (rank 4) outranks the location plan (rank 2/1), so fixing the rep's store /
+                           market does nothing while the pin stands. Carries `overridden_plans`
+                           (the location-based plan(s) the pin beat), so the operator sees exactly what
+                           to remove.
+      • location_mismatch — LOW-CONFIDENCE, best-effort text hint. The winning plan's NAME names a
+                           market string other than the rep's own resolved market. Never a matcher —
+                           purely a "does this look wrong?" nudge computed from `known_markets`.
+    """
+    flags = []
+    if winner is None:
+        flags.append({"flag": "no_plan"})
+        return flags
+    win_scope = (winner.get("scope") or "").strip().lower()
+    win_pid = winner.get("plan_id")
+    if win_scope == "employee":
+        overridden, seen = [], set()
+        for c in (considered or []):
+            if not c.get("matched"):
+                continue
+            cscope = (c.get("scope") or "").strip().lower()
+            if cscope in ("store", "market") and c.get("plan_id") != win_pid:
+                k = (c.get("plan_id"), cscope)
+                if k in seen:
+                    continue
+                seen.add(k)
+                overridden.append({"plan_name": c.get("plan_name"), "scope": cscope,
+                                   "scope_value": c.get("scope_value")})
+        if overridden:
+            flags.append({"flag": "by_name_override", "overridden_plans": overridden})
+    # optional, low-confidence: the winning plan's NAME names a market that is not the rep's own.
+    pname = (winner.get("plan_name") or "").lower()
+    rep_mkt = (rep_market or "").strip().lower()
+    if pname and known_markets:
+        named = sorted({str(m).strip() for m in known_markets
+                        if str(m or "").strip() and str(m).strip().lower() in pname})
+        # only a mismatch if the name names SOME market, none of which is the rep's own market
+        if named and not any(m.lower() == rep_mkt for m in named) and \
+                (not rep_mkt or rep_mkt not in pname):
+            flags.append({"flag": "location_mismatch", "plan_names_market": named,
+                          "rep_market": rep_market or None})
+    return flags
+
+
 def _read_employee_roles(client, org_id):
     """{_canon_person(employee name) -> job role (lower-cased)} from the org's storeops roster.
 

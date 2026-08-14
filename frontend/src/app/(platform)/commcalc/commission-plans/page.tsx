@@ -581,6 +581,10 @@ export default function CommissionPlansPage() {
           on rules YOU define — then assign each plan to employees / stores / markets. The preview shows what a
           plan <strong>would</strong> pay; it is <strong>read-only</strong> and does not change live commissions.
         </p>
+        <p style={{ fontSize: 13, margin: '6px 0 0' }}>
+          🕵️ <a href="/commcalc/plan-assignment-audit" style={{ color: 'var(--accent)' }}>Plan Assignment Audit</a>
+          {' '}— see which plan every employee resolves to and catch by-name pins that override a rep&rsquo;s store/market.
+        </p>
       </div>
 
       {/* RUN COMMISSION (owner directive 2026-08-05) — editing a plan changes NOTHING until the period
