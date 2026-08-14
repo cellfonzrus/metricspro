@@ -3754,15 +3754,71 @@ def employee_widgets_keys():
     return {"widgets": EMP_WIDGETS}
 
 
+def _enforce_dashboard_access(authorization: str, org_id: str, employee_id: str) -> None:
+    """Access control for GET /employee-dashboard (the bundle carries commission $, pay rate, KPIs
+    and chargebacks — a rep's private compensation).
+
+    Before this gate the endpoint trusted the `employee_id` QUERY PARAM: any signed-in rep could pull
+    a colleague's — or any store's — pay/commission by editing the id (the web picker restricted the
+    dropdown, but the server did not). This is the IDOR fix (matches how /storeops/timeclock/* derive
+    identity from the token, not the body).
+
+    The rule reuses the SAME visibility logic as the employee picker (/storeops/employees/visible), so
+    what the server allows exactly matches what the dropdown offers:
+      • your OWN employee_id → always allowed;
+      • role scope 'all' (admin) or an unidentifiable caller (RBAC master switch off / open-app mode)
+        → allowed, i.e. behaviour is UNCHANGED for admins and for tenants not yet enforcing RBAC;
+      • a store/market/DM manager → allowed only for employees inside their span;
+      • anyone else asking for someone else → 403.
+    """
+    from app.core.dashboard_access import dashboard_access_allowed
+    from app.modules.storeops.router import _caller_app_user, _role_permissions, employees_visible
+
+    # Authenticated? (unauth requests in an enforcing tenant are already rejected by the tenant
+    # middleware before this handler; an unauth request here means open-app mode → unchanged behaviour)
+    authenticated = bool(_uid_from_token(authorization))
+    au = _caller_app_user(authorization, org_id) if authenticated else {}
+    own_eid = str((au or {}).get("employee_id") or "").strip()
+    role = str((au or {}).get("role") or "").strip()
+
+    # EXPLICIT scope only — do NOT use the picker's default-to-"all". A blank/missing/scope-less role
+    # yields None here, so such a caller is confined to their own dashboard.
+    explicit_scope = None
+    roster_ids: set[str] = set()
+    if authenticated:
+        try:
+            explicit_scope = (_role_permissions(org_id, role) or {}).get("scope")
+        except Exception:
+            explicit_scope = None
+        # Only a positively-scoped manager consults the span roster (reuses the picker's span logic,
+        # incl. store-address aliasing) — never the default-"all" path.
+        if isinstance(explicit_scope, str) and explicit_scope.strip().lower() in (
+            "store", "market", "region", "dm", "area"):
+            try:
+                vis = employees_visible(authorization, org_id)
+                roster_ids = {str(e.get("employee_id")).strip()
+                              for e in (vis.get("employees") or []) if e.get("employee_id")}
+            except Exception:
+                roster_ids = set()
+
+    if not dashboard_access_allowed(authenticated=authenticated, own_employee_id=own_eid,
+                                    target_employee_id=employee_id, explicit_scope=explicit_scope,
+                                    visible_roster_ids=roster_ids):
+        raise HTTPException(403, "You can only view your own dashboard.")
+
+
 @router.get("/employee-dashboard")
-def employee_dashboard(employee_id: str = "", period: str = "", org_id: str = ORG_ID):
+def employee_dashboard(employee_id: str = "", period: str = "",
+                       authorization: str = Header(default=""), org_id: str = ORG_ID):
     """One bundle for an employee's self-service dashboard, plus the effective widget
     visibility (role employee_widgets). Sections compute regardless; the frontend hides
-    disabled widgets. employee_id identifies the rep (admins pass it; a self-scoped rep is
-    pinned to their own by the frontend)."""
+    disabled widgets. employee_id identifies the rep; access is enforced server-side from the auth
+    token (see _enforce_dashboard_access) — a rep can only read their own bundle, managers their span,
+    admins everyone."""
     from datetime import date as _date, timedelta as _td
     if not employee_id:
         raise HTTPException(400, "employee_id required")
+    _enforce_dashboard_access(authorization, org_id, employee_id)
     client = sb()
     emp = (client.schema("storeops").table("employees").select("*")
            .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data or [])

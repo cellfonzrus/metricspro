@@ -64,12 +64,23 @@ def _log_system_error(request, exc) -> str:
     return ref
 
 
+# HSTS (2026-08-13): tell browsers to only ever reach this API over HTTPS, platform-wide. TLS is
+# terminated at the edge (Railway), so this is a single response header, not crypto — zero measurable
+# cost. `includeSubDomains` scopes to the API host's own subtree; `preload` is intentionally OMITTED
+# (it is an irreversible commitment to the browser preload list). Tune via env HSTS_MAX_AGE
+# (default 1 year); HSTS_MAX_AGE=0 disables the header entirely (e.g. a plain-HTTP staging box).
+# Harmless to native clients (they ignore it) and to plain-HTTP responses (browsers ignore HSTS
+# unless it arrives over TLS), so it is safe to stamp unconditionally.
+_HSTS_MAX_AGE = os.environ.get("HSTS_MAX_AGE", "31536000").strip()
+
 _SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
 }
+if _HSTS_MAX_AGE not in ("", "0"):
+    _SECURITY_HEADERS["Strict-Transport-Security"] = f"max-age={_HSTS_MAX_AGE}; includeSubDomains"
 
 
 class HardeningMiddleware(BaseHTTPMiddleware):
