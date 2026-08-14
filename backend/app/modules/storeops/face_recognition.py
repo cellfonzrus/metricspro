@@ -45,7 +45,17 @@ moment it deploys, whether or not the migration has been applied yet. `available
 which of the two it is, so a tenant is never told "you turned it off" when the real reason is a missing
 migration.
 """
+import os
 from datetime import datetime, timezone
+
+# ── GLOBAL KILL SWITCH (owner directive 2026-08-14: disable face ID app-wide, till further notice) ──
+# Face recognition is turned OFF for EVERY tenant and employee, independent of the stored master switch
+# / per-employee assignment, so every client (web kiosk + mobile app) and the admin gate see the
+# feature as disabled and clock-in takes the no-face path. This is the single choke point every
+# enabled-check flows through (get_tenant_face_config + resolve_employee_face below). Re-enable WITHOUT
+# a code change by setting env FACE_ID_ENABLED=1 (restores the normal per-tenant behaviour), or revert
+# this block. Enrollment/verify simply never run while it is off; no stored face data is touched.
+FACE_ID_GLOBALLY_DISABLED = os.environ.get("FACE_ID_ENABLED", "0").strip().lower() not in ("1", "true", "yes", "on")
 
 # What every tenant gets before migration 420 exists, and what a fresh tenant's columns default to.
 DEFAULT_TENANT_FACE_CONFIG = {"enabled": False, "default_for_employees": True}
@@ -82,7 +92,8 @@ def get_tenant_face_config(org_id, sb_client):
     t = rows[0]
     default_for_employees = t.get("face_recognition_default_for_employees")
     cfg = {
-        "enabled": bool(t.get("face_recognition_enabled")),
+        # Global kill switch wins over the stored master switch (owner directive 2026-08-14).
+        "enabled": bool(t.get("face_recognition_enabled")) and not FACE_ID_GLOBALLY_DISABLED,
         "default_for_employees": True if default_for_employees is None else bool(default_for_employees),
         "enabled_at": t.get("face_recognition_enabled_at"),
         "enabled_by": t.get("face_recognition_enabled_by"),
@@ -126,6 +137,9 @@ def get_employee_face_rows(org_id, sb_client):
 def resolve_employee_face(tenant_cfg, employee_row, available=True):
     """{enabled, reason} for one employee. `reason` is a stable machine key the kiosk and the admin
     panel both render — never a sentence, so the wording can change without breaking a caller."""
+    if FACE_ID_GLOBALLY_DISABLED:
+        # App-wide kill switch (owner directive 2026-08-14) — off for everyone regardless of config.
+        return {"enabled": False, "reason": "globally_disabled"}
     if not available:
         return {"enabled": False, "reason": "not_configured"}
     if not (tenant_cfg or {}).get("enabled"):
