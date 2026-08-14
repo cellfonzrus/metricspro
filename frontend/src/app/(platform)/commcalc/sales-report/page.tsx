@@ -69,6 +69,19 @@ export default function SalesReportPage() {
   const [selMarkets, setSelMarkets] = useState<string[]>([])   // multi-select market filter
   const [selStores, setSelStores] = useState<string[]>([])     // multi-select store filter
   const [selReps, setSelReps] = useState<string[]>([])         // RULE FIVE rep(s) multi (pick-don't-type)
+  const [unmOpen, setUnmOpen] = useState(false)                // "see the unmatched transactions" viewer
+  const [unm, setUnm] = useState<any>(null)                    // the unmatched blank-ct activation candidates
+  const [unmBusy, setUnmBusy] = useState(false)
+
+  // SEE THE UNMATCHED TRANSACTIONS (2026-08-14): the banner counts them; this lists the ACTUAL ones behind
+  // it (department / category / product) so the owner knows exactly what blank-CT activation rule to write.
+  // Read-only; reuses the SAME classifier the report banner uses (single source of truth).
+  function openUnmatched() {
+    setUnmOpen(true); setUnm(null); setUnmBusy(true)
+    api(`/api/v1/commcalc/sales-report/classification-unmatched?period=${encodeURIComponent(period)}${orgParam()}`)
+      .then(setUnm).catch(e => setUnm({ error: String(e?.message || e), by_line: [], transactions: [] }))
+      .finally(() => setUnmBusy(false))
+  }
 
   function openDiag() {
     setDiag({}); setDiagBusy(true)
@@ -265,6 +278,15 @@ export default function SalesReportPage() {
           {(data.classification_gaps.blank_ct_non_activation ?? 0) > 0 &&
             <> · <b>{data.classification_gaps.blank_ct_non_activation}</b> further blank-contract-type transaction(s) are
               bill-payment or accessory-only and are correctly <i>not</i> counted as activations.</>}
+          {/* SEE THE UNMATCHED TRANSACTIONS: the count alone leaves the owner guessing what rule to write —
+              this lists the actual unmatched transactions with the fields an activation rule matches on. */}
+          {(data.classification_gaps.blank_ct_unrecovered ?? 0) > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '2px 10px' }} onClick={openUnmatched}>
+                🔎 See the {data.classification_gaps.blank_ct_unrecovered} unmatched transaction(s)
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -432,6 +454,81 @@ export default function SalesReportPage() {
                     </div>
                   )
                 })}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* SEE THE UNMATCHED TRANSACTIONS — the actual blank-contract-type activation candidates behind the
+          banner count, so the owner can read off exactly which department/category/product to write a
+          blank-CT activation rule for. Read-only; the SAME classifier the banner uses. */}
+      {unmOpen && (
+        <div onClick={() => setUnmOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} className="card" style={{ background: 'var(--surface)', borderRadius: 12, padding: 20, width: 'min(860px,97vw)', maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>🔎 Unmatched activation candidates</div>
+              <button className="btn btn-secondary" style={{ padding: '2px 10px' }} onClick={() => setUnmOpen(false)}>✕</button>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 12px' }}>
+              These are the blank-contract-type transactions that <b>could</b> be activations (they have a real sale line, not just a bill payment or accessory) but no <b>Contract type → activation bucket</b> map entry and no <b>blank-contract-type activation rule</b> matched — so they currently count as <b>0</b> activations. Find the <b>Department / Category / Product</b> pattern that identifies a real activation below, then add a blank-contract-type activation rule for it (e.g. <i>Department contains</i> <code>BrandedHandset</code> <i>and</i> <code>Rtr</code> → <b>Activation</b>). Read-only; nothing here changes a number until you add the rule.
+            </p>
+            {!unm ? (
+              <div style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>{unmBusy ? 'Loading…' : ' '}</div>
+            ) : unm.error ? (
+              <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#991b1b' }}>❌ {unm.error}</div>
+            ) : (unm.by_line || []).length === 0 ? (
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text3)', fontSize: 13 }}>No unmatched activation candidates for this period — nothing to map. ✅</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>
+                  <b>{unm.counts?.blank_ct_unrecovered ?? 0}</b> unmatched transaction(s) · grouped by the fields a rule matches on (most frequent first). The counts here reconcile with the report banner.
+                </div>
+                <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--surface2)', textAlign: 'left' }}>
+                        {['Store', 'Department', 'Category', 'Product', 'Txns', 'Lines'].map(h => (
+                          <th key={h} style={{ padding: '6px 10px', whiteSpace: 'nowrap', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(unm.by_line || []).map((r: any, i: number) => (
+                        <tr key={i} style={{ borderTop: '1px solid var(--border)', background: i % 2 ? 'var(--surface2)' : undefined }}>
+                          <td style={{ padding: '5px 10px', whiteSpace: 'nowrap' }}>{r.store || '—'}</td>
+                          <td style={{ padding: '5px 10px' }}><code style={{ fontSize: 11 }}>{r.department || '(blank)'}</code></td>
+                          <td style={{ padding: '5px 10px' }}><code style={{ fontSize: 11 }}>{r.category || '(blank)'}</code></td>
+                          <td style={{ padding: '5px 10px' }}>{r.product_desc || '(blank)'}</td>
+                          <td style={{ padding: '5px 10px', textAlign: 'right' }}>{r.transactions}</td>
+                          <td style={{ padding: '5px 10px', textAlign: 'right', color: 'var(--text3)' }}>{r.lines}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {(unm.transactions || []).length > 0 && (
+                  <details style={{ marginTop: 12 }}>
+                    <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Show individual transactions ({(unm.transactions || []).length})</summary>
+                    <div style={{ marginTop: 8, maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {(unm.transactions || []).map((t: any) => (
+                        <div key={t.trans_id} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '6px 10px' }}>
+                          <div style={{ fontSize: 12, fontWeight: 600 }}>{t.store || '—'} · {t.trans_date || ''} · <span style={{ color: 'var(--text3)', fontWeight: 400 }}>txn {t.trans_id}</span></div>
+                          <div style={{ marginTop: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            {(t.lines || []).map((l: any, j: number) => (
+                              <div key={j} style={{ fontSize: 11.5, color: 'var(--text2)' }}>
+                                <code style={{ fontSize: 11 }}>{l.department || '(blank)'}</code> / <code style={{ fontSize: 11 }}>{l.category || '(blank)'}</code> — {l.product_desc || '(blank)'}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+                <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                  Note: tender type is not shown — the Sales Report reads a projection without it, and activation rules match on Department / Category / Product / Transaction type (the columns above).
+                </div>
               </>
             )}
           </div>

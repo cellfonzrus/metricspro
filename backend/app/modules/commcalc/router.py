@@ -15893,6 +15893,61 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
             "shown_rows": src_meta.get("shown_rows"), "filled_days": src_meta.get("filled_days")}
 
 
+@router.get("/sales-report/classification-unmatched")
+async def sales_report_classification_unmatched(period: str = "", authorization: str = Header(default=""),
+                                                org_id: str = ORG_ID):
+    """SEE THE UNMATCHED TRANSACTIONS (2026-08-14). The Sales Report's classification banner tells the owner
+    "N transaction(s) have no contract type and no activation rule matched — map them" but never says WHICH
+    transactions or their line shape, so the owner has to GUESS what activation rule to write. This lists the
+    ACTUAL unrecovered blank-contract-type activation-candidate transactions — the exact 7 (per store) behind
+    the banner — with the department / category / product_desc the blank-ct activation rules (mig 224) match
+    on, grouped so the owner reads off what to tick.
+
+    SINGLE SOURCE OF TRUTH: it pulls the SAME union rows the report aggregates, resolves the SAME
+    payout-exclusion predicate, and calls the SAME `_classification_gaps(..., want_samples=True)` — the
+    classifier is never re-run or re-implemented, so the listed transactions are exactly the ones the banner
+    counts. READ-ONLY; org-scoped; span-scoped to the caller's stores like the report. Never raises the
+    report (any failure degrades to empty)."""
+    require_org(org_id)
+    client = sb()
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    acfg = _accessory_config(client, org_id)
+    rows, src_meta = _sales_rows_union(client, org_id, period, _SALES_DISPLAY_COLS)
+    # The tenant's own payout-exclusion map — the SAME predicate the report passes to _classification_gaps,
+    # so a bill-payment / non-commissionable line is not listed as an activation candidate. Degrades to None.
+    try:
+        from app.modules.commcalc import plan_pay_gate as _ppg
+        _exc_rules, _ = _ppg.load_exclusions(client, org_id)
+        _is_exc = (lambda _r: _ppg.exclusion_hit(_r, _exc_rules) is not None) if _exc_rules else None
+    except Exception:
+        _is_exc = None
+    try:
+        gaps = _classification_gaps(rows, acfg, is_excluded=_is_exc, want_samples=True)
+    except Exception as e:
+        return {"period": period, "org_id": org_id, "error": f"{type(e).__name__}: {e}",
+                "by_line": [], "transactions": [], "counts": {}}
+    by_line = gaps.get('blank_ct_unrecovered_by_line') or []
+    txns = gaps.get('blank_ct_unrecovered_txns') or []
+    # Span-scope to the caller's stores, exactly as the report filters its rows (a scoped manager must not
+    # see other stores' transactions). Fail open to unrestricted on any resolution error.
+    try:
+        from app.modules.storeops.router import scope_keyset, in_keyset
+        ks = scope_keyset(authorization, org_id)
+        if ks is not None:
+            by_line = [r for r in by_line if in_keyset(ks, r.get("store"))]
+            txns = [r for r in txns if in_keyset(ks, r.get("store"))]
+    except Exception:
+        pass
+    return {"period": period, "org_id": org_id, "source_meta": src_meta,
+            "counts": {"blank_ct_transactions": gaps.get('blank_ct_transactions'),
+                       "blank_ct_unrecovered": gaps.get('blank_ct_unrecovered'),
+                       "blank_ct_non_activation": gaps.get('blank_ct_non_activation'),
+                       "rescued_by_rules": gaps.get('rescued_by_rules')},
+            "by_line": by_line, "transactions": txns, "note": gaps.get('note')}
+
+
 @router.get("/sales-report/detail")
 async def sales_report_detail(period: str = "", store: str = "", salesperson: str = "",
                               date: str = "", org_id: str = ORG_ID):
@@ -17975,7 +18030,7 @@ def _txn_activation_candidate(lines, acfg, is_excluded=None):
     return False
 
 
-def _classification_gaps(rows, acfg, is_excluded=None):
+def _classification_gaps(rows, acfg, is_excluded=None, want_samples=False, sample_cap=300):
     """Report-level VISIBILITY into activation-classification gaps so a tenant's activations never silently
     read 0 again. Over the (voided/Return-skipped) rows already in memory, returns:
       unrecognized_contract_types : [{contract_type, lines, transactions}] for NON-blank ct values that
@@ -17988,7 +18043,21 @@ def _classification_gaps(rows, acfg, is_excluded=None):
         activation_rules, and therefore really are unclassified (still 0).
       rescued_by_rules      : how many blank-ct tids the activation_rules DID classify.
       note                  : a human sentence (or None) telling the owner exactly where to map them.
-    DISPLAY ONLY. Pure; never raises. Empty everything (house/Boost, no blank/unknown labels) -> note None."""
+    DISPLAY ONLY. Pure; never raises. Empty everything (house/Boost, no blank/unknown labels) -> note None.
+
+    want_samples (2026-08-14): the counts alone tell the owner "7 unclassified" but not WHICH 7 or their
+    line shape, so they cannot author the activation rule the note asks for (the "see the unmatched
+    transactions" blind spot). When True this ALSO returns the ACTUAL unrecovered transactions — built from
+    the SAME `unrecovered` tid set this function already derives (single source of truth; the classifier is
+    never re-run or re-implemented for the listing):
+      blank_ct_unrecovered_by_line : [{store, department, category, product_desc, lines, transactions}]
+        grouped over every line of the unrecovered transactions, most-frequent first — the field/value
+        vocabulary the owner ticks into an activation rule (dept 'BrandedHandset' + dept 'Rtr' -> premium).
+      blank_ct_unrecovered_txns : [{trans_id, store, trans_date, lines:[{department,category,product_desc}]}]
+        (capped at sample_cap) so the owner can eyeball intact transaction shapes.
+    NOTE: the Sales-Report DISPLAY projection (_SALES_DISPLAY_COLS) carries no tender_type, so tender is not
+    surfaced here — the blank-ct activation rules match on department/category/product_desc/trans_type, which
+    are exactly the fields returned."""
     from collections import Counter
     ct_map = (acfg or {}).get('contract_type_map')
     rules = (acfg or {}).get('activation_rules') or []
@@ -18039,12 +18108,45 @@ def _classification_gaps(rows, acfg, is_excluded=None):
     if parts:
         note = ('; '.join(parts) + ' — map them in Sales Report ⚙ Classification (contract-type map / '
                 'blank-contract-type activation rules) so they count as activations.')
-    return {'unrecognized_contract_types': unrecognized,
-            'blank_ct_transactions': len(txn_blank),
-            'blank_ct_non_activation': len(non_act),
-            'blank_ct_unrecovered': len(unrecovered),
-            'rescued_by_rules': len(blank_bucket),
-            'note': note}
+    out = {'unrecognized_contract_types': unrecognized,
+           'blank_ct_transactions': len(txn_blank),
+           'blank_ct_non_activation': len(non_act),
+           'blank_ct_unrecovered': len(unrecovered),
+           'rescued_by_rules': len(blank_bucket),
+           'note': note}
+    if want_samples:
+        # The ACTUAL unrecovered transactions, built from the SAME `unrecovered` tid set above — never a
+        # second classifier pass. `unrecovered` is already sorted (deterministic), so the per-txn cap is
+        # stable across calls. Grouped by the fields an activation rule matches on so the owner reads off
+        # exactly what to tick. Store comes from the first line of the transaction.
+        by_line, line_tids = Counter(), {}
+        txns = []
+        for t in unrecovered:
+            lns = lines_by_tid.get(t) or []
+            store = ''
+            for _l in lns:
+                if str(_l.get('store') or '').strip():
+                    store = str(_l.get('store')).strip()
+                    break
+            if len(txns) < sample_cap:
+                txns.append({'trans_id': t, 'store': store,
+                             'trans_date': (str((lns[0].get('trans_date') if lns else '') or '')),
+                             'lines': [{'department': str(_l.get('department') or '').strip(),
+                                        'category': str(_l.get('category') or '').strip(),
+                                        'product_desc': str(_l.get('product_desc') or '').strip()}
+                                       for _l in lns]})
+            for _l in lns:
+                k = (store, str(_l.get('department') or '').strip(),
+                     str(_l.get('category') or '').strip(), str(_l.get('product_desc') or '').strip())
+                by_line[k] += 1
+                line_tids.setdefault(k, set()).add(t)
+        out['blank_ct_unrecovered_by_line'] = sorted(
+            [{'store': k[0], 'department': k[1], 'category': k[2], 'product_desc': k[3],
+              'lines': n, 'transactions': len(line_tids.get(k, set()))}
+             for k, n in by_line.items()],
+            key=lambda x: (-x['transactions'], -x['lines']))
+        out['blank_ct_unrecovered_txns'] = txns
+    return out
 
 
 _STORE_STREET_SUFFIX = {
