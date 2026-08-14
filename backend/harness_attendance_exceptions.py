@@ -346,6 +346,7 @@ class FakeQuery:
     def in_(self, k, vals): self.filters.append(("in", k, set(str(x) for x in vals))); return self
     def gte(self, k, v): self.filters.append(("gte", k, v)); return self
     def lte(self, k, v): self.filters.append(("lte", k, v)); return self
+    def is_(self, k, v): self.filters.append(("is", k, v)); return self
     def order(self, *_a, **_k): return self
     def limit(self, n): self._limit = n; return self
     def update(self, payload): self._mode = "update"; self._payload = payload; return self
@@ -361,6 +362,13 @@ class FakeQuery:
                 return False
             if kind == "lte" and str(rv) > str(v):
                 return False
+            if kind == "is":
+                # supabase .is_(col, "null") -> col IS NULL; anything else -> exact identity match.
+                if str(v).lower() == "null":
+                    if rv is not None:
+                        return False
+                elif rv != v:
+                    return False
         return True
 
     def execute(self):
@@ -395,6 +403,23 @@ import app.modules.core.router as core_router  # noqa: E402
 R.get_supabase = lambda: fake
 R.sb = lambda: fake.schema("storeops")
 core_router._uid_from_token = lambda auth: "uid-1"
+
+# _require_manager (Section E) and _caller_identity (Section F's /timeclock/status + list RBAC) resolve
+# the acting user through the middleware's caller_app_user_http, which otherwise talks to the real
+# membership store. Point it at the SAME in-memory app_users every section already seeds so the whole
+# file runs with NO network / NO Supabase creds. Router imports the symbol lazily inside each handler,
+# so patching the module attribute is picked up at call time.
+import app.core.tenant_middleware as _tm  # noqa: E402
+
+
+def _fake_caller_app_user_http(uid, columns="org_id"):
+    for r in fake.store.get(("storeops", "app_users"), []):
+        if str(r.get("auth_id")) == str(uid):
+            return dict(r)
+    return None
+
+
+_tm.caller_app_user_http = _fake_caller_app_user_http
 
 ORG = "org-att-1"
 # Section D calls the REAL router handler, which reads the REAL wall clock (datetime.now(timezone.utc))
@@ -480,6 +505,75 @@ try:
 except Exception as e:
     check("E4 a non-manager PUT is rejected (403)", getattr(e, "status_code", None) == 403, e)
 fake.seed("storeops", "app_users", [{"org_id": ORG, "auth_id": "uid-1", "employee_id": "E1", "role": "admin"}])   # restore
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# SECTION F — GET /timeclock/list must SURFACE a registered punch (the 2026-08-14 detection bug).
+#
+# Symptom: an employee's kiosk showed "Clocked in since 9:56am" (the token-scoped /timeclock/status
+# read FOUND her open punch) while the admin Time Clock list showed no punch. Root cause on the CODE
+# side: the list's RBAC narrowing compared the punch's BUSINESS employee_id ("E45") against a span
+# set (scope_emp_ids) that, for a rep whose only in-span evidence is a Schedule-page shift, carries
+# the NUMERIC employees.id ("45") — an id-FORM mismatch that dropped a genuine in-scope punch. The
+# fix canonicalizes both sides to the business id (payroll_identity.business_id_alias_map), the same
+# reconciliation Section D already exercises for attendance-exceptions.
+#
+# These tests drive the REAL R.timeclock_list handler; scope_emp_ids is stubbed to a controlled span
+# so the assertion is about the id-form reconciliation in the handler, not caller_scope internals
+# (those are covered by their own scope harness).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+_orig_scope_emp_ids = R.scope_emp_ids
+ZORG = "org-att-1"
+# Zainab: numeric employees.id 45, business id "E45", home store OUT of the manager's span (S9).
+fake.store.clear()
+fake.seed("storeops", "tenants", [{"org_id": ZORG}])
+fake.seed("storeops", "app_users", [{"org_id": ZORG, "auth_id": "uid-z", "employee_id": "E45", "role": "rep"}])
+fake.seed("storeops", "employees", [
+    {"org_id": ZORG, "id": 45, "employee_id": "E45", "name": "Zainab", "home_store": "S9", "is_active": True},
+])
+# Her OPEN punch (no clock_out) — proves an open, not-yet-clocked-out punch surfaces too.
+Z_CI = biz(D_WD, "09:56").isoformat()
+fake.seed("storeops", "timelog", [
+    {"org_id": ZORG, "id": "tz1", "employee_id": "E45", "employee_name": "Zainab", "store_code": "S9",
+     "work_date": D_WD, "clock_in": Z_CI, "clock_out": None},
+])
+# A DIFFERENT tenant's punch that also happens to key as "E45" — must NEVER leak into this org.
+fake.store[("storeops", "timelog")].append(
+    {"org_id": "org-OTHER", "id": "tz-other", "employee_id": "E45", "employee_name": "Ghost",
+     "store_code": "S9", "work_date": D_WD, "clock_in": Z_CI, "clock_out": None})
+core_router._uid_from_token = lambda auth: "uid-z"
+
+# (A) the token-scoped status read FINDS her open punch — the kiosk "Clocked in since 9:56" source.
+statusA = R.timeclock_status(authorization=AUTH, org_id=ZORG)
+check("F1 (A) /timeclock/status finds her OPEN punch (the kiosk 'clocked in' source)",
+      statusA.get("clockedIn") is True and statusA.get("entry", {}).get("id") == "tz1", statusA)
+
+# (B) admin list, UNRESTRICTED (full admin, eids=None) — always returns the in-org punch.
+R.scope_emp_ids = lambda *a, **k: None
+listB_admin = R.timeclock_list(start=D_WD, end=D_WD, authorization=AUTH, org_id=ZORG)
+check("F2 (B) unrestricted admin list returns her in-org open punch",
+      any(r.get("id") == "tz1" for r in listB_admin), listB_admin)
+check("F3 (B) a DIFFERENT tenant's like-keyed punch never leaks into this org's list (isolation intact)",
+      all(r.get("id") != "tz-other" for r in listB_admin), listB_admin)
+
+# (B) admin list, SCOPED manager whose span includes Zainab ONLY via her numeric-id Schedule shift:
+# eids carries "45" (numeric), never "E45". THIS is the case the raw `str(id) in eids` filter dropped.
+R.scope_emp_ids = lambda *a, **k: {"45"}
+listB_scoped = R.timeclock_list(start=D_WD, end=D_WD, authorization=AUTH, org_id=ZORG)
+check("F4 (B) scoped-manager list SURFACES the punch despite numeric-vs-business id-form mismatch (THE FIX)",
+      any(r.get("id") == "tz1" for r in listB_scoped), listB_scoped)
+# equivalence: the row (A) matched is exactly the row (B) now returns.
+check("F5 (A)==(B): the punch the status read returns is the one the scoped admin list now returns",
+      statusA.get("entry", {}).get("id") == next((r.get("id") for r in listB_scoped if r.get("id") == "tz1"), None),
+      (statusA, listB_scoped))
+
+# Isolation guard: a span that genuinely does NOT include her (some other rep only) still excludes her.
+R.scope_emp_ids = lambda *a, **k: {"E99"}
+listB_excl = R.timeclock_list(start=D_WD, end=D_WD, authorization=AUTH, org_id=ZORG)
+check("F6 (B) a span that truly excludes her still drops her punch (canonicalization didn't over-widen)",
+      all(r.get("id") != "tz1" for r in listB_excl), listB_excl)
+
+R.scope_emp_ids = _orig_scope_emp_ids   # restore
+
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed (cumulative, all sections)")
 if FAIL:
