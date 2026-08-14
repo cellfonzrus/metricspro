@@ -13972,6 +13972,104 @@ async def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = 
             "roles": sorted(roles_set), "markets": sorted(markets_set)}
 
 
+@router.get("/commission-plans/assignment-audit")
+async def commission_plan_assignment_audit(org_id: str = ORG_ID, include_inactive: bool = True):
+    """READ-ONLY audit: for EVERY roster employee, which commission plan they resolve to and WHY —
+    flagging the dangerous by-name pin that silently overrides a rep's store/market plan.
+
+    THE PROBLEM IT SOLVES (real production case, "Silvia Nava"): a rep pinned to a plan by NAME
+    (employee-scope assignment, rank 4) outranks their store (rank 2) and market (rank 1). So a rep in
+    Chicago who has a by-name pin on the "…NY" plan keeps getting paid the NY plan even after their
+    store/market is corrected — the pin has to be removed. This endpoint finds ALL such cases at once.
+
+    SINGLE SOURCE OF TRUTH: every "which plan / via which assignment" answer comes straight from
+    `commission_engine._resolve_plan_for(..., explain=True)` — the SAME matcher the live /calculate path
+    pays from — and the flags come from the pure `commission_engine.audit_flags(winner, considered, …)`.
+    Nothing here re-implements matching, so the audit cannot disagree with what actually pays.
+
+    ENUMERATION mirrors the employee picker (`/commission-plans/roster`): reps come from the storeops
+    roster, each with their home_store. MARKET is resolved through `_read_store_market`
+    (commcalc.store_mapping) with the EXACT expression the live calc uses
+    (`store_market.get(low) or store_market.get(first_token, "")`), and ROLE through the SAME
+    `_read_employee_roles` name bridge the pay path uses — so the inputs fed to the resolver match the
+    live calc for the store the rep is on. (Caveat: the live calc keys market off each SALES ROW'S POS
+    store string; here we substitute the roster home_store, since a per-employee audit has no sale row.
+    For a rep whose sales land on a different store than their home_store, the resolved market can
+    differ — the by-name pin itself is store/market-independent, so the by_name_override finding stands
+    regardless.)
+
+    Org-scoped, read-only, never writes. Degrades to {ready:false} when migration 059 is unapplied."""
+    require_org(org_id)
+    client = sb()
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        return {"ready": False,
+                "note": "Run migration 059_commission_plans.sql to enable the assignment audit.",
+                "employees": [], "counts": {}}
+    # roster (same source the picker / _read_employee_roles uses), with home_store per person
+    try:
+        q = (client.schema("storeops").table("employees")
+             .select("id,name,role,email,home_store,epay_salesperson,is_active").eq("org_id", org_id))
+        if not include_inactive:
+            q = q.eq("is_active", True)
+        emps = q.order("name").execute().data or []
+    except Exception:
+        emps = []
+    store_market = commission_engine._read_store_market(client, org_id)   # commcalc.store_mapping
+    role_by_rep = commission_engine._read_employee_roles(client, org_id)  # {_canon(name) -> role}
+    known_markets = sorted({(m or "").strip() for m in store_market.values() if (m or "").strip()})
+
+    employees, counts = [], {"total": 0, "by_name_override": 0, "no_plan": 0, "location_mismatch": 0}
+    for e in emps:
+        name = (e.get("name") or "").strip()
+        if not name:
+            continue
+        store = (e.get("home_store") or "").strip()
+        low = store.lower()
+        first = low.split(" ")[0] if low else ""
+        # EXACT expression preview() uses to map a store string to a market.
+        market = (store_market.get(low) or store_market.get(first, "")) if low else ""
+        rep_role = role_by_rep.get(commission_engine._canon_person(name))
+        resolution = commission_engine._resolve_plan_for(
+            name, store, market, plans, rep_role=rep_role, explain=True)
+        winner = resolution.get("winner")
+        considered = resolution.get("considered") or []
+        flags = commission_engine.audit_flags(winner, considered, rep_market=market,
+                                              known_markets=known_markets)
+        flag_names = {f["flag"] for f in flags}
+        counts["total"] += 1
+        for fn in ("by_name_override", "no_plan", "location_mismatch"):
+            if fn in flag_names:
+                counts[fn] += 1
+        employees.append({
+            "employee": name,
+            "store": store,
+            "market": market,
+            "role": rep_role or None,
+            "is_active": bool(e.get("is_active", True)),
+            "resolved_plan": (winner or {}).get("plan_name"),
+            "winner_scope": (winner or {}).get("scope"),
+            "winner_value": (winner or {}).get("scope_value"),
+            "winner_priority": (winner or {}).get("rank"),          # precedence 4>3>2>1>0
+            "winner_assignment_priority": (winner or {}).get("priority"),  # in-scope tie-break
+            "flags": flags,
+            "flag_names": sorted(flag_names),
+        })
+    # flagged rows first (by_name_override at the very top), then the rest, name-stable within a group.
+    def _rank(row):
+        fn = set(row.get("flag_names") or [])
+        if "by_name_override" in fn:
+            return 0
+        if "no_plan" in fn:
+            return 1
+        if "location_mismatch" in fn:
+            return 2
+        return 3
+    employees.sort(key=lambda r: (_rank(r), str(r.get("employee") or "").lower()))
+    return {"ready": True, "employees": employees, "counts": counts,
+            "markets": known_markets}
+
+
 @router.post("/commission-plans/bulk-assign")
 async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
     """Assign ONE commission plan to MANY employees in a single action (owner directive 2026-07-23).
