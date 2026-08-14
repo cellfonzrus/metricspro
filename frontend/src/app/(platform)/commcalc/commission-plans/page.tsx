@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
-import { api, fmt } from '@/lib/client'
+import { api, fmt, apiDownload, apiFetchBase64, ORG_ID, localToday } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker from '@/components/EntityPicker'
@@ -534,6 +534,26 @@ export default function CommissionPlansPage() {
     } catch (e: any) { setMsg('❌ Preview: ' + (e?.message || e)) } finally { setPreviewBusy(false) }
   }
 
+  // ── PAYOUT STRUCTURE — the employee-facing "how commission is earned" document ─────────────────────
+  // Server-rendered PDF (payout_structure.py) built from THIS tenant's real commission-plan config: what
+  // pays, at what rate, how often, and what never pays. Handed to staff BEFORE they start selling. Passing
+  // no plan_id renders every plan (the document you give any employee); passing plan_id renders one plan as
+  // a per-team handout. READ-ONLY — the endpoint computes and writes nothing. Download uses the authed
+  // byte-download choke point; Send fetches the SAME PDF as base64 and posts it through the shared
+  // /notify/send-file modal (SendReportButton's serverFiles path — the PDF is rendered on the SERVER, so
+  // the in-browser export path can't produce it).
+  const payoutStructureUrl = (planId?: string) =>
+    `/api/v1/commcalc/commission-plans/payout-structure?fmt=pdf&org_id=${ORG_ID}${planId ? `&plan_id=${planId}` : ''}`
+  function downloadPayoutStructure(planId?: string) {
+    apiDownload(payoutStructureUrl(planId)).catch(e => setMsg('❌ Payout structure: ' + (e?.message || e)))
+  }
+  async function payoutStructureFiles(planId?: string, planName?: string) {
+    const b64 = await apiFetchBase64(payoutStructureUrl(planId))
+    const safe = (planName ? `payout-structure-${planName}` : 'payout-structure')
+      .replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
+    return [{ filename: `${safe}.pdf`, mime: 'application/pdf', content_b64: b64 }]
+  }
+
   function previewPayload(): ExportPayload {
     return {
       title: 'Commission Plan Preview (read-only)', subtitle: `${period} — does NOT change live commissions`,
@@ -574,6 +594,28 @@ export default function CommissionPlansPage() {
 
       {!ready && <div className="card" style={{ padding: 14, marginBottom: 14, background: '#fffbeb', border: '1px solid #fde68a', fontSize: 13 }}>⚠️ {msg || 'Run migration 059_commission_plans.sql in Supabase to enable.'}</div>}
 
+      {/* PAYOUT STRUCTURE (owner directive) — the employee-facing "how commission is earned" document.
+          Built from this tenant's real plan config; hand it to staff BEFORE they start selling. Download
+          the PDF or send it to recipients. READ-ONLY — nothing is computed or written. All-plans is the
+          primary (the document you give any employee); a per-plan handout lives on each plan row below. */}
+      {ready && (
+        <div className="card" style={{ padding: 14, marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap' }}>📄 Payout Structure</div>
+          <span style={{ fontSize: 12, color: 'var(--text2)', flex: '1 1 240px', minWidth: 200 }}>
+            The employee-facing “how commission is earned” document — what pays, at what rate, how often, and
+            what never pays. Hand it to staff before they start selling. Read-only.
+          </span>
+          <button className="btn btn-secondary" onClick={() => downloadPayoutStructure()}
+            title="Download the Payout Structure PDF for all plans (the document you give any employee)">
+            📄 Payout Structure (PDF)
+          </button>
+          <SendReportButton
+            title={`Payout structure — all plans — ${localToday()}`}
+            label="📤 Send structure"
+            serverFiles={() => payoutStructureFiles()} />
+        </div>
+      )}
+
       {/* tab bar — plan-centric editor  vs  people-centric bulk assign */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid var(--border)' }}>
         {([['plans', '🧮 Plans'], ['bulk', '👥 Assign to people']] as const).map(([t, label]) => (
@@ -605,6 +647,11 @@ export default function CommissionPlansPage() {
               {p.base_tier_metric && <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 10, background: '#ede9fe', color: '#6d28d9' }}>tier: {p.base_tier_metric}</span>}
               {!p.is_active && <span style={{ fontSize: 11, color: '#b45309' }}>inactive</span>}
               <span style={{ flex: 1 }} />
+              {/* Per-team handout: this ONE plan's Payout Structure (per-plan variant of the all-plans doc
+                  above). Read-only server-rendered PDF. */}
+              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }}
+                onClick={() => downloadPayoutStructure(p.id)}
+                title="Download this plan's Payout Structure PDF (per-team handout)">📄 Payout</button>
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => runPreview(p.id)}>👁️ Preview</button>
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => setDraft({ ...blankPlan(), ...p, base_tier_metric: p.base_tier_metric || 'none', carrier_id: p.carrier_id || '', rules: p.rules || [], tiers: p.tiers || [], assignments: p.assignments || [] })}>Edit</button>
               <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => del(p.id)}>Delete</button>

@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { api, apiUpload, ORG_ID } from '@/lib/client'
+import { api, apiUpload, apiDownload, ORG_ID } from '@/lib/client'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import EntityPicker from '@/components/EntityPicker'
 
@@ -55,6 +55,14 @@ export default function ImplementationWizard() {
         </select>
         <span style={{ fontSize: 12, color: 'var(--text3)' }}>Pick a carrier to keep a separate column layout for it (e.g. Cricket vs Boost).</span>
         <span style={{ flex: 1 }} />
+        {/* Employee-facing Payout Structure PDF — "how commission is earned", from the tenant's plan config.
+            Hand it to new staff before they start selling. Read-only server-rendered document. */}
+        <button className="btn btn-secondary" style={{ fontSize: 13 }}
+          onClick={() => apiDownload(`/api/v1/commcalc/commission-plans/payout-structure?fmt=pdf&org_id=${ORG_ID}`)
+            .catch(e => setMsg('❌ Payout structure: ' + (e?.message || e)))}
+          title="Download the employee-facing Payout Structure PDF (how commission is earned)">
+          📄 Payout Structure (PDF)
+        </button>
         <Link href="/commcalc/onboarding" style={{ fontSize: 13 }}>Full onboarding →</Link>
       </div>
 
