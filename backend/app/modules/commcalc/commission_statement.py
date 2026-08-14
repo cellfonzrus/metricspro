@@ -462,7 +462,7 @@ def _render_docs(docs):
                                 spaceAfter=6))
         story.append(Paragraph(
             "This statement summarises incentive calculated for the period shown, from the figures produced "
-            "by the last commission run. It is provided for your reference. The incentive structure it is "
+            "by the last incentive run. It is provided for your reference. The incentive structure it is "
             "based on is described in your Payout Structure document. If a figure looks wrong, raise it with "
             "your manager before the period closes.", st_cap))
 

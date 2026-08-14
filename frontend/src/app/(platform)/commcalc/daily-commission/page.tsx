@@ -316,7 +316,7 @@ export default function DailyCommissionPage() {
   return (
     <div>
       <div style={{ marginBottom: 14 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Daily Commission</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Daily Incentive</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', lineHeight: 1.6 }}>
           What each rep has <b>probably</b> earned this cycle, what has been <b>advanced to them in cash</b>,
           and what is due now. <b>Accrued is an expected figure, not a payslip</b> — it never changes anyone's
@@ -344,7 +344,7 @@ export default function DailyCommissionPage() {
       {err && <div className="card" style={{ borderLeft: '4px solid var(--red)', marginBottom: 14, fontSize: 13 }}>{err}</div>}
       {notReady && (
         <div className="card" style={{ borderLeft: '4px solid var(--amber)', marginBottom: 14, fontSize: 13, lineHeight: 1.7 }}>
-          <b>Daily commission accrual is not switched on yet.</b><br />{acc.note}
+          <b>Daily incentive accrual is not switched on yet.</b><br />{acc.note}
         </div>
       )}
 
@@ -386,7 +386,7 @@ export default function DailyCommissionPage() {
               <select style={sel} value={cycleMode} onChange={e => setDraftPath(['cycle', 'mode'], e.target.value)}>
                 {(cfg.cycle_modes || []).map((o: string) => (
                   <option key={o} value={o}>{o === 'calendar_month' ? 'Calendar month'
-                    : o === 'payroll' ? 'Payroll cycle' : 'Commission cycle'}</option>
+                    : o === 'payroll' ? 'Payroll cycle' : 'Incentive cycle'}</option>
                 ))}
               </select>
             </div>
@@ -569,7 +569,7 @@ export default function DailyCommissionPage() {
           <div style={{ marginBottom: 14 }}>
             <ReportShell
               title="Per rep — accrued vs advanced"
-              subtitle={`cycle ${cycle?.label} · as of ${to} · accrued is EXPECTED commission, advances are cash out of the envelope`}
+              subtitle={`cycle ${cycle?.label} · as of ${to} · accrued is EXPECTED incentive, advances are cash out of the envelope`}
               filename={`daily-commission-by-rep-${to}`}
               columns={EMP_COLS} rows={shownEmps} totals compact stickyHeader
               onRowClick={(r: any) => setDrill({ ...r, __lines: true })}
@@ -698,7 +698,7 @@ export default function DailyCommissionPage() {
           <div style={{ marginBottom: 14 }}>
             <ReportShell
               title={`Cash advances — ${from} to ${to}`}
-              subtitle="every payout recorded against accrued commission (append-only; corrections are their own decision)"
+              subtitle="every payout recorded against accrued incentive (append-only; corrections are their own decision)"
               filename={`commission-advances-${from}-${to}`}
               columns={LEDGER_COLS} rows={shownLedger} totals compact stickyHeader
             />
@@ -711,7 +711,7 @@ export default function DailyCommissionPage() {
               The accrual runs automatically every day, right after the sales feed lands. This button
               re-runs one date by hand — useful when a day's sales arrived late. It is <b>idempotent</b>:
               re-running a date restates it (and re-allocates the rest of that month to the tier now being
-              met), never adds to it, and it is <b>not</b> a commission recalculation — no payout is touched.
+              met), never adds to it, and it is <b>not</b> an incentive recalculation — no payout is touched.
             </div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <input style={sel} type="date" value={runDate} onChange={e => setRunDate(e.target.value)} aria-label="Date to recompute" />

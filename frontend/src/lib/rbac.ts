@@ -273,7 +273,7 @@ export const NAV: NavGroup[] = [
     { href: '/referral/approvals', label: 'Approvals', icon: '✅', module: 'referral', scopes: ['all', 'market'] },
     { href: '/referral/settings', label: 'Referral Settings', icon: '⚙️', module: 'referral', scopes: ['all'] },
   ]},
-  { group: 'Commissions', module: 'commissions', items: [
+  { group: 'Incentives', module: 'commissions', items: [
       { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
     { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions' },
@@ -309,7 +309,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/accessory-cost-audit', label: 'Accessory Cost Audit', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/expected-commission', label: 'Expected vs Earned', icon: '⏳', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/daily-commission', label: 'Daily Commission', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/daily-commission', label: 'Daily Incentive', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/training', label: 'Training Center', icon: '🎓', module: 'targets' },
     { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions' },

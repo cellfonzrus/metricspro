@@ -155,7 +155,7 @@ export default function CommCalcDashboard() {
       {/* Calc refused / error banner — surfaces the R1 unconfigured-tenant guard with a fix link */}
       {calcError && (
         <div className="card" style={{ borderLeft: '4px solid var(--red)', background: 'var(--surface2)', marginBottom: 24 }}>
-          <div style={{ fontWeight: 700, color: 'var(--red)', marginBottom: 6 }}>⚠ Commission calculation refused — last good snapshot kept</div>
+          <div style={{ fontWeight: 700, color: 'var(--red)', marginBottom: 6 }}>⚠ Incentive calculation refused — last good snapshot kept</div>
           <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{calcError}</div>
           {/REFUSED|no commission source|plan mode/i.test(calcError) && (
             <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>

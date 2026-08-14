@@ -317,7 +317,7 @@ const panel = state => render(React.createElement(RunCommissionPanel, {
   ok('success renders the done banner', /data-testid="run-commission-done"/.test(doneHtml))
   ok('success shows the NEW total', /data-testid="run-commission-total"[^>]*>\$2,142\.37</.test(doneHtml), doneHtml)
   ok('success shows the DELTA vs before', /run-commission-delta/.test(doneHtml) && doneHtml.includes('688.35'))
-  ok('success links to the Rep Commission report', /href="\/commcalc"/.test(doneHtml))
+  ok('success links to the Rep Incentive report', /href="\/commcalc"/.test(doneHtml))
 
   ok('idle renders nothing at all', panel(RC.initialState(PERIOD, 'luxelink')) === '')
 }
@@ -334,7 +334,7 @@ section('7. the control: the period it shows is the period it recomputes')
   ok('the tenant is named next to the button', html.includes('luxelink'))
   ok('the period is PICKED, not typed (RULE THREE)',
     /data-testid="period-picker" data-value="July 2026"/.test(html), html)
-  ok('the button label is the owner-facing "Run Commission"', /Run Commission/.test(html))
+  ok('the button label is the owner-facing "Run Incentive"', /Run Incentive/.test(html))
   ok('no confirm dialog is open on first render (nothing can fire by itself)',
     !/run-commission-confirm/.test(html))
 

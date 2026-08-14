@@ -121,7 +121,7 @@ export const paths = {
 
 export function confirmText(period: string, tenant: string): string {
   const who = (tenant || '').trim()
-  return `Recalculate commissions for ${period}${who ? ` (${who})` : ''}? ` +
+  return `Recalculate incentives for ${period}${who ? ` (${who})` : ''}? ` +
     `This replaces the stored payout numbers for that month.`
 }
 

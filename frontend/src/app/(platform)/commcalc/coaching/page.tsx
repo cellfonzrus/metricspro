@@ -120,7 +120,7 @@ export default function RepCoachingPage() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : reps.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 50, color: 'var(--text3)' }}>
-          {allReps.length === 0 ? `No rep incentives for ${period}. (Run the commission calc first.)` : 'No reps match the current filters.'}</div>
+          {allReps.length === 0 ? `No rep incentives for ${period}. (Run the incentive calc first.)` : 'No reps match the current filters.'}</div>
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>

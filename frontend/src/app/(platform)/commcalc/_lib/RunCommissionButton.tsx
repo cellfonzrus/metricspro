@@ -134,7 +134,7 @@ export function RunCommissionPanel({ state, onConfirm, onCancel, onDismiss, repo
 
 // ── container ────────────────────────────────────────────────────────────────────────────────────
 export default function RunCommissionButton({
-  period, onPeriodChange, periodOptions, label = '⚡ Run Commission', note, compact = false,
+  period, onPeriodChange, periodOptions, label = '⚡ Run Incentive', note, compact = false,
 }: {
   /** The page's own period context, when it has one. The control never targets anything else silently. */
   period?: string
