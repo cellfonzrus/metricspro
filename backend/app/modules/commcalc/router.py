@@ -9104,6 +9104,23 @@ def _can_view_device_commission(authorization, org_id):
         return False
 
 
+def _can_view_statement_held(authorization, org_id):
+    """Gate the incentive-statement 'Held / not yet paid' section (DATA_GRANTS 'statement_held'). DEFAULT-
+    CLOSED by owner directive — the held itemization is management-only, off the PDF AND the fmt=json model
+    for everyone until granted. Same resolution SHAPE as `_can_view_device_commission`: super_admin /
+    company-wide ('all') / admin pass, else the caller needs the grant. Frontend mirror:
+    `hasDataGrant(perms, 'statement_held')`. Degrades CLOSED on any resolution error, so it can only ever
+    HIDE the held section, never leak it."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller
+        from app.modules.commcalc import commission_statement as _cst_gate
+        uid = _uid_from_token(authorization)
+        caller = _resolve_caller(sb(), uid) if uid else None
+        return _cst_gate.statement_held_allowed(caller)
+    except Exception:
+        return False
+
+
 def _can_view_imei_rebates(authorization, org_id):
     """PAGE gate for the IMEI ↔ Rebate reconciliation report (owner directive 2026-07-29: this report
     has NO default access). ADMIN-ONLY BY DEFAULT, grantable via the DATA_GRANTS 'imei_rebates' key —
@@ -12638,12 +12655,16 @@ def _statement_buckets(client, org_id, period, rep, source_report="ma_daily_tx")
 
 @router.get("/commission-statement")
 def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
-                                  source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+                                  source_report: str = "ma_daily_tx",
+                                  authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The individual per-employee Commission Statement — what YOU earned, line by line.
 
     fmt=pdf (default) downloads it; fmt=json returns the SAME document model so an on-screen preview and
     the PDF can never disagree (same contract as payout-structure). Every number is re-stated from the
     read-only drill-down; nothing is computed or written here.
+
+    The "Held / not yet paid" section is DEFAULT-CLOSED (owner directive): it is carried on neither the PDF
+    nor the JSON unless the caller holds the 'statement_held' grant (`_can_view_statement_held`).
     """
     require_org(org_id)
     if not rep:
@@ -12686,8 +12707,10 @@ def commission_statement_document(rep: str, period: str, fmt: str = "pdf",
     except Exception:
         tenant = ""
 
+    # Held section is management-only, default-closed — carried only when the caller holds the grant.
+    include_held = _can_view_statement_held(authorization, org_id)
     doc = _cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
-                               period=period, gate_cfg=gate_cfg)
+                               period=period, gate_cfg=gate_cfg, include_held=include_held)
     if (fmt or "pdf").strip().lower() == "json":
         return doc
     return Response(content=_cst.render_pdf(doc), media_type="application/pdf",
@@ -12726,7 +12749,8 @@ def _statement_period_reps(client, org_id, period, store="", market=""):
 
 @router.get("/commission-statements")
 def commission_statements_batch(period: str, reps: str = "", store: str = "", market: str = "",
-                                fmt: str = "pdf", source_report: str = "ma_daily_tx", org_id: str = ORG_ID):
+                                fmt: str = "pdf", source_report: str = "ma_daily_tx",
+                                authorization: str = Header(default=""), org_id: str = ORG_ID):
     """EVERY rep's Commission Statement for a period, in ONE multi-page PDF (one rep per page).
 
     `reps` (comma-separated) renders exactly those, in that order — the reports page passes its filtered/
@@ -12734,6 +12758,9 @@ def commission_statements_batch(period: str, reps: str = "", store: str = "", ma
     derived from rep_commissions for the period (optionally narrowed by store/market). fmt=json returns
     the list of document models the PDF renders from. READ-ONLY throughout; a rep whose drill-down fails
     is SKIPPED (never 500s the whole batch), and a period with no reps yields a valid one-page PDF.
+
+    The "Held / not yet paid" section is DEFAULT-CLOSED (owner directive): carried on neither the PDF nor
+    the JSON unless the caller holds the 'statement_held' grant (`_can_view_statement_held`).
     """
     require_org(org_id)
     if not period:
@@ -12766,6 +12793,8 @@ def commission_statements_batch(period: str, reps: str = "", store: str = "", ma
     except Exception:
         tenant = ""
 
+    # Held section is management-only, default-closed — carried only when the caller holds the grant.
+    include_held = _can_view_statement_held(authorization, org_id)
     docs = []
     for rep in rep_list:
         try:
@@ -12774,7 +12803,7 @@ def commission_statements_batch(period: str, reps: str = "", store: str = "", ma
             continue   # one bad rep must not sink the whole batch
         buckets = _statement_buckets(client, org_id, period, rep, source_report=source_report)
         docs.append(_cst.build_statement(explain, buckets=buckets, tenant_name=tenant, rep_name=rep,
-                                         period=period, gate_cfg=gate_cfg))
+                                         period=period, gate_cfg=gate_cfg, include_held=include_held))
 
     if (fmt or "pdf").strip().lower() == "json":
         return {"period": period, "count": len(docs), "statements": docs}
