@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { api, apiDownload, fmt, ORG_ID } from '@/lib/client'
+import { api, apiDownload, apiFetchBase64, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { SendReportButton } from '@/lib/send-report'
 import { ExportButtons, type ExportPayload } from '@/lib/export'
@@ -207,6 +207,17 @@ export default function ReportsPage() {
     if (!names.length) { alert('No reps to export for the current filter.'); return }
     apiDownload(`/api/v1/commcalc/commission-statements?period=${encodeURIComponent(period)}&reps=${encodeURIComponent(names.join(','))}&org_id=${ORG_ID}`)
       .catch(e => alert(`Could not generate statements: ${e?.message || e}`))
+  }
+  // Send the selected rep's server-rendered statement PDF through the shared /notify/send-file modal
+  // (SendReportButton serverFiles path). Same rep-name expression as downloadStatement, so it resolves
+  // identically in explain_rep.
+  async function currentRepStatementFiles() {
+    const r = currentRep
+    if (!r) return []
+    const name = repLabel(r)
+    const b64 = await apiFetchBase64(`/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(name)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`)
+    const safe = `${name}-${period}`.replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
+    return [{ filename: `commission-statement-${safe}.pdf`, mime: 'application/pdf', content_b64: b64 }]
   }
   // Cheap title for the Send modal's header (buildPayload() itself only runs on click).
   const exportTitle = tab === 'individual'
@@ -456,6 +467,18 @@ export default function ReportsPage() {
                 title="Plan + multi-month drill-down: which assignment, per-rule lines, installment gates & MA cross-reference">
                 🔬 How was this calculated?
               </a>
+            )}
+            {/* This rep's itemized statement — co-located with the rep selector so it is reliably visible
+                on the Individual Rep tab (there is also a copy in the top export bar). */}
+            {currentRep && (
+              <button className="btn btn-secondary" onClick={downloadStatement}
+                title="Download this rep's itemized commission statement (line-by-line, PDF)">
+                📄 Commission Statement (PDF)
+              </button>
+            )}
+            {currentRep && (
+              <SendReportButton title={`Commission statement — ${repLabel(currentRep)} — ${period}`}
+                label="📤 Send statement" serverFiles={currentRepStatementFiles} />
             )}
             {/* This rep's Google store rating(s) — chips sit beside the person, exactly like on the
                 ranking/review scorecards. Renders nothing when there is no rating data. */}

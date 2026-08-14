@@ -1,7 +1,8 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
-import { api, fmt, ORG_ID } from '@/lib/client'
+import { api, apiDownload, apiFetchBase64, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
+import { SendReportButton } from '@/lib/send-report'
 import { ReportShell } from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -116,6 +117,25 @@ export default function CommissionExplainPage() {
       .then(setDev).catch(e => setDev({ error: String(e?.message || e) })).finally(() => setDevBusy(false))
   }
 
+  // ── This rep's ITEMIZED COMMISSION STATEMENT (server-rendered PDF, reportlab) ──────────────────────
+  // Same READ-ONLY document the /commcalc/reports page offers, delivered here so a rep's full calculation
+  // can be handed to that employee. `rep` is the exact storeops_name || epay_salesperson string this page
+  // already sends to /commission-explain, so it resolves identically in explain_rep. Download uses the
+  // authed byte-download choke point; Send fetches the SAME PDF as base64 and posts it through the shared
+  // /notify/send-file modal (the statement is rendered on the SERVER, so the in-browser export path can't
+  // produce it — this is SendReportButton's serverFiles path).
+  const statementUrl = () =>
+    `/api/v1/commcalc/commission-statement?rep=${encodeURIComponent(rep)}&period=${encodeURIComponent(period)}&org_id=${ORG_ID}`
+  function downloadStatement() {
+    if (!rep) return
+    apiDownload(statementUrl()).catch(e => alert(`Could not generate statement: ${e?.message || e}`))
+  }
+  async function statementFiles() {
+    const b64 = await apiFetchBase64(statementUrl())
+    const safe = `${rep}-${period}`.replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
+    return [{ filename: `commission-statement-${safe}.pdf`, mime: 'application/pdf', content_b64: b64 }]
+  }
+
   const pc = data?.plan_component
   const mm = data?.multimonth_component
   const planRows = useMemo(() => {
@@ -167,6 +187,20 @@ export default function CommissionExplainPage() {
               {r.storeops_name || r.epay_salesperson}{r.store ? ` — ${r.store.substring(0, 20)}` : ''}</option>)}
           </select>
         </label>
+        {/* This rep's itemized statement — download the server-rendered PDF, or send it to the employee.
+            Shown once a rep is selected so it reads as tied to the explained rep. */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button className="btn btn-secondary" onClick={downloadStatement} disabled={!rep}
+            title="Download this rep's itemized commission statement (line-by-line, PDF)">
+            📄 Commission Statement (PDF)
+          </button>
+          {rep && (
+            <SendReportButton
+              title={`Commission statement — ${rep} — ${period}`}
+              label="📤 Send statement"
+              serverFiles={statementFiles} />
+          )}
+        </div>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <input className="input" placeholder="Search IMEI / device serial…" value={imei}

@@ -392,12 +392,11 @@ export async function apiUpload(path: string, form: FormData) {
   return res.json()
 }
 
-// Server-rendered FILE download (PDF/XLSX/…). Same choke point as api(): identical org-scoping and auth
-// headers, identical dead-session / impersonation / tenant-choice latches and error contract — but it
-// reads the response as BYTES and triggers a browser download instead of parsing JSON. Used for endpoints
-// that return a file body (e.g. the commission-statement PDFs). `filename` overrides the server's
-// Content-Disposition name when given.
-export async function apiDownload(path: string, filename?: string) {
+// Authed GET choke point for BINARY/file responses. Same org-scoping, auth headers, and
+// dead-session / impersonation / tenant-choice latches + error contract as api(), but returns the raw
+// Response so the caller can read bytes (blob / arrayBuffer) instead of JSON. Shared by apiDownload and
+// apiFetchBase64 so the two never drift.
+async function authedFileGet(path: string): Promise<Response> {
   const authHeader = await bearer()
   const res = await fetch(`${API_URL}${withOrgScope(path)}`, {
     headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...impersonationHeader(path) },
@@ -409,6 +408,14 @@ export async function apiDownload(path: string, filename?: string) {
     if (res.status === 409) markTenantChoiceRequired(err)
     throw new Error(errMsg(err, res.status))
   }
+  return res
+}
+
+// Server-rendered FILE download (PDF/XLSX/…): fetch the bytes through authedFileGet and trigger a browser
+// download. Used for endpoints that return a file body (e.g. the commission-statement PDFs). `filename`
+// overrides the server's Content-Disposition name when given.
+export async function apiDownload(path: string, filename?: string) {
+  const res = await authedFileGet(path)
   const blob = await res.blob()
   // Fall back to the server's Content-Disposition filename, then a generic one.
   let name = filename
@@ -425,6 +432,20 @@ export async function apiDownload(path: string, filename?: string) {
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// Fetch a server-rendered file as RAW base64 (no data: prefix), matching what render{Pdf,Excel}Base64
+// return so the bytes can be POSTed straight to /notify/send-file as a `content_b64` file. Used to SEND a
+// server-rendered PDF (e.g. a commission statement) through the same modal the in-browser export path uses.
+export async function apiFetchBase64(path: string): Promise<string> {
+  const res = await authedFileGet(path)
+  const bytes = new Uint8Array(await res.arrayBuffer())
+  let binary = ''
+  const CHUNK = 0x8000   // chunk the char-code conversion so a large PDF doesn't blow the call stack
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
 }
 
 export const fmt = (n: number) =>
