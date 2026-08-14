@@ -2616,10 +2616,38 @@ def _caller_identity(authorization: str):
     return org, eid
 
 
+_TC432_PRESENT = None   # cached tri-state: None=unprobed, True/False after the first probe
+
+
+def _timeclock_432_present():
+    """True once migration 432 has been applied — i.e. storeops.timeclock_permission exists (and, since
+    they ship together in the SAME migration, the timelog.{auto_clocked_out,permission_status,
+    permission_id} columns). Cached after the first successful probe (a migration is never un-run, so a
+    True answer is permanent); a False answer is NOT cached so the process self-heals the moment 432
+    lands without needing a restart.
+
+    DEPLOY-ORDER SAFETY (AGENT_CONTRACT §5, the same posture attendance_exceptions/lunch_deduction take
+    for migrations 421/418): the #20 code can go live BEFORE this migration runs. Every new write in the
+    auto-clockout / DM-permission feature is gated on this probe, so an older DB without 432 keeps
+    clocking in and out with the exact pre-#20 behavior — a plain punch, no permission gating — instead
+    of throwing 'column/relation does not exist' and breaking clock-out."""
+    global _TC432_PRESENT
+    if _TC432_PRESENT:
+        return True
+    try:
+        sb().table("timeclock_permission").select("id").limit(1).execute()
+        _TC432_PRESENT = True
+    except Exception:
+        _TC432_PRESENT = False
+    return _TC432_PRESENT
+
+
 def _pending_permissions_for(org_id, employee_id):
     """This employee's own PENDING time-clock permissions (migration 432), for the kiosk's
-    '⏳ Pending your DM's permission' banner. Best-effort — degrades to [] if migration 432 hasn't run
-    yet (never break /timeclock/status, which the kiosk polls, on a pre-migration tenant)."""
+    '⏳ Pending your DM's permission' banner. Empty when 432 hasn't run yet (never break
+    /timeclock/status, which the kiosk polls, on a pre-migration tenant)."""
+    if not _timeclock_432_present():
+        return []
     try:
         return (sb().table("timeclock_permission").select("*").eq("org_id", org_id)
                 .eq("employee_id", employee_id).eq("status", "pending")
@@ -2688,12 +2716,13 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
     # auto_clocked_out=false) is NOT gated — it never needs permission. Any lookup gap → treat as a
     # normal punch (never trap the rep on a config/migration miss — mirrors the closing gate posture).
     is_reclock_pending = False
-    try:
-        prior_auto = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
-                      .eq("work_date", work_date).eq("auto_clocked_out", True).limit(1).execute().data) or []
-        is_reclock_pending = bool(prior_auto)
-    except Exception:
-        is_reclock_pending = False
+    if _timeclock_432_present():   # deploy-order safety: no permission gating until migration 432 is applied
+        try:
+            prior_auto = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
+                          .eq("work_date", work_date).eq("auto_clocked_out", True).limit(1).execute().data) or []
+            is_reclock_pending = bool(prior_auto)
+        except Exception:
+            is_reclock_pending = False
     selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
     row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name,
            "store_code": req_store,
@@ -2960,11 +2989,12 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     wdate = str(entry.get("work_date") or "")[:10]
     grace = timedelta(minutes=FORCE_CLOCKOUT_GRACE_MIN)
     sched_end = _scheduled_end_for_punch(org_id, entry)
+    has432 = _timeclock_432_present()   # deploy-order safety: pre-432 DBs keep the plain-punch path
     auto_stamped = False
     log_entry_point = "clock_out_stale_auto"
     late_cap = False            # worked past scheduled_end + grace on a same-day punch
     hold_hours_pending = False  # a pending second session — hours held NULL until the DM approves
-    if str(entry.get("permission_status") or "") == "pending":
+    if has432 and str(entry.get("permission_status") or "") == "pending":
         # A SECOND session still awaiting the DM (migration 432): record the clock-out but DO NOT stamp
         # hours — it must not count toward pay until the DM approves (approval computes + stamps then).
         hold_hours_pending = True
@@ -2979,7 +3009,7 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
             auto_stamped = True
         else:
             note_add = f"stale punch (opened {wdate}) closed from kiosk — review hours"
-    elif sched_end and now > sched_end + grace:
+    elif has432 and sched_end and now > sched_end + grace:
         # Worked PAST scheduled_end + grace (owner directive 2026-08-14): cap the COUNTED clock-out at
         # end+grace (auto-clocked-out there) and raise a rep-initiated late_clockout permission for the
         # EXTRA time — the base scheduled-through-grace time counts now, the extra only once approved.
@@ -3002,7 +3032,7 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
         except Exception:
             hours = None
     upd = {"clock_out": out_at.isoformat(), "hours": hours}
-    if auto_stamped:
+    if auto_stamped and has432:   # only write the new column when migration 432 has added it
         upd["auto_clocked_out"] = True
     if note_add:
         upd["notes"] = ((entry.get("notes") or "") + " | " + note_add).strip(" |")
@@ -3874,6 +3904,7 @@ def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=No
         q = q.eq("org_id", org_id)
     open_punches = q.execute().data or []
     now = datetime.now(timezone.utc)
+    has432 = _timeclock_432_present()   # deploy-order safety: don't write auto_clocked_out pre-432
     closed = []
     for p in open_punches:
         oid = p.get("org_id") or ORG_ID
@@ -3898,12 +3929,13 @@ def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=No
         except Exception:
             hours = None
         note = ((p.get("notes") or "") + " | auto clock-out at scheduled end + grace (system)").strip(" |")
+        sweep_upd = {"clock_out": stamp_at.isoformat(), "hours": hours, "notes": note}
+        if has432:   # only stamp the new flag once migration 432 has added the column
+            sweep_upd["auto_clocked_out"] = True
         try:
-            client.table("timelog").update(
-                {"clock_out": stamp_at.isoformat(), "hours": hours, "notes": note, "auto_clocked_out": True}
-            ).eq("id", p["id"]).execute()
+            client.table("timelog").update(sweep_upd).eq("id", p["id"]).execute()
             closed.append({"employee_id": p.get("employee_id"), "store_code": p.get("store_code"),
-                           "clock_out": stamp_at.isoformat(), "hours": hours, "auto_clocked_out": True})
+                           "clock_out": stamp_at.isoformat(), "hours": hours, "auto_clocked_out": has432})
             try:
                 _log_payroll_change(
                     oid, field="clock_out", entry_point=("force_clockout_manual" if actor else "force_clockout_cron"),
@@ -4086,6 +4118,8 @@ def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, request
     """Insert a pending timeclock_permission linked to `punch`, resolving the store's District Manager.
     Degrades to a DM-less pending row (any admin/DM can still act) when the org tree isn't configured.
     NEVER raises — a permission-log miss must not fail the punch that already happened."""
+    if not _timeclock_432_present():
+        return {"id": None, "kind": kind, "status": "pending", "error": "migration 432 not applied"}
     try:
         store_code = punch.get("store_code")
         dm_eid, dm_email, _dm_name = _dm_for_store(org_id, store_code)
@@ -4125,6 +4159,8 @@ def list_timeclock_permissions(status: str = "", authorization: str = Header(def
     """Rep-initiated time-clock permissions for the caller's tenant, narrowed to the caller's store
     span (the SAME RBAC keyset every sibling timeclock surface applies) — powers the DM/admin approval
     board. Optional ?status=pending|approved|denied. Newest first."""
+    if not _timeclock_432_present():
+        return {"permissions": []}   # deploy-order safety: empty until migration 432 is applied
     org_id, _eid = _caller_identity(authorization) if authorization else (org_id, None)
     q = sb().table("timeclock_permission").select("*").eq("org_id", org_id)
     if status:
@@ -4145,6 +4181,8 @@ def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = H
     approved actual departure and its hours recomputed. Denying leaves the held time uncounted."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
+    if not _timeclock_432_present():
+        raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
     decision = (body.get("decision") or "").strip().lower()
     if decision not in ("approve", "deny"):
         raise HTTPException(400, "decision must be 'approve' or 'deny'")
@@ -4214,6 +4252,8 @@ def request_extra_time(body: dict, authorization: str = Header(default=""), org_
     manual clock-out raised the request. Body: {entry_id?, requested_clock_out?(ISO), reason?}. Creates
     a pending late_clockout permission for the DM. Idempotent per punch (a pending one is returned as-is)."""
     org_id, employee_id = _caller_identity(authorization)
+    if not _timeclock_432_present():
+        raise HTTPException(404, "No auto-clocked-out punch found to request extra time for.")
     now = datetime.now(timezone.utc)
     today = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
     entry_id = body.get("entry_id")

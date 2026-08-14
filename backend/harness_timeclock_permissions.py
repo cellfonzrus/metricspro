@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, ".")
 
 PASS, FAIL = [], []
+_ABSENT_KEYS = set()   # (schema, table) keys whose reads/writes should raise "relation does not exist"
 
 
 def check(name, cond, detail=""):
@@ -99,6 +100,10 @@ class FakeQuery:
         return True
 
     def execute(self):
+        # Simulate a table/relation that does NOT exist yet (a migration not applied) — the real
+        # PostgREST client raises here; the router's capability probe catches it and degrades.
+        if self.key in _ABSENT_KEYS:
+            raise Exception(f'relation "{self.key[1]}" does not exist')
         rows = self.store.setdefault(self.key, [])
         if self._mode == "insert":
             payload = self._payload if isinstance(self._payload, list) else [self._payload]
@@ -342,6 +347,49 @@ check("8b re-clock-in after a MANUAL close is NOT gated (no DM permission needed
       r_after.get("success") is True and not r_after.get("needs_dm_permission"), r_after)
 check("8c ...and no permission row is raised for a normal lunch-break day",
       len(perms()) == 0 and tl_rows()[-1].get("permission_status") is None, (perms(), tl_rows()[-1]))
+
+
+# ══ 9: DEPLOY-ORDER SAFETY — migration 432 NOT applied → clock-in/out fall back to a plain punch ═══
+# The production incident (#20): code went live before migration 432, so the new columns/table didn't
+# exist and the clock-out/clock-in write paths threw "column/relation does not exist". With the
+# capability probe, an un-migrated DB must keep clocking in AND OUT with the exact pre-#20 behavior.
+_ABSENT_KEYS.add(("storeops", "timeclock_permission"))   # the table 432 creates — reads now raise
+R._TC432_PRESENT = None                                   # clear the cached probe so it re-detects
+reset()
+fake.store.pop(("storeops", "timeclock_permission"), None)   # truly absent, as on a pre-432 DB
+check("9a the capability probe reports migration 432 ABSENT when the table read raises",
+      R._timeclock_432_present() is False)
+
+set_now(biz(8, 0))
+r_in = R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+check("9b clock-IN still succeeds as a plain punch (no permission gating) when 432 is absent",
+      r_in.get("success") is True and not r_in.get("needs_dm_permission"), r_in)
+check("9c ...and writes no permission_status on the punch", tl_rows()[-1].get("permission_status") is None, tl_rows()[-1])
+
+set_now(SCHED_END + timedelta(minutes=20))   # worked 15 min past the would-be grace cap
+r_out = R.clock_out({}, authorization=AUTH, org_id=ORG)
+row = tl_rows()[0]
+check("9d clock-OUT past shift+grace STILL SUCCEEDS (the incident) — plain punch stamped at now, no error",
+      r_out.get("success") is True and not r_out.get("extra_pending")
+      and row.get("clock_out") == (SCHED_END + timedelta(minutes=20)).isoformat()
+      and row.get("hours") == 9.33, (r_out, row))
+check("9e ...no auto_clocked_out flag and no permission table written pre-432",
+      not row.get("auto_clocked_out") and ("storeops", "timeclock_permission") not in fake.store,
+      (row, list(fake.store.keys())))
+
+# The force-clockout sweep must also survive a pre-432 DB (close the punch, just without the new flag).
+reset()
+fake.store.pop(("storeops", "timeclock_permission"), None)
+set_now(biz(8, 0))
+R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+set_now(SCHED_END + timedelta(minutes=6))
+sweep_pre432 = R._do_force_clockout(org_id=ORG)
+srow = tl_rows()[0]
+check("9f force-clockout sweep still closes the punch pre-432 (stamped at end+grace, no new flag, no error)",
+      sweep_pre432["closed"] == 1 and srow.get("clock_out") == STAMP.isoformat()
+      and not srow.get("auto_clocked_out"), (sweep_pre432, srow))
+
+_ABSENT_KEYS.discard(("storeops", "timeclock_permission"))   # restore for any later use
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
