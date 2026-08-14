@@ -19,12 +19,17 @@ const modal: React.CSSProperties = {
 }
 const chk: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }
 
-export function SendReportButton({ reportKey, filters, compact, exportPayload, title }: {
+export function SendReportButton({ reportKey, filters, compact, exportPayload, serverFiles, title, label }: {
   reportKey?: string                       // server-rendered path (report must be in report_registry)
   filters?: Record<string, any>
   compact?: boolean
   exportPayload?: () => ExportPayload       // universal path: render the file in-browser + POST /notify/send-file
+  // server-file path: the file is ALREADY rendered on the server (e.g. a reportlab PDF). The callback
+  // fetches its bytes as base64 and they are delivered through the SAME /notify/send-file flow. Additive —
+  // when omitted, the reportKey / exportPayload paths behave exactly as before.
+  serverFiles?: () => Promise<{ filename: string; mime: string; content_b64: string }[]>
   title?: string
+  label?: string                            // override the button caption (default "📤 Send")
 }) {
   const [open, setOpen] = useState(false)
   const [employees, setEmployees] = useState<Emp[]>([])
@@ -75,13 +80,24 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, t
     const formats = [fmtXlsx && 'xlsx', fmtPdf && 'pdf'].filter(Boolean)
     const { emails, phones } = collect()
     if (!channels.length) { setResult('Pick at least one channel.'); return }
-    if (!formats.length) { setResult('Pick at least one format.'); return }
+    // The format picker only governs the in-browser render paths; a server-rendered file is already a
+    // fixed PDF, so its "format" is not chosen here.
+    if (!serverFiles && !formats.length) { setResult('Pick at least one format.'); return }
     if (chEmail && !emails.length) { setResult('Email selected but no email recipients.'); return }
     if (chWhatsapp && !phones.length) { setResult('WhatsApp selected but no phone recipients.'); return }
     setBusy(true); setResult('')
     try {
       let res: any
-      if (exportPayload) {
+      if (serverFiles) {
+        // Server-file path: the PDF is rendered by the backend; fetch its bytes and deliver them through
+        // the SAME /notify/send-file endpoint the in-browser path uses.
+        const files = await serverFiles()
+        if (!files.length) { setResult('Nothing to send.'); setBusy(false); return }
+        res = await api(`/api/v1/notify/send-file?org_id=${ORG_ID}`, {
+          method: 'POST',
+          body: JSON.stringify({ title: title || 'Report', message, channels, emails, phones, files }),
+        })
+      } else if (exportPayload) {
         // Universal path: render the file(s) in the browser and deliver via /notify/send-file (no
         // server-side report registration needed — works for ANY report/dashboard).
         const p = exportPayload()
@@ -109,7 +125,7 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, t
 
   return (
     <>
-      <button className="btn btn-secondary" style={btnStyle} onClick={() => setOpen(true)}>📤 Send</button>
+      <button className="btn btn-secondary" style={btnStyle} onClick={() => setOpen(true)}>{label || '📤 Send'}</button>
       {open && (
         <div style={overlay} onClick={() => !busy && setOpen(false)}>
           <div style={modal} onClick={e => e.stopPropagation()}>
@@ -119,7 +135,7 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, t
             </div>
             <div style={{ fontSize: 12, color: 'var(--muted,#888)', marginBottom: 12 }}>
               Report: <b>{title || reportKey || 'this report'}</b>{filters && Object.keys(filters).length ? ` · filters: ${JSON.stringify(filters)}` : ''}
-              {exportPayload ? ' · current filtered view' : ''}
+              {serverFiles ? ' · PDF' : exportPayload ? ' · current filtered view' : ''}
             </div>
 
             <div style={{ display: 'flex', gap: 20, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -130,11 +146,13 @@ export function SendReportButton({ reportKey, filters, compact, exportPayload, t
                 <label style={chk}><input type="checkbox" checked={chWhatsapp} onChange={e => setChWhatsapp(e.target.checked)} /> WhatsApp
                   {health && !health.whatsapp_configured && <span style={{ color: '#c00', fontSize: 11 }}> (not configured)</span>}</label>
               </div>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Formats</div>
-                <label style={chk}><input type="checkbox" checked={fmtXlsx} onChange={e => setFmtXlsx(e.target.checked)} /> Excel (.xlsx)</label>
-                <label style={chk}><input type="checkbox" checked={fmtPdf} onChange={e => setFmtPdf(e.target.checked)} /> PDF</label>
-              </div>
+              {!serverFiles && (
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Formats</div>
+                  <label style={chk}><input type="checkbox" checked={fmtXlsx} onChange={e => setFmtXlsx(e.target.checked)} /> Excel (.xlsx)</label>
+                  <label style={chk}><input type="checkbox" checked={fmtPdf} onChange={e => setFmtPdf(e.target.checked)} /> PDF</label>
+                </div>
+              )}
             </div>
 
             <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>Recipients</div>
