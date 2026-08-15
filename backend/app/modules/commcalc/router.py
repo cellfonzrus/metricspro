@@ -912,6 +912,24 @@ async def upload_file(
                                          row_count=_ingest_rows_saved(_res if isinstance(_res, dict) else {}))
 
 
+def _parse_trans_ts(raw):
+    """Full transaction timestamp (ISO) from the POS 'Trans Date Time' cell, or None when the cell is
+    date-only (no clock time). Kept NULLABLE on purpose so the hour-of-day staffing heat map ignores
+    timeless rows instead of piling them onto midnight. The ':' / am-pm test avoids faking a 00:00 hour
+    for date-only exports (which is why historical rows, stored date-only, simply have no trans_ts)."""
+    s = str(raw or "").strip()
+    low = s.lower()
+    if not s or (":" not in s and "am" not in low and "pm" not in low):
+        return None
+    try:
+        td = pd.to_datetime(s, errors="coerce")
+        if pd.isna(td):
+            return None
+        return td.isoformat()
+    except Exception:
+        return None
+
+
 async def _upload_file_impl(
     file_type: str,
     file: UploadFile = File(...),
@@ -1348,6 +1366,7 @@ async def _upload_file_impl(
                 'tax': safe_float(r.get('Tax') or r.get('Sales Tax') or r.get('Tax Amount') or r.get('Tax Amt')),
                 'trans_id': str(r.get('Trans ID','')).replace('.0','').strip(),
                 'trans_date': str(r.get('Trans Date Time',r.get('Trans Date','')))[:10] or None,
+                'trans_ts': _parse_trans_ts(trans_date_raw),   # full clock time for the staffing heat map (nullable)
                 'mdn': str(r.get('Activated Mobile Number','') or r.get('Primary Account Number','')).replace('.0','').strip(),
                 'serial_1': str(r.get('Serial 1','')).replace('.0','').strip()[:30],
                 'register': str(r.get('Register','')).strip(),
@@ -3742,6 +3761,12 @@ async def upload_mapped(
     #     period replace. Either way: snapshot the to-be-deleted slice FIRST; on ANY insert failure restore
     #     it so a failed import leaves the table AT LEAST as full as before (no DB transactions in supabase-py).
     source_aware = _table_has_column(client, table, "source_id")
+    # trans_ts is an OPTIONAL capture column (mig 854). Strip it if the migration hasn't landed so the
+    # core sales insert can never fail on 42703 — same doctrine as source_id/carrier_id above.
+    if table in ("raw_sales", "daily_sales_feed") and mapped and "trans_ts" in mapped[0] \
+            and not _table_has_column(client, table, "trans_ts"):
+        for _r in mapped:
+            _r.pop("trans_ts", None)
     # (c) PARTITION-SCOPED replace — a file replaces its OWN slice (its MA accounts / stores, within its
     #     own date range) and never another company's. See _replace_scope. None ⇒ legacy period-wide.
     scope = _replace_scope(table, mapped)
