@@ -1,16 +1,22 @@
--- 852_commcalc_dm_incentive_plan.sql   (commcalc schema)
+-- 852_commcalc_management_incentive_plan.sql   (commcalc schema)
 --
--- DISTRICT-MANAGER INCENTIVE PLAN — a per-DM, store-AGGREGATED incentive with target-based component
--- payouts plus qualification-gated flat bonuses. This is deliberately NOT modeled on the per-sale-line
--- commission_plan engine (migration 059): that engine multiplies a rate by each individual sale line,
--- and has no concept of "$8,000/store target across 7 stores" or a "cash deposited twice weekly" gate.
--- A DM incentive is scored once per DM per period against the roll-up of the stores they manage.
+-- MANAGEMENT INCENTIVE PLAN — a per-MANAGER, store-AGGREGATED incentive with target-based component
+-- payouts plus qualification-gated flat bonuses. One framework for EVERY management level (district
+-- manager, market manager, regional, …): a plan is built once and ASSIGNED to whoever should get it,
+-- and different plans can be set up for different levels. It reuses the SAME assignment basis as the
+-- employee commission_plan engine (migration 059): scope precedence employee > role > store > market >
+-- default, so "assign an employee to a plan" works exactly like it does for commissions.
 --
--- OWNER SPEC (2026-08-15), seeded as the DEFAULT for the Total Wireless carrier, fully overridable by
--- any tenant (clone → edit; a tenant row wins over the house default). Two sections:
+-- This is deliberately NOT modeled on the per-sale-line commission_plan engine itself: that engine
+-- multiplies a rate by each individual sale line and has no concept of "$8,000/store target across 7
+-- stores" or a "cash deposited twice weekly" gate. A management incentive is scored once per manager
+-- per period against the roll-up of the stores that manager is responsible for.
 --
---   A. STORE PERFORMANCE — component payouts, rate × actual aggregated across the DM's stores, shown
---      against a per-store target, capped at the target opportunity by default:
+-- OWNER SPEC (2026-08-15) — the first plan seeded is the Total Wireless DEFAULT for a district manager,
+-- fully overridable by any tenant (clone → edit; a tenant row wins over the house default). Two sections:
+--
+--   A. STORE PERFORMANCE — component payouts, rate × actual aggregated across the manager's stores,
+--      shown against a per-store target, capped at the target opportunity by default:
 --        Accessory Sales  2%     $8,000/store × 7 stores  → $1,120 full
 --        VHI / FIOS       $2/ea  10/store    × 6 stores  → $120 full
 --        Edge Activations $5/ea  10/store    × 6 stores  → $300 full
@@ -22,19 +28,21 @@
 --                                 the period (from inventory aging).
 --
 -- MONEY POSTURE: nothing here computes or pays. These tables hold the PLAN DEFINITION only. Computation
--- (per-DM per-period) and any accrual into the ledger live in code and write their own rows in
--- commcalc.dm_incentive_payout (below), which is a draft→approved→paid record, never auto-paid.
+-- (per-manager per-period) and any accrual into the ledger live in code and write their own rows in
+-- commcalc.management_incentive_payout (below), which is a draft→approved→paid record, never auto-paid.
 --
 -- Additive + idempotent: CREATE IF NOT EXISTS, RLS open_all like every sibling commcalc table, no seed
 -- in the SQL (the Total Wireless default is seeded from code, never-clobber, so the wording/amounts are
 -- correctable in a normal deploy — same rationale as the training/support seeds).
 
 -- ── 1. Plan header ───────────────────────────────────────────────────────────────────────────────
-create table if not exists commcalc.dm_incentive_plan (
+create table if not exists commcalc.management_incentive_plan (
   id                        uuid primary key default gen_random_uuid(),
   org_id                    uuid not null,
   carrier_id                uuid,                     -- FK-by-convention to commcalc.carrier; NULL = any carrier
   name                      text not null,
+  level                     text,                     -- free label for the management level this plan targets
+                                                      -- ('district_manager','market_manager','regional',…); display only
   is_active                 boolean not null default true,
   is_default                boolean not null default false,   -- the house/Total-Wireless default (seeded)
   period_type               text not null default 'monthly',  -- 'monthly' (only mode for now)
@@ -50,19 +58,19 @@ create table if not exists commcalc.dm_incentive_plan (
 -- kind:          'percent'  → payout = rate × actual_dollars           (rate 0.02 = 2%)
 --                'per_unit' → payout = rate × actual_units             (rate = $ per unit)
 -- metric_source: which actual to pull ('accessory_gp' | 'vhi_fios_count' | 'edge_count' | ...);
---                resolved in code against existing sales actuals, aggregated over the DM's stores.
--- target_per_store + store_count define the OPPORTUNITY (goal); store_count NULL = use the DM's own
---                store-set size from the org tree. cap_at_target = pay no more than the full opportunity.
-create table if not exists commcalc.dm_incentive_component (
+--                resolved in code against existing sales actuals, aggregated over the manager's stores.
+-- target_per_store + store_count define the OPPORTUNITY (goal); store_count NULL = use the manager's
+--                own store-set size from the org tree. cap_at_target = pay no more than the opportunity.
+create table if not exists commcalc.management_incentive_component (
   id              uuid primary key default gen_random_uuid(),
-  plan_id         uuid not null references commcalc.dm_incentive_plan(id) on delete cascade,
+  plan_id         uuid not null references commcalc.management_incentive_plan(id) on delete cascade,
   org_id          uuid not null,
   label           text not null,
   kind            text not null check (kind in ('percent', 'per_unit')),
   rate            numeric not null default 0,
   metric_source   text not null,
   target_per_store numeric default 0,
-  store_count     integer,                            -- NULL = the DM's actual store count
+  store_count     integer,                            -- NULL = the manager's actual store count
   cap_at_target   boolean not null default true,
   sort            integer default 0
 );
@@ -76,9 +84,9 @@ create table if not exists commcalc.dm_incentive_component (
 --            'manual'          → management marks earned/not on the statement.
 --            'none'            → always paid.
 -- config:    per-kind knobs, e.g. {"max_days": 10} for inventory_aging.
-create table if not exists commcalc.dm_incentive_bonus (
+create table if not exists commcalc.management_incentive_bonus (
   id         uuid primary key default gen_random_uuid(),
-  plan_id    uuid not null references commcalc.dm_incentive_plan(id) on delete cascade,
+  plan_id    uuid not null references commcalc.management_incentive_plan(id) on delete cascade,
   org_id     uuid not null,
   label      text not null,
   kind       text not null check (kind in ('consolidated', 'inventory_selloff', 'flat')),
@@ -97,9 +105,9 @@ create table if not exists commcalc.dm_incentive_bonus (
 -- op/threshold: pass test, e.g. zulu lt 5, tmr3 gt 75, twp gt 80, address_checks gt 50.
 -- config:     metric knobs, e.g. cash_deposit {"day": "sat", "max_amount": 0, "days": 2}.
 -- applies_to: which bonus this gates ('consolidated' by default).
-create table if not exists commcalc.dm_incentive_qualifier (
+create table if not exists commcalc.management_incentive_qualifier (
   id          uuid primary key default gen_random_uuid(),
-  plan_id     uuid not null references commcalc.dm_incentive_plan(id) on delete cascade,
+  plan_id     uuid not null references commcalc.management_incentive_plan(id) on delete cascade,
   org_id      uuid not null,
   metric_key  text not null,
   label       text,
@@ -112,12 +120,14 @@ create table if not exists commcalc.dm_incentive_qualifier (
   sort        integer default 0
 );
 
--- ── 5. Assignment — who a plan applies to (mirrors commission_plan_assignment's shape) ────────────
+-- ── 5. Assignment — who a plan applies to (SAME shape/precedence as commission_plan_assignment) ───
 -- scope: 'employee' | 'role' | 'market' | 'store' | 'default'. The Total Wireless default is seeded as
--- scope='role', scope_value='district_manager'. A tenant's own plan with a higher priority overrides it.
-create table if not exists commcalc.dm_incentive_assignment (
+-- scope='role', scope_value='district_manager'. Assigning a specific manager = an 'employee'-scope row,
+-- which wins over role/market/default (precedence employee>role>store>market>default), exactly like the
+-- employee commission plan. A tenant's own plan with a higher priority overrides the house default.
+create table if not exists commcalc.management_incentive_assignment (
   id          uuid primary key default gen_random_uuid(),
-  plan_id     uuid not null references commcalc.dm_incentive_plan(id) on delete cascade,
+  plan_id     uuid not null references commcalc.management_incentive_plan(id) on delete cascade,
   org_id      uuid not null,
   scope       text not null default 'role' check (scope in ('employee', 'role', 'market', 'store', 'default')),
   scope_value text,
@@ -126,18 +136,18 @@ create table if not exists commcalc.dm_incentive_assignment (
 );
 
 -- ── 6. Computed payout records (the statement + the accrual source; draft → approved → paid) ───────
--- One row per DM per period per plan. `breakdown` holds the full computed detail (each component's
+-- One row per manager per period per plan. `breakdown` holds the full computed detail (each component's
 -- actual/target/payout, each qualifier's value/pass, each bonus earned) so the statement + PDF render
 -- from a stored snapshot and pay is auditable. `qualified` = did the consolidated gate pass. Management
 -- edits (override amount / earned) are stored here, never on the plan definition.
-create table if not exists commcalc.dm_incentive_payout (
+create table if not exists commcalc.management_incentive_payout (
   id              uuid primary key default gen_random_uuid(),
   org_id          uuid not null,
   plan_id         uuid,
-  dm_employee_id  text not null,
-  dm_employee_name text,
+  employee_id     text not null,
+  employee_name   text,
   period          text not null,                      -- 'YYYY-MM'
-  store_codes     text[],                             -- the DM's store set used for this computation
+  store_codes     text[],                             -- the manager's store set used for this computation
   breakdown       jsonb default '{}'::jsonb,
   component_total numeric default 0,
   bonus_total     numeric default 0,
@@ -150,23 +160,23 @@ create table if not exists commcalc.dm_incentive_payout (
   decided_at      timestamptz,
   created_at      timestamptz default now(),
   updated_at      timestamptz default now(),
-  unique (org_id, plan_id, dm_employee_id, period)
+  unique (org_id, plan_id, employee_id, period)
 );
 
-create index if not exists dm_incentive_plan_org on commcalc.dm_incentive_plan (org_id);
-create index if not exists dm_incentive_component_plan on commcalc.dm_incentive_component (plan_id);
-create index if not exists dm_incentive_bonus_plan on commcalc.dm_incentive_bonus (plan_id);
-create index if not exists dm_incentive_qualifier_plan on commcalc.dm_incentive_qualifier (plan_id);
-create index if not exists dm_incentive_assignment_plan on commcalc.dm_incentive_assignment (plan_id);
-create index if not exists dm_incentive_assignment_scope on commcalc.dm_incentive_assignment (org_id, scope, scope_value);
-create index if not exists dm_incentive_payout_lookup on commcalc.dm_incentive_payout (org_id, period, dm_employee_id);
+create index if not exists mgmt_incentive_plan_org on commcalc.management_incentive_plan (org_id);
+create index if not exists mgmt_incentive_component_plan on commcalc.management_incentive_component (plan_id);
+create index if not exists mgmt_incentive_bonus_plan on commcalc.management_incentive_bonus (plan_id);
+create index if not exists mgmt_incentive_qualifier_plan on commcalc.management_incentive_qualifier (plan_id);
+create index if not exists mgmt_incentive_assignment_plan on commcalc.management_incentive_assignment (plan_id);
+create index if not exists mgmt_incentive_assignment_scope on commcalc.management_incentive_assignment (org_id, scope, scope_value);
+create index if not exists mgmt_incentive_payout_lookup on commcalc.management_incentive_payout (org_id, period, employee_id);
 
 -- RLS: open_all to the app roles (service_role does the real work), same posture as every commcalc table.
 do $$
 declare t text;
 begin
-  foreach t in array array['dm_incentive_plan','dm_incentive_component','dm_incentive_bonus',
-                           'dm_incentive_qualifier','dm_incentive_assignment','dm_incentive_payout']
+  foreach t in array array['management_incentive_plan','management_incentive_component','management_incentive_bonus',
+                           'management_incentive_qualifier','management_incentive_assignment','management_incentive_payout']
   loop
     execute format('alter table commcalc.%I enable row level security', t);
     execute format('drop policy if exists open_all on commcalc.%I', t);
@@ -177,12 +187,12 @@ end $$;
 
 notify pgrst, 'reload schema';
 
-select 'Migration 852 complete — commcalc.dm_incentive_* (plan, component, bonus, qualifier, assignment, payout)' as status;
+select 'Migration 852 complete — commcalc.management_incentive_* (plan, component, bonus, qualifier, assignment, payout)' as status;
 
 -- REVERT (undo — no payout is computed here, so this touches no paid money):
--- drop table if exists commcalc.dm_incentive_payout;
--- drop table if exists commcalc.dm_incentive_assignment;
--- drop table if exists commcalc.dm_incentive_qualifier;
--- drop table if exists commcalc.dm_incentive_bonus;
--- drop table if exists commcalc.dm_incentive_component;
--- drop table if exists commcalc.dm_incentive_plan;
+-- drop table if exists commcalc.management_incentive_payout;
+-- drop table if exists commcalc.management_incentive_assignment;
+-- drop table if exists commcalc.management_incentive_qualifier;
+-- drop table if exists commcalc.management_incentive_bonus;
+-- drop table if exists commcalc.management_incentive_component;
+-- drop table if exists commcalc.management_incentive_plan;
