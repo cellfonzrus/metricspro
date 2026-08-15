@@ -19781,6 +19781,8 @@ def save_carrier_kpi_metric(body: dict, org_id: str = ORG_ID):
            "target_default": safe_float(body.get("target_default")),
            "payout_config_col": body.get("payout_config_col") or f"kpi_{key}_target",
            "sort": int(body.get("sort") or 0), "is_active": bool(body.get("is_active", True))}
+    if "source_mode" in body:   # only when the toggle is used, so metric saves still work pre-mig-853
+        row["source_mode"] = body.get("source_mode") or "manual"
     try:
         if body.get("id"):
             r = sb().schema('commcalc').table('carrier_kpi_metric').update(row).eq('id', body['id']).eq('org_id', org_id).execute()
@@ -19795,6 +19797,91 @@ def save_carrier_kpi_metric(body: dict, org_id: str = ORG_ID):
 def delete_carrier_kpi_metric(metric_id: str, org_id: str = ORG_ID):
     sb().schema('commcalc').table('carrier_kpi_metric').delete().eq('org_id', org_id).eq('id', metric_id).execute()
     return {"deleted": metric_id}
+
+
+# ── KPI actuals (manual now / email later) — mig 853 ──────────────────────────────────────────────
+def _kpi_source_mode_map(client, org_id):
+    """{metric_key: 'manual'|'email'} per carrier_kpi_metric.source_mode. Empty (→ all default 'manual')
+    when mig 853's source_mode column isn't applied yet."""
+    try:
+        rows = (client.schema('commcalc').table('carrier_kpi_metric')
+                .select('metric_key,source_mode').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        return {}
+    return {r.get('metric_key'): (r.get('source_mode') or 'manual') for r in rows}
+
+
+def _kpi_effective_actuals(client, org_id, period, scope='store', metric_keys=None, entities=None):
+    """{(entity, metric_key): {'value', 'source'}} — the effective KPI actual per entity honoring each
+    metric's source_mode: the preferred source wins, the other is a fallback so a value still shows.
+    Degrades to {} when the kpi_actual table (mig 853) isn't applied yet."""
+    try:
+        rows = (client.schema('commcalc').table('kpi_actual').select('*')
+                .eq('org_id', org_id).eq('scope', scope).in_('period', _pvariants(period))
+                .limit(200000).execute().data) or []
+    except Exception:
+        return {}
+    modes = _kpi_source_mode_map(client, org_id)
+    grouped = {}
+    for r in rows:
+        mk = r.get('metric_key'); ent = r.get('entity')
+        if metric_keys and mk not in metric_keys:
+            continue
+        if entities and ent not in entities:
+            continue
+        grouped.setdefault((ent, mk), {})[r.get('source') or 'manual'] = r.get('value')
+    out = {}
+    for (ent, mk), bysrc in grouped.items():
+        pref = modes.get(mk, 'manual')
+        alt = 'email' if pref == 'manual' else 'manual'
+        if bysrc.get(pref) is not None:
+            out[(ent, mk)] = {'value': bysrc[pref], 'source': pref}
+        elif bysrc.get(alt) is not None:
+            out[(ent, mk)] = {'value': bysrc[alt], 'source': alt + ' (fallback)'}
+    return out
+
+
+@router.get("/kpi-actuals")
+def list_kpi_actuals(period: str, scope: str = 'store', org_id: str = ORG_ID):
+    """Raw stored KPI actual rows (both sources) for the period + the per-metric source modes, so the KPI
+    page can prefill the manual grid and show which source is active. Degrades cleanly pre-mig-853."""
+    try:
+        rows = (sb().schema('commcalc').table('kpi_actual').select('*')
+                .eq('org_id', org_id).eq('scope', scope).in_('period', _pvariants(period))
+                .limit(200000).execute().data) or []
+        ready = True
+    except Exception:
+        rows, ready = [], False
+    return {"period": period, "scope": scope, "ready": ready, "rows": rows,
+            "source_modes": _kpi_source_mode_map(sb(), org_id)}
+
+
+@router.post("/kpi-actuals")
+def save_kpi_actuals(body: dict, org_id: str = ORG_ID):
+    """Upsert MANUAL KPI values. Body {period, scope?, updated_by?, entries:[{entity, metric_key, value}]}.
+    Writes source='manual' only — never touches an 'email' row, so flipping source mode loses nothing."""
+    period = (body.get("period") or "").strip()
+    if not period:
+        raise HTTPException(400, "period required")
+    scope = body.get("scope") or "store"
+    who = body.get("updated_by")
+    rows = []
+    for e in (body.get("entries") or []):
+        ent = (str(e.get("entity") or "")).strip()
+        mk = (str(e.get("metric_key") or "")).strip()
+        if not ent or not mk:
+            continue
+        val = e.get("value")
+        rows.append({"org_id": org_id, "scope": scope, "entity": ent, "period": period, "metric_key": mk,
+                     "value": (None if val in ("", None) else safe_float(val)), "source": "manual", "updated_by": who})
+    if not rows:
+        return {"saved": 0}
+    try:
+        r = sb().schema('commcalc').table('kpi_actual').upsert(
+            rows, on_conflict='org_id,scope,entity,period,metric_key,source').execute()
+        return {"saved": len(r.data or rows)}
+    except Exception as ex:
+        raise HTTPException(500, f"save kpi actuals failed (is migration 853 applied?): {ex}")
 
 
 @router.get("/coaching/{period}")
@@ -28965,11 +29052,26 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
         except Exception:
             out["unresolved"].append("inventory_aging")
 
-    # Qualifiers with no data source anywhere — always manual.
-    for k in which_quals:
-        if k in ("zulu", "twp", "address_checks") and k not in out["resolved"]:
-            out["unresolved"].append(k)
-            out["notes"][k] = "No data source in the app yet — enter manually (or upload via the KPI module once wired)."
+    # zulu / twp / address_checks — read STORED KPI actuals (manual now, email later), honoring each
+    # metric's source_mode, averaged across the manager's stores (same grain as tmr3). Unresolved only
+    # when there's genuinely no stored value yet.
+    kpi_pending = [k for k in which_quals if k in ("zulu", "twp", "address_checks") and k not in out["resolved"]]
+    if kpi_pending:
+        try:
+            eff = _kpi_effective_actuals(client, org_id, period, scope="store",
+                                         metric_keys=set(kpi_pending), entities=scodes)
+        except Exception:
+            eff = {}
+        for k in kpi_pending:
+            vals = [v["value"] for (ent, mk), v in eff.items() if mk == k and v.get("value") is not None]
+            if vals:
+                out["qualifier_values"][k] = round(sum(vals) / len(vals), 2)
+                srcs = sorted({str(v["source"]).split()[0] for (ent, mk), v in eff.items() if mk == k})
+                out["resolved"].append(k)
+                out["notes"][k] = f"Stored KPI actual ({'/'.join(srcs) or 'manual'}), averaged across the manager's stores."
+            else:
+                out["unresolved"].append(k)
+                out["notes"][k] = "No stored KPI value yet — enter on the KPI page (manual mode) or via email import once wired."
     return out
 
 
