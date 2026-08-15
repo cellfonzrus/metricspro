@@ -28478,3 +28478,234 @@ def atu_opportunity_report(period: str = "", start: str = "", end: str = "",
             "base entered in Settings.",
         ],
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# MANAGEMENT INCENTIVE (migration 852) — per-manager, store-aggregated incentive plans. CRUD for the
+# plan definition, a compute endpoint that feeds the pure engine (management_incentive.py), and the
+# payout ledger (draft → approved → paid). Every read degrades to empty when mig 852 hasn't run, so a
+# pre-migration tenant never 500s. Actual production/metric resolution (accessory $, VHI/FIOS, Edge,
+# cash-deposit, inventory aging, KPI pull) lands in a follow-up; today the caller supplies actuals +
+# qualifier values (manual/entry or a later resolver), and the engine does the money math.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+_MI_CHILD_TABLES = ("management_incentive_component", "management_incentive_bonus",
+                    "management_incentive_qualifier", "management_incentive_assignment")
+
+
+def _mi_load_plans(client, org_id, plan_id=None, active_only=False):
+    """Load management-incentive plans with their children nested, shaped for the engine + the builder
+    UI. Best-effort: an un-run migration 852 (tables absent) returns []."""
+    try:
+        q = (client.schema("commcalc").table("management_incentive_plan").select("*").eq("org_id", org_id))
+        if plan_id:
+            q = q.eq("id", plan_id)
+        if active_only:
+            q = q.eq("is_active", True)
+        plans = q.execute().data or []
+    except Exception:
+        return []
+    if not plans:
+        return []
+    ids = [p["id"] for p in plans]
+    kids = {t: {} for t in _MI_CHILD_TABLES}
+    for t in _MI_CHILD_TABLES:
+        try:
+            rows = (client.schema("commcalc").table(t).select("*")
+                    .eq("org_id", org_id).in_("plan_id", ids).execute().data) or []
+        except Exception:
+            rows = []
+        for r in rows:
+            kids[t].setdefault(r.get("plan_id"), []).append(r)
+    for p in plans:
+        p["components"] = sorted(kids["management_incentive_component"].get(p["id"], []), key=lambda x: x.get("sort", 0))
+        p["bonuses"] = sorted(kids["management_incentive_bonus"].get(p["id"], []), key=lambda x: x.get("sort", 0))
+        p["qualifiers"] = sorted(kids["management_incentive_qualifier"].get(p["id"], []), key=lambda x: x.get("sort", 0))
+        p["assignments"] = kids["management_incentive_assignment"].get(p["id"], [])
+    return plans
+
+
+@router.get("/management-incentive/plans")
+def mi_list_plans(org_id: str = ORG_ID):
+    """Every management-incentive plan for the tenant, children nested. Empty pre-migration-852."""
+    require_org(org_id)
+    return {"plans": _mi_load_plans(sb(), org_id)}
+
+
+@router.post("/management-incentive/plans")
+def mi_save_plan(body: dict, org_id: str = ORG_ID):
+    """Upsert a plan and REPLACE its children (components / bonuses / qualifiers / assignments) —
+    delete-then-insert, the same shape as save_commission_plan. `assignments` is how an employee/role/
+    level is attached to the plan (scope precedence employee>role>store>market>default). Editing a plan
+    stamps updated_by so the platform seeder never clobbers it again."""
+    require_org(org_id)
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    client = sb()
+    header = {
+        "org_id": org_id, "name": name,
+        "level": (body.get("level") or None),
+        "carrier_id": body.get("carrier_id") or None,
+        "period_type": (body.get("period_type") or "monthly"),
+        "consolidated_bonus_amount": safe_float(body.get("consolidated_bonus_amount", 300)),
+        "is_active": bool(body.get("is_active", True)),
+        "is_default": bool(body.get("is_default", False)),
+        "notes": body.get("notes") or None,
+        "updated_by": (body.get("_actor") or "admin"),
+    }
+    try:
+        if body.get("id"):
+            client.schema("commcalc").table("management_incentive_plan").update(header) \
+                  .eq("id", body["id"]).eq("org_id", org_id).execute()
+            plan_id = body["id"]
+        else:
+            r = client.schema("commcalc").table("management_incentive_plan") \
+                      .upsert(header, on_conflict="org_id,name").execute()
+            plan_id = (r.data or [{}])[0].get("id")
+            if not plan_id:
+                got = (client.schema("commcalc").table("management_incentive_plan").select("id")
+                       .eq("org_id", org_id).eq("name", name).limit(1).execute().data) or []
+                plan_id = got[0]["id"] if got else None
+        if not plan_id:
+            raise HTTPException(500, "could not resolve plan id after save")
+
+        def _kids(key, table, fields):
+            client.schema("commcalc").table(table).delete().eq("org_id", org_id).eq("plan_id", plan_id).execute()
+            rows = body.get(key) or []
+            clean = []
+            for i, raw in enumerate(rows):
+                row = {k: raw.get(k) for k in fields if k in raw}
+                row["org_id"], row["plan_id"] = org_id, plan_id
+                row.setdefault("sort", i)
+                clean.append(row)
+            if clean:
+                client.schema("commcalc").table(table).insert(clean).execute()
+
+        _kids("components", "management_incentive_component",
+              ("label", "kind", "rate", "metric_source", "target_per_store", "store_count", "cap_at_target", "sort"))
+        _kids("bonuses", "management_incentive_bonus",
+              ("label", "kind", "amount", "gated_by", "config", "sort"))
+        _kids("qualifiers", "management_incentive_qualifier",
+              ("metric_key", "label", "source", "op", "threshold", "unit", "config", "applies_to", "sort"))
+        _kids("assignments", "management_incentive_assignment",
+              ("scope", "scope_value", "priority"))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"save failed (has migration 852 run?): {e}")
+    plans = _mi_load_plans(client, org_id, plan_id=plan_id)
+    return {"ok": True, "plan": (plans[0] if plans else {"id": plan_id})}
+
+
+@router.delete("/management-incentive/plans/{plan_id}")
+def mi_delete_plan(plan_id: str, org_id: str = ORG_ID):
+    """Delete a plan (children cascade via the FK). A seeded default can be deleted; the seeder will
+    re-create it on the next sync unless a tenant keeps its own edited copy."""
+    require_org(org_id)
+    try:
+        sb().schema("commcalc").table("management_incentive_plan").delete() \
+            .eq("id", plan_id).eq("org_id", org_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"delete failed: {e}")
+    return {"ok": True}
+
+
+@router.post("/management-incentive/compute")
+def mi_compute(body: dict, org_id: str = ORG_ID):
+    """Compute a manager's incentive for a period and (optionally) save it as a draft payout.
+
+    Body: {plan_id?, employee_id, employee_name?, role?, store?, market?, store_keys?, period,
+           store_codes?, manager_store_count?, actuals{}, qualifier_values{}, derived{}, overrides{},
+           save?(bool)}. When plan_id is omitted the plan is RESOLVED for the manager exactly like the
+           employee commission plan (employee>role>store>market>default). Returns the full breakdown;
+           when save=true it upserts commcalc.management_incentive_payout as a draft (never auto-paid)."""
+    require_org(org_id)
+    from app.modules.commcalc import management_incentive as _mi
+    client = sb()
+    plans = _mi_load_plans(client, org_id, plan_id=body.get("plan_id"), active_only=not body.get("plan_id"))
+    if body.get("plan_id"):
+        plan = plans[0] if plans else None
+    else:
+        plan = _mi.resolve_plan(
+            plans, employee_name=body.get("employee_name"), role=body.get("role"),
+            store=body.get("store"), market=body.get("market"), store_keys=body.get("store_keys"))
+    if not plan:
+        raise HTTPException(404, "no management-incentive plan resolves for this manager")
+
+    store_codes = body.get("store_codes") or []
+    store_count = body.get("manager_store_count")
+    if store_count is None:
+        store_count = len(store_codes)
+    result = _mi.compute_payout(
+        plan,
+        actuals=body.get("actuals") or {},
+        qualifier_values=body.get("qualifier_values") or {},
+        manager_store_count=store_count,
+        derived=body.get("derived") or {},
+        overrides=body.get("overrides") or {})
+
+    period = (body.get("period") or "").strip()
+    saved = None
+    if body.get("save") and period and body.get("employee_id"):
+        row = {
+            "org_id": org_id, "plan_id": plan.get("id"),
+            "employee_id": str(body["employee_id"]), "employee_name": body.get("employee_name"),
+            "period": period, "store_codes": store_codes, "breakdown": result,
+            "component_total": result["component_total"], "bonus_total": result["bonus_total"],
+            "total": result["total"], "qualified": result["consolidated_qualified"],
+            "status": "draft", "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            client.schema("commcalc").table("management_incentive_payout").upsert(
+                row, on_conflict="org_id,plan_id,employee_id,period").execute()
+            saved = True
+        except Exception as e:
+            saved = f"not saved: {e}"
+    return {"ok": True, "plan_id": plan.get("id"), "plan_name": plan.get("name"),
+            "breakdown": result, "saved": saved}
+
+
+@router.get("/management-incentive/payouts")
+def mi_list_payouts(period: str = "", employee_id: str = "", status: str = "", org_id: str = ORG_ID):
+    """Computed management-incentive payouts for the tenant (the statement + accrual source). Filters:
+    period 'YYYY-MM', employee_id, status. Newest first. Empty pre-migration-852."""
+    require_org(org_id)
+    try:
+        q = sb().schema("commcalc").table("management_incentive_payout").select("*").eq("org_id", org_id)
+        if period:
+            q = q.eq("period", period)
+        if employee_id:
+            q = q.eq("employee_id", employee_id)
+        if status:
+            q = q.eq("status", status)
+        rows = q.order("period", desc=True).limit(1000).execute().data or []
+    except Exception:
+        rows = []
+    return {"payouts": rows}
+
+
+@router.post("/management-incentive/payouts/{payout_id}/decision")
+def mi_payout_decision(payout_id: str, body: dict, org_id: str = ORG_ID):
+    """Approve / deny / mark-paid a computed payout — the ledger transition (draft → approved → paid).
+    Body: {decision:'approve'|'deny'|'pay', note?, who?, who_name?}. Denying keeps the row for the audit
+    trail but zeroes nothing here — payroll readers act on status. Nothing is paid until 'pay'."""
+    require_org(org_id)
+    decision = (body.get("decision") or "").strip().lower()
+    status = {"approve": "approved", "deny": "draft", "pay": "paid"}.get(decision)
+    if status is None:
+        raise HTTPException(400, "decision must be 'approve', 'deny', or 'pay'")
+    _iso = datetime.now(timezone.utc).isoformat()
+    upd = {"status": status, "decided_by": body.get("who"), "decided_by_name": body.get("who_name"),
+           "decided_at": _iso, "updated_at": _iso}
+    if body.get("note") is not None:
+        upd["override_note"] = body.get("note")
+    try:
+        r = (sb().schema("commcalc").table("management_incentive_payout").update(upd)
+             .eq("id", payout_id).eq("org_id", org_id).execute())
+        if not (r.data or []):
+            raise HTTPException(404, "payout not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"decision failed: {e}")
+    return {"ok": True, "status": status}
