@@ -19937,6 +19937,60 @@ def import_paramount_mtd(body: dict, org_id: str = ORG_ID):
     return {"stores": len(parsed), "values": len(entries), "preview": preview, "saved": saved}
 
 
+@router.get("/inventory-recon")
+def inventory_recon(store_code: str, period: str, max_days: int = 10, org_id: str = ORG_ID):
+    """IMEI/serial reconciliation for a store + period — is every device accounted for? Matches B2B
+    inventory (inventory_aging_device) against B2B sales (raw_sales.serial_1) and reports: devices that
+    left the shelf with no sale (shrink), sales with no matching received device, uncategorized sales,
+    and a sold-within-N-days aging split. Reuses the app's own IMEI normalizer + bucket classifier."""
+    from datetime import timedelta
+    from app.modules.commcalc import inventory_recon as _ir
+    from app.modules.commcalc import gp_report as _gp
+    require_org(org_id)
+    client = sb()
+    resolve_code = _store_code_resolver(client, org_id)
+    sc = str(store_code).strip()
+
+    def _derived_received(r):
+        rd = r.get("received_date")
+        if rd:
+            return str(rd)[:10]
+        aod = _mi_parse_date(r.get("as_of_date"))
+        dis = r.get("days_in_stock")
+        if aod is not None and dis is not None:
+            try:
+                return (aod - timedelta(days=int(dis))).isoformat()
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    try:
+        inv_rows = (client.schema("commcalc").table("inventory_aging_device")
+                    .select("imei,store,on_hand,off_hand_as_of,received_date,as_of_date,days_in_stock")
+                    .eq("org_id", org_id).limit(200000).execute().data) or []
+    except Exception:
+        inv_rows = []
+    devices = [{"imei": r.get("imei"), "on_hand": r.get("on_hand"),
+                "off_hand_as_of": r.get("off_hand_as_of"), "received": _derived_received(r)}
+               for r in inv_rows if resolve_code(r.get("store") or "") == sc]
+
+    try:
+        sale_rows = (client.schema("commcalc").table("raw_sales")
+                     .select("serial_1,store,trans_date,product_desc,voided,trans_type")
+                     .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
+    except Exception:
+        sale_rows = []
+    sales = [{"serial": r.get("serial_1"), "trans_date": r.get("trans_date"), "product_desc": r.get("product_desc")}
+             for r in sale_rows
+             if str(r.get("serial_1") or "").strip()
+             and not _gp.is_voided(r.get("voided"))
+             and str(r.get("trans_type") or "").strip() != "Return"
+             and resolve_code(r.get("store") or "") == sc]
+
+    result = _ir.reconcile(devices, sales, max_days=int(max_days or 10))
+    return {"store_code": sc, "period": period, **result}
+
+
 @router.get("/coaching/{period}")
 def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
                  market: Optional[List[str]] = Query(default=None), rep: str = "",
