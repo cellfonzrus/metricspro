@@ -28735,13 +28735,16 @@ def _mi_word_in(text, word):
 
 
 def _mi_classify_sales_row(category, contract_type, product_desc):
-    """Word-match a sales row to a Management-Incentive component metric. Returns 'edge' | 'vhi_fios' |
-    None. NOTE: the app has no pre-assembled edge/VHI-FIOS per-store count — this defines that count by
-    the same tokens the activation/category classifiers recognize (see _AUTO_ACT_CATEGORY_KEYS and
-    installment_category rules). Kept pure for the harness."""
+    """Word-match a sales row to a Management-Incentive component metric. Returns 'edge' | 'twp' |
+    'vhi_fios' | None. NOTE: the app has no pre-assembled per-store count for these — this defines each
+    by the same tokens the activation/category classifiers recognize (see _AUTO_ACT_CATEGORY_KEYS and
+    installment_category rules). TWP = Total Wireless Protect insurance attach (owner: "TW" = protect).
+    Kept pure for the harness."""
     fields = (category, contract_type, product_desc)
     if any(_mi_word_in(f, "edge") for f in fields):
         return "edge"
+    if any(_mi_word_in(f, "twp") or _mi_word_in(f, "protect") for f in fields):
+        return "twp"
     if any(_mi_word_in(product_desc, w) for w in ("vhi",)) or any(_mi_word_in(f, "fios") for f in fields):
         return "vhi_fios"
     # 'home internet' is a two-token phrase → check the raw substring on category/product_desc.
@@ -28838,7 +28841,7 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
     # precedence (raw_sales → daily_sales_feed), then tag edge / VHI-FIOS by product tokens. NOTE: rep pay
     # has no distinct edge/VHI line today — both fold into 'premium activations' — so this counts the same
     # sales universe reps are paid on and labels the two product kinds within it.
-    if "edge_count" in which_sources or "vhi_fios_count" in which_sources:
+    if any(k in which_sources for k in ("edge_count", "vhi_fios_count", "twp_count")):
         try:
             from app.modules.commcalc import gp_report as _gp
             resolve_code = _store_code_resolver(client, org_id)
@@ -28846,7 +28849,7 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
                 return (client.schema("commcalc").table(table).select(_ACTUALS_COLS)
                         .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
             rows = _raw("raw_sales") or _raw("daily_sales_feed")   # rep-pay source precedence
-            edge_ids, vhi_ids = set(), set()
+            edge_ids, vhi_ids, twp_ids = set(), set(), set()
             for r in rows:
                 if _gp.is_voided(r.get("voided")):
                     continue
@@ -28861,18 +28864,25 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
                 tid = r.get("trans_id")
                 if kind == "edge":
                     edge_ids.add(tid)
+                elif kind == "twp":
+                    twp_ids.add(tid)
                 elif kind == "vhi_fios":
                     vhi_ids.add(tid)
+            _basis = " transactions from the same sales rep commission is paid on (voids / Returns / admin excluded, raw_sales→feed)."
             if "edge_count" in which_sources:
                 out["actuals"]["edge_count"] = len(edge_ids)
                 out["resolved"].append("edge_count")
-                out["notes"]["edge_count"] = "Edge transactions from the same sales rep commission is paid on (voids / Returns / admin excluded, raw_sales→feed). Reps fold Edge into premium activations today."
+                out["notes"]["edge_count"] = "Edge" + _basis + " Reps fold Edge into premium activations today."
             if "vhi_fios_count" in which_sources:
                 out["actuals"]["vhi_fios_count"] = len(vhi_ids)
                 out["resolved"].append("vhi_fios_count")
-                out["notes"]["vhi_fios_count"] = "VHI / FIOS / home-internet transactions from the same sales rep commission is paid on (voids / Returns / admin excluded). Reps fold these into premium activations today."
+                out["notes"]["vhi_fios_count"] = "VHI / FIOS / home-internet" + _basis + " Reps fold these into premium activations today."
+            if "twp_count" in which_sources:
+                out["actuals"]["twp_count"] = len(twp_ids)
+                out["resolved"].append("twp_count")
+                out["notes"]["twp_count"] = "Total Wireless Protect (TWP) insurance attachments" + _basis
         except Exception:
-            for k in ("edge_count", "vhi_fios_count"):
+            for k in ("edge_count", "vhi_fios_count", "twp_count"):
                 if k in which_sources:
                     out["unresolved"].append(k)
 
