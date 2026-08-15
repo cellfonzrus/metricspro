@@ -205,6 +205,105 @@ def get_employees(include_inactive: bool = False, all_company: bool = False, aut
         rows = [e for e in rows if in_keyset(ks, e.get("home_store"))]
     return rows
 
+@router.get("/staffing-heatmap")
+def staffing_heatmap(store_code: str, period: str, capacity: float = 12.0, org_id: str = ORG_ID):
+    """Store-local weekday × hour heat map: transaction DEMAND → 'staff required' (demand ÷ capacity),
+    laid over SCHEDULED heads (shifts) and ACTUAL heads present (timelog). `capacity` = transactions one
+    employee handles per labor-hour (tunable). Scheduled/actual are available today; transaction demand
+    accrues from mig-854 `trans_ts` going forward (historical rows are date-only)."""
+    from app.modules.storeops.staffing_heatmap import build_grid, hhmm_to_hours
+    tz = _biz_tz_for_store(org_id, store_code)
+    p = str(period).strip()
+    try:
+        if "-" in p and p[:4].isdigit():
+            yy, mm = int(p[:4]), int(p[5:7])
+        else:
+            _dt = datetime.strptime(p, "%B %Y"); yy, mm = _dt.year, _dt.month
+    except Exception:
+        raise HTTPException(400, "period must be 'YYYY-MM' or 'Month YYYY'")
+    d0 = _date(yy, mm, 1)
+    d1 = (_date(yy + 1, 1, 1) if mm == 12 else _date(yy, mm + 1, 1)) - timedelta(days=1)
+    occurrences = {}
+    _d = d0
+    while _d <= d1:
+        occurrences[_d.weekday()] = occurrences.get(_d.weekday(), 0) + 1
+        _d += timedelta(days=1)
+
+    def _local(s):
+        if not s:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(tz)
+        except Exception:
+            return None
+
+    demand, scheduled, actual = {}, {}, {}
+
+    # SCHEDULED — shifts carry a local date + HH:MM start/end.
+    try:
+        shifts = (sb().table("shifts").select("shift_date,start_time,end_time")
+                  .eq("org_id", org_id).eq("store_code", store_code).eq("is_deleted", False)
+                  .gte("shift_date", d0.isoformat()).lte("shift_date", d1.isoformat())
+                  .limit(100000).execute().data) or []
+    except Exception:
+        shifts = []
+    for s in shifts:
+        try:
+            wd = _date.fromisoformat(str(s.get("shift_date"))[:10]).weekday()
+        except Exception:
+            continue
+        for hr in hhmm_to_hours(s.get("start_time"), s.get("end_time")):
+            scheduled[(wd, hr)] = scheduled.get((wd, hr), 0) + 1
+
+    # ACTUAL — timelog punches (UTC → store-local), one head per covered hour.
+    try:
+        punches = (sb().table("timelog").select("clock_in,clock_out")
+                   .eq("org_id", org_id).eq("store_code", store_code)
+                   .gte("work_date", d0.isoformat()).lte("work_date", d1.isoformat())
+                   .limit(100000).execute().data) or []
+    except Exception:
+        punches = []
+    for pu in punches:
+        ci = _local(pu.get("clock_in")); co = _local(pu.get("clock_out"))
+        if not ci:
+            continue
+        cur = ci.replace(minute=0, second=0, microsecond=0)
+        end = co if (co and co > ci) else ci + timedelta(minutes=1)   # open/short punch → its start hour
+        while cur < end:
+            actual[(cur.weekday(), cur.hour)] = actual.get((cur.weekday(), cur.hour), 0) + 1
+            cur += timedelta(hours=1)
+
+    # DEMAND — transactions with a real clock time (mig 854), matched to this store, voids excluded.
+    try:
+        from app.modules.commcalc.router import _store_code_resolver, _pvariants
+        client = get_supabase()
+        resolve_code = _store_code_resolver(client, org_id)
+
+        def _tx(table):
+            return (client.schema("commcalc").table(table).select("trans_ts,store,voided")
+                    .eq("org_id", org_id).in_("period", _pvariants(period))
+                    .not_.is_("trans_ts", "null").limit(200000).execute().data) or []
+        for r in (_tx("raw_sales") + _tx("daily_sales_feed")):
+            if str(r.get("voided") or "").strip().lower() in ("1", "true", "yes", "voided", "void"):
+                continue
+            if resolve_code(r.get("store") or "") != store_code:
+                continue
+            lt = _local(r.get("trans_ts"))
+            if not lt:
+                continue
+            demand[(lt.weekday(), lt.hour)] = demand.get((lt.weekday(), lt.hour), 0) + 1
+    except Exception:
+        pass
+
+    grid = build_grid(demand, scheduled, actual, occurrences, capacity)
+    return {"store_code": store_code, "period": period, "capacity": capacity,
+            "timezone": str(getattr(tz, "key", tz)), "occurrences": {str(k): v for k, v in occurrences.items()},
+            "grid": grid, "has_demand": any(c["txn_total"] for c in grid)}
+
+
 @router.get("/shifts")
 def get_shifts(store_code: str = None, week_start: str = None, week_end: str = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     q = sb().table("shifts").select("*").eq("org_id", org_id).eq("is_deleted", False)

@@ -19,6 +19,7 @@ const LINKS = [
   { href: '/storeops/timeoff', icon: '🌴', label: 'Time Off', desc: 'Requests & approvals' },
   { href: '/storeops/swaps', icon: '🔄', label: 'Shift Swaps', desc: 'Swap requests & approvals' },
   { href: '/storeops/payroll', icon: '💵', label: 'Payroll', desc: 'Scheduled vs actual pay' },
+  { href: '/storeops/staffing', icon: '🔥', label: 'Staffing Heat Map', desc: 'Demand by hour → staff required vs scheduled' },
   { href: '/storeops/admin', icon: '🛠️', label: 'Admin', desc: 'Employees, pay rates, stores' },
 ]
 
