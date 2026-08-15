@@ -1028,6 +1028,122 @@
           "action_hint": "Open /failures and filter to import errors."
         }
       ]
+    },
+    {
+      "slug": "timeclock-clockout-and-permission",
+      "title": "Clocking out — and when you need permission",
+      "module": "storeops",
+      "audience": "rep",
+      "description": "Always clock out when you leave. What happens if you forget, and when working late or coming back for a second session needs your manager's OK.",
+      "start_href": "/portal",
+      "est_minutes": 3,
+      "sort_order": 70,
+      "steps": [
+        {
+          "page_href": "/portal",
+          "target": null,
+          "title": "Clocking out the right way",
+          "body": "This is your clock-in / clock-out screen. The most important habit is simple: clock out yourself every time you leave. This walk-through shows you exactly how, and explains what the system now does if you forget or if you work past your shift. Click Next and we'll go through it.",
+          "narration": "This is your clock screen. The one habit that matters most: clock out yourself every time you leave. Let's walk through how, and what happens if you forget or work late.",
+          "action_hint": "Open /portal while clocked in, so the CLOCK OUT button is showing."
+        },
+        {
+          "page_href": "/portal",
+          "target": "text:CLOCK OUT",
+          "target_fragile": true,
+          "title": "Tap CLOCK OUT when you leave",
+          "body": "When your shift ends, tap this red CLOCK OUT button. That records your real hours to the minute. Do this every day — it is the only thing you have to remember, and it keeps your pay correct with nothing pending.",
+          "narration": "When your shift ends, tap the red CLOCK OUT button. That records your real hours to the minute and keeps your pay correct with nothing left pending.",
+          "action_hint": "Highlight the red CLOCK OUT button. Tap it and show the confirmation."
+        },
+        {
+          "page_href": "/portal",
+          "target": null,
+          "title": "If you forget: the 5-minute auto clock-out",
+          "body": "If you never clock out, the system closes your shift for you at your scheduled end time plus a 5-minute grace. Your scheduled hours are paid as normal — you are not left 'on the clock' overnight. It is marked as an automatic clock-out so it is clear it wasn't a manual punch.",
+          "narration": "If you forget entirely, the system clocks you out at your scheduled end plus five minutes, so you're never left on the clock overnight. Your scheduled hours are still paid.",
+          "action_hint": "Hold on the screen. Caption: auto clock-out at scheduled end + 5 minutes."
+        },
+        {
+          "page_href": "/portal",
+          "target": null,
+          "title": "Worked past your shift? The extra time needs approval",
+          "body": "If you actually work beyond your scheduled end plus the 5-minute grace, your scheduled time is paid right away — but the EXTRA minutes are held until your manager approves them. When you clock out late, the extra is sent to your manager automatically as a request; you don't file anything.",
+          "narration": "If you work past your shift plus the grace, your scheduled time is paid right away, but the extra minutes are held until your manager approves them. Clocking out late sends that request automatically.",
+          "action_hint": "Caption: extra time past shift = pending your manager's approval."
+        },
+        {
+          "page_href": "/portal",
+          "target": null,
+          "title": "Coming back for a second shift the same day",
+          "body": "If you were auto-clocked-out earlier and clock IN again later the same day, that second session is allowed — but it is held pending your manager's OK before it counts toward pay. A normal lunch break (where you clocked out yourself and came back) is not affected and needs no permission.",
+          "narration": "If you were auto-clocked-out earlier and clock in again later that day, the second session is held until your manager approves it. A normal lunch break you clocked out for yourself is unaffected.",
+          "action_hint": "Caption: second session after an auto clock-out = pending approval."
+        },
+        {
+          "page_href": "/portal",
+          "target": null,
+          "title": "How you'll know it's pending",
+          "body": "Whenever something is waiting on your manager, your clock screen shows a '⏳ Pending your manager's permission' note. You don't need to chase it — once your manager approves, that time is added to your hours automatically. If it is denied, that time is not paid, and you should speak to your manager.",
+          "narration": "Whenever something is waiting on your manager, your clock screen shows a pending note. Once they approve, the time is added automatically. If it's denied, that time isn't paid — talk to your manager.",
+          "action_hint": "Highlight the ⏳ pending banner on the kiosk if one is present."
+        }
+      ]
+    },
+    {
+      "slug": "timeclock-approve-permissions",
+      "title": "Approve late clock-outs & second sessions",
+      "module": "storeops",
+      "audience": "manager",
+      "description": "Reps are auto-clocked-out at their shift end + 5 minutes. Extra time worked, and a second session after that, wait here for your approval before they count toward pay.",
+      "start_href": "/storeops/timeclock-permissions",
+      "est_minutes": 3,
+      "sort_order": 72,
+      "steps": [
+        {
+          "page_href": "/storeops/timeclock-permissions",
+          "target": null,
+          "title": "Where time-clock approvals live",
+          "body": "This is the Time-clock Permissions board, under Store Ops. Reps are automatically clocked out at their scheduled shift end plus a 5-minute grace. Two things then wait for your approval before they count toward pay: extra time worked past that cap, and a second session started after an auto clock-out. Click Next and we'll go through approving one.",
+          "narration": "This is the Time-clock Permissions board under Store Ops. Reps are auto-clocked-out at shift end plus five minutes. Extra time worked, and a second session after that, wait here for your approval.",
+          "action_hint": "Open /storeops/timeclock-permissions with at least one pending request."
+        },
+        {
+          "page_href": "/storeops/timeclock-permissions",
+          "target": "text:Permissions to approve",
+          "target_fragile": true,
+          "title": "Your pending list",
+          "body": "Everything waiting on you is here, with the rep, store, date, what kind of request it is — extra time past shift, or a second session — and how many extra minutes are involved. The count next to the heading is how many are waiting.",
+          "narration": "Everything waiting on you is in this list: the rep, store, date, the kind of request, and how many extra minutes. The number by the heading is how many are pending.",
+          "action_hint": "Highlight the pending table and the count beside 'Permissions to approve'."
+        },
+        {
+          "page_href": "/storeops/timeclock-permissions",
+          "target": "text:Approve",
+          "target_fragile": true,
+          "title": "Approving makes the time count",
+          "body": "Tap Approve and that held time is added to the rep's hours right away — the extra minutes are stamped onto the punch, or the second session starts counting. The tick IS the approval: it records that you approved it, and when. This is what the rep is waiting on.",
+          "narration": "Tap Approve and the held time counts immediately — the extra minutes are added, or the second session starts counting. The tick is the approval, recorded with your name and the time.",
+          "action_hint": "Highlight the green Approve button on a pending row and tap it."
+        },
+        {
+          "page_href": "/storeops/timeclock-permissions",
+          "target": "text:Deny",
+          "target_fragile": true,
+          "title": "Denying leaves it uncounted",
+          "body": "If the extra time or second session shouldn't be paid, tap Deny. The rep keeps their scheduled hours, but the disputed time stays out of their pay. You can add a short reason so there's a record of why. Use this when someone clocked out late without a real reason.",
+          "narration": "If the time shouldn't be paid, tap Deny. The rep keeps their scheduled hours, but the disputed time stays out of pay. Add a short reason so there's a record.",
+          "action_hint": "Highlight the Deny button and show the reason prompt."
+        },
+        {
+          "page_href": "/storeops/timeclock-permissions",
+          "target": null,
+          "title": "The rep sees your decision",
+          "body": "Your decision shows on the rep's own clock screen — approved time appears in their hours, a denial clears the pending note. Decided requests move to the history below the pending list, so there's always a record of who approved what and when. Check this board at the end of each day so nobody's pay is left waiting.",
+          "narration": "Your decision shows on the rep's clock screen, and every decided request moves to the history below with who approved it and when. Check this board at the end of each day so no one's pay is left waiting.",
+          "action_hint": "Scroll to the decided/history section below the pending list."
+        }
+      ]
     }
   ]
 }
