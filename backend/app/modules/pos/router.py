@@ -1836,11 +1836,12 @@ def report_kpis(org_id: str = ORG_ID, authorization: str = Header(default="")):
     # counts stay org-wide deliberately: both catalogs are org-level, with no store dimension
     # to filter on.
     ks = _caller_store_keyset(authorization, org_id)
-    # Day/month boundaries in BUSINESS_TZ (America/New_York) like the commcalc feed — a 9pm ET
-    # sale belongs to today's KPI, not tomorrow's UTC date.
+    # Day/month boundaries in the TENANT's business zone (migration 085; house default Eastern) like
+    # the commcalc feed — a 9pm-local sale belongs to today's KPI, not tomorrow's UTC date, and a
+    # Central-time tenant is bucketed in Central, not Eastern (owner report 2026-08-15).
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    from app.modules.pos.commcalc_feed import BUSINESS_TZ
-    now_local = _dt.now(BUSINESS_TZ)
+    from app.modules.pos.commcalc_feed import business_tz
+    now_local = _dt.now(business_tz(org_id))
     today = now_local.replace(hour=0, minute=0, second=0, microsecond=0) \
         .astimezone(_tz.utc).isoformat()
     week = (_dt.now(_tz.utc) - _td(days=7)).isoformat()

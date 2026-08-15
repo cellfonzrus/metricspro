@@ -1741,6 +1741,19 @@ def put_tenant_settings(body: dict, authorization: str = Header(default=""), x_a
                     raise HTTPException(400, f"{k} must be a number")
             if k == "biweekly_anchor" and not (v or "").strip():
                 v = None
+            if k == "timezone":
+                # The tenant's default business time zone (propagates to the time clock, POS day/month
+                # boundaries, and every business-local calculation). Must be a real IANA zone, so a
+                # typo can't silently fall back to the house default. Empty clears it to the default.
+                v = (str(v).strip() if v is not None else "")
+                if v:
+                    try:
+                        from zoneinfo import ZoneInfo
+                        ZoneInfo(v)
+                    except Exception:
+                        raise HTTPException(400, f"'{v}' is not a valid time zone (use an IANA name like America/Chicago)")
+                else:
+                    v = None
             upd[k] = v
     if not upd:
         raise HTTPException(400, "nothing to update")

@@ -85,6 +85,43 @@ def _biz_tz_for(org_id: str):
     return _BIZ_TZ
 
 
+# ── PER-STORE timezone (migration 851) ─────────────────────────────────────────────────────────────
+# A tenant can operate stores in more than one zone (Chicago = Central, NY/NJ = Eastern). Every
+# business-local calculation for a punch — the scheduled-end the auto-clock-out sweep closes against,
+# the work-date a clock-in is bucketed onto — must use the STORE's own zone, not one zone for the whole
+# tenant, or a Chicago "7 PM" shift gets read as 7 PM Eastern (= 6 PM Central) and swept an hour early.
+#
+# RESOLUTION: stores.timezone (this store) → _biz_tz_for(org) (tenant default) → _BIZ_TZ (house default).
+# DEGRADES: a missing store row, an unset column, or an un-run migration 851 falls back to the tenant
+# timezone — byte-identical to today's behavior — so the clock never breaks over a config/migration gap.
+_STORE_TZ_CACHE = {}   # (org_id, store_code) -> ZoneInfo; store zones effectively never change at runtime
+
+
+def _biz_tz_for_store(org_id, store_code):
+    """The timezone for ONE store: its own storeops.stores.timezone when set, else the tenant default
+    (_biz_tz_for), else the house default. Cached per (org, store). Never raises."""
+    sc = (str(store_code).strip() if store_code else "")
+    if not sc:
+        return _biz_tz_for(org_id)
+    key = (str(org_id), sc)
+    hit = _STORE_TZ_CACHE.get(key)
+    if hit is not None:
+        return hit
+    tz = None
+    try:
+        rows = (sb().table("stores").select("timezone")
+                .eq("org_id", org_id).eq("store_code", sc).limit(1).execute().data) or []
+        val = ((rows[0].get("timezone") if rows else "") or "").strip()
+        if val:
+            tz = ZoneInfo(val)
+    except Exception:
+        tz = None                       # column/migration absent, or bad zone string → tenant default
+    if tz is None:
+        tz = _biz_tz_for(org_id)
+    _STORE_TZ_CACHE[key] = tz
+    return tz
+
+
 # ── Disabled-store leak fix (2026-08-06 owner report, verbatim: "t-902 / 531 etc all t-stores have
 # been disabled but they still show in time clock, targets etc reports - check and remove") ────────
 # ROOT CAUSE: storeops.stores.is_active was correctly set to false for the 6 disabled T-stores (T-531,
@@ -1714,7 +1751,24 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
               "phone", "notes", "epay_login", "epay_salesperson", "employee_id",
               "pay_basis", "pay_amount", "termination_date")
-STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes")
+STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes", "timezone")
+
+
+def _clean_store_timezone(row):
+    """Validate/normalize a store 'timezone' field in-place (migration 851): empty → None (inherit the
+    tenant default); a non-IANA string is rejected so a typo can't silently fall back. No-op when the
+    key isn't being set."""
+    if "timezone" not in row:
+        return
+    v = (str(row["timezone"]).strip() if row["timezone"] is not None else "")
+    if not v:
+        row["timezone"] = None
+        return
+    try:
+        ZoneInfo(v)
+    except Exception:
+        raise HTTPException(400, f"'{v}' is not a valid time zone (use an IANA name like America/Chicago)")
+    row["timezone"] = v
 
 # Pay-adjacent fields on `employees` (2026-07-27 Deliverable 6): PATCH /employees/{id} previously took
 # NO role gate at all for pay_rate — only org_id scoping. Per the owner dispatch's explicit rule ("if
@@ -2130,10 +2184,12 @@ def create_store(store: dict, org_id: str = ORG_ID):
         raise HTTPException(400, "store_code required")
     if "market" in row:
         row["market"] = _canonicalize_market(row["market"], _collect_markets(org_id))
+    _clean_store_timezone(row)
     row["org_id"] = org_id
     if row.get("is_active") is None:
         row["is_active"] = True
     r = sb().table("stores").insert(row).execute()
+    _STORE_TZ_CACHE.clear()   # a new store's zone must be visible to the clock immediately
     _sync_store_mapping(org_id, [row])   # propagate the new store to commcalc.store_mapping
     _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0] if r.data else row
@@ -2179,9 +2235,12 @@ def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
         raise HTTPException(400, "no valid fields to update")
     if "market" in row:
         row["market"] = _canonicalize_market(row["market"], _collect_markets(org_id))
+    _clean_store_timezone(row)
     r = sb().table("stores").update(row).eq("id", store_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "store not found")
+    if "timezone" in row:
+        _STORE_TZ_CACHE.clear()   # zone change must take effect without a restart
     _sync_store_mapping_update(org_id, r.data[0].get("store_code"), row)
     _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0]
@@ -2684,9 +2743,12 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
         raise HTTPException(409, "Already clocked in — clock out first.")
     name, home_store = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
-    work_date = now.astimezone(_biz_tz_for(org_id)).date().isoformat()   # business-local date (not UTC)
     # Which store is this punch for? The kiosk sends the selected store; fall back to home store.
     req_store = (body.get("store_code") or "").strip() or home_store
+    # Business-local date, bucketed in THIS STORE's zone (migration 851) so a late-evening Central-time
+    # punch lands on the correct calendar day, not the Eastern one. Falls back to the tenant zone when
+    # the store has no own zone set.
+    work_date = now.astimezone(_biz_tz_for_store(org_id, req_store)).date().isoformat()
     # Gate: home OR scheduled-today OR floater store. Anything else needs a manager override.
     if req_store:
         allowed = _allowed_clock_stores(org_id, employee_id, home_store, work_date)
@@ -2763,7 +2825,7 @@ def timeclock_allowed_stores(authorization: str = Header(default=""), org_id: st
     kiosk can show a picker instead of forcing the home store."""
     org_id, employee_id = _caller_identity(authorization)
     name, home_store = _emp_name(org_id, employee_id)
-    work_date = datetime.now(timezone.utc).astimezone(_biz_tz_for(org_id)).date().isoformat()
+    work_date = datetime.now(timezone.utc).astimezone(_biz_tz_for_store(org_id, home_store)).date().isoformat()
     allowed = sorted(_allowed_clock_stores(org_id, employee_id, home_store, work_date))
     return {"home_store": home_store, "work_date": work_date,
             "stores": allowed or ([_norm_store(home_store)] if home_store else [])}
@@ -2787,7 +2849,7 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
         raise HTTPException(409, "That employee is already clocked in — clock out first.")
     name, _home = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
-    work_date = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
+    work_date = now.astimezone(_biz_tz_for_store(org_id, store_code)).date().isoformat()  # store zone (mig 851)
     # update the schedule so the store is on record for today (idempotent-ish: skip if already there)
     try:
         exists = (sb().table("shifts").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
@@ -2875,7 +2937,7 @@ def _closing_gate_block(org_id, employee_id, store_code, work_date=None):
         store = (store_code or "").strip()
         if not store:
             return None
-        today = datetime.now(timezone.utc).astimezone(_biz_tz_for(org_id)).date().isoformat()
+        today = datetime.now(timezone.utc).astimezone(_biz_tz_for_store(org_id, store)).date().isoformat()
         if work_date and str(work_date)[:10] != today:
             return None  # stale punch from a previous business day — always closable
         t = (sb().table("tenants").select("closing_gate_enabled").eq("org_id", org_id).limit(1).execute().data) or []
@@ -2985,7 +3047,8 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     now = datetime.now(timezone.utc)
     out_at = now
     note_add = None
-    today = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
+    # "Today" for the stale-punch check, resolved in the entry's own store zone (migration 851).
+    today = now.astimezone(_biz_tz_for_store(org_id, entry.get("store_code"))).date().isoformat()
     wdate = str(entry.get("work_date") or "")[:10]
     grace = timedelta(minutes=FORCE_CLOCKOUT_GRACE_MIN)
     sched_end = _scheduled_end_for_punch(org_id, entry)
@@ -3836,13 +3899,21 @@ def _emp_id_variants(org_id, employee_id):
     return ids, name
 
 
-def _biz_dt_utc(date_str, hhmm, org_id=None):
-    """Combine a 'YYYY-MM-DD' + 'HH:MM' (business-local) into an aware UTC datetime, or None."""
+def _biz_dt_utc(date_str, hhmm, org_id=None, store_code=None):
+    """Combine a 'YYYY-MM-DD' + 'HH:MM' (business-local) into an aware UTC datetime, or None.
+    When `store_code` is given the STORE's timezone is used (migration 851), so a shift's "19:00" is
+    read in the store's own zone; without it, the tenant default. This is what makes the auto-clock-out
+    sweep close a Chicago punch at 7 PM Central and an NY punch at 7 PM Eastern from the same code."""
     try:
         parts = str(hhmm).strip().split(":")
         h, m = int(parts[0]), int(parts[1])
         naive = datetime.fromisoformat(str(date_str)[:10] + f"T{h:02d}:{m:02d}:00")
-        tz = _biz_tz_for(org_id) if org_id else _BIZ_TZ
+        if org_id and store_code:
+            tz = _biz_tz_for_store(org_id, store_code)
+        elif org_id:
+            tz = _biz_tz_for(org_id)
+        else:
+            tz = _BIZ_TZ
         return naive.replace(tzinfo=tz).astimezone(timezone.utc)
     except Exception:
         return None
@@ -3882,7 +3953,9 @@ def _scheduled_end_for_punch(org_id, punch):
     end_hhmm = _approved_extension_end(org_id, ids, wdate) or s.get("end_time")
     if not end_hhmm:
         return None
-    return _biz_dt_utc(wdate, end_hhmm, org_id)
+    # Read the shift end in THIS STORE's zone (migration 851) — the fix for the multi-zone sweep bug.
+    # Prefer the shift's own store_code, falling back to the punch's, then the tenant default.
+    return _biz_dt_utc(wdate, end_hhmm, org_id, store_code=(s.get("store_code") or store))
 
 
 def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=None):

@@ -50,8 +50,26 @@ from fastapi import HTTPException
 
 from app.core.database import get_supabase
 
-BUSINESS_TZ = ZoneInfo("America/New_York")
+BUSINESS_TZ = ZoneInfo("America/New_York")   # house-wide default when a tenant hasn't set its own
 FEED_KEY = "pos_internal_daily_sales"
+
+
+def business_tz(org_id=None):
+    """The tenant's business time zone (storeops.tenants.timezone, migration 085 / set at onboarding),
+    else the house default. POS day/month boundaries resolve through this so a tenant that operates
+    outside Eastern isn't bucketed onto the wrong business day (owner report 2026-08-15). Best-effort:
+    any read error / un-run migration / bad zone string degrades to the house default, never raises."""
+    if not org_id:
+        return BUSINESS_TZ
+    try:
+        rows = (get_supabase().schema("storeops").table("tenants").select("timezone")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        tz = ((rows[0].get("timezone") if rows else "") or "").strip()
+        if tz:
+            return ZoneInfo(tz)
+    except Exception:
+        pass
+    return BUSINESS_TZ
 
 # own-stream table + promotion target per mode
 MODE_TABLES = {

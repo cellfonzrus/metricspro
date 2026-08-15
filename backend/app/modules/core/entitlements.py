@@ -27,7 +27,14 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 11  # bumped: 11 = mig 800 registered the "crm" module (sales pipeline + follow-up +
+SEED_VERSION = 12  # bumped: 12 = the 2026-08-14 training pack (v3 of app/data/training_tours_seed.json)
+                   #              adds the two Time Clock walk-throughs — the rep's "Clocking out — and
+                   #              when you need permission" (auto clock-out at shift end + 5 min grace,
+                   #              late-clock-out and second-session approval) and the manager's "Approve
+                   #              late clock-outs & second sessions" board tour. Seeded onto the HOUSE
+                   #              org (never-clobber) so every tenant READS them; a bump re-runs the
+                   #              house seed pass so the new tours land without a manual re-seed.
+                   # 11 = mig 800 registered the "crm" module (sales pipeline + follow-up +
                    #              Customer 360), so every EXISTING tenant self-provisions a crm
                    #              tenant_modules entitlement row on its next login. The CRM's own
                    #              default CONTENT (pipeline, stages, dispositions, cadence) is seeded

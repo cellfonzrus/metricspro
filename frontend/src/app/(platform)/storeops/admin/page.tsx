@@ -11,7 +11,21 @@ const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid
 // last-KNOWN-SAVED snapshots (populated on load and after every successful save) — comparing the
 // live row against its snapshot is what drives the "N unsaved changes" bulk-save button/count.
 const EMP_EDIT_FIELDS = ['name', 'employee_id', 'home_store', 'email', 'phone', 'is_active']
-const STORE_EDIT_FIELDS = ['store_code', 'address', 'market', 'monthly_target', 'is_active', 'phone']
+const STORE_EDIT_FIELDS = ['store_code', 'address', 'market', 'monthly_target', 'is_active', 'phone', 'timezone']
+
+// Per-store time zone (migration 851). Empty = inherit the company default set in Pay-period settings.
+// A store physically in a different zone (e.g. a Chicago store under an Eastern-default company) is set
+// here so its clock-outs, day totals and schedules use its OWN local time.
+const STORE_TZ_OPTS: { v: string; label: string }[] = [
+  { v: '', label: 'Company default' },
+  { v: 'America/New_York', label: 'Eastern (ET)' },
+  { v: 'America/Chicago', label: 'Central (CT)' },
+  { v: 'America/Denver', label: 'Mountain (MT)' },
+  { v: 'America/Phoenix', label: 'Arizona (MST)' },
+  { v: 'America/Los_Angeles', label: 'Pacific (PT)' },
+  { v: 'America/Anchorage', label: 'Alaska (AKT)' },
+  { v: 'Pacific/Honolulu', label: 'Hawaii (HST)' },
+]
 function isDirty(row: any, orig: any, fields: string[]) {
   if (!orig) return false
   return fields.some(f => String(row[f] ?? '') !== String(orig[f] ?? ''))
@@ -69,7 +83,7 @@ export default function StoreOpsAdminPage() {
   const [showInactive, setShowInactive] = useState(false)
   const [upBusy, setUpBusy] = useState(false)
   const [newEmp, setNewEmp] = useState<any>({ name: '', employee_id: '', home_store: '', email: '', phone: '' })
-  const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '' })
+  const [newStore, setNewStore] = useState<any>({ store_code: '', address: '', market: '', monthly_target: '', timezone: '' })
   const [markets, setMarkets] = useState<string[]>([])   // RULE THREE dropdown options (GET /storeops/markets)
 
   async function loadAll() {
@@ -206,6 +220,7 @@ export default function StoreOpsAdminPage() {
       await api(`/api/v1/storeops/stores/${s.id}`, { method: 'PATCH', body: JSON.stringify({
         store_code: s.store_code, address: s.address, market: s.market,
         monthly_target: Number(s.monthly_target) || 0, is_active: !!s.is_active, phone: s.phone,
+        timezone: s.timezone || null,
       }) })
       setOrigStores(o => ({ ...o, [s.id]: { ...s } }))
       setMsg(`Saved ${s.store_code}`)
@@ -429,6 +444,9 @@ export default function StoreOpsAdminPage() {
               <input style={{ ...sel, width: 120 }} placeholder="Store code *" value={newStore.store_code} onChange={e => setNewStore({ ...newStore, store_code: e.target.value })} />
               <input style={{ ...sel, width: 220 }} placeholder="Address" value={newStore.address} onChange={e => setNewStore({ ...newStore, address: e.target.value })} />
               <MarketField width={130} value={newStore.market} options={markets} onChange={v => setNewStore({ ...newStore, market: v })} />
+              <select style={{ ...sel, width: 150 }} value={newStore.timezone} onChange={e => setNewStore({ ...newStore, timezone: e.target.value })} title="Store time zone — blank uses the company default">
+                {STORE_TZ_OPTS.map(t => <option key={t.v || 'default'} value={t.v}>{t.label}</option>)}
+              </select>
               <input style={{ ...sel, width: 120 }} type="number" placeholder="Monthly target" value={newStore.monthly_target} onChange={e => setNewStore({ ...newStore, monthly_target: e.target.value })} />
               <button className="btn btn-primary" onClick={addStore}>➕ Add</button>
             </div>
@@ -453,7 +471,7 @@ export default function StoreOpsAdminPage() {
           <div className="table-wrapper">
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {['Store code', 'Address', 'Market', 'Monthly target', 'Active', ''].map(h =>
+                {['Store code', 'Address', 'Market', 'Time zone', 'Monthly target', 'Active', ''].map(h =>
                   <th key={h} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -465,6 +483,11 @@ export default function StoreOpsAdminPage() {
                     <td style={cell}><input style={{ ...sel, width: 110 }} value={s.store_code || ''} onChange={ev => setStore(s.id, { store_code: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 220 }} value={s.address || ''} onChange={ev => setStore(s.id, { address: ev.target.value })} /></td>
                     <td style={cell}><MarketField width={130} value={s.market} options={markets} onChange={v => setStore(s.id, { market: v })} /></td>
+                    <td style={cell}>
+                      <select style={{ ...sel, width: 150 }} value={s.timezone || ''} onChange={ev => setStore(s.id, { timezone: ev.target.value || null })} title="Store time zone — blank uses the company default">
+                        {STORE_TZ_OPTS.map(t => <option key={t.v || 'default'} value={t.v}>{t.label}</option>)}
+                      </select>
+                    </td>
                     <td style={cell}><input style={{ ...sel, width: 110 }} type="number" value={s.monthly_target ?? ''} onChange={ev => setStore(s.id, { monthly_target: ev.target.value })} /></td>
                     <td style={cell}>
                       <input type="checkbox" checked={!!s.is_active} disabled={!!rowBusy[key]}
