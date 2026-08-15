@@ -28750,6 +28750,43 @@ def _mi_classify_sales_row(category, contract_type, product_desc):
     return None
 
 
+def _mi_parse_date(s):
+    from datetime import date as _d
+    if not s:
+        return None
+    s = str(s)[:10]
+    try:
+        return _d(int(s[:4]), int(s[5:7]), int(s[8:10]))
+    except (ValueError, IndexError):
+        return None
+
+
+def _mi_ever_over_days(received_date, days_in_stock, as_of_date, off_hand_as_of, m_start, m_end, max_days):
+    """Did this device EVER exceed max_days in stock DURING [m_start, m_end]? Returns True/False, or None
+    when the age is unknowable. This answers the period-correct question the shipped gate did not: not "is
+    it over N right now" but "did it peak over N at any point in the period." `received` falls back to
+    (as_of_date − days_in_stock) when received_date is NULL — the luxelink aging export carries age, not a
+    received date, and device_history uses the same fallback ladder. PURE / unit-tested."""
+    from datetime import timedelta
+    ms = _mi_parse_date(m_start); me = _mi_parse_date(m_end)
+    rec = _mi_parse_date(received_date)
+    if rec is None:
+        aod = _mi_parse_date(as_of_date)
+        try:
+            dis = int(days_in_stock)
+        except (TypeError, ValueError):
+            dis = None
+        if aod is not None and dis is not None:
+            rec = aod - timedelta(days=dis)
+    if rec is None or ms is None or me is None:
+        return None
+    off = _mi_parse_date(off_hand_as_of)
+    in_stock = rec <= me and (off is None or off >= ms)     # on the shelf at some point in the period
+    shelf_end = min(off, me) if off is not None else me     # last day it could have aged within the period
+    peak = (shelf_end - rec).days
+    return bool(in_stock and peak > int(max_days))
+
+
 def _mi_period_dates(period):
     """'YYYY-MM' → (first_day, last_day) ISO date strings for that month."""
     from datetime import date as _d
@@ -28874,7 +28911,9 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
         except Exception:
             out["unresolved"].append("cash_deposit")
 
-    # inventory_aging derived gate — any device over max_days still on-shelf in the store set (snapshot).
+    # inventory_aging derived gate — did ANY device EVER exceed max_days in stock DURING the period, across
+    # the store set? (period-correct: not "over N right now" but "peaked over N at any point in the month").
+    # max_days is per-org configurable (management_incentive_bonus.config.max_days — Luxelink 10 / Cellfonz 45).
     inv_bonus = any((b.get("gated_by") or "") == "inventory_aging" for b in (plan.get("bonuses") or []))
     if inv_bonus:
         try:
@@ -28883,14 +28922,36 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
                 if (b.get("gated_by") or "") == "inventory_aging":
                     max_days = int((b.get("config") or {}).get("max_days", 10) or 10)
                     break
+            d0, d1 = _mi_period_dates(period)
             resolve_code = _store_code_resolver(client, org_id)
-            aged = (client.schema("commcalc").table("inventory_aging_device")
-                    .select("store,days_in_stock,on_hand").eq("org_id", org_id)
-                    .gt("days_in_stock", max_days).limit(200000).execute().data) or []
-            hit = any((r.get("on_hand") is not False) and (resolve_code(r.get("store") or "") in scodes) for r in aged)
-            out["derived"]["inventory_aging"] = not hit    # qualifies when NO over-aged device is on shelf
-            out["resolved"].append("inventory_aging")
-            out["notes"]["inventory_aging"] = f"No device over {max_days} days on shelf (current inventory snapshot — cannot see mid-month history; review)."
+            rows = (client.schema("commcalc").table("inventory_aging_device")
+                    .select("store,received_date,days_in_stock,as_of_date,off_hand_as_of")
+                    .eq("org_id", org_id).limit(200000).execute().data) or []
+            hit = False; checked = 0; unknown = 0
+            for r in rows:
+                if resolve_code(r.get("store") or "") not in scodes:
+                    continue
+                ever = _mi_ever_over_days(r.get("received_date"), r.get("days_in_stock"),
+                                          r.get("as_of_date"), r.get("off_hand_as_of"), d0, d1, max_days)
+                if ever is None:
+                    unknown += 1
+                    continue
+                checked += 1
+                if ever:
+                    hit = True
+                    break
+            if checked == 0:
+                # No evaluable age data → fail closed to manual review rather than silently granting.
+                out["unresolved"].append("inventory_aging")
+                out["notes"]["inventory_aging"] = f"No evaluable inventory-age data for these stores in the period ({unknown} device row(s) missing age) — enter manually."
+            else:
+                out["derived"]["inventory_aging"] = not hit    # qualifies when NO device ever aged past max_days
+                note = (f"A device exceeded {max_days} days in stock during the period → gate not met."
+                        if hit else f"No device exceeded {max_days} days in stock during the period, across the manager's stores.")
+                if unknown:
+                    note += f" ⚠ {unknown} device(s) had no age data and were skipped — review."
+                out["resolved"].append("inventory_aging")
+                out["notes"]["inventory_aging"] = note
         except Exception:
             out["unresolved"].append("inventory_aging")
 
