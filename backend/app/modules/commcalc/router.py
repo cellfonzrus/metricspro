@@ -28709,3 +28709,210 @@ def mi_payout_decision(payout_id: str, body: dict, org_id: str = ORG_ID):
     except Exception as e:
         raise HTTPException(500, f"decision failed: {e}")
     return {"ok": True, "status": status}
+
+
+# ── AUTO-PULL the numbers (migration 852 follow-up) ───────────────────────────────────────────────
+# Resolve a manager's actuals + qualification metrics for a period, aggregated across the stores they
+# manage, REUSING the app's own math so the numbers match every other surface. Best-effort per metric:
+# a metric with no data source (or a failed read) is left UNRESOLVED and stays a manual-entry field —
+# it is never silently guessed. Returns pre-fill values the Compute tab drops in for the manager to
+# review before saving. Nothing here computes pay.
+def _mi_word_in(text, word):
+    """True when `word` appears as a whole token in `text` (case-insensitive) — the same word-match the
+    activation/category classifiers use, so 'edge' doesn't match 'ledger' and 'vhi' doesn't match 'vhic'."""
+    toks = set()
+    cur = ""
+    for ch in str(text or "").lower():
+        if ch.isalnum():
+            cur += ch
+        else:
+            if cur:
+                toks.add(cur)
+            cur = ""
+    if cur:
+        toks.add(cur)
+    return word in toks
+
+
+def _mi_classify_sales_row(category, contract_type, product_desc):
+    """Word-match a sales row to a Management-Incentive component metric. Returns 'edge' | 'vhi_fios' |
+    None. NOTE: the app has no pre-assembled edge/VHI-FIOS per-store count — this defines that count by
+    the same tokens the activation/category classifiers recognize (see _AUTO_ACT_CATEGORY_KEYS and
+    installment_category rules). Kept pure for the harness."""
+    fields = (category, contract_type, product_desc)
+    if any(_mi_word_in(f, "edge") for f in fields):
+        return "edge"
+    if any(_mi_word_in(product_desc, w) for w in ("vhi",)) or any(_mi_word_in(f, "fios") for f in fields):
+        return "vhi_fios"
+    # 'home internet' is a two-token phrase → check the raw substring on category/product_desc.
+    if any("home internet" in str(f or "").lower() for f in (category, product_desc)):
+        return "vhi_fios"
+    return None
+
+
+def _mi_period_dates(period):
+    """'YYYY-MM' → (first_day, last_day) ISO date strings for that month."""
+    from datetime import date as _d
+    y, m = int(str(period)[:4]), int(str(period)[5:7])
+    first = _d(y, m, 1)
+    nxt = _d(y + 1, 1, 1) if m == 12 else _d(y, m + 1, 1)
+    last = _d.fromordinal(nxt.toordinal() - 1)
+    return first.isoformat(), last.isoformat()
+
+
+def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
+    """Assemble {store_codes, manager_store_count, actuals, qualifier_values, derived, resolved,
+    unresolved, notes}. Every read is guarded — a failure leaves that key unresolved (manual)."""
+    out = {"store_codes": [], "manager_store_count": 0, "actuals": {}, "qualifier_values": {},
+           "derived": {}, "resolved": [], "unresolved": [], "notes": {}}
+
+    # 1. Manager → store set (org tree, the SAME span RBAC uses).
+    store_codes = []
+    try:
+        rows = (get_supabase().schema("storeops")
+                .rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": str(employee_id)})
+                .execute().data) or []
+        store_codes = sorted({(r.get("store_code") or "").strip() for r in rows if (r.get("store_code") or "").strip()})
+    except Exception:
+        store_codes = []
+    out["store_codes"] = store_codes
+    out["manager_store_count"] = len(store_codes)
+    if not store_codes:
+        out["notes"]["store_codes"] = "No stores resolved from the org tree for this manager (org units / managers configured?)."
+    scodes = set(store_codes)
+
+    which_sources = {(c.get("metric_source") or "") for c in (plan.get("components") or [])}
+    which_quals = {(q.get("metric_key") or "") for q in (plan.get("qualifiers") or [])}
+
+    # 2. Accessory $ — the app's own accessory 'achieved' (ext_price + set-up fee), summed over stores.
+    if "accessory_gp" in which_sources:
+        try:
+            feed = _compute_feed_actuals_py(client, org_id, period) or []
+            acc = round(sum(_f_num(a.get("acc_gp")) for a in feed if (a.get("store_code") or "") in scodes), 2)
+            out["actuals"]["accessory_gp"] = acc
+            out["resolved"].append("accessory_gp")
+            out["notes"]["accessory_gp"] = "Accessory sales + device set-up fee (the app's accessory 'achieved'), summed over the manager's stores."
+        except Exception:
+            out["unresolved"].append("accessory_gp")
+
+    # 3/4. Edge + VHI/FIOS counts — distinct transactions matching the tokens, over the store set.
+    if "edge_count" in which_sources or "vhi_fios_count" in which_sources:
+        try:
+            resolve_code = _store_code_resolver(client, org_id)
+            def _raw(table):
+                return (client.schema("commcalc").table(table).select(_ACTUALS_COLS)
+                        .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
+            rows = _raw("daily_sales_feed") or _raw("raw_sales")
+            edge_ids, vhi_ids = set(), set()
+            for r in rows:
+                if str(r.get("voided") or "").strip().lower() in ("1", "true", "yes", "y", "t"):
+                    continue
+                code = resolve_code(r.get("store") or "")
+                if code not in scodes:
+                    continue
+                kind = _mi_classify_sales_row(r.get("category"), r.get("contract_type"), r.get("product_desc"))
+                tid = r.get("trans_id")
+                if kind == "edge":
+                    edge_ids.add(tid)
+                elif kind == "vhi_fios":
+                    vhi_ids.add(tid)
+            if "edge_count" in which_sources:
+                out["actuals"]["edge_count"] = len(edge_ids)
+                out["resolved"].append("edge_count")
+                out["notes"]["edge_count"] = "Distinct transactions tagged 'edge' (app-defined count — review vs your carrier report)."
+            if "vhi_fios_count" in which_sources:
+                out["actuals"]["vhi_fios_count"] = len(vhi_ids)
+                out["resolved"].append("vhi_fios_count")
+                out["notes"]["vhi_fios_count"] = "Distinct transactions matching VHI / FIOS / home-internet (app-defined count — review)."
+        except Exception:
+            for k in ("edge_count", "vhi_fios_count"):
+                if k in which_sources:
+                    out["unresolved"].append(k)
+
+    # 5. tmr3 (3MR) — store-level DLAR, averaged over the manager's stores.
+    if "tmr3" in which_quals:
+        try:
+            mo = int(str(period)[5:7]); yr = int(str(period)[:4])
+            q = (client.schema("commcalc").table("raw_dlar_store").select("store_code,tmr3,period_month,period_year,period")
+                 .eq("org_id", org_id).in_("store_code", list(scodes) or [""]))
+            dl = q.execute().data or []
+            vals = [_f_num(r.get("tmr3")) for r in dl
+                    if (str(r.get("period_month")) == str(mo) and str(r.get("period_year")) == str(yr))
+                    or (str(period) in _pvariants(str(r.get("period") or "")))]
+            vals = [v for v in vals if v is not None]
+            if vals:
+                out["qualifier_values"]["tmr3"] = round(sum(vals) / len(vals), 2)
+                out["resolved"].append("tmr3")
+                out["notes"]["tmr3"] = "3-month retention (raw_dlar_store), averaged over the manager's stores."
+            else:
+                out["unresolved"].append("tmr3")
+        except Exception:
+            out["unresolved"].append("tmr3")
+
+    # 6. Cash deposit — leftover (collected − deposited) over the store set + period (proxy for the gate).
+    if "cash_deposit" in which_quals:
+        try:
+            from app.modules.closing import deposit_recon as _dr
+            d0, d1 = _mi_period_dates(period)
+            closing = _dr.closing_cash_raw_by_store_day(client, org_id, d0, d1, list(scodes))
+            deps = _dr.bank_deposits_by_store_day(client, org_id, d0, d1, list(scodes))
+            collected = round(sum(v.get("t_cash", 0.0) for v in closing.values()), 2)
+            deposited = round(sum(_f_num(r.get("amount")) for r in deps), 2)
+            out["qualifier_values"]["cash_deposit"] = round(collected - deposited, 2)
+            out["resolved"].append("cash_deposit")
+            out["notes"]["cash_deposit"] = f"Cash left undeposited = collected ${collected} − deposited ${deposited}, over the period. Gate wants ≤ threshold."
+        except Exception:
+            out["unresolved"].append("cash_deposit")
+
+    # inventory_aging derived gate — any device over max_days still on-shelf in the store set (snapshot).
+    inv_bonus = any((b.get("gated_by") or "") == "inventory_aging" for b in (plan.get("bonuses") or []))
+    if inv_bonus:
+        try:
+            max_days = 10
+            for b in (plan.get("bonuses") or []):
+                if (b.get("gated_by") or "") == "inventory_aging":
+                    max_days = int((b.get("config") or {}).get("max_days", 10) or 10)
+                    break
+            resolve_code = _store_code_resolver(client, org_id)
+            aged = (client.schema("commcalc").table("inventory_aging_device")
+                    .select("store,days_in_stock,on_hand").eq("org_id", org_id)
+                    .gt("days_in_stock", max_days).limit(200000).execute().data) or []
+            hit = any((r.get("on_hand") is not False) and (resolve_code(r.get("store") or "") in scodes) for r in aged)
+            out["derived"]["inventory_aging"] = not hit    # qualifies when NO over-aged device is on shelf
+            out["resolved"].append("inventory_aging")
+            out["notes"]["inventory_aging"] = f"No device over {max_days} days on shelf (current inventory snapshot — cannot see mid-month history; review)."
+        except Exception:
+            out["unresolved"].append("inventory_aging")
+
+    # Qualifiers with no data source anywhere — always manual.
+    for k in which_quals:
+        if k in ("zulu", "twp", "address_checks") and k not in out["resolved"]:
+            out["unresolved"].append(k)
+            out["notes"][k] = "No data source in the app yet — enter manually (or upload via the KPI module once wired)."
+    return out
+
+
+def _f_num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@router.post("/management-incentive/resolve")
+def mi_resolve(body: dict, org_id: str = ORG_ID):
+    """Auto-pull a manager's numbers for a period, aggregated over the stores they manage — reusing the
+    app's own accessory/DLAR/deposit/inventory math. Body: {plan_id, employee_id, period}. Returns
+    pre-fill {store_codes, manager_store_count, actuals, qualifier_values, derived, resolved[],
+    unresolved[], notes{}} for the Compute tab; the manager reviews before saving. Never computes pay."""
+    require_org(org_id)
+    employee_id = str(body.get("employee_id") or "").strip()
+    period = str(body.get("period") or "").strip()
+    if not employee_id or not period:
+        raise HTTPException(400, "employee_id and period are required")
+    client = sb()
+    plans = _mi_load_plans(client, org_id, plan_id=body.get("plan_id"))
+    plan = plans[0] if plans else None
+    if not plan:
+        raise HTTPException(404, "plan not found")
+    return {"ok": True, **_mi_resolve_numbers(client, org_id, period, employee_id, plan)}

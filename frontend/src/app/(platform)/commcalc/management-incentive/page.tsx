@@ -247,6 +247,7 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
   const [payouts, setPayouts] = useState<any[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [pullInfo, setPullInfo] = useState<any>(null)
 
   const plan = plans.find(p => p.id === planId) || null
   const inp: React.CSSProperties = { width: '100%', padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -258,6 +259,22 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
       .then((r: any) => setPayouts(r.payouts || [])).catch(() => setPayouts([]))
   }, [period])
   useEffect(() => { loadPayouts() }, [loadPayouts])
+
+  async function pull() {
+    if (!plan || !employeeId) { setMsg('Pick a plan and enter the manager id first.'); return }
+    setBusy(true); setMsg(''); setPullInfo(null)
+    try {
+      const r: any = await api('/api/v1/commcalc/management-incentive/resolve', {
+        method: 'POST', body: JSON.stringify({ plan_id: planId, employee_id: employeeId, period }),
+      })
+      if (r.actuals) setActuals(a => ({ ...a, ...r.actuals }))
+      if (r.qualifier_values) setMetrics(m => ({ ...m, ...r.qualifier_values }))
+      if (typeof r.manager_store_count === 'number' && r.manager_store_count > 0) setStoreCount(r.manager_store_count)
+      if (r.derived && typeof r.derived.inventory_aging === 'boolean') setInvOk(r.derived.inventory_aging)
+      setPullInfo({ resolved: r.resolved || [], unresolved: r.unresolved || [], notes: r.notes || {}, stores: r.store_codes || [] })
+      setMsg(`⤵ Pulled ${(r.resolved || []).length} value(s) across ${(r.store_codes || []).length} store(s). Review, then compute.`)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
 
   async function compute(save: boolean) {
     if (!plan) { setMsg('Pick a plan.'); return }
@@ -319,10 +336,22 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-          <button className="btn btn-primary" disabled={busy || !plan} onClick={() => compute(false)}>{busy ? '…' : 'Compute'}</button>
+        <div style={{ display: 'flex', gap: 10, marginTop: 14, alignItems: 'center' }}>
+          <button className="btn" disabled={busy || !plan || !employeeId} title="Auto-pull the numbers from the app's sales / DLAR / deposit / inventory data" onClick={pull}>{busy ? '…' : '⤵ Pull numbers'}</button>
+          <button className="btn btn-primary" disabled={busy || !plan} onClick={() => compute(false)}>Compute</button>
           <button className="btn" disabled={busy || !plan || !employeeId} onClick={() => compute(true)}>Compute & save draft</button>
         </div>
+        {pullInfo && (
+          <div style={{ marginTop: 12, fontSize: 12, background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+            {pullInfo.resolved.length > 0 && <div style={{ marginBottom: 4 }}><b style={{ color: '#166534' }}>Auto-filled:</b> {pullInfo.resolved.join(', ')}</div>}
+            {pullInfo.unresolved.length > 0 && <div style={{ marginBottom: 4 }}><b style={{ color: '#b45309' }}>Enter manually (no data source):</b> {pullInfo.unresolved.join(', ')}</div>}
+            {Object.keys(pullInfo.notes || {}).length > 0 && (
+              <ul style={{ margin: '6px 0 0', paddingLeft: 16, color: 'var(--text3)' }}>
+                {Object.entries(pullInfo.notes).map(([k, v]: any) => <li key={k}><b>{k}:</b> {v}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       {result && (
