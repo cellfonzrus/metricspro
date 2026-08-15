@@ -1751,7 +1751,24 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
               "phone", "notes", "epay_login", "epay_salesperson", "employee_id",
               "pay_basis", "pay_amount", "termination_date")
-STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes")
+STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes", "timezone")
+
+
+def _clean_store_timezone(row):
+    """Validate/normalize a store 'timezone' field in-place (migration 851): empty → None (inherit the
+    tenant default); a non-IANA string is rejected so a typo can't silently fall back. No-op when the
+    key isn't being set."""
+    if "timezone" not in row:
+        return
+    v = (str(row["timezone"]).strip() if row["timezone"] is not None else "")
+    if not v:
+        row["timezone"] = None
+        return
+    try:
+        ZoneInfo(v)
+    except Exception:
+        raise HTTPException(400, f"'{v}' is not a valid time zone (use an IANA name like America/Chicago)")
+    row["timezone"] = v
 
 # Pay-adjacent fields on `employees` (2026-07-27 Deliverable 6): PATCH /employees/{id} previously took
 # NO role gate at all for pay_rate — only org_id scoping. Per the owner dispatch's explicit rule ("if
@@ -2167,10 +2184,12 @@ def create_store(store: dict, org_id: str = ORG_ID):
         raise HTTPException(400, "store_code required")
     if "market" in row:
         row["market"] = _canonicalize_market(row["market"], _collect_markets(org_id))
+    _clean_store_timezone(row)
     row["org_id"] = org_id
     if row.get("is_active") is None:
         row["is_active"] = True
     r = sb().table("stores").insert(row).execute()
+    _STORE_TZ_CACHE.clear()   # a new store's zone must be visible to the clock immediately
     _sync_store_mapping(org_id, [row])   # propagate the new store to commcalc.store_mapping
     _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0] if r.data else row
@@ -2216,9 +2235,12 @@ def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
         raise HTTPException(400, "no valid fields to update")
     if "market" in row:
         row["market"] = _canonicalize_market(row["market"], _collect_markets(org_id))
+    _clean_store_timezone(row)
     r = sb().table("stores").update(row).eq("id", store_id).eq("org_id", org_id).execute()
     if not r.data:
         raise HTTPException(404, "store not found")
+    if "timezone" in row:
+        _STORE_TZ_CACHE.clear()   # zone change must take effect without a restart
     _sync_store_mapping_update(org_id, r.data[0].get("store_code"), row)
     _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0]

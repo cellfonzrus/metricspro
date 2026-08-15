@@ -7,6 +7,19 @@ import CarrierPicker from '@/components/CarrierPicker'
 // pay cycle (weekly/biweekly), and how the payday is placed — with a LIVE worked example so they
 // can tune the params to match their real payday (e.g. Luxelink: Thu→Wed week, pay the next Friday).
 const DOW = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] // 0=Mon..6=Sun
+// The tenant's DEFAULT business time zone (captured here at onboarding). Every business-local
+// calculation — the time clock's auto-clock-out, POS day/month boundaries, schedules, payroll — uses
+// it, unless a specific store overrides it in the store settings. IANA names; a store in a different
+// zone (e.g. a Chicago store under an Eastern-default company) is set per-store, not here.
+const TZ_OPTIONS: { v: string; label: string }[] = [
+  { v: 'America/New_York', label: 'Eastern — New York (ET)' },
+  { v: 'America/Chicago', label: 'Central — Chicago (CT)' },
+  { v: 'America/Denver', label: 'Mountain — Denver (MT)' },
+  { v: 'America/Phoenix', label: 'Mountain, no DST — Phoenix (MST)' },
+  { v: 'America/Los_Angeles', label: 'Pacific — Los Angeles (PT)' },
+  { v: 'America/Anchorage', label: 'Alaska — Anchorage (AKT)' },
+  { v: 'Pacific/Honolulu', label: 'Hawaii — Honolulu (HST)' },
+]
 const fmt = (iso: string) => { try { const d = new Date(iso + 'T00:00:00'); return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) } catch { return iso } }
 
 export default function TenantSettingsPage() {
@@ -53,6 +66,20 @@ export default function TenantSettingsPage() {
       </p>
 
       {!canEdit && <div style={{ padding: 10, marginBottom: 12, background: 'var(--surface2)', borderRadius: 8, fontSize: 13, color: 'var(--text2)' }}>Only a company admin can change these settings — you can view the current cycle below.</div>}
+
+      <div className="card" style={{ padding: 18, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🕐 Business time zone</div>
+        <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 10px' }}>
+          The default zone for this company. The time clock (including auto clock-out at shift end),
+          POS day totals, schedules and payroll all read times in this zone. A store located in a
+          different zone can override it in that store&apos;s settings.
+        </p>
+        <label style={{ display: 'block', maxWidth: 340 }}><span style={lbl}>Default time zone</span>
+          <select style={inp} disabled={!canEdit} value={s.timezone || ''} onChange={e => set({ timezone: e.target.value || null })}>
+            <option value="">House default — Eastern (ET)</option>
+            {TZ_OPTIONS.map(t => <option key={t.v} value={t.v}>{t.label}</option>)}
+          </select></label>
+      </div>
 
       <div className="card" style={{ padding: 18 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 14 }}>
