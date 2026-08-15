@@ -912,6 +912,24 @@ async def upload_file(
                                          row_count=_ingest_rows_saved(_res if isinstance(_res, dict) else {}))
 
 
+def _parse_trans_ts(raw):
+    """Full transaction timestamp (ISO) from the POS 'Trans Date Time' cell, or None when the cell is
+    date-only (no clock time). Kept NULLABLE on purpose so the hour-of-day staffing heat map ignores
+    timeless rows instead of piling them onto midnight. The ':' / am-pm test avoids faking a 00:00 hour
+    for date-only exports (which is why historical rows, stored date-only, simply have no trans_ts)."""
+    s = str(raw or "").strip()
+    low = s.lower()
+    if not s or (":" not in s and "am" not in low and "pm" not in low):
+        return None
+    try:
+        td = pd.to_datetime(s, errors="coerce")
+        if pd.isna(td):
+            return None
+        return td.isoformat()
+    except Exception:
+        return None
+
+
 async def _upload_file_impl(
     file_type: str,
     file: UploadFile = File(...),
@@ -1348,6 +1366,7 @@ async def _upload_file_impl(
                 'tax': safe_float(r.get('Tax') or r.get('Sales Tax') or r.get('Tax Amount') or r.get('Tax Amt')),
                 'trans_id': str(r.get('Trans ID','')).replace('.0','').strip(),
                 'trans_date': str(r.get('Trans Date Time',r.get('Trans Date','')))[:10] or None,
+                'trans_ts': _parse_trans_ts(trans_date_raw),   # full clock time for the staffing heat map (nullable)
                 'mdn': str(r.get('Activated Mobile Number','') or r.get('Primary Account Number','')).replace('.0','').strip(),
                 'serial_1': str(r.get('Serial 1','')).replace('.0','').strip()[:30],
                 'register': str(r.get('Register','')).strip(),
@@ -3742,6 +3761,12 @@ async def upload_mapped(
     #     period replace. Either way: snapshot the to-be-deleted slice FIRST; on ANY insert failure restore
     #     it so a failed import leaves the table AT LEAST as full as before (no DB transactions in supabase-py).
     source_aware = _table_has_column(client, table, "source_id")
+    # trans_ts is an OPTIONAL capture column (mig 854). Strip it if the migration hasn't landed so the
+    # core sales insert can never fail on 42703 — same doctrine as source_id/carrier_id above.
+    if table in ("raw_sales", "daily_sales_feed") and mapped and "trans_ts" in mapped[0] \
+            and not _table_has_column(client, table, "trans_ts"):
+        for _r in mapped:
+            _r.pop("trans_ts", None)
     # (c) PARTITION-SCOPED replace — a file replaces its OWN slice (its MA accounts / stores, within its
     #     own date range) and never another company's. See _replace_scope. None ⇒ legacy period-wide.
     scope = _replace_scope(table, mapped)
@@ -19781,6 +19806,8 @@ def save_carrier_kpi_metric(body: dict, org_id: str = ORG_ID):
            "target_default": safe_float(body.get("target_default")),
            "payout_config_col": body.get("payout_config_col") or f"kpi_{key}_target",
            "sort": int(body.get("sort") or 0), "is_active": bool(body.get("is_active", True))}
+    if "source_mode" in body:   # only when the toggle is used, so metric saves still work pre-mig-853
+        row["source_mode"] = body.get("source_mode") or "manual"
     try:
         if body.get("id"):
             r = sb().schema('commcalc').table('carrier_kpi_metric').update(row).eq('id', body['id']).eq('org_id', org_id).execute()
@@ -19795,6 +19822,173 @@ def save_carrier_kpi_metric(body: dict, org_id: str = ORG_ID):
 def delete_carrier_kpi_metric(metric_id: str, org_id: str = ORG_ID):
     sb().schema('commcalc').table('carrier_kpi_metric').delete().eq('org_id', org_id).eq('id', metric_id).execute()
     return {"deleted": metric_id}
+
+
+# ── KPI actuals (manual now / email later) — mig 853 ──────────────────────────────────────────────
+def _kpi_source_mode_map(client, org_id):
+    """{metric_key: 'manual'|'email'} per carrier_kpi_metric.source_mode. Empty (→ all default 'manual')
+    when mig 853's source_mode column isn't applied yet."""
+    try:
+        rows = (client.schema('commcalc').table('carrier_kpi_metric')
+                .select('metric_key,source_mode').eq('org_id', org_id).execute().data) or []
+    except Exception:
+        return {}
+    return {r.get('metric_key'): (r.get('source_mode') or 'manual') for r in rows}
+
+
+def _kpi_effective_actuals(client, org_id, period, scope='store', metric_keys=None, entities=None):
+    """{(entity, metric_key): {'value', 'source'}} — the effective KPI actual per entity honoring each
+    metric's source_mode: the preferred source wins, the other is a fallback so a value still shows.
+    Degrades to {} when the kpi_actual table (mig 853) isn't applied yet."""
+    try:
+        rows = (client.schema('commcalc').table('kpi_actual').select('*')
+                .eq('org_id', org_id).eq('scope', scope).in_('period', _pvariants(period))
+                .limit(200000).execute().data) or []
+    except Exception:
+        return {}
+    modes = _kpi_source_mode_map(client, org_id)
+    grouped = {}
+    for r in rows:
+        mk = r.get('metric_key'); ent = r.get('entity')
+        if metric_keys and mk not in metric_keys:
+            continue
+        if entities and ent not in entities:
+            continue
+        grouped.setdefault((ent, mk), {})[r.get('source') or 'manual'] = r.get('value')
+    out = {}
+    for (ent, mk), bysrc in grouped.items():
+        pref = modes.get(mk, 'manual')
+        alt = 'email' if pref == 'manual' else 'manual'
+        if bysrc.get(pref) is not None:
+            out[(ent, mk)] = {'value': bysrc[pref], 'source': pref}
+        elif bysrc.get(alt) is not None:
+            out[(ent, mk)] = {'value': bysrc[alt], 'source': alt + ' (fallback)'}
+    return out
+
+
+@router.get("/kpi-actuals")
+def list_kpi_actuals(period: str, scope: str = 'store', org_id: str = ORG_ID):
+    """Raw stored KPI actual rows (both sources) for the period + the per-metric source modes, so the KPI
+    page can prefill the manual grid and show which source is active. Degrades cleanly pre-mig-853."""
+    try:
+        rows = (sb().schema('commcalc').table('kpi_actual').select('*')
+                .eq('org_id', org_id).eq('scope', scope).in_('period', _pvariants(period))
+                .limit(200000).execute().data) or []
+        ready = True
+    except Exception:
+        rows, ready = [], False
+    return {"period": period, "scope": scope, "ready": ready, "rows": rows,
+            "source_modes": _kpi_source_mode_map(sb(), org_id)}
+
+
+@router.post("/kpi-actuals")
+def save_kpi_actuals(body: dict, org_id: str = ORG_ID):
+    """Upsert MANUAL KPI values. Body {period, scope?, updated_by?, entries:[{entity, metric_key, value}]}.
+    Writes source='manual' only — never touches an 'email' row, so flipping source mode loses nothing."""
+    period = (body.get("period") or "").strip()
+    if not period:
+        raise HTTPException(400, "period required")
+    scope = body.get("scope") or "store"
+    who = body.get("updated_by")
+    rows = []
+    for e in (body.get("entries") or []):
+        ent = (str(e.get("entity") or "")).strip()
+        mk = (str(e.get("metric_key") or "")).strip()
+        if not ent or not mk:
+            continue
+        val = e.get("value")
+        rows.append({"org_id": org_id, "scope": scope, "entity": ent, "period": period, "metric_key": mk,
+                     "value": (None if val in ("", None) else safe_float(val)), "source": "manual", "updated_by": who})
+    if not rows:
+        return {"saved": 0}
+    try:
+        r = sb().schema('commcalc').table('kpi_actual').upsert(
+            rows, on_conflict='org_id,scope,entity,period,metric_key,source').execute()
+        return {"saved": len(r.data or rows)}
+    except Exception as ex:
+        raise HTTPException(500, f"save kpi actuals failed (is migration 853 applied?): {ex}")
+
+
+@router.post("/kpi-import/paramount")
+def import_paramount_mtd(body: dict, org_id: str = ORG_ID):
+    """Parse a Paramount Wireless MTD report (HTML email body) → store zulu / tmr3 / twp per door (Door
+    TSP = store_code) as source='email' KPI actuals. Body {period, html, dry_run?}. Feeds only the
+    qualifier gates — component counts stay on the rep-pay basis (owner decision)."""
+    from app.modules.commcalc.paramount_kpi import parse_paramount_mtd_kpis
+    period = (body.get("period") or "").strip()
+    html = body.get("html") or ""
+    if not period or not str(html).strip():
+        raise HTTPException(400, "period and html are required")
+    parsed = parse_paramount_mtd_kpis(html)
+    preview = [{"store_code": c, **m} for c, m in sorted(parsed.items())]
+    entries = [(c, mk, val) for c, mets in parsed.items() for mk, val in mets.items()]
+    if body.get("dry_run"):
+        return {"stores": len(parsed), "values": len(entries), "preview": preview, "saved": 0}
+    rows = [{"org_id": org_id, "scope": "store", "entity": c, "period": period, "metric_key": mk,
+             "value": val, "source": "email", "updated_by": body.get("updated_by")} for (c, mk, val) in entries]
+    saved = 0
+    if rows:
+        try:
+            r = sb().schema('commcalc').table('kpi_actual').upsert(
+                rows, on_conflict='org_id,scope,entity,period,metric_key,source').execute()
+            saved = len(r.data or rows)
+        except Exception as ex:
+            raise HTTPException(500, f"paramount import failed (is migration 853 applied?): {ex}")
+    return {"stores": len(parsed), "values": len(entries), "preview": preview, "saved": saved}
+
+
+@router.get("/inventory-recon")
+def inventory_recon(store_code: str, period: str, max_days: int = 10, org_id: str = ORG_ID):
+    """IMEI/serial reconciliation for a store + period — is every device accounted for? Matches B2B
+    inventory (inventory_aging_device) against B2B sales (raw_sales.serial_1) and reports: devices that
+    left the shelf with no sale (shrink), sales with no matching received device, uncategorized sales,
+    and a sold-within-N-days aging split. Reuses the app's own IMEI normalizer + bucket classifier."""
+    from datetime import timedelta
+    from app.modules.commcalc import inventory_recon as _ir
+    from app.modules.commcalc import gp_report as _gp
+    require_org(org_id)
+    client = sb()
+    resolve_code = _store_code_resolver(client, org_id)
+    sc = str(store_code).strip()
+
+    def _derived_received(r):
+        rd = r.get("received_date")
+        if rd:
+            return str(rd)[:10]
+        aod = _mi_parse_date(r.get("as_of_date"))
+        dis = r.get("days_in_stock")
+        if aod is not None and dis is not None:
+            try:
+                return (aod - timedelta(days=int(dis))).isoformat()
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    try:
+        inv_rows = (client.schema("commcalc").table("inventory_aging_device")
+                    .select("imei,store,on_hand,off_hand_as_of,received_date,as_of_date,days_in_stock")
+                    .eq("org_id", org_id).limit(200000).execute().data) or []
+    except Exception:
+        inv_rows = []
+    devices = [{"imei": r.get("imei"), "on_hand": r.get("on_hand"),
+                "off_hand_as_of": r.get("off_hand_as_of"), "received": _derived_received(r)}
+               for r in inv_rows if resolve_code(r.get("store") or "") == sc]
+
+    try:
+        sale_rows = (client.schema("commcalc").table("raw_sales")
+                     .select("serial_1,store,trans_date,product_desc,voided,trans_type")
+                     .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
+    except Exception:
+        sale_rows = []
+    sales = [{"serial": r.get("serial_1"), "trans_date": r.get("trans_date"), "product_desc": r.get("product_desc")}
+             for r in sale_rows
+             if str(r.get("serial_1") or "").strip()
+             and not _gp.is_voided(r.get("voided"))
+             and str(r.get("trans_type") or "").strip() != "Return"
+             and resolve_code(r.get("store") or "") == sc]
+
+    result = _ir.reconcile(devices, sales, max_days=int(max_days or 10))
+    return {"store_code": sc, "period": period, **result}
 
 
 @router.get("/coaching/{period}")
@@ -28709,3 +28903,308 @@ def mi_payout_decision(payout_id: str, body: dict, org_id: str = ORG_ID):
     except Exception as e:
         raise HTTPException(500, f"decision failed: {e}")
     return {"ok": True, "status": status}
+
+
+# ── AUTO-PULL the numbers (migration 852 follow-up) ───────────────────────────────────────────────
+# Resolve a manager's actuals + qualification metrics for a period, aggregated across the stores they
+# manage, REUSING the app's own math so the numbers match every other surface. Best-effort per metric:
+# a metric with no data source (or a failed read) is left UNRESOLVED and stays a manual-entry field —
+# it is never silently guessed. Returns pre-fill values the Compute tab drops in for the manager to
+# review before saving. Nothing here computes pay.
+def _mi_word_in(text, word):
+    """True when `word` appears as a whole token in `text` (case-insensitive) — the same word-match the
+    activation/category classifiers use, so 'edge' doesn't match 'ledger' and 'vhi' doesn't match 'vhic'."""
+    toks = set()
+    cur = ""
+    for ch in str(text or "").lower():
+        if ch.isalnum():
+            cur += ch
+        else:
+            if cur:
+                toks.add(cur)
+            cur = ""
+    if cur:
+        toks.add(cur)
+    return word in toks
+
+
+def _mi_classify_sales_row(category, contract_type, product_desc):
+    """Word-match a sales row to a Management-Incentive component metric. Returns 'edge' | 'twp' |
+    'vhi_fios' | None. NOTE: the app has no pre-assembled per-store count for these — this defines each
+    by the same tokens the activation/category classifiers recognize (see _AUTO_ACT_CATEGORY_KEYS and
+    installment_category rules). TWP = Total Wireless Protect insurance attach (owner: "TW" = protect).
+    Kept pure for the harness."""
+    fields = (category, contract_type, product_desc)
+    if any(_mi_word_in(f, "edge") for f in fields):
+        return "edge"
+    if any(_mi_word_in(f, "twp") or _mi_word_in(f, "protect") for f in fields):
+        return "twp"
+    if any(_mi_word_in(product_desc, w) for w in ("vhi",)) or any(_mi_word_in(f, "fios") for f in fields):
+        return "vhi_fios"
+    # 'home internet' is a two-token phrase → check the raw substring on category/product_desc.
+    if any("home internet" in str(f or "").lower() for f in (category, product_desc)):
+        return "vhi_fios"
+    return None
+
+
+def _mi_parse_date(s):
+    from datetime import date as _d
+    if not s:
+        return None
+    s = str(s)[:10]
+    try:
+        return _d(int(s[:4]), int(s[5:7]), int(s[8:10]))
+    except (ValueError, IndexError):
+        return None
+
+
+def _mi_ever_over_days(received_date, days_in_stock, as_of_date, off_hand_as_of, m_start, m_end, max_days):
+    """Did this device EVER exceed max_days in stock DURING [m_start, m_end]? Returns True/False, or None
+    when the age is unknowable. This answers the period-correct question the shipped gate did not: not "is
+    it over N right now" but "did it peak over N at any point in the period." `received` falls back to
+    (as_of_date − days_in_stock) when received_date is NULL — the luxelink aging export carries age, not a
+    received date, and device_history uses the same fallback ladder. PURE / unit-tested."""
+    from datetime import timedelta
+    ms = _mi_parse_date(m_start); me = _mi_parse_date(m_end)
+    rec = _mi_parse_date(received_date)
+    if rec is None:
+        aod = _mi_parse_date(as_of_date)
+        try:
+            dis = int(days_in_stock)
+        except (TypeError, ValueError):
+            dis = None
+        if aod is not None and dis is not None:
+            rec = aod - timedelta(days=dis)
+    if rec is None or ms is None or me is None:
+        return None
+    off = _mi_parse_date(off_hand_as_of)
+    in_stock = rec <= me and (off is None or off >= ms)     # on the shelf at some point in the period
+    shelf_end = min(off, me) if off is not None else me     # last day it could have aged within the period
+    peak = (shelf_end - rec).days
+    return bool(in_stock and peak > int(max_days))
+
+
+def _mi_period_dates(period):
+    """'YYYY-MM' → (first_day, last_day) ISO date strings for that month."""
+    from datetime import date as _d
+    y, m = int(str(period)[:4]), int(str(period)[5:7])
+    first = _d(y, m, 1)
+    nxt = _d(y + 1, 1, 1) if m == 12 else _d(y, m + 1, 1)
+    last = _d.fromordinal(nxt.toordinal() - 1)
+    return first.isoformat(), last.isoformat()
+
+
+def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
+    """Assemble {store_codes, manager_store_count, actuals, qualifier_values, derived, resolved,
+    unresolved, notes}. Every read is guarded — a failure leaves that key unresolved (manual)."""
+    out = {"store_codes": [], "manager_store_count": 0, "actuals": {}, "qualifier_values": {},
+           "derived": {}, "resolved": [], "unresolved": [], "notes": {}}
+
+    # 1. Manager → store set (org tree, the SAME span RBAC uses).
+    store_codes = []
+    try:
+        rows = (get_supabase().schema("storeops")
+                .rpc("org_span_for_manager", {"p_org_id": org_id, "p_employee_id": str(employee_id)})
+                .execute().data) or []
+        store_codes = sorted({(r.get("store_code") or "").strip() for r in rows if (r.get("store_code") or "").strip()})
+    except Exception:
+        store_codes = []
+    out["store_codes"] = store_codes
+    out["manager_store_count"] = len(store_codes)
+    if not store_codes:
+        out["notes"]["store_codes"] = "No stores resolved from the org tree for this manager (org units / managers configured?)."
+    scodes = set(store_codes)
+
+    which_sources = {(c.get("metric_source") or "") for c in (plan.get("components") or [])}
+    which_quals = {(q.get("metric_key") or "") for q in (plan.get("qualifiers") or [])}
+
+    # 2. Accessory $ — the app's own accessory 'achieved' (ext_price + set-up fee), summed over stores.
+    if "accessory_gp" in which_sources:
+        try:
+            feed = _compute_feed_actuals_py(client, org_id, period) or []
+            acc = round(sum(_f_num(a.get("acc_gp")) for a in feed if (a.get("store_code") or "") in scodes), 2)
+            out["actuals"]["accessory_gp"] = acc
+            out["resolved"].append("accessory_gp")
+            out["notes"]["accessory_gp"] = "Accessory sales + device set-up fee (the app's accessory 'achieved'), summed over the manager's stores."
+        except Exception:
+            out["unresolved"].append("accessory_gp")
+
+    # 3/4. Edge + VHI/FIOS counts — counted over the EXACT SAME transactions rep commission is paid on,
+    # so the DM's roll-up shares one basis of truth with rep pay. We apply calc_rep_commissions' own row
+    # filters (gp_report.is_voided, trans_type != 'Return', salesperson != 'admin') and its source
+    # precedence (raw_sales → daily_sales_feed), then tag edge / VHI-FIOS by product tokens. NOTE: rep pay
+    # has no distinct edge/VHI line today — both fold into 'premium activations' — so this counts the same
+    # sales universe reps are paid on and labels the two product kinds within it.
+    if any(k in which_sources for k in ("edge_count", "vhi_fios_count", "twp_count")):
+        try:
+            from app.modules.commcalc import gp_report as _gp
+            resolve_code = _store_code_resolver(client, org_id)
+            def _raw(table):
+                return (client.schema("commcalc").table(table).select(_ACTUALS_COLS)
+                        .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
+            rows = _raw("raw_sales") or _raw("daily_sales_feed")   # rep-pay source precedence
+            edge_ids, vhi_ids, twp_ids = set(), set(), set()
+            for r in rows:
+                if _gp.is_voided(r.get("voided")):
+                    continue
+                if str(r.get("trans_type") or "").strip() == "Return":
+                    continue
+                if str(r.get("salesperson") or "").strip().lower() == "admin":
+                    continue
+                code = resolve_code(r.get("store") or "")
+                if code not in scodes:
+                    continue
+                kind = _mi_classify_sales_row(r.get("category"), r.get("contract_type"), r.get("product_desc"))
+                tid = r.get("trans_id")
+                if kind == "edge":
+                    edge_ids.add(tid)
+                elif kind == "twp":
+                    twp_ids.add(tid)
+                elif kind == "vhi_fios":
+                    vhi_ids.add(tid)
+            _basis = " transactions from the same sales rep commission is paid on (voids / Returns / admin excluded, raw_sales→feed)."
+            if "edge_count" in which_sources:
+                out["actuals"]["edge_count"] = len(edge_ids)
+                out["resolved"].append("edge_count")
+                out["notes"]["edge_count"] = "Edge" + _basis + " Reps fold Edge into premium activations today."
+            if "vhi_fios_count" in which_sources:
+                out["actuals"]["vhi_fios_count"] = len(vhi_ids)
+                out["resolved"].append("vhi_fios_count")
+                out["notes"]["vhi_fios_count"] = "VHI / FIOS / home-internet" + _basis + " Reps fold these into premium activations today."
+            if "twp_count" in which_sources:
+                out["actuals"]["twp_count"] = len(twp_ids)
+                out["resolved"].append("twp_count")
+                out["notes"]["twp_count"] = "Total Wireless Protect (TWP) insurance attachments" + _basis
+        except Exception:
+            for k in ("edge_count", "vhi_fios_count", "twp_count"):
+                if k in which_sources:
+                    out["unresolved"].append(k)
+
+    # 5. tmr3 (3MR) — store-level DLAR, averaged over the manager's stores.
+    if "tmr3" in which_quals:
+        try:
+            mo = int(str(period)[5:7]); yr = int(str(period)[:4])
+            q = (client.schema("commcalc").table("raw_dlar_store").select("store_code,tmr3,period_month,period_year,period")
+                 .eq("org_id", org_id).in_("store_code", list(scodes) or [""]))
+            dl = q.execute().data or []
+            vals = [_f_num(r.get("tmr3")) for r in dl
+                    if (str(r.get("period_month")) == str(mo) and str(r.get("period_year")) == str(yr))
+                    or (str(period) in _pvariants(str(r.get("period") or "")))]
+            vals = [v for v in vals if v is not None]
+            if vals:
+                out["qualifier_values"]["tmr3"] = round(sum(vals) / len(vals), 2)
+                out["resolved"].append("tmr3")
+                out["notes"]["tmr3"] = "3-month retention (raw_dlar_store), averaged over the manager's stores."
+            else:
+                out["unresolved"].append("tmr3")
+        except Exception:
+            out["unresolved"].append("tmr3")
+
+    # 6. Cash deposit — leftover (collected − deposited) over the store set + period (proxy for the gate).
+    if "cash_deposit" in which_quals:
+        try:
+            from app.modules.closing import deposit_recon as _dr
+            d0, d1 = _mi_period_dates(period)
+            closing = _dr.closing_cash_raw_by_store_day(client, org_id, d0, d1, list(scodes))
+            deps = _dr.bank_deposits_by_store_day(client, org_id, d0, d1, list(scodes))
+            collected = round(sum(v.get("t_cash", 0.0) for v in closing.values()), 2)
+            deposited = round(sum(_f_num(r.get("amount")) for r in deps), 2)
+            out["qualifier_values"]["cash_deposit"] = round(collected - deposited, 2)
+            out["resolved"].append("cash_deposit")
+            out["notes"]["cash_deposit"] = f"Cash left undeposited = collected ${collected} − deposited ${deposited}, over the period. Gate wants ≤ threshold."
+        except Exception:
+            out["unresolved"].append("cash_deposit")
+
+    # inventory_aging derived gate — did ANY device EVER exceed max_days in stock DURING the period, across
+    # the store set? (period-correct: not "over N right now" but "peaked over N at any point in the month").
+    # max_days is per-org configurable (management_incentive_bonus.config.max_days — Luxelink 10 / Cellfonz 45).
+    inv_bonus = any((b.get("gated_by") or "") == "inventory_aging" for b in (plan.get("bonuses") or []))
+    if inv_bonus:
+        try:
+            max_days = 10
+            for b in (plan.get("bonuses") or []):
+                if (b.get("gated_by") or "") == "inventory_aging":
+                    max_days = int((b.get("config") or {}).get("max_days", 10) or 10)
+                    break
+            d0, d1 = _mi_period_dates(period)
+            resolve_code = _store_code_resolver(client, org_id)
+            rows = (client.schema("commcalc").table("inventory_aging_device")
+                    .select("store,received_date,days_in_stock,as_of_date,off_hand_as_of")
+                    .eq("org_id", org_id).limit(200000).execute().data) or []
+            hit = False; checked = 0; unknown = 0
+            for r in rows:
+                if resolve_code(r.get("store") or "") not in scodes:
+                    continue
+                ever = _mi_ever_over_days(r.get("received_date"), r.get("days_in_stock"),
+                                          r.get("as_of_date"), r.get("off_hand_as_of"), d0, d1, max_days)
+                if ever is None:
+                    unknown += 1
+                    continue
+                checked += 1
+                if ever:
+                    hit = True
+                    break
+            if checked == 0:
+                # No evaluable age data → fail closed to manual review rather than silently granting.
+                out["unresolved"].append("inventory_aging")
+                out["notes"]["inventory_aging"] = f"No evaluable inventory-age data for these stores in the period ({unknown} device row(s) missing age) — enter manually."
+            else:
+                out["derived"]["inventory_aging"] = not hit    # qualifies when NO device ever aged past max_days
+                note = (f"A device exceeded {max_days} days in stock during the period → gate not met."
+                        if hit else f"No device exceeded {max_days} days in stock during the period, across the manager's stores.")
+                if unknown:
+                    note += f" ⚠ {unknown} device(s) had no age data and were skipped — review."
+                out["resolved"].append("inventory_aging")
+                out["notes"]["inventory_aging"] = note
+        except Exception:
+            out["unresolved"].append("inventory_aging")
+
+    # zulu / twp / address_checks — read STORED KPI actuals (manual now, email later), honoring each
+    # metric's source_mode, averaged across the manager's stores (same grain as tmr3). Unresolved only
+    # when there's genuinely no stored value yet.
+    # tmr3 included so an imported Paramount 3MR backfills when raw_dlar_store had none (it's skipped here
+    # if the DLAR block above already resolved it).
+    kpi_pending = [k for k in which_quals if k in ("zulu", "twp", "address_checks", "tmr3") and k not in out["resolved"]]
+    if kpi_pending:
+        try:
+            eff = _kpi_effective_actuals(client, org_id, period, scope="store",
+                                         metric_keys=set(kpi_pending), entities=scodes)
+        except Exception:
+            eff = {}
+        for k in kpi_pending:
+            vals = [v["value"] for (ent, mk), v in eff.items() if mk == k and v.get("value") is not None]
+            if vals:
+                out["qualifier_values"][k] = round(sum(vals) / len(vals), 2)
+                srcs = sorted({str(v["source"]).split()[0] for (ent, mk), v in eff.items() if mk == k})
+                out["resolved"].append(k)
+                out["notes"][k] = f"Stored KPI actual ({'/'.join(srcs) or 'manual'}), averaged across the manager's stores."
+            else:
+                out["unresolved"].append(k)
+                out["notes"][k] = "No stored KPI value yet — enter on the KPI page (manual mode) or via email import once wired."
+    return out
+
+
+def _f_num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@router.post("/management-incentive/resolve")
+def mi_resolve(body: dict, org_id: str = ORG_ID):
+    """Auto-pull a manager's numbers for a period, aggregated over the stores they manage — reusing the
+    app's own accessory/DLAR/deposit/inventory math. Body: {plan_id, employee_id, period}. Returns
+    pre-fill {store_codes, manager_store_count, actuals, qualifier_values, derived, resolved[],
+    unresolved[], notes{}} for the Compute tab; the manager reviews before saving. Never computes pay."""
+    require_org(org_id)
+    employee_id = str(body.get("employee_id") or "").strip()
+    period = str(body.get("period") or "").strip()
+    if not employee_id or not period:
+        raise HTTPException(400, "employee_id and period are required")
+    client = sb()
+    plans = _mi_load_plans(client, org_id, plan_id=body.get("plan_id"))
+    plan = plans[0] if plans else None
+    if not plan:
+        raise HTTPException(404, "plan not found")
+    return {"ok": True, **_mi_resolve_numbers(client, org_id, period, employee_id, plan)}

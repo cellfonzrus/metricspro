@@ -153,7 +153,7 @@ export default function ManagementIncentivePage() {
               {/* Bonuses */}
               <Section title="Flat bonuses" onAdd={() => addRow('bonuses', { label: '', kind: 'flat', amount: 0, gated_by: 'none', config: {} })}>
                 <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-                  <thead><tr>{['Label', 'Kind', 'Amount', 'Gated by', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                  <thead><tr>{['Label', 'Kind', 'Amount', 'Gated by', 'Max days', ''].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
                   <tbody>
                     {(plan.bonuses || []).map((b, i) => (
                       <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
@@ -161,12 +161,15 @@ export default function ManagementIncentivePage() {
                         <td style={td}><select style={inp} value={b.kind} onChange={e => setRow('bonuses', i, { kind: e.target.value })}>{BONUS_KIND.map(k => <option key={k}>{k}</option>)}</select></td>
                         <td style={{ ...td, width: 90 }}><input style={inp} type="number" value={b.kind === 'consolidated' ? (plan.consolidated_bonus_amount ?? '') : (b.amount ?? '')} disabled={b.kind === 'consolidated'} title={b.kind === 'consolidated' ? 'Uses the plan-level Consolidated bonus $' : ''} onChange={e => setRow('bonuses', i, { amount: Number(e.target.value) })} /></td>
                         <td style={td}><select style={inp} value={b.gated_by} onChange={e => setRow('bonuses', i, { gated_by: e.target.value })}>{GATED.map(k => <option key={k}>{k}</option>)}</select></td>
+                        <td style={{ ...td, width: 80 }}>{b.gated_by === 'inventory_aging'
+                          ? <input style={inp} type="number" min={1} title="Max days a device may age in stock before this bonus is forfeit (e.g. 10, 45)" value={(b.config?.max_days ?? 10)} onChange={e => setRow('bonuses', i, { config: { ...(b.config || {}), max_days: Number(e.target.value) } })} />
+                          : <span style={{ color: 'var(--text3)' }}>—</span>}</td>
                         <td style={td}><button className="btn" style={{ fontSize: 11, padding: '2px 6px' }} onClick={() => delRow('bonuses', i)}>✕</button></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>gated by <b>qualifiers</b> = earned only when all qualification metrics pass · <b>inventory_aging</b> = no device over 10 days · <b>manual</b> = you decide on the statement.</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4 }}>gated by <b>qualifiers</b> = earned only when all qualification metrics pass · <b>inventory_aging</b> = no device ever aged past the <b>Max days</b> threshold during the period · <b>manual</b> = you decide on the statement.</div>
               </Section>
 
               {/* Qualifiers */}
@@ -247,6 +250,7 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
   const [payouts, setPayouts] = useState<any[]>([])
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
+  const [pullInfo, setPullInfo] = useState<any>(null)
 
   const plan = plans.find(p => p.id === planId) || null
   const inp: React.CSSProperties = { width: '100%', padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -258,6 +262,22 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
       .then((r: any) => setPayouts(r.payouts || [])).catch(() => setPayouts([]))
   }, [period])
   useEffect(() => { loadPayouts() }, [loadPayouts])
+
+  async function pull() {
+    if (!plan || !employeeId) { setMsg('Pick a plan and enter the manager id first.'); return }
+    setBusy(true); setMsg(''); setPullInfo(null)
+    try {
+      const r: any = await api('/api/v1/commcalc/management-incentive/resolve', {
+        method: 'POST', body: JSON.stringify({ plan_id: planId, employee_id: employeeId, period }),
+      })
+      if (r.actuals) setActuals(a => ({ ...a, ...r.actuals }))
+      if (r.qualifier_values) setMetrics(m => ({ ...m, ...r.qualifier_values }))
+      if (typeof r.manager_store_count === 'number' && r.manager_store_count > 0) setStoreCount(r.manager_store_count)
+      if (r.derived && typeof r.derived.inventory_aging === 'boolean') setInvOk(r.derived.inventory_aging)
+      setPullInfo({ resolved: r.resolved || [], unresolved: r.unresolved || [], notes: r.notes || {}, stores: r.store_codes || [] })
+      setMsg(`⤵ Pulled ${(r.resolved || []).length} value(s) across ${(r.store_codes || []).length} store(s). Review, then compute.`)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
 
   async function compute(save: boolean) {
     if (!plan) { setMsg('Pick a plan.'); return }
@@ -313,16 +333,28 @@ function ComputeTab({ plans }: { plans: Plan[] }) {
               ))}
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginTop: 4 }}>
                 <input type="checkbox" checked={invOk} onChange={e => setInvOk(e.target.checked)} />
-                No device over 10 days in stock (inventory bonus qualifies)
+                No device aged past {((plan.bonuses || []).find(b => b.gated_by === 'inventory_aging')?.config?.max_days ?? 10)} days in stock during the period (inventory bonus qualifies)
               </label>
             </div>
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-          <button className="btn btn-primary" disabled={busy || !plan} onClick={() => compute(false)}>{busy ? '…' : 'Compute'}</button>
+        <div style={{ display: 'flex', gap: 10, marginTop: 14, alignItems: 'center' }}>
+          <button className="btn" disabled={busy || !plan || !employeeId} title="Auto-pull the numbers from the app's sales / DLAR / deposit / inventory data" onClick={pull}>{busy ? '…' : '⤵ Pull numbers'}</button>
+          <button className="btn btn-primary" disabled={busy || !plan} onClick={() => compute(false)}>Compute</button>
           <button className="btn" disabled={busy || !plan || !employeeId} onClick={() => compute(true)}>Compute & save draft</button>
         </div>
+        {pullInfo && (
+          <div style={{ marginTop: 12, fontSize: 12, background: 'var(--surface2)', borderRadius: 8, padding: '10px 12px' }}>
+            {pullInfo.resolved.length > 0 && <div style={{ marginBottom: 4 }}><b style={{ color: '#166534' }}>Auto-filled:</b> {pullInfo.resolved.join(', ')}</div>}
+            {pullInfo.unresolved.length > 0 && <div style={{ marginBottom: 4 }}><b style={{ color: '#b45309' }}>Enter manually (no data source):</b> {pullInfo.unresolved.join(', ')}</div>}
+            {Object.keys(pullInfo.notes || {}).length > 0 && (
+              <ul style={{ margin: '6px 0 0', paddingLeft: 16, color: 'var(--text3)' }}>
+                {Object.entries(pullInfo.notes).map(([k, v]: any) => <li key={k}><b>{k}:</b> {v}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       {result && (

@@ -252,6 +252,172 @@ export default function KPIPage() {
           </table>
         </div>
       )}
+
+      <ParamountImport period={period} />
+      <ManualKpiSection period={period} stores={storeData} />
+    </div>
+  )
+}
+
+function ParamountImport({ period }: { period: string }) {
+  const [html, setHtml] = useState('')
+  const [preview, setPreview] = useState<any[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  async function run(dry: boolean) {
+    if (!html.trim()) { setMsg('Paste the report HTML first.'); return }
+    setBusy(true); setMsg('')
+    try {
+      const r: any = await api(`/api/v1/commcalc/kpi-import/paramount?org_id=${ORG_ID}`, {
+        method: 'POST', body: JSON.stringify({ period, html, dry_run: dry }),
+      })
+      setPreview(r.preview || [])
+      setMsg(dry ? `Parsed ${r.stores} store(s), ${r.values} value(s). Review, then Import.` : `✓ Imported ${r.saved} value(s) for ${r.stores} store(s).`)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 24, padding: 16 }}>
+      <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Import Paramount MTD report (email body)</h2>
+      <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px' }}>
+        Paste the report’s HTML (the email body). Pulls <b>Zulu</b>, <b>3MR</b>, and <b>TWP%</b> per door (Door TSP = store) into the KPI store as <b>email</b> values for <b>{period}</b>. Component counts stay on the rep-pay basis.
+      </p>
+      <textarea value={html} onChange={e => setHtml(e.target.value)} placeholder="<table>…Door TSP…</table>"
+        style={{ width: '100%', minHeight: 90, fontFamily: 'monospace', fontSize: 12 }} />
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
+        <button className="btn" disabled={busy} onClick={() => run(true)}>{busy ? '…' : 'Preview'}</button>
+        <button className="btn btn-primary" disabled={busy || !preview} onClick={() => run(false)}>Import</button>
+        {msg && <span style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+      {preview && preview.length > 0 && (
+        <div style={{ overflowX: 'auto', marginTop: 10 }}>
+          <table style={{ fontSize: 12, borderCollapse: 'collapse' }}>
+            <thead><tr>{['Door', 'Zulu%', '3MR%', 'TWP%'].map(h => <th key={h} style={{ textAlign: 'left', padding: '3px 12px 3px 0' }}>{h}</th>)}</tr></thead>
+            <tbody>{preview.map((p: any) => (
+              <tr key={p.store_code}>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.store_code}</td>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.zulu ?? '—'}</td>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.tmr3 ?? '—'}</td>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.twp ?? '—'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Metrics with no automated feed yet — captured by hand until their email import is wired.
+const EXTRA_METRICS = [
+  { key: 'zulu', label: 'Zulu' },
+  { key: 'twp', label: 'TWP' },
+  { key: 'address_checks', label: 'Address Checks' },
+]
+
+function ManualKpiSection({ period, stores }: { period: string; stores: any[] }) {
+  const [modes, setModes] = useState<Record<string, string>>({})
+  const [rows, setRows] = useState<any[]>([])
+  const [edits, setEdits] = useState<Record<string, string>>({})   // `${entity}|${metric}` -> value
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  function load() {
+    api(`/api/v1/commcalc/kpi-actuals?period=${encodeURIComponent(period)}&scope=store&org_id=${ORG_ID}`)
+      .then((act: any) => {
+        setModes(act.source_modes || {})
+        setRows(act.rows || [])
+        const e: Record<string, string> = {}
+        for (const r of (act.rows || [])) if (r.source === 'manual') e[`${r.entity}|${r.metric_key}`] = r.value ?? ''
+        setEdits(e)
+      }).catch(() => { setModes({}); setRows([]); setEdits({}) })
+  }
+  useEffect(load, [period])
+
+  const storeList = stores
+    .map(s => ({ code: String(s.store_code || s.address || ''), label: String(s.address || s.location || s.store_code || '') }))
+    .filter(s => s.code)
+
+  async function setMode(metric: string, mode: string) {
+    setModes(m => ({ ...m, [metric]: mode }))
+    try {
+      await api(`/api/v1/commcalc/carrier-kpi-metrics?org_id=${ORG_ID}`, {
+        method: 'POST',
+        body: JSON.stringify({ metric_key: metric, label: EXTRA_METRICS.find(x => x.key === metric)?.label || metric, source_mode: mode }),
+      })
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+
+  async function save() {
+    setBusy(true); setMsg('')
+    const entries: any[] = []
+    for (const [k, v] of Object.entries(edits)) {
+      const [entity, metric_key] = k.split('|')
+      if ((modes[metric_key] || 'manual') !== 'manual') continue   // only persist manual-mode metrics
+      entries.push({ entity, metric_key, value: v })
+    }
+    try {
+      const r: any = await api(`/api/v1/commcalc/kpi-actuals?org_id=${ORG_ID}`, {
+        method: 'POST', body: JSON.stringify({ period, scope: 'store', entries }),
+      })
+      setMsg(`✓ Saved ${r.saved} value(s).`); load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 24, padding: 16 }}>
+      <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Manual KPI entry — Zulu · TWP · Address Checks</h2>
+      <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 12px' }}>
+        These have no automated feed yet. Enter values per store in <b>Manual</b> mode; flip a metric to <b>Email</b> once its
+        import is wired — both sources are kept, so switching never loses data. The Management-Incentive Pull reads these for the qualification gate.
+      </p>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left', padding: '6px 8px' }}>Store</th>
+              {EXTRA_METRICS.map(m => (
+                <th key={m.key} style={{ textAlign: 'right', padding: '6px 8px' }}>
+                  <div>{m.label}</div>
+                  <div style={{ display: 'inline-flex', gap: 2, marginTop: 2 }}>
+                    {['manual', 'email'].map(md => (
+                      <button key={md} className="btn" onClick={() => setMode(m.key, md)} style={{
+                        fontSize: 10, padding: '1px 6px',
+                        background: (modes[m.key] || 'manual') === md ? 'var(--accent)' : 'var(--surface2)',
+                        color: (modes[m.key] || 'manual') === md ? 'white' : 'var(--text2)',
+                      }}>{md}</button>
+                    ))}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {storeList.length === 0 && <tr><td colSpan={1 + EXTRA_METRICS.length} style={{ padding: 12, color: 'var(--text3)' }}>No stores for this period yet.</td></tr>}
+            {storeList.map(s => (
+              <tr key={s.code} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={{ padding: '4px 8px' }}>{s.label.substring(0, 40)}</td>
+                {EXTRA_METRICS.map(m => {
+                  const manual = (modes[m.key] || 'manual') === 'manual'
+                  const key = `${s.code}|${m.key}`
+                  if (manual) return (
+                    <td key={m.key} style={{ padding: '4px 8px', textAlign: 'right' }}>
+                      <input type="number" style={{ width: 70, textAlign: 'right' }} value={edits[key] ?? ''} onChange={e => setEdits(ed => ({ ...ed, [key]: e.target.value }))} />
+                    </td>
+                  )
+                  const emailRow = rows.find(r => r.entity === s.code && r.metric_key === m.key && r.source === 'email')
+                  return <td key={m.key} style={{ padding: '4px 8px', textAlign: 'right', color: 'var(--text3)' }}>{emailRow?.value ?? '—'} <span style={{ fontSize: 9 }} title="from email import">✉</span></td>
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12 }}>
+        <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? '…' : 'Save manual values'}</button>
+        {msg && <span style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
     </div>
   )
 }
