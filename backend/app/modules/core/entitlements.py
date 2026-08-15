@@ -27,7 +27,10 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"   # house org (middleware rewrit
 # tenant re-syncs on its next /core/me. (1 = initial tenant-provisioning engine, mig 076; 2 = mig 077
 # folded the configurable HR intake-capture form into seed_tenant_defaults(); 3 = mig 079 expanded
 # seed_intake_fields() into the comprehensive HR packet — work eligibility, W-4, policies.)
-SEED_VERSION = 12  # bumped: 12 = the 2026-08-14 training pack (v3 of app/data/training_tours_seed.json)
+SEED_VERSION = 13  # bumped: 13 = the 2026-08-15 Management Incentive default (mig 852) — seeds the
+                   #              house-org Total Wireless district-manager plan so every tenant reads a
+                   #              working default to clone/edit. Never-clobber; un-run mig 852 = no-op.
+                   # 12 = the 2026-08-14 training pack (v3 of app/data/training_tours_seed.json)
                    #              adds the two Time Clock walk-throughs — the rep's "Clocking out — and
                    #              when you need permission" (auto clock-out at shift end + 5 min grace,
                    #              late-clock-out and second-session approval) and the manager's "Approve
@@ -250,6 +253,15 @@ def sync_tenant(client, org_id: str) -> dict:
         try:
             from app.modules.core.whats_new_seed import seed_release_notes
             seed_release_notes(client, org_id)
+        except Exception:
+            pass
+        # HOUSE org only: seed the platform-default Management Incentive plan (mig 852) — the owner's
+        # Total Wireless district-manager default ($2,090 at full attainment). Same never-clobber shape
+        # as the seeds above; an un-run mig 852 is a silent no-op, so the incentive builder simply shows
+        # no default plan until the migration lands.
+        try:
+            from app.modules.commcalc.management_incentive_seed import seed_management_incentive_defaults
+            seed_management_incentive_defaults(client, org_id)
         except Exception:
             pass
     if seeded:
