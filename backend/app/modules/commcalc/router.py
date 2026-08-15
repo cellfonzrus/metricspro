@@ -19884,6 +19884,34 @@ def save_kpi_actuals(body: dict, org_id: str = ORG_ID):
         raise HTTPException(500, f"save kpi actuals failed (is migration 853 applied?): {ex}")
 
 
+@router.post("/kpi-import/paramount")
+def import_paramount_mtd(body: dict, org_id: str = ORG_ID):
+    """Parse a Paramount Wireless MTD report (HTML email body) → store zulu / tmr3 / twp per door (Door
+    TSP = store_code) as source='email' KPI actuals. Body {period, html, dry_run?}. Feeds only the
+    qualifier gates — component counts stay on the rep-pay basis (owner decision)."""
+    from app.modules.commcalc.paramount_kpi import parse_paramount_mtd_kpis
+    period = (body.get("period") or "").strip()
+    html = body.get("html") or ""
+    if not period or not str(html).strip():
+        raise HTTPException(400, "period and html are required")
+    parsed = parse_paramount_mtd_kpis(html)
+    preview = [{"store_code": c, **m} for c, m in sorted(parsed.items())]
+    entries = [(c, mk, val) for c, mets in parsed.items() for mk, val in mets.items()]
+    if body.get("dry_run"):
+        return {"stores": len(parsed), "values": len(entries), "preview": preview, "saved": 0}
+    rows = [{"org_id": org_id, "scope": "store", "entity": c, "period": period, "metric_key": mk,
+             "value": val, "source": "email", "updated_by": body.get("updated_by")} for (c, mk, val) in entries]
+    saved = 0
+    if rows:
+        try:
+            r = sb().schema('commcalc').table('kpi_actual').upsert(
+                rows, on_conflict='org_id,scope,entity,period,metric_key,source').execute()
+            saved = len(r.data or rows)
+        except Exception as ex:
+            raise HTTPException(500, f"paramount import failed (is migration 853 applied?): {ex}")
+    return {"stores": len(parsed), "values": len(entries), "preview": preview, "saved": saved}
+
+
 @router.get("/coaching/{period}")
 def rep_coaching(period: str, store: Optional[List[str]] = Query(default=None),
                  market: Optional[List[str]] = Query(default=None), rep: str = "",
@@ -29055,7 +29083,9 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
     # zulu / twp / address_checks — read STORED KPI actuals (manual now, email later), honoring each
     # metric's source_mode, averaged across the manager's stores (same grain as tmr3). Unresolved only
     # when there's genuinely no stored value yet.
-    kpi_pending = [k for k in which_quals if k in ("zulu", "twp", "address_checks") and k not in out["resolved"]]
+    # tmr3 included so an imported Paramount 3MR backfills when raw_dlar_store had none (it's skipped here
+    # if the DLAR block above already resolved it).
+    kpi_pending = [k for k in which_quals if k in ("zulu", "twp", "address_checks", "tmr3") and k not in out["resolved"]]
     if kpi_pending:
         try:
             eff = _kpi_effective_actuals(client, org_id, period, scope="store",

@@ -253,7 +253,58 @@ export default function KPIPage() {
         </div>
       )}
 
+      <ParamountImport period={period} />
       <ManualKpiSection period={period} stores={storeData} />
+    </div>
+  )
+}
+
+function ParamountImport({ period }: { period: string }) {
+  const [html, setHtml] = useState('')
+  const [preview, setPreview] = useState<any[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  async function run(dry: boolean) {
+    if (!html.trim()) { setMsg('Paste the report HTML first.'); return }
+    setBusy(true); setMsg('')
+    try {
+      const r: any = await api(`/api/v1/commcalc/kpi-import/paramount?org_id=${ORG_ID}`, {
+        method: 'POST', body: JSON.stringify({ period, html, dry_run: dry }),
+      })
+      setPreview(r.preview || [])
+      setMsg(dry ? `Parsed ${r.stores} store(s), ${r.values} value(s). Review, then Import.` : `✓ Imported ${r.saved} value(s) for ${r.stores} store(s).`)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 24, padding: 16 }}>
+      <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Import Paramount MTD report (email body)</h2>
+      <p style={{ fontSize: 12.5, color: 'var(--text2)', margin: '0 0 10px' }}>
+        Paste the report’s HTML (the email body). Pulls <b>Zulu</b>, <b>3MR</b>, and <b>TWP%</b> per door (Door TSP = store) into the KPI store as <b>email</b> values for <b>{period}</b>. Component counts stay on the rep-pay basis.
+      </p>
+      <textarea value={html} onChange={e => setHtml(e.target.value)} placeholder="<table>…Door TSP…</table>"
+        style={{ width: '100%', minHeight: 90, fontFamily: 'monospace', fontSize: 12 }} />
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 10 }}>
+        <button className="btn" disabled={busy} onClick={() => run(true)}>{busy ? '…' : 'Preview'}</button>
+        <button className="btn btn-primary" disabled={busy || !preview} onClick={() => run(false)}>Import</button>
+        {msg && <span style={{ fontSize: 12 }}>{msg}</span>}
+      </div>
+      {preview && preview.length > 0 && (
+        <div style={{ overflowX: 'auto', marginTop: 10 }}>
+          <table style={{ fontSize: 12, borderCollapse: 'collapse' }}>
+            <thead><tr>{['Door', 'Zulu%', '3MR%', 'TWP%'].map(h => <th key={h} style={{ textAlign: 'left', padding: '3px 12px 3px 0' }}>{h}</th>)}</tr></thead>
+            <tbody>{preview.map((p: any) => (
+              <tr key={p.store_code}>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.store_code}</td>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.zulu ?? '—'}</td>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.tmr3 ?? '—'}</td>
+                <td style={{ padding: '2px 12px 2px 0' }}>{p.twp ?? '—'}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
