@@ -28795,17 +28795,27 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
         except Exception:
             out["unresolved"].append("accessory_gp")
 
-    # 3/4. Edge + VHI/FIOS counts — distinct transactions matching the tokens, over the store set.
+    # 3/4. Edge + VHI/FIOS counts — counted over the EXACT SAME transactions rep commission is paid on,
+    # so the DM's roll-up shares one basis of truth with rep pay. We apply calc_rep_commissions' own row
+    # filters (gp_report.is_voided, trans_type != 'Return', salesperson != 'admin') and its source
+    # precedence (raw_sales → daily_sales_feed), then tag edge / VHI-FIOS by product tokens. NOTE: rep pay
+    # has no distinct edge/VHI line today — both fold into 'premium activations' — so this counts the same
+    # sales universe reps are paid on and labels the two product kinds within it.
     if "edge_count" in which_sources or "vhi_fios_count" in which_sources:
         try:
+            from app.modules.commcalc import gp_report as _gp
             resolve_code = _store_code_resolver(client, org_id)
             def _raw(table):
                 return (client.schema("commcalc").table(table).select(_ACTUALS_COLS)
                         .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
-            rows = _raw("daily_sales_feed") or _raw("raw_sales")
+            rows = _raw("raw_sales") or _raw("daily_sales_feed")   # rep-pay source precedence
             edge_ids, vhi_ids = set(), set()
             for r in rows:
-                if str(r.get("voided") or "").strip().lower() in ("1", "true", "yes", "y", "t"):
+                if _gp.is_voided(r.get("voided")):
+                    continue
+                if str(r.get("trans_type") or "").strip() == "Return":
+                    continue
+                if str(r.get("salesperson") or "").strip().lower() == "admin":
                     continue
                 code = resolve_code(r.get("store") or "")
                 if code not in scodes:
@@ -28819,11 +28829,11 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
             if "edge_count" in which_sources:
                 out["actuals"]["edge_count"] = len(edge_ids)
                 out["resolved"].append("edge_count")
-                out["notes"]["edge_count"] = "Distinct transactions tagged 'edge' (app-defined count — review vs your carrier report)."
+                out["notes"]["edge_count"] = "Edge transactions from the same sales rep commission is paid on (voids / Returns / admin excluded, raw_sales→feed). Reps fold Edge into premium activations today."
             if "vhi_fios_count" in which_sources:
                 out["actuals"]["vhi_fios_count"] = len(vhi_ids)
                 out["resolved"].append("vhi_fios_count")
-                out["notes"]["vhi_fios_count"] = "Distinct transactions matching VHI / FIOS / home-internet (app-defined count — review)."
+                out["notes"]["vhi_fios_count"] = "VHI / FIOS / home-internet transactions from the same sales rep commission is paid on (voids / Returns / admin excluded). Reps fold these into premium activations today."
         except Exception:
             for k in ("edge_count", "vhi_fios_count"):
                 if k in which_sources:
