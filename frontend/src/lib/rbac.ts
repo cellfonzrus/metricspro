@@ -289,6 +289,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/ma-handsets', label: 'Handset COGS', icon: '📦', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/device-cost-recon', label: 'Device Cost Recon', icon: '🧮', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/productivity-insights', label: 'Productivity Insights', icon: '💡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/whatif', label: 'What‑If Analysis', icon: '🔮', module: 'commissions', scopes: ['all', 'market'] },

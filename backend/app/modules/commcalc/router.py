@@ -21365,6 +21365,112 @@ def get_productivity(period: str, org_id: str = ORG_ID, today: str = "",
                 "filters": {"stores": [], "markets": [], "reps": []}, "applied": {}, "error": str(e)[:200]}
 
 
+@router.get("/productivity-insights/{period}")
+def productivity_insights(period: str, store_code: str, metric: str = "acc", org_id: str = ORG_ID):
+    """Productivity lens — talent-to-demand fit for ONE store. Ranks reps by output/hour (accessory $/hr
+    or boxes/hr), computes what share of each rep's SCHEDULED hours falls in the store's peak-demand
+    hours, and emits POSITIVE recommendations (recognize / reschedule to peak / coach). Human-in-the-loop:
+    it recommends, the manager decides — never an adverse action."""
+    from datetime import datetime as _dt2, timedelta as _td2
+    from app.modules.commcalc import productivity_fit as _pf
+    from app.modules.storeops.router import _biz_tz_for_store
+    from app.modules.commcalc.staffing_heatmap import hhmm_to_hours
+    require_org(org_id)
+    sc = str(store_code).strip()
+    client = sb()
+
+    # 1. output/hour per rep at this store
+    out_by_name = {}
+    try:
+        g = _prod_gather(client, org_id, period, stores=[sc])
+        prod = _prod.compute_productivity(g["store_reps"], g["hours_by_key"])
+        key = "acc_per_hr" if metric != "boxes" else "boxes_per_hr"
+        for grp in (prod.get("stores") or []):
+            if str(grp.get("store_code")) != sc:
+                continue
+            for r in (grp.get("reps") or []):
+                out_by_name[str(r.get("rep") or "").strip().upper()] = {
+                    "name": r.get("rep"), "output_per_hour": r.get(key),
+                    "acc_per_hr": r.get("acc_per_hr"), "boxes_per_hr": r.get("boxes_per_hr"), "hours": r.get("hours")}
+    except Exception as e:
+        print(f"WARN productivity-insights gather failed: {e}")
+
+    # period → month range
+    p = str(period).strip()
+    try:
+        if "-" in p and p[:4].isdigit():
+            yy, mm = int(p[:4]), int(p[5:7])
+        else:
+            d = _dt2.strptime(p, "%B %Y"); yy, mm = d.year, d.month
+        from datetime import date as _d3
+        d0 = _d3(yy, mm, 1); d1 = (_d3(yy + 1, 1, 1) if mm == 12 else _d3(yy, mm + 1, 1)) - _td2(days=1)
+    except Exception:
+        raise HTTPException(400, "period must be 'YYYY-MM' or 'Month YYYY'")
+
+    # 2. scheduled hours-by-hour per employee (shifts carry local HH:MM)
+    hours_by_emp = {}
+    try:
+        shifts = (get_supabase().schema("storeops").table("shifts")
+                  .select("employee_name,start_time,end_time").eq("org_id", org_id).eq("store_code", sc)
+                  .eq("is_deleted", False).gte("shift_date", d0.isoformat()).lte("shift_date", d1.isoformat())
+                  .limit(100000).execute().data) or []
+    except Exception:
+        shifts = []
+    for s in shifts:
+        nm = str(s.get("employee_name") or "").strip().upper()
+        if not nm:
+            continue
+        hbh = hours_by_emp.setdefault(nm, {})
+        for hr in hhmm_to_hours(s.get("start_time"), s.get("end_time")):
+            hbh[hr] = hbh.get(hr, 0) + 1
+
+    # 3. demand-by-hour (trans_ts → store-local); fall back to scheduled-heads proxy when no demand yet
+    tz = _biz_tz_for_store(org_id, sc)
+    demand_by_hour = {}
+    try:
+        resolve_code = _store_code_resolver(client, org_id)
+        from app.modules.commcalc import gp_report as _gp
+
+        def _tx(table):
+            return (client.schema("commcalc").table(table).select("trans_ts,store,voided")
+                    .eq("org_id", org_id).in_("period", _pvariants(period))
+                    .not_.is_("trans_ts", "null").limit(200000).execute().data) or []
+        for r in (_tx("raw_sales") + _tx("daily_sales_feed")):
+            if _gp.is_voided(r.get("voided")) or resolve_code(r.get("store") or "") != sc:
+                continue
+            try:
+                dt = _dt2.fromisoformat(str(r.get("trans_ts")).replace("Z", "+00:00")).astimezone(tz)
+            except Exception:
+                continue
+            demand_by_hour[dt.hour] = demand_by_hour.get(dt.hour, 0) + 1
+    except Exception:
+        demand_by_hour = {}
+    has_demand = bool(demand_by_hour)
+    if not has_demand:   # proxy: the hours the store actually staffs heaviest
+        for hbh in hours_by_emp.values():
+            for hr, h in hbh.items():
+                demand_by_hour[hr] = demand_by_hour.get(hr, 0) + h
+
+    peak = _pf.peak_hours(demand_by_hour)
+
+    reps = []
+    seen = set()
+    for nm, info in out_by_name.items():
+        seen.add(nm)
+        reps.append({"name": info["name"], "output_per_hour": info["output_per_hour"],
+                     "acc_per_hr": info.get("acc_per_hr"), "boxes_per_hr": info.get("boxes_per_hr"),
+                     "hours_by_hour": hours_by_emp.get(nm, {})})
+    for nm, hbh in hours_by_emp.items():   # scheduled but no sales → still show (output None)
+        if nm not in seen:
+            reps.append({"name": nm.title(), "output_per_hour": None, "acc_per_hr": None,
+                         "boxes_per_hr": None, "hours_by_hour": hbh})
+
+    res = _pf.analyze(reps, peak)
+    return {"store_code": sc, "period": period, "metric": ("boxes/hr" if metric == "boxes" else "accessory $/hr"),
+            "has_demand": has_demand, "peak_basis": ("transactions" if has_demand else "scheduled hours (proxy — no transaction-time data yet)"),
+            "timezone": str(getattr(tz, "key", tz)), **res}
+
+
 @router.get("/productivity/rankings/{period}")
 def get_productivity_rankings(period: str, org_id: str = ORG_ID, today: str = "",
                               stores: Optional[List[str]] = Query(default=None),
