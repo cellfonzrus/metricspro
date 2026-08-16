@@ -185,6 +185,19 @@ app.include_router(pos_router, prefix="/api/v1")          # POS module — Phase
 app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
 app.include_router(referral_router, prefix="/api/v1")     # Referral — QR referrals + gated commission (mig 850)
 
+# Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /
+# break-glass states at boot. Best-effort; STARTUP_STRICT=1 makes prod findings fail the boot.
+@app.on_event("startup")
+def _security_posture_startup():
+    try:
+        from app.core.security_posture import check_and_log
+        check_and_log()
+    except RuntimeError:
+        raise           # STARTUP_STRICT opted into fail-to-boot
+    except Exception:
+        pass
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "1.0.0", "modules": ["commcalc", "storeops", "notify", "core", "account", "storevisit", "closing", "helpdesk", "hr"]}

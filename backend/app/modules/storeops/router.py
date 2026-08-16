@@ -4955,14 +4955,30 @@ def _caller_app_user(authorization: str, org_id: str = ORG_ID) -> dict:
     return rows[0] if rows else {}
 
 
+def _rbac_scope_failclosed() -> bool:
+    """Fail-closed switch for RBAC scope resolution (Security Controls Spec §1, item 4b). Default ON:
+    an UNRESOLVED role (blank, not in the roles table, misconfigured with no scope, or a read error)
+    resolves to the MOST RESTRICTIVE existing scope ('self') instead of widening to the whole org
+    ('all'). Real roles carry an explicit scope and are unaffected. Break-glass
+    RBAC_SCOPE_FAILCLOSED=0 restores the old 'all' fallback via one Railway env change, same
+    never-strand-the-operator posture as REQUIRE_AUTH / STRICT_MEMBERSHIP."""
+    import os
+    return os.environ.get("RBAC_SCOPE_FAILCLOSED", "1").lower() not in ("0", "false", "no", "off")
+
+
 def _role_scope(org_id: str, role: str) -> str:
+    # An unresolved role must not silently grant org-wide reach. Fail CLOSED to 'self' (break-glass
+    # RBAC_SCOPE_FAILCLOSED=0 → old 'all'). A role that exists WITH an explicit scope is always honored.
+    fallback = "self" if _rbac_scope_failclosed() else "all"
     if not role:
-        return "all"
+        return fallback
     try:
         rr = sb().table("roles").select("permissions").eq("org_id", org_id).eq("name", role).limit(1).execute().data or []
-        return (((rr[0].get("permissions") or {}).get("scope")) if rr else "all") or "all"
+        if not rr:
+            return fallback                                    # unknown role → restrictive
+        return ((rr[0].get("permissions") or {}).get("scope")) or fallback
     except Exception:
-        return "all"
+        return fallback                                        # roles read failed → restrictive
 
 
 def _role_permissions(org_id: str, role: str) -> dict:
