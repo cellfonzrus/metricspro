@@ -3392,6 +3392,34 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
     return {"available": available, "config": cfg, "rows": rows, "counts": counts, "limit_hit": limit_hit}
 
 
+@router.get("/accountability")
+def accountability(start: str, end: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Accountability lens (B) — per-employee attendance PATTERNS over [start, end], flagged against policy
+    thresholds, with POSITIVE coaching recommendations. Reuses the attendance-exceptions engine and its
+    policy config (the persistent 'handbook'). Surfaces patterns for a manager to have a supportive
+    conversation about — it never proposes discipline or termination; the manager decides."""
+    from app.modules.storeops import accountability as _acc
+    if not (start and end):
+        raise HTTPException(400, "start and end are required")
+    exc = attendance_exceptions(start=start, end=end, authorization=authorization, org_id=org_id)
+    rows = exc.get("rows") or []
+    # total scheduled shifts per employee in the window (denominator for the rates), RBAC-narrowed the
+    # same way the exception rows already are.
+    ks = scope_keyset(authorization, org_id)
+    shifts = (sb().table("shifts").select("employee_name,store_code").eq("org_id", org_id)
+              .eq("is_deleted", False).gte("shift_date", start).lte("shift_date", end)
+              .limit(50000).execute().data) or []
+    counts = {}
+    for s in shifts:
+        if ks is not None and not in_keyset(ks, s.get("store_code")):
+            continue
+        k = str(s.get("employee_name") or "").strip().upper()
+        if k:
+            counts[k] = counts.get(k, 0) + 1
+    res = _acc.aggregate(rows, counts)
+    return {"start": start, "end": end, "config": exc.get("config"), "limit_hit": exc.get("limit_hit"), **res}
+
+
 # ── tenant-level thresholds for the report above (RULE TWO admin UI) ──────────────────────────────
 @router.get("/timeclock/attendance-config")
 def get_attendance_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
