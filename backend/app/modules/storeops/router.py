@@ -1850,7 +1850,7 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
               "phone", "notes", "epay_login", "epay_salesperson", "employee_id",
               "pay_basis", "pay_amount", "termination_date")
-STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes", "timezone")
+STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "net_profit_target", "is_active", "phone", "notes", "timezone")
 
 
 def _clean_store_timezone(row):
@@ -2829,6 +2829,32 @@ def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_
     return {"clockedIn": False, "entry": None, "pending_permissions": pending}
 
 
+# A rep may clock in no earlier than this many minutes before their scheduled shift start (owner
+# 2026-08-16). Managers can still approve an earlier start via /timeclock/override.
+EARLY_CLOCKIN_MAX_MIN = 15
+
+
+def _scheduled_start_utc(org_id, employee_id, name, store, work_date):
+    """Earliest scheduled shift START (as aware UTC, in the store's zone) for this employee at this store
+    today — or None when they have no shift there today (then the early-clock-in rule doesn't apply)."""
+    try:
+        rows = (sb().table("shifts").select("start_time,employee_id,employee_name")
+                .eq("org_id", org_id).eq("store_code", store).eq("shift_date", work_date)
+                .eq("is_deleted", False).limit(50).execute().data) or []
+    except Exception:
+        return None
+    nm = str(name or "").strip().upper()
+    starts = []
+    for s in rows:
+        match = (employee_id and str(s.get("employee_id") or "") == str(employee_id)) \
+            or (nm and str(s.get("employee_name") or "").strip().upper() == nm)
+        if match and (s.get("start_time") or "").strip():
+            dt = _biz_dt_utc(work_date, s.get("start_time"), org_id, store)
+            if dt:
+                starts.append(dt)
+    return min(starts) if starts else None
+
+
 @router.post("/timeclock/clock-in")
 def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Record a clock-in (one row). Identity is the SIGNED-IN employee (from the auth token) — a
@@ -2855,6 +2881,15 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
             return {"success": False, "needs_override": True, "store_code": req_store,
                     "allowed_stores": sorted(allowed), "home_store": home_store,
                     "message": f"You're not scheduled at {req_store} today. A manager can approve it."}
+    # Too-early gate (owner 2026-08-16): no clock-in more than EARLY_CLOCKIN_MAX_MIN before the scheduled
+    # shift start. Only applies when the rep has a shift here today; a manager can still approve via override.
+    if req_store:
+        sched_start = _scheduled_start_utc(org_id, employee_id, name, req_store, work_date)
+        if sched_start and now < sched_start - timedelta(minutes=EARLY_CLOCKIN_MAX_MIN):
+            return {"success": False, "too_early": True, "needs_override": True, "store_code": req_store,
+                    "scheduled_start": _fmt_time(sched_start.isoformat(), org_id),
+                    "message": f"Too early — you can clock in up to {EARLY_CLOCKIN_MAX_MIN} min before your "
+                               f"{_fmt_time(sched_start.isoformat(), org_id)} shift. A manager can approve an earlier start."}
     # Priority-sell acknowledgment gate (module 095): if the tenant enabled it and this store has
     # devices in the final % of their pay window, the rep must acknowledge before clocking in. Any
     # lookup gap → no block (never trap a rep on a config/migration miss — mirrors the closing gate).
@@ -3390,6 +3425,34 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
     for r in rows:
         counts[r["exception_type"]] = counts.get(r["exception_type"], 0) + 1
     return {"available": available, "config": cfg, "rows": rows, "counts": counts, "limit_hit": limit_hit}
+
+
+@router.get("/accountability")
+def accountability(start: str, end: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Accountability lens (B) — per-employee attendance PATTERNS over [start, end], flagged against policy
+    thresholds, with POSITIVE coaching recommendations. Reuses the attendance-exceptions engine and its
+    policy config (the persistent 'handbook'). Surfaces patterns for a manager to have a supportive
+    conversation about — it never proposes discipline or termination; the manager decides."""
+    from app.modules.storeops import accountability as _acc
+    if not (start and end):
+        raise HTTPException(400, "start and end are required")
+    exc = attendance_exceptions(start=start, end=end, authorization=authorization, org_id=org_id)
+    rows = exc.get("rows") or []
+    # total scheduled shifts per employee in the window (denominator for the rates), RBAC-narrowed the
+    # same way the exception rows already are.
+    ks = scope_keyset(authorization, org_id)
+    shifts = (sb().table("shifts").select("employee_name,store_code").eq("org_id", org_id)
+              .eq("is_deleted", False).gte("shift_date", start).lte("shift_date", end)
+              .limit(50000).execute().data) or []
+    counts = {}
+    for s in shifts:
+        if ks is not None and not in_keyset(ks, s.get("store_code")):
+            continue
+        k = str(s.get("employee_name") or "").strip().upper()
+        if k:
+            counts[k] = counts.get(k, 0) + 1
+    res = _acc.aggregate(rows, counts)
+    return {"start": start, "end": end, "config": exc.get("config"), "limit_hit": exc.get("limit_hit"), **res}
 
 
 # ── tenant-level thresholds for the report above (RULE TWO admin UI) ──────────────────────────────
@@ -3965,8 +4028,8 @@ def save_face(body: dict, authorization: str = Header(default=""), org_id: str =
 # BEYOND end+grace needs a rep-initiated DM permission (migration 432) before it counts.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # The grace window (minutes) added to the scheduled end for BOTH the trigger (fire only once now is past
-# end+grace) AND the stamp (clock_out recorded at end+grace). Owner set this to 5 minutes.
-FORCE_CLOCKOUT_GRACE_MIN = 5
+# end+grace) AND the stamp (clock_out recorded at end+grace). Owner set this to 20 minutes (2026-08-16).
+FORCE_CLOCKOUT_GRACE_MIN = 20
 
 
 def _emp_id_variants(org_id, employee_id):

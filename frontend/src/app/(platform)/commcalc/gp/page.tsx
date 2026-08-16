@@ -28,7 +28,7 @@ interface StoreRow {
   atu_m1: number; atu_m2_12: number; atu_unsplit: number
   mi: number; atu: number; total_rev: number
   rep_pay: number; exp_total: number; net_phone_cost: number
-  net_profit: number; net_excl_mdf: number
+  net_profit: number; net_excl_mdf: number; net_profit_target?: number; net_profit_attainment?: number
 }
 
 // The By-Rep view's row shape (data.rep_rows) — named so the export columns aren't `any`.
@@ -75,6 +75,7 @@ const COLS_BASE: ColDef[] = [
   { key: 'exp_total',    label: '−Expenses',   group: 'Deductions', red: true },
   { key: 'net_phone_cost', label: '−Phone Cost', group: 'Deductions', red: true },
   { key: 'net_profit',   label: 'Net Profit',  group: 'Summary', bold: true, highlight: true },
+  { key: 'net_profit_target', label: 'NP Target', group: 'Summary' },
   { key: 'net_excl_mdf', label: 'Excl. MDF',  group: 'Summary' },
 ]
 

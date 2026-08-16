@@ -31,9 +31,39 @@ DATE_SRC = {
     "Reimbursement Date": "reimbursement_date",
 }
 
+def _is_anchor(cell) -> bool:
+    """The ESN/device-key column marks the real header row."""
+    return str(cell).strip().upper() in ("ESN", "ESN/IMEI", "IMEI", "ESN NUMBER")
+
+
+def _read_asset_df(file_bytes: bytes):
+    """Find the sheet + header row that actually holds the Asset_Lending data. Tolerant of a cover/summary
+    sheet placed first and of title rows above the header (the common reasons a valid file 'fails to
+    upload' when only the first sheet / row 1 is read). Raises a CLEAR error naming what was found."""
+    try:
+        book = pd.read_excel(BytesIO(file_bytes), sheet_name=None, header=None, dtype=str)
+    except Exception as e:
+        raise ValueError(f"Could not open the Asset_Lending file as a spreadsheet: {e}")
+    tried = []
+    for sheet, raw in (book or {}).items():
+        if raw is None or raw.empty:
+            tried.append(f"'{sheet}'(empty)")
+            continue
+        for hdr in range(min(15, len(raw))):   # scan leading rows for the header
+            if any(_is_anchor(c) for c in raw.iloc[hdr].tolist()):
+                df = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet, header=hdr, dtype=str)
+                df.columns = df.columns.str.strip()
+                if len(df.dropna(how="all")) > 0:
+                    return df
+        tried.append(f"'{sheet}'({len(raw)} rows)")
+    raise ValueError(
+        "No device rows found in the Asset_Lending file — couldn't locate an 'ESN' column header in any "
+        f"sheet (looked in: {', '.join(tried) or 'no sheets'}). Make sure the sheet with the device list "
+        "(the one whose header row has 'ESN', 'Category', 'Status', 'Owed to VIP', …) is included.")
+
+
 def parse_asset_ledger(file_bytes: bytes, org_id: str) -> list[dict]:
-    df = pd.read_excel(BytesIO(file_bytes), dtype=str)
-    df.columns = df.columns.str.strip()
+    df = _read_asset_df(file_bytes)
 
     # Clean money cols
     for col in MONEY_COLS:
