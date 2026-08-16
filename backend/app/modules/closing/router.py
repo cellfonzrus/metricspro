@@ -716,12 +716,17 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
     # cast, so the range compare stays in Python too; the verification table is small either way.
     vers = (client.schema("commcalc").table("daily_closing_verification")
             .select("store_code,close_date,verified").eq("org_id", org_id).execute().data) or []
+    # Key on NORMALIZED (store_code.strip(), close_date[:10]) — same as the missed-verify detector
+    # (ops_chargebacks) — so a stray time-component on close_date or whitespace on store_code can't empty
+    # the verified∩submitted intersection (which would show a card "Verified" yet the tile 0/N).
+    def _vkey(store, cd):
+        return ((str(store or "").strip()), str(cd or "")[:10])
     if period:
-        verified_keys = {(v.get("store_code"), str(v.get("close_date"))) for v in vers
-                         if v.get("verified") and str(v.get("close_date") or "").startswith(period)}
+        verified_keys = {_vkey(v.get("store_code"), v.get("close_date")) for v in vers
+                         if v.get("verified") and str(v.get("close_date") or "")[:10].startswith(period)}
     else:
-        verified_keys = {(v.get("store_code"), str(v.get("close_date"))) for v in vers
-                         if v.get("verified") and date_from <= str(v.get("close_date") or "") <= date_to}
+        verified_keys = {_vkey(v.get("store_code"), v.get("close_date")) for v in vers
+                         if v.get("verified") and date_from <= str(v.get("close_date") or "")[:10] <= date_to}
 
     MONEY = ("store_cash", "store_cc", "epay_cash", "epay_cc", "acc_sale", "other_account")
     COUNT = ("upgrade_count", "new_line_count", "postpaid_count")
@@ -797,7 +802,7 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         d = {k: v for k, v in d.items() if k != "_days"} | {"days": len(d["_days"])}
         return d
 
-    submitted_keys = {(r.get("store_code"), str(r.get("close_date"))) for r in kept_rows if r.get("store_code")}
+    submitted_keys = {_vkey(r.get("store_code"), r.get("close_date")) for r in kept_rows if r.get("store_code")}
     bs = sorted((finalize(v) for v in by_store.values()),
                 key=lambda s: str(s.get("store_address") or s.get("store_name") or ""))
     br = sorted((finalize(v) for v in by_rep.values()), key=lambda s: -s.get("rows", 0))
