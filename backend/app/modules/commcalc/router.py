@@ -14777,6 +14777,21 @@ async def get_gp_report(period: str, view: str = "store", market: str = "", auth
     client = sb()
     result = _compute_gp(client, org_id, period, market="")   # full (unfiltered) so the snapshot is complete
     _write_gp_snapshot(client, org_id, period, result)   # snapshot stays company-complete
+    # Per-store NET PROFIT target (default $10,000) + attainment (mig 855). Defaults to 10000 when the
+    # column isn't applied yet, so the goal + attainment show immediately.
+    try:
+        _st = (client.schema("storeops").table("stores").select("store_code,net_profit_target")
+               .eq("org_id", org_id).limit(50000).execute().data) or []
+        _tgt = {str(s.get("store_code")): s.get("net_profit_target") for s in _st}
+    except Exception:
+        _tgt = {}
+    for r in (result.get("store_rows") or []):
+        try:
+            t = float(_tgt.get(str(r.get("store_code"))))
+        except (TypeError, ValueError):
+            t = 10000.0
+        r["net_profit_target"] = t
+        r["net_profit_attainment"] = (round((r.get("net_profit") or 0) / t, 3) if t else None)
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)   # None = unrestricted (admin / rbac off)
     if ks is not None:

@@ -219,7 +219,8 @@ export default function StoreOpsAdminPage() {
     try {
       await api(`/api/v1/storeops/stores/${s.id}`, { method: 'PATCH', body: JSON.stringify({
         store_code: s.store_code, address: s.address, market: s.market,
-        monthly_target: Number(s.monthly_target) || 0, is_active: !!s.is_active, phone: s.phone,
+        monthly_target: Number(s.monthly_target) || 0, net_profit_target: Number(s.net_profit_target) || 0,
+        is_active: !!s.is_active, phone: s.phone,
         timezone: s.timezone || null,
       }) })
       setOrigStores(o => ({ ...o, [s.id]: { ...s } }))
@@ -488,7 +489,12 @@ export default function StoreOpsAdminPage() {
                         {STORE_TZ_OPTS.map(t => <option key={t.v || 'default'} value={t.v}>{t.label}</option>)}
                       </select>
                     </td>
-                    <td style={cell}><input style={{ ...sel, width: 110 }} type="number" value={s.monthly_target ?? ''} onChange={ev => setStore(s.id, { monthly_target: ev.target.value })} /></td>
+                    <td style={cell}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <input style={{ ...sel, width: 120 }} type="number" title="Monthly sales/production target" value={s.monthly_target ?? ''} onChange={ev => setStore(s.id, { monthly_target: ev.target.value })} />
+                        <input style={{ ...sel, width: 120 }} type="number" title="Net profit target ($) — the P&L goal" placeholder="Net profit $" value={s.net_profit_target ?? ''} onChange={ev => setStore(s.id, { net_profit_target: ev.target.value })} />
+                      </div>
+                    </td>
                     <td style={cell}>
                       <input type="checkbox" checked={!!s.is_active} disabled={!!rowBusy[key]}
                         onChange={ev => toggleStoreActive(s, ev.target.checked)} title="Auto-saves immediately" />

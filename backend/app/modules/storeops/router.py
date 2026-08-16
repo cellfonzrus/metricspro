@@ -1850,7 +1850,7 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 EMP_FIELDS = ("name", "home_store", "role", "pay_rate", "is_active", "email",
               "phone", "notes", "epay_login", "epay_salesperson", "employee_id",
               "pay_basis", "pay_amount", "termination_date")
-STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "is_active", "phone", "notes", "timezone")
+STORE_FIELDS = ("store_code", "address", "market", "monthly_target", "net_profit_target", "is_active", "phone", "notes", "timezone")
 
 
 def _clean_store_timezone(row):
