@@ -395,12 +395,36 @@ async function bearer(): Promise<Record<string, string>> {
 // API client for FastAPI backend. Attaches the Supabase session token so the backend can identify
 // the caller for span-scoped reads (Phase 5). The backend ignores it while RBAC enforcement is off.
 // An explicit Authorization in opts.headers still wins (spread last).
+// ── GPS for the system access log (owner 2026-08-16). Best-effort: if the browser hasn't granted
+// location, no header is sent and the server records the request with no GPS. Started lazily on the
+// first api() call (one permission prompt per session); a watch keeps the last position fresh. ──────
+let _geo: { lat: number; lng: number; acc?: number } | null = null
+let _geoStarted = false
+function startGeoWatch() {
+  if (_geoStarted || typeof navigator === 'undefined' || !navigator.geolocation) return
+  _geoStarted = true
+  try {
+    navigator.geolocation.watchPosition(
+      p => { _geo = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy } },
+      () => { /* denied/unavailable — leave _geo null */ },
+      { enableHighAccuracy: false, maximumAge: 300000, timeout: 20000 },
+    )
+  } catch { /* no-op */ }
+}
+function geoHeader(): Record<string, string> {
+  startGeoWatch()
+  if (!_geo) return {}
+  const h: Record<string, string> = { 'x-geo-lat': String(_geo.lat), 'x-geo-lng': String(_geo.lng) }
+  if (_geo.acc != null) h['x-geo-acc'] = String(Math.round(_geo.acc))
+  return h
+}
+
 export async function api(path: string, opts: RequestInit = {}) {
   const authHeader = await bearer()
   const res = await fetch(`${API_URL}${withOrgScope(path)}`, {
     ...opts,
     headers: { 'Content-Type': 'application/json', ...authHeader, ...activeOrgHeader(), ...twofaHeader(),
-               ...impersonationHeader(path), ...opts.headers },
+               ...impersonationHeader(path), ...geoHeader(), ...opts.headers },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -419,7 +443,7 @@ export async function api(path: string, opts: RequestInit = {}) {
 export async function apiUpload(path: string, form: FormData) {
   const authHeader = await bearer()
   const res = await fetch(`${API_URL}${withOrgScope(path)}`, { method: 'POST', body: form,
-    headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...impersonationHeader(path) } })
+    headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...impersonationHeader(path), ...geoHeader() } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)

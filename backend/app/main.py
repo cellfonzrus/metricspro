@@ -107,6 +107,13 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # fixes are done + isolation test passes). Derives org_id from the verified token. Default = no-op.
 app.add_middleware(TenantScopeMiddleware)
 
+# System access log (owner 2026-08-16): one row per request — actor / path / status / IP / GPS. Added
+# AFTER TenantScope ⇒ OUTER of it, so it sees the actor the tenant middleware resolved (via context var)
+# and records the final status even on a middleware rejection (401/403). Best-effort — never blocks or
+# fails a request; writes with the service-role client.
+from app.core.access_log import AccessLogMiddleware
+app.add_middleware(AccessLogMiddleware)
+
 # H5 (2026-08-05 security audit): cap the request BODY. There was no limit of any kind, so one large
 # POST buffered without bound into `await file.read()` → `pd.read_excel(...)` and took the single-worker
 # container down for every tenant. Added AFTER TenantScope ⇒ OUTER of it, so an oversized body is
