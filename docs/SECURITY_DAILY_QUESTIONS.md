@@ -8,14 +8,12 @@ Status legend: ⬜ open · ⏳ in discussion · ✅ decided (record the decision
 
 ---
 
-### 1. ⬜ Prune fallback if pg_cron is unavailable
-Migration 857 best-effort schedules `core.prune_audit_logs()` daily at 04:10 UTC **only if pg_cron is
-installed**. If this project doesn't have pg_cron, retention runs only when the backend endpoint
-`POST /api/v1/core/audit/prune/run-due` is hit.
-- **Decide:** enable pg_cron on the Supabase project, **or** add the prune endpoint to the existing
-  notify `/run-due` scheduler cadence.
-- **Check:** `SELECT jobname, schedule FROM cron.job WHERE jobname = 'prune_audit_logs_daily';`
-  (empty result + pg_cron present ⇒ schedule didn't register).
+### 1. ✅ Prune fallback if pg_cron is unavailable — RESOLVED 2026-08-16
+pg_cron is enabled on the project and the daily job registered cleanly:
+`prune_audit_logs_daily` → `10 4 * * *` → `SELECT core.prune_audit_logs();`. No fallback needed; the
+backend `POST /api/v1/core/audit/prune/run-due` endpoint remains available as a manual trigger.
+- Original decision (enable pg_cron vs. wire into notify `/run-due`): moot — pg_cron present.
+- Re-check anytime: `SELECT jobname, schedule FROM cron.job WHERE jobname = 'prune_audit_logs_daily';`
 
 ### 2. ⬜ Retention windows
 Defaults: `access_log` = **365 days**, `failure_log` = **180 days** (30-day floor enforced in-function).
