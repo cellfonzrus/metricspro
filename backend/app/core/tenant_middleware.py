@@ -528,6 +528,16 @@ def _pick_active_org(member_orgs, default_org, requested):
 # handler never has to guess. Set once per request, on every authenticated path.
 _ACTING_ORG: contextvars.ContextVar = contextvars.ContextVar("mp_acting_org", default=None)
 _ACTING_SUPER_ADMIN: contextvars.ContextVar = contextvars.ContextVar("mp_acting_super_admin", default=False)
+# The resolved human for THIS request ({uid, role, super_admin, email?}) — published for the access log.
+_ACTING_ACTOR: contextvars.ContextVar = contextvars.ContextVar("mp_acting_actor", default=None)
+
+
+def _set_actor(actor):
+    _ACTING_ACTOR.set(actor or None)
+
+
+def _get_actor():
+    return _ACTING_ACTOR.get()
 
 
 class TenantChoiceRequired(Exception):
@@ -817,6 +827,7 @@ class TenantScopeMiddleware:
             # Publish the tenant they declared so a token-gated handler administers THAT tenant
             # instead of silently falling back to whichever membership row sorted first.
             _set_acting((headers.get(_ACTIVE_ORG_HEADER, "") or "").strip() or None, super_admin=True)
+            _set_actor({"uid": uid, "super_admin": True, "role": "super_admin"})
             return await self.app(scope, receive, send)
         if not member_orgs:
             # H2 (2026-08-05): the token VERIFIED but the login has NO tenant membership (no app_users
@@ -828,6 +839,7 @@ class TenantScopeMiddleware:
             # blocks membership-less access to PROTECTED tenant data. Break-glass: STRICT_MEMBERSHIP=0.
             if _strict_membership():
                 return await _reject_401(send)
+            _set_actor({"uid": uid})
             return await self.app(scope, receive, send)
         # Normal login: honor the caller's chosen tenant ONLY if it is one of their memberships,
         # else fall back to their default membership. Empty membership ⇒ no rewrite (unprovisioned).
@@ -840,6 +852,7 @@ class TenantScopeMiddleware:
             return await _reject_tenant_choice(send)
         org = _pick_active_org(member_orgs, default_org, requested)
         _set_acting(org, super_admin=False)
+        _set_actor({"uid": uid, "role": (org_info.get(org) or {}).get("role")})
         # 2FA gate (auth-hardening) — ADDITIVE, super-admins already returned above. Enforced only when
         # the global break-glass TWOFA_ENFORCE is on (default) AND the active tenant requires 2FA for
         # this user AND a valid x-2fa-token is absent. The OTP start/verify endpoints live under the

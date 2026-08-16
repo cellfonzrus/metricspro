@@ -523,6 +523,7 @@ export const NAV: NavGroup[] = [
     { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
     { href: '/admin/security', label: 'Security Settings', icon: '🛡️', module: 'admin' },
+    { href: '/admin/access-log', label: 'Access Log', icon: '🧭', module: 'admin' },
     // "Sign in as an employee" audit log + policy (mig 730, owner directive 2026-08-06). Tagged
     // module 'admin' with NO `scopes`, byte-identical in shape to its /admin/security sibling: an
     // existing admin role already carries modules.admin, so this nav line adds NO new permission

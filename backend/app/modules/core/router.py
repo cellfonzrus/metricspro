@@ -526,6 +526,57 @@ def _require_super_admin(authorization: str, active_org: str = ""):
     raise HTTPException(403, "super-admin only")
 
 
+@router.get("/access-log")
+def access_log(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+               date_from: str = "", date_to: str = "", actor: str = "", ip: str = "",
+               anonymous_only: bool = False, group: str = "", limit: int = 500):
+    """System access log (super-admin only). Raw rows, or a per-actor / per-IP summary (`group=actor|ip`)
+    to spot a scraper — requests, distinct paths, first/last seen. Filter by date range / actor / IP /
+    anonymous-only. Records who accessed the system with path, status, IP and GPS (mig 856)."""
+    _require_super_admin(authorization, x_active_org)
+    try:
+        q = (get_supabase_admin().schema("core").table("access_log").select("*")
+             .order("created_at", desc=True))
+        if date_from:
+            q = q.gte("created_at", date_from)
+        if date_to:
+            q = q.lte("created_at", date_to)
+        if actor:
+            q = q.eq("actor_auth_id", actor)
+        if ip:
+            q = q.eq("ip", ip)
+        if anonymous_only:
+            q = q.eq("anonymous", True)
+        rows = (q.limit(min(int(limit or 500), 5000)).execute().data) or []
+    except Exception as e:
+        return {"rows": [], "ready": False, "error": f"{e} (is migration 856 applied?)"}
+    if group in ("actor", "ip"):
+        key = "actor_auth_id" if group == "actor" else "ip"
+        agg = {}
+        for r in rows:
+            k = (str(r.get(key) or "").strip()) or ("(anonymous)" if group == "actor" else "(no-ip)")
+            a = agg.get(k)
+            if not a:
+                a = agg[k] = {"key": k, "requests": 0, "_paths": set(), "anonymous": bool(r.get("anonymous")),
+                              "first": r.get("created_at"), "last": r.get("created_at"),
+                              "sample_ip": r.get("ip"), "sample_ua": r.get("user_agent"),
+                              "gps_lat": r.get("gps_lat"), "gps_lng": r.get("gps_lng")}
+            a["requests"] += 1
+            if r.get("path"):
+                a["_paths"].add(r["path"])
+            ts = r.get("created_at")
+            if ts:
+                a["first"] = min(a["first"] or ts, ts)
+                a["last"] = max(a["last"] or ts, ts)
+        out = []
+        for a in agg.values():
+            a["distinct_paths"] = len(a.pop("_paths"))
+            out.append(a)
+        out.sort(key=lambda x: -x["requests"])
+        return {"group": group, "rows": out, "scanned": len(rows)}
+    return {"rows": rows, "count": len(rows)}
+
+
 def _require_setting(authorization: str, active_org: str, area: str):
     """Server-side gate for a permission-controlled ADMIN operation. Resolves the caller from the
     verified JWT (never from a client-set body/header) and requires edit rights on `area` via the
