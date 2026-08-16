@@ -174,10 +174,17 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
 
 ### Phase 1 — Close the open doors (P0)
 1. **Session controls** — idle timeout + absolute lifetime, enforced server-side.
+   🟡 **Built (gated OFF).** `app/core/session_guard.py` + `core.session_activity`
+   (mig 858), keyed on the JWT `session_id`. Enable with `SESSION_ENFORCE=1`
+   (`SESSION_IDLE_MINUTES`, `SESSION_ABSOLUTE_HOURS`).
 2. **Inbound rate limiting** — per-IP and per-actor, applied first to auth +
    export + write endpoints. Directly addresses the "strolling/scraping" gap.
+   ✅ **Built (ON).** `app/core/rate_limit.py` — per-IP fixed window, strict on
+   auth paths, generous elsewhere. `RATE_LIMIT_ENFORCE=0` to disable.
 3. **Audit-log retention + prune** — retention window + scheduled prune job on
-   `core.access_log` and peer audit tables.
+   `core.access_log` and peer audit tables. ✅ **Built.** `core.prune_audit_logs`
+   (mig 857) + daily pg_cron + `POST /core/audit/prune/run-due`. Impersonation
+   log / crm_lookup_audit deliberately untouched.
 4. **Fail-closed hardening** — (a) field encryption raises in prod when no key;
    (b) `_role_scope` unknown-role → no scope; (c) `MULTI_TENANT_ENFORCE` on by
    default, "off" is a logged break-glass state.

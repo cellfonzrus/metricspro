@@ -577,6 +577,30 @@ def access_log(authorization: str = Header(default=""), x_active_org: str = Head
     return {"rows": rows, "count": len(rows)}
 
 
+@router.post("/audit/prune/run-due")
+def prune_audit_logs(x_notify_secret: str = Header(default=""),
+                     access_days: int = 0, failure_days: int = 0):
+    """Retention sweep for the audit logs (Security Controls Spec §3, P0). Deletes access_log rows
+    older than `access_days` (default 365) and failure_log rows older than `failure_days` (default 180),
+    keeping a 30-day floor. The impersonation log and crm_lookup_audit — the audit-of-record — are
+    never touched. Secret-guarded like /notify/run-due, with a CONSTANT-TIME compare; pg_cron may also
+    call the SQL function directly (mig 857). Path ends in /run-due so the tenant middleware allowlists
+    it for the JWT-less scheduler."""
+    import hmac
+    secret = settings.NOTIFY_RUN_SECRET or ""
+    if not secret or not hmac.compare_digest(x_notify_secret or "", secret):
+        raise HTTPException(403, "forbidden")
+    args = {"p_access_retain_days": int(access_days) if access_days else 365,
+            "p_failure_retain_days": int(failure_days) if failure_days else 180}
+    try:
+        rows = (get_supabase_admin().schema("core").rpc("prune_audit_logs", args).execute().data) or []
+        deleted = {r.get("table_name"): r.get("rows_deleted") for r in rows}
+        return {"ok": True, "deleted": deleted}
+    except Exception as e:
+        # function absent (mig 857 un-run) or DB error → report, never 500 the scheduler
+        return {"ok": False, "error": f"{e} (is migration 857 applied?)"}
+
+
 def _require_setting(authorization: str, active_org: str, area: str):
     """Server-side gate for a permission-controlled ADMIN operation. Resolves the caller from the
     verified JWT (never from a client-set body/header) and requires edit rights on `area` via the
