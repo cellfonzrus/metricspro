@@ -380,6 +380,8 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     data). **Part 38:** hr onboarding config CRUD (category save/update, task
     save/update — TASK_FIELDS allow-list via model_fields_set) → lax; hr
     create/update-employee are EMP_FIELDS-driven freeform records (deferred).
+    **Part 39:** hr intake-field save/update (INTAKE_FIELD_COLS allow-list),
+    accounting-forward settings, onboarding-attention config → lax.
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

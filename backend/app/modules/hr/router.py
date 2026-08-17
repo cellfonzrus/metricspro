@@ -1823,11 +1823,25 @@ def intake_fields_list(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.post("/onboarding/intake-fields")
-def intake_field_save(body: dict, org_id: str = ORG_ID):
-    label = (body.get("label") or "").strip()
+class IntakeFieldIn(LaxModel):
+    key: Any = None
+    label: Any = None
+    section: Any = None
+    field_type: Any = None
+    options: Any = None
+    required: Any = None
+    propagate_to: Any = None
+    sensitive: Any = None
+    help_text: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+
+
+def intake_field_save(body: IntakeFieldIn, org_id: str = ORG_ID):
+    label = (body.label or "").strip()
     if not label:
         raise HTTPException(400, "label required")
-    row = {k: body[k] for k in INTAKE_FIELD_COLS if k in body}
+    row = {k: getattr(body, k) for k in INTAKE_FIELD_COLS if k in body.model_fields_set}
     row.update({"org_id": org_id, "label": label})
     row.setdefault("key", _slug(label))
     row["key"] = _slug(row["key"])
@@ -1843,8 +1857,8 @@ def intake_field_save(body: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/onboarding/intake-fields/{field_id}")
-def intake_field_update(field_id: str, body: dict, org_id: str = ORG_ID):
-    upd = {k: body[k] for k in INTAKE_FIELD_COLS if k in body}
+def intake_field_update(field_id: str, body: IntakeFieldIn, org_id: str = ORG_ID):
+    upd = {k: getattr(body, k) for k in INTAKE_FIELD_COLS if k in body.model_fields_set}
     if "propagate_to" in upd:
         prop = (upd.get("propagate_to") or "").strip() or None
         if prop and prop not in _PROPAGATABLE:
@@ -3067,14 +3081,22 @@ def onboarding_get_accounting_settings(org_id: str = ORG_ID):
 
 
 @router.put("/onboarding/accounting-settings")
-def onboarding_set_accounting_settings(body: dict, org_id: str = ORG_ID):
+class OnboardingSetAccountingSettingsIn(LaxModel):
+    emails: Any = None
+    whatsapps: Any = None
+    subject: str = ""
+    message: str = ""
+    include_portal_link: Any = True
+
+
+def onboarding_set_accounting_settings(body: OnboardingSetAccountingSettingsIn, org_id: str = ORG_ID):
     """Save the accounting-forward destination. emails/whatsapps accept a list or a comma-separated string."""
     row = {"org_id": org_id,
-           "accounting_emails": _recipient_list(body.get("emails")),
-           "accounting_whatsapps": _recipient_list(body.get("whatsapps")),
-           "forward_subject": (body.get("subject") or "").strip() or None,
-           "forward_message": (body.get("message") or "").strip() or None,
-           "include_portal_link": body.get("include_portal_link", True) is not False,
+           "accounting_emails": _recipient_list(body.emails),
+           "accounting_whatsapps": _recipient_list(body.whatsapps),
+           "forward_subject": (body.subject or "").strip() or None,
+           "forward_message": (body.message or "").strip() or None,
+           "include_portal_link": body.include_portal_link is not False,
            "updated_at": _now_iso()}
     try:
         _so().table("hr_onboarding_settings").upsert(row, on_conflict="org_id").execute()
@@ -3529,13 +3551,17 @@ def onboarding_attention_config(org_id: str = ORG_ID):
 
 
 @router.put("/onboarding/attention-config")
-def put_onboarding_attention_config(body: dict, org_id: str = ORG_ID,
+class PutOnboardingAttentionConfigIn(LaxModel):
+    stuck_invite_days: Any = None
+
+
+def put_onboarding_attention_config(body: PutOnboardingAttentionConfigIn, org_id: str = ORG_ID,
                                     authorization: str = Header(default="")):
     """Set the tenant's 'stuck onboarding invite' alert threshold (days, clamped 1-90). HR/admin-only
     — same gate as every other HR-config write in this file."""
     org_id, _email, _role = _require_hr_or_admin(authorization)   # the caller's OWN tenant is authoritative
     try:
-        days = int(body.get("stuck_invite_days"))
+        days = int(body.stuck_invite_days)
     except (TypeError, ValueError):
         raise HTTPException(400, "stuck_invite_days must be a whole number of days")
     days = max(1, min(90, days))
