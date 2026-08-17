@@ -4783,14 +4783,22 @@ def get_payroll_settings(employee_id: str, org_id: str = ORG_ID):
             "state": "NY", "extra_withholding": 0, "skipped": False}
 
 
+class PayrollSettingsIn(LaxModel):
+    filing_status: str = ""
+    allowances: Any = None
+    state: str = ""
+    extra_withholding: Any = None
+    skipped: Any = None
+
+
 @router.put("/payroll-settings/{employee_id}")
-def put_payroll_settings(employee_id: str, body: dict, org_id: str = ORG_ID):
+def put_payroll_settings(employee_id: str, body: PayrollSettingsIn, org_id: str = ORG_ID):
     row = {"org_id": org_id, "employee_id": employee_id,
-           "filing_status": body.get("filing_status") or "Single",
-           "allowances": int(body.get("allowances") or 0),
-           "state": (body.get("state") or "NY").upper()[:2],
-           "extra_withholding": float(body.get("extra_withholding") or 0),
-           "skipped": bool(body.get("skipped")),
+           "filing_status": body.filing_status or "Single",
+           "allowances": int(body.allowances or 0),
+           "state": (body.state or "NY").upper()[:2],
+           "extra_withholding": float(body.extra_withholding or 0),
+           "skipped": bool(body.skipped),
            "updated_at": datetime.now(timezone.utc).isoformat()}
     sb().table("payroll_settings").upsert(row, on_conflict="org_id,employee_id").execute()
     return {"ok": True, "employee_id": employee_id}
@@ -4812,17 +4820,25 @@ def list_manual_hours(employee_id: str = "", start: str = "", end: str = "", aut
     return rows
 
 
+class ManualHoursIn(LaxModel):
+    employee_id: str = ""
+    reason: str = ""
+    hours: Any = None
+    work_date: str = ""
+    added_by: str = ""
+
+
 @router.post("/manual-hours")
-def add_manual_hours(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    employee_id = (body.get("employee_id") or "").strip()
-    reason = (body.get("reason") or "").strip()
+def add_manual_hours(body: ManualHoursIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    employee_id = (body.employee_id or "").strip()
+    reason = (body.reason or "").strip()
     if not employee_id or not reason:
         raise HTTPException(400, "employee_id and reason are required")
-    if body.get("hours") in (None, ""):
+    if body.hours in (None, ""):
         raise HTTPException(400, "hours required")
     row = {"org_id": org_id, "employee_id": employee_id,
-           "work_date": body.get("work_date") or datetime.now(timezone.utc).date().isoformat(),
-           "hours": float(body.get("hours")), "reason": reason, "added_by": body.get("added_by")}
+           "work_date": body.work_date or datetime.now(timezone.utc).date().isoformat(),
+           "hours": float(body.hours), "reason": reason, "added_by": body.added_by or None}
     r = sb().table("manual_hours").insert(row).execute()
     saved = r.data[0] if r.data else row
     # Deliverable 4 (Payroll Change Log): a manual-hours adjustment IS a manual change to payroll
@@ -6703,8 +6719,17 @@ def additional_payroll_run_due(x_notify_secret: str = Header(default="")):
     return {"period": period, "orgs_processed": len(orgs), "results": results}
 
 
+class SalaryAdvanceIn(LaxModel):
+    employee_id: str = ""
+    amount: Any = None
+    paid_date: str = ""
+    store_code: str = ""
+    withdrawal_ref: str = ""
+    recorded_by: str = ""
+
+
 @router.post("/salary-advance/record")
-def record_salary_advance(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def record_salary_advance(body: SalaryAdvanceIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Records a cash salary advance from the daily-closing envelope, then recomputes + pushes THIS
     employee's period's Additional Payroll. OWNER RULE (verbatim intent): this NEVER touches
     payroll_gross / GET /storeops/payroll — it only appends to storeops.salary_advance_ledger and, if
@@ -6713,20 +6738,19 @@ def record_salary_advance(body: dict, authorization: str = Header(default=""), o
     QUERY param (RULE ONE). employee_id is validated against the real roster — pick-don't-type, never
     a free-text id (RULE THREE)."""
     u = _require_manager(authorization, org_id)
-    body = body or {}
-    employee_id = str(body.get("employee_id") or "").strip()
+    employee_id = str(body.employee_id or "").strip()
     if not employee_id:
         raise HTTPException(400, "employee_id is required")
     emp_rows = _employees_with_pay_fields(org_id, "id,name,employee_id,home_store", eq={"employee_id": employee_id})
     if not emp_rows:
         raise HTTPException(400, "Unknown employee_id — pick an existing employee (no free-text ids).")
     try:
-        amount = float(body.get("amount"))
+        amount = float(body.amount)
     except (TypeError, ValueError):
         raise HTTPException(400, "amount must be a number")
     if amount <= 0:
         raise HTTPException(400, "amount must be greater than 0")
-    paid_date_raw = str(body.get("paid_date") or "").strip()
+    paid_date_raw = str(body.paid_date or "").strip()
     try:
         paid_date = _date.fromisoformat(paid_date_raw[:10])
     except ValueError:
@@ -6734,9 +6758,9 @@ def record_salary_advance(body: dict, authorization: str = Header(default=""), o
 
     row = {
         "org_id": org_id, "employee_id": employee_id, "amount": amount, "paid_date": paid_date.isoformat(),
-        "method": "envelope_cash", "store_code": body.get("store_code") or None,
-        "withdrawal_ref": body.get("withdrawal_ref") or None,
-        "recorded_by": body.get("recorded_by") or u.get("email") or u.get("employee_id") or "manager",
+        "method": "envelope_cash", "store_code": body.store_code or None,
+        "withdrawal_ref": body.withdrawal_ref or None,
+        "recorded_by": body.recorded_by or u.get("email") or u.get("employee_id") or "manager",
     }
     try:
         ins = sb().table("salary_advance_ledger").insert(row).execute()
