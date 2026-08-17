@@ -357,9 +357,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     custom-report-defs save threads `body` into `validate_definition` (deferred).
     **Part 31:** commcalc agency set-consent, set-carriers, generate-invoice
     (optional body) → lax; the six agency `upsert_*` / add-transfer handlers thread
-    `body` into `_agency.*` helpers (deferred). ~264 `dict` bodies remain
-    (body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
-    data).
+    `body` into `_agency.*` helpers (deferred). **Part 32:** commcalc portal sweep
+    configs (vip / dlar / epay sweep put-config) → lax; presence-and-not-None loops
+    via model_fields_set, write-only portal_pass + SSRF portal_url guard preserved.
+    ~261 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
+    skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

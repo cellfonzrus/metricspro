@@ -3059,7 +3059,24 @@ async def vip_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/vip/sweep/config")
-async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID,
+class VipSweepPutConfigIn(LaxModel):
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    lookback_days: Any = None
+    sweep_invoices: Any = None
+    sweep_asset: Any = None
+    sweep_creditmemo: Any = None
+    sweep_asset_ledger: Any = None
+    sweep_chargebacks: Any = None
+    enabled: Any = None
+    portal_user: Any = None
+    portal_pass: Any = None
+
+
+async def vip_sweep_put_config(body: VipSweepPutConfigIn, org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -3071,9 +3088,9 @@ async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID,
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
               'lookback_days', 'sweep_invoices', 'sweep_asset', 'sweep_creditmemo',
               'sweep_asset_ledger', 'sweep_chargebacks', 'enabled', 'portal_user'):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
-    pw = (body.get('portal_pass') or '').strip()
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
+    pw = (body.portal_pass or '').strip()
     if pw:
         row['portal_pass'] = pw
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
@@ -8680,7 +8697,18 @@ async def dlar_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/dlar/sweep/config")
-async def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID,
+class DlarSweepPutConfigIn(LaxModel):
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    enabled: Any = None
+    portal_user: Any = None
+    portal_pass: Any = None
+
+
+async def dlar_sweep_put_config(body: DlarSweepPutConfigIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -8691,9 +8719,9 @@ async def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID,
     row = {'org_id': org_id}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
               'enabled', 'portal_user'):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
-    pw = (body.get('portal_pass') or '').strip()
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
+    pw = (body.portal_pass or '').strip()
     if pw:
         row['portal_pass'] = pw
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
@@ -8963,7 +8991,22 @@ async def epay_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/epay/sweep/config")
-async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
+class EpaySweepPutConfigIn(LaxModel):
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    enabled: Any = None
+    portal_user: Any = None
+    portal_url: Any = None
+    sweep_mi: Any = None
+    sweep_comp: Any = None
+    sweep_payment: Any = None
+    portal_pass: Any = None
+
+
+async def epay_sweep_put_config(body: EpaySweepPutConfigIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -8974,8 +9017,8 @@ async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
     row = {'org_id': org_id}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
               'enabled', 'portal_user', 'portal_url', 'sweep_mi', 'sweep_comp', 'sweep_payment'):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
     # SSRF GUARD (C4): epay_sweep_config.portal_url is handed to page.goto() in a --no-sandbox
     # Chromium exactly like the data_source one. epay_sweep._safe_base re-checks at USE time (rows
     # saved before this landed were never validated); this is the same check at SAVE time so the
@@ -8985,7 +9028,7 @@ async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
             row['portal_url'] = _url_guard.assert_safe_url(row['portal_url'], what="portal address")
         except _url_guard.UnsafeUrlError as e:
             raise HTTPException(400, e.message)
-    pw = (body.get('portal_pass') or '').strip()
+    pw = (body.portal_pass or '').strip()
     if pw:
         row['portal_pass'] = pw
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()

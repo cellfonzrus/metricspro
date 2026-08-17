@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt31) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt32) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–31 = 169 endpoints; ~264 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–32 = 172 endpoints; ~261 remain) |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -114,10 +114,14 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   live_login_submit/click/input. **Part 30:** ma_overview_put_tile, ma_overview_put_rate;
   custom_report_defs_save threads body into validate_definition → deferred. **Part 31:** agency
   set_consent, set_carriers, generate_invoice; the six agency upsert_*/add_transfer thread body into
-  `_agency.*` → deferred. **commcalc convertible surface now largely swept** — remaining `body: dict`
-  handlers are predominantly body-threaders/freeform-map/`{**body}` spreaders (re-grep to confirm the
-  tail). After commcalc: hr (~32, many freeform-intake / public-token → treat like body-threading), then
-  a final sweep of any other modules with `grep -rn 'body: dict' app/modules`. The
+  `_agency.*` → deferred. **Part 32:** vip/dlar/epay sweep put-config. **commcalc still has ~15
+  convertible handlers** (38 `body: dict` total, minus known threaders/freeform-map). Remaining commcalc
+  convertible candidates: pay_simulator_simulate, whatif_put_source_config, apply_ma_class_wiring_rule_
+  proposals, upsert_category_rule, put_flag_rules, commission_rule_impact, payout_record,
+  put_payout_accrual_config, save_financing_vendor, add_financing_vendor_carrier/detection_rule,
+  save_financing_target, atu_config_set, mi_save_plan/compute/payout_decision/resolve, seed_* (optional
+  bodies) — read each first. After commcalc: hr (~32, many freeform-intake / public-token → treat like
+  body-threading), then `grep -rn 'body: dict' app/modules` for any other module. The
   group (put_expenses/bulk_apply/upsert_expense_system_line/put_expense_apply_config/apply_expenses),
   ftp/email/data-source/proxy config, report-pull/manual-upload maps, live-login, ma-overview,
   custom-report-defs, and the agency_* group (~9). Read each first, watch for body-threading AND
