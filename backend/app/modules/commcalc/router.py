@@ -26298,7 +26298,27 @@ def ma_overview_tiles(org_id: str = ORG_ID):
 
 
 @router.put("/ma-overview-recon/tiles/{tile_key}")
-def ma_overview_put_tile(tile_key: str, body: dict, org_id: str = ORG_ID,
+class MaOverviewPutTileIn(LaxModel):
+    label: Any = None
+    sort_order: Any = None
+    value_format: Any = None
+    source_table: Any = None
+    agg: Any = None
+    value_fields: Any = None
+    sign: Any = None
+    filter_field: Any = None
+    filter_op: Any = None
+    filter_value: Any = None
+    filters: Any = None
+    uploaded_field: Any = None
+    uploaded_aliases: Any = None
+    tolerance_abs: Any = None
+    tolerance_pct: Any = None
+    note: Any = None
+    is_active: Any = None
+
+
+def ma_overview_put_tile(tile_key: str, body: MaOverviewPutTileIn, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """Save ONE tile's mapping for this tenant (upsert on org+tile_key). Validated against the source
     vocabulary before it is stored, so a typo'd column can never silently read as "no rows matched".
@@ -26311,10 +26331,10 @@ def ma_overview_put_tile(tile_key: str, body: dict, org_id: str = ORG_ID,
     for f in mo.TILE_FIELDS:
         if f == "tile_key":
             continue
-        if f in (body or {}):
-            row[f] = body.get(f)
-    if "is_active" in (body or {}):
-        row["is_active"] = bool(body.get("is_active"))
+        if f in body.model_fields_set:
+            row[f] = getattr(body, f)
+    if "is_active" in body.model_fields_set:
+        row["is_active"] = bool(body.is_active)
     base = next((dict(t) for t in mo.DEFAULT_TILES if t["tile_key"] == row["tile_key"]), {})
     base.update({k: v for k, v in row.items() if v is not None})
     problems = mo.tile_problems(base)
@@ -26371,7 +26391,14 @@ def ma_overview_rate_plan(period: str = "", org_id: str = ORG_ID):
 
 
 @router.put("/ma-overview-recon/rate-plan/{month_index}")
-def ma_overview_put_rate(month_index: int, body: dict, org_id: str = ORG_ID,
+class MaOverviewPutRateIn(LaxModel):
+    rate_pct: Any = None
+    spiff_flat: Any = None
+    effective_from: Any = None
+    note: Any = None
+
+
+def ma_overview_put_rate(month_index: int, body: MaOverviewPutRateIn, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """Set the carrier's rate for one month leg. body: {rate_pct, spiff_flat?, effective_from?, note?}.
     Config only — it moves no money and triggers no recalculation; it changes what the recon EXPECTS."""
@@ -26380,13 +26407,12 @@ def ma_overview_put_rate(month_index: int, body: dict, org_id: str = ORG_ID,
         raise HTTPException(403, "You don't have permission to edit the carrier rate plan.")
     if not 1 <= int(month_index) <= 6:
         raise HTTPException(400, "month_index must be 1..6")
-    body = body or {}
     row = {"org_id": org_id, "month_index": int(month_index),
-           "rate_pct": safe_float(body.get("rate_pct")),
-           "spiff_flat": safe_float(body.get("spiff_flat")),
-           "effective_from": (str(body.get("effective_from"))[:10] or None)
-                             if body.get("effective_from") else None,
-           "note": (body.get("note") or None),
+           "rate_pct": safe_float(body.rate_pct),
+           "spiff_flat": safe_float(body.spiff_flat),
+           "effective_from": (str(body.effective_from)[:10] or None)
+                             if body.effective_from else None,
+           "note": (body.note or None),
            "updated_by": "api_v1",
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     # NOT an upsert with on_conflict: the table's uniqueness is a COALESCE-based EXPRESSION index

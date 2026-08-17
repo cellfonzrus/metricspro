@@ -352,7 +352,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     **Part 29:** commcalc report-pull-map save, manual-upload save/reset mapping,
     data-source login verify + live-login submit/click/input → lax; `_RPM_FIELDS`
     allow-list via model_fields_set, float-validated click coords typed Any.
-    ~269 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
+    **Part 30:** commcalc ma-overview recon (tile-config put — 17-field TILE_FIELDS
+    allow-list via model_fields_set — and carrier rate-plan put) → lax.
+    custom-report-defs save threads `body` into `validate_definition` (deferred).
+    ~267 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
     skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
