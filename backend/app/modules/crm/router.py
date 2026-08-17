@@ -1306,8 +1306,40 @@ def customer_360(phone: str = "", reveal: bool = False, org_id: str = ORG_ID,
                                  "permission. Ask an administrator to grant it on your role.")
     money_ok = customer360.customer_360_financial_allowed(caller)
     ks = _keyset(authorization, org_id)
-    return customer360.build_360(client, org_id, phone, caller=caller, money_ok=money_ok, keyset=ks,
-                                 reveal=bool(reveal))
+    result = customer360.build_360(client, org_id, phone, caller=caller, money_ok=money_ok, keyset=ks,
+                                   reveal=bool(reveal))
+    # Whether this caller may run a DSAR export (admin-only) — the UI shows the button accordingly.
+    result["can_export_dsar"] = bool(_can_edit_settings(caller))
+    return result
+
+
+@router.get("/customer-360/dsar")
+def customer_360_dsar(phone: str = "", org_id: str = ORG_ID, authorization: str = Header(default=""),
+                      x_active_org: str = Header(default="")):
+    """DSAR export (Security Controls Spec item 16): the full, UNMASKED record MetricsPro holds about a
+    customer phone — for a data-subject access request. Administrator-only (a compliance action) and
+    audited like a 360 reveal (build_360 writes the crm_lookup_audit row with pii_revealed=true). The
+    caller assembles this into whatever the request requires; the payload is a complete, structured
+    snapshot across POS, sales, activations, devices, CRM and support."""
+    caller = _caller(authorization, x_active_org)
+    if not _can_edit_settings(caller):
+        raise HTTPException(403, "A data-subject (DSAR) export is administrator-only.")
+    client = get_supabase()
+    money_ok = customer360.customer_360_financial_allowed(caller)
+    ks = _keyset(authorization, org_id)
+    from datetime import datetime, timezone
+    record = customer360.build_360(client, org_id, phone, caller=caller, money_ok=money_ok, keyset=ks,
+                                   reveal=True)
+    return {
+        "dsar": True,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "subject_phone": record.get("phone"),
+        "requested_by": caller.get("email") or caller.get("role"),
+        "note": ("Data-subject access export. Contains all records linked to this phone number across "
+                 "POS, sales, activations, devices, CRM and support. Handle per your privacy policy; "
+                 "this export was recorded in the lookup audit trail."),
+        "record": record,
+    }
 
 
 @router.get("/customer-360/audit")

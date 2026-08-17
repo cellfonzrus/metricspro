@@ -255,13 +255,16 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
 15. **Typed request schemas (Pydantic)** rolled out across write endpoints.
     🟡 **In progress (incremental).** `app/core/schemas.py` — `StrictModel`
     (extra=forbid → rejects unknown fields) / `LaxModel` (ignores unknown, for
-    legacy). **Part 1:** the containment + auth endpoints authored this cycle
+    legacy). **Part 1:** containment + auth endpoints authored this cycle
     (ip-block ×2, sessions/revoke, export-event, login-precheck/record → strict;
-    forgot/reset-password → lax). Remaining ~425 `dict` bodies migrate in later
-    parts, highest-risk write endpoints first.
-16. **DSAR / erasure workflow.** _(Deferred by recommendation — see
-    SECURITY_DAILY_QUESTIONS; no SSN data yet + 1st month, so build the DSAR
-    export first, defer erasure until a retention policy is set.)_
+    forgot/reset-password → lax). **Part 2:** auth self-service (me/set-password,
+    me/2fa/start·verify·settings → lax). ~421 `dict` bodies remain for later parts.
+16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
+    `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
+    record for a data-subject request, reusing Customer-360; the lookup page shows
+    a "DSAR export" download to admins. **Erasure/anonymization deliberately
+    deferred** (no SSN yet, 1st month, no retention policy; collides with WORM
+    audit) — approach documented for when it's needed.
 
 ### Phase 4 — Enterprise & compliance (P2)
 17. SSO (SAML/OIDC), SIEM shipping, DAST, compliance-framework mapping.
