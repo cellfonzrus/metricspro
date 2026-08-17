@@ -3218,8 +3218,13 @@ def put_security_settings(body: dict, authorization: str = Header(default=""), x
 
 
 # ── Authenticated self password change (reroutes the client-side supabase-js set → policy enforced) ──
+class SetPasswordIn(LaxModel):
+    new_password: str = ""
+    password: str = ""
+
+
 @router.post("/me/set-password")
-def set_own_password(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def set_own_password(body: SetPasswordIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The signed-in user sets their OWN password (must-reset first-login screen + normal change). Routed
     through the backend so the tenant password policy CANNOT be bypassed client-side (the old screen
     called supabase.auth.updateUser directly). Validates → sets via the admin API → clears must_reset."""
@@ -3229,7 +3234,7 @@ def set_own_password(body: dict, authorization: str = Header(default=""), x_acti
     client = sb()
     caller = _resolve_caller(client, uid, x_active_org)
     org_id = (caller or {}).get("org_id") or ORG_ID
-    pw = body.get("new_password") or body.get("password") or ""
+    pw = body.new_password or body.password or ""
     validate_password(client, org_id, pw)
     try:
         get_supabase_admin().auth.admin.update_user_by_id(uid, {"password": pw})
@@ -3576,8 +3581,24 @@ def get_2fa_status(authorization: str = Header(default=""), x_active_org: str = 
             "channels_status": _anotify.channels_status()}
 
 
+class Start2FAIn(LaxModel):
+    channel: str = ""
+
+
+class Verify2FAIn(LaxModel):
+    code: str = ""
+    remember: bool = False
+    device_id: str = ""
+    label: str = ""
+
+
+class Set2FASettingsIn(LaxModel):
+    enabled: bool = False
+    channels: list = []
+
+
 @router.post("/me/2fa/start")
-async def start_2fa(body: dict, request: Request, authorization: str = Header(default=""),
+async def start_2fa(body: Start2FAIn, request: Request, authorization: str = Header(default=""),
                     x_active_org: str = Header(default="")):
     """Issue a 2FA OTP over the chosen channel (email always available; whatsapp only if a verified phone
     is on file). Best-effort delivery; the code row exists regardless so a channel hiccup isn't fatal."""
@@ -3591,7 +3612,7 @@ async def start_2fa(body: dict, request: Request, authorization: str = Header(de
     org_id = u.get("org_id") or ORG_ID
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
     policy = _load_twofa_policy(client, org_id)
-    want = (body.get("channel") or "").strip().lower()
+    want = (body.channel or "").strip().lower()
     channel = want if want in policy["channels"] else policy["channels"][0]
     if channel == "whatsapp" and not (u.get("phone_verified") and u.get("phone")):
         channel = "email"   # no verified phone → fall back to email
@@ -3611,7 +3632,7 @@ async def start_2fa(body: dict, request: Request, authorization: str = Header(de
 
 
 @router.post("/me/2fa/verify")
-def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def verify_2fa(body: Verify2FAIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Verify a 2FA code and mint a signed 'verified session' marker (x-2fa-token) the client sends on
     every request. 'remember' → a 30-day device marker; otherwise a 12-hour session marker. Uniform
     'Invalid or expired code.' on any failure."""
@@ -3624,21 +3645,21 @@ def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org
         raise HTTPException(403, "no tenant for this login")
     org_id = u.get("org_id") or ORG_ID
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
-    code = (body.get("code") or "").strip()
+    code = (body.code or "").strip()
     ok, reason = _verify_otp(client, email=email, purpose="2fa", code=code)
     if not ok:
         if reason == "unavailable":
             raise HTTPException(503, "Two-factor is temporarily unavailable. Please try again shortly.")
         raise HTTPException(400, "Invalid or expired code.")
-    remember = bool(body.get("remember"))
-    device = (body.get("device_id") or "").strip() or secrets.token_urlsafe(9)
+    remember = bool(body.remember)
+    device = (body.device_id or "").strip() or secrets.token_urlsafe(9)
     ttl = (30 * 86400) if remember else (12 * 3600)
     exp = _sec.now_ts() + ttl
     token = _sec.mint_2fa_token(uid, org_id, device, exp)
     try:
         client.schema("core").table("twofa_device").insert({
             "auth_id": uid, "org_id": org_id, "device_id": device,
-            "label": (body.get("label") or None),
+            "label": (body.label or None),
             "expires_at": datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()}).execute()
     except Exception:
         pass  # mig 711 un-run → the stateless marker still works; the device audit row is best-effort
@@ -3649,7 +3670,7 @@ def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org
 
 
 @router.post("/me/2fa/settings")
-def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def set_2fa_settings(body: Set2FASettingsIn, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                           x_2fa_token: str = Header(default="")):
     """The user turns 2FA on/off for themselves (matters under the 'optional' tenant mode) and picks
     channels. Cannot turn OFF when the tenant policy is 'required'. When 2FA is currently required for
@@ -3665,10 +3686,10 @@ def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_acti
     org_id = u.get("org_id") or ORG_ID
     _enforce_self_2fa(client, org_id, uid, u.get("role"), u.get("twofa_enabled"), x_2fa_token)
     policy = _load_twofa_policy(client, org_id)
-    enabled = bool(body.get("enabled"))
+    enabled = bool(body.enabled)
     if policy["mode"] == "required":
         enabled = True   # can't self-disable a required policy
-    channels = [c for c in (body.get("channels") or []) if c in ("email", "whatsapp")] or ["email"]
+    channels = [c for c in (body.channels or []) if c in ("email", "whatsapp")] or ["email"]
     try:
         client.schema("storeops").table("app_users").update(
             {"twofa_enabled": enabled, "twofa_channels": channels}).eq("id", u["id"]).execute()
