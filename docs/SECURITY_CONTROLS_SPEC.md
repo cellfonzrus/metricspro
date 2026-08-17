@@ -309,7 +309,9 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     threads `body` into `normalize_field_rule` (deferred). **Part 14:** commcalc
     item/config (upload-duty config, item-category put, item-mapping upsert + bulk,
     device-model add) → lax; presence via model_fields_set, int-coerced fields
-    typed Any. ~326 `dict` bodies remain
+    typed Any. **Part 15:** commcalc registry/schedule (custom-import-type create,
+    connector-schedule patch, accessory-flags push) → lax; presence-and-not-None
+    loop via model_fields_set. ~323 `dict` bodies remain
     (body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
     data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**

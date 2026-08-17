@@ -7002,23 +7002,30 @@ def list_custom_import_types(org_id: str = ORG_ID):
     return sorted(out, key=lambda r: (r['label'] or '').lower())
 
 
+class CustomImportTypeIn(LaxModel):
+    label: str = ""
+    report_key: str = ""
+    period_mode: Any = None
+    note: Any = None
+
+
 @router.post("/custom-import-types")
-def create_custom_import_type(body: dict, org_id: str = ORG_ID):
+def create_custom_import_type(body: CustomImportTypeIn, org_id: str = ORG_ID):
     """Register a self-serve custom sheet. body: {label, report_key?, period_mode?, note?}. Auto-slugs a
     report_key from the label, rejects a collision with a built-in type, and marks it as a generic JSONB
     capture (target_table=raw_custom_import). Returns the report_key to use in a filename pattern.
     Idempotent (upsert by report_key)."""
     require_org(org_id)
-    label = (body.get('label') or '').strip()
+    label = (body.label or '').strip()
     if not label:
         raise HTTPException(400, "label required")
-    rk = _slugify_report_key((body.get('report_key') or '').strip() or label)
+    rk = _slugify_report_key((body.report_key or '').strip() or label)
     if rk in BUILTIN_UPLOAD_TYPES:
         raise HTTPException(400, f"'{rk}' is a built-in report type — pick a different name")
     row = {'org_id': org_id, 'report_key': rk, 'label': label,
-           'period_mode': (body.get('period_mode') or 'current'),
+           'period_mode': (body.period_mode or 'current'),
            'target_table': CUSTOM_IMPORT_TABLE, 'upload_endpoint': 'custom',
-           'auto': True, 'note': (body.get('note') or None),
+           'auto': True, 'note': (body.note or None),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
     return (r.data[0] if r.data else row)
@@ -7123,8 +7130,17 @@ def connector_run_now(cid: str, background_tasks: BackgroundTasks, org_id: str =
     raise HTTPException(400, f"'{rows[0].get('vendor_name')}' is manual-only — upload it on the Upload Wizard.")
 
 
+class ConnectorScheduleIn(LaxModel):
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    enabled: Any = None
+
+
 @router.patch("/connectors/{cid}/schedule")
-def update_connector_schedule(cid: str, body: dict, org_id: str = ORG_ID):
+def update_connector_schedule(cid: str, body: ConnectorScheduleIn, org_id: str = ORG_ID):
     """Set a connector's sweep schedule (frequency/day/hour/timezone/enabled) from the registry —
     written to its *_sweep_config and re-deriving next_run_at via the shared scheduler. The registry
     becomes the single place to schedule, instead of hunting for each vendor's own sweep page."""
@@ -7149,9 +7165,9 @@ def update_connector_schedule(cid: str, body: dict, org_id: str = ORG_ID):
     merged = {**cur[0]}
     upd = {}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone', 'enabled'):
-        if k in body and body[k] is not None:
-            upd[k] = body[k]
-            merged[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            upd[k] = getattr(body, k)
+            merged[k] = getattr(body, k)
     upd['next_run_at'] = _vip_next_run(merged.get('frequency') or 'daily', merged.get('day_of_week'),
                                        merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
     try:
@@ -8482,17 +8498,22 @@ def accessory_receipt(trans_id: str, org_id: str = ORG_ID):
     return {"trans_id": trans_id, "header": header, "lines": lines, "line_count": len(lines), "total": round(total, 2)}
 
 
+class AccessoryFlagsPushIn(LaxModel):
+    rows: Any = None
+    assigned_by: Any = None
+
+
 @router.post("/accessory-flags/push")
-def accessory_flags_push(body: dict, org_id: str = ORG_ID):
+def accessory_flags_push(body: AccessoryFlagsPushIn, org_id: str = ORG_ID):
     """Flag selected accessory rows → chargeback bucket, ASSIGNED to the rep who sold it (writes the
     employee chargeback_items row). Body: {rows:[{trans_id,sku,item_desc,dedupe_key,rep,store,
     store_code,period,trans_date,phone_model,ext_price,chargeback_amount}], assigned_by}.
     Idempotent per dedupe_key — re-pushing updates the amount instead of duplicating."""
     require_org(org_id)
-    rows = body.get("rows") or []
+    rows = body.rows or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
-    by = body.get("assigned_by") or "admin"
+    by = body.assigned_by or "admin"
     client = sb()
     pushed, errors = 0, []
     for r in rows:
