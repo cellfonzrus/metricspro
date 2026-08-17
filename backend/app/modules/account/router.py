@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
+from app.core.schemas import LaxModel
 from app.modules.account import coa, engine, autocompute, report_gates
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
@@ -42,23 +43,36 @@ async def list_companies(org_id: str = ORG_ID):
     return {"companies": rows}
 
 
+class CompanyCreateIn(LaxModel):
+    name: str = ""
+    legal_name: str = ""
+    ein: str = ""
+
+
+class CompanyUpdateIn(LaxModel):
+    name: str = ""
+    legal_name: str = ""
+    ein: str = ""
+
+
 @router.post("/companies")
-async def create_company(body: dict, org_id: str = ORG_ID):
+async def create_company(body: CompanyCreateIn, org_id: str = ORG_ID):
     require_org(org_id)
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
     row = {"org_id": org_id, "name": name,
-           "legal_name": (body.get("legal_name") or name).strip(),
-           "ein": (body.get("ein") or "").strip() or None}
+           "legal_name": (body.legal_name or name).strip(),
+           "ein": (body.ein or "").strip() or None}
     res = sb().schema("commcalc").table("companies").insert(row).execute()
     return {"company": (res.data or [row])[0]}
 
 
 @router.patch("/companies/{company_id}")
-async def update_company(company_id: str, body: dict, org_id: str = ORG_ID):
+async def update_company(company_id: str, body: CompanyUpdateIn, org_id: str = ORG_ID):
     require_org(org_id)
-    upd = {k: body[k] for k in ("name", "legal_name", "ein") if k in body}
+    sent = body.model_fields_set
+    upd = {k: getattr(body, k) for k in ("name", "legal_name", "ein") if k in sent}
     if not upd:
         raise HTTPException(400, "nothing to update")
     sb().schema("commcalc").table("companies").update(upd) \
@@ -112,11 +126,15 @@ async def list_stores(org_id: str = ORG_ID):
     return {"stores": out, "companies": companies}
 
 
+class AssignStoresIn(LaxModel):
+    assignments: list = []
+
+
 @router.post("/companies/assign")
-async def assign_stores(body: dict, org_id: str = ORG_ID):
+async def assign_stores(body: AssignStoresIn, org_id: str = ORG_ID):
     """Body: {assignments:[{store_address, company_id}]}. Upserts the store→company map."""
     require_org(org_id)
-    rows = body.get("assignments") or []
+    rows = body.assignments or []
     client = sb()
     saved = 0
     for r in rows:
