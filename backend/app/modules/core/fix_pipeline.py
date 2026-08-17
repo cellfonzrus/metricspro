@@ -61,11 +61,13 @@ import hmac
 import re
 import uuid
 from datetime import date, datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Header
 
 from app.core.config import settings
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 
 # NO extra prefix beyond "/fix-pipeline": this sub-router is mounted ONTO core/router.py's `router`
 # (which already carries "/core"), so main.py — a SHARED file — needs no change. Final paths:
@@ -744,8 +746,27 @@ def get_pipeline_request(rid: str, org_id: str = ORG_ID, all_orgs: int = 0,
             "org_id": org}
 
 
+class CreatePipelineRequestIn(LaxModel):
+    signature: Any = None
+    sample_path: Any = None
+    path: Any = None
+    exc_type: Any = None
+    status: Any = None
+    classification: Any = None
+    failure_ids: Any = None
+    affected_orgs: Any = None
+    user_actions: Any = None
+    occurrence_count: Any = None
+    first_ref: Any = None
+    title: Any = None
+    module_agent: Any = None
+    triage_summary: Any = None
+    resolved_note: Any = None
+    model: Any = None
+
+
 @router.post("/requests")
-def create_pipeline_request(body: dict, org_id: str = ORG_ID,
+def create_pipeline_request(body: CreatePipelineRequestIn, org_id: str = ORG_ID,
                                   authorization: str = Header(default=""),
                                   x_active_org: str = Header(default=""),
                                   x_fix_pipeline_secret: str = Header(default="")):
@@ -761,26 +782,26 @@ def create_pipeline_request(body: dict, org_id: str = ORG_ID,
     actor = _authorize("registry_write", authorization=authorization, x_active_org=x_active_org,
                        secret=x_fix_pipeline_secret)
     org, _ = _scope(actor, org_id, 0)
-    sig = (body.get("signature") or "").strip()
+    sig = (body.signature or "").strip()
     if not sig:
-        path, exc = body.get("sample_path") or body.get("path") or "", body.get("exc_type") or ""
+        path, exc = body.sample_path or body.path or "", body.exc_type or ""
         sig = fix_signature(path, exc) if (path or exc) else ""
     if not sig:
         raise HTTPException(422, "signature (or sample_path + exc_type) is required")
-    status = str(body.get("status") or "reported").strip().lower()
+    status = str(body.status or "reported").strip().lower()
     if status not in FIX_CREATE_STATUSES or status not in FIX_STATUSES:
         status = "reported"                      # default-DENY: never create at/after a build
-    cls = str(body.get("classification") or "").strip().lower() or None
+    cls = str(body.classification or "").strip().lower() or None
     if cls and cls not in FIX_CLASSIFICATIONS:
         raise HTTPException(422, f"classification must be one of {', '.join(FIX_CLASSIFICATIONS)}")
-    ids = [str(i) for i in (body.get("failure_ids") or []) if i][:500]
-    affected = body.get("affected_orgs")
+    ids = [str(i) for i in (body.failure_ids or []) if i][:500]
+    affected = body.affected_orgs
     affected = affected if isinstance(affected, list) else []
     # The triage routine already writes prose about "what config/data needs fixing" — this structures it.
     # Validated here so a bad `kind` is a 422 BEFORE anything is written.
     try:
-        new_actions = (normalize_user_actions(body.get("user_actions"))
-                       if body.get("user_actions") is not None else None)
+        new_actions = (normalize_user_actions(body.user_actions)
+                       if body.user_actions is not None else None)
     except ValueError as e:
         raise HTTPException(422, str(e))
     client = sb()
@@ -798,7 +819,7 @@ def create_pipeline_request(body: dict, org_id: str = ORG_ID,
         for a in affected:
             if isinstance(a, dict) and a.get("org_id"):
                 counts[a["org_id"]] = counts.get(a["org_id"], 0) + int(a.get("count") or 0)
-        occ = int(body.get("occurrence_count") or 0) or max(len(merged_ids), 1)
+        occ = int(body.occurrence_count or 0) or max(len(merged_ids), 1)
         patch = {
             "occurrence_count": max(int(cur.get("occurrence_count") or 0), occ),
             "failure_ids": merged_ids,
@@ -809,8 +830,8 @@ def create_pipeline_request(body: dict, org_id: str = ORG_ID,
                             note=f"folded {len(ids)} more occurrence(s) into this signature"),
         }
         for f in ("sample_path", "exc_type", "title", "first_ref", "resolved_note"):
-            if not cur.get(f) and body.get(f):
-                patch[f] = body[f]
+            if not cur.get(f) and getattr(body, f):
+                patch[f] = getattr(body, f)
         # A re-file NEVER clobbers a checklist the operator has been ticking off — it only fills an empty
         # one. Editing an existing checklist is an explicit PATCH.
         if new_actions and not user_actions_of(cur):
@@ -822,19 +843,19 @@ def create_pipeline_request(body: dict, org_id: str = ORG_ID,
     row = {
         "org_id": org,                                  # RULE ONE: stamp the tenant on the INSERT
         "signature": sig,
-        "first_ref": (body.get("first_ref") or None),
-        "occurrence_count": max(int(body.get("occurrence_count") or 0) or len(ids) or 1, 1),
-        "sample_path": (body.get("sample_path") or body.get("path") or None),
-        "exc_type": (body.get("exc_type") or None),
+        "first_ref": (body.first_ref or None),
+        "occurrence_count": max(int(body.occurrence_count or 0) or len(ids) or 1, 1),
+        "sample_path": (body.sample_path or body.path or None),
+        "exc_type": (body.exc_type or None),
         "failure_ids": ids,
         "affected_orgs": [a for a in affected if isinstance(a, dict) and a.get("org_id")],
-        "title": (str(body.get("title") or sig)[:300]),
+        "title": (str(body.title or sig)[:300]),
         "status": status,
         "classification": cls,
-        "module_agent": (body.get("module_agent") or None),
-        "triage_summary": (body.get("triage_summary") or None),
-        "resolved_note": (body.get("resolved_note") or None),
-        "model": (body.get("model") or None),
+        "module_agent": (body.module_agent or None),
+        "triage_summary": (body.triage_summary or None),
+        "resolved_note": (body.resolved_note or None),
+        "model": (body.model or None),
         "created_by": actor["actor"],
         "created_at": now, "updated_at": now,
         "audit": [{"at": now, "actor": actor["actor"], "actor_kind": actor["kind"],
@@ -871,8 +892,32 @@ _TEXT_FIELDS = ("resolved_note",)
 _INT_FIELDS = ("tokens_triage", "tokens_build", "tokens_review", "occurrence_count")
 
 
+class PatchPipelineRequestIn(LaxModel):
+    classification: Any = None
+    module_agent: Any = None
+    branch: Any = None
+    commit_sha: Any = None
+    worktree: Any = None
+    triage_summary: Any = None
+    proofs_summary: Any = None
+    model: Any = None
+    title: Any = None
+    sample_path: Any = None
+    exc_type: Any = None
+    first_ref: Any = None
+    tokens_triage: Any = None
+    tokens_build: Any = None
+    tokens_review: Any = None
+    occurrence_count: Any = None
+    pushed_commit: Any = None
+    resolved_note: Any = None
+    user_actions: Any = None
+    status: Any = None
+    note: Any = None
+
+
 @router.patch("/requests/{rid}")
-def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
+def patch_pipeline_request(rid: str, body: PatchPipelineRequestIn, org_id: str = ORG_ID,
                                  authorization: str = Header(default=""),
                                  x_active_org: str = Header(default=""),
                                  x_fix_pipeline_secret: str = Header(default="")):
@@ -896,9 +941,9 @@ def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
 
     patch = {}
     for f in _PATCHABLE:
-        if f not in body:
+        if f not in body.model_fields_set:
             continue
-        v = body[f]
+        v = getattr(body, f)
         if f in _INT_FIELDS:
             try:
                 v = max(int(v or 0), 0)
@@ -914,14 +959,14 @@ def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
 
     # The ship-time checklist (mig 719). Validated against USER_ACTION_KINDS, and merged against the
     # CURRENT list so a rewrite can never un-tick a step the operator already completed.
-    if "user_actions" in body:
+    if "user_actions" in body.model_fields_set:
         try:
-            patch["user_actions"] = normalize_user_actions(body["user_actions"], user_actions_of(cur))
+            patch["user_actions"] = normalize_user_actions(body.user_actions, user_actions_of(cur))
         except ValueError as e:
             raise HTTPException(422, str(e))
 
-    target = str(body.get("status") or "").strip().lower()
-    note = str(body.get("note") or "")
+    target = str(body.status or "").strip().lower()
+    note = str(body.note or "")
     if target:
         eff_class = patch.get("classification", cur.get("classification"))
         ok, why = pipeline_status_change(
@@ -935,7 +980,7 @@ def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
             patch["approved_by"] = actor["actor"]
             patch["approved_at"] = _now_iso()
         if target == "pushed":
-            patch["pushed_commit"] = (body.get("pushed_commit") or cur.get("pushed_commit")
+            patch["pushed_commit"] = (body.pushed_commit or cur.get("pushed_commit")
                                       or patch.get("pushed_commit"))
             patch["pushed_at"] = _now_iso()
 
@@ -966,8 +1011,12 @@ def patch_pipeline_request(rid: str, body: dict, org_id: str = ORG_ID,
             "hint": hint}
 
 
+class PatchPipelineActionIn(LaxModel):
+    status: Any = None
+
+
 @router.patch("/requests/{rid}/actions/{action_id}")
-def patch_pipeline_request_action(rid: str, action_id: str, body: dict, org_id: str = ORG_ID,
+def patch_pipeline_request_action(rid: str, action_id: str, body: PatchPipelineActionIn, org_id: str = ORG_ID,
                                         all_orgs: int = 0,
                                         authorization: str = Header(default=""),
                                         x_active_org: str = Header(default=""),
@@ -990,7 +1039,7 @@ def patch_pipeline_request_action(rid: str, action_id: str, body: dict, org_id: 
     actor = _authorize("action_write", authorization=authorization, x_active_org=x_active_org,
                        secret=x_fix_pipeline_secret)
     org, cross = _scope(actor, org_id, all_orgs)
-    status = str(body.get("status") or "done").strip().lower()
+    status = str(body.status or "done").strip().lower()
     if status not in USER_ACTION_STATUSES:
         raise HTTPException(422, f"status must be one of {', '.join(USER_ACTION_STATUSES)}")
     client = sb()
@@ -1066,8 +1115,19 @@ def list_token_rates(org_id: str = ORG_ID, authorization: str = Header(default="
                            "split, so the output share is an assumption you control per model.")}
 
 
+class UpsertTokenRateIn(LaxModel):
+    model: Any = None
+    label: Any = None
+    usd_per_mtok_in: Any = None
+    usd_per_mtok_out: Any = None
+    output_share: Any = 0.20
+    effective_date: Any = None
+    is_active: Any = True
+    notes: Any = None
+
+
 @router.put("/token-rates")
-def upsert_token_rate(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def upsert_token_rate(body: UpsertTokenRateIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                             x_active_org: str = Header(default=""),
                             x_fix_pipeline_secret: str = Header(default="")):
     """Create/update ONE rate row, keyed by (org_id, model, effective_date) — so editing today's rate is an
@@ -1076,28 +1136,28 @@ def upsert_token_rate(body: dict, org_id: str = ORG_ID, authorization: str = Hea
     could silently misreport spend."""
     actor = _authorize("config_write", authorization=authorization, x_active_org=x_active_org,
                        secret=x_fix_pipeline_secret)
-    model = str(body.get("model") or "").strip()
+    model = str(body.model or "").strip()
     if not model:
         raise HTTPException(422, "model is required")
     try:
-        rin = float(body.get("usd_per_mtok_in"))
-        rout = float(body.get("usd_per_mtok_out"))
+        rin = float(body.usd_per_mtok_in)
+        rout = float(body.usd_per_mtok_out)
     except (TypeError, ValueError):
         raise HTTPException(422, "usd_per_mtok_in and usd_per_mtok_out must be numbers")
     if rin < 0 or rout < 0:
         raise HTTPException(422, "rates cannot be negative")
     try:
-        share = float(body.get("output_share", 0.20))
+        share = float(body.output_share)
     except (TypeError, ValueError):
         raise HTTPException(422, "output_share must be a number between 0 and 1")
     if not (0.0 <= share <= 1.0):
         raise HTTPException(422, "output_share must be between 0 and 1")
-    eff = str(body.get("effective_date") or date.today().isoformat())[:10]
+    eff = str(body.effective_date or date.today().isoformat())[:10]
     row = {"org_id": (org_id or ORG_ID),          # RULE ONE: stamp the org on the write
-           "model": model, "label": (body.get("label") or None),
+           "model": model, "label": (body.label or None),
            "usd_per_mtok_in": rin, "usd_per_mtok_out": rout, "effective_date": eff,
-           "output_share": share, "is_active": bool(body.get("is_active", True)),
-           "notes": (body.get("notes") or None),
+           "output_share": share, "is_active": bool(body.is_active),
+           "notes": (body.notes or None),
            "updated_by": actor["actor"], "updated_at": _now_iso()}
     try:
         (sb().schema("core").table("token_rates")

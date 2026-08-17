@@ -1,11 +1,14 @@
 """Account Module router — companies + store assignment (#multi-company), manual journal
 entries, the compute/compute-on-demand engine, P&L, Balance Sheet, and the #10 reconciliation."""
+from typing import Any
 from fastapi import APIRouter, HTTPException, Header
 from fastapi.concurrency import run_in_threadpool
 from datetime import datetime, timezone
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
+from app.core.schemas import LaxModel
 from app.modules.account import coa, engine, autocompute, report_gates
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
@@ -41,23 +44,36 @@ async def list_companies(org_id: str = ORG_ID):
     return {"companies": rows}
 
 
+class CompanyCreateIn(LaxModel):
+    name: str = ""
+    legal_name: str = ""
+    ein: str = ""
+
+
+class CompanyUpdateIn(LaxModel):
+    name: str = ""
+    legal_name: str = ""
+    ein: str = ""
+
+
 @router.post("/companies")
-async def create_company(body: dict, org_id: str = ORG_ID):
+async def create_company(body: CompanyCreateIn, org_id: str = ORG_ID):
     require_org(org_id)
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
     row = {"org_id": org_id, "name": name,
-           "legal_name": (body.get("legal_name") or name).strip(),
-           "ein": (body.get("ein") or "").strip() or None}
+           "legal_name": (body.legal_name or name).strip(),
+           "ein": (body.ein or "").strip() or None}
     res = sb().schema("commcalc").table("companies").insert(row).execute()
     return {"company": (res.data or [row])[0]}
 
 
 @router.patch("/companies/{company_id}")
-async def update_company(company_id: str, body: dict, org_id: str = ORG_ID):
+async def update_company(company_id: str, body: CompanyUpdateIn, org_id: str = ORG_ID):
     require_org(org_id)
-    upd = {k: body[k] for k in ("name", "legal_name", "ein") if k in body}
+    sent = body.model_fields_set
+    upd = {k: getattr(body, k) for k in ("name", "legal_name", "ein") if k in sent}
     if not upd:
         raise HTTPException(400, "nothing to update")
     sb().schema("commcalc").table("companies").update(upd) \
@@ -111,11 +127,15 @@ async def list_stores(org_id: str = ORG_ID):
     return {"stores": out, "companies": companies}
 
 
+class AssignStoresIn(LaxModel):
+    assignments: list = []
+
+
 @router.post("/companies/assign")
-async def assign_stores(body: dict, org_id: str = ORG_ID):
+async def assign_stores(body: AssignStoresIn, org_id: str = ORG_ID):
     """Body: {assignments:[{store_address, company_id}]}. Upserts the store→company map."""
     require_org(org_id)
-    rows = body.get("assignments") or []
+    rows = body.assignments or []
     client = sb()
     saved = 0
     for r in rows:
@@ -141,13 +161,17 @@ async def get_journal(period: str, org_id: str = ORG_ID):
             "account_types": {"pl": sorted(PL_TYPES), "balance_sheet": sorted(BS_TYPES)}}
 
 
+class PutJournalIn(LaxModel):
+    rows: Any = None
+
+
 @router.put("/journal/{period}")
-async def put_journal(period: str, body: dict, org_id: str = ORG_ID):
+async def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
     """Replace all journal entries for the period. Body: {rows:[{statement, account_type,
     account_line, amount, company_id?, store_address?, entry_date?, memo?}]}."""
     require_org(org_id)
     pm, py = coa.parse_period(period)
-    rows = body.get("rows") or []
+    rows = body.rows or []
     client = sb()
     ins = []
     for r in rows:
@@ -229,15 +253,19 @@ async def list_inventory_values(org_id: str = ORG_ID):
             "total_effective": round(sum(coa.safe_float(r["effective"]) for r in out), 2)}
 
 
+class PutInventoryValuesIn(LaxModel):
+    rows: Any = None
+
+
 @router.put("/inventory-values")
-async def put_inventory_values(body: dict, org_id: str = ORG_ID):
+async def put_inventory_values(body: PutInventoryValuesIn, org_id: str = ORG_ID):
     """Set/clear the manual inventory override per store. Body: {rows:[{store, manual_value,
     note?}]}. manual_value null/'' clears the override (the swept value then drives the BS).
     Never touches swept_value. Re-compute statements to apply to a stored Balance Sheet."""
     require_org(org_id)
     client = sb()
     saved = 0
-    for r in (body.get("rows") or []):
+    for r in (body.rows or []):
         st = coa._norm_store(r.get("store"))
         if not st:
             continue
@@ -319,8 +347,16 @@ async def get_config(org_id: str = ORG_ID):
                          "device_cogs_mode": "off"}}
 
 
+class AccountPutConfigIn(LaxModel):
+    accessory_cogs_pct: Any = None
+    service_fee_products: Any = None
+    payroll_expense_names: Any = None
+    payroll_expense_routes: Any = None
+    device_cogs_mode: Any = None
+
+
 @router.put("/config")
-async def put_config(body: dict, org_id: str = ORG_ID):
+async def put_config(body: AccountPutConfigIn, org_id: str = ORG_ID):
     """Set this tenant's finance/accounting config. Body may carry either knob, independently:
       accessory_cogs_pct    0..1 — accessory COGS as a fraction of gross accessory sales.
       service_fee_products  [str] — sale-line products that are FEE INCOME to the store (mig 613),
@@ -341,9 +377,9 @@ async def put_config(body: dict, org_id: str = ORG_ID):
     # PARTIAL SAVE: each knob is written only when the body actually carries it, so the service-fee
     # picker cannot silently rewrite the accessory COGS % (and vice-versa). An absent key keeps the
     # tenant's current value; this endpoint used to REQUIRE accessory_cogs_pct on every call.
-    if "accessory_cogs_pct" in body:
+    if "accessory_cogs_pct" in body.model_fields_set:
         try:
-            pct = float(body.get("accessory_cogs_pct"))
+            pct = float(body.accessory_cogs_pct)
         except (TypeError, ValueError):
             raise HTTPException(400, "accessory_cogs_pct must be a number between 0 and 1")
         if not (0 <= pct <= 1):
@@ -351,8 +387,8 @@ async def put_config(body: dict, org_id: str = ORG_ID):
         row["accessory_cogs_pct"] = round(pct, 6)
     else:
         row["accessory_cogs_pct"] = round(float(cur["accessory_cogs_pct"]), 6)
-    if "service_fee_products" in body:
-        raw = body.get("service_fee_products") or []
+    if "service_fee_products" in body.model_fields_set:
+        raw = body.service_fee_products or []
         if not isinstance(raw, list):
             raise HTTPException(400, "service_fee_products must be a list of product descriptions")
         # de-duplicate case-insensitively but KEEP the observed spelling (it is what the picker shows)
@@ -367,8 +403,8 @@ async def put_config(body: dict, org_id: str = ORG_ID):
     # Listing a name makes payroll AUTHORITATIVE for the period and SUPPRESSES the StoreOps
     # shifts×rate estimate. That is the whole point: luxelink keys payroll by hand, so it was getting
     # a $145,358.27 estimate ON TOP of $108,430.59 of real salary rows.
-    if "payroll_expense_names" in body:
-        raw = body.get("payroll_expense_names") or []
+    if "payroll_expense_names" in body.model_fields_set:
+        raw = body.payroll_expense_names or []
         if not isinstance(raw, list):
             raise HTTPException(400, "payroll_expense_names must be a list of expense names")
         picked, seen = [], set()
@@ -378,8 +414,8 @@ async def put_config(body: dict, org_id: str = ORG_ID):
                 seen.add(s.lower())
                 picked.append(s)
         row["payroll_expense_names"] = picked
-    if "payroll_expense_routes" in body:
-        raw = body.get("payroll_expense_routes") or {}
+    if "payroll_expense_routes" in body.model_fields_set:
+        raw = body.payroll_expense_routes or {}
         if not isinstance(raw, dict):
             raise HTTPException(400, "payroll_expense_routes must be a {expense name: line} object")
         routes = {}
@@ -393,8 +429,8 @@ async def put_config(body: dict, org_id: str = ORG_ID):
             routes[name] = lk
         row["payroll_expense_routes"] = routes
     # ── OWNER RULING K3 (mig 621) — device COGS recognition mode ────────────────────────────────
-    if "device_cogs_mode" in body:
-        mode = str(body.get("device_cogs_mode") or "").strip()
+    if "device_cogs_mode" in body.model_fields_set:
+        mode = str(body.device_cogs_mode or "").strip()
         if mode not in ("off", "auto", "invoice", "pos"):
             raise HTTPException(400, "device_cogs_mode must be one of: off, auto, invoice, pos")
         row["device_cogs_mode"] = mode
@@ -436,7 +472,7 @@ async def run_due(x_notify_secret: str = Header(default=""), only_org: str = "",
     /notify/run-due); each tenant runs under core.run_for_tenant (money_scope="none"). `only_org`
     targets a single tenant; `force=true` recomputes regardless of staleness. This changes WHEN
     compute runs, never WHAT it computes."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     # SEV-1 2026-07-30 — same reason as /compute, and worse here: this sweep walks EVERY tenant x 2
     # periods, so it is N x (all the blocking Supabase work + one Claude narrative). On the event loop

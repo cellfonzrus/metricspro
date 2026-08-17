@@ -109,6 +109,17 @@ def normalize_email(value) -> str:
     return str(value or "").strip().lower()
 
 
+def mask_email(value) -> str:
+    """'j•••@gmail.com' — first char of the local part kept, the rest hidden, domain preserved so the
+    reader can still tell a gmail from a work address. Empty in → '' (nothing to hint at)."""
+    s = str(value or "").strip()
+    if not s or "@" not in s:
+        return "•••" if s else ""
+    local, _, domain = s.partition("@")
+    head = local[:1] if local else ""
+    return f"{head}•••@{domain}"
+
+
 def display_name(lead: dict) -> str:
     parts = [str(lead.get("first_name") or "").strip(), str(lead.get("last_name") or "").strip()]
     name = " ".join(p for p in parts if p).strip()

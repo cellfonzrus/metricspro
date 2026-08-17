@@ -21,14 +21,66 @@ PAYMENT GATEWAY is a LATER phase — see the `# TODO payment gateway` seam on PO
 """
 from datetime import datetime, timezone
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 # Reuse the core super-admin gate (token-verified + house-admin bootstrap fallback).
 from app.modules.core.router import _require_super_admin
 
 router = APIRouter(prefix="/billing", tags=["Billing (Tenants)"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+# ── Request bodies (Item 15 Pydantic rollout — lax so legacy callers never break) ──────────────
+class UpsertPlanIn(LaxModel):
+    org_id: Any = None
+    basis: Any = None
+    cycle: Any = None
+    unit_price: Any = None
+    currency: Any = None
+    modules: Any = None
+    is_active: Any = True
+    notes: Any = None
+
+
+class GenerateInvoiceIn(LaxModel):
+    org_id: Any = None
+    period_start: Any = None
+    period_end: Any = None
+    due_date: Any = None
+    notes: Any = None
+
+
+class UpdateInvoiceIn(LaxModel):
+    status: Any = None
+    issued_at: Any = None
+    payment_ref: Any = None
+    due_date: Any = None
+    notes: Any = None
+
+
+class MarkPaidIn(LaxModel):
+    payment_ref: Any = None
+    issued_at: Any = None
+
+
+class UpsertPlatformConnectorIn(LaxModel):
+    id: Any = None
+    provider: Any = None
+    display_name: Any = None
+    is_enabled: Any = True
+    credential: Any = None
+    config: Any = None
+    flat_monthly_cost: Any = None
+    sort_order: Any = None
+    notes: Any = None
+
+
+class RefreshPlatformCostsIn(LaxModel):
+    id: Any = None
 
 VALID_BASIS = {"flat", "per_store", "per_entity", "per_user", "per_module", "per_carrier"}
 VALID_CYCLE = {"monthly", "annual"}
@@ -121,15 +173,15 @@ async def get_plan(org_id: str, authorization: str = Header(default="")):
 
 
 @router.post("/plan")
-async def upsert_plan(body: dict, authorization: str = Header(default="")):
+async def upsert_plan(body: UpsertPlanIn, authorization: str = Header(default="")):
     """Create/update a tenant's plan (keyed by org_id). Body: {org_id, basis, unit_price, cycle,
     currency?, modules?, is_active?, notes?}."""
     _require_super_admin(authorization)
-    org_id = (body.get("org_id") or "").strip()
+    org_id = (body.org_id or "").strip()
     if not org_id:
         raise HTTPException(400, "org_id required")
-    basis = (body.get("basis") or "flat").strip()
-    cycle = (body.get("cycle") or "monthly").strip()
+    basis = (body.basis or "flat").strip()
+    cycle = (body.cycle or "monthly").strip()
     if basis not in VALID_BASIS:
         raise HTTPException(400, f"basis must be one of {sorted(VALID_BASIS)}")
     if cycle not in VALID_CYCLE:
@@ -137,12 +189,12 @@ async def upsert_plan(body: dict, authorization: str = Header(default="")):
     row = {
         "org_id": org_id,
         "basis": basis,
-        "unit_price": float(body.get("unit_price") or 0),
+        "unit_price": float(body.unit_price or 0),
         "cycle": cycle,
-        "currency": (body.get("currency") or "USD").strip() or "USD",
-        "modules": body.get("modules") if body.get("modules") else None,
-        "is_active": bool(body.get("is_active", True)),
-        "notes": body.get("notes"),
+        "currency": (body.currency or "USD").strip() or "USD",
+        "modules": body.modules if body.modules else None,
+        "is_active": bool(body.is_active),
+        "notes": body.notes,
     }
     try:
         sb().schema("storeops").table("billing_plan").upsert(row, on_conflict="org_id").execute()
@@ -172,17 +224,17 @@ async def delete_plan(org_id: str, authorization: str = Header(default="")):
 
 # ── invoices ──────────────────────────────────────────────────────────────────────────────────
 @router.post("/invoices/generate")
-async def generate_invoice(body: dict, authorization: str = Header(default="")):
+async def generate_invoice(body: GenerateInvoiceIn, authorization: str = Header(default="")):
     """Generate a DRAFT invoice for a tenant + period. Quantity is computed from the plan's basis
     against the LIVE drivers; amount = quantity × unit_price. The cycle's unit_price is taken as-is
     (monthly plan → monthly price, annual plan → annual price); v1 does NOT auto-prorate the period.
     Body: {org_id, period_start, period_end, due_date?, notes?}."""
     _require_super_admin(authorization)
-    org_id = (body.get("org_id") or "").strip()
+    org_id = (body.org_id or "").strip()
     if not org_id:
         raise HTTPException(400, "org_id required")
-    period_start = body.get("period_start")
-    period_end = body.get("period_end")
+    period_start = body.period_start
+    period_end = body.period_end
     if not period_start or not period_end:
         raise HTTPException(400, "period_start and period_end required (YYYY-MM-DD)")
     client = sb()
@@ -207,8 +259,8 @@ async def generate_invoice(body: dict, authorization: str = Header(default="")):
         "amount": amount,
         "currency": plan.get("currency") or "USD",
         "status": "draft",
-        "due_date": body.get("due_date"),
-        "notes": body.get("notes"),
+        "due_date": body.due_date,
+        "notes": body.notes,
     }
     try:
         res = client.schema("storeops").table("billing_invoice").insert(inv).execute()
@@ -232,23 +284,23 @@ async def list_invoices(org_id: str = "", authorization: str = Header(default=""
 
 
 @router.patch("/invoices/{invoice_id}")
-async def update_invoice(invoice_id: str, body: dict, authorization: str = Header(default="")):
+async def update_invoice(invoice_id: str, body: UpdateInvoiceIn, authorization: str = Header(default="")):
     """Update an invoice's lifecycle: status (sent|paid|void), payment_ref, issued_at, due_date, notes.
     Setting status=sent stamps issued_at if not already set."""
     _require_super_admin(authorization)
     upd: dict = {}
-    if "status" in body:
-        st = (body.get("status") or "").strip()
+    if "status" in body.model_fields_set:
+        st = (body.status or "").strip()
         if st not in VALID_STATUS:
             raise HTTPException(400, f"status must be one of {sorted(VALID_STATUS)}")
         upd["status"] = st
-        if st == "sent" and not body.get("issued_at"):
+        if st == "sent" and not body.issued_at:
             upd["issued_at"] = datetime.now(timezone.utc).isoformat()
     for k in ("payment_ref", "due_date", "notes"):
-        if k in body:
-            upd[k] = body[k]
-    if "issued_at" in body:
-        upd["issued_at"] = body["issued_at"]
+        if k in body.model_fields_set:
+            upd[k] = getattr(body, k)
+    if "issued_at" in body.model_fields_set:
+        upd["issued_at"] = body.issued_at
     if not upd:
         raise HTTPException(400, "nothing to update")
     try:
@@ -259,7 +311,7 @@ async def update_invoice(invoice_id: str, body: dict, authorization: str = Heade
 
 
 @router.post("/invoices/{invoice_id}/pay")
-async def mark_paid(invoice_id: str, body: dict = None, authorization: str = Header(default="")):
+async def mark_paid(invoice_id: str, body: MarkPaidIn = None, authorization: str = Header(default="")):
     """Mark an invoice PAID and store a payment reference.
 
     # TODO payment gateway: this is the SEAM for a real payment processor. A later phase will
@@ -269,10 +321,10 @@ async def mark_paid(invoice_id: str, body: dict = None, authorization: str = Hea
     # Stripe here yet.
     """
     _require_super_admin(authorization)
-    body = body or {}
+    body = body or MarkPaidIn()
     upd = {"status": "paid",
-           "payment_ref": body.get("payment_ref") or f"manual-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-           "issued_at": body.get("issued_at") or datetime.now(timezone.utc).isoformat()}
+           "payment_ref": body.payment_ref or f"manual-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+           "issued_at": body.issued_at or datetime.now(timezone.utc).isoformat()}
     try:
         sb().schema("storeops").table("billing_invoice").update(upd).eq("id", invoice_id).execute()
     except Exception as e:
@@ -362,30 +414,30 @@ async def list_platform_connectors(authorization: str = Header(default="")):
 
 
 @router.post("/platform-connectors")
-async def upsert_platform_connector(body: dict, authorization: str = Header(default="")):
+async def upsert_platform_connector(body: UpsertPlatformConnectorIn, authorization: str = Header(default="")):
     """Add or update a platform connector. The credential is only overwritten when a NEW (non-masked)
     value is supplied — re-saving with the masked placeholder keeps the stored secret."""
     _require_super_admin(authorization)
-    provider = (body.get("provider") or "").strip().lower()
+    provider = (body.provider or "").strip().lower()
     if not provider:
         raise HTTPException(400, "provider required")
     row = {"org_id": ORG_ID, "provider": provider,
-           "display_name": (body.get("display_name") or "").strip() or provider,
-           "is_enabled": bool(body.get("is_enabled", True))}
-    cred = (body.get("credential") or "").strip()
+           "display_name": (body.display_name or "").strip() or provider,
+           "is_enabled": bool(body.is_enabled)}
+    cred = (body.credential or "").strip()
     if cred and "…" not in cred and "•" not in cred:   # a real new secret, not the masked echo
         row["credential"] = cred
-    if "config" in body:
-        row["config"] = body.get("config") or {}
-    if "flat_monthly_cost" in body:
-        row["flat_monthly_cost"] = _pc._num(body.get("flat_monthly_cost"))
-    if "sort_order" in body:
-        try: row["sort_order"] = int(body.get("sort_order") or 0)
+    if "config" in body.model_fields_set:
+        row["config"] = body.config or {}
+    if "flat_monthly_cost" in body.model_fields_set:
+        row["flat_monthly_cost"] = _pc._num(body.flat_monthly_cost)
+    if "sort_order" in body.model_fields_set:
+        try: row["sort_order"] = int(body.sort_order or 0)
         except (TypeError, ValueError): pass
-    if "notes" in body:
-        row["notes"] = body.get("notes")
+    if "notes" in body.model_fields_set:
+        row["notes"] = body.notes
     try:
-        cid = body.get("id")
+        cid = body.id
         if cid:
             _pcstore().update(row).eq("id", cid).execute()
             return {"ok": True, "id": cid}
@@ -431,12 +483,12 @@ async def platform_costs_summary(authorization: str = Header(default="")):
 
 
 @router.post("/platform-costs/refresh")
-async def refresh_platform_costs(body: dict = None, authorization: str = Header(default="")):
+async def refresh_platform_costs(body: RefreshPlatformCostsIn = None, authorization: str = Header(default="")):
     """Pull live cost for every enabled connector (or one, if {id} is passed), persist the result, and
     return the new total + per-connector status. Providers without a live fetcher use their flat figure."""
     _require_super_admin(authorization)
-    body = body or {}
-    only = body.get("id")
+    body = body or RefreshPlatformCostsIn()
+    only = body.id
     try:
         rows = _pcstore().select("*").execute().data or []
     except Exception as e:

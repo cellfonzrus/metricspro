@@ -24,9 +24,28 @@ KEY MANAGEMENT (operator):
     it up. With NO key configured, encryption is a safe no-op passthrough (values stay plaintext) and
     is_enabled() returns False so the UI can warn.
 """
+import os
 from app.core.config import settings
 
 _PREFIX = "enc:v1:"
+
+
+class EncryptionKeyMissing(RuntimeError):
+    """Raised by encrypt() when strict mode is on, the app is in production, and NO key is configured —
+    so a sensitive field is refused rather than silently written as plaintext (fail CLOSED). Callers see
+    it as a masked 500; the fix is to set FIELD_ENCRYPTION_KEY, not to store plaintext."""
+
+
+def _is_prod() -> bool:
+    return (getattr(settings, "APP_ENV", "") or "").strip().lower() in ("production", "prod", "live")
+
+
+def _strict_encryption() -> bool:
+    """Fail-closed switch for field encryption (Security Controls Spec §2, item 4a). Default OFF so the
+    control ships without risking a surprise outage on a deploy where the key isn't set yet; the
+    operator flips FIELD_ENCRYPTION_STRICT=1 once the key is confirmed present in prod (daily item #5).
+    Only ever effective in production — dev/test always pass through so local work needs no key."""
+    return os.environ.get("FIELD_ENCRYPTION_STRICT", "0").lower() in ("1", "true", "yes")
 
 
 def _raw_keys():
@@ -70,6 +89,13 @@ def encrypt(value):
         return s
     fs = _fernets()
     if not fs:
+        # FAIL CLOSED in production when strict mode is on: refuse to store a sensitive value as
+        # plaintext. Otherwise (dev/test, or strict off) keep the graceful passthrough — is_enabled()
+        # is False and the UI warns. See _strict_encryption().
+        if _strict_encryption() and _is_prod():
+            raise EncryptionKeyMissing(
+                "FIELD_ENCRYPTION_KEY is not set; refusing to store a sensitive field as plaintext "
+                "(FIELD_ENCRYPTION_STRICT is on). Set the key, then retry.")
         return s
     return _PREFIX + fs[0].encrypt(s.encode("utf-8")).decode("ascii")
 

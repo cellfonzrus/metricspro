@@ -4,9 +4,12 @@ Upload the closing sheet (one row per rep per day), DM evening verification (per
 missing-rep check vs the schedule), and reconciliation against B2B actual daily sales. Tables live
 in commcalc.* (migration 029).
 """
+from typing import Any
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
+from app.core.schemas import LaxModel
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from dateutil import parser as dateparser
@@ -1377,39 +1380,60 @@ def closing_summary(date: str = None, date_from: str = None, date_to: str = None
 
 
 # ── DM verification upsert ────────────────────────────────────────────────────────────────
+class VerifyStoreIn(LaxModel):
+    store_code: Any = None
+    close_date: Any = None
+    store_name: Any = None
+    verified: Any = True
+    verified_by: Any = None
+    dm_store_cash: Any = None
+    dm_store_cc: Any = None
+    dm_epay_cash: Any = None
+    dm_epay_cc: Any = None
+    dm_acc_sale: Any = None
+    dm_other: Any = None
+    note: Any = None
+
+
 @router.post("/verify")
-def verify_store(payload: dict, org_id: str = ORG_ID):
-    code = payload.get("store_code")
-    date = payload.get("close_date")
+def verify_store(payload: VerifyStoreIn, org_id: str = ORG_ID):
+    code = payload.store_code
+    date = payload.close_date
     if not code or not date:
         raise HTTPException(400, "store_code and close_date required")
     body = {
         "org_id": org_id, "close_date": date, "store_code": code,
-        "store_name": payload.get("store_name"),
-        "verified": bool(payload.get("verified", True)),
-        "verified_by": payload.get("verified_by"),
-        "verified_at": _now() if payload.get("verified", True) else None,
-        "dm_store_cash": payload.get("dm_store_cash"), "dm_store_cc": payload.get("dm_store_cc"),
-        "dm_epay_cash": payload.get("dm_epay_cash"), "dm_epay_cc": payload.get("dm_epay_cc"),
-        "dm_acc_sale": payload.get("dm_acc_sale"), "dm_other": payload.get("dm_other"),
-        "note": payload.get("note"), "updated_at": _now(),
+        "store_name": payload.store_name,
+        "verified": bool(payload.verified),
+        "verified_by": payload.verified_by,
+        "verified_at": _now() if payload.verified else None,
+        "dm_store_cash": payload.dm_store_cash, "dm_store_cc": payload.dm_store_cc,
+        "dm_epay_cash": payload.dm_epay_cash, "dm_epay_cc": payload.dm_epay_cc,
+        "dm_acc_sale": payload.dm_acc_sale, "dm_other": payload.dm_other,
+        "note": payload.note, "updated_at": _now(),
     }
     (sb().schema("commcalc").table("daily_closing_verification")
      .upsert(body, on_conflict="org_id,close_date,store_code").execute())
     return {"ok": True, "store_code": code, "close_date": date}
 
 
+class ApproveExpenseIn(LaxModel):
+    row_id: Any = None
+    approved: Any = True
+    approved_by: Any = None
+
+
 @router.post("/expense/approve")
-def approve_expense(payload: dict, org_id: str = ORG_ID):
+def approve_expense(payload: ApproveExpenseIn, org_id: str = ORG_ID):
     """DM approval of a rep's daily-closing expense — a single toggle. Body: {row_id, approved(bool),
     approved_by?}. Sets expense_approved(+by/at) on that daily_closing row; unchecking clears them."""
-    row_id = (payload.get("row_id") or "").strip()
+    row_id = (payload.row_id or "").strip()
     if not row_id:
         raise HTTPException(400, "row_id required")
-    approved = bool(payload.get("approved", True))
+    approved = bool(payload.approved)
     upd = {
         "expense_approved": approved,
-        "expense_approved_by": (payload.get("approved_by") or "DM") if approved else None,
+        "expense_approved_by": (payload.approved_by or "DM") if approved else None,
         "expense_approved_at": _now() if approved else None,
         "updated_at": _now(),
     }
@@ -1464,11 +1488,15 @@ def _signed_envelope(path):
         return path
 
 
+class UploadEnvelopePhotoIn(LaxModel):
+    image: Any = None
+
+
 @router.post("/envelope-photo")
-def upload_envelope_photo(body: dict, org_id: str = ORG_ID):
+def upload_envelope_photo(body: UploadEnvelopePhotoIn, org_id: str = ORG_ID):
     """Store a captured envelope photo (base64) → return its path + a signed URL. The path goes into
     daily_closing.envelope_picture on submit."""
-    path = _upload_envelope(org_id, body.get("image"))
+    path = _upload_envelope(org_id, body.image)
     if not path:
         raise HTTPException(400, "no image provided")
     return {"path": path, "url": _signed_envelope(path)}
@@ -1771,8 +1799,14 @@ def delete_row(row_id: str, org_id: str = ORG_ID):
     return {"deleted": row_id}
 
 
+class ReleaseClosingRowIn(LaxModel):
+    released: Any = True
+    released_by: Any = None
+    note: Any = None
+
+
 @router.post("/row/{row_id}/release")
-def release_closing_row(row_id: str, payload: dict = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def release_closing_row(row_id: str, payload: ReleaseClosingRowIn = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """MANAGEMENT OVERRIDE (mig 502): unlock a submitted daily_closing row for exactly ONE corrected
     resubmit. Gated to the same management-review permission as /closing/attempts (DMs excluded) — a
     DM cannot self-release a duplicate. Body: {released: bool (default true), released_by?, note?}.
@@ -1783,10 +1817,10 @@ def release_closing_row(row_id: str, payload: dict = None, authorization: str = 
     client = sb()
     if not _can_mgmt_review(_caller_perms(client, authorization)):
         raise HTTPException(403, "Releasing a closing is permission-restricted (not available to DMs).")
-    payload = payload or {}
-    released = bool(payload.get("released", True))
-    by = (payload.get("released_by") or "").strip() or "management"
-    upd = ({"released_at": _now(), "released_by": by, "release_note": (payload.get("note") or "").strip() or None}
+    payload = payload or ReleaseClosingRowIn()
+    released = bool(payload.released)
+    by = (payload.released_by or "").strip() or "management"
+    upd = ({"released_at": _now(), "released_by": by, "release_note": (payload.note or "").strip() or None}
            if released else {"released_at": None, "released_by": None, "release_note": None})
     try:
         r = (client.schema("commcalc").table("daily_closing").update(upd)
@@ -2333,8 +2367,15 @@ def get_tender_config(org_id: str = ORG_ID):
     return {"defs": defs, "maps": maps, "standard": standard, "recon_mode": mode, "custom": custom}
 
 
+class PutTenderConfigIn(LaxModel):
+    defs: Any = None
+    maps: Any = None
+    recon_mode: Any = None
+    custom: Any = None
+
+
 @router.put("/tender-config")
-def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_tender_config(payload: PutTenderConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's tender defs + maps + recon mode. Body {defs:[...], maps:[...], recon_mode, custom}.
     Full replace (delete-then-insert) — the wizard always sends the complete set. Gated to the 'closing'
     settings area (2026-07-26 settings audit: /closing/tender-config is already nav-restricted to
@@ -2344,8 +2385,8 @@ def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = 
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing tender configuration is permission-restricted.")
-    defs = payload.get("defs") or []
-    maps = payload.get("maps") or []
+    defs = payload.defs or []
+    maps = payload.maps or []
     rows = []
     for i, dd in enumerate(defs):
         key = (dd.get("tender_key") or "").strip()
@@ -2395,10 +2436,10 @@ def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = 
         client.schema("commcalc").table("closing_tender_map").insert(mrows).execute()
     try:
         upd = {}
-        if "recon_mode" in payload:
-            upd["closing_recon_mode"] = payload.get("recon_mode") or "3way"
-        if "custom" in payload:
-            upd["closing_tenders_custom"] = bool(payload.get("custom"))
+        if "recon_mode" in payload.model_fields_set:
+            upd["closing_recon_mode"] = payload.recon_mode or "3way"
+        if "custom" in payload.model_fields_set:
+            upd["closing_tenders_custom"] = bool(payload.custom)
         if upd:
             client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
     except Exception:
@@ -2487,8 +2528,12 @@ def get_count_config(org_id: str = ORG_ID):
     return {"defs": defs, "standard": standard}
 
 
+class PutCountConfigIn(LaxModel):
+    defs: Any = None
+
+
 @router.put("/count-config")
-def put_count_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_count_config(payload: PutCountConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's count-field defs. Body {defs:[...]}. Full replace (delete-then-insert) — the
     wizard always sends the complete set. Saving an EMPTY list reverts the tenant to the hardcoded 3.
     Gated to the 'closing' settings area (2026-07-26 settings audit — same rationale as tender-config)."""
@@ -2496,7 +2541,7 @@ def put_count_config(payload: dict, org_id: str = ORG_ID, authorization: str = H
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing count-field configuration is permission-restricted.")
-    defs = payload.get("defs") or []
+    defs = payload.defs or []
     try:
         client.schema("commcalc").table("closing_count_field_def").delete().eq("org_id", org_id).execute()
     except Exception as e:
@@ -2700,26 +2745,34 @@ def get_deposit_config(org_id: str = ORG_ID):
     return cfg
 
 
+class PutDepositConfigIn(LaxModel):
+    match_target: Any = None
+    ocr_model: Any = None
+    include_expenses_default: Any = None
+    include_bill_payments_default: Any = None
+    include_other_adj_default: Any = None
+
+
 @router.put("/deposit-config")
-def put_deposit_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_deposit_config(body: PutDepositConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """2026-07-26 settings audit: this was the ONE gap already flagged by a prior Gate-1 review
     ('deposit-config PUT ungated = SETTING_AREAS doctrine gap') — closed the same way as the other
     closing settings writes."""
     if not _can_edit_closing_setting(_caller_perms(sb(), authorization)):
         raise HTTPException(403, "Editing deposit-recon configuration is permission-restricted.")
-    target = (body.get("match_target") or "total_cash").strip()
+    target = (body.match_target or "total_cash").strip()
     if target not in _DEPOSIT_MATCH_TARGETS:
         raise HTTPException(400, f"match_target must be one of {_DEPOSIT_MATCH_TARGETS}")
     row = {"org_id": org_id, "match_target": target, "updated_at": _now()}
-    model = (body.get("ocr_model") or "").strip()
+    model = (body.ocr_model or "").strip()
     if model:
         row["ocr_model"] = model
     # mig 509 — Cash Deposit Recon default adjustment toggles (org-level "excluded by default";
     # the report itself can override per-run without touching this config). Only written when the
     # caller explicitly sends the key, so a plain OCR-settings save from the old UI never resets them.
     for k in ("include_expenses_default", "include_bill_payments_default", "include_other_adj_default"):
-        if k in body:
-            row[k] = bool(body.get(k))
+        if k in body.model_fields_set:
+            row[k] = bool(getattr(body, k))
     try:
         sb().schema("commcalc").table("closing_deposit_config").upsert(row, on_conflict="org_id").execute()
     except Exception:
@@ -2727,8 +2780,30 @@ def put_deposit_config(body: dict, org_id: str = ORG_ID, authorization: str = He
     return get_deposit_config(org_id)
 
 
+class BankDepositIn(LaxModel):
+    close_date: Any = None
+    store_code: Any = None
+    category_id: Any = None
+    store_name: Any = None
+    store_address: Any = None
+    employee_name: Any = None
+    amount: Any = None
+    receipt_path: Any = None
+    receipt: Any = None
+    handed_to: Any = None
+    note: Any = None
+    short_reason: Any = None
+    parent_deposit_id: Any = None
+    will_deposit_more: Any = None
+    slip: Any = None
+    manual_confirmed: Any = None
+    include_expenses: Any = None
+    include_bill_payments: Any = None
+    include_other_adj: Any = None
+
+
 @router.post("/bank-deposit")
-async def bank_deposit(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+async def bank_deposit(body: BankDepositIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Record a bank deposit (ePay cash / store cash reps collected and deposited). One row per
     deposit; reconciled vs the tenant's CONFIGURED declared-cash basis (bill_payment_cash | store_cash |
     total_cash — see /closing/deposit-config). Accepts EITHER an already-uploaded `receipt_path` OR an
@@ -2760,29 +2835,29 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID, authorization: str = He
     hasn't run — never blocks the deposit from saving either way."""
     require_org(org_id)
     client = sb()
-    d = _date(body.get("close_date")) or body.get("close_date")
-    store = (body.get("store_code") or "").strip() or None
-    cat_id = (body.get("category_id") or "").strip() or None
+    d = _date(body.close_date) or body.close_date
+    store = (body.store_code or "").strip() or None
+    cat_id = (body.category_id or "").strip() or None
     cat = deposit_recon.category_by_id(client, org_id, cat_id) if cat_id else None
     row = {"org_id": org_id, "close_date": d, "period": (str(d)[:7] if d else None),
            "store_code": store,
-           "store_address": body.get("store_name") or body.get("store_address"),
-           "employee_name": (body.get("employee_name") or "").strip() or None,
-           "amount": _money(body.get("amount")),
-           "receipt_path": body.get("receipt_path") or body.get("receipt") or None,
-           "handed_to": (body.get("handed_to") or "").strip() or None,
-           "note": (body.get("note") or "").strip() or None,
+           "store_address": body.store_name or body.store_address,
+           "employee_name": (body.employee_name or "").strip() or None,
+           "amount": _money(body.amount),
+           "receipt_path": body.receipt_path or body.receipt or None,
+           "handed_to": (body.handed_to or "").strip() or None,
+           "note": (body.note or "").strip() or None,
            "category_id": cat.get("id") if cat else None,
            "category_name": cat.get("name") if cat else None,
-           "short_reason": (body.get("short_reason") or "").strip() or None,
-           "is_supplemental": bool(body.get("parent_deposit_id")),
-           "parent_deposit_id": (body.get("parent_deposit_id") or "").strip() or None,
-           "will_deposit_more": bool(body.get("will_deposit_more")) if "will_deposit_more" in body else None,
+           "short_reason": (body.short_reason or "").strip() or None,
+           "is_supplemental": bool(body.parent_deposit_id),
+           "parent_deposit_id": (body.parent_deposit_id or "").strip() or None,
+           "will_deposit_more": bool(body.will_deposit_more) if "will_deposit_more" in body.model_fields_set else None,
            "recorded_by": _caller_email(client, authorization)}
 
     cfg = _deposit_config(client, org_id)
     ocr_amount, ocr_detail, ocr_status = None, None, "pending"
-    slip = body.get("slip")
+    slip = body.slip
     if slip and "," in str(slip):
         try:
             header, b64 = str(slip).split(",", 1)
@@ -2794,7 +2869,7 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID, authorization: str = He
             ocr_amount, ocr_detail, ocr_status = await _ocr_bank_deposit_slip(raw, ext, cfg["ocr_model"])
         except Exception as e:
             ocr_detail, ocr_status = {"error": str(e)[:200]}, "unreadable"
-    elif body.get("manual_confirmed"):
+    elif body.manual_confirmed:
         ocr_status = "manual_confirmed"
 
     declared_amount, _rep_n = (None, 0)
@@ -2811,9 +2886,9 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID, authorization: str = He
     # attempted when a category was actually picked — an "uncategorized" deposit (category_id omitted,
     # the pre-509 default) gets no recon block, exactly the old behaviour.
     recon_block = None
-    include_expenses = bool(body.get("include_expenses", cfg["include_expenses_default"]))
-    include_bill_payments = bool(body.get("include_bill_payments", cfg["include_bill_payments_default"]))
-    include_other_adj = bool(body.get("include_other_adj", cfg["include_other_adj_default"]))
+    include_expenses = bool(body.include_expenses if "include_expenses" in body.model_fields_set else cfg["include_expenses_default"])
+    include_bill_payments = bool(body.include_bill_payments if "include_bill_payments" in body.model_fields_set else cfg["include_bill_payments_default"])
+    include_other_adj = bool(body.include_other_adj if "include_other_adj" in body.model_fields_set else cfg["include_other_adj_default"])
     if cat and store and d:
         try:
             raw = deposit_recon.closing_cash_raw_by_store_day(client, org_id, d, d, store_codes=[store])
@@ -2849,7 +2924,7 @@ async def bank_deposit(body: dict, org_id: str = ORG_ID, authorization: str = He
         "ocr_date": (ocr_detail or {}).get("date") if isinstance(ocr_detail, dict) else None,
         "ocr_bank_name": (ocr_detail or {}).get("bank_name") if isinstance(ocr_detail, dict) else None,
         "ocr_match": ocr_status, "ocr_detail": ocr_detail, "match_target": cfg["match_target"],
-        "declared_amount": declared_amount, "manual_confirmed": bool(body.get("manual_confirmed")),
+        "declared_amount": declared_amount, "manual_confirmed": bool(body.manual_confirmed),
     })
     try:
         r = client.schema("commcalc").table("bank_deposit").insert(row).execute()
@@ -2899,14 +2974,18 @@ def get_deposit_categories(org_id: str = ORG_ID):
     return {"categories": rows, "basis_values": list(deposit_recon.BASIS_VALUES)}
 
 
+class PutDepositCategoriesIn(LaxModel):
+    categories: Any = None
+
+
 @router.put("/deposit-categories")
-def put_deposit_categories(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_deposit_categories(payload: PutDepositCategoriesIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Full-replace-by-upsert save (mirrors /closing/expense-categories). Never deletes — deactivate
     instead, since already-posted bank_deposit/closing_deposit_adjustment rows reference a category id."""
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing deposit categories is permission-restricted.")
-    cats = payload.get("categories") or []
+    cats = payload.categories or []
     ups, news = [], []
     for i, c in enumerate(cats):
         name = (c.get("name") or "").strip()
@@ -2936,12 +3015,16 @@ def get_deposit_adjustment_types(org_id: str = ORG_ID):
     return {"types": deposit_recon.load_adjustment_types(sb(), org_id, active_only=False)}
 
 
+class PutDepositAdjustmentTypesIn(LaxModel):
+    types: Any = None
+
+
 @router.put("/deposit-adjustment-types")
-def put_deposit_adjustment_types(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_deposit_adjustment_types(payload: PutDepositAdjustmentTypesIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing deposit adjustment types is permission-restricted.")
-    types = payload.get("types") or []
+    types = payload.types or []
     ups, news = [], []
     for i, t in enumerate(types):
         name = (t.get("name") or "").strip()
@@ -2981,25 +3064,35 @@ def list_deposit_adjustments(date_from: str = "", date_to: str = "", stores: str
     return {"rows": rows, "total": round(sum(_f(r.get("amount")) for r in rows), 2)}
 
 
+class CreateDepositAdjustmentIn(LaxModel):
+    close_date: Any = None
+    amount: Any = None
+    adjustment_type_id: Any = None
+    adjustment_type_name: Any = None
+    store_code: Any = None
+    category_id: Any = None
+    description: Any = None
+
+
 @router.post("/deposit-adjustment")
-def create_deposit_adjustment(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def create_deposit_adjustment(payload: CreateDepositAdjustmentIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Record one manual 'other' adjustment line (store/day, amount, tenant-configured type,
     optionally tied to a specific deposit category). Org-stamped; never touches bank_deposit rows —
     picked up by GET /closing/deposit-recon's own read the next time that report runs."""
     require_org(org_id)
     client = sb()
-    close_date = _date(payload.get("close_date"))
+    close_date = _date(payload.close_date)
     if not close_date:
         raise HTTPException(400, "valid close_date required")
-    amt = _money(payload.get("amount"))
+    amt = _money(payload.amount)
     if amt <= 0:
         raise HTTPException(400, "Adjustment amount must be greater than zero.")
-    atype = deposit_recon.adjustment_type_by_id(client, org_id, payload.get("adjustment_type_id"))
-    row = {"org_id": org_id, "store_code": (payload.get("store_code") or "").strip() or None,
+    atype = deposit_recon.adjustment_type_by_id(client, org_id, payload.adjustment_type_id)
+    row = {"org_id": org_id, "store_code": (payload.store_code or "").strip() or None,
            "close_date": close_date, "adjustment_type_id": atype.get("id") if atype else None,
-           "adjustment_type_name": atype.get("name") if atype else (payload.get("adjustment_type_name") or "").strip() or None,
-           "category_id": (payload.get("category_id") or "").strip() or None,
-           "amount": amt, "description": (payload.get("description") or "").strip() or None,
+           "adjustment_type_name": atype.get("name") if atype else (payload.adjustment_type_name or "").strip() or None,
+           "category_id": (payload.category_id or "").strip() or None,
+           "amount": amt, "description": (payload.description or "").strip() or None,
            "created_by": _caller_email(client, authorization)}
     try:
         r = client.schema("commcalc").table(deposit_recon.ADJ_TABLE).insert(row).execute()
@@ -3008,8 +3101,20 @@ def create_deposit_adjustment(payload: dict, org_id: str = ORG_ID, authorization
     return {"ok": True, "row": (r.data[0] if r.data else row)}
 
 
+class UpdateBankDepositMetaIn(LaxModel):
+    short_reason: Any = None
+    will_deposit_more: Any = None
+    # Money/identity fields are NOT editable here — declared so a caller that sends them is detected
+    # (via model_fields_set) and rejected loudly, exactly as before.
+    amount: Any = None
+    category_id: Any = None
+    close_date: Any = None
+    store_code: Any = None
+    expected_amount_recon: Any = None
+
+
 @router.put("/bank-deposit/{deposit_id}")
-def update_bank_deposit_meta(deposit_id: str, payload: dict, org_id: str = ORG_ID,
+def update_bank_deposit_meta(deposit_id: str, payload: UpdateBankDepositMetaIn, org_id: str = ORG_ID,
                              authorization: str = Header(default="")):
     """NARROW, metadata-only edit — short_reason / will_deposit_more ONLY. The short-deposit modal
     posts the reason a moment AFTER the deposit itself was recorded (the user hasn't typed it yet at
@@ -3019,13 +3124,13 @@ def update_bank_deposit_meta(deposit_id: str, payload: dict, org_id: str = ORG_I
     require_org(org_id)
     client = sb()
     for forbidden in ("amount", "category_id", "close_date", "store_code", "expected_amount_recon"):
-        if forbidden in payload:
+        if forbidden in payload.model_fields_set:
             raise HTTPException(400, f"'{forbidden}' cannot be changed on an existing deposit — record a new (supplemental) deposit instead.")
     patch = {}
-    if "short_reason" in payload:
-        patch["short_reason"] = (payload.get("short_reason") or "").strip() or None
-    if "will_deposit_more" in payload:
-        patch["will_deposit_more"] = bool(payload.get("will_deposit_more"))
+    if "short_reason" in payload.model_fields_set:
+        patch["short_reason"] = (payload.short_reason or "").strip() or None
+    if "will_deposit_more" in payload.model_fields_set:
+        patch["will_deposit_more"] = bool(payload.will_deposit_more)
     if not patch:
         return {"ok": True, "updated": 0}
     try:
@@ -3551,8 +3656,16 @@ def get_cash_config(org_id: str = ORG_ID):
             "closers": closers, "recipients": recips}
 
 
+class PutCashConfigIn(LaxModel):
+    closing_deadline: Any = None
+    closing_gate_enabled: Any = None
+    cash_alert_after_days: Any = None
+    closing_mode: Any = None
+    closing_stale_alert_days: Any = None
+
+
 @router.put("/cash-config")
-def put_cash_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_cash_config(body: PutCashConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Update the closing-gate + cash-aging settings (defined at onboarding). Gated to the 'closing'
     settings area (2026-07-26 settings audit — this page is already nav-restricted to company-wide
     scope; the backend had no matching check)."""
@@ -3561,8 +3674,8 @@ def put_cash_config(body: dict, org_id: str = ORG_ID, authorization: str = Heade
         raise HTTPException(403, "Editing cash-management settings is permission-restricted.")
     upd = {}
     for k in ("closing_deadline", "closing_gate_enabled", "cash_alert_after_days", "closing_mode"):
-        if k in body:
-            v = body[k]
+        if k in body.model_fields_set:
+            v = getattr(body, k)
             if k == "closing_gate_enabled":
                 v = bool(v)
             elif k == "cash_alert_after_days":
@@ -3575,9 +3688,9 @@ def put_cash_config(body: dict, org_id: str = ORG_ID, authorization: str = Heade
             upd[k] = v
     if upd:
         client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
-    if "closing_stale_alert_days" in body:
+    if "closing_stale_alert_days" in body.model_fields_set:
         try:
-            _n = max(0, int(body["closing_stale_alert_days"]))
+            _n = max(0, int(body.closing_stale_alert_days))
         except (TypeError, ValueError):
             _n = 3
         try:
@@ -3588,39 +3701,56 @@ def put_cash_config(body: dict, org_id: str = ORG_ID, authorization: str = Heade
     return get_cash_config(org_id)
 
 
+class SetStoreCloserIn(LaxModel):
+    store_code: Any = None
+    employee_id: Any = None
+    employee_name: Any = None
+
+
 @router.put("/cash-config/closer")
-def set_store_closer(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def set_store_closer(body: SetStoreCloserIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Assign (or clear) the closer for a store. Body: {store_code, employee_id?, employee_name?}.
     Gated to the 'closing' settings area (2026-07-26 settings audit — same rationale as cash-config)."""
     if not _can_edit_closing_setting(_caller_perms(sb(), authorization)):
         raise HTTPException(403, "Assigning store closers is permission-restricted.")
-    store = (body.get("store_code") or "").strip()
+    store = (body.store_code or "").strip()
     if not store:
         raise HTTPException(400, "store_code required")
-    if not (body.get("employee_id") or body.get("employee_name")):
+    if not (body.employee_id or body.employee_name):
         sb().schema("storeops").table("store_closer").delete().eq("org_id", org_id).eq("store_code", store).execute()
         return {"ok": True, "cleared": True}
-    row = {"org_id": org_id, "store_code": store, "employee_id": body.get("employee_id"),
-           "employee_name": body.get("employee_name"), "updated_at": _now()}
+    row = {"org_id": org_id, "store_code": store, "employee_id": body.employee_id,
+           "employee_name": body.employee_name, "updated_at": _now()}
     sb().schema("storeops").table("store_closer").upsert(row, on_conflict="org_id,store_code").execute()
     return {"ok": True, "store_code": store}
 
 
+class UpsertAlertRecipientIn(LaxModel):
+    id: Any = None
+    scope: Any = None
+    name: Any = None
+    email: Any = None
+    whatsapp: Any = None
+    via_email: Any = True
+    via_whatsapp: Any = None
+    include_dm: Any = True
+
+
 @router.put("/cash-config/recipient")
-def upsert_alert_recipient(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def upsert_alert_recipient(body: UpsertAlertRecipientIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Add/update an alert recipient. Body: {id?, scope, name?, email?, whatsapp?, via_email?, via_whatsapp?, include_dm?}.
     Gated to the 'closing' settings area (2026-07-26 settings audit — same rationale as cash-config)."""
     if not _can_edit_closing_setting(_caller_perms(sb(), authorization)):
         raise HTTPException(403, "Editing alert recipients is permission-restricted.")
-    scope = (body.get("scope") or "all").strip()
-    row = {"org_id": org_id, "scope": scope, "name": body.get("name"),
-           "email": (body.get("email") or "").strip() or None, "whatsapp": (body.get("whatsapp") or "").strip() or None,
-           "via_email": body.get("via_email", True), "via_whatsapp": bool(body.get("via_whatsapp")),
-           "include_dm": body.get("include_dm", True)}
+    scope = (body.scope or "all").strip()
+    row = {"org_id": org_id, "scope": scope, "name": body.name,
+           "email": (body.email or "").strip() or None, "whatsapp": (body.whatsapp or "").strip() or None,
+           "via_email": body.via_email, "via_whatsapp": bool(body.via_whatsapp),
+           "include_dm": body.include_dm}
     c = sb()
-    if body.get("id"):
-        c.schema("storeops").table("alert_recipient").update(row).eq("id", body["id"]).eq("org_id", org_id).execute()
-        return {"ok": True, "id": body["id"]}
+    if body.id:
+        c.schema("storeops").table("alert_recipient").update(row).eq("id", body.id).eq("org_id", org_id).execute()
+        return {"ok": True, "id": body.id}
     r = c.schema("storeops").table("alert_recipient").insert(row).execute()
     return {"ok": True, "id": (r.data or [{}])[0].get("id")}
 
@@ -3647,8 +3777,12 @@ def get_ops_chargeback_policy(org_id: str = ORG_ID):
     return {"policy": ops_chargebacks.get_policy(sb(), org_id)}
 
 
+class PutOpsChargebackPolicyIn(LaxModel):
+    policy: Any = None
+
+
 @router.put("/ops-chargebacks/policy")
-def put_ops_chargeback_policy(payload: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_ops_chargeback_policy(payload: PutOpsChargebackPolicyIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Save {policy:[{reason, amount, enabled}, ...]}. Gated the same way as this module's other
     money-config surfaces (an explicit settings.closing role grant/deny wins; else the management-
     review gate — company-wide/super-admin, DMs excluded)."""
@@ -3656,7 +3790,7 @@ def put_ops_chargeback_policy(payload: dict, authorization: str = Header(default
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing ops-chargeback amounts is permission-restricted.")
-    rows = ops_chargebacks.put_policy(client, org_id, payload.get("policy") or [])
+    rows = ops_chargebacks.put_policy(client, org_id, payload.policy or [])
     return {"policy": rows}
 
 
@@ -3715,8 +3849,14 @@ def get_missed_dm_verifies(lookback_days: int = 14, date_from: str = None, date_
             "market_filter_skipped": market_filter_skipped}
 
 
+class DecideMissedDmVerifyIn(LaxModel):
+    id: Any = None
+    decision: Any = None
+    notes: Any = None
+
+
 @router.post("/ops-chargebacks/decide")
-def decide_missed_dm_verify(payload: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_missed_dm_verify(payload: DecideMissedDmVerifyIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Post (deduct from the DM's commission) or waive one pending missed_dm_verify chargeback.
     Body: {id, decision: 'posted'|'waived', notes?}. Management-review gated — same as this
     module's other override actions (release, duplicates); DMs cannot decide their own chargeback."""
@@ -3725,14 +3865,14 @@ def decide_missed_dm_verify(payload: dict, authorization: str = Header(default="
     perms = _caller_perms(client, authorization)
     if not _can_mgmt_review(perms):
         raise HTTPException(403, "Deciding a chargeback is permission-restricted (not available to DMs).")
-    cb_id = (payload.get("id") or "").strip()
-    decision = (payload.get("decision") or "").strip()
+    cb_id = (payload.id or "").strip()
+    decision = (payload.decision or "").strip()
     if not cb_id:
         raise HTTPException(400, "id required")
     try:
         row = ops_chargebacks.decide_chargeback(
             client, org_id, cb_id, decision, decided_by=_caller_email(client, authorization),
-            notes=payload.get("notes"), reason_filter="missed_dm_verify")
+            notes=payload.notes, reason_filter="missed_dm_verify")
     except LookupError:
         raise HTTPException(404, "chargeback not found")
     except ValueError as e:
@@ -3849,7 +3989,7 @@ def _biz_now_hhmm():
 async def cash_alerts_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (NOTIFY_RUN_SECRET) — run both the missing-closing and cash-unpicked alert
     sweeps across all tenants. Schedule hourly. Deduped, so re-running is safe."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     missing = await _run_closing_missing_alerts()
     unpicked = await _run_cash_unpicked_alerts()
@@ -4401,34 +4541,47 @@ def _ocr_deposit_amount(raw: bytes, ext: str):
         return None, {"error": str(e)[:200]}
 
 
+class RecordDepositIn(LaxModel):
+    store_code: Any = None
+    close_date: Any = None
+    date: Any = None
+    employee_name: Any = None
+    disposition: Any = None
+    note: Any = None
+    handed_to: Any = None
+    declared_amount: Any = None
+    deposit_slip: Any = None
+    deposit_amount: Any = None
+
+
 @router.post("/pickup/deposit")
-def record_deposit(payload: dict, org_id: str = ORG_ID):
+def record_deposit(payload: RecordDepositIn, org_id: str = ORG_ID):
     """Record what happened to picked-up cash: DEPOSITED (upload the slip → OCR the amount → match
     against the system's declared cash → flag any mismatch for review) or HANDED to management.
     Body: {store_code, close_date, employee_name, disposition:'deposited'|'handed_to_mgmt',
     deposit_slip?(data_url), deposit_amount?(manual override), declared_amount?, handed_to?, note?}."""
     client = sb()
-    store = (payload.get("store_code") or "").strip()
-    cdate = _date(payload.get("close_date") or payload.get("date"))
-    emp = (payload.get("employee_name") or "").strip()
-    disp = (payload.get("disposition") or "").strip().lower()
+    store = (payload.store_code or "").strip()
+    cdate = _date(payload.close_date or payload.date)
+    emp = (payload.employee_name or "").strip()
+    disp = (payload.disposition or "").strip().lower()
     if not (store and cdate) or disp not in ("deposited", "handed_to_mgmt"):
         raise HTTPException(400, "store_code, close_date and disposition (deposited|handed_to_mgmt) required")
     upd = {"org_id": org_id, "close_date": cdate, "store_code": store, "employee_name": emp,
-           "disposition": disp, "deposit_note": payload.get("note"), "deposited_at": _now()}
+           "disposition": disp, "deposit_note": payload.note, "deposited_at": _now()}
     ocr = None
     if disp == "handed_to_mgmt":
-        upd["handed_to"] = payload.get("handed_to")
+        upd["handed_to"] = payload.handed_to
     else:
         # declared = the system's cash for this envelope (epay cash + store cash)
-        declared = payload.get("declared_amount")
+        declared = payload.declared_amount
         if declared is None:
             dc = (client.schema("commcalc").table("daily_closing").select("store_cash,epay_cash")
                   .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
                   .eq("employee_name", emp).limit(1).execute().data) or []
             declared = (_f(dc[0].get("store_cash")) + _f(dc[0].get("epay_cash"))) if dc else None
-        slip = payload.get("deposit_slip")
-        amount = payload.get("deposit_amount")
+        slip = payload.deposit_slip
+        amount = payload.deposit_amount
         if slip and "," in str(slip):
             path = _upload_envelope(org_id, slip)   # reuse the private closing-envelopes bucket
             upd["deposit_slip_path"] = path
@@ -4455,19 +4608,26 @@ def record_deposit(payload: dict, org_id: str = ORG_ID):
             "flagged": upd.get("deposit_flagged"), "ocr": ocr}
 
 
+class ConfirmPickupIn(LaxModel):
+    date: Any = None
+    close_date: Any = None
+    items: Any = None
+    picked_up_by: Any = None
+
+
 @router.post("/pickup")
-async def confirm_pickup(payload: dict, org_id: str = ORG_ID):
+async def confirm_pickup(payload: ConfirmPickupIn, org_id: str = ORG_ID):
     """Confirm the DM picked up the selected cash envelopes, then notify the assigned recipient.
     `date` is the single-day-page's date (kept for backward compat — every item defaults to it when it
     doesn't carry its own `close_date`). Since the pickup page now supports a DATE RANGE (retail-ops-7
     item 2), a batch can span multiple days — each item's OWN `close_date` (if sent) wins, so a
     multi-day selection is never mis-stamped with one shared date."""
     client = sb()
-    top_date = _date(payload.get("date") or payload.get("close_date"))
-    items = payload.get("items") or []
+    top_date = _date(payload.date or payload.close_date)
+    items = payload.items or []
     if not items:
         raise HTTPException(400, "Select at least one envelope.")
-    dm = (payload.get("picked_up_by") or "DM").strip()
+    dm = (payload.picked_up_by or "DM").strip()
     total = 0.0
     for it in items:
         item_date = _date(it.get("close_date")) or top_date
@@ -4488,8 +4648,16 @@ async def confirm_pickup(payload: dict, org_id: str = ORG_ID):
     return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify}
 
 
+class UndoPickupIn(LaxModel):
+    pickup_id: Any = None
+    store_code: Any = None
+    close_date: Any = None
+    date: Any = None
+    employee_name: Any = None
+
+
 @router.post("/pickup/undo")
-def undo_pickup(payload: dict, org_id: str = ORG_ID):
+def undo_pickup(payload: UndoPickupIn, org_id: str = ORG_ID):
     """Undo a mistaken cash-pickup confirmation (OWNER DIRECTIVE 2026-08-04 completion of the pickup
     flow -- edit-safe recording). Body: {store_code, close_date, employee_name} OR {pickup_id}.
     Idempotent: undoing an envelope that isn't currently picked_up (or doesn't exist) is a no-op, not
@@ -4497,14 +4665,14 @@ def undo_pickup(payload: dict, org_id: str = ORG_ID):
     recorded (deposited/handed to management) -- that's a completed cash event, not a mis-tap, and
     must be corrected deliberately rather than silently reversed."""
     client = sb()
-    pid = (payload.get("pickup_id") or "").strip()
+    pid = (payload.pickup_id or "").strip()
     if pid:
         rows = (client.schema("commcalc").table("cash_pickup").select("*")
                 .eq("org_id", org_id).eq("id", pid).limit(1).execute().data) or []
     else:
-        store = (payload.get("store_code") or "").strip()
-        cdate = _date(payload.get("close_date") or payload.get("date"))
-        emp = (payload.get("employee_name") or "").strip()
+        store = (payload.store_code or "").strip()
+        cdate = _date(payload.close_date or payload.date)
+        emp = (payload.employee_name or "").strip()
         if not (store and cdate):
             raise HTTPException(400, "store_code + close_date (or pickup_id) required")
         rows = (client.schema("commcalc").table("cash_pickup").select("*")
@@ -4537,12 +4705,20 @@ def get_pickup_config(org_id: str = ORG_ID):
             "email_configured": _email_configured(), "whatsapp_configured": _wa_configured()}
 
 
+class PutPickupConfigIn(LaxModel):
+    recipient_name: Any = None
+    recipient_email: Any = None
+    recipient_whatsapp: Any = None
+    notify_email: Any = None
+    notify_whatsapp: Any = None
+
+
 @router.put("/pickup-config")
-def put_pickup_config(body: dict, org_id: str = ORG_ID):
+def put_pickup_config(body: PutPickupConfigIn, org_id: str = ORG_ID):
     row = {"org_id": org_id, "updated_at": _now()}
     for k in ("recipient_name", "recipient_email", "recipient_whatsapp", "notify_email", "notify_whatsapp"):
-        if k in body:
-            row[k] = body[k]
+        if k in body.model_fields_set:
+            row[k] = getattr(body, k)
     sb().schema("commcalc").table("cash_pickup_config").upsert(row, on_conflict="org_id").execute()
     return get_pickup_config(org_id)
 
@@ -4642,8 +4818,19 @@ def closing_sweep_get_config(org_id: str = ORG_ID):
     return _closing_public_cfg(_closing_cfg(sb(), org_id))
 
 
+class ClosingSweepPutConfigIn(LaxModel):
+    sheet_id: Any = None
+    tab: Any = None
+    enabled: Any = None
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+
+
 @router.put("/sweep/config")
-def closing_sweep_put_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def closing_sweep_put_config(body: ClosingSweepPutConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Gated to the 'closing' settings area (2026-07-26 settings audit — /closing/imports is already
     nav-restricted to company-wide scope; the backend had no matching check)."""
     client = sb()
@@ -4652,8 +4839,8 @@ def closing_sweep_put_config(body: dict, org_id: str = ORG_ID, authorization: st
     cur = _closing_cfg(client, org_id) or {}
     row = {"org_id": org_id}
     for k in ("sheet_id", "tab", "enabled", "frequency", "day_of_week", "day_of_month", "hour", "timezone"):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
     merged = {**_CLOSING_CFG_DEFAULTS, **cur, **row}
     row["next_run_at"] = _next_run(merged.get("frequency"), merged.get("day_of_week"),
                                    merged.get("day_of_month"), merged.get("hour"), merged.get("timezone"))
@@ -4676,7 +4863,7 @@ def closing_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_I
 @router.post("/sweep/run-due")
 def closing_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — run every enabled config whose next_run_at has passed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _now()
@@ -5683,8 +5870,12 @@ def get_expense_categories(org_id: str = ORG_ID):
     return {"categories": rows, "kinds": list(expense_config.KINDS)}
 
 
+class PutExpenseCategoriesIn(LaxModel):
+    categories: Any = None
+
+
 @router.put("/expense-categories")
-def put_expense_categories(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_expense_categories(payload: PutExpenseCategoriesIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Full-replace-by-upsert save (the admin page always sends the complete edited list — mirrors
     tender-config/count-config). A row with an `id` updates in place; one without gets a new id. Never
     deletes — deactivating (is_active=false) is how a tenant retires a category without breaking the
@@ -5692,7 +5883,7 @@ def put_expense_categories(payload: dict, org_id: str = ORG_ID, authorization: s
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing expense categories is permission-restricted.")
-    cats = payload.get("categories") or []
+    cats = payload.categories or []
     ups, news = [], []
     for i, c in enumerate(cats):
         name = (c.get("name") or "").strip()
@@ -5778,21 +5969,37 @@ def _validate_expense_line(client, org_id, line: dict) -> dict:
             "amount": amt, "description": desc, "employee_id": emp_id, "employee_name": emp_name}
 
 
+class CreateExpenseLineIn(LaxModel):
+    close_date: Any = None
+    store_code: Any = None
+    closing_row_id: Any = None
+    created_by: Any = None
+    category_id: Any = None
+    amount: Any = None
+    description: Any = None
+    employee_id: Any = None
+    employee_name: Any = None
+
+
 @router.post("/expense")
-def create_expense_line(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def create_expense_line(payload: CreateExpenseLineIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Standalone expense-line entry (a manager logging a store-level expense not tied to any one
     rep's own closing submission — closing_row_id stays NULL). The rep-submit-flow path (categorized
     lines attached to a fresh daily_closing row) is handled inline inside POST /closing/row instead —
     see `_insert_expense_lines` below, which this endpoint also uses."""
     require_org(org_id)
-    close_date = _date(payload.get("close_date"))
+    close_date = _date(payload.close_date)
     if not close_date:
         raise HTTPException(400, "valid close_date required")
     client = sb()
-    clean = _validate_expense_line(client, org_id, payload)
-    row = {"org_id": org_id, "store_code": (payload.get("store_code") or "").strip() or None,
-           "close_date": close_date, "closing_row_id": (payload.get("closing_row_id") or "").strip() or None,
-           "status": "pending", "created_by": (payload.get("created_by") or "").strip() or None,
+    # _validate_expense_line is a shared dict-based helper (also called with nested rows from
+    # create_row); hand it the line fields as a plain dict so its `.get()` reads still work.
+    clean = _validate_expense_line(client, org_id, {
+        "category_id": payload.category_id, "amount": payload.amount, "description": payload.description,
+        "employee_id": payload.employee_id, "employee_name": payload.employee_name})
+    row = {"org_id": org_id, "store_code": (payload.store_code or "").strip() or None,
+           "close_date": close_date, "closing_row_id": (payload.closing_row_id or "").strip() or None,
+           "status": "pending", "created_by": (payload.created_by or "").strip() or None,
            **clean}
     try:
         r = client.schema("commcalc").table("closing_expense").insert(row).execute()
@@ -5862,8 +6069,13 @@ def _push_expense_category_pl(client, org_id, period, category_id, category_name
         return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e})"}
 
 
+class DecideExpenseLineIn(LaxModel):
+    status: Any = None
+    decided_by: Any = None
+
+
 @router.post("/expense/{expense_id}/decide")
-def decide_expense_line(expense_id: str, payload: dict, org_id: str = ORG_ID,
+def decide_expense_line(expense_id: str, payload: DecideExpenseLineIn, org_id: str = ORG_ID,
                         authorization: str = Header(default="")):
     """DM/manager decides ONE categorized expense line — approve or reject. Body: {status: 'approved'
     |'rejected', decided_by?}. Extends the existing single-checkbox approve affordance (POST
@@ -5873,7 +6085,7 @@ def decide_expense_line(expense_id: str, payload: dict, org_id: str = ORG_ID,
     client = sb()
     if not _can_mgmt_review(_caller_perms(client, authorization)):
         raise HTTPException(403, "Approving expenses is management-restricted.")
-    status = (payload.get("status") or "").strip().lower()
+    status = (payload.status or "").strip().lower()
     if status not in ("approved", "rejected"):
         raise HTTPException(400, "status must be 'approved' or 'rejected'")
     try:
@@ -5884,7 +6096,7 @@ def decide_expense_line(expense_id: str, payload: dict, org_id: str = ORG_ID,
     if not rows:
         raise HTTPException(404, "expense line not found")
     row = rows[0]
-    decided_by = (payload.get("decided_by") or _caller_email(client, authorization) or "manager")
+    decided_by = (payload.decided_by or _caller_email(client, authorization) or "manager")
     upd = {"status": status, "approved_by": decided_by, "approved_at": _now(), "updated_at": _now()}
     (client.schema("commcalc").table("closing_expense").update(upd)
      .eq("org_id", org_id).eq("id", expense_id).execute())
@@ -5910,7 +6122,7 @@ def expense_pl_sweep_run(org_id: str = ORG_ID):
 def expense_pl_sweep_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (NOTIFY_RUN_SECRET) — nightly, across every tenant. Idempotent (full
     recompute per category+period), safe to re-run."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     try:
@@ -5997,8 +6209,24 @@ def get_envelope_config(store_code: str = "", org_id: str = ORG_ID):
             "store_overrides": [r for r in rows if r.get("store_code")]}
 
 
+class PutEnvelopeConfigIn(LaxModel):
+    store_code: Any = None
+    take_commission: Any = True
+    take_salary: Any = True
+    take_expenses: Any = True
+    commission_cadence: Any = None
+    commission_anchor: Any = None
+    commission_anchor_date: Any = None
+    salary_cadence: Any = None
+    salary_anchor: Any = None
+    salary_anchor_date: Any = None
+    order_preference: Any = None
+    require_photo_if_cash: Any = None
+    updated_by: Any = None
+
+
 @router.put("/envelope-config")
-def put_envelope_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_envelope_config(payload: PutEnvelopeConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Body: {store_code: null|"S123", take_commission, take_salary, take_expenses,
     commission_cadence, commission_anchor, commission_anchor_date, salary_cadence, salary_anchor,
     salary_anchor_date, order_preference('oldest_first'|'newest_first', Q15),
@@ -6008,21 +6236,21 @@ def put_envelope_config(payload: dict, org_id: str = ORG_ID, authorization: str 
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing envelope payout configuration is permission-restricted.")
-    store_code = (payload.get("store_code") or "").strip() or None
+    store_code = (payload.store_code or "").strip() or None
     row = {"org_id": org_id, "store_code": store_code,
-           "take_commission": payload.get("take_commission", True) is not False,
-           "take_salary": payload.get("take_salary", True) is not False,
-           "take_expenses": payload.get("take_expenses", True) is not False,
-           "commission_cadence": (payload.get("commission_cadence") or "weekly").strip().lower(),
-           "commission_anchor": payload.get("commission_anchor"),
-           "commission_anchor_date": payload.get("commission_anchor_date") or None,
-           "salary_cadence": (payload.get("salary_cadence") or "weekly").strip().lower(),
-           "salary_anchor": payload.get("salary_anchor"),
-           "salary_anchor_date": payload.get("salary_anchor_date") or None,
-           "order_preference": (payload.get("order_preference") or "oldest_first").strip().lower(),
+           "take_commission": payload.take_commission is not False,
+           "take_salary": payload.take_salary is not False,
+           "take_expenses": payload.take_expenses is not False,
+           "commission_cadence": (payload.commission_cadence or "weekly").strip().lower(),
+           "commission_anchor": payload.commission_anchor,
+           "commission_anchor_date": payload.commission_anchor_date or None,
+           "salary_cadence": (payload.salary_cadence or "weekly").strip().lower(),
+           "salary_anchor": payload.salary_anchor,
+           "salary_anchor_date": payload.salary_anchor_date or None,
+           "order_preference": (payload.order_preference or "oldest_first").strip().lower(),
            # BUG FIX 2026-08-07 (mig 510) — explicit opt-IN only; default false, never inferred true.
-           "require_photo_if_cash": payload.get("require_photo_if_cash") is True,
-           "updated_by": (payload.get("updated_by") or _caller_email(client, authorization) or None),
+           "require_photo_if_cash": payload.require_photo_if_cash is True,
+           "updated_by": (payload.updated_by or _caller_email(client, authorization) or None),
            "updated_at": _now()}
     if row["commission_cadence"] not in ("daily", "weekly", "biweekly", "monthly"):
         raise HTTPException(400, "commission_cadence must be daily|weekly|biweekly|monthly")
@@ -6196,8 +6424,22 @@ def envelope_plan(store_code: str = "", as_of: str = "", required_amount: float 
 
 
 # ── POST /closing/envelope-withdrawal — DM execution: record cash taken from ONE envelope ───────────
+class RecordEnvelopeWithdrawalIn(LaxModel):
+    store_code: Any = None
+    close_date: Any = None
+    closing_row_id: Any = None
+    amount: Any = None
+    purpose: Any = None
+    expense_id: Any = None
+    employee_id: Any = None
+    employee_name: Any = None
+    remaining_after: Any = None
+    notes: Any = None
+    taken_by: Any = None
+
+
 @router.post("/envelope-withdrawal")
-def record_envelope_withdrawal(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def record_envelope_withdrawal(payload: RecordEnvelopeWithdrawalIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Body: {store_code, close_date, closing_row_id, amount, purpose('commission_payout'|
     'salary_payout'|'expense'|'other'), expense_id?, employee_id?, employee_name?, remaining_after?,
     notes?, taken_by?}. Writes the envelope_withdrawal row (org-stamped), then best-effort:
@@ -6211,23 +6453,23 @@ def record_envelope_withdrawal(payload: dict, org_id: str = ORG_ID, authorizatio
     client = sb()
     if not _can_mgmt_review(_caller_perms(client, authorization)):
         raise HTTPException(403, "Recording an envelope withdrawal is management-restricted.")
-    close_date = _date(payload.get("close_date"))
+    close_date = _date(payload.close_date)
     if not close_date:
         raise HTTPException(400, "valid close_date required (the ENVELOPE's own close_date)")
-    amount = _money(payload.get("amount"))
+    amount = _money(payload.amount)
     if amount <= 0:
         raise HTTPException(400, "amount must be greater than zero")
-    purpose = (payload.get("purpose") or "other").strip().lower()
+    purpose = (payload.purpose or "other").strip().lower()
     if purpose not in ("commission_payout", "salary_payout", "expense", "other"):
         raise HTTPException(400, "purpose must be one of commission_payout|salary_payout|expense|other")
-    taken_by = (payload.get("taken_by") or _caller_email(client, authorization) or "DM")
-    row = {"org_id": org_id, "store_code": (payload.get("store_code") or "").strip() or None,
-           "close_date": close_date, "closing_row_id": (payload.get("closing_row_id") or "").strip() or None,
-           "amount": amount, "purpose": purpose, "expense_id": (payload.get("expense_id") or "").strip() or None,
-           "employee_id": (payload.get("employee_id") or "").strip() or None,
-           "employee_name": (payload.get("employee_name") or "").strip() or None,
-           "remaining_after": payload.get("remaining_after"), "taken_by": taken_by,
-           "taken_at": _now(), "notes": (payload.get("notes") or "").strip() or None}
+    taken_by = (payload.taken_by or _caller_email(client, authorization) or "DM")
+    row = {"org_id": org_id, "store_code": (payload.store_code or "").strip() or None,
+           "close_date": close_date, "closing_row_id": (payload.closing_row_id or "").strip() or None,
+           "amount": amount, "purpose": purpose, "expense_id": (payload.expense_id or "").strip() or None,
+           "employee_id": (payload.employee_id or "").strip() or None,
+           "employee_name": (payload.employee_name or "").strip() or None,
+           "remaining_after": payload.remaining_after, "taken_by": taken_by,
+           "taken_at": _now(), "notes": (payload.notes or "").strip() or None}
     try:
         r = client.schema("commcalc").table("envelope_withdrawal").insert(row).execute()
     except Exception as e:

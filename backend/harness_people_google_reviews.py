@@ -398,7 +398,9 @@ def section_logic():
     # ── sweep_store, with the Google HTTP calls MOCKED (no live API key exists) ────────────────
     real_text_search, real_details = gr.text_search_place, gr.place_details
 
-    def fake_text_search(address, api_key, timeout=15):
+    def fake_text_search(address, api_key, timeout=15, brand=None):
+        # `brand` (mig 430) is the tenant's search_brand token, prepended to the query by the real
+        # text_search_place. The mock just records it so the sweep/resolve paths can pass it through.
         return {"place_id": "PLACE123", "formatted_address": address, "display_name": "Test Store"}
 
     calls = {"details": 0}
@@ -602,9 +604,16 @@ def section_router():
     def fake_get_supabase():
         return fake_client
 
+    # Patch BOTH the router's bound name AND the source in app.core.database: caller resolution now
+    # runs through tenant_middleware.caller_app_user, which does `from app.core.database import
+    # get_supabase` at call time — so patching only router_mod.get_supabase left that path reaching
+    # for a real (env-less) client. Cover the source too so the whole request path uses the fake.
+    import app.core.database as _core_db
     real_get_supabase = router_mod.get_supabase
+    real_db_get_supabase = _core_db.get_supabase
     real_uid = core_router_mod._uid_from_token
     router_mod.get_supabase = fake_get_supabase
+    _core_db.get_supabase = fake_get_supabase
     core_router_mod._uid_from_token = lambda auth: {
         "Bearer admin": "admin-uid", "Bearer mgr": "mgr-uid",
         "Bearer rep-ali": "ali-uid", "Bearer rep-sara": "sara-uid",
@@ -621,6 +630,10 @@ def section_router():
     store["storeops.roles"] = [
         {"org_id": ORG, "name": "rep", "permissions": {"scope": "self"}},
         {"org_id": ORG, "name": "market_manager", "permissions": {"scope": "market"}},
+        # Real tenants seed an 'admin' role at scope 'all' (RBAC_SCOPE_FAILCLOSED would otherwise
+        # fail an unresolved role closed to 'self' — see _role_scope). Without this row the admin
+        # dashboard span (F22) resolves empty, which is a fixture gap, not the endpoint's behavior.
+        {"org_id": ORG, "name": "admin", "permissions": {"scope": "all"}},
     ]
     store["storeops.employees"] = [
         {"org_id": ORG, "employee_id": "E1", "name": "Ali Khan", "email": "ali@x.com", "home_store": "S1", "is_active": True},
@@ -646,16 +659,16 @@ def section_router():
            and cfg0["target_default"] == gr.DEFAULT_TARGET, cfg0)
 
         try:
-            router_mod.put_google_reviews_config({"api_key": "secret-key-1", "enabled": True,
-                                                   "target_default": 4.5}, authorization="Bearer rep-ali",
-                                                  x_active_org="", org_id=ORG)
+            router_mod.put_google_reviews_config(
+                router_mod.GoogleReviewsConfigIn(api_key="secret-key-1", enabled=True, target_default=4.5),
+                authorization="Bearer rep-ali", x_active_org="", org_id=ORG)
             ok("F2 a rep cannot edit the config", False, "no exception raised")
         except Exception as e:
             ok("F2 a rep cannot edit the config (403)", getattr(e, "status_code", None) == 403, e)
 
-        put1 = router_mod.put_google_reviews_config({"api_key": "secret-key-1", "enabled": True,
-                                                      "target_default": 4.5}, authorization="Bearer admin",
-                                                     x_active_org="", org_id=ORG)
+        put1 = router_mod.put_google_reviews_config(
+            router_mod.GoogleReviewsConfigIn(api_key="secret-key-1", enabled=True, target_default=4.5),
+            authorization="Bearer admin", x_active_org="", org_id=ORG)
         ok("F3 admin CAN save the config", put1["enabled"] is True and put1["target_default"] == 4.5, put1)
         ok("F4 the raw api_key is NEVER echoed back", "secret-key-1" not in str(put1), put1)
         ok("F5 has_api_key now true, with a masked hint only", put1["has_api_key"] is True
@@ -664,25 +677,28 @@ def section_router():
         ok("F6 the raw key IS actually persisted server-side (just never returned)",
            raw_row["api_key"] == "secret-key-1", raw_row)
 
-        put2 = router_mod.put_google_reviews_config({"enabled": False}, authorization="Bearer admin",
-                                                     x_active_org="", org_id=ORG)
+        put2 = router_mod.put_google_reviews_config(
+            router_mod.GoogleReviewsConfigIn(enabled=False),
+            authorization="Bearer admin", x_active_org="", org_id=ORG)
         ok("F7 omitting api_key on a later PUT keeps the existing key (write-only field)",
            store["storeops.google_review_config"][0]["api_key"] == "secret-key-1", store["storeops.google_review_config"])
         ok("F8 other fields (enabled) still update independently", put2["enabled"] is False, put2)
 
         # ── store-config override + resolve-place (mocked) ─────────────────────────────────────
-        router_mod.put_google_review_store_config("S2", {"target_override": 4.3},
-                                                   authorization="Bearer admin", x_active_org="", org_id=ORG)
+        router_mod.put_google_review_store_config(
+            "S2", router_mod.GoogleReviewStoreConfigIn(target_override=4.3),
+            authorization="Bearer admin", x_active_org="", org_id=ORG)
         stores_view = router_mod.list_google_review_stores(authorization="Bearer admin", org_id=ORG)
         s2 = next(s for s in stores_view["stores"] if s["store_code"] == "S2")
         ok("F9 per-store target_override reflected in the stores list", s2["target"] == 4.3, s2)
 
         real_ts = router_mod._gr.text_search_place
-        router_mod._gr.text_search_place = lambda address, api_key, timeout=15: {
+        router_mod._gr.text_search_place = lambda address, api_key, timeout=15, brand=None: {
             "place_id": "PLACEZ", "formatted_address": address, "display_name": "Z"}
         try:
-            rp = router_mod.post_resolve_place({"store_code": "S1"}, authorization="Bearer admin",
-                                               x_active_org="", org_id=ORG)
+            rp = router_mod.post_resolve_place(
+                router_mod.ResolvePlaceIn(store_code="S1"),
+                authorization="Bearer admin", x_active_org="", org_id=ORG)
             ok("F10 resolve-place persists a place_id from the store's OWN address (no free-typed input)",
                rp["place_id"] == "PLACEZ", rp)
         finally:
@@ -696,31 +712,33 @@ def section_router():
         plan_id = inserted["id"]
 
         try:
-            router_mod.submit_action_plan(plan_id, {"plan_text": "Will do X"}, authorization="Bearer rep-sara")
+            router_mod.submit_action_plan(plan_id, router_mod.ActionPlanSubmitIn(plan_text="Will do X"),
+                                          authorization="Bearer rep-sara")
             ok("F11 a DIFFERENT employee cannot submit someone else's plan", False, "no exception")
         except Exception as e:
             ok("F11 a different employee cannot submit someone else's plan (403)",
                getattr(e, "status_code", None) == 403, e)
 
-        sub = router_mod.submit_action_plan(plan_id, {"plan_text": "Will follow up with the customer"},
-                                            authorization="Bearer rep-ali")
+        sub = router_mod.submit_action_plan(
+            plan_id, router_mod.ActionPlanSubmitIn(plan_text="Will follow up with the customer"),
+            authorization="Bearer rep-ali")
         ok("F12 the OWNING employee can submit -> status='submitted'", sub["status"] == "submitted", sub)
 
         try:
-            router_mod.push_back_action_plan(plan_id, {"dm_comments": "needs more detail"},
+            router_mod.push_back_action_plan(plan_id, router_mod.ActionPlanReviewIn(dm_comments="needs more detail"),
                                              authorization="Bearer mgr", org_id=ORG)
             ok("F13 push-back without a due_date is rejected", False, "no exception")
         except Exception as e:
             ok("F13 push-back without a due_date is rejected (400)", getattr(e, "status_code", None) == 400, e)
 
-        pb = router_mod.push_back_action_plan(plan_id, {"dm_comments": "please add a follow-up date",
-                                                        "due_date": "2026-08-15"},
-                                              authorization="Bearer mgr", org_id=ORG)
+        pb = router_mod.push_back_action_plan(
+            plan_id, router_mod.ActionPlanReviewIn(dm_comments="please add a follow-up date", due_date="2026-08-15"),
+            authorization="Bearer mgr", org_id=ORG)
         ok("F14 DM push-back sets status/comments/due_date", pb["status"] == "pushed_back"
            and pb["due_date"] == "2026-08-15" and pb["dm_comments"], pb)
 
         try:
-            router_mod.dm_confirm_action_plan(plan_id, {}, authorization="Bearer mgr", org_id=ORG)
+            router_mod.dm_confirm_action_plan(plan_id, router_mod.ActionPlanReviewIn(), authorization="Bearer mgr", org_id=ORG)
             ok("F15 DM cannot confirm before the employee marks done", False, "no exception")
         except Exception as e:
             ok("F15 DM cannot confirm before the employee marks done (400)",
@@ -737,12 +755,13 @@ def section_router():
         ok("F17 employee marks done: employee_marked_done_at set, status still in_progress",
            md["employee_marked_done_at"] and md["status"] == "in_progress", md)
 
-        done = router_mod.dm_confirm_action_plan(plan_id, {"dm_comments": "confirmed, great job"},
-                                                 authorization="Bearer mgr", org_id=ORG)
+        done = router_mod.dm_confirm_action_plan(
+            plan_id, router_mod.ActionPlanReviewIn(dm_comments="confirmed, great job"),
+            authorization="Bearer mgr", org_id=ORG)
         ok("F18 DM confirm -> status='completed' (terminal)", done["status"] == "completed", done)
 
         try:
-            router_mod.push_back_action_plan(plan_id, {"dm_comments": "x", "due_date": "2026-09-01"},
+            router_mod.push_back_action_plan(plan_id, router_mod.ActionPlanReviewIn(dm_comments="x", due_date="2026-09-01"),
                                              authorization="Bearer mgr", org_id=ORG)
             ok("F19 a completed plan cannot be pushed back again", False, "no exception")
         except Exception as e:
@@ -769,9 +788,9 @@ def section_router():
         # ── sweep-config round trip + next_run_at is a real future UTC timestamp ────────────────
         sc0 = router_mod.get_google_reviews_sweep_config(authorization="Bearer admin", org_id=ORG)
         ok("F24 GET sweep-config pre-row: sane defaults", sc0["frequency"] == "daily" and sc0["enabled"] is False, sc0)
-        sc1 = router_mod.put_google_reviews_sweep_config({"enabled": True, "frequency": "weekly",
-                                                           "day_of_week": 2, "hour": 7},
-                                                          authorization="Bearer admin", x_active_org="", org_id=ORG)
+        sc1 = router_mod.put_google_reviews_sweep_config(
+            router_mod.GoogleReviewsSweepConfigIn(enabled=True, frequency="weekly", day_of_week=2, hour=7),
+            authorization="Bearer admin", x_active_org="", org_id=ORG)
         ok("F25 PUT sweep-config persists + computes next_run_at", sc1["enabled"] is True
            and sc1["frequency"] == "weekly" and sc1.get("next_run_at"), sc1)
         nxt = datetime.fromisoformat(sc1["next_run_at"].replace("Z", "+00:00"))
@@ -795,7 +814,7 @@ def section_router():
         store["storeops.google_review_config"][0]["api_key"] = "sweep-key"
         store["storeops.google_review_config"][0]["enabled"] = True
         real_ts2, real_pd2 = router_mod._gr.text_search_place, router_mod._gr.place_details
-        router_mod._gr.text_search_place = lambda address, api_key, timeout=15: {
+        router_mod._gr.text_search_place = lambda address, api_key, timeout=15, brand=None: {
             "place_id": "PSWEEP", "formatted_address": address, "display_name": "Sweep Store"}
         router_mod._gr.place_details = lambda place_id, api_key, timeout=15: {
             "rating": 4.9, "review_count": 10, "reviews": []}
@@ -810,6 +829,7 @@ def section_router():
             router_mod._gr.text_search_place, router_mod._gr.place_details = real_ts2, real_pd2
     finally:
         router_mod.get_supabase = real_get_supabase
+        _core_db.get_supabase = real_db_get_supabase
         core_router_mod._uid_from_token = real_uid
 
 
@@ -841,9 +861,14 @@ def section_phase15_router():
 
     store = {}
     fake_client = FakeClient(store)
+    # Patch the source in app.core.database too — tenant_middleware.caller_app_user imports
+    # get_supabase from there at call time (see section F for the full note).
+    import app.core.database as _core_db
     real_get_supabase = router_mod.get_supabase
+    real_db_get_supabase = _core_db.get_supabase
     real_uid = core_router_mod._uid_from_token
     router_mod.get_supabase = lambda: fake_client
+    _core_db.get_supabase = lambda: fake_client
     core_router_mod._uid_from_token = lambda auth: {
         "Bearer admin": "admin-uid", "Bearer mgr": "mgr-uid",
         "Bearer rep-ali": "ali-uid", "Bearer rep-sara": "sara-uid",
@@ -860,6 +885,10 @@ def section_phase15_router():
     store["storeops.roles"] = [
         {"org_id": ORG, "name": "rep", "permissions": {"scope": "self"}},
         {"org_id": ORG, "name": "market_manager", "permissions": {"scope": "market"}},
+        # Real tenants seed an 'admin' role at scope 'all' (RBAC_SCOPE_FAILCLOSED would otherwise
+        # fail an unresolved role closed to 'self' — see _role_scope). Without this row the admin
+        # dashboard span (F22) resolves empty, which is a fixture gap, not the endpoint's behavior.
+        {"org_id": ORG, "name": "admin", "permissions": {"scope": "all"}},
     ]
     store["storeops.employees"] = [
         {"org_id": ORG, "employee_id": "E1", "name": "Ali Khan", "email": "ali@y.com", "home_store": "S1", "is_active": True},
@@ -929,11 +958,14 @@ def section_phase15_router():
         ok("I9 ...but E2 (home S2, outside span) is SILENTLY DROPPED, not a whole-call 403",
            "E2" not in s1["summaries"], s1)
         e1_rows = s1["summaries"]["E1"]
-        ok("I10 the summary row shape is EXACT: store_code/rating/review_count/target/status only",
-           set(e1_rows[0].keys()) == {"store_code", "rating", "review_count", "target", "status"}, e1_rows)
+        ok("I10 the summary row shape is EXACT: store_code/rating/review_count/target/status/reviews_needed only",
+           set(e1_rows[0].keys()) == {"store_code", "rating", "review_count", "target", "status", "reviews_needed"}, e1_rows)
         ok("I11 the summary carries the real snapshot rating (4.2) for S1", e1_rows[0]["rating"] == 4.2, e1_rows)
+        # 'reviews_needed' (an int count to reach target) legitimately contains the substring "reviews";
+        # this check is about no review CONTENT/TEXT leaking into the light summary, so match the
+        # content fields specifically rather than a bare "reviews" substring.
         ok("I12 no review TEXT anywhere in the summary payload (light, table-column shape)",
-           "reviews" not in str(e1_rows), e1_rows)
+           "review_text" not in str(e1_rows) and "author" not in str(e1_rows), e1_rows)
 
         s2 = router_mod.google_reviews_employee_summary(employee_ids="E1,E2", authorization="Bearer admin", org_id=ORG)
         ok("I13 an admin (unrestricted span) sees BOTH E1 and E2 in the batch summary",
@@ -970,6 +1002,7 @@ def section_phase15_router():
            "pre-migration-420 degrade)", d_degrade["employee_id"] == "E1", d_degrade)
     finally:
         router_mod.get_supabase = real_get_supabase
+        _core_db.get_supabase = real_db_get_supabase
         core_router_mod._uid_from_token = real_uid
 
 

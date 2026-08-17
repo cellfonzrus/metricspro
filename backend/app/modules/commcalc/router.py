@@ -1,11 +1,13 @@
 """CommCalc API Router — all /api/v1/commcalc/* endpoints"""
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header, Query
 from fastapi.responses import JSONResponse
-from typing import List, Optional
+from typing import List, Optional, Any
 import pandas as pd
 import io
 import re
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
+from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
@@ -57,6 +59,7 @@ from app.modules.commcalc import atu_opportunity as _atu
 from app.modules.commcalc import productivity as _prod
 from app.modules.commcalc import payout_accrual
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 from uuid import uuid4 as _uuid4
 # Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
@@ -1984,14 +1987,20 @@ def pay_simulator_context(period: str = "", rep: str = "",
 
 
 @router.post("/pay-simulator/simulate")
-def pay_simulator_simulate(body: dict = None, authorization: str = Header(default=""),
+class PaySimulatorSimulateIn(LaxModel):
+    period: Any = None
+    inputs: Any = None
+    rep: Any = None
+
+
+def pay_simulator_simulate(body: Optional[PaySimulatorSimulateIn] = None, authorization: str = Header(default=""),
                            org_id: str = ORG_ID):
     """Projected pay for the caller's OWN levers. POST because the input is a lever map, NOT because
     anything is written — this handler performs no insert/update/upsert/delete and triggers no
     recalculation. body = {period, inputs:{<lever_key>:{units, amount}}, rep?}."""
-    b = body or {}
-    return pay_simulator.run(sb(), authorization, b.get("period") or "",
-                             b.get("inputs") or {}, requested_rep=(b.get("rep") or ""),
+    b = body or PaySimulatorSimulateIn()
+    return pay_simulator.run(sb(), authorization, b.period or "",
+                             b.inputs or {}, requested_rep=(b.rep or ""),
                              requested_org=org_id)
 
 
@@ -2061,24 +2070,38 @@ def whatif_get_source_config(carrier_id: str = "", authorization: str = Header(d
 
 
 @router.put("/whatif/source-config")
-def whatif_put_source_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+class WhatifPutSourceConfigIn(LaxModel):
+    carrier_id: str = ""
+    carrier_mode: str = ""
+    residual_source: Any = None
+    residual_order_type: Any = None
+    residual_amount_field: Any = None
+    residual_sign: Any = None
+    income_source: Any = None
+    retail_cost_source: Any = None
+    ma_commission_sign: Any = None
+    notes: Any = None
+    is_active: Any = None
+
+
+def whatif_put_source_config(body: WhatifPutSourceConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Upsert a PER-CARRIER What-If source override (or the org's mode-default row when
     carrier_id is the nil UUID). Config, not code (RULE TWO). Degrades with an ok=false hint before mig
     209 runs."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    carrier_id = (body.get("carrier_id") or "").strip() or "00000000-0000-0000-0000-000000000000"
-    carrier_mode = (body.get("carrier_mode") or "boost").strip().lower()
+    carrier_id = (body.carrier_id or "").strip() or "00000000-0000-0000-0000-000000000000"
+    carrier_mode = (body.carrier_mode or "boost").strip().lower()
     if carrier_mode not in ("boost", "plan"):
         carrier_mode = "boost"
     row = {"org_id": org_id, "carrier_id": carrier_id, "carrier_mode": carrier_mode,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     for k in ("residual_source", "residual_order_type", "residual_amount_field", "residual_sign",
               "income_source", "retail_cost_source", "ma_commission_sign", "notes"):
-        if k in body:
-            row[k] = body.get(k)
-    if "is_active" in body:
-        row["is_active"] = bool(body.get("is_active"))
+        if k in body.model_fields_set:
+            row[k] = getattr(body, k)
+    if "is_active" in body.model_fields_set:
+        row["is_active"] = bool(body.is_active)
     try:
         client = sb()
         client.schema("commcalc").table("whatif_source_config").upsert(
@@ -3057,7 +3080,24 @@ async def vip_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/vip/sweep/config")
-async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID,
+class VipSweepPutConfigIn(LaxModel):
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    lookback_days: Any = None
+    sweep_invoices: Any = None
+    sweep_asset: Any = None
+    sweep_creditmemo: Any = None
+    sweep_asset_ledger: Any = None
+    sweep_chargebacks: Any = None
+    enabled: Any = None
+    portal_user: Any = None
+    portal_pass: Any = None
+
+
+async def vip_sweep_put_config(body: VipSweepPutConfigIn, org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -3069,9 +3109,9 @@ async def vip_sweep_put_config(body: dict, org_id: str = ORG_ID,
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
               'lookback_days', 'sweep_invoices', 'sweep_asset', 'sweep_creditmemo',
               'sweep_asset_ledger', 'sweep_chargebacks', 'enabled', 'portal_user'):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
-    pw = (body.get('portal_pass') or '').strip()
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
+    pw = (body.portal_pass or '').strip()
     if pw:
         row['portal_pass'] = pw
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
@@ -3098,7 +3138,7 @@ async def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG
 async def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -3136,14 +3176,20 @@ def list_carriers(org_id: str = ORG_ID):
     return (sb().schema("commcalc").table("carrier").select("*").eq("org_id", org_id).order("name").execute().data) or []
 
 
+class CarrierIn(LaxModel):
+    name: str = ""
+    code: str = ""
+    is_default: Any = None
+
+
 @router.post("/carriers")
-def create_carrier(body: dict, org_id: str = ORG_ID):
+def create_carrier(body: CarrierIn, org_id: str = ORG_ID):
     require_org(org_id)
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
-    is_default = bool(body.get("is_default"))
-    row = {"org_id": org_id, "name": name, "code": (body.get("code") or "").strip() or None,
+    is_default = bool(body.is_default)
+    row = {"org_id": org_id, "name": name, "code": (body.code or "").strip() or None,
            "is_default": is_default}
     client = sb()
     if is_default:  # only one default carrier per org
@@ -3153,18 +3199,18 @@ def create_carrier(body: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/carriers/{cid}")
-def update_carrier(cid: str, body: dict, org_id: str = ORG_ID):
+def update_carrier(cid: str, body: CarrierIn, org_id: str = ORG_ID):
     require_org(org_id)
     patch = {}
-    if "name" in body:
-        nm = (body.get("name") or "").strip()
+    if "name" in body.model_fields_set:
+        nm = (body.name or "").strip()
         if not nm:
             raise HTTPException(400, "name cannot be empty")
         patch["name"] = nm
-    if "code" in body:
-        patch["code"] = (body.get("code") or "").strip() or None
-    if "is_default" in body:
-        patch["is_default"] = bool(body.get("is_default"))
+    if "code" in body.model_fields_set:
+        patch["code"] = (body.code or "").strip() or None
+    if "is_default" in body.model_fields_set:
+        patch["is_default"] = bool(body.is_default)
     if not patch:
         raise HTTPException(400, "nothing to update")
     client = sb()
@@ -3427,26 +3473,37 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
     return {"reports": reports, "outputs": outputs}
 
 
+class ColumnMappingIn(LaxModel):
+    report_key: str = ""
+    target_field: str = ""
+    source_header: str = ""
+    transform: str = ""
+    carrier_id: Any = None
+    is_active: Any = True
+    priority: Any = None
+    id: Any = None
+
+
 @router.post("/column-mapping")
-def upsert_column_mapping(body: dict, org_id: str = ORG_ID):
+def upsert_column_mapping(body: ColumnMappingIn, org_id: str = ORG_ID):
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
-    tf = (body.get("target_field") or "").strip()
-    sh = (body.get("source_header") or "").strip()
+    rk = (body.report_key or "").strip()
+    tf = (body.target_field or "").strip()
+    sh = (body.source_header or "").strip()
     if not rk or not tf or not sh:
         raise HTTPException(400, "report_key, target_field and source_header are required")
-    transform = (body.get("transform") or "text").strip()
+    transform = (body.transform or "text").strip()
     if transform not in column_mapping.TRANSFORMS:
         raise HTTPException(400, "transform must be one of " + "|".join(column_mapping.TRANSFORM_KEYS))
-    row = {"org_id": org_id, "report_key": rk, "carrier_id": body.get("carrier_id") or None,
+    row = {"org_id": org_id, "report_key": rk, "carrier_id": body.carrier_id or None,
            "target_field": tf, "source_header": sh, "transform": transform,
-           "is_active": body.get("is_active", True) is not False,
-           "priority": int(body.get("priority") or 100),
+           "is_active": body.is_active is not False,
+           "priority": int(body.priority or 100),
            "updated_at": column_mapping.now_iso()}
     client = sb()
-    if body.get("id"):
-        client.schema("commcalc").table("column_mapping").update(row).eq("id", body["id"]).execute()
-        return {"ok": True, "id": body["id"]}
+    if body.id:
+        client.schema("commcalc").table("column_mapping").update(row).eq("id", body.id).execute()
+        return {"ok": True, "id": body.id}
     r = client.schema("commcalc").table("column_mapping").upsert(
         row, on_conflict="org_id,report_key,carrier_id,target_field").execute()
     return r.data[0] if r.data else row
@@ -3878,21 +3935,32 @@ def list_commission_fields(report_key: str = "carrier_commission", org_id: str =
             "catalog_ready": bool(raw)}
 
 
+class CommissionFieldIn(LaxModel):
+    label: str = ""
+    target_field: Any = None
+    report_key: Any = None
+    kind: Any = None
+    data_type: Any = None
+    is_amount: Any = None
+    month_index: Any = None
+    sort_order: Any = None
+
+
 @router.post("/commission-fields")
-def create_commission_field(body: dict, org_id: str = ORG_ID):
+def create_commission_field(body: CommissionFieldIn, org_id: str = ORG_ID):
     """Create a NEW commission category → adds the physical column on carrier_commission (via RPC) AND a
     catalog row. body: {report_key?, label, kind?, data_type?, is_amount?, month_index?, target_field?}.
     Returns a clear 400 (not a 500) if migration 067 isn't installed yet."""
     require_org(org_id)
-    label = (body.get("label") or "").strip()
-    if not label and not body.get("target_field"):
+    label = (body.label or "").strip()
+    if not label and not body.target_field:
         raise HTTPException(400, "label (or target_field) is required")
     try:
         row = commission_catalog.add_field(
-            sb(), org_id, body.get("report_key") or "carrier_commission",
-            label=label, kind=body.get("kind") or "other", data_type=body.get("data_type") or "number",
-            is_amount=body.get("is_amount"), month_index=body.get("month_index"),
-            target_field=body.get("target_field"), sort_order=int(body.get("sort_order") or 100))
+            sb(), org_id, body.report_key or "carrier_commission",
+            label=label, kind=body.kind or "other", data_type=body.data_type or "number",
+            is_amount=body.is_amount, month_index=body.month_index,
+            target_field=body.target_field, sort_order=int(body.sort_order or 100))
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "field": row}
@@ -3932,27 +4000,38 @@ def list_target_fields(report_key: str = "", org_id: str = ORG_ID):
             "registry_ready": target_registry.table_ready(client)}
 
 
+class TargetFieldIn(LaxModel):
+    report_key: str = ""
+    label: str = ""
+    target_field: Any = None
+    transform: str = ""
+    required: Any = None
+    default_source: Any = None
+    aliases: Any = None
+    sort_order: Any = None
+
+
 @router.post("/target-fields")
-def create_target_field(body: dict, org_id: str = ORG_ID):
+def create_target_field(body: TargetFieldIn, org_id: str = ORG_ID):
     """Create/update a per-tenant target field for ANY report_key. body: {report_key, label, transform?,
     required?, default_source?, aliases?(list|comma-string), sort_order?, target_field?}. NO DDL — this is
     purely the mappable field list. Returns a clear 400 (not a 500) if migration 070 isn't applied."""
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
-    label = (body.get("label") or "").strip()
+    rk = (body.report_key or "").strip()
+    label = (body.label or "").strip()
     if not rk:
         raise HTTPException(400, "report_key is required")
-    if not label and not body.get("target_field"):
+    if not label and not body.target_field:
         raise HTTPException(400, "label (or target_field) is required")
-    transform = (body.get("transform") or "text").strip()
+    transform = (body.transform or "text").strip()
     if transform not in column_mapping.TRANSFORMS:
         raise HTTPException(400, "transform must be one of " + "|".join(column_mapping.TRANSFORM_KEYS))
     try:
         row = target_registry.add_field(
             sb(), org_id, rk, label=label, transform=transform,
-            required=bool(body.get("required")), default_source=body.get("default_source") or "",
-            aliases=body.get("aliases"), sort_order=int(body.get("sort_order") or 100),
-            target_field=body.get("target_field"))
+            required=bool(body.required), default_source=body.default_source or "",
+            aliases=body.aliases, sort_order=int(body.sort_order or 100),
+            target_field=body.target_field)
     except Exception as e:
         raise HTTPException(400, f"Could not save — run migration 070_target_field_registry.sql first. [{e}]")
     return {"ok": True, "field": row}
@@ -4742,38 +4821,50 @@ def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str 
                          "labels whose month-of-life the source never states.")}
 
 
+class CommissionCategoryMapIn(LaxModel):
+    source_report: str = ""
+    pattern: str = ""
+    category: str = ""
+    match_field: str = ""
+    match_op: str = ""
+    sign_rule: str = ""
+    priority: Any = None
+    leg_bucket: Any = None
+    id: Any = None
+
+
 @router.post("/commission-category-map")
-def upsert_commission_category_map(body: dict, org_id: str = ORG_ID):
+def upsert_commission_category_map(body: CommissionCategoryMapIn, org_id: str = ORG_ID):
     """Create/update one classification rule. body: {id?, source_report, match_field, match_op, pattern,
     category, sign_rule?, priority?}. 400 (not 500) if migration 071 isn't applied."""
     require_org(org_id)
-    sr = (body.get("source_report") or "ma_daily_tx").strip()
-    pattern = (body.get("pattern") or "").strip()
-    category = (body.get("category") or "").strip().lower()
+    sr = (body.source_report or "ma_daily_tx").strip()
+    pattern = (body.pattern or "").strip()
+    category = (body.category or "").strip().lower()
     if not pattern or not category:
         raise HTTPException(400, "pattern and category are required")
-    mf = (body.get("match_field") or "product_name").strip()
-    op = (body.get("match_op") or "contains").strip()
-    sign = (body.get("sign_rule") or "negative_only").strip()
+    mf = (body.match_field or "product_name").strip()
+    op = (body.match_op or "contains").strip()
+    sign = (body.sign_rule or "negative_only").strip()
     if mf not in commission_ledger.MATCH_FIELDS or op not in commission_ledger.MATCH_OPS or sign not in commission_ledger.SIGN_RULES:
         raise HTTPException(400, "invalid match_field / match_op / sign_rule")
     row = {"org_id": org_id, "source_report": sr, "match_field": mf, "match_op": op, "pattern": pattern,
-           "category": category, "sign_rule": sign, "priority": int(body.get("priority") or 100),
+           "category": category, "sign_rule": sign, "priority": int(body.priority or 100),
            "is_seeded": False, "updated_at": column_mapping.now_iso()}
     client = sb()
     # COMMISSION LEG override (mig 274). '' / absent = DERIVE (the default, and what every existing rule
     # keeps). Only written when the column actually exists, so this endpoint still works pre-274.
-    if "leg_bucket" in body:
-        lb = str(body.get("leg_bucket") or "").strip().lower()
+    if "leg_bucket" in body.model_fields_set:
+        lb = str(body.leg_bucket or "").strip().lower()
         if lb and lb not in commission_ledger.LEG_BUCKETS:
             raise HTTPException(400, f"leg_bucket must be blank (derive) or one of "
                                      f"{', '.join(commission_ledger.LEG_BUCKETS)}")
         if "leg_bucket" in _known_columns(client, "commission_category_map", ["leg_bucket"]):
             row["leg_bucket"] = lb or None
     try:
-        if body.get("id"):
-            client.schema("commcalc").table("commission_category_map").update(row).eq("id", body["id"]).execute()
-            return {"ok": True, "id": body["id"]}
+        if body.id:
+            client.schema("commcalc").table("commission_category_map").update(row).eq("id", body.id).execute()
+            return {"ok": True, "id": body.id}
         r = client.schema("commcalc").table("commission_category_map").upsert(
             row, on_conflict="org_id,source_report,match_field,match_op,pattern").execute()
         return {"ok": True, "rule": (r.data[0] if r.data else row)}
@@ -5033,8 +5124,16 @@ def get_ma_product_class(source_report: str = "ma_daily_tx", period: str = "", s
             "ready": ready, "migration": None if ready else "254_commission_ma_product_class.sql"}
 
 
+class UpsertMaProductClassIn(LaxModel):
+    source_report: str = ""
+    product_name: Any = None
+    product_class: Any = None
+    status: str = ""
+    note: Any = None
+
+
 @router.post("/ma-product-class")
-def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def upsert_ma_product_class(body: UpsertMaProductClassIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """Create/update ONE product-name -> class mapping.
     body: {product_name, product_class, source_report?, status?, note?}.
 
@@ -5042,9 +5141,9 @@ def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str
     matched byte-exact thereafter. The reserved class 'unmapped' can never be assigned — to unmap a
     name, DELETE its row. 400 (not 500) until migration 254 is applied."""
     require_org(org_id)
-    sr = (body.get("source_report") or "ma_daily_tx").strip()
-    name = ma_product_class.normalize(body.get("product_name"))
-    cls = ma_product_class.normalize(body.get("product_class"))
+    sr = (body.source_report or "ma_daily_tx").strip()
+    name = ma_product_class.normalize(body.product_name)
+    cls = ma_product_class.normalize(body.product_class)
     if not name or not cls:
         raise HTTPException(400, "product_name and product_class are required")
     client = sb()
@@ -5054,11 +5153,11 @@ def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str
         raise HTTPException(400, "'unmapped' is a reserved class — delete the mapping instead of assigning it")
     if cls not in allowed:
         raise HTTPException(400, f"unknown class `{cls}` — allowed: {', '.join(allowed)}")
-    status = (body.get("status") or "proposed").strip().lower()
+    status = (body.status or "proposed").strip().lower()
     if status not in ma_product_class.STATUSES:
         raise HTTPException(400, f"status must be one of {', '.join(ma_product_class.STATUSES)}")
     row = {"org_id": org_id, "source_report": sr, "product_name": name, "product_class": cls,
-           "status": status, "note": (body.get("note") or None),
+           "status": status, "note": (body.note or None),
            "updated_at": column_mapping.now_iso()}
     if status == "confirmed":
         row["confirmed_by"] = _mpc_who(authorization)
@@ -5074,14 +5173,21 @@ def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str
         raise HTTPException(400, f"Could not save — run migration 254_commission_ma_product_class.sql first. [{e}]")
 
 
+class ConfirmMaProductClassIn(LaxModel):
+    source_report: str = ""
+    product_names: Any = None
+    items: Any = None
+    all: Any = None
+
+
 @router.post("/ma-product-class/confirm")
-def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def confirm_ma_product_class(body: ConfirmMaProductClassIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """CONFIRM proposals — the owner's decision step. body: {product_names: [..]} or {all: true} to
     confirm every proposed row for the source. Confirming only changes `status`; it never re-classifies
     a name and never touches a payout. Returns what it confirmed."""
     require_org(org_id)
-    sr = (body.get("source_report") or "ma_daily_tx").strip()
-    names = [ma_product_class.normalize(n) for n in (body.get("product_names") or []) if str(n).strip()]
+    sr = (body.source_report or "ma_daily_tx").strip()
+    names = [ma_product_class.normalize(n) for n in (body.product_names or []) if str(n).strip()]
     # OWNER REPORT 2026-08-11: "the proposed mapping when you hit confirm does not save it and the
     # subsidy is not going away". CONFIRM USED TO ONLY *UPDATE* ROWS THAT ALREADY EXISTED. The page
     # lists every distinct product_name in the feed and shows the built-in PROPOSAL beside it — but a
@@ -5093,14 +5199,14 @@ def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: st
     # caller's own `items` (what the UI displayed), else from the built-in proposal for that exact
     # name. A name with neither is still reported in `not_found` rather than guessed at.
     items = {}
-    for it in (body.get("items") or []):
+    for it in (body.items or []):
         n = ma_product_class.normalize((it or {}).get("product_name"))
         c = ma_product_class.normalize((it or {}).get("product_class"))
         if n and c:
             items[n] = c
             if n not in names:
                 names.append(n)
-    if not names and not body.get("all"):
+    if not names and not body.all:
         raise HTTPException(400, "product_names[], items[] or all=true is required")
     client = sb()
     map_rows, ready = _mpc_map_rows(client, org_id, sr)
@@ -5113,7 +5219,7 @@ def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: st
     who, now = _mpc_who(authorization), column_mapping.now_iso()
     targets = [r for r in map_rows
                if (r.get("status") or "proposed") != "confirmed"
-               and (body.get("all") or ma_product_class.normalize(r.get("product_name")) in names)]
+               and (body.all or ma_product_class.normalize(r.get("product_name")) in names)]
     done = []
     for r in targets:
         try:
@@ -5151,13 +5257,17 @@ def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: st
             "not_found": unresolved}
 
 
+class SeedMaProductClassIn(LaxModel):
+    source_report: str = ""
+
+
 @router.post("/ma-product-class/seed-proposals")
-def seed_ma_product_class(body: dict = None, org_id: str = ORG_ID):
+def seed_ma_product_class(body: Optional[SeedMaProductClassIn] = None, org_id: str = ORG_ID):
     """Materialise the built-in PROPOSALS as rows for THIS tenant (status='proposed'), skipping names
     already mapped. Migration 254 seeds the house org only; every other tenant seeds itself here, with
     org_id stamped on every insert (RULE ONE: config rows carry the tenant). Idempotent."""
     require_org(org_id)
-    sr = ((body or {}).get("source_report") or "ma_daily_tx").strip()
+    sr = ((body.source_report if body else "") or "ma_daily_tx").strip()
     client = sb()
     map_rows, ready = _mpc_map_rows(client, org_id, sr)
     if not ready:
@@ -5294,21 +5404,28 @@ def _can_edit_ma_class_wiring(authorization, org_id):
         return True
 
 
+class MaClassWiringModeIn(LaxModel):
+    consumer: str = ""
+    mode: str = ""
+    source_report: str = ""
+    note: Any = None
+
+
 @router.put("/ma-class-wiring/mode")
-def put_ma_class_wiring_mode(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def put_ma_class_wiring_mode(body: MaClassWiringModeIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """Flip ONE consumer between 'legacy' and 'class'. body: {consumer, mode, source_report?, note?}.
     Admin-gated (money posture). 400 — never 500 — until migration 265 is applied."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    consumer = (body.get("consumer") or "").strip()
-    mode = (body.get("mode") or "").strip().lower()
+    consumer = (body.consumer or "").strip()
+    mode = (body.mode or "").strip().lower()
     if consumer not in ma_class_wiring.CONSUMERS:
         raise HTTPException(400, "consumer must be one of %s" % ", ".join(ma_class_wiring.CONSUMERS))
     if mode not in ma_class_wiring.MODES:
         raise HTTPException(400, "mode must be one of %s" % ", ".join(ma_class_wiring.MODES))
     row = {"org_id": org_id, "consumer": consumer, "mode": mode,
-           "source_report": (body.get("source_report") or "ma_daily_tx").strip(),
-           "note": (body.get("note") or None),
+           "source_report": (body.source_report or "ma_daily_tx").strip(),
+           "note": (body.note or None),
            "updated_by": _mpc_who(authorization), "updated_at": column_mapping.now_iso()}
     try:
         (sb().schema("commcalc").table(ma_class_wiring.CONFIG_TABLE)
@@ -5322,14 +5439,19 @@ def put_ma_class_wiring_mode(body: dict, org_id: str = ORG_ID, authorization: st
                        "This consumer is back on its legacy selection — nothing here reads a class.")}
 
 
+class MaClassWiringLegIn(LaxModel):
+    product_class: Any = None
+    income_leg: Any = None
+
+
 @router.put("/ma-class-wiring/leg")
-def put_ma_class_wiring_leg(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def put_ma_class_wiring_leg(body: MaClassWiringLegIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """Map ONE product class to a carrier-income leg. body: {product_class, income_leg}.
     Only takes effect while carrier_income is in 'class' mode. Admin-gated."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    cls = ma_class_wiring.normalize(body.get("product_class"))
-    leg = ma_class_wiring.normalize(body.get("income_leg")).lower()
+    cls = ma_class_wiring.normalize(body.product_class)
+    leg = ma_class_wiring.normalize(body.income_leg).lower()
     if not cls or cls == ma_product_class.UNMAPPED:
         raise HTTPException(400, "product_class is required and may not be the reserved 'unmapped'")
     if leg not in ma_class_wiring.INCOME_LEGS:
@@ -5452,8 +5574,13 @@ def ma_class_wiring_rule_proposals(source_report: str = "ma_daily_tx", period: s
                      "no CONFIRMED names has no proposal here, by design.")}
 
 
+class ApplyMaClassWiringRuleProposalsIn(LaxModel):
+    source_report: str = ""
+    rules: Any = None
+
+
 @router.post("/ma-class-wiring/rule-proposals/apply")
-def apply_ma_class_wiring_rule_proposals(body: dict, org_id: str = ORG_ID,
+def apply_ma_class_wiring_rule_proposals(body: ApplyMaClassWiringRuleProposalsIn, org_id: str = ORG_ID,
                                          authorization: str = Header(None)):
     """Write the CHOSEN product_class rules into commcalc.commission_category_map.
     body: {source_report?, rules: [{product_class, category, sign_rule?, priority?}]}.
@@ -5462,8 +5589,8 @@ def apply_ma_class_wiring_rule_proposals(body: dict, org_id: str = ORG_ID,
     the map's own unique shape, so re-applying is idempotent."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    sr = (body.get("source_report") or "ma_daily_tx").strip()
-    wanted = body.get("rules") or []
+    sr = (body.source_report or "ma_daily_tx").strip()
+    wanted = body.rules or []
     if not isinstance(wanted, list) or not wanted:
         raise HTTPException(400, "rules[] is required — this endpoint never applies everything")
     client = sb()
@@ -5782,8 +5909,19 @@ def accessory_definition_pay_impact(period: str, org_id: str = ORG_ID):
                      "on AND Run Commission is pressed for this period.")}
 
 
+class UpsertAccessoryDefinitionIn(LaxModel):
+    match_field: str = ""
+    match_value: str = ""
+    accessory_class: Any = None
+    status: str = ""
+    force: Any = None
+    period: Any = None
+    is_accessory: Any = True
+    note: Any = None
+
+
 @router.post("/accessory-definition")
-def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def upsert_accessory_definition(body: UpsertAccessoryDefinitionIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """Create/update ONE mapping. body: {match_field, match_value, is_accessory?, accessory_class?,
     status?, note?}.
 
@@ -5791,24 +5929,24 @@ def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization:
     free text is refused with the closest matches suggested (RULE THREE). 400 (not 500) until 257 runs.
     """
     require_org(org_id)
-    mf = str(body.get("match_field") or "").strip().lower()
+    mf = str(body.match_field or "").strip().lower()
     if mf not in accessory_definition.MATCH_FIELDS:
         raise HTTPException(400, f"match_field must be one of {list(accessory_definition.MATCH_FIELDS)}")
-    mv = str(body.get("match_value") or "").strip()
+    mv = str(body.match_value or "").strip()
     if not mv:
         raise HTTPException(400, "match_value is required — pick a real value from your own sales data.")
     client = sb()
-    cls = accessory_definition.normalize_class(body.get("accessory_class"))
+    cls = accessory_definition.normalize_class(body.accessory_class)
     classes, _cr = _ad_classes(client, org_id)
     allowed = {c["class_key"] for c in classes}
     if cls and cls not in allowed:
         raise HTTPException(400, f"unknown accessory class `{cls}` — allowed: {sorted(allowed)}")
-    status = str(body.get("status") or "proposed").strip().lower()
+    status = str(body.status or "proposed").strip().lower()
     if status not in accessory_definition.STATUSES:
         raise HTTPException(400, f"status must be one of {list(accessory_definition.STATUSES)}")
     # RULE THREE: the value must EXIST in the tenant's own data (or already be mapped).
-    if not body.get("force"):
-        rows, _m = _ad_sales(client, org_id, str(body.get("period") or ""))
+    if not body.force:
+        rows, _m = _ad_sales(client, org_id, str(body.period or ""))
         have = {accessory_definition.normalize(r.get(mf)) for r in rows}
         map_rows, _mr = _ad_map_rows(client, org_id)
         have |= {accessory_definition.normalize(m.get("match_value")) for m in map_rows
@@ -5818,8 +5956,8 @@ def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization:
             raise HTTPException(400, f"`{mv}` is not a {mf} value present in your sales data. "
                                      + (f"Closest: {near}." if near else "Pick one from the list."))
     row = {"org_id": org_id, "match_field": mf, "match_value": mv,
-           "is_accessory": bool(body.get("is_accessory", True)),
-           "accessory_class": cls, "status": status, "note": (body.get("note") or None),
+           "is_accessory": bool(body.is_accessory),
+           "accessory_class": cls, "status": status, "note": (body.note or None),
            "updated_at": column_mapping.now_iso()}
     if status == "confirmed":
         row["confirmed_by"] = _mpc_who(authorization)
@@ -5835,24 +5973,31 @@ def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization:
         raise HTTPException(400, f"Could not save — run migration 257_commission_accessory_definition.sql first. [{e}]")
 
 
+class ConfirmAccessoryDefinitionIn(LaxModel):
+    ids: Any = None
+    all: Any = None
+    classes: Any = None
+    all_classes: Any = None
+
+
 @router.post("/accessory-definition/confirm")
-def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def confirm_accessory_definition(body: ConfirmAccessoryDefinitionIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """CONFIRM proposals — the owner's decision step, for mappings and/or the seeded classes.
     body: {ids:[..]} | {all: true} | {classes:[class_key,..]} | {all_classes: true}.
     Confirming only changes `status`; it never re-classifies anything and never touches a payout."""
     require_org(org_id)
     client = sb()
     who, now = _mpc_who(authorization), column_mapping.now_iso()
-    ids = [str(i) for i in (body.get("ids") or []) if str(i).strip()]
+    ids = [str(i) for i in (body.ids or []) if str(i).strip()]
     done_maps, done_classes = [], []
-    if ids or body.get("all"):
+    if ids or body.all:
         map_rows, ready = _ad_map_rows(client, org_id)
         if not ready:
             raise HTTPException(400, "Run migration 257_commission_accessory_definition.sql first.")
         for r in map_rows:
             if str(r.get("status") or "proposed") == "confirmed":
                 continue
-            if not (body.get("all") or str(r.get("id")) in ids):
+            if not (body.all or str(r.get("id")) in ids):
                 continue
             try:
                 (client.schema("commcalc").table(accessory_definition.MAP_TABLE)
@@ -5862,8 +6007,8 @@ def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization
                 done_maps.append(str(r.get("id")))
             except Exception:
                 pass
-    keys = [accessory_definition.normalize_class(k) for k in (body.get("classes") or [])]
-    if keys or body.get("all_classes"):
+    keys = [accessory_definition.normalize_class(k) for k in (body.classes or [])]
+    if keys or body.all_classes:
         try:
             rows = (client.schema("commcalc").table(accessory_definition.CLASS_TABLE).select("*")
                     .eq("org_id", org_id).limit(1000).execute().data) or []
@@ -5872,7 +6017,7 @@ def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization
         for r in rows:
             if str(r.get("status") or "proposed") == "confirmed":
                 continue
-            if not (body.get("all_classes") or accessory_definition.normalize_class(r.get("class_key")) in keys):
+            if not (body.all_classes or accessory_definition.normalize_class(r.get("class_key")) in keys):
                 continue
             try:
                 (client.schema("commcalc").table(accessory_definition.CLASS_TABLE)
@@ -5882,14 +6027,14 @@ def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization
                 done_classes.append(str(r.get("class_key")))
             except Exception:
                 pass
-    if not ids and not keys and not body.get("all") and not body.get("all_classes"):
+    if not ids and not keys and not body.all and not body.all_classes:
         raise HTTPException(400, "ids[] / classes[] / all / all_classes is required")
     return {"ok": True, "confirmed_mappings": done_maps, "confirmed_classes": done_classes,
             "confirmed_count": len(done_maps) + len(done_classes)}
 
 
 @router.post("/accessory-definition/seed-classes")
-def seed_accessory_definition_classes(body: dict = None, org_id: str = ORG_ID):
+def seed_accessory_definition_classes(body: Optional[LaxModel] = None, org_id: str = ORG_ID):
     """Materialise the owner's built-in accessory CLASSES as rows for THIS tenant (status='proposed'),
     skipping keys that already exist. Migration 257 seeds the house org only; every other tenant seeds
     itself here, with org_id stamped on every insert (RULE ONE). Idempotent. No MAPPINGS are seeded —
@@ -5942,8 +6087,15 @@ def put_accessory_definition_field_rule(body: dict, authorization: str = Header(
                      "field, never a product name: " + ", ".join(refused))}
 
 
+class ProposeAccessoryDefinitionIn(LaxModel):
+    period: Any = None
+    store: Any = None
+    rep: Any = None
+    dry_run: Any = None
+
+
 @router.post("/accessory-definition/propose-from-data")
-def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_ID):
+def propose_accessory_definition_from_data(body: Optional[ProposeAccessoryDefinitionIn] = None, org_id: str = ORG_ID):
     """Infer PROPOSED product-description mappings from THIS tenant's own sale lines, and (unless
     `dry_run`) write them as status='proposed' for the owner to confirm.
 
@@ -5958,7 +6110,7 @@ def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_
     Nothing is inferred from a product NAME, nothing is proposed for a product no evidence touched, and
     set-up fees are excluded first. `dry_run=true` returns the list without writing anything."""
     require_org(org_id)
-    body = body or {}
+    body = body or ProposeAccessoryDefinitionIn()
     client = sb()
     map_rows, map_ready = _ad_map_rows(client, org_id)
     rule, _refused, _rr = _ad_field_rule(client, org_id)
@@ -5967,14 +6119,14 @@ def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_
         setup_kws = set((_accessory_config(client, org_id) or {}).get("setup_fee_products") or ())
     except Exception:
         setup_kws = set()
-    rows, meta = _ad_sales(client, org_id, str(body.get("period") or ""),
-                           str(body.get("store") or ""), str(body.get("rep") or ""))
+    rows, meta = _ad_sales(client, org_id, str(body.period or ""),
+                           str(body.store or ""), str(body.rep or ""))
     live = [r for r in rows
             if str(r.get("voided") or "").strip().upper() not in ("YES", "Y", "TRUE", "1")
             and str(r.get("trans_type") or "").strip() != "Return"]
     index = accessory_definition.build_index(map_rows)
     proposals = accessory_definition.propose_from_data(live, index, rule, setup_kws)
-    if body.get("dry_run"):
+    if body.dry_run:
         return {"ok": True, "dry_run": True, "proposals": proposals, "count": len(proposals),
                 "meta": meta, "ready": map_ready}
     if not map_ready:
@@ -5985,7 +6137,7 @@ def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_
                       "note": ("Proposed from your own %s data: this product is already an accessory on "
                                "%d of its %d line(s) (%s said so on %s). Mapping the description also "
                                "covers the %d line(s) whose department/category is spelled differently."
-                               % (str(body.get("period") or "sales"), p["covered_lines"], p["lines"],
+                               % (str(body.period or "sales"), p["covered_lines"], p["lines"],
                                   (p["evidence"] or {}).get("matched_by") or "the definition",
                                   (p["evidence"] or {}).get("date") or "an earlier line",
                                   p["uncovered_lines"]))}
@@ -6350,23 +6502,34 @@ def list_category_map(carrier_id: str = "", org_id: str = ORG_ID):
 
 
 @router.post("/carrier-category-map")
-def upsert_category_rule(body: dict, org_id: str = ORG_ID):
+class UpsertCategoryRuleIn(LaxModel):
+    component: str = ""
+    raw_category: str = ""
+    carrier_id: Any = None
+    match_type: str = ""
+    subtype: str = ""
+    priority: Any = None
+    is_active: Any = True
+    id: Any = None
+
+
+def upsert_category_rule(body: UpsertCategoryRuleIn, org_id: str = ORG_ID):
     require_org(org_id)
-    comp = (body.get("component") or "").strip().upper()
+    comp = (body.component or "").strip().upper()
     if comp not in carrier_map.COMPONENTS:
         raise HTTPException(400, "component must be one of " + "|".join(carrier_map.COMPONENTS))
-    raw = (body.get("raw_category") or "").strip()
+    raw = (body.raw_category or "").strip()
     if not raw:
         raise HTTPException(400, "raw_category required")
-    row = {"org_id": org_id, "carrier_id": body.get("carrier_id") or None, "raw_category": raw,
-           "match_type": (body.get("match_type") or "exact").lower(), "component": comp,
-           "subtype": (body.get("subtype") or "").strip() or None,
-           "priority": int(body.get("priority") or 100),
-           "is_active": body.get("is_active", True) is not False,
+    row = {"org_id": org_id, "carrier_id": body.carrier_id or None, "raw_category": raw,
+           "match_type": (body.match_type or "exact").lower(), "component": comp,
+           "subtype": (body.subtype or "").strip() or None,
+           "priority": int(body.priority or 100),
+           "is_active": body.is_active is not False,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if body.get("id"):
-        sb().schema("commcalc").table("carrier_category_map").update(row).eq("id", body["id"]).execute()
-        return {"ok": True, "id": body["id"]}
+    if body.id:
+        sb().schema("commcalc").table("carrier_category_map").update(row).eq("id", body.id).execute()
+        return {"ok": True, "id": body.id}
     r = sb().schema("commcalc").table("carrier_category_map").upsert(
         row, on_conflict="org_id,carrier_id,raw_category,match_type").execute()
     return r.data[0] if r.data else row
@@ -6652,15 +6815,22 @@ def upload_duty_config(org_id: str = ORG_ID):
     return {'defaults': _duty_defaults(client, org_id), 'duties': _duty_rows(client, org_id)}
 
 
+class UploadDutyConfigIn(LaxModel):
+    default_assignee: str = ""
+    reminder_hour: Any = 9
+    reminder_minute: Any = 0
+    timezone: str = ""
+
+
 @router.put("/upload-duty-config")
-def set_upload_duty_config(body: dict, org_id: str = ORG_ID):
+def set_upload_duty_config(body: UploadDutyConfigIn, org_id: str = ORG_ID):
     """Set the tenant default assignee + reminder time (the owner's "one person" model)."""
     require_org(org_id)
     row = {'org_id': org_id,
-           'default_assignee': (body.get('default_assignee') or '').strip() or None,
-           'reminder_hour': int(body.get('reminder_hour', 9) or 0),
-           'reminder_minute': int(body.get('reminder_minute', 0) or 0),
-           'timezone': (body.get('timezone') or 'America/New_York').strip(),
+           'default_assignee': (body.default_assignee or '').strip() or None,
+           'reminder_hour': int(body.reminder_hour or 0),
+           'reminder_minute': int(body.reminder_minute or 0),
+           'timezone': (body.timezone or 'America/New_York').strip(),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     sb().schema('commcalc').table('report_upload_defaults').upsert(row, on_conflict='org_id').execute()
     return {'ok': True, 'defaults': row}
@@ -6750,34 +6920,51 @@ def _safe_portal_url(raw):
         raise HTTPException(400, e.message)
 
 
+class ConnectorIn(LaxModel):
+    vendor_name: str = ""
+    label: Any = None
+    sweep_kind: str = ""
+    portal_url: Any = None
+    auth_type: Any = None
+    twofa_method: Any = None
+    twofa_status: Any = None
+    automatable: Any = True
+    config_table: str = ""
+    account_id: str = ""
+    login_username: str = ""
+    sort_order: Any = None
+    enabled: Any = None
+    notes: Any = None
+
+
 @router.post("/connectors")
-def create_connector(body: dict, org_id: str = ORG_ID):
+def create_connector(body: ConnectorIn, org_id: str = ORG_ID):
     """Onboard a new vendor connector to the registry (no SQL). Upsert by vendor_name."""
     require_org(org_id)
-    name = (body.get('vendor_name') or '').strip()
+    name = (body.vendor_name or '').strip()
     if not name:
         raise HTTPException(400, "vendor_name required")
-    row = {'org_id': org_id, 'vendor_name': name, 'label': body.get('label'),
-           'sweep_kind': (body.get('sweep_kind') or 'manual').strip(),
-           'portal_url': _safe_portal_url(body.get('portal_url')),
-           'auth_type': body.get('auth_type') or 'form', 'twofa_method': body.get('twofa_method') or 'none',
-           'twofa_status': body.get('twofa_status') or 'needs_setup',
-           'automatable': body.get('automatable', True) is not False, 'enabled': True,
-           'config_table': (body.get('config_table') or '').strip() or None,
-           'account_id': (body.get('account_id') or '').strip() or None,        # e.g. Total Wireless retailer #
-           'login_username': (body.get('login_username') or '').strip() or None,
-           'sort_order': int(body.get('sort_order') or 100),
+    row = {'org_id': org_id, 'vendor_name': name, 'label': body.label,
+           'sweep_kind': (body.sweep_kind or 'manual').strip(),
+           'portal_url': _safe_portal_url(body.portal_url),
+           'auth_type': body.auth_type or 'form', 'twofa_method': body.twofa_method or 'none',
+           'twofa_status': body.twofa_status or 'needs_setup',
+           'automatable': body.automatable is not False, 'enabled': True,
+           'config_table': (body.config_table or '').strip() or None,
+           'account_id': (body.account_id or '').strip() or None,        # e.g. Total Wireless retailer #
+           'login_username': (body.login_username or '').strip() or None,
+           'sort_order': int(body.sort_order or 100),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('connector_instances').upsert(row, on_conflict='org_id,vendor_name').execute()
     return r.data[0] if r.data else row
 
 
 @router.patch("/connectors/{cid}")
-def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
+def update_connector(cid: str, body: ConnectorIn, org_id: str = ORG_ID):
     require_org(org_id)
     allow = ('label', 'enabled', 'automatable', 'twofa_method', 'twofa_status', 'portal_url', 'sort_order', 'notes',
              'account_id', 'login_username')
-    row = {k: body[k] for k in allow if k in body}
+    row = {k: getattr(body, k) for k in allow if k in body.model_fields_set}
     if 'portal_url' in row:
         row['portal_url'] = _safe_portal_url(row['portal_url'])
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
@@ -6785,27 +6972,49 @@ def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+class ReportDefIn(LaxModel):
+    report_key: str = ""
+    connector_id: Any = None
+    label: Any = None
+    source_name: Any = None
+    report_id: Any = None
+    period_mode: Any = None
+    target_table: Any = None
+    upload_endpoint: Any = None
+    source_url: Any = None
+    auto: Any = None
+    refresh_months: Any = None
+    carrier_id: Any = None
+    sort_order: Any = None
+    note: Any = None
+    daily_upload: Any = None
+    upload_assignee: Any = None
+    upload_instructions: Any = None
+    reminder_hour: Any = None
+    reminder_minute: Any = None
+
+
 @router.post("/report-definitions")
-def create_report_def(body: dict, org_id: str = ORG_ID):
+def create_report_def(body: ReportDefIn, org_id: str = ORG_ID):
     """Add a report to a connector in the registry (no SQL). Upsert by report_key."""
     require_org(org_id)
-    rk = (body.get('report_key') or '').strip()
+    rk = (body.report_key or '').strip()
     if not rk:
         raise HTTPException(400, "report_key required")
-    row = {'org_id': org_id, 'connector_id': body.get('connector_id'), 'report_key': rk,
-           'label': body.get('label'), 'source_name': body.get('source_name'), 'report_id': body.get('report_id'),
-           'period_mode': body.get('period_mode') or 'current', 'target_table': body.get('target_table'),
-           'upload_endpoint': body.get('upload_endpoint'), 'source_url': body.get('source_url'),
-           'auto': bool(body.get('auto')), 'refresh_months': int(body.get('refresh_months') or 1),
-           'carrier_id': (body.get('carrier_id') or None),   # NULL = carrier-agnostic (mig 291)
-           'sort_order': int(body.get('sort_order') or 100),
+    row = {'org_id': org_id, 'connector_id': body.connector_id, 'report_key': rk,
+           'label': body.label, 'source_name': body.source_name, 'report_id': body.report_id,
+           'period_mode': body.period_mode or 'current', 'target_table': body.target_table,
+           'upload_endpoint': body.upload_endpoint, 'source_url': body.source_url,
+           'auto': bool(body.auto), 'refresh_months': int(body.refresh_months or 1),
+           'carrier_id': (body.carrier_id or None),   # NULL = carrier-agnostic (mig 291)
+           'sort_order': int(body.sort_order or 100),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
     return r.data[0] if r.data else row
 
 
 @router.patch("/report-definitions/{rid}")
-def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
+def update_report_def(rid: str, body: ReportDefIn, org_id: str = ORG_ID):
     require_org(org_id)
     allow = ('label', 'source_name', 'report_id', 'period_mode', 'target_table', 'upload_endpoint',
              'source_url', 'auto', 'refresh_months', 'sort_order', 'note', 'carrier_id',
@@ -6813,7 +7022,7 @@ def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
              # so these must be editable from the Imports screen, not seeded from here.
              'daily_upload', 'upload_assignee', 'upload_instructions',
              'reminder_hour', 'reminder_minute')
-    row = {k: body[k] for k in allow if k in body}
+    row = {k: getattr(body, k) for k in allow if k in body.model_fields_set}
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     sb().schema('commcalc').table('report_definitions').update(row).eq('org_id', org_id).eq('id', rid).execute()
     return {"ok": True}
@@ -6851,23 +7060,30 @@ def list_custom_import_types(org_id: str = ORG_ID):
     return sorted(out, key=lambda r: (r['label'] or '').lower())
 
 
+class CustomImportTypeIn(LaxModel):
+    label: str = ""
+    report_key: str = ""
+    period_mode: Any = None
+    note: Any = None
+
+
 @router.post("/custom-import-types")
-def create_custom_import_type(body: dict, org_id: str = ORG_ID):
+def create_custom_import_type(body: CustomImportTypeIn, org_id: str = ORG_ID):
     """Register a self-serve custom sheet. body: {label, report_key?, period_mode?, note?}. Auto-slugs a
     report_key from the label, rejects a collision with a built-in type, and marks it as a generic JSONB
     capture (target_table=raw_custom_import). Returns the report_key to use in a filename pattern.
     Idempotent (upsert by report_key)."""
     require_org(org_id)
-    label = (body.get('label') or '').strip()
+    label = (body.label or '').strip()
     if not label:
         raise HTTPException(400, "label required")
-    rk = _slugify_report_key((body.get('report_key') or '').strip() or label)
+    rk = _slugify_report_key((body.report_key or '').strip() or label)
     if rk in BUILTIN_UPLOAD_TYPES:
         raise HTTPException(400, f"'{rk}' is a built-in report type — pick a different name")
     row = {'org_id': org_id, 'report_key': rk, 'label': label,
-           'period_mode': (body.get('period_mode') or 'current'),
+           'period_mode': (body.period_mode or 'current'),
            'target_table': CUSTOM_IMPORT_TABLE, 'upload_endpoint': 'custom',
-           'auto': True, 'note': (body.get('note') or None),
+           'auto': True, 'note': (body.note or None),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
     return (r.data[0] if r.data else row)
@@ -6972,8 +7188,17 @@ def connector_run_now(cid: str, background_tasks: BackgroundTasks, org_id: str =
     raise HTTPException(400, f"'{rows[0].get('vendor_name')}' is manual-only — upload it on the Upload Wizard.")
 
 
+class ConnectorScheduleIn(LaxModel):
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    enabled: Any = None
+
+
 @router.patch("/connectors/{cid}/schedule")
-def update_connector_schedule(cid: str, body: dict, org_id: str = ORG_ID):
+def update_connector_schedule(cid: str, body: ConnectorScheduleIn, org_id: str = ORG_ID):
     """Set a connector's sweep schedule (frequency/day/hour/timezone/enabled) from the registry —
     written to its *_sweep_config and re-deriving next_run_at via the shared scheduler. The registry
     becomes the single place to schedule, instead of hunting for each vendor's own sweep page."""
@@ -6998,9 +7223,9 @@ def update_connector_schedule(cid: str, body: dict, org_id: str = ORG_ID):
     merged = {**cur[0]}
     upd = {}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone', 'enabled'):
-        if k in body and body[k] is not None:
-            upd[k] = body[k]
-            merged[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            upd[k] = getattr(body, k)
+            merged[k] = getattr(body, k)
     upd['next_run_at'] = _vip_next_run(merged.get('frequency') or 'daily', merged.get('day_of_week'),
                                        merged.get('day_of_month'), merged.get('hour'), merged.get('timezone'))
     try:
@@ -7018,7 +7243,7 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     (enabled + next_run_at), dispatches the due ones by sweep_kind, and advances next_run_at.
     Additive: the per-vendor run-dues still work; point a single cron here and disable the others to
     avoid double-runs. Guarded by NOTIFY_RUN_SECRET (reused — no new env var)."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -7727,15 +7952,21 @@ def get_flag_rules(org_id: str = ORG_ID):
 
 
 @router.put("/flag-rules")
-def put_flag_rules(body: dict, org_id: str = ORG_ID):
+class PutFlagRulesIn(LaxModel):
+    accessory_threshold: Any = None
+    accessory_chargeback_amount: Any = None
+    accessory_min_threshold: Any = None
+
+
+def put_flag_rules(body: PutFlagRulesIn, org_id: str = ORG_ID):
     require_org(org_id)
     row = {"id": 1, "org_id": org_id, "updated_at": _cb_now()}
-    if body.get("accessory_threshold") is not None:
-        row["accessory_threshold"] = safe_float(body.get("accessory_threshold"))
-    if body.get("accessory_chargeback_amount") is not None:
-        row["accessory_chargeback_amount"] = safe_float(body.get("accessory_chargeback_amount"))
-    if body.get("accessory_min_threshold") is not None:
-        row["accessory_min_threshold"] = safe_float(body.get("accessory_min_threshold"))
+    if body.accessory_threshold is not None:
+        row["accessory_threshold"] = safe_float(body.accessory_threshold)
+    if body.accessory_chargeback_amount is not None:
+        row["accessory_chargeback_amount"] = safe_float(body.accessory_chargeback_amount)
+    if body.accessory_min_threshold is not None:
+        row["accessory_min_threshold"] = safe_float(body.accessory_min_threshold)
     try:
         sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
         _invalidate_accessory_config(org_id)   # legacy fallback source for _accessory_config (②)
@@ -7804,22 +8035,30 @@ def get_item_categories(org_id: str = ORG_ID):
             "kpi": _item_category_values(client, org_id, "kpi"), "ready": True}
 
 
+class PutItemCategoryIn(LaxModel):
+    dimension: str = ""
+    value: str = ""
+    label: Any = None
+    is_active: Any = None
+    sort_order: Any = None
+
+
 @router.put("/item-categories")
-def put_item_category(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_item_category(body: PutItemCategoryIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Add/rename/deactivate ONE category value. body: {dimension('sales'|'kpi'), value,
     label?, is_active?, sort_order?}. value is the canonical key stored on item_mapping.*_category."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    dim = (body.get("dimension") or "").strip().lower()
-    val = (body.get("value") or "").strip().lower().replace(" ", "_")
+    dim = (body.dimension or "").strip().lower()
+    val = (body.value or "").strip().lower().replace(" ", "_")
     if dim not in ("sales", "kpi") or not val:
         raise HTTPException(400, "dimension ('sales'|'kpi') and value are required.")
     row = {"org_id": org_id, "dimension": dim, "value": val,
-           "label": (body.get("label") or val.replace("_", " ").title()),
-           "is_active": bool(body.get("is_active")) if body.get("is_active") is not None else True,
+           "label": (body.label or val.replace("_", " ").title()),
+           "is_active": bool(body.is_active) if body.is_active is not None else True,
            "source": "manual", "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if body.get("sort_order") is not None:
-        row["sort_order"] = int(body.get("sort_order") or 100)
+    if body.sort_order is not None:
+        row["sort_order"] = int(body.sort_order or 100)
     try:
         sb().schema("commcalc").table("item_category_config").upsert(row, on_conflict="org_id,dimension,value").execute()
     except Exception as e:
@@ -7897,28 +8136,40 @@ def get_item_mapping(search: str = None, item_type: str = None, store: str = Non
     return {"items": rows, "ready": True, "counts": counts, "total": len(rows)}
 
 
+class UpsertItemMappingIn(LaxModel):
+    item_key: Any = None
+    sku: Any = None
+    item_desc: Any = None
+    item_type: str = ""
+    device_model: str = ""
+    department: Any = None
+    category: Any = None
+    sales_category: Any = None
+    kpi_category: Any = None
+
+
 @router.post("/item-mapping")
-def upsert_item_mapping(body: dict, org_id: str = ORG_ID):
+def upsert_item_mapping(body: UpsertItemMappingIn, org_id: str = ORG_ID):
     """Classify / edit one item (type + device_model). Keyed by item_key (sku, else description)."""
     require_org(org_id)
-    key = (body.get("item_key") or _item_key(body.get("sku"), body.get("item_desc")))
+    key = (body.item_key or _item_key(body.sku, body.item_desc))
     if not key:
         raise HTTPException(400, "item_key (or sku/item_desc) required")
-    item_type = (body.get("item_type") or "unclassified").strip()
-    device_model = (body.get("device_model") or "").strip() or None
+    item_type = (body.item_type or "unclassified").strip()
+    device_model = (body.device_model or "").strip() or None
     if item_type == "phone" and not device_model:
         raise HTTPException(400, "Phone model is required when the item type is 'phone'.")
     row = {"org_id": org_id, "item_key": key,
-           "sku": (body.get("sku") or "").strip() or None,
-           "item_desc": (body.get("item_desc") or "").strip() or None,
+           "sku": (body.sku or "").strip() or None,
+           "item_desc": (body.item_desc or "").strip() or None,
            "item_type": item_type, "device_model": device_model,
-           "department": body.get("department"), "category": body.get("category"),
+           "department": body.department, "category": body.category,
            "source": "manual", "updated_at": _cb_now()}
     # DUAL-category (mig 210): only stamp when present so a type-only save never nulls a category.
-    if "sales_category" in body:
-        row["sales_category"] = (str(body.get("sales_category") or "").strip() or None)
-    if "kpi_category" in body:
-        row["kpi_category"] = (str(body.get("kpi_category") or "").strip() or None)
+    if "sales_category" in body.model_fields_set:
+        row["sales_category"] = (str(body.sales_category or "").strip() or None)
+    if "kpi_category" in body.model_fields_set:
+        row["kpi_category"] = (str(body.kpi_category or "").strip() or None)
     try:
         sb().schema("commcalc").table("item_mapping").upsert(row, on_conflict="org_id,item_key").execute()
         if device_model:
@@ -7928,20 +8179,28 @@ def upsert_item_mapping(body: dict, org_id: str = ORG_ID):
     return {"ok": True, "item_key": key}
 
 
+class BulkItemMappingIn(LaxModel):
+    item_keys: Any = None
+    item_type: str = ""
+    device_model: str = ""
+    sales_category: Any = None
+    kpi_category: Any = None
+
+
 @router.post("/item-mapping/bulk")
-def bulk_item_mapping(body: dict, org_id: str = ORG_ID):
+def bulk_item_mapping(body: BulkItemMappingIn, org_id: str = ORG_ID):
     """Apply a type and/or phone model to MANY items at once. Body: {item_keys: [...],
     item_type?, device_model?}. Only the provided fields are changed on each row."""
     require_org(org_id)
-    keys = [k for k in (body.get("item_keys") or []) if k]
+    keys = [k for k in (body.item_keys or []) if k]
     if not keys:
         raise HTTPException(400, "item_keys required")
-    item_type = (body.get("item_type") or "").strip() or None
-    device_model = (body.get("device_model") or "").strip() or None
+    item_type = (body.item_type or "").strip() or None
+    device_model = (body.device_model or "").strip() or None
     if item_type == "phone" and not device_model:
         raise HTTPException(400, "Phone model is required when setting type to 'phone'. Pick a model to apply to the selected items.")
-    sales_category = (body.get("sales_category") or "").strip() if "sales_category" in body else None
-    kpi_category = (body.get("kpi_category") or "").strip() if "kpi_category" in body else None
+    sales_category = (body.sales_category or "").strip() if "sales_category" in body.model_fields_set else None
+    kpi_category = (body.kpi_category or "").strip() if "kpi_category" in body.model_fields_set else None
     if not item_type and not device_model and sales_category is None and kpi_category is None:
         raise HTTPException(400, "Provide item_type, device_model, sales_category and/or kpi_category to apply.")
     patch = {"source": "manual", "updated_at": _cb_now()}
@@ -8013,10 +8272,14 @@ def list_device_models(org_id: str = ORG_ID):
     return {"models": sorted(m for m in models if m), "registry": reg}
 
 
+class AddDeviceModelIn(LaxModel):
+    model: str = ""
+
+
 @router.post("/device-models")
-def add_device_model(body: dict, org_id: str = ORG_ID):
+def add_device_model(body: AddDeviceModelIn, org_id: str = ORG_ID):
     require_org(org_id)
-    model = (body.get("model") or "").strip()
+    model = (body.model or "").strip()
     if not model:
         raise HTTPException(400, "model required")
     try:
@@ -8299,17 +8562,22 @@ def accessory_receipt(trans_id: str, org_id: str = ORG_ID):
     return {"trans_id": trans_id, "header": header, "lines": lines, "line_count": len(lines), "total": round(total, 2)}
 
 
+class AccessoryFlagsPushIn(LaxModel):
+    rows: Any = None
+    assigned_by: Any = None
+
+
 @router.post("/accessory-flags/push")
-def accessory_flags_push(body: dict, org_id: str = ORG_ID):
+def accessory_flags_push(body: AccessoryFlagsPushIn, org_id: str = ORG_ID):
     """Flag selected accessory rows → chargeback bucket, ASSIGNED to the rep who sold it (writes the
     employee chargeback_items row). Body: {rows:[{trans_id,sku,item_desc,dedupe_key,rep,store,
     store_code,period,trans_date,phone_model,ext_price,chargeback_amount}], assigned_by}.
     Idempotent per dedupe_key — re-pushing updates the amount instead of duplicating."""
     require_org(org_id)
-    rows = body.get("rows") or []
+    rows = body.rows or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
-    by = body.get("assigned_by") or "admin"
+    by = body.assigned_by or "admin"
     client = sb()
     pushed, errors = 0, []
     for r in rows:
@@ -8476,7 +8744,18 @@ async def dlar_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/dlar/sweep/config")
-async def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID,
+class DlarSweepPutConfigIn(LaxModel):
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    enabled: Any = None
+    portal_user: Any = None
+    portal_pass: Any = None
+
+
+async def dlar_sweep_put_config(body: DlarSweepPutConfigIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -8487,9 +8766,9 @@ async def dlar_sweep_put_config(body: dict, org_id: str = ORG_ID,
     row = {'org_id': org_id}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
               'enabled', 'portal_user'):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
-    pw = (body.get('portal_pass') or '').strip()
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
+    pw = (body.portal_pass or '').strip()
     if pw:
         row['portal_pass'] = pw
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
@@ -8516,7 +8795,7 @@ async def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = OR
 async def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -8644,7 +8923,7 @@ async def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG
 async def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -8759,7 +9038,22 @@ async def epay_sweep_get_config(org_id: str = ORG_ID):
 
 
 @router.put("/epay/sweep/config")
-async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
+class EpaySweepPutConfigIn(LaxModel):
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    enabled: Any = None
+    portal_user: Any = None
+    portal_url: Any = None
+    sweep_mi: Any = None
+    sweep_comp: Any = None
+    sweep_payment: Any = None
+    portal_pass: Any = None
+
+
+async def epay_sweep_put_config(body: EpaySweepPutConfigIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -8770,8 +9064,8 @@ async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
     row = {'org_id': org_id}
     for k in ('frequency', 'day_of_week', 'day_of_month', 'hour', 'timezone',
               'enabled', 'portal_user', 'portal_url', 'sweep_mi', 'sweep_comp', 'sweep_payment'):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
     # SSRF GUARD (C4): epay_sweep_config.portal_url is handed to page.goto() in a --no-sandbox
     # Chromium exactly like the data_source one. epay_sweep._safe_base re-checks at USE time (rows
     # saved before this landed were never validated); this is the same check at SAVE time so the
@@ -8781,7 +9075,7 @@ async def epay_sweep_put_config(body: dict, org_id: str = ORG_ID,
             row['portal_url'] = _url_guard.assert_safe_url(row['portal_url'], what="portal address")
         except _url_guard.UnsafeUrlError as e:
             raise HTTPException(400, e.message)
-    pw = (body.get('portal_pass') or '').strip()
+    pw = (body.portal_pass or '').strip()
     if pw:
         row['portal_pass'] = pw
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
@@ -8837,7 +9131,7 @@ async def epay_discover_reports(org_id: str = ORG_ID):
 async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -10539,54 +10833,64 @@ async def get_commission_settings(org_id: str = ORG_ID):
     return _commission_org_config(sb(), org_id)
 
 
+class PutCommissionSettingsIn(LaxModel):
+    pay_disabled: Any = None
+    residual_visibility: Any = None
+    plan_ct_resolution: Any = None
+    installment_mrc_basis: Any = None
+    installment_mrc_hardware_guard: Any = None
+    store_resolution: Any = None
+    calc_stale_minutes: Any = None
+
+
 @router.put("/commission-settings")
-async def put_commission_settings(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_commission_settings(body: PutCommissionSettingsIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Sets pay_disabled and/or residual_visibility for the tenant. pay_disabled=true means
     'this tenant INTENTIONALLY pays no commissions' → silences the R1 unconfigured-tenant refusal."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     row = {"org_id": org_id, "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if "pay_disabled" in body:
-        row["pay_disabled"] = bool(body.get("pay_disabled"))
-    if "residual_visibility" in body:
-        rv = (body.get("residual_visibility") or "all").strip().lower()
+    if "pay_disabled" in body.model_fields_set:
+        row["pay_disabled"] = bool(body.pay_disabled)
+    if "residual_visibility" in body.model_fields_set:
+        rv = (body.residual_visibility or "all").strip().lower()
         row["residual_visibility"] = rv if rv in ("all", "permissioned") else "all"
     # mig 232 — MONEY-ADJACENT: 'mapped' lets a contract_type-keyed Commission Plan rule ALSO match the
     # line's resolved activation bucket (the tenant's own mig-213 map + mig-224 activation rules), so
     # blank / carrier-specific Contract Type lines can start paying. Strictly a superset => pay can go UP
     # on the NEXT Calculate (this write alone moves nothing). Same admin gate as the rest of this endpoint.
-    if "plan_ct_resolution" in body:
-        cr = (body.get("plan_ct_resolution") or "raw").strip().lower()
+    if "plan_ct_resolution" in body.model_fields_set:
+        cr = (body.plan_ct_resolution or "raw").strip().lower()
         row["plan_ct_resolution"] = cr if cr in ("raw", "mapped") else "raw"
     # mig 233 — MONEY: which sale line a multi-month %-of-MRC installment is paid on. 'plan_line'
     # (default) = the activation's RATE-PLAN line; 'trigger_line' = the pre-2026-07-25 per-line
     # resolution, which let a handset line's PRICE be paid as if it were a monthly charge. Switching to
     # 'trigger_line' can INCREASE pay on the next Calculate. Same admin gate as the rest of this endpoint.
-    if "installment_mrc_basis" in body:
-        mb = (body.get("installment_mrc_basis") or "plan_line").strip().lower()
+    if "installment_mrc_basis" in body.model_fields_set:
+        mb = (body.installment_mrc_basis or "plan_line").strip().lower()
         row["installment_mrc_basis"] = mb if mb in ("plan_line", "trigger_line") else "plan_line"
     # mig 246 — MONEY: with the guard ON (default) a DEVICE line (IMEI / a configured hardware
     # department) can never donate its own price as a multi-month MRC — the 2026-07-27 tablet bug
     # ($14.00 = 5% of a $279.99 promo price). Turning it OFF restores that behaviour and can INCREASE
     # pay on the next Calculate. Same admin gate as the rest of this endpoint.
-    if "installment_mrc_hardware_guard" in body:
-        row["installment_mrc_hardware_guard"] = bool(body.get("installment_mrc_hardware_guard"))
+    if "installment_mrc_hardware_guard" in body.model_fields_set:
+        row["installment_mrc_hardware_guard"] = bool(body.installment_mrc_hardware_guard)
     # mig 249 — MONEY-ADJACENT: 'alias' resolves a rep's raw POS store string through the /store-match
     # alias table (commcalc.store_aliases → store_code → store_mapping / storeops roster) for their
     # MARKET, and lets a store-scope assignment also match the resolved store code / canonical address.
     # It can only ATTACH a plan that today attaches to nobody => pay can go UP on the NEXT Calculate
     # (this write alone moves nothing). Same admin gate as the rest of this endpoint.
-    if "store_resolution" in body:
-        sr = (body.get("store_resolution") or "exact").strip().lower()
+    if "store_resolution" in body.model_fields_set:
+        sr = (body.store_resolution or "exact").strip().lower()
         row["store_resolution"] = sr if sr in ("exact", "alias") else "exact"
     # mig 275 — NOT MONEY: minutes before a recompute still marked 'running' is presumed dead and the next
     # Calculate takes the slot over. Blank/None clears the override back to the 20-minute code default.
     # Clamped 1..1440 here as well as at read time so a bad save can neither wedge recomputes (too high)
     # nor let two of them overlap. Parsed HERE, written BELOW in its own statement.
     _csm_set, _csm_val = False, None
-    if "calc_stale_minutes" in body:
+    if "calc_stale_minutes" in body.model_fields_set:
         _csm_set = True
-        _v = body.get("calc_stale_minutes")
+        _v = body.calc_stale_minutes
         if _v is None or str(_v).strip() == "":
             _csm_val = None
         else:
@@ -10867,24 +11171,33 @@ async def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
             "value_fields": ["ext_price", "gp"], "departments": depts, "categories": cats}
 
 
+class PutActivationMatcherIn(LaxModel):
+    reset: Any = None
+    value_field: str = ""
+    departments: Any = None
+    categories: Any = None
+    product_keywords: Any = None
+    min_amount: Any = None
+
+
 @router.put("/plan-installments/activation-matcher")
-async def put_activation_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_activation_matcher(body: PutActivationMatcherIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Save the tenant's activation-payment matcher (mig 210). body: {departments[], categories[],
     product_keywords[], value_field('ext_price'|'gp'), min_amount} — OR {reset:true} to revert to the engine
     default (stored NULL). 500 with a 'run migration 210' hint if the column is absent."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
-    if body.get("reset"):
+    if body.reset:
         matcher = None
     else:
-        vf = str(body.get("value_field") or "ext_price").strip().lower()
+        vf = str(body.value_field or "ext_price").strip().lower()
         matcher = {
-            "departments": [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()],
-            "categories": [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()],
-            "product_keywords": [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()],
+            "departments": [str(x).strip() for x in (body.departments or []) if str(x).strip()],
+            "categories": [str(x).strip() for x in (body.categories or []) if str(x).strip()],
+            "product_keywords": [str(x).strip() for x in (body.product_keywords or []) if str(x).strip()],
             "value_field": vf if vf in ("ext_price", "gp") else "ext_price",
-            "min_amount": safe_float(body.get("min_amount")) if body.get("min_amount") is not None else 0.01,
+            "min_amount": safe_float(body.min_amount) if body.min_amount is not None else 0.01,
         }
     row = {"org_id": org_id, "activation_payment_matcher": matcher,
            "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
@@ -10935,8 +11248,15 @@ async def get_plan_line_matcher(period: str = "", org_id: str = ORG_ID):
             "departments": depts, "categories": cats}
 
 
+class PutPlanLineMatcherIn(LaxModel):
+    reset: Any = None
+    departments: Any = None
+    categories: Any = None
+    product_keywords: Any = None
+
+
 @router.put("/plan-installments/plan-line-matcher")
-async def put_plan_line_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_plan_line_matcher(body: PutPlanLineMatcherIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Save the tenant's rate-plan line matcher (mig 233). body: {departments[], categories[],
     product_keywords[]} — OR {reset:true} to revert to the engine default (stored NULL).
 
@@ -10946,12 +11266,12 @@ async def put_plan_line_matcher(body: dict, authorization: str = Header(default=
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
-    if body.get("reset"):
+    if body.reset:
         matcher = None
     else:
-        matcher = {"departments": [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()],
-                   "categories": [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()],
-                   "product_keywords": [str(x).strip() for x in (body.get("product_keywords") or [])
+        matcher = {"departments": [str(x).strip() for x in (body.departments or []) if str(x).strip()],
+                   "categories": [str(x).strip() for x in (body.categories or []) if str(x).strip()],
+                   "product_keywords": [str(x).strip() for x in (body.product_keywords or [])
                                         if str(x).strip()]}
     row = {"org_id": org_id, "plan_line_matcher": matcher,
            "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
@@ -11054,37 +11374,48 @@ async def put_category_qualification(body: dict, authorization: str = Header(def
             "qualification": qual or dict(icat.DEFAULT_QUALIFICATION)}
 
 
+class SaveCategoryRuleIn(LaxModel):
+    category_key: str = ""
+    match_field: str = ""
+    match_op: str = ""
+    match_value: str = ""
+    priority: Any = None
+    is_active: Any = True
+    note: Any = None
+    id: Any = None
+
+
 @router.post("/plan-installments/category-rules")
-async def save_category_rule(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def save_category_rule(body: SaveCategoryRuleIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Add/replace ONE tenant classification rule (mig 245).
     body: {id?, category_key, match_field, match_op, match_value, priority?, is_active?, note?}.
     Tenant rules are evaluated BEFORE the built-ins; the built-ins remain as the fallback tail."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     from app.modules.commcalc import installment_category as icat
-    ck = str(body.get("category_key") or "").strip().lower()
+    ck = str(body.category_key or "").strip().lower()
     if ck not in icat.CATEGORY_KEYS or ck == "unknown":
         raise HTTPException(400, "category_key must be one of "
                                  f"{[k for k in icat.CATEGORY_KEYS if k != 'unknown']}")
-    mf = str(body.get("match_field") or "product_desc").strip().lower()
-    mo = str(body.get("match_op") or "contains").strip().lower()
+    mf = str(body.match_field or "product_desc").strip().lower()
+    mo = str(body.match_op or "contains").strip().lower()
     if mf not in icat.MATCH_FIELDS:
         raise HTTPException(400, f"match_field must be one of {list(icat.MATCH_FIELDS)}")
     if mo not in icat.MATCH_OPS:
         raise HTTPException(400, f"match_op must be one of {list(icat.MATCH_OPS)}")
-    mv = str(body.get("match_value") or "").strip()
+    mv = str(body.match_value or "").strip()
     if not mv:
         raise HTTPException(400, "match_value is required (pick a real Department / Category / product value).")
     row = {"org_id": org_id, "category_key": ck, "match_field": mf, "match_op": mo, "match_value": mv,
-           "priority": int(body.get("priority") or 50), "is_active": bool(body.get("is_active", True)),
-           "note": body.get("note"), "updated_by": _caller_uid(authorization),
+           "priority": int(body.priority or 50), "is_active": bool(body.is_active),
+           "note": body.note, "updated_by": _caller_uid(authorization),
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     client = sb()
     try:
-        if body.get("id"):
+        if body.id:
             (client.schema('commcalc').table('installment_category_rule').update(row)
-             .eq('id', body["id"]).eq('org_id', org_id).execute())
-            return {"saved": True, "id": body["id"]}
+             .eq('id', body.id).eq('org_id', org_id).execute())
+            return {"saved": True, "id": body.id}
         r = client.schema('commcalc').table('installment_category_rule').insert(row).execute()
         return {"saved": True, "id": (r.data or [{}])[0].get("id")}
     except Exception as e:
@@ -11499,8 +11830,16 @@ async def list_expected_commission_promotes(period: str = "", status: str = "",
             "ready": True, "migration": None}
 
 
+class PromoteExpectedCommissionIn(LaxModel):
+    period: str = ""
+    trans_id: str = ""
+    mdn: str = ""
+    reason: str = ""
+    month_index: Any = None
+
+
 @router.post("/expected-commission/promote")
-async def promote_expected_commission(body: dict, authorization: str = Header(default=""),
+async def promote_expected_commission(body: PromoteExpectedCommissionIn, authorization: str = Header(default=""),
                                       org_id: str = ORG_ID):
     """💰 MONEY WRITE — move ONE chain-month's EXPECTED amount into EARNED.
     body: {period, trans_id, mdn, month_index, reason} (`reason` is REQUIRED — this is an audit row).
@@ -11527,12 +11866,12 @@ async def promote_expected_commission(body: dict, authorization: str = Header(de
             if why == "setting_area" else
             "This action must be performed by an identified, signed-in user — it writes a money "
             "record naming who approved it."))
-    period = str(body.get("period") or "").strip()
-    trans_id = str(body.get("trans_id") or "").strip()
-    mdn = str(body.get("mdn") or "").strip()
-    reason = str(body.get("reason") or "").strip()
+    period = str(body.period or "").strip()
+    trans_id = str(body.trans_id or "").strip()
+    mdn = str(body.mdn or "").strip()
+    reason = str(body.reason or "").strip()
     try:
-        month_index = int(body.get("month_index"))
+        month_index = int(body.month_index)
     except (TypeError, ValueError):
         raise HTTPException(400, "month_index is required")
     if not period or not trans_id:
@@ -11575,8 +11914,13 @@ async def promote_expected_commission(body: dict, authorization: str = Header(de
                      "approved.")}
 
 
+class RevokeExpectedCommissionIn(LaxModel):
+    id: str = ""
+    reason: Any = None
+
+
 @router.post("/expected-commission/revoke")
-async def revoke_expected_commission(body: dict, authorization: str = Header(default=""),
+async def revoke_expected_commission(body: RevokeExpectedCommissionIn, authorization: str = Header(default=""),
                                      org_id: str = ORG_ID):
     """💰 MONEY WRITE — revoke a promote. body: {id, reason?}. The row is KEPT with status='revoked'
     (an audit trail you can delete is not an audit trail); the month reverts to the normal gate on the
@@ -11585,14 +11929,14 @@ async def revoke_expected_commission(body: dict, authorization: str = Header(def
     allowed, why, _caller = _xc_can_promote(authorization, org_id)
     if not allowed:
         raise HTTPException(403, "You do not have permission to change expected-to-earned promotions.")
-    rid = str(body.get("id") or "").strip()
+    rid = str(body.id or "").strip()
     if not rid:
         raise HTTPException(400, "id is required")
     try:
         (sb().schema("commcalc").table(expected_commission.TABLE)
          .update({"status": "revoked", "revoked_by": _xc_who(authorization),
                   "revoked_at": _datetime.now(_timezone.utc).isoformat(),
-                  "revoke_reason": (body.get("reason") or None),
+                  "revoke_reason": (body.reason or None),
                   "updated_at": _datetime.now(_timezone.utc).isoformat()})
          .eq("org_id", org_id).eq("id", rid).execute())
     except Exception as e:
@@ -11771,18 +12115,24 @@ async def mrc_mapping_candidates(period: str, org_id: str = ORG_ID):
     return {"period": period, "candidates": out, "count": len(out)}
 
 
+class MrcMappingConfirmIn(LaxModel):
+    carrier_id: Any = None
+    match_op: str = ""
+    items: Any = None
+
+
 @router.post("/mrc-mapping/confirm")
-async def mrc_mapping_confirm(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def mrc_mapping_confirm(body: MrcMappingConfirmIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert user-confirmed product_mrc rows (money config → admin-only). Body: {carrier_id?, match_op?,
     items:[{plan, mrc, classification?}]}. Marks each row confirmed=true. Reuses the existing product_mrc
     table (mig 074) — never a new mapping table."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
-    carrier_id = body.get("carrier_id") or None
-    match_op = (body.get("match_op") or "equals").strip() or "equals"
+    carrier_id = body.carrier_id or None
+    match_op = (body.match_op or "equals").strip() or "equals"
     saved = 0
-    for it in (body.get("items") or []):
+    for it in (body.items or []):
         plan = str(it.get("plan") or "").strip()
         if not plan:
             continue
@@ -11867,8 +12217,16 @@ def _mrc_crossmenu_conflicts(item_rows, plans, classification):
     return conflicts
 
 
+class MrcMappingBulkClassifyIn(LaxModel):
+    classification: str = ""
+    carrier_id: Any = None
+    match_op: str = ""
+    dry_run: Any = None
+    items: Any = None
+
+
 @router.post("/mrc-mapping/bulk-classify")
-async def mrc_mapping_bulk_classify(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def mrc_mapping_bulk_classify(body: MrcMappingBulkClassifyIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Assign ONE classification to MANY product_mrc mappings in a single round trip (bulk companion to
     /mrc-mapping/confirm). Body: {items:[{plan, mrc?, source_desc?, prefill_mrc?} | str], classification,
     carrier_id?, match_op?, dry_run?}. CROSS-MENU GUARD: every plan is checked against the Item / Model
@@ -11881,15 +12239,15 @@ async def mrc_mapping_bulk_classify(body: dict, authorization: str = Header(defa
     Calculation. Admin-gated (money config surface)."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    classification = (body.get("classification") or "").strip()
+    classification = (body.classification or "").strip()
     if not classification:
         raise HTTPException(400, "classification is required")
-    carrier_id = body.get("carrier_id") or None
-    match_op = (body.get("match_op") or "equals").strip() or "equals"
-    dry_run = bool(body.get("dry_run"))
+    carrier_id = body.carrier_id or None
+    match_op = (body.match_op or "equals").strip() or "equals"
+    dry_run = bool(body.dry_run)
     # de-dupe the requested plans (case-insensitive), preserving any per-plan mrc/prefill payload
     items, seen = [], set()
-    for it in (body.get("items") or []):
+    for it in (body.items or []):
         plan = str((it.get("plan") if isinstance(it, dict) else it) or "").strip()
         if not plan or plan.lower() in seen:
             continue
@@ -11987,26 +12345,38 @@ async def list_payout_schedules(org_id: str = ORG_ID):
     return {"schedules": scheds, "ready": True}
 
 
+class SavePayoutScheduleIn(LaxModel):
+    id: Any = None
+    company_id: Any = None
+    carrier_id: Any = None
+    activation_type: str = ""
+    num_months: Any = None
+    gate_signal: Any = None
+    bypass_tier: Any = True
+    is_active: Any = True
+    lines: Any = None
+
+
 @router.post("/payout-schedule")
-async def save_payout_schedule(body: dict, org_id: str = ORG_ID):
+async def save_payout_schedule(body: SavePayoutScheduleIn, org_id: str = ORG_ID):
     """Create/replace a schedule + its lines. Body: {id?, company_id?, carrier_id?, activation_type?,
     num_months, gate_signal?, bypass_tier?, is_active?, lines:[{month_index, payout_kind, flat_amount?,
     mrc_pct?, mrc_basis?, requires_paid}]}. Replaces the lines for the schedule (delete-then-insert)."""
     client = sb()
     head = {
         "org_id": org_id,
-        "company_id": body.get("company_id") or None,
-        "carrier_id": body.get("carrier_id") or None,
-        "activation_type": (body.get("activation_type") or "*").strip() or "*",
-        "num_months": int(body.get("num_months") or 1),
-        "gate_signal": body.get("gate_signal") or "paid_residual",
-        "bypass_tier": bool(body.get("bypass_tier", True)),
-        "is_active": bool(body.get("is_active", True)),
+        "company_id": body.company_id or None,
+        "carrier_id": body.carrier_id or None,
+        "activation_type": (body.activation_type or "*").strip() or "*",
+        "num_months": int(body.num_months or 1),
+        "gate_signal": body.gate_signal or "paid_residual",
+        "bypass_tier": bool(body.bypass_tier),
+        "is_active": bool(body.is_active),
     }
     try:
-        if body.get("id"):
-            client.schema('commcalc').table('payout_schedule').update(head).eq('id', body['id']).eq('org_id', org_id).execute()
-            sid = body['id']
+        if body.id:
+            client.schema('commcalc').table('payout_schedule').update(head).eq('id', body.id).eq('org_id', org_id).execute()
+            sid = body.id
         else:
             r = client.schema('commcalc').table('payout_schedule').upsert(
                 head, on_conflict='org_id,company_id,carrier_id,activation_type').execute()
@@ -12015,7 +12385,7 @@ async def save_payout_schedule(body: dict, org_id: str = ORG_ID):
             raise HTTPException(500, "could not save schedule header")
         client.schema('commcalc').table('payout_schedule_line').delete().eq('org_id', org_id).eq('schedule_id', sid).execute()
         lines = []
-        for ln in (body.get("lines") or []):
+        for ln in (body.lines or []):
             lines.append({
                 "org_id": org_id, "schedule_id": sid,
                 "month_index": int(ln.get("month_index") or 1),
@@ -12069,31 +12439,42 @@ async def list_product_mrc(org_id: str = ORG_ID):
     return {"items": rows, "ready": True}
 
 
+class SaveProductMrcIn(LaxModel):
+    id: Any = None
+    carrier_id: Any = None
+    plan_pattern: str = ""
+    match_op: str = ""
+    mrc: Any = None
+    priority: Any = None
+    is_active: Any = True
+    note: Any = None
+
+
 @router.post("/product-mrc")
-async def save_product_mrc(body: dict, org_id: str = ORG_ID):
+async def save_product_mrc(body: SaveProductMrcIn, org_id: str = ORG_ID):
     """Create/update one catalog entry. Body: {id?, carrier_id?, plan_pattern, match_op?, mrc, priority?,
     is_active?, note?}. plan_pattern is matched (case-insensitive) against raw_mi.customer_plan."""
     client = sb()
-    plan = (body.get("plan_pattern") or "").strip()
+    plan = (body.plan_pattern or "").strip()
     if not plan:
         raise HTTPException(400, "plan_pattern is required")
-    op = (body.get("match_op") or "equals").strip()
+    op = (body.match_op or "equals").strip()
     if op not in ("equals", "contains"):
         raise HTTPException(400, "match_op must be 'equals' or 'contains'")
     rec = {
         "org_id": org_id,
-        "carrier_id": body.get("carrier_id") or None,
+        "carrier_id": body.carrier_id or None,
         "plan_pattern": plan,
         "match_op": op,
-        "mrc": safe_float(body.get("mrc")),
-        "priority": int(body.get("priority") or 100),
-        "is_active": bool(body.get("is_active", True)),
-        "note": (body.get("note") or "").strip() or None,
+        "mrc": safe_float(body.mrc),
+        "priority": int(body.priority or 100),
+        "is_active": bool(body.is_active),
+        "note": (body.note or "").strip() or None,
     }
     try:
-        if body.get("id"):
-            client.schema('commcalc').table('product_mrc').update(rec).eq('id', body['id']).eq('org_id', org_id).execute()
-            return {"id": body["id"]}
+        if body.id:
+            client.schema('commcalc').table('product_mrc').update(rec).eq('id', body.id).eq('org_id', org_id).execute()
+            return {"id": body.id}
         r = client.schema('commcalc').table('product_mrc').insert(rec).execute()
         return {"id": (r.data or [{}])[0].get("id")}
     except Exception as e:
@@ -12276,8 +12657,14 @@ def carrier_template_sources(org_id: str = ORG_ID):
     return template_clone.list_shared_sources(sb(), org_id)
 
 
+class CarrierTemplateCloneIn(LaxModel):
+    source_org_id: str = ""
+    source_carrier_id: str = ""
+    dry_run: Any = None
+
+
 @router.post("/carrier-template/clone")
-def carrier_template_clone(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def carrier_template_clone(body: CarrierTemplateCloneIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Clone a shareable source carrier's payout config into THIS org (org_id = target, from the JWT via
     middleware). Body: {source_org_id, source_carrier_id, dry_run?}. dry_run=true returns the full
     would-create/would-skip manifest and writes nothing; the real run returns the same shape with created
@@ -12286,9 +12673,9 @@ def carrier_template_clone(body: dict, authorization: str = Header(default=""), 
     _require_carrier_template_edit(authorization, org_id)
     return template_clone.clone_carrier_template(
         sb(), target_org_id=org_id,
-        source_org_id=(body.get("source_org_id") or "").strip(),
-        source_carrier_id=(body.get("source_carrier_id") or "").strip(),
-        dry_run=bool(body.get("dry_run", False)),
+        source_org_id=(body.source_org_id or "").strip(),
+        source_carrier_id=(body.source_carrier_id or "").strip(),
+        dry_run=bool(body.dry_run),
     )
 
 
@@ -12353,14 +12740,20 @@ def get_nav_config(org_id: str = ORG_ID):
     return {"labels": labels, "capabilities": caps, "layout": layout}
 
 
+class NavLabelIn(LaxModel):
+    scope: str = ""
+    key: str = ""
+    label: str = ""
+
+
 @router.post("/nav-labels")
-def set_nav_label(body: dict, org_id: str = ORG_ID):
+def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID):
     """Upsert one display nickname. body: {scope?: 'nav'|'group', key, label}. An empty label REMOVES
     the override (reverts to the built-in label). Clear 400 (not 500) if migration 068 isn't applied.
     Display-only: this never touches a DB column, route, report_key or data path."""
-    scope = (body.get('scope') or 'nav').strip()
-    key = (body.get('key') or '').strip()
-    label = (body.get('label') or '').strip()
+    scope = (body.scope or 'nav').strip()
+    key = (body.key or '').strip()
+    label = (body.label or '').strip()
     if not key:
         raise HTTPException(400, "key required")
     client = sb()
@@ -12378,8 +12771,17 @@ def set_nav_label(body: dict, org_id: str = ORG_ID):
     return {"ok": True, "scope": scope, "key": key, "label": label}
 
 
+class NavLayoutIn(LaxModel):
+    items: Any = None
+    hideReportsDirectory: Any = None
+    groups: Any = None
+    groupOrder: Any = None
+    subOrder: Any = None
+    itemOrder: Any = None
+
+
 @router.post("/nav-layout")
-def set_nav_layout(body: dict, org_id: str = ORG_ID):
+def set_nav_layout(body: NavLayoutIn, org_id: str = ORG_ID):
     """Save the per-tenant sidebar LAYOUT (admin config): which group each nav item appears under, plus
     hidden items, SUB-CATEGORIES and explicit drag-and-drop order.
     Body = {items: {<href>: {group?: str, sub?: str, hidden?: bool, also?: [str]}}, groups?: [str],
@@ -12396,9 +12798,9 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
     (scope='layout', reusing mig 068 — no new migration); an empty layout (no items AND no groups) clears
     it (reverts to the built-in menu). Display-only — never touches routes, data, or access control."""
     import json as _json
-    raw_items = (body or {}).get('items') or {}
+    raw_items = body.items or {}
     # platform-core hide-reports-directory toggle: preserve the flag through the layout payload
-    hide = bool((body or {}).get('hideReportsDirectory'))
+    hide = bool(body.hideReportsDirectory)
     items = {}
     for h, v in raw_items.items():
         if not isinstance(v, dict):
@@ -12427,7 +12829,7 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
         items[h] = entry
     # admin-created group names (may be empty of items) — de-duped, non-empty
     groups = []
-    for gname in ((body or {}).get('groups') or []):
+    for gname in (body.groups or []):
         gname = (gname or '').strip() if isinstance(gname, str) else ''
         if gname and gname not in groups:
             groups.append(gname)
@@ -12442,7 +12844,7 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
                 out.append(s)
         return out
 
-    group_order = _names((body or {}).get('groupOrder'))
+    group_order = _names(body.groupOrder)
 
     def _order_map(raw):
         out = {}
@@ -12454,8 +12856,8 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
                     out[gname] = vals
         return out
 
-    sub_order = _order_map((body or {}).get('subOrder'))
-    item_order = _order_map((body or {}).get('itemOrder'))
+    sub_order = _order_map(body.subOrder)
+    item_order = _order_map(body.itemOrder)
 
     client = sb()
     try:
@@ -12495,27 +12897,41 @@ async def list_distributors(org_id: str = ORG_ID):
     return {"distributors": rows, "ready": True}
 
 
+class SaveDistributorIn(LaxModel):
+    id: Any = None
+    name: str = ""
+    carrier_id: Any = None
+    arrangement: Any = None
+    terms_days: Any = None
+    billing_cycle: Any = None
+    has_asset_lending: Any = None
+    default_funding: Any = None
+    portal_provider: Any = None
+    is_active: Any = True
+    notes: Any = None
+
+
 @router.post("/distributors")
-async def save_distributor(body: dict, org_id: str = ORG_ID):
-    name = (body.get("name") or "").strip()
+async def save_distributor(body: SaveDistributorIn, org_id: str = ORG_ID):
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
     row = {
         "org_id": org_id, "name": name,
-        "carrier_id": body.get("carrier_id") or None,
-        "arrangement": (body.get("arrangement") or "terms"),
-        "terms_days": int(body.get("terms_days") or 0) or None,
-        "billing_cycle": body.get("billing_cycle") or "net",
-        "has_asset_lending": bool(body.get("has_asset_lending")),
-        "default_funding": body.get("default_funding") or "own",
-        "portal_provider": body.get("portal_provider") or None,
-        "is_active": bool(body.get("is_active", True)),
-        "notes": body.get("notes") or None,
+        "carrier_id": body.carrier_id or None,
+        "arrangement": (body.arrangement or "terms"),
+        "terms_days": int(body.terms_days or 0) or None,
+        "billing_cycle": body.billing_cycle or "net",
+        "has_asset_lending": bool(body.has_asset_lending),
+        "default_funding": body.default_funding or "own",
+        "portal_provider": body.portal_provider or None,
+        "is_active": bool(body.is_active),
+        "notes": body.notes or None,
     }
     client = sb()
     try:
-        if body.get("id"):
-            r = client.schema('commcalc').table('distributors').update(row).eq('id', body['id']).eq('org_id', org_id).execute()
+        if body.id:
+            r = client.schema('commcalc').table('distributors').update(row).eq('id', body.id).eq('org_id', org_id).execute()
         else:
             r = client.schema('commcalc').table('distributors').upsert(row, on_conflict='org_id,name').execute()
         return (r.data or [{}])[0]
@@ -12547,15 +12963,26 @@ async def list_distributor_payments(distributor_id: str = "", org_id: str = ORG_
             "totals": {"own": round(own, 2), "borrowed": round(borrowed, 2), "total": round(own + borrowed, 2)}}
 
 
+class AddDistributorPaymentIn(LaxModel):
+    distributor_id: Any = None
+    pay_date: Any = None
+    period: Any = None
+    amount: Any = None
+    funding_source: Any = None
+    account_label: Any = None
+    ref: Any = None
+    notes: Any = None
+
+
 @router.post("/distributor-payments")
-async def add_distributor_payment(body: dict, org_id: str = ORG_ID):
+async def add_distributor_payment(body: AddDistributorPaymentIn, org_id: str = ORG_ID):
     row = {
-        "org_id": org_id, "distributor_id": body.get("distributor_id") or None,
-        "pay_date": body.get("pay_date") or None, "period": body.get("period") or None,
-        "amount": safe_float(body.get("amount")),
-        "funding_source": body.get("funding_source") or "own",
-        "account_label": body.get("account_label") or None,
-        "ref": body.get("ref") or None, "notes": body.get("notes") or None,
+        "org_id": org_id, "distributor_id": body.distributor_id or None,
+        "pay_date": body.pay_date or None, "period": body.period or None,
+        "amount": safe_float(body.amount),
+        "funding_source": body.funding_source or "own",
+        "account_label": body.account_label or None,
+        "ref": body.ref or None, "notes": body.notes or None,
     }
     client = sb()
     try:
@@ -12842,42 +13269,59 @@ def commission_statements_batch(period: str, reps: str = "", store: str = "", ma
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+class SaveCommissionPlanIn(LaxModel):
+    id: Any = None
+    name: str = ""
+    carrier_id: Any = None
+    base_tier_metric: Any = None
+    is_active: Any = True
+    notes: Any = None
+    tier_count_basis: Any = None
+    tier_match_field: Any = None
+    tier_match_op: Any = None
+    tier_match_value: Any = None
+    tier_below_min_multiplier: Any = None
+    rules: Any = None
+    tiers: Any = None
+    assignments: Any = None
+
+
 @router.post("/commission-plans")
-async def save_commission_plan(body: dict, org_id: str = ORG_ID):
+async def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
     client = sb()
     plan_row = {
         "org_id": org_id, "name": name,
-        "carrier_id": body.get("carrier_id") or None,
-        "base_tier_metric": body.get("base_tier_metric") or None,
-        "is_active": bool(body.get("is_active", True)),
-        "notes": body.get("notes") or None,
+        "carrier_id": body.carrier_id or None,
+        "base_tier_metric": body.base_tier_metric or None,
+        "is_active": bool(body.is_active),
+        "notes": body.notes or None,
     }
     # TIER ATTAINMENT CONFIG (mig 232) — only written when the caller sent the field AND the column exists,
     # so a pre-migration database saves exactly as before instead of 500-ing on an unknown column.
     if _plan_tier_cols_present(client):
-        if "tier_count_basis" in body:
-            _b = (body.get("tier_count_basis") or "").strip().lower()
+        if "tier_count_basis" in body.model_fields_set:
+            _b = (body.tier_count_basis or "").strip().lower()
             plan_row["tier_count_basis"] = _b if _b in ("lines", "transactions") else None
         for _k in ("tier_match_field", "tier_match_op", "tier_match_value"):
-            if _k in body:
-                _v = str(body.get(_k) or "").strip()
+            if _k in body.model_fields_set:
+                _v = str(getattr(body, _k) or "").strip()
                 if _k == "tier_match_field" and _v and _v not in commission_engine.MATCH_FIELDS:
                     _v = "any"
                 if _k == "tier_match_op" and _v and _v not in ("equals", "contains", "in"):
                     _v = "equals"
                 plan_row[_k] = _v or None
-        if "tier_below_min_multiplier" in body:
-            _m = body.get("tier_below_min_multiplier")
+        if "tier_below_min_multiplier" in body.model_fields_set:
+            _m = body.tier_below_min_multiplier
             plan_row["tier_below_min_multiplier"] = (
                 None if _m is None or str(_m).strip() == "" else safe_float(_m))
     try:
-        if body.get("id"):
-            r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body['id']).eq('org_id', org_id).execute()
-            plan_id = body['id']
+        if body.id:
+            r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body.id).eq('org_id', org_id).execute()
+            plan_id = body.id
         else:
             r = client.schema('commcalc').table('commission_plan').upsert(plan_row, on_conflict='org_id,name').execute()
             plan_id = (r.data or [{}])[0].get('id')
@@ -12893,7 +13337,7 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
             client.schema('commcalc').table(tbl).delete().eq('org_id', org_id).eq('plan_id', plan_id).execute()
 
         rules = []
-        for i, rl in enumerate(body.get("rules") or []):
+        for i, rl in enumerate(body.rules or []):
             mf = (rl.get("match_field") or "any")
             if mf not in commission_engine.MATCH_FIELDS:
                 mf = "any"
@@ -12936,10 +13380,10 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
             client.schema('commcalc').table('commission_rule').insert(rules).execute()
 
         tiers = []
-        for i, t in enumerate(body.get("tiers") or []):
+        for i, t in enumerate(body.tiers or []):
             tiers.append({
                 "org_id": org_id, "plan_id": plan_id,
-                "metric": t.get("metric") or body.get("base_tier_metric") or None,
+                "metric": t.get("metric") or body.base_tier_metric or None,
                 "min_count": int(t.get("min_count") or 0),
                 "multiplier": safe_float(t.get("multiplier")) or 1,
                 "sort": int(t.get("sort") if t.get("sort") is not None else i),
@@ -12948,7 +13392,7 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
             client.schema('commcalc').table('commission_tier').insert(tiers).execute()
 
         assigns = []
-        for a in body.get("assignments") or []:
+        for a in body.assignments or []:
             scope = (a.get("scope") or "default")
             assigns.append({
                 "org_id": org_id, "plan_id": plan_id, "scope": scope,
@@ -13720,7 +14164,12 @@ async def get_coverage_excluded_sellers(org_id: str = ORG_ID):
 
 
 @router.put("/commission-plans/coverage-excluded")
-async def put_coverage_excluded_sellers(body: dict, authorization: str = Header(default=""),
+class PutCoverageExcludedSellersIn(LaxModel):
+    sellers: Any = None
+    artifact_hints: Any = None
+
+
+async def put_coverage_excluded_sellers(body: PutCoverageExcludedSellersIn, authorization: str = Header(default=""),
                                         org_id: str = ORG_ID):
     """Admin-only. Sets the tenant's excluded-seller list (and optionally the artifact word list).
     Body: {sellers:[str], artifact_hints?:[str]}.
@@ -13729,7 +14178,7 @@ async def put_coverage_excluded_sellers(body: dict, authorization: str = Header(
     'sellers with no plan attached' panel — the payout loop never sees it, so no rep's pay can move."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    sellers = body.get("sellers")
+    sellers = body.sellers
     if sellers is None or not isinstance(sellers, list):
         raise HTTPException(400, "sellers must be a list of seller names")
     clean, seen = [], set()
@@ -13742,8 +14191,8 @@ async def put_coverage_excluded_sellers(body: dict, authorization: str = Header(
         clean.append(v)
     row = {"org_id": org_id, "coverage_excluded_sellers": clean,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if isinstance(body.get("artifact_hints"), list):
-        row["coverage_artifact_hints"] = [str(h).strip().lower() for h in body["artifact_hints"]
+    if isinstance(body.artifact_hints, list):
+        row["coverage_artifact_hints"] = [str(h).strip().lower() for h in body.artifact_hints
                                           if str(h or "").strip()]
     try:
         sb().schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
@@ -13856,8 +14305,14 @@ def _validate_rule_overrides(overrides):
     return out
 
 
+class CommissionRuleImpactIn(LaxModel):
+    period: Any = None
+    overrides: Any = None
+    rep: Any = None
+
+
 @router.post("/commission-plans/rule-impact")
-async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
+async def commission_rule_impact(body: CommissionRuleImpactIn, org_id: str = ORG_ID):
     """READ-ONLY BLAST RADIUS for a proposed commission-rule matcher change. Writes NOTHING and triggers
     no calculation — it runs the real engine twice (as configured, and with the proposed matchers applied
     to an in-memory copy) and returns the difference.
@@ -13877,17 +14332,17 @@ async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
     on are still withheld until the paid-residual gate is met, and any month pays $0 if no rate-plan MRC
     resolves. So `freed_enrolled_by_multimonth` is a CEILING on what might be re-paid, while
     `freed_no_pay_source` is the hard floor — those lines have no configured source at all."""
-    period = str((body or {}).get("period") or "").strip()
+    period = str(body.period or "").strip()
     if not period:
         raise HTTPException(400, "period required")
     require_org(org_id)
-    overrides = (body or {}).get("overrides") or {}
+    overrides = body.overrides or {}
     if not isinstance(overrides, dict):
         raise HTTPException(400, "overrides must be an object keyed by rule id")
     overrides = _validate_rule_overrides(overrides)
     try:
         return plan_impact.rule_impact(sb(), org_id, period, overrides,
-                                       only_rep=str((body or {}).get("rep") or "").strip() or None)
+                                       only_rep=str(body.rep or "").strip() or None)
     except Exception as e:
         print(f"WARN rule-impact failed for org {org_id} period {period}: {e}")
         raise HTTPException(500, f"rule impact unavailable: {e}")
@@ -14125,7 +14580,13 @@ async def commission_plan_assignment_audit(org_id: str = ORG_ID, include_inactiv
 
 
 @router.post("/commission-plans/bulk-assign")
-async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
+class BulkAssignCommissionPlanIn(LaxModel):
+    plan_id: str = ""
+    people: Any = None
+    replace_existing: Any = None
+
+
+async def bulk_assign_commission_plan(body: BulkAssignCommissionPlanIn, org_id: str = ORG_ID):
     """Assign ONE commission plan to MANY employees in a single action (owner directive 2026-07-23).
 
     Body: {plan_id, people:[<scope_value> | {value}...], replace_existing?:bool}. Additive to single-
@@ -14140,12 +14601,12 @@ async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
                             rows deleted + new row inserted ('replaced' = # rows removed for them)
       • skipped_has_other — person had a different direct plan and replace_existing=false (needs confirm)
     """
-    plan_id = (body.get("plan_id") or "").strip()
+    plan_id = (body.plan_id or "").strip()
     if not plan_id:
         raise HTTPException(400, "plan_id required")
     # normalize + dedupe the selection (accept plain strings or {value} objects), first-seen order
     seen, values = set(), []
-    for p in (body.get("people") or []):
+    for p in (body.people or []):
         v = str((p.get("value") if isinstance(p, dict) else p) or "").strip()
         k = _norm_assign(v)
         if not v or k in seen:
@@ -14154,7 +14615,7 @@ async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
         values.append(v)
     if not values:
         raise HTTPException(400, "no people selected")
-    replace_existing = bool(body.get("replace_existing"))
+    replace_existing = bool(body.replace_existing)
     client = sb()
     # plan must exist for THIS org (guards a stale / cross-tenant plan_id)
     try:
@@ -14283,9 +14744,18 @@ async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     return r.data or []
 
 @router.put("/stores/{store_id}")
-async def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+class UpdateStoreIn(LaxModel):
+    market: Any = None
+    store_code: Any = None
+    store_address: Any = None
+    is_active: Any = None
+    salesforce_id: Any = None
+
+
+async def update_store(store_id: str, body: UpdateStoreIn, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    allowed = {k: v for k, v in body.items() if k in ['market', 'store_code', 'store_address', 'is_active', 'salesforce_id']}
+    allowed = {k: getattr(body, k) for k in ('market', 'store_code', 'store_address', 'is_active', 'salesforce_id')
+               if k in body.model_fields_set}
     if not allowed:
         raise HTTPException(400, "No valid fields to update")
     # market is normalized for EVERY caller, not just the settings dropdown: trimmed, and snapped to the
@@ -14327,11 +14797,16 @@ async def store_resolution(period: str = "", org_id: str = ORG_ID):
     return _store_resolution_report(sb(), org_id, period=(period or None))
 
 
+class AddStoreAliasIn(LaxModel):
+    alias: str = ""
+    store_code: str = ""
+
+
 @router.post("/store-aliases")
-async def add_store_alias(body: dict, org_id: str = ORG_ID):
+async def add_store_alias(body: AddStoreAliasIn, org_id: str = ORG_ID):
     require_org(org_id)
-    alias = (body.get('alias') or '').strip()
-    code = (body.get('store_code') or '').strip()
+    alias = (body.alias or '').strip()
+    code = (body.store_code or '').strip()
     if not alias or not code:
         raise HTTPException(400, "alias and store_code required")
     client = sb()
@@ -14424,20 +14899,28 @@ def get_ingest_guard_config(org_id: str = ORG_ID):
 
 
 @router.put("/ingest-guard/config")
-def put_ingest_guard_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+class PutIngestGuardConfigIn(LaxModel):
+    mode: str = ""
+    block_min_rows: Any = None
+    allow_creates_alias: Any = True
+    notify_on_flag: Any = True
+    updated_by: Any = None
+
+
+def put_ingest_guard_config(body: PutIngestGuardConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Set the enforcement mode / thresholds. Permission-gated; org-scoped (org_id is the query
     param the tenant middleware rewrites from the caller's JWT — never a body field)."""
     require_org(org_id)
     _require_guard_edit(authorization, org_id)
-    mode = str(body.get("mode") or "warn").strip().lower()
+    mode = str(body.mode or "warn").strip().lower()
     if mode not in _isg.MODES:
         raise HTTPException(400, f"mode must be one of {', '.join(_isg.MODES)}")
     row = {
         "org_id": org_id, "mode": mode,
-        "block_min_rows": max(0, int(safe_float(body.get("block_min_rows")) or 0)),
-        "allow_creates_alias": bool(body.get("allow_creates_alias", True)),
-        "notify_on_flag": bool(body.get("notify_on_flag", True)),
-        "updated_by": (body.get("updated_by") or "web"),
+        "block_min_rows": max(0, int(safe_float(body.block_min_rows) or 0)),
+        "allow_creates_alias": bool(body.allow_creates_alias),
+        "notify_on_flag": bool(body.notify_on_flag),
+        "updated_by": (body.updated_by or "web"),
     }
     try:
         sb().schema("commcalc").table("ingest_store_guard").upsert(row, on_conflict="org_id").execute()
@@ -14468,8 +14951,15 @@ def get_ingest_guard_queue(status: str = "pending", limit: int = 200, org_id: st
     return {"ok": True, "count": len(rows), "items": rows, "status": status}
 
 
+class DecideIngestGuardItemIn(LaxModel):
+    decision: str = ""
+    store_code: str = ""
+    decided_by: Any = None
+    note: Any = None
+
+
 @router.post("/ingest-guard/queue/{item_id}/decide")
-def decide_ingest_guard_item(item_id: str, body: dict = None,
+def decide_ingest_guard_item(item_id: str, body: Optional[DecideIngestGuardItemIn] = None,
                              authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Rule on one flagged store.
 
@@ -14485,8 +14975,8 @@ def decide_ingest_guard_item(item_id: str, body: dict = None,
     to 'released', so a second call is a no-op)."""
     require_org(org_id)
     _require_guard_edit(authorization, org_id)
-    body = body or {}
-    decision = str(body.get("decision") or "").strip().lower()
+    body = body or DecideIngestGuardItemIn()
+    decision = str(body.decision or "").strip().lower()
     if decision not in ("allow", "reject"):
         raise HTTPException(400, "decision must be 'allow' or 'reject'")
     client = sb()
@@ -14504,7 +14994,7 @@ def decide_ingest_guard_item(item_id: str, body: dict = None,
     released, alias = 0, None
     if decision == "allow":
         cfg = _isg.get_config(client, org_id)
-        code = str(body.get("store_code") or "").strip()
+        code = str(body.store_code or "").strip()
         if code and cfg.get("allow_creates_alias"):
             # pick-don't-type: the code MUST be one of the org's real stores.
             M = _store_maps(client, org_id)
@@ -14531,8 +15021,8 @@ def decide_ingest_guard_item(item_id: str, body: dict = None,
         client.schema("commcalc").table("ingest_store_quarantine").update({
             "status": ("released" if released else ("allowed" if decision == "allow" else "rejected")),
             "decided_at": _datetime.now(timezone.utc).isoformat(),
-            "decided_by": (body.get("decided_by") or "web"),
-            "decision_note": (body.get("note") or None),
+            "decided_by": (body.decided_by or "web"),
+            "decision_note": (body.note or None),
         }).eq("org_id", org_id).eq("id", item_id).execute()
     except Exception as e:
         print(f"WARN guard decision not recorded: {e}")
@@ -14944,14 +15434,19 @@ async def get_gp_category_map(org_id: str = ORG_ID):
             "defaults": {"device": sorted(DEVICE_DEPTS), "accessory": [ONDIGO_DEPT]}}
 
 
+class SetGpCategoryMapIn(LaxModel):
+    department: Any = None
+    category: str = ""
+
+
 @router.post("/gp-category-map")
-async def set_gp_category_map(body: dict, org_id: str = ORG_ID):
+async def set_gp_category_map(body: SetGpCategoryMapIn, org_id: str = ORG_ID):
     """Upsert ONE department→category override. body: {department, category}. An empty category REMOVES
     the override (reverts to the built-in default). 400 (not 500) if migration 069 isn't applied."""
-    if 'department' not in body:
+    if 'department' not in body.model_fields_set:
         raise HTTPException(400, "department required")
-    dept = str(body.get('department') or '').strip()
-    cat = str(body.get('category') or '').strip().lower()
+    dept = str(body.department or '').strip()
+    cat = str(body.category or '').strip().lower()
     try:
         if not cat:
             sb().schema('commcalc').table('gp_category_map').delete() \
@@ -15389,15 +15884,22 @@ async def commission_leg_labels(period: str = "", months: int = 6, org_id: str =
             'unsplit_total': round(sum(x['amount'] for x in out if x['bucket'] == 'unsplit'), 2)}
 
 
+class SetCommissionLegLabelIn(LaxModel):
+    label: str = ""
+    bucket: str = ""
+    leg_month: Any = None
+    note: Any = None
+
+
 @router.post("/commission-leg-labels")
-async def set_commission_leg_label(body: dict, org_id: str = ORG_ID):
+async def set_commission_leg_label(body: SetCommissionLegLabelIn, org_id: str = ORG_ID):
     """Map ONE exact carrier label to a leg bucket. bucket '' REMOVES the override (back to the regex).
     Reporting only — this moves a dollar between two REPORT columns, never between two people."""
     require_org(org_id)
-    label = str(body.get('label') or '').strip()
+    label = str(body.label or '').strip()
     if not label:
         raise HTTPException(400, 'label required')
-    bucket = str(body.get('bucket') or '').strip().lower()
+    bucket = str(body.bucket or '').strip().lower()
     sc = sb().schema('commcalc')
     try:
         if not bucket:
@@ -15405,10 +15907,10 @@ async def set_commission_leg_label(body: dict, org_id: str = ORG_ID):
             return {'ok': True, 'removed': label}
         if bucket not in _commission_legs.BUCKETS:
             raise HTTPException(400, f"bucket must be one of {', '.join(_commission_legs.BUCKETS)}")
-        lm = body.get('leg_month')
+        lm = body.leg_month
         row = {'org_id': org_id, 'label': label, 'bucket': bucket,
                'leg_month': int(lm) if str(lm or '').strip().isdigit() else None,
-               'note': str(body.get('note') or '').strip() or None,
+               'note': str(body.note or '').strip() or None,
                'updated_at': _datetime.now(_timezone.utc).isoformat()}
         sc.table('commission_leg_label_map').upsert(row, on_conflict='org_id,label').execute()
     except HTTPException:
@@ -15439,25 +15941,38 @@ async def get_commission_leg_config(org_id: str = ORG_ID):
             'resolved': legcls.describe(), 'buckets': list(_commission_legs.BUCKETS)}
 
 
+class SetCommissionLegConfigIn(LaxModel):
+    carrier_mode: Any = None
+    label_month_regex: Any = None
+    unlabeled_bucket: Any = None
+    ma_month_field_prefix: Any = None
+    notes: Any = None
+    m1_month: Any = None
+    max_leg_month: Any = None
+    ma_max_month: Any = None
+    mi_split_by_activation: Any = None
+    ma_m1_fields: Any = None
+
+
 @router.post("/commission-leg-config")
-async def set_commission_leg_config(body: dict, org_id: str = ORG_ID):
+async def set_commission_leg_config(body: SetCommissionLegConfigIn, org_id: str = ORG_ID):
     """Upsert THIS org's mode-default leg-attribution row (carrier_id = nil). Reporting config only."""
     require_org(org_id)
     sc = sb().schema('commcalc')
-    mode = str(body.get('carrier_mode') or 'boost').strip().lower() or 'boost'
+    mode = str(body.carrier_mode or 'boost').strip().lower() or 'boost'
     row = {'org_id': org_id, 'carrier_id': '00000000-0000-0000-0000-000000000000',
            'carrier_mode': mode, 'is_active': True,
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     for k in ('label_month_regex', 'unlabeled_bucket', 'ma_month_field_prefix', 'notes'):
-        if k in body and str(body.get(k) or '').strip():
-            row[k] = str(body[k]).strip()
+        if k in body.model_fields_set and str(getattr(body, k) or '').strip():
+            row[k] = str(getattr(body, k)).strip()
     for k in ('m1_month', 'max_leg_month', 'ma_max_month'):
-        if k in body and str(body.get(k) or '').strip().isdigit():
-            row[k] = int(body[k])
-    if 'mi_split_by_activation' in body:
-        row['mi_split_by_activation'] = bool(body['mi_split_by_activation'])
-    if isinstance(body.get('ma_m1_fields'), list):
-        row['ma_m1_fields'] = [str(x).strip() for x in body['ma_m1_fields'] if str(x).strip()]
+        if k in body.model_fields_set and str(getattr(body, k) or '').strip().isdigit():
+            row[k] = int(getattr(body, k))
+    if 'mi_split_by_activation' in body.model_fields_set:
+        row['mi_split_by_activation'] = bool(body.mi_split_by_activation)
+    if isinstance(body.ma_m1_fields, list):
+        row['ma_m1_fields'] = [str(x).strip() for x in body.ma_m1_fields if str(x).strip()]
     if row.get('unlabeled_bucket') and row['unlabeled_bucket'] not in _commission_legs.BUCKETS:
         raise HTTPException(400, f"unlabeled_bucket must be one of {', '.join(_commission_legs.BUCKETS)}")
     if row.get('label_month_regex'):
@@ -15726,11 +16241,16 @@ async def get_chargebacks(period: str, authorization: str = Header(default=""), 
     return [c for c in rows if in_keyset(ks, c.get('store'))]
 
 @router.put("/chargebacks/{item_id}")
-async def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+class UpdateChargebackIn(LaxModel):
+    deduct: Any = False
+    decided_by: Any = None
+
+
+async def update_chargeback(item_id: str, body: UpdateChargebackIn, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    update = {'deduct': bool(body.get('deduct', False)), 'decided_at': 'now()'}
-    if body.get('decided_by'):
-        update['decided_by'] = body['decided_by']
+    update = {'deduct': bool(body.deduct), 'decided_at': 'now()'}
+    if body.decided_by:
+        update['decided_by'] = body.decided_by
     r = client.schema('commcalc').table('chargeback_items').update(update).eq('id', item_id).execute()
     return r.data[0] if r.data else {}
 
@@ -16370,7 +16890,24 @@ def get_accessory_config(org_id: str = ORG_ID):
 
 
 @router.put("/accessory-config")
-def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+class PutAccessoryConfigIn(LaxModel):
+    departments: Any = None
+    categories: Any = None
+    product_keywords: Any = None
+    acima_tenders: Any = None
+    box_departments: Any = None
+    setup_fee_keywords: Any = None
+    billpay_products: Any = None
+    contract_type_map: Any = None
+    activation_rules: Any = None
+    box_count_buckets: Any = None
+    catalog_classify_enabled: Any = None
+    catalog_accessory_categories: Any = None
+    apply_to_gp: Any = None
+    definition_drives_pay: Any = None
+
+
+def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set what counts as accessory sales + which Tender Type = an ACIMA lease. Body: {departments:[...],
     categories:[...], product_keywords:[...], acima_tenders:[...]}. A line is an accessory if its
     department OR category is listed OR its product description contains a keyword. ACIMA commission =
@@ -16391,28 +16928,28 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
     row = {"org_id": org_id, "updated_at": _cb_now(),
            "departments": cur["departments_list"], "categories": cur["categories_list"],
            "product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"]}
-    if "departments" in body or "categories" in body or "product_keywords" in body:
-        row["departments"] = [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()]
-        row["categories"] = [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()]
-        row["product_keywords"] = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
-    if "acima_tenders" in body:
-        row["acima_tenders"] = [str(x).strip() for x in (body.get("acima_tenders") or []) if str(x).strip()]
+    if "departments" in body.model_fields_set or "categories" in body.model_fields_set or "product_keywords" in body.model_fields_set:
+        row["departments"] = [str(x).strip() for x in (body.departments or []) if str(x).strip()]
+        row["categories"] = [str(x).strip() for x in (body.categories or []) if str(x).strip()]
+        row["product_keywords"] = [str(x).strip() for x in (body.product_keywords or []) if str(x).strip()]
+    if "acima_tenders" in body.model_fields_set:
+        row["acima_tenders"] = [str(x).strip() for x in (body.acima_tenders or []) if str(x).strip()]
     # BOX departments (mig 218). Included defensively: pre-218 the column doesn't exist, so a save carrying
     # it 500s — we retry WITHOUT it so editing the accessory lists never breaks before 218 is applied (box
     # counting then falls back to the code default _BOX_DEPTS).
-    row["box_departments"] = ([str(x).strip() for x in (body.get("box_departments") or []) if str(x).strip()]
-                              if "box_departments" in body else cur["box_departments_list"])
+    row["box_departments"] = ([str(x).strip() for x in (body.box_departments or []) if str(x).strip()]
+                              if "box_departments" in body.model_fields_set else cur["box_departments_list"])
     # Device SET-UP FEE keywords (mig 217, pkg A field — editable from the shared Classification-settings UI).
-    row["setup_fee_keywords"] = ([str(x).strip() for x in (body.get("setup_fee_keywords") or []) if str(x).strip()]
-                                 if "setup_fee_keywords" in body else cur["setup_fee_keywords_list"])
+    row["setup_fee_keywords"] = ([str(x).strip() for x in (body.setup_fee_keywords or []) if str(x).strip()]
+                                 if "setup_fee_keywords" in body.model_fields_set else cur["setup_fee_keywords_list"])
     # BILL-PAYMENT products (mig 214 — editable from the shared Classification-settings UI). Empty list =
     # fall back to the hard-coded Boost tokens in the aggregation (conversion byte-identical for the house).
-    row["billpay_products"] = ([str(x).strip() for x in (body.get("billpay_products") or []) if str(x).strip()]
-                               if "billpay_products" in body else cur["billpay_products_list"])
+    row["billpay_products"] = ([str(x).strip() for x in (body.billpay_products or []) if str(x).strip()]
+                               if "billpay_products" in body.model_fields_set else cur["billpay_products_list"])
     # CONTRACT-TYPE -> activation-bucket map (mig 213 — editable from the shared Classification-settings UI).
     # Sanitize to {str contract_type : bucket} with bucket in premium|upgrade|byod|none (unknown dropped).
-    if "contract_type_map" in body:
-        _raw = body.get("contract_type_map") or {}
+    if "contract_type_map" in body.model_fields_set:
+        _raw = body.contract_type_map or {}
         _ok = {"premium", "upgrade", "byod", "none"}
         row["contract_type_map"] = {str(k).strip(): str(v).strip().lower()
                                     for k, v in ((_raw.items()) if isinstance(_raw, dict) else [])
@@ -16423,7 +16960,7 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
     # Sanitize each rule to {bucket in premium|upgrade|byod, all_of:[cond], none_of:[cond]} where a cond is
     # {field:str, contains_any:[str], equals_any:[str]}; malformed rules/conds dropped. Empty list = the
     # blank-ct engine is a no-op (Boost byte-identical).
-    if "activation_rules" in body:
+    if "activation_rules" in body.model_fields_set:
         # n2 (Gate-1): the cond `field` must be a REAL matchable sales column (pick-don't-type over these);
         # a typo'd field would silently never match, so drop it at save time.
         _KNOWN_RULE_FIELDS = {'department', 'category', 'product_desc', 'trans_type', 'contract_type',
@@ -16447,7 +16984,7 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
                 o['equals_any'] = ea
             return o
         _rules = []
-        for _r in (body.get('activation_rules') or []):
+        for _r in (body.activation_rules or []):
             if not isinstance(_r, dict):
                 continue
             _b = str(_r.get('bucket') or '').strip().lower()
@@ -16466,28 +17003,28 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
         row["activation_rules"] = cur["activation_rules"]
     # BOX-COUNT buckets (mig 231) — which activation buckets add to "total boxes sold". Sanitized to the
     # known bucket vocabulary. Empty = device-line boxes only (byte-identical).
-    if "box_count_buckets" in body:
-        row["box_count_buckets"] = [str(b).strip().lower() for b in (body.get("box_count_buckets") or [])
+    if "box_count_buckets" in body.model_fields_set:
+        row["box_count_buckets"] = [str(b).strip().lower() for b in (body.box_count_buckets or [])
                                     if str(b).strip().lower() in ("byod", "upgrade", "premium")]
     else:
         row["box_count_buckets"] = cur["box_count_buckets_list"]
     # CATALOG-driven accessory classification toggle + accessory categories (mig 231).
-    if "catalog_classify_enabled" in body:
-        row["catalog_classify_enabled"] = bool(body.get("catalog_classify_enabled"))
+    if "catalog_classify_enabled" in body.model_fields_set:
+        row["catalog_classify_enabled"] = bool(body.catalog_classify_enabled)
     else:
         row["catalog_classify_enabled"] = cur["catalog_classify_enabled"]
-    if "catalog_accessory_categories" in body:
-        row["catalog_accessory_categories"] = [str(x).strip() for x in (body.get("catalog_accessory_categories") or []) if str(x).strip()]
+    if "catalog_accessory_categories" in body.model_fields_set:
+        row["catalog_accessory_categories"] = [str(x).strip() for x in (body.catalog_accessory_categories or []) if str(x).strip()]
     else:
         row["catalog_accessory_categories"] = cur["catalog_accessory_categories_list"]
     # GP-report adoption flag (mig 250 — editable from the shared Classification-settings UI).
-    row["apply_to_gp"] = (bool(body.get("apply_to_gp")) if "apply_to_gp" in body
+    row["apply_to_gp"] = (bool(body.apply_to_gp) if "apply_to_gp" in body.model_fields_set
                           else bool(cur.get("apply_to_gp", False)))
     # ACCESSORY DEFINITION AS A PAY BASIS (mig 276) — A MONEY SWITCH. It changes nothing until the next
     # recalculation, and it is strictly additive (it can only ADD accessory lines to what a plan rule
     # keyed on `accessory` matches). Written only when the caller sent it; default false.
-    row["definition_drives_pay"] = (bool(body.get("definition_drives_pay"))
-                                    if "definition_drives_pay" in body
+    row["definition_drives_pay"] = (bool(body.definition_drives_pay)
+                                    if "definition_drives_pay" in body.model_fields_set
                                     else bool(cur.get("definition_drives_pay", False)))
     # Persist defensively: pre-mig-214/213/217/218/231 those columns don't exist, so a save carrying them
     # 500s — retry progressively dropping the NEWEST columns first (mig-231 columns are the newest) so
@@ -16633,8 +17170,14 @@ def catalog_overrides(org_id: str = ORG_ID):
     return {"ok": True, "org_id": org_id, "overrides": rows}
 
 
+class PutCatalogOverrideIn(LaxModel):
+    match_type: str = ""
+    match_value: Any = None
+    category: str = ""
+
+
 @router.put("/catalog/override")
-def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_catalog_override(body: PutCatalogOverrideIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set (or CLEAR) a category override for one catalog product — the user-editable, NON-destructive layer
     on top of the loaded catalog file (deliverable 3). Body:
       {match_type:'upc'|'sku'|'product_id'|'product_desc', match_value:str, category:str}
@@ -16646,10 +17189,10 @@ def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = 
     if not _can_edit_classification(authorization, org_id):
         raise HTTPException(403, "You don't have permission to edit Classification settings.")
     from app.modules.commcalc import accessory_catalog as _accat
-    mt = str(body.get("match_type") or "").strip().lower()
+    mt = str(body.match_type or "").strip().lower()
     if mt not in ("upc", "sku", "product_id", "product_desc"):
         raise HTTPException(400, "match_type must be one of upc / sku / product_id / product_desc.")
-    raw_val = body.get("match_value")
+    raw_val = body.match_value
     if mt == "product_desc":
         mv = _accat.norm_desc(raw_val)
     elif mt == "product_id":
@@ -16658,7 +17201,7 @@ def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = 
         mv = _accat.clean_key(raw_val)
     if not mv:
         raise HTTPException(400, "match_value is required.")
-    cat = str(body.get("category") or "").strip()
+    cat = str(body.category or "").strip()
     client = sb()
     try:
         if not cat:
@@ -16871,9 +17414,9 @@ async def sales_recon_sync_flags(period: str = "", notify: bool = False,
         try:
             from app.modules.notify import router as N  # lazy: avoids notify↔commcalc import cycle
             result["notify"] = await N.send_to_designated(
-                {"report_key": "sales_recon", "filters": {"period": result["period"]},
-                 "message": (f"{result['missing_in_monthly']} sales-feed leak(s) totalling "
-                             f"${(result.get('leak_total') or 0):,.2f} detected for {result['period']}.")},
+                N.SendToDesignatedIn(report_key="sales_recon", filters={"period": result["period"]},
+                                     message=(f"{result['missing_in_monthly']} sales-feed leak(s) totalling "
+                                              f"${(result.get('leak_total') or 0):,.2f} detected for {result['period']}.")),
                 org_id=org_id)
         except Exception as e:
             result["notify_error"] = str(e)
@@ -19109,7 +19652,17 @@ async def get_targets(period: str, include_inactive: bool = False,
 
 
 @router.put("/targets/{period}")
-async def save_target(period: str, body: dict, authorization: str = Header(default=""),
+class SaveTargetIn(LaxModel):
+    store_code: Any = None
+    activations_monthly: Any = None
+    upgrades_monthly: Any = None
+    accessories_monthly: Any = None
+    byod_pct: Any = None
+    notes: Any = None
+    updated_by: Any = None
+
+
+async def save_target(period: str, body: SaveTargetIn, authorization: str = Header(default=""),
                       org_id: str = ORG_ID):
     """Upsert one store's monthly target config (Target Settings save, and the DM per-store
     drill-down under My Targets).
@@ -19117,7 +19670,7 @@ async def save_target(period: str, body: dict, authorization: str = Header(defau
     GATED (2026-08-03) on the EXISTING 'targets' settings area + the caller's own store span — see
     `_require_target_edit`. This endpoint previously took no Authorization header at all."""
     client = sb()
-    code = str(body.get('store_code', '') or '').strip()
+    code = str(body.store_code or '').strip()
     if not code:
         raise HTTPException(400, "store_code required")
     _require_target_edit(authorization, org_id, code)
@@ -19125,23 +19678,27 @@ async def save_target(period: str, body: dict, authorization: str = Header(defau
     row = {
         'org_id': org_id, 'store_code': code, 'period': period,
         'period_month': pm['month'], 'period_year': pm['year'],
-        'activations_monthly': safe_float(body.get('activations_monthly')),
-        'upgrades_monthly': safe_float(body.get('upgrades_monthly')),
-        'accessories_monthly': safe_float(body.get('accessories_monthly')),
+        'activations_monthly': safe_float(body.activations_monthly),
+        'upgrades_monthly': safe_float(body.upgrades_monthly),
+        'accessories_monthly': safe_float(body.accessories_monthly),
         # Blank field → NULL (fall back to KPI default), not 0% which would zero the BYOD target.
-        'byod_pct': (safe_float(body.get('byod_pct'))
-                     if str(body.get('byod_pct') if body.get('byod_pct') is not None else '').strip() != ''
+        'byod_pct': (safe_float(body.byod_pct)
+                     if str(body.byod_pct if body.byod_pct is not None else '').strip() != ''
                      else None),
-        'notes': body.get('notes'),
-        'updated_by': body.get('updated_by') or 'web',
+        'notes': body.notes,
+        'updated_by': body.updated_by or 'web',
     }
     r = (client.schema('commcalc').table('targets')
          .upsert(row, on_conflict='org_id,store_code,period').execute())
     return r.data[0] if r.data else row
 
 
+class RollForwardTargetsIn(LaxModel):
+    overwrite: Any = None
+
+
 @router.post("/targets/{period}/roll-forward")
-async def roll_forward_targets(period: str, body: dict = None,
+async def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = None,
                                authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Persist the month-over-month carry-forward into `period`: each store's prior-month target
     carried forward, or +10% where last month's target was met (see _carry_forward_map). By default
@@ -19154,7 +19711,7 @@ async def roll_forward_targets(period: str, body: dict = None,
     client = sb()
     _require_target_edit(authorization, org_id)
     pm = parse_period(period)
-    overwrite = bool((body or {}).get('overwrite'))
+    overwrite = bool(body.overwrite) if body else False
     existing = {str(r.get('store_code', '')).upper()
                 for r in ((client.schema('commcalc').table('targets')
                            .select('store_code').eq('org_id', org_id)
@@ -19810,22 +20367,34 @@ def list_carrier_kpi_metrics(carrier_id: str = "", org_id: str = ORG_ID):
     return {"metrics": rows, "ready": True, "default_carrier": _KPI_DEFAULT_CARRIER}
 
 
+class SaveCarrierKpiMetricIn(LaxModel):
+    metric_key: str = ""
+    carrier_id: Any = None
+    label: Any = None
+    target_default: Any = None
+    payout_config_col: Any = None
+    sort: Any = None
+    is_active: Any = True
+    source_mode: Any = None
+    id: Any = None
+
+
 @router.post("/carrier-kpi-metrics")
-def save_carrier_kpi_metric(body: dict, org_id: str = ORG_ID):
+def save_carrier_kpi_metric(body: SaveCarrierKpiMetricIn, org_id: str = ORG_ID):
     """Create/edit one KPI metric definition. carrier_id omitted/blank → the org default (nil) set."""
-    key = (body.get("metric_key") or "").strip()
+    key = (body.metric_key or "").strip()
     if not key:
         raise HTTPException(400, "metric_key required")
-    row = {"org_id": org_id, "carrier_id": body.get("carrier_id") or _KPI_DEFAULT_CARRIER,
-           "metric_key": key, "label": body.get("label") or key,
-           "target_default": safe_float(body.get("target_default")),
-           "payout_config_col": body.get("payout_config_col") or f"kpi_{key}_target",
-           "sort": int(body.get("sort") or 0), "is_active": bool(body.get("is_active", True))}
-    if "source_mode" in body:   # only when the toggle is used, so metric saves still work pre-mig-853
-        row["source_mode"] = body.get("source_mode") or "manual"
+    row = {"org_id": org_id, "carrier_id": body.carrier_id or _KPI_DEFAULT_CARRIER,
+           "metric_key": key, "label": body.label or key,
+           "target_default": safe_float(body.target_default),
+           "payout_config_col": body.payout_config_col or f"kpi_{key}_target",
+           "sort": int(body.sort or 0), "is_active": bool(body.is_active)}
+    if "source_mode" in body.model_fields_set:   # only when the toggle is used, so metric saves still work pre-mig-853
+        row["source_mode"] = body.source_mode or "manual"
     try:
-        if body.get("id"):
-            r = sb().schema('commcalc').table('carrier_kpi_metric').update(row).eq('id', body['id']).eq('org_id', org_id).execute()
+        if body.id:
+            r = sb().schema('commcalc').table('carrier_kpi_metric').update(row).eq('id', body.id).eq('org_id', org_id).execute()
         else:
             r = sb().schema('commcalc').table('carrier_kpi_metric').upsert(row, on_conflict='org_id,carrier_id,metric_key').execute()
         return (r.data or [{}])[0]
@@ -19896,17 +20465,24 @@ def list_kpi_actuals(period: str, scope: str = 'store', org_id: str = ORG_ID):
             "source_modes": _kpi_source_mode_map(sb(), org_id)}
 
 
+class SaveKpiActualsIn(LaxModel):
+    period: str = ""
+    scope: Any = None
+    updated_by: Any = None
+    entries: Any = None
+
+
 @router.post("/kpi-actuals")
-def save_kpi_actuals(body: dict, org_id: str = ORG_ID):
+def save_kpi_actuals(body: SaveKpiActualsIn, org_id: str = ORG_ID):
     """Upsert MANUAL KPI values. Body {period, scope?, updated_by?, entries:[{entity, metric_key, value}]}.
     Writes source='manual' only — never touches an 'email' row, so flipping source mode loses nothing."""
-    period = (body.get("period") or "").strip()
+    period = (body.period or "").strip()
     if not period:
         raise HTTPException(400, "period required")
-    scope = body.get("scope") or "store"
-    who = body.get("updated_by")
+    scope = body.scope or "store"
+    who = body.updated_by
     rows = []
-    for e in (body.get("entries") or []):
+    for e in (body.entries or []):
         ent = (str(e.get("entity") or "")).strip()
         mk = (str(e.get("metric_key") or "")).strip()
         if not ent or not mk:
@@ -19924,23 +20500,30 @@ def save_kpi_actuals(body: dict, org_id: str = ORG_ID):
         raise HTTPException(500, f"save kpi actuals failed (is migration 853 applied?): {ex}")
 
 
+class ImportParamountMtdIn(LaxModel):
+    period: str = ""
+    html: Any = None
+    dry_run: Any = None
+    updated_by: Any = None
+
+
 @router.post("/kpi-import/paramount")
-def import_paramount_mtd(body: dict, org_id: str = ORG_ID):
+def import_paramount_mtd(body: ImportParamountMtdIn, org_id: str = ORG_ID):
     """Parse a Paramount Wireless MTD report (HTML email body) → store zulu / tmr3 / twp per door (Door
     TSP = store_code) as source='email' KPI actuals. Body {period, html, dry_run?}. Feeds only the
     qualifier gates — component counts stay on the rep-pay basis (owner decision)."""
     from app.modules.commcalc.paramount_kpi import parse_paramount_mtd_kpis
-    period = (body.get("period") or "").strip()
-    html = body.get("html") or ""
+    period = (body.period or "").strip()
+    html = body.html or ""
     if not period or not str(html).strip():
         raise HTTPException(400, "period and html are required")
     parsed = parse_paramount_mtd_kpis(html)
     preview = [{"store_code": c, **m} for c, m in sorted(parsed.items())]
     entries = [(c, mk, val) for c, mets in parsed.items() for mk, val in mets.items()]
-    if body.get("dry_run"):
+    if body.dry_run:
         return {"stores": len(parsed), "values": len(entries), "preview": preview, "saved": 0}
     rows = [{"org_id": org_id, "scope": "store", "entity": c, "period": period, "metric_key": mk,
-             "value": val, "source": "email", "updated_by": body.get("updated_by")} for (c, mk, val) in entries]
+             "value": val, "source": "email", "updated_by": body.updated_by} for (c, mk, val) in entries]
     saved = 0
     if rows:
         try:
@@ -20848,15 +21431,21 @@ def get_exec_metric_config(org_id: str = ORG_ID):
 
 
 @router.put("/exec-metric-config")
-def put_exec_metric_config(body: dict, org_id: str = ORG_ID):
+class PutExecMetricConfigIn(LaxModel):
+    bucket: str = ""
+    rules: Any = None
+    basis: Any = None
+
+
+def put_exec_metric_config(body: PutExecMetricConfigIn, org_id: str = ORG_ID):
     """Upsert one bucket's metric definition (org-scoped). body = {bucket, rules:{...}, basis}. Only the
     six known buckets are accepted. Degrades gracefully if mig 204 hasn't run (returns ok=false hint)."""
     require_org(org_id)
-    bucket = str(body.get('bucket') or '').strip()
+    bucket = str(body.bucket or '').strip()
     if bucket not in _EXEC_BUCKETS:
         raise HTTPException(400, f"unknown bucket (allowed: {', '.join(_EXEC_BUCKETS)})")
-    rules = body.get('rules') if isinstance(body.get('rules'), dict) else {}
-    basis = 'ext_price' if str(body.get('basis') or 'count') == 'ext_price' else 'count'
+    rules = body.rules if isinstance(body.rules, dict) else {}
+    basis = 'ext_price' if str(body.basis or 'count') == 'ext_price' else 'count'
     try:
         sb().schema('commcalc').table('exec_metric_config').upsert(
             {'org_id': org_id, 'bucket': bucket, 'rules': rules, 'basis': basis,
@@ -21292,31 +21881,45 @@ def _require_perf_review_edit(authorization, org_id):
 
 
 @router.put("/productivity/config")
-def put_productivity_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+class PutProductivityConfigIn(LaxModel):
+    item_key: str = ""
+    label: Any = None
+    source_key: Any = None
+    standard_type: Any = None
+    standard: Any = None
+    weight: Any = None
+    count_in_stack_ranker: Any = None
+    count_in_review: Any = None
+    enabled: Any = None
+    hidden: Any = None
+    sort: Any = None
+
+
+def put_productivity_config(body: PutProductivityConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert ONE registry item (add a custom item or edit/enable/disable a default). item_key required;
     source_key must be in the SOURCE CATALOG (pick-don't-type — no free-form formula). Degrades with a hint
     if mig 215 isn't applied. GATED on the 'performance_review' settings permission (B5)."""
     require_org(org_id)
     _require_perf_review_edit(authorization, org_id)
-    item_key = str(body.get('item_key') or '').strip()
+    item_key = str(body.item_key or '').strip()
     if not item_key:
         raise HTTPException(400, "item_key required")
-    source_key = str(body.get('source_key') or '').strip()
+    source_key = str(body.source_key or '').strip()
     if source_key and source_key not in _prod.SOURCE_CATALOG:
         raise HTTPException(400, f"unknown source_key (pick from the catalog): {source_key}")
     row = {'org_id': org_id, 'item_key': item_key}
     for c in ('label', 'source_key', 'standard_type'):
-        if body.get(c) is not None:
-            row[c] = str(body.get(c))
-    if 'standard' in body:
-        row['standard'] = None if body.get('standard') in (None, '') else safe_float(body.get('standard'))
-    if 'weight' in body:
-        row['weight'] = safe_float(body.get('weight'))
+        if getattr(body, c) is not None:
+            row[c] = str(getattr(body, c))
+    if 'standard' in body.model_fields_set:
+        row['standard'] = None if body.standard in (None, '') else safe_float(body.standard)
+    if 'weight' in body.model_fields_set:
+        row['weight'] = safe_float(body.weight)
     for b in ('count_in_stack_ranker', 'count_in_review', 'enabled', 'hidden'):
-        if b in body:
-            row[b] = bool(body.get(b))
-    if 'sort' in body:
-        row['sort'] = int(safe_float(body.get('sort')))
+        if b in body.model_fields_set:
+            row[b] = bool(getattr(body, b))
+    if 'sort' in body.model_fields_set:
+        row['sort'] = int(safe_float(body.sort))
     row['is_seed_default'] = item_key in {d['item_key'] for d in _prod.DEFAULT_ITEMS}
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     try:
@@ -21873,10 +22476,15 @@ async def get_rep_aliases(org_id: str = ORG_ID):
 
 
 @router.post("/rep-aliases")
-async def post_rep_aliases(body: dict, org_id: str = ORG_ID):
+class PostRepAliasesIn(LaxModel):
+    canonical: str = ""
+    aliases: Any = None
+
+
+async def post_rep_aliases(body: PostRepAliasesIn, org_id: str = ORG_ID):
     """Merge rep name-variants into one canonical. Body: {canonical, aliases:[...]}."""
-    canonical = (body.get('canonical') or '').strip()
-    aliases = body.get('aliases') or []
+    canonical = (body.canonical or '').strip()
+    aliases = body.aliases or []
     if not canonical or not isinstance(aliases, list) or not aliases:
         raise HTTPException(400, "canonical + aliases[] required")
     client = sb()
@@ -22008,13 +22616,17 @@ def _system_line_keys(client, org_id, pv):
 
 
 @router.put("/expenses/{period}")
-async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
+class PutExpensesIn(LaxModel):
+    rows: Any = None
+
+
+async def put_expenses(period: str, body: PutExpensesIn, org_id: str = ORG_ID):
     """Replace all MANUAL expenses for the period (matrix save + bulk upload). Body:
     {rows:[{store_code, expense_name, expense_type, amount}]}. Zero/blank rows are dropped.
     AUTO 'system' lines (source_key not null — e.g. the payroll-computed Paid Leave Accumulated) are
     NEVER deleted or shadowed here: the delete is manual-only, and an incoming row that collides with a
     system (store, expense) is dropped (the system line owns that cell), so GP never double-counts."""
-    rows = body.get('rows') or []
+    rows = body.rows or []
     client = sb()
     pv = _pvariants(period)
     sys_keys = _system_line_keys(client, org_id, pv)
@@ -22066,8 +22678,12 @@ def _bulk_apply_expand(cells):
     return by_expense, ins, cleared
 
 
+class BulkApplyExpensesIn(LaxModel):
+    cells: Any = None
+
+
 @router.post("/expenses/{period}/bulk-apply")
-async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
+async def bulk_apply_expenses(period: str, body: BulkApplyExpensesIn, org_id: str = ORG_ID):
     """Idempotent per-CELL upsert of specific (store, expense) cells for a period — powers the
     'copy one column to many stores' and 'multi-store common expense' bulk actions in ONE request
     (never N sequential saves). Body: {cells:[{store_code, expense_name, expense_type, amount}]}.
@@ -22076,7 +22692,7 @@ async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
     amount 0 CLEARS the cell. Delete-then-insert-nonzero per (expense_name × affected stores) → no
     unique index required and safe to re-run. org-scoped on every read AND write."""
     require_org(org_id)
-    by_expense, ins_bare, cleared = _bulk_apply_expand(body.get('cells') or [])
+    by_expense, ins_bare, cleared = _bulk_apply_expand(body.cells or [])
     client = sb()
     pv = _pvariants(period)
     # Clear every affected (period, expense_name, store_code) cell. Compound (store,expense) IN isn't
@@ -22095,8 +22711,15 @@ async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
             "stores": stores_touched, "expenses": len(by_expense), "period": period}
 
 
+class UpsertExpenseSystemLineIn(LaxModel):
+    source_key: str = ""
+    label: str = ""
+    cells: Any = None
+    expense_type: Any = None
+
+
 @router.post("/expenses/{period}/system-line")
-async def upsert_expense_system_line(period: str, body: dict, org_id: str = ORG_ID):
+async def upsert_expense_system_line(period: str, body: UpsertExpenseSystemLineIn, org_id: str = ORG_ID):
     """RECEIVER for an AUTO-COMPUTED ('system') store-expense line. mod-people's payroll run is the CALLER:
     it computes the per-store cost (e.g. 'Paid Leave Accumulated' / PTO accrual) and POSTs it here to be
     inserted into the Store Expenses matrix. The line coexists with manual expenses and rolls into the SAME
@@ -22112,14 +22735,14 @@ async def upsert_expense_system_line(period: str, body: dict, org_id: str = ORG_
     rate, tier, or plan changes, and it does NOT recompute anything. Returns {ok, period, source_key, label,
     stores_written, total}."""
     require_org(org_id)
-    source_key = str(body.get('source_key') or '').strip()
-    label = str(body.get('label') or '').strip()
+    source_key = str(body.source_key or '').strip()
+    label = str(body.label or '').strip()
     if not source_key:
         return {"ok": False, "error": "source_key required"}
     if not label:
         return {"ok": False, "error": "label required"}
     ins = _system_line_expand(org_id, period, source_key, label,
-                              body.get('cells') or [], body.get('expense_type') or 'Fixed')
+                              body.cells or [], body.expense_type or 'Fixed')
     client = sb()
     pv = _pvariants(period)
     # Replace the prior values for THIS (source_key, period): delete-by-source_key then insert the non-zero
@@ -22241,13 +22864,17 @@ async def get_expense_apply_config(org_id: str = ORG_ID):
             "default_tokens": list(_EXPENSE_APPLY_DEFAULT_TOKENS)}
 
 
+class PutExpenseApplyConfigIn(LaxModel):
+    tokens: Any = None
+
+
 @router.put("/expenses/apply-config")
-async def put_expense_apply_config(body: dict, org_id: str = ORG_ID):
+async def put_expense_apply_config(body: PutExpenseApplyConfigIn, org_id: str = ORG_ID):
     """Replace the org's excluded-expense tokens (the admin-editable protected set). Body {tokens:[...]}.
     Case-insensitively deduped. Degrades gracefully (ok=false + hint) until mig 205 creates the table."""
     require_org(org_id)
     toks = []
-    for t in (body.get('tokens') or []):
+    for t in (body.tokens or []):
         t = str(t or '').strip()
         if t and t.lower() not in [x.lower() for x in toks]:
             toks.append(t)
@@ -22263,8 +22890,15 @@ async def put_expense_apply_config(body: dict, org_id: str = ORG_ID):
                 "hint": "run migration 205_commission_expense_apply_config.sql"}
 
 
+class ApplyExpensesToMonthsIn(LaxModel):
+    source_period: str = ""
+    target_periods: Any = None
+    source_cells: Any = None
+    expense_names: Any = None
+
+
 @router.post("/expenses/apply-to-months")
-async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
+async def apply_expenses_to_months(body: ApplyExpensesToMonthsIn, org_id: str = ORG_ID):
     """Copy a SOURCE month's store expenses onto a chosen set of TARGET months — EXCEPT the configured
     protected expenses (commission + salary by default; see GET/PUT /expenses/apply-config). Body:
       { source_period: 'July 2026',
@@ -22277,18 +22911,18 @@ async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
     period-spelling. Does NOT recompute commissions or GP: writing expenses into a closed prior month
     SHIFTS that month's Gross Profit / P&L — re-run Calculation (or refresh the P&L) to reflect it."""
     require_org(org_id)
-    source_period = str(body.get('source_period') or '').strip()
+    source_period = str(body.source_period or '').strip()
     if not source_period:
         return {"ok": False, "error": "source_period required"}
     targets = []
-    for p in (body.get('target_periods') or []):
+    for p in (body.target_periods or []):
         p = str(p or '').strip()
         if p and p != source_period and p not in targets:   # never write back onto the source month
             targets.append(p)
     if not targets:
         return {"ok": False, "error": "no target_periods (after dropping the source month)"}
     client = sb()
-    src_override = body.get('source_cells')
+    src_override = body.source_cells
     if isinstance(src_override, list) and src_override:
         src_rows = src_override                     # LIVE grid passed by the page (WYSIWYG for the open month)
     else:
@@ -22304,7 +22938,7 @@ async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
                         .select('store_code,expense_name,expense_type,amount')
                         .eq('org_id', org_id).in_('period', _spv).execute().data) or []
     excluded_tokens = _expense_apply_tokens(client, org_id)
-    selection = body.get('expense_names')
+    selection = body.expense_names
     sel = selection if (isinstance(selection, list) and selection) else None
     rows, affected, skipped = _apply_to_months_expand(src_rows, targets, excluded_tokens, sel)
     # Idempotent per-cell delete-then-insert into each target period (never a whole-month wipe). Compound
@@ -22498,34 +23132,59 @@ def get_ftp_config(org_id: str = ORG_ID):
 
 
 @router.put("/ftp-sweep/config")
-def put_ftp_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+class PutFtpConfigIn(LaxModel):
+    host: str = ""
+    port: Any = None
+    username: str = ""
+    use_tls: Any = None
+    passive: Any = True
+    remote_dir: str = ""
+    patterns: Any = None
+    enabled: Any = None
+    frequency: Any = None
+    hour: Any = None
+    password: Any = None
+
+
+def put_ftp_config(body: PutFtpConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save config. Password only updated when a non-empty value is supplied (so it isn't wiped)."""
     require_org(org_id)
     _require_import_admin(authorization, org_id)
-    row = {"org_id": org_id, "host": (body.get("host") or "").strip() or None,
-           "port": int(body.get("port") or 21), "username": (body.get("username") or "").strip() or None,
-           "use_tls": bool(body.get("use_tls")), "passive": body.get("passive", True) is not False,
-           "remote_dir": (body.get("remote_dir") or "/").strip(),
-           "patterns": body.get("patterns") or [], "enabled": bool(body.get("enabled")),
-           "frequency": body.get("frequency") or "daily", "hour": int(body.get("hour") or 7),
+    row = {"org_id": org_id, "host": (body.host or "").strip() or None,
+           "port": int(body.port or 21), "username": (body.username or "").strip() or None,
+           "use_tls": bool(body.use_tls), "passive": body.passive is not False,
+           "remote_dir": (body.remote_dir or "/").strip(),
+           "patterns": body.patterns or [], "enabled": bool(body.enabled),
+           "frequency": body.frequency or "daily", "hour": int(body.hour or 7),
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if (body.get("password") or "").strip():
-        row["password"] = body["password"]
-    if body.get("enabled"):
+    if (body.password or "").strip():
+        row["password"] = body.password
+    if body.enabled:
         row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
     sb().schema("commcalc").table("ftp_sweep_config").upsert(row, on_conflict="org_id").execute()
     return {"ok": True}
 
 
+class TestFtpIn(LaxModel):
+    host: Any = None
+    port: Any = None
+    username: Any = None
+    password: Any = None
+    use_tls: Any = None
+    passive: Any = None
+    remote_dir: Any = None
+    patterns: Any = None
+
+
 @router.post("/ftp-sweep/test")
-def test_ftp(body: dict, org_id: str = ORG_ID):
+def test_ftp(body: TestFtpIn, org_id: str = ORG_ID):
     """List the remote directory (merging any unsaved overrides from the body) + which files match a
     pattern. Used by the 'Test connection' button before saving creds."""
     require_org(org_id)
     cfg = dict(_ftp_cfg(sb(), org_id) or {})
     for k in ("host", "port", "username", "password", "use_tls", "passive", "remote_dir", "patterns"):
-        if k in body and body[k] not in (None, ""):
-            cfg[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) not in (None, ""):
+            cfg[k] = getattr(body, k)
     try:
         files = _ftp.list_files(cfg)
     except Exception as e:
@@ -22552,7 +23211,7 @@ def ftp_processed(org_id: str = ORG_ID, limit: int = 100):
 @router.post("/ftp-sweep/run-due")
 async def ftp_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — run the FTP sweep if enabled + due, then advance next_run_at."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -23109,7 +23768,13 @@ def get_sales_derive_config(org_id: str = ORG_ID):
 
 
 @router.put("/sales/derive-config")
-def put_sales_derive_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+class PutSalesDeriveConfigIn(LaxModel):
+    enabled: Any = None
+    days: Any = None
+    retain: Any = None
+
+
+def put_sales_derive_config(body: PutSalesDeriveConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's month-boundary grace window (migration 266). Import-channel setting, so it is
     gated on the SAME 'import_health' settings area as the mailbox/portal editors — not the commission
     pay gate, because this changes WHEN sales are derived and never what anyone is paid.
@@ -23121,9 +23786,9 @@ def put_sales_derive_config(body: dict, org_id: str = ORG_ID, authorization: str
     require_org(org_id)
     _require_import_admin(authorization, org_id)
     cfg = sales_derive.resolve({
-        "enabled": body.get("enabled", True),
-        "days": body.get("days", sales_derive.DEFAULT["days"]),
-        "retain": body.get("retain"),
+        "enabled": body.enabled if "enabled" in body.model_fields_set else True,
+        "days": body.days if "days" in body.model_fields_set else sales_derive.DEFAULT["days"],
+        "retain": body.retain,
     })
     row = {"org_id": org_id, sales_derive.CONFIG_COLUMN: cfg,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
@@ -23274,7 +23939,7 @@ def sales_promote_due(x_notify_secret: str = Header(default=""), period: str = N
     double-count. Schedule hourly (offset from the email-sweep cron) so raw_sales never lags the feed for
     any tenant. With no `period` it also re-derives the JUST-CLOSED month inside each tenant's
     month-boundary grace window (sales_derive.py) — still with no recompute anywhere."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     return _promote_all_due(sb(), period)
 
@@ -23302,25 +23967,43 @@ def get_email_config(org_id: str = ORG_ID, account: str = "default"):
     return _strip_pw(cfg)
 
 
+class PutEmailConfigIn(LaxModel):
+    account: str = ""
+    label: str = ""
+    imap_host: str = ""
+    imap_port: Any = None
+    username: str = ""
+    use_ssl: Any = True
+    mailbox: str = ""
+    from_filter: str = ""
+    since_days: Any = None
+    patterns: Any = None
+    enabled: Any = None
+    frequency: Any = None
+    hour: Any = None
+    password: Any = None
+    acknowledge_cross_org: Any = None
+
+
 @router.put("/email-sweep/config")
-def put_email_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_email_config(body: PutEmailConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save one mailbox. `account` keys which mailbox (default 'default'); pass a distinct key + label to
     add another (e.g. account='total', label='Total Wireless'). Password only updated when supplied."""
     require_org(org_id)
     _require_import_admin(authorization, org_id)
-    account = (body.get("account") or "default").strip() or "default"
-    row = {"org_id": org_id, "account": account, "label": (body.get("label") or "").strip() or None,
-           "imap_host": (body.get("imap_host") or "").strip() or None,
-           "imap_port": int(body.get("imap_port") or 993), "username": (body.get("username") or "").strip() or None,
-           "use_ssl": body.get("use_ssl", True) is not False, "mailbox": (body.get("mailbox") or "INBOX").strip(),
-           "from_filter": (body.get("from_filter") or "").strip() or None,
-           "since_days": int(body.get("since_days") or 14),
-           "patterns": body.get("patterns") or [], "enabled": bool(body.get("enabled")),
-           "frequency": body.get("frequency") or "daily", "hour": int(body.get("hour") or 7),
+    account = (body.account or "default").strip() or "default"
+    row = {"org_id": org_id, "account": account, "label": (body.label or "").strip() or None,
+           "imap_host": (body.imap_host or "").strip() or None,
+           "imap_port": int(body.imap_port or 993), "username": (body.username or "").strip() or None,
+           "use_ssl": body.use_ssl is not False, "mailbox": (body.mailbox or "INBOX").strip(),
+           "from_filter": (body.from_filter or "").strip() or None,
+           "since_days": int(body.since_days or 14),
+           "patterns": body.patterns or [], "enabled": bool(body.enabled),
+           "frequency": body.frequency or "daily", "hour": int(body.hour or 7),
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if (body.get("password") or "").strip():
-        row["password"] = body["password"]
-    if body.get("enabled"):
+    if (body.password or "").strip():
+        row["password"] = body.password
+    if body.enabled:
         row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
     # MISFILE GUARD (the cross-org class has bitten twice — the Luxelink mailbox filed under the HOUSE
     # org would ingest Total sales into Boost, and the same physical inbox enabled under two orgs makes
@@ -23329,7 +24012,7 @@ def put_email_config(body: dict, org_id: str = ORG_ID, authorization: str = Head
     # save with acknowledge_cross_org) goes through but still carries the warning so the UI can surface it.
     conflicts = _mailbox_cross_org(sb(), row.get("username"), org_id)
     enabled_conflicts = [c for c in conflicts if c.get("enabled")]
-    if row.get("enabled") and enabled_conflicts and not body.get("acknowledge_cross_org"):
+    if row.get("enabled") and enabled_conflicts and not body.acknowledge_cross_org:
         return {"ok": False, "account": account, "warning": "cross_org_mailbox",
                 "message": (f"The mailbox '{row.get('username')}' is already configured and ENABLED under "
                             f"another tenant. Enabling it here too would make BOTH tenants ingest the same "
@@ -23363,15 +24046,28 @@ def delete_email_account(account: str, org_id: str = ORG_ID):
     return {"deleted": account}
 
 
+class TestEmailIn(LaxModel):
+    account: Any = None
+    imap_host: Any = None
+    imap_port: Any = None
+    username: Any = None
+    password: Any = None
+    use_ssl: Any = None
+    mailbox: Any = None
+    from_filter: Any = None
+    since_days: Any = None
+    patterns: Any = None
+
+
 @router.post("/email-sweep/test")
-def test_email(body: dict, org_id: str = ORG_ID):
+def test_email(body: TestEmailIn, org_id: str = ORG_ID):
     """Connect to the mailbox (merging any unsaved overrides) and list recent messages + their
     attachments and which match a pattern. Used by the 'Test connection' button before saving creds."""
     require_org(org_id)
-    cfg = dict(_email_cfg(sb(), org_id, (body.get("account") or "default").strip() or "default") or {})
+    cfg = dict(_email_cfg(sb(), org_id, (body.account or "default").strip() or "default") or {})
     for k in ("imap_host", "imap_port", "username", "password", "use_ssl", "mailbox", "from_filter", "since_days", "patterns"):
-        if k in body and body[k] not in (None, ""):
-            cfg[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) not in (None, ""):
+            cfg[k] = getattr(body, k)
     try:
         msgs = _email.list_messages(cfg)
     except Exception as e:
@@ -23414,18 +24110,28 @@ def list_pos_profiles(org_id: str = ORG_ID, pos_key: str = "b2bsoft"):
 
 
 @router.put("/pos-profiles")
-def put_pos_profile(body: dict, org_id: str = ORG_ID):
+class PutPosProfileIn(LaxModel):
+    pos_key: str = ""
+    label: str = ""
+    imap_defaults: Any = None
+    filename_rules: Any = None
+    schedule_defaults: Any = None
+    report_defs: Any = None
+    is_active: Any = True
+
+
+def put_pos_profile(body: PutPosProfileIn, org_id: str = ORG_ID):
     """Edit this tenant's POS standard profile (SAP-configurable — the standard is a config row, not code).
     Degrades gracefully: if mig 200 isn't applied yet, returns ok=False with a hint instead of 500."""
     require_org(org_id)
-    pos_key = (body.get("pos_key") or "b2bsoft").strip() or "b2bsoft"
+    pos_key = (body.pos_key or "b2bsoft").strip() or "b2bsoft"
     row = {"org_id": org_id, "pos_key": pos_key,
-           "label": (body.get("label") or "").strip() or None,
-           "imap_defaults": body.get("imap_defaults") or {},
-           "filename_rules": body.get("filename_rules") or [],
-           "schedule_defaults": body.get("schedule_defaults") or {},
-           "report_defs": body.get("report_defs") or [],
-           "is_active": body.get("is_active", True) is not False,
+           "label": (body.label or "").strip() or None,
+           "imap_defaults": body.imap_defaults or {},
+           "filename_rules": body.filename_rules or [],
+           "schedule_defaults": body.schedule_defaults or {},
+           "report_defs": body.report_defs or [],
+           "is_active": body.is_active is not False,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     try:
         sb().schema("commcalc").table("pos_profile").upsert(row, on_conflict="org_id,pos_key").execute()
@@ -23701,7 +24407,7 @@ def connector_health(org_id: str = ORG_ID):
 async def connector_health_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (hourly): WhatsApp/email the assigned person for any errored/stale data source.
     Deduped via alert_log so it won't re-alert every tick until the source recovers."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     failures = _scan_connector_health(client)
@@ -23722,7 +24428,7 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
 @router.post("/email-sweep/run-due")
 async def email_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — run the email sweep if enabled + due, then advance next_run_at."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -24086,12 +24792,31 @@ def list_data_sources(org_id: str = ORG_ID):
 
 
 @router.put("/data-sources")
-def save_data_source(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+class SaveDataSourceIn(LaxModel):
+    id: Any = None
+    distributor_id: Any = None
+    carrier_id: Any = None
+    processor: Any = None
+    label: Any = None
+    portal_url: Any = None
+    username: Any = None
+    account_id: Any = None
+    password: Any = None
+    proxy_url: Any = None
+    enabled: Any = None
+    frequency: Any = None
+    hour: Any = None
+    notes: Any = None
+    months_back: Any = None
+    auto_pull_after_login: Any = None
+
+
+def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Create/update one login. Omitting password on an update KEEPS the stored one."""
     require_org(org_id)
     _require_import_admin(authorization, org_id)
-    row = {k: body[k] for k in _SOURCE_FIELDS if k in body}
-    if not (row.get("processor") or "").strip() and not body.get("id"):
+    row = {k: getattr(body, k) for k in _SOURCE_FIELDS if k in body.model_fields_set}
+    if not (row.get("processor") or "").strip() and not body.id:
         raise HTTPException(400, "processor is required (e.g. vidapay, total_access, epay)")
     for k in ("distributor_id", "carrier_id"):
         if k in row and not (row[k] or "").strip():
@@ -24117,10 +24842,10 @@ def save_data_source(body: dict, org_id: str = ORG_ID, authorization: str = Head
                 raise HTTPException(400, e.message)
     client = sb()
     try:
-        if body.get("id"):
+        if body.id:
             client.schema("commcalc").table("data_source").update(row)\
-                .eq("id", body["id"]).eq("org_id", org_id).execute()
-            return {"ok": True, "id": body["id"]}
+                .eq("id", body.id).eq("org_id", org_id).execute()
+            return {"ok": True, "id": body.id}
         row["org_id"] = org_id
         r = client.schema("commcalc").table("data_source").insert(row).execute()
         return {"ok": True, "id": (r.data or [{}])[0].get("id")}
@@ -24136,13 +24861,17 @@ def delete_data_source(sid: str, org_id: str = ORG_ID, authorization: str = Head
     return {"ok": True}
 
 
+class TestProxyIn(LaxModel):
+    proxy_url: str = ""
+
+
 @router.post("/data-source/test-proxy")
-def test_proxy(body: dict, org_id: str = ORG_ID):
+def test_proxy(body: TestProxyIn, org_id: str = ORG_ID):
     """Make ONE request through the given proxy_url to an IP-echo, so an operator can confirm a
     residential/allow-listed proxy WORKS (and see the egress IP + country) BEFORE fighting a portal's 2FA.
     Also probes the server's OWN egress (no proxy) for comparison, so 'routed through proxy' is provable.
     Read-only; nothing is stored."""
-    proxy_url = (body.get("proxy_url") or "").strip()
+    proxy_url = (body.proxy_url or "").strip()
     if not proxy_url:
         raise HTTPException(400, "enter a proxy_url first (http://user:pass@host:port)")
     # SSRF GUARD (C4): this endpoint makes a request THROUGH the caller-supplied proxy and returns the
@@ -24297,14 +25026,26 @@ def list_report_pull_map(processor: str = "", org_id: str = ORG_ID):
 
 
 @router.put("/report-pull-map")
-def save_report_pull_map(body: dict, org_id: str = ORG_ID):
+class SaveReportPullMapIn(LaxModel):
+    report_key: Any = None
+    display_name: Any = None
+    target_table: Any = None
+    column_map: Any = None
+    param_spec: Any = None
+    export_pref: Any = None
+    enabled: Any = None
+    sort_order: Any = None
+    processor: Any = None
+
+
+def save_report_pull_map(body: SaveReportPullMapIn, org_id: str = ORG_ID):
     """Create/update THIS org's override for one report_key (never mutates the house default row — a
     tenant edit becomes a tenant-scoped override). Upserts on (org_id, report_key)."""
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
+    rk = (body.report_key or "").strip()
     if not rk:
         raise HTTPException(400, "report_key is required")
-    row = {k: body[k] for k in _RPM_FIELDS if k in body}
+    row = {k: getattr(body, k) for k in _RPM_FIELDS if k in body.model_fields_set}
     row["org_id"] = org_id
     row["report_key"] = rk
     row["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -24484,28 +25225,37 @@ async def manual_upload_detect(report_key: str = Form(...), carrier_id: str = Fo
 
 
 @router.post("/manual-upload/mapping")
-def manual_upload_save_mapping(body: dict, org_id: str = ORG_ID):
+class ManualUploadSaveMappingIn(LaxModel):
+    report_key: str = ""
+    carrier_id: str = ""
+    column_map: Any = None
+    field_sources: Any = None
+    sample_headers: Any = None
+    saved_by: Any = None
+
+
+def manual_upload_save_mapping(body: ManualUploadSaveMappingIn, org_id: str = ORG_ID):
     """Persist the per-(org,carrier,report_key) manual column mapping. Accepts either a ready column_map
     or a {dest_col: source_header} selection (field_sources) — the latter inherits value TYPES from the
     report_pull default so numeric/date casting is preserved. SAP: map once, upload against it forever."""
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
-    carrier_id = (body.get("carrier_id") or "").strip()
+    rk = (body.report_key or "").strip()
+    carrier_id = (body.carrier_id or "").strip()
     if not rk or not carrier_id:
         raise HTTPException(400, "report_key and carrier_id are required")
     spec = _ma_effective_spec(org_id, rk) or {}
     default_map = spec.get("column_map") or {}
-    column_map = body.get("column_map")
+    column_map = body.column_map
     if not (isinstance(column_map, dict) and column_map):
-        column_map = ma_upload.build_column_map(body.get("field_sources") or {}, default_map)
+        column_map = ma_upload.build_column_map(body.field_sources or {}, default_map)
     if not column_map:
         raise HTTPException(400, "no columns mapped")
     row = {
         "org_id": org_id, "carrier_id": carrier_id, "report_key": rk,
         "target_table": spec.get("target_table"),
         "column_map": column_map,
-        "sample_headers": body.get("sample_headers"),
-        "saved_by": (body.get("saved_by") or None),
+        "sample_headers": body.sample_headers,
+        "saved_by": (body.saved_by or None),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     client = sb()
@@ -24523,12 +25273,17 @@ def manual_upload_save_mapping(body: dict, org_id: str = ORG_ID):
         raise HTTPException(400, f"Could not save mapping — is migration 212 applied? {e}")
 
 
+class ManualUploadResetMappingIn(LaxModel):
+    report_key: str = ""
+    carrier_id: str = ""
+
+
 @router.post("/manual-upload/reset-mapping")
-def manual_upload_reset_mapping(body: dict, org_id: str = ORG_ID):
+def manual_upload_reset_mapping(body: ManualUploadResetMappingIn, org_id: str = ORG_ID):
     """Drop the saved override for (org,carrier,report_key) so it falls back to the report_pull default."""
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
-    carrier_id = (body.get("carrier_id") or "").strip()
+    rk = (body.report_key or "").strip()
+    carrier_id = (body.carrier_id or "").strip()
     if not rk or not carrier_id:
         raise HTTPException(400, "report_key and carrier_id are required")
     try:
@@ -24734,7 +25489,7 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
     this, any signed-in user could trigger pulls for every tenant on the platform.
     NOTE the cron itself does not exist yet: nothing scheduled this endpoint, so the "VidaPay runs on a
     schedule" expectation has never been true. The SQL to schedule it is in migration 241."""
-    cron = bool(settings.NOTIFY_RUN_SECRET) and x_notify_secret == settings.NOTIFY_RUN_SECRET
+    cron = verify_notify_secret(x_notify_secret)
     if not cron:
         require_org(org_id)
     client = sb()
@@ -24911,14 +25666,18 @@ async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, o
                        "Watch the status; the 2FA prompt appears here when it's ready."}
 
 
+class LoginCodeIn(LaxModel):
+    code: str = ""
+
+
 @router.post("/data-sources/{sid}/login/verify")
-async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
+async def data_source_login_verify(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
     """Phase 2: submit the 2FA code against the pending session and, on success, store the durable
     authenticated session so scheduled/manual pulls reuse it until the portal invalidates it."""
     require_org(org_id)
     from app.modules.commcalc import vidapay_sweep as vp
     from fastapi.concurrency import run_in_threadpool
-    code = str((body or {}).get("code") or "").strip()
+    code = str(body.code or "").strip()
     if not code:
         raise HTTPException(400, "Enter the verification code.")
     client = sb()
@@ -25199,12 +25958,12 @@ def live_login_state(sid: str, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/live-login/submit")
-def live_login_submit(sid: str, body: dict, org_id: str = ORG_ID):
+def live_login_submit(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
     """Enqueue the operator's 2FA code into the LIVE session. The worker thread fills it into the same
     open page, selects the trust radio and clicks Verify — the UI polls /state for the outcome."""
     require_org(org_id)
     from app.modules.commcalc import live_login
-    code = str((body or {}).get("code") or "").strip()
+    code = str(body.code or "").strip()
     if not code:
         raise HTTPException(400, "Enter the verification code.")
     sess = live_login.get_session(sid, org_id)
@@ -25227,7 +25986,12 @@ def live_login_resend(sid: str, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/live-login/click")
-def live_login_click(sid: str, body: dict, org_id: str = ORG_ID):
+class LiveLoginClickIn(LaxModel):
+    x: Any = None
+    y: Any = None
+
+
+def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     """'Take control': forward an operator click (NORMALIZED x/y in 0..1 of the streamed image) to the
     live page, so they can press a control the auto-clicker missed (e.g. the portal's Next button)."""
     require_org(org_id)
@@ -25236,7 +26000,7 @@ def live_login_click(sid: str, body: dict, org_id: str = ORG_ID):
     if not sess:
         raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
     try:
-        nx = float((body or {}).get("x")); ny = float((body or {}).get("y"))
+        nx = float(body.x); ny = float(body.y)
     except (TypeError, ValueError):
         raise HTTPException(400, "click needs numeric x,y in 0..1")
     sess.click(nx, ny)
@@ -25244,7 +26008,16 @@ def live_login_click(sid: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/live-login/input")
-def live_login_input(sid: str, body: dict, org_id: str = ORG_ID):
+class LiveLoginInputIn(LaxModel):
+    type: Any = None
+    x: Any = None
+    y: Any = None
+    text: Any = None
+    key: Any = None
+    deltaY: Any = None
+
+
+def live_login_input(sid: str, body: LiveLoginInputIn, org_id: str = ORG_ID):
     """Forward a raw human input event to the LIVE page with HIGH priority (drained before SUBMIT_CODE /
     RESEND / PULL). type ∈ click|dblclick|type|key|scroll. Click coords are NORMALIZED (0..1 of the
     streamed image) and multiplied by the live viewport size server-side (DPR-proof — the img is rendered
@@ -25254,23 +26027,22 @@ def live_login_input(sid: str, body: dict, org_id: str = ORG_ID):
     sess = live_login.get_session(sid, org_id)
     if not sess:
         raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
-    ev = body or {}
-    et = str(ev.get("type") or "").strip().lower()
+    et = str(body.type or "").strip().lower()
     if et not in ("click", "dblclick", "type", "key", "scroll"):
         raise HTTPException(400, "input type must be one of click|dblclick|type|key|scroll")
     norm = {"type": et}
     if et in ("click", "dblclick"):
         try:
-            norm["x"] = float(ev.get("x")); norm["y"] = float(ev.get("y"))
+            norm["x"] = float(body.x); norm["y"] = float(body.y)
         except (TypeError, ValueError):
             raise HTTPException(400, "click needs numeric x,y in 0..1")
     elif et == "type":
-        norm["text"] = str(ev.get("text") or "")
+        norm["text"] = str(body.text or "")
     elif et == "key":
-        norm["key"] = str(ev.get("key") or "")
+        norm["key"] = str(body.key or "")
     elif et == "scroll":
         try:
-            norm["deltaY"] = float(ev.get("deltaY") or 0)
+            norm["deltaY"] = float(body.deltaY or 0)
         except (TypeError, ValueError):
             norm["deltaY"] = 0.0
     sess.input_event(norm)
@@ -25622,7 +26394,27 @@ def ma_overview_tiles(org_id: str = ORG_ID):
 
 
 @router.put("/ma-overview-recon/tiles/{tile_key}")
-def ma_overview_put_tile(tile_key: str, body: dict, org_id: str = ORG_ID,
+class MaOverviewPutTileIn(LaxModel):
+    label: Any = None
+    sort_order: Any = None
+    value_format: Any = None
+    source_table: Any = None
+    agg: Any = None
+    value_fields: Any = None
+    sign: Any = None
+    filter_field: Any = None
+    filter_op: Any = None
+    filter_value: Any = None
+    filters: Any = None
+    uploaded_field: Any = None
+    uploaded_aliases: Any = None
+    tolerance_abs: Any = None
+    tolerance_pct: Any = None
+    note: Any = None
+    is_active: Any = None
+
+
+def ma_overview_put_tile(tile_key: str, body: MaOverviewPutTileIn, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """Save ONE tile's mapping for this tenant (upsert on org+tile_key). Validated against the source
     vocabulary before it is stored, so a typo'd column can never silently read as "no rows matched".
@@ -25635,10 +26427,10 @@ def ma_overview_put_tile(tile_key: str, body: dict, org_id: str = ORG_ID,
     for f in mo.TILE_FIELDS:
         if f == "tile_key":
             continue
-        if f in (body or {}):
-            row[f] = body.get(f)
-    if "is_active" in (body or {}):
-        row["is_active"] = bool(body.get("is_active"))
+        if f in body.model_fields_set:
+            row[f] = getattr(body, f)
+    if "is_active" in body.model_fields_set:
+        row["is_active"] = bool(body.is_active)
     base = next((dict(t) for t in mo.DEFAULT_TILES if t["tile_key"] == row["tile_key"]), {})
     base.update({k: v for k, v in row.items() if v is not None})
     problems = mo.tile_problems(base)
@@ -25695,7 +26487,14 @@ def ma_overview_rate_plan(period: str = "", org_id: str = ORG_ID):
 
 
 @router.put("/ma-overview-recon/rate-plan/{month_index}")
-def ma_overview_put_rate(month_index: int, body: dict, org_id: str = ORG_ID,
+class MaOverviewPutRateIn(LaxModel):
+    rate_pct: Any = None
+    spiff_flat: Any = None
+    effective_from: Any = None
+    note: Any = None
+
+
+def ma_overview_put_rate(month_index: int, body: MaOverviewPutRateIn, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """Set the carrier's rate for one month leg. body: {rate_pct, spiff_flat?, effective_from?, note?}.
     Config only — it moves no money and triggers no recalculation; it changes what the recon EXPECTS."""
@@ -25704,13 +26503,12 @@ def ma_overview_put_rate(month_index: int, body: dict, org_id: str = ORG_ID,
         raise HTTPException(403, "You don't have permission to edit the carrier rate plan.")
     if not 1 <= int(month_index) <= 6:
         raise HTTPException(400, "month_index must be 1..6")
-    body = body or {}
     row = {"org_id": org_id, "month_index": int(month_index),
-           "rate_pct": safe_float(body.get("rate_pct")),
-           "spiff_flat": safe_float(body.get("spiff_flat")),
-           "effective_from": (str(body.get("effective_from"))[:10] or None)
-                             if body.get("effective_from") else None,
-           "note": (body.get("note") or None),
+           "rate_pct": safe_float(body.rate_pct),
+           "spiff_flat": safe_float(body.spiff_flat),
+           "effective_from": (str(body.effective_from)[:10] or None)
+                             if body.effective_from else None,
+           "note": (body.note or None),
            "updated_by": "api_v1",
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     # NOT an upsert with on_conflict: the table's uniqueness is a COALESCE-based EXPRESSION index
@@ -26359,18 +27157,26 @@ def agency_delete_link(link_id: str, org_id: str = ORG_ID, authorization: str = 
     return _agency.delete_link(sb(), org_id, link_id)
 
 
+class AgencySetConsentIn(LaxModel):
+    status: str = ""
+
+
 @router.post("/agency/links/{link_id}/consent")
-def agency_set_consent(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def agency_set_consent(link_id: str, body: AgencySetConsentIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
     _require_agency_edit(authorization, org_id)   # M2: master-recorded (offline) consent is admin-gated
-    return _agency.set_consent(sb(), org_id, link_id, (body.get("status") or ""), _agency_who(authorization, org_id))
+    return _agency.set_consent(sb(), org_id, link_id, (body.status or ""), _agency_who(authorization, org_id))
+
+
+class AgencySetCarriersIn(LaxModel):
+    carrier_ids: Any = None
 
 
 @router.post("/agency/links/{link_id}/carriers")
-def agency_set_carriers(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def agency_set_carriers(link_id: str, body: AgencySetCarriersIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
     _require_agency_edit(authorization, org_id)
-    return _agency.set_carriers(sb(), org_id, link_id, (body.get("carrier_ids") or []), _agency_who(authorization, org_id))
+    return _agency.set_carriers(sb(), org_id, link_id, (body.carrier_ids or []), _agency_who(authorization, org_id))
 
 
 @router.get("/agency/sub-lookup")
@@ -26541,12 +27347,16 @@ def agency_reject_transfer(tid: str, org_id: str = ORG_ID, authorization: str = 
 
 
 # ── invoices ──────────────────────────────────────────────────────────────────────────────────────────
+class AgencyGenerateInvoiceIn(LaxModel):
+    period: str = ""
+
+
 @router.post("/agency/links/{link_id}/invoices/generate")
-def agency_generate_invoice(link_id: str, body: dict = None, period: str = "", org_id: str = ORG_ID,
+def agency_generate_invoice(link_id: str, body: Optional[AgencyGenerateInvoiceIn] = None, period: str = "", org_id: str = ORG_ID,
                             authorization: str = Header(default="")):
     require_org(org_id)
     _require_agency_edit(authorization, org_id)
-    per = period or ((body or {}).get("period") or "")
+    per = period or ((body.period if body else "") or "")
     if not per:
         raise HTTPException(400, "period is required")
     return _agency.generate_invoice(sb(), org_id, link_id, per, _agency_who(authorization, org_id))
@@ -28336,7 +29146,7 @@ async def payout_accrual_run_due(x_notify_secret: str = Header(default="")):
     The accrual ALSO runs at the tail of /sales/promote-due (right after the feed lands), so this
     endpoint is the belt to that braces: schedule it once a day if you want a fixed-time run, or rely
     on the promote sweep alone. Both paths are idempotent, so running both is harmless."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     return payout_accrual.run_all_due(sb())
 
@@ -28449,8 +29259,14 @@ async def delete_financing_vendor(vendor_key: str, org_id: str = ORG_ID,
                      "enabled=false to switch one off permanently.")}
 
 
+class AddFinancingVendorCarrierIn(LaxModel):
+    carrier_id: Any = None
+    carrier_name: Any = None
+    enabled: Any = True
+
+
 @router.post("/financing/vendors/{vendor_key}/carriers")
-async def add_financing_vendor_carrier(vendor_key: str, body: dict, org_id: str = ORG_ID,
+async def add_financing_vendor_carrier(vendor_key: str, body: AddFinancingVendorCarrierIn, org_id: str = ORG_ID,
                                        authorization: str = Header(default="")):
     """Assign a vendor to a carrier. A vendor may serve MANY carriers — this is the whole mechanism
     behind "ACIMA could also be added to Total at a later date": one row, no release."""
@@ -28458,9 +29274,9 @@ async def add_financing_vendor_carrier(vendor_key: str, body: dict, org_id: str 
     _require_commission_admin(authorization, org_id)
     client = sb()
     row = {"org_id": org_id, "vendor_key": _finreg.clean_key(vendor_key),
-           "carrier_id": (body or {}).get("carrier_id") or None,
-           "carrier_name": ((body or {}).get("carrier_name") or "").strip() or None,
-           "enabled": bool((body or {}).get("enabled", True))}
+           "carrier_id": body.carrier_id or None,
+           "carrier_name": (body.carrier_name or "").strip() or None,
+           "enabled": bool(body.enabled)}
     if not row["carrier_id"] and not row["carrier_name"]:
         raise HTTPException(400, "pick a carrier")
     try:
@@ -28584,7 +29400,16 @@ async def get_financing_targets(period: str, include_inactive: bool = False,
 
 
 @router.put("/financing/targets/{period}")
-async def save_financing_target(period: str, body: dict, authorization: str = Header(default=""),
+class SaveFinancingTargetIn(LaxModel):
+    store_code: Any = None
+    vendor_key: Any = None
+    target_amount: Any = None
+    target_units: Any = None
+    notes: Any = None
+    updated_by: Any = None
+
+
+async def save_financing_target(period: str, body: SaveFinancingTargetIn, authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """Set ONE store's monthly financing target (optionally per vendor). Gated on the SAME 'targets'
     settings area + store span as the existing Target Settings save.
@@ -28594,18 +29419,18 @@ async def save_financing_target(period: str, body: dict, authorization: str = He
     table from commcalc.targets so this cannot break the existing target save."""
     require_org(org_id)
     client = sb()
-    code = str((body or {}).get('store_code') or '').strip()
+    code = str(body.store_code or '').strip()
     if not code:
         raise HTTPException(400, "store_code required")
     _require_target_edit(authorization, org_id, code)
-    vk = str((body or {}).get('vendor_key') or '').strip().lower()
-    amt = (body or {}).get('target_amount')
+    vk = str(body.vendor_key or '').strip().lower()
+    amt = body.target_amount
     row = {'org_id': org_id, 'period': period, 'store_code': code,
            'vendor_key': (vk or None),
-           'target_units': safe_float((body or {}).get('target_units')),
+           'target_units': safe_float(body.target_units),
            'target_amount': (safe_float(amt) if str(amt if amt is not None else '').strip() != '' else None),
-           'notes': (body or {}).get('notes'),
-           'updated_by': (body or {}).get('updated_by') or 'web',
+           'notes': body.notes,
+           'updated_by': body.updated_by or 'web',
            'updated_at': datetime.now(timezone.utc).isoformat()}
     try:
         r = (client.schema('commcalc').table(_finreg.TARGET_TABLE)
@@ -28702,15 +29527,22 @@ def atu_config_get(org_id: str = ORG_ID):
 
 
 @router.post("/atu-config")
-def atu_config_set(body: dict, org_id: str = ORG_ID):
+class AtuConfigSetIn(LaxModel):
+    saving_per_month: Any = None
+    boost_rate_pct: Any = None
+    total_rate_pct: Any = None
+    total_recharge_base: Any = None
+
+
+def atu_config_set(body: AtuConfigSetIn, org_id: str = ORG_ID):
     """Save the assumptions. org_id is STAMPED (RULE ONE). Values are clamped to >= 0 — a negative rate
     would silently flip the sign of the whole report."""
     require_org(org_id)
     payload = {"org_id": org_id}
     for k in _ATU_DEFAULTS:
-        if k in (body or {}):
+        if k in body.model_fields_set:
             try:
-                payload[k] = max(0.0, float((body or {}).get(k)))
+                payload[k] = max(0.0, float(getattr(body, k)))
             except (TypeError, ValueError):
                 continue
     payload["updated_at"] = _datetime.now(_timezone.utc).isoformat()
@@ -28846,33 +29678,50 @@ def mi_list_plans(org_id: str = ORG_ID):
     return {"plans": _mi_load_plans(sb(), org_id)}
 
 
+class MiSavePlanIn(LaxModel):
+    id: Any = None
+    name: str = ""
+    level: Any = None
+    carrier_id: Any = None
+    period_type: Any = None
+    consolidated_bonus_amount: Any = 300
+    is_active: Any = True
+    is_default: Any = False
+    notes: Any = None
+    actor: Any = _Field(default=None, alias="_actor")
+    components: Any = None
+    bonuses: Any = None
+    qualifiers: Any = None
+    assignments: Any = None
+
+
 @router.post("/management-incentive/plans")
-def mi_save_plan(body: dict, org_id: str = ORG_ID):
+def mi_save_plan(body: MiSavePlanIn, org_id: str = ORG_ID):
     """Upsert a plan and REPLACE its children (components / bonuses / qualifiers / assignments) —
     delete-then-insert, the same shape as save_commission_plan. `assignments` is how an employee/role/
     level is attached to the plan (scope precedence employee>role>store>market>default). Editing a plan
     stamps updated_by so the platform seeder never clobbers it again."""
     require_org(org_id)
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
     client = sb()
     header = {
         "org_id": org_id, "name": name,
-        "level": (body.get("level") or None),
-        "carrier_id": body.get("carrier_id") or None,
-        "period_type": (body.get("period_type") or "monthly"),
-        "consolidated_bonus_amount": safe_float(body.get("consolidated_bonus_amount", 300)),
-        "is_active": bool(body.get("is_active", True)),
-        "is_default": bool(body.get("is_default", False)),
-        "notes": body.get("notes") or None,
-        "updated_by": (body.get("_actor") or "admin"),
+        "level": (body.level or None),
+        "carrier_id": body.carrier_id or None,
+        "period_type": (body.period_type or "monthly"),
+        "consolidated_bonus_amount": safe_float(body.consolidated_bonus_amount),
+        "is_active": bool(body.is_active),
+        "is_default": bool(body.is_default),
+        "notes": body.notes or None,
+        "updated_by": (body.actor or "admin"),
     }
     try:
-        if body.get("id"):
+        if body.id:
             client.schema("commcalc").table("management_incentive_plan").update(header) \
-                  .eq("id", body["id"]).eq("org_id", org_id).execute()
-            plan_id = body["id"]
+                  .eq("id", body.id).eq("org_id", org_id).execute()
+            plan_id = body.id
         else:
             r = client.schema("commcalc").table("management_incentive_plan") \
                       .upsert(header, on_conflict="org_id,name").execute()
@@ -28886,7 +29735,7 @@ def mi_save_plan(body: dict, org_id: str = ORG_ID):
 
         def _kids(key, table, fields):
             client.schema("commcalc").table(table).delete().eq("org_id", org_id).eq("plan_id", plan_id).execute()
-            rows = body.get(key) or []
+            rows = getattr(body, key) or []
             clean = []
             for i, raw in enumerate(rows):
                 row = {k: raw.get(k) for k in fields if k in raw}
@@ -28925,8 +29774,26 @@ def mi_delete_plan(plan_id: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+class MiComputeIn(LaxModel):
+    plan_id: Any = None
+    employee_id: Any = None
+    employee_name: Any = None
+    role: Any = None
+    store: Any = None
+    market: Any = None
+    store_keys: Any = None
+    store_codes: Any = None
+    manager_store_count: Any = None
+    actuals: Any = None
+    qualifier_values: Any = None
+    derived: Any = None
+    overrides: Any = None
+    period: Any = None
+    save: Any = None
+
+
 @router.post("/management-incentive/compute")
-def mi_compute(body: dict, org_id: str = ORG_ID):
+def mi_compute(body: MiComputeIn, org_id: str = ORG_ID):
     """Compute a manager's incentive for a period and (optionally) save it as a draft payout.
 
     Body: {plan_id?, employee_id, employee_name?, role?, store?, market?, store_keys?, period,
@@ -28937,34 +29804,34 @@ def mi_compute(body: dict, org_id: str = ORG_ID):
     require_org(org_id)
     from app.modules.commcalc import management_incentive as _mi
     client = sb()
-    plans = _mi_load_plans(client, org_id, plan_id=body.get("plan_id"), active_only=not body.get("plan_id"))
-    if body.get("plan_id"):
+    plans = _mi_load_plans(client, org_id, plan_id=body.plan_id, active_only=not body.plan_id)
+    if body.plan_id:
         plan = plans[0] if plans else None
     else:
         plan = _mi.resolve_plan(
-            plans, employee_name=body.get("employee_name"), role=body.get("role"),
-            store=body.get("store"), market=body.get("market"), store_keys=body.get("store_keys"))
+            plans, employee_name=body.employee_name, role=body.role,
+            store=body.store, market=body.market, store_keys=body.store_keys)
     if not plan:
         raise HTTPException(404, "no management-incentive plan resolves for this manager")
 
-    store_codes = body.get("store_codes") or []
-    store_count = body.get("manager_store_count")
+    store_codes = body.store_codes or []
+    store_count = body.manager_store_count
     if store_count is None:
         store_count = len(store_codes)
     result = _mi.compute_payout(
         plan,
-        actuals=body.get("actuals") or {},
-        qualifier_values=body.get("qualifier_values") or {},
+        actuals=body.actuals or {},
+        qualifier_values=body.qualifier_values or {},
         manager_store_count=store_count,
-        derived=body.get("derived") or {},
-        overrides=body.get("overrides") or {})
+        derived=body.derived or {},
+        overrides=body.overrides or {})
 
-    period = (body.get("period") or "").strip()
+    period = (body.period or "").strip()
     saved = None
-    if body.get("save") and period and body.get("employee_id"):
+    if body.save and period and body.employee_id:
         row = {
             "org_id": org_id, "plan_id": plan.get("id"),
-            "employee_id": str(body["employee_id"]), "employee_name": body.get("employee_name"),
+            "employee_id": str(body.employee_id), "employee_name": body.employee_name,
             "period": period, "store_codes": store_codes, "breakdown": result,
             "component_total": result["component_total"], "bonus_total": result["bonus_total"],
             "total": result["total"], "qualified": result["consolidated_qualified"],
@@ -28999,21 +29866,28 @@ def mi_list_payouts(period: str = "", employee_id: str = "", status: str = "", o
     return {"payouts": rows}
 
 
+class MiPayoutDecisionIn(LaxModel):
+    decision: str = ""
+    who: Any = None
+    who_name: Any = None
+    note: Any = None
+
+
 @router.post("/management-incentive/payouts/{payout_id}/decision")
-def mi_payout_decision(payout_id: str, body: dict, org_id: str = ORG_ID):
+def mi_payout_decision(payout_id: str, body: MiPayoutDecisionIn, org_id: str = ORG_ID):
     """Approve / deny / mark-paid a computed payout — the ledger transition (draft → approved → paid).
     Body: {decision:'approve'|'deny'|'pay', note?, who?, who_name?}. Denying keeps the row for the audit
     trail but zeroes nothing here — payroll readers act on status. Nothing is paid until 'pay'."""
     require_org(org_id)
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     status = {"approve": "approved", "deny": "draft", "pay": "paid"}.get(decision)
     if status is None:
         raise HTTPException(400, "decision must be 'approve', 'deny', or 'pay'")
     _iso = datetime.now(timezone.utc).isoformat()
-    upd = {"status": status, "decided_by": body.get("who"), "decided_by_name": body.get("who_name"),
+    upd = {"status": status, "decided_by": body.who, "decided_by_name": body.who_name,
            "decided_at": _iso, "updated_at": _iso}
-    if body.get("note") is not None:
-        upd["override_note"] = body.get("note")
+    if body.note is not None:
+        upd["override_note"] = body.note
     try:
         r = (sb().schema("commcalc").table("management_incentive_payout").update(upd)
              .eq("id", payout_id).eq("org_id", org_id).execute())
@@ -29312,19 +30186,25 @@ def _f_num(v):
         return 0.0
 
 
+class MiResolveIn(LaxModel):
+    employee_id: Any = None
+    period: Any = None
+    plan_id: Any = None
+
+
 @router.post("/management-incentive/resolve")
-def mi_resolve(body: dict, org_id: str = ORG_ID):
+def mi_resolve(body: MiResolveIn, org_id: str = ORG_ID):
     """Auto-pull a manager's numbers for a period, aggregated over the stores they manage — reusing the
     app's own accessory/DLAR/deposit/inventory math. Body: {plan_id, employee_id, period}. Returns
     pre-fill {store_codes, manager_store_count, actuals, qualifier_values, derived, resolved[],
     unresolved[], notes{}} for the Compute tab; the manager reviews before saving. Never computes pay."""
     require_org(org_id)
-    employee_id = str(body.get("employee_id") or "").strip()
-    period = str(body.get("period") or "").strip()
+    employee_id = str(body.employee_id or "").strip()
+    period = str(body.period or "").strip()
     if not employee_id or not period:
         raise HTTPException(400, "employee_id and period are required")
     client = sb()
-    plans = _mi_load_plans(client, org_id, plan_id=body.get("plan_id"))
+    plans = _mi_load_plans(client, org_id, plan_id=body.plan_id)
     plan = plans[0] if plans else None
     if not plan:
         raise HTTPException(404, "plan not found")

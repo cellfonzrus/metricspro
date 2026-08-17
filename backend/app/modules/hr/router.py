@@ -14,9 +14,11 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, date as _date
+from typing import Any, Optional
 from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 from app.core.config import settings
 from app.core import crypto
 from app.modules.storeops.router import scope_emp_ids, _tenant_pp_settings, _employees_with_pay_fields
@@ -603,12 +605,18 @@ def onboarding_template(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.post("/onboarding/categories")
-def onboarding_save_category(body: dict, org_id: str = ORG_ID):
-    label = (body.get("label") or "").strip()
+class OnboardingSaveCategoryIn(LaxModel):
+    label: str = ""
+    key: str = ""
+    sort_order: Any = None
+
+
+def onboarding_save_category(body: OnboardingSaveCategoryIn, org_id: str = ORG_ID):
+    label = (body.label or "").strip()
     if not label:
         raise HTTPException(400, "label required")
-    row = {"org_id": org_id, "key": (body.get("key") or _slug(label)).strip(),
-           "label": label, "sort_order": int(body.get("sort_order") or 100)}
+    row = {"org_id": org_id, "key": (body.key or _slug(label)).strip(),
+           "label": label, "sort_order": int(body.sort_order or 100)}
     try:
         r = so_upsert("onboarding_category", row, "org_id,key")
     except Exception as e:
@@ -616,9 +624,15 @@ def onboarding_save_category(body: dict, org_id: str = ORG_ID):
     return (r or [row])[0]
 
 
+class OnboardingUpdateCategoryIn(LaxModel):
+    label: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+
+
 @router.patch("/onboarding/categories/{cat_id}")
-def onboarding_update_category(cat_id: str, body: dict, org_id: str = ORG_ID):
-    upd = {k: body[k] for k in ("label", "sort_order", "is_active") if k in body}
+def onboarding_update_category(cat_id: str, body: OnboardingUpdateCategoryIn, org_id: str = ORG_ID):
+    upd = {k: getattr(body, k) for k in ("label", "sort_order", "is_active") if k in body.model_fields_set}
     r = _so().table("onboarding_category").update(upd).eq("org_id", org_id).eq("id", cat_id).execute()
     return (r.data or [{}])[0]
 
@@ -629,12 +643,31 @@ def onboarding_delete_category(cat_id: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+class OnboardingTaskIn(LaxModel):
+    category_id: Any = None
+    key: Any = None
+    label: Any = None
+    description: Any = None
+    owner_role: Any = None
+    doc_url: Any = None
+    doc_label: Any = None
+    is_fillable: Any = None
+    requires_upload: Any = None
+    applies_state: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+    requires_signature: Any = None
+    form_fields: Any = None
+    is_mandatory: Any = None
+    work_auth: Any = None
+
+
 @router.post("/onboarding/tasks")
-def onboarding_save_task(body: dict, org_id: str = ORG_ID):
-    label = (body.get("label") or "").strip()
+def onboarding_save_task(body: OnboardingTaskIn, org_id: str = ORG_ID):
+    label = (body.label or "").strip()
     if not label:
         raise HTTPException(400, "label required")
-    row = {k: body[k] for k in TASK_FIELDS if k in body}
+    row = {k: getattr(body, k) for k in TASK_FIELDS if k in body.model_fields_set}
     row.update({"org_id": org_id, "label": label})
     row.setdefault("key", _slug(label))
     row.setdefault("owner_role", "employee")
@@ -650,8 +683,8 @@ def onboarding_save_task(body: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/onboarding/tasks/{task_id}")
-def onboarding_update_task(task_id: str, body: dict, org_id: str = ORG_ID):
-    upd = {k: body[k] for k in TASK_FIELDS if k in body}
+def onboarding_update_task(task_id: str, body: OnboardingTaskIn, org_id: str = ORG_ID):
+    upd = {k: getattr(body, k) for k in TASK_FIELDS if k in body.model_fields_set}
     if "applies_state" in upd:
         upd["applies_state"] = (upd["applies_state"] or "").strip().upper() or None
     r = _so().table("onboarding_task").update(upd).eq("org_id", org_id).eq("id", task_id).execute()
@@ -903,12 +936,16 @@ def onboarding_for_employee(employee_id: str, org_id: str = ORG_ID):
             "owner_labels": OWNER_ROLE_LABELS, "states": SEED_STATES}
 
 
+class OnboardingSetProfileIn(LaxModel):
+    work_state: Any = None
+
+
 @router.patch("/onboarding/employee/{employee_id}")
-def onboarding_set_profile(employee_id: str, body: dict, org_id: str = ORG_ID):
+def onboarding_set_profile(employee_id: str, body: OnboardingSetProfileIn, org_id: str = ORG_ID):
     """Set the employee's work_state (drives which state tax form shows)."""
     upd = {"org_id": org_id, "employee_id": employee_id}
-    if "work_state" in body:
-        upd["work_state"] = _normalize_state(body.get("work_state"))
+    if "work_state" in body.model_fields_set:
+        upd["work_state"] = _normalize_state(body.work_state)
     try:
         _so().table("employee_onboarding_profile").upsert(upd, on_conflict="org_id,employee_id").execute()
     except Exception as e:
@@ -1336,20 +1373,26 @@ def hr_employee_database(employee_ids: str = "", fields: str = "", include_inact
             "fields": _EMPDB_BASE_FIELDS + dd_defs, "employees": out_rows}
 
 
+class OnboardingUpdateStatusIn(LaxModel):
+    status: Any = None
+    verified_by: Any = None
+    note: Any = None
+
+
 @router.post("/onboarding/employee/{employee_id}/task/{task_id}")
-def onboarding_update_status(employee_id: str, task_id: str, body: dict, org_id: str = ORG_ID):
+def onboarding_update_status(employee_id: str, task_id: str, body: OnboardingUpdateStatusIn, org_id: str = ORG_ID):
     """HR/DM/MM marks a task verified / not-applicable, or adds a note. status=verified stamps who+when."""
-    status = (body.get("status") or "").strip()
+    status = (body.status or "").strip()
     if status and status not in ONBOARD_STATUSES:
         raise HTTPException(400, f"bad status '{status}'")
     row = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id, "updated_at": _now_iso()}
     if status:
         row["status"] = status
         if status == "verified":
-            row["verified_by"] = (body.get("verified_by") or "").strip() or None
+            row["verified_by"] = (body.verified_by or "").strip() or None
             row["verified_at"] = _now_iso()
-    if "note" in body:
-        row["note"] = body.get("note")
+    if "note" in body.model_fields_set:
+        row["note"] = body.note
     try:
         _so().table("employee_onboarding").upsert(row, on_conflict="org_id,employee_id,task_id").execute()
     except Exception as e:
@@ -1569,13 +1612,19 @@ def onboarding_orphaned_files(employee_id: str, org_id: str = ORG_ID):
     return {"ok": True, "orphaned": out, "count": len(out)}
 
 
+class OnboardingReattachOrphanIn(LaxModel):
+    path: Any = None
+    name: Any = None
+    actor: Any = None
+
+
 @router.post("/onboarding/employee/{employee_id}/task/{task_id}/reattach-orphan")
-def onboarding_reattach_orphan(employee_id: str, task_id: str, body: dict, org_id: str = ORG_ID):
+def onboarding_reattach_orphan(employee_id: str, task_id: str, body: OnboardingReattachOrphanIn, org_id: str = ORG_ID):
     """HR manually re-attaches a recovered orphaned file (see GET .../orphaned-files) to a task's
     document list. Never moves/deletes the storage object — just adds a `documents[]` entry pointing at
     it, exactly like a normal upload would; recorded as its own audited event (doc_recovered), distinct
     from an ordinary upload, so the trail is honest about what happened. Body: {path, name?, actor?}."""
-    path = (body.get("path") or "").strip()
+    path = (body.path or "").strip()
     prefix = f"{org_id}/{employee_id}/"
     if not path.startswith(prefix):
         raise HTTPException(400, "that file doesn't belong to this employee")
@@ -1585,9 +1634,9 @@ def onboarding_reattach_orphan(employee_id: str, task_id: str, body: dict, org_i
         raise HTTPException(400, "already attached to this task")
     raw_name = path.rsplit("/", 1)[-1]
     default_name = raw_name.split("_", 1)[-1] if "_" in raw_name else raw_name
-    entry = {"id": uuid.uuid4().hex, "path": path, "name": (body.get("name") or "").strip() or default_name,
+    entry = {"id": uuid.uuid4().hex, "path": path, "name": (body.name or "").strip() or default_name,
              "content_type": None, "uploaded_at": _now_iso(),
-             "uploaded_by": (body.get("actor") or "HR") + " (recovered)", "uploaded_role": "recovered"}
+             "uploaded_by": (body.actor or "HR") + " (recovered)", "uploaded_role": "recovered"}
     docs.append(entry)
     upd = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id,
            "documents": docs, "document_path": path, "document_name": entry["name"], "updated_at": _now_iso()}
@@ -1596,18 +1645,24 @@ def onboarding_reattach_orphan(employee_id: str, task_id: str, body: dict, org_i
     except Exception as e:
         raise HTTPException(400, f"Could not attach — is migration 402 applied? {e}")
     task = _task_row(org_id, task_id)
-    _log_event(org_id, employee_id, "doc_recovered", actor=(body.get("actor") or "HR"),
+    _log_event(org_id, employee_id, "doc_recovered", actor=(body.actor or "HR"),
                detail={"task": task.get("label"), "path": path, "file_name": entry["name"]})
     return {"ok": True, "file_id": entry["id"]}
 
 
 # ── Credential-less QR access (token + DOB/last-4 gate) ─────────────────────────────────────────────
+class OnboardingMintTokenIn(LaxModel):
+    verify_kind: Any = None
+    verify_value: Any = None
+    expires_days: Any = None
+
+
 @router.post("/onboarding/employee/{employee_id}/token")
-def onboarding_mint_token(employee_id: str, body: dict, org_id: str = ORG_ID):
+def onboarding_mint_token(employee_id: str, body: OnboardingMintTokenIn, org_id: str = ORG_ID):
     """Issue (or rotate) the QR access token + identity gate. Body: verify_kind ('dob'|'ssn4'),
     verify_value, expires_days? Returns the token + the portal path the QR should encode."""
-    kind = (body.get("verify_kind") or "dob").strip()
-    val = (body.get("verify_value") or "").strip()
+    kind = (body.verify_kind or "dob").strip()
+    val = (body.verify_value or "").strip()
     if kind not in ("dob", "ssn4"):
         raise HTTPException(400, "verify_kind must be 'dob' or 'ssn4'")
     if not val:
@@ -1619,7 +1674,7 @@ def onboarding_mint_token(employee_id: str, body: dict, org_id: str = ORG_ID):
         row["verify_dob"] = val[:10]
     else:
         row["verify_ssn4"] = re.sub(r"\D", "", val)[-4:]
-    days = body.get("expires_days")
+    days = body.expires_days
     if days:
         try:
             row["token_expires_at"] = (datetime.utcnow() + timedelta(days=int(days))).isoformat()
@@ -1678,13 +1733,17 @@ def public_onboarding_meta(token: str):
     return {"ok": True, "verify_kind": prof.get("verify_kind") or "dob"}
 
 
+class PublicOnboardingGateIn(LaxModel):
+    value: Any = None
+
+
 @router.post("/public/onboarding/{token}")
-def public_onboarding_view(token: str, body: dict):
+def public_onboarding_view(token: str, body: PublicOnboardingGateIn):
     """Step 2: gate check → the employee's first name + their own checklist items (links + uploads)."""
     prof = _profile_by_token(token)
     if not _token_valid(prof):
         raise HTTPException(404, "This onboarding link is invalid or has expired.")
-    if not _check_gate(prof, body.get("value")):
+    if not _check_gate(prof, body.value):
         raise HTTPException(403, "That didn't match our records. Please check and try again.")
     bundle = _onboarding_bundle(prof["org_id"], prof["employee_id"])
     bundle.pop("employee_id", None)   # don't leak the internal id to a credential-less caller
@@ -1790,11 +1849,25 @@ def intake_fields_list(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.post("/onboarding/intake-fields")
-def intake_field_save(body: dict, org_id: str = ORG_ID):
-    label = (body.get("label") or "").strip()
+class IntakeFieldIn(LaxModel):
+    key: Any = None
+    label: Any = None
+    section: Any = None
+    field_type: Any = None
+    options: Any = None
+    required: Any = None
+    propagate_to: Any = None
+    sensitive: Any = None
+    help_text: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+
+
+def intake_field_save(body: IntakeFieldIn, org_id: str = ORG_ID):
+    label = (body.label or "").strip()
     if not label:
         raise HTTPException(400, "label required")
-    row = {k: body[k] for k in INTAKE_FIELD_COLS if k in body}
+    row = {k: getattr(body, k) for k in INTAKE_FIELD_COLS if k in body.model_fields_set}
     row.update({"org_id": org_id, "label": label})
     row.setdefault("key", _slug(label))
     row["key"] = _slug(row["key"])
@@ -1810,8 +1883,8 @@ def intake_field_save(body: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/onboarding/intake-fields/{field_id}")
-def intake_field_update(field_id: str, body: dict, org_id: str = ORG_ID):
-    upd = {k: body[k] for k in INTAKE_FIELD_COLS if k in body}
+def intake_field_update(field_id: str, body: IntakeFieldIn, org_id: str = ORG_ID):
+    upd = {k: getattr(body, k) for k in INTAKE_FIELD_COLS if k in body.model_fields_set}
     if "propagate_to" in upd:
         prop = (upd.get("propagate_to") or "").strip() or None
         if prop and prop not in _PROPAGATABLE:
@@ -2031,20 +2104,29 @@ def _sign_dd_disclaimer(org_id, employee_id, initials, actor="employee"):
     return {"ok": True, "signed_at": now, "initials": initials[:12]}
 
 
+class OnboardingMeDdDisclaimerIn(LaxModel):
+    initials: Any = None
+
+
 @router.post("/onboarding/me/dd-disclaimer")
-def onboarding_me_dd_disclaimer(body: dict, authorization: str = Header(default="")):
+def onboarding_me_dd_disclaimer(body: OnboardingMeDdDisclaimerIn, authorization: str = Header(default="")):
     me = _me_from_token(authorization)
-    return _sign_dd_disclaimer(me["org_id"], me["employee_id"], (body or {}).get("initials"), actor="employee")
+    return _sign_dd_disclaimer(me["org_id"], me["employee_id"], body.initials, actor="employee")
+
+
+class PublicOnboardingDdDisclaimerIn(LaxModel):
+    value: Any = None
+    initials: Any = None
 
 
 @router.post("/public/onboarding/{token}/dd-disclaimer")
-def public_onboarding_dd_disclaimer(token: str, body: dict):
+def public_onboarding_dd_disclaimer(token: str, body: PublicOnboardingDdDisclaimerIn):
     prof = _profile_by_token(token)
     if not _token_valid(prof):
         raise HTTPException(404, "This onboarding link is invalid or has expired.")
-    if not _check_gate(prof, (body or {}).get("value")):
+    if not _check_gate(prof, body.value):
         raise HTTPException(403, "Identity check failed.")
-    return _sign_dd_disclaimer(prof["org_id"], prof["employee_id"], (body or {}).get("initials"), actor="employee")
+    return _sign_dd_disclaimer(prof["org_id"], prof["employee_id"], body.initials, actor="employee")
 
 
 @router.get("/onboarding/me/routing-lookup")
@@ -2190,8 +2272,18 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, 
     return result
 
 
+class OnboardingInviteOneIn(LaxModel):
+    method: Any = None
+    dob: Any = None
+    ssn4: Any = None
+    role_name: Any = None
+    expires_days: Any = 30
+    actor: Any = None
+    send_email: Any = True
+
+
 @router.post("/onboarding/employee/{employee_id}/invite")
-async def onboarding_invite_one(employee_id: str, body: dict, org_id: str = ORG_ID,
+async def onboarding_invite_one(employee_id: str, body: OnboardingInviteOneIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default=""),
                                 x_active_org: str = Header(default="")):
     """Invite/re-invite ONE hire. Body: method('link'|'login'), dob?/ssn4? (link gate), role_name?,
@@ -2201,21 +2293,30 @@ async def onboarding_invite_one(employee_id: str, body: dict, org_id: str = ORG_
            .eq("org_id", org_id).eq("employee_id", employee_id).limit(1).execute().data) or []
     if not emp:
         raise HTTPException(404, "employee not found")
-    res = await _send_invite(org_id, emp[0], (body.get("method") or "link").strip(),
-                             dob=(body.get("dob") or "").strip() or None,
-                             ssn4=(body.get("ssn4") or "").strip() or None,
-                             role_name=(body.get("role_name") or "").strip() or None,
-                             expires_days=body.get("expires_days", 30),
-                             actor=(body.get("actor") or "HR"),
-                             send_email_flag=body.get("send_email", True),
+    res = await _send_invite(org_id, emp[0], (body.method or "link").strip(),
+                             dob=(body.dob or "").strip() or None,
+                             ssn4=(body.ssn4 or "").strip() or None,
+                             role_name=(body.role_name or "").strip() or None,
+                             expires_days=body.expires_days,
+                             actor=(body.actor or "HR"),
+                             send_email_flag=body.send_email,
                              authorization=authorization, x_active_org=x_active_org)
     if not res.get("ok"):
         raise HTTPException(400, res.get("error") or "invite failed")
     return res
 
 
+class OnboardingInviteBulkIn(LaxModel):
+    method: Any = None
+    employee_ids: Any = None
+    all_incomplete: Any = None
+    role_name: Any = None
+    send_email: Any = True
+    actor: Any = None
+
+
 @router.post("/onboarding/invite-bulk")
-async def onboarding_invite_bulk(body: dict, org_id: str = ORG_ID,
+async def onboarding_invite_bulk(body: OnboardingInviteBulkIn, org_id: str = ORG_ID,
                                  authorization: str = Header(default=""),
                                  x_active_org: str = Header(default="")):
     """Invite MANY hires in one action (for a roster of existing staff). Body:
@@ -2223,13 +2324,13 @@ async def onboarding_invite_bulk(body: dict, org_id: str = ORG_ID,
     employee_ids?[] (omit + all_incomplete=true → everyone without a completed onboarding),
     all_incomplete?, send_email? (default true). Returns a per-employee result summary."""
     so = _so()
-    method = (body.get("method") or "login").strip()
-    ids = [str(i).strip() for i in (body.get("employee_ids") or []) if str(i).strip()]
+    method = (body.method or "login").strip()
+    ids = [str(i).strip() for i in (body.employee_ids or []) if str(i).strip()]
     emps = (so.table("employees").select("employee_id,name,email")
             .eq("org_id", org_id).eq("is_active", True).execute().data) or []
     if ids:
         emps = [e for e in emps if e.get("employee_id") in set(ids)]
-    elif body.get("all_incomplete"):
+    elif body.all_incomplete:
         try:
             done = {p["employee_id"] for p in ((so.table("employee_onboarding_profile")
                     .select("employee_id,workflow_status").eq("org_id", org_id).execute().data) or [])
@@ -2245,8 +2346,8 @@ async def onboarding_invite_bulk(body: dict, org_id: str = ORG_ID,
     results = []
     for e in emps:
         results.append(await _send_invite(org_id, e, "login",
-                                          role_name=(body.get("role_name") or "").strip() or None,
-                                          send_email_flag=body.get("send_email", True), actor=body.get("actor") or "HR",
+                                          role_name=(body.role_name or "").strip() or None,
+                                          send_email_flag=body.send_email, actor=body.actor or "HR",
                                           authorization=authorization, x_active_org=x_active_org))
     ok = sum(1 for r in results if r.get("ok"))
     emailed = sum(1 for r in results if r.get("emailed"))
@@ -2289,35 +2390,56 @@ def _compliance_block_message(reasons):
 
 
 # ── Workflow transitions + provisioning ──────────────────────────────────────────────────────────
+class OnboardingAdvanceIn(LaxModel):
+    to_status: str = ""
+    override_compliance: Any = None
+    compliance_override_reason: str = ""
+    actor: Any = None
+    reason: Any = None
+
+
 @router.post("/onboarding/employee/{employee_id}/advance")
-def onboarding_advance(employee_id: str, body: dict, org_id: str = ORG_ID):
+def onboarding_advance(employee_id: str, body: OnboardingAdvanceIn, org_id: str = ORG_ID):
     """HR moves the workflow to a specific status. An out-of-order move is recorded as an OVERRIDE
     (with reason) but always allowed — the flow stays in the system, HR stays in control. EXCEPTION
     (item 4): moving to provisioned/active is hard-gated on work-authorization docs + a known work
     state; see _blocking_gate."""
-    to = (body.get("to_status") or "").strip()
+    to = (body.to_status or "").strip()
     if to not in WORKFLOW_STATUSES:
         raise HTTPException(400, f"to_status must be one of {WORKFLOW_STATUSES}")
     gate_reasons = {}
     if to in ("provisioned", "active"):
         blocked, gate_reasons = _blocking_gate(org_id, employee_id)
-        if blocked and not (body.get("override_compliance") and (body.get("compliance_override_reason") or "").strip()):
+        if blocked and not (body.override_compliance and (body.compliance_override_reason or "").strip()):
             raise HTTPException(400, {"code": "compliance_blocked",
                                       "message": _compliance_block_message(gate_reasons), "reasons": gate_reasons})
     so = _so()
     prof = _get_profile(so, org_id, employee_id) or {}
     cur = prof.get("workflow_status") or "invited"
     is_override = STATUS_ORDER.get(to, 0) != STATUS_ORDER.get(cur, 0) + 1
-    st = _set_status(so, org_id, employee_id, to, actor=(body.get("actor") or "HR"),
-                     reason=(body.get("reason") or None), is_override=is_override)
+    st = _set_status(so, org_id, employee_id, to, actor=(body.actor or "HR"),
+                     reason=(body.reason or None), is_override=is_override)
     if gate_reasons:   # the gate was blocked above and explicitly overridden to get here
-        _log_event(org_id, employee_id, "compliance_override", actor=(body.get("actor") or "HR"),
-                   reason=(body.get("compliance_override_reason") or None), is_override=True, detail=gate_reasons)
+        _log_event(org_id, employee_id, "compliance_override", actor=(body.actor or "HR"),
+                   reason=(body.compliance_override_reason or None), is_override=True, detail=gate_reasons)
     return {"ok": True, "workflow_status": st, "was_override": is_override}
 
 
+class OnboardingProvisionIn(LaxModel):
+    override: Any = None
+    override_compliance: Any = None
+    compliance_override_reason: str = ""
+    role_name: str = ""
+    market: Any = None
+    store_code: Any = None
+    store_codes: Any = None
+    actor: Any = None
+    reason: Any = None
+    send_email: Any = True
+
+
 @router.post("/onboarding/employee/{employee_id}/provision")
-async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_ID,
+async def onboarding_provision(employee_id: str, body: OnboardingProvisionIn, org_id: str = ORG_ID,
                                authorization: str = Header(default=""),
                                x_active_org: str = Header(default="")):
     """Auto-provision the hire: create their login, assign their role/scope, email the credentials,
@@ -2334,7 +2456,7 @@ async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_I
         raise HTTPException(400, "this employee has no email — add one before provisioning a login")
     prof = _get_profile(so, org_id, employee_id) or {}
     cur = prof.get("workflow_status") or "invited"
-    override = bool(body.get("override"))
+    override = bool(body.override)
     if STATUS_ORDER.get(cur, 0) < STATUS_ORDER["docs_verified"] and not override:
         raise HTTPException(400, {"code": "docs_incomplete",
                                   "message": f"Documents aren't verified yet (status: {STATUS_LABELS.get(cur, cur)}). "
@@ -2342,14 +2464,14 @@ async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_I
     # Item 4: work-auth blocking gate — NOT bypassed by the general docs `override` above. Needs its own
     # explicit, separately-audited override_compliance + reason.
     gate_blocked, gate_reasons = _blocking_gate(org_id, employee_id)
-    if gate_blocked and not (body.get("override_compliance") and (body.get("compliance_override_reason") or "").strip()):
+    if gate_blocked and not (body.override_compliance and (body.compliance_override_reason or "").strip()):
         raise HTTPException(400, {"code": "compliance_blocked",
                                   "message": _compliance_block_message(gate_reasons), "reasons": gate_reasons})
     from app.modules.core.router import assign_role, create_login as core_create_login
-    role = (body.get("role_name") or "sales_rep").strip()
+    role = (body.role_name or "sales_rep").strip()
     await _maybe_await(assign_role({"email": email, "full_name": emp[0].get("name"), "role": role,
-                       "market": body.get("market"), "store_code": body.get("store_code"),
-                       "store_codes": body.get("store_codes"), "employee_id": employee_id}, org_id,
+                       "market": body.market, "store_code": body.store_code,
+                       "store_codes": body.store_codes, "employee_id": employee_id}, org_id,
                        authorization=authorization, x_active_org=x_active_org))
     try:
         login = await _maybe_await(core_create_login({"email": email}, org_id,
@@ -2358,15 +2480,15 @@ async def onboarding_provision(employee_id: str, body: dict, org_id: str = ORG_I
     except Exception as e:
         raise HTTPException(400, f"could not create login: {str(e)[:200]}")
     _set_status(so, org_id, employee_id, "provisioned",
-                actor=(body.get("actor") or "HR"), reason=(body.get("reason") or None), is_override=override)
-    _log_event(org_id, employee_id, "provisioned", actor=(body.get("actor") or "HR"),
-               reason=(body.get("reason") or None), is_override=override,
+                actor=(body.actor or "HR"), reason=(body.reason or None), is_override=override)
+    _log_event(org_id, employee_id, "provisioned", actor=(body.actor or "HR"),
+               reason=(body.reason or None), is_override=override,
                detail={"role": role, "email": email})
     if gate_blocked:   # the compliance gate was blocked above and explicitly overridden to get here
-        _log_event(org_id, employee_id, "compliance_override", actor=(body.get("actor") or "HR"),
-                   reason=(body.get("compliance_override_reason") or None), is_override=True, detail=gate_reasons)
+        _log_event(org_id, employee_id, "compliance_override", actor=(body.actor or "HR"),
+                   reason=(body.compliance_override_reason or None), is_override=True, detail=gate_reasons)
     emailed = False
-    if body.get("send_email", True):
+    if body.send_email:
         try:
             from app.modules.notify.channels.email_resend import send_email, is_configured
             if is_configured():
@@ -2423,8 +2545,14 @@ async def _notify_mandatory_added(org_id, employee_id, missing_labels, state_und
     return False
 
 
+class OnboardingReconcileIn(LaxModel):
+    dry_run: Any = True
+    notify: Any = True
+    actor: Any = None
+
+
 @router.post("/onboarding/reconcile")
-async def onboarding_reconcile(body: dict, org_id: str = ORG_ID):
+async def onboarding_reconcile(body: OnboardingReconcileIn, org_id: str = ORG_ID):
     """Item 1's backfill path. The checklist total/done is ALREADY computed live against the CURRENT
     template every time (see onboarding_for_employee — no per-employee snapshot exists anywhere in this
     file), so a newly mandatory task automatically shows up as outstanding for every in-flight AND
@@ -2438,9 +2566,9 @@ async def onboarding_reconcile(body: dict, org_id: str = ORG_ID):
     whether affected employees are emailed the missing item(s). Never regresses a provisioned/active
     hire's workflow_status (matches _recompute_status's existing 'never move backward' invariant) — this
     surfaces + notifies, it does not revoke a login."""
-    dry_run = body.get("dry_run", True) is not False
-    notify = body.get("notify", True) is not False
-    actor = (body.get("actor") or "HR").strip()
+    dry_run = body.dry_run is not False
+    notify = body.notify is not False
+    actor = (body.actor or "HR").strip()
     so = _so()
     try:
         emps = (so.table("employees").select("employee_id,name").eq("org_id", org_id)
@@ -2547,10 +2675,15 @@ def onboarding_me(authorization: str = Header(default="")):
     return _onboarding_bundle(me["org_id"], me["employee_id"])
 
 
+class OnboardingMeStateIn(LaxModel):
+    work_state: Any = None
+    state: Any = None
+
+
 @router.post("/onboarding/me/state")
-def onboarding_me_state(body: dict, authorization: str = Header(default="")):
+def onboarding_me_state(body: OnboardingMeStateIn, authorization: str = Header(default="")):
     me = _me_from_token(authorization)
-    st = _set_work_state(me["org_id"], me["employee_id"], body.get("work_state") or body.get("state"), actor="employee")
+    st = _set_work_state(me["org_id"], me["employee_id"], body.work_state or body.state, actor="employee")
     return {"ok": True, "work_state": st}
 
 
@@ -2591,14 +2724,20 @@ def onboarding_me_delete_document(task_id: str, file_id: str, authorization: str
 
 
 # ── Public (token) intake + state, mirroring the self endpoints ──────────────────────────────────
+class PublicOnboardingStateIn(LaxModel):
+    value: Any = None
+    work_state: Any = None
+    state: Any = None
+
+
 @router.post("/public/onboarding/{token}/state")
-def public_onboarding_state(token: str, body: dict):
+def public_onboarding_state(token: str, body: PublicOnboardingStateIn):
     prof = _profile_by_token(token)
     if not _token_valid(prof):
         raise HTTPException(404, "This onboarding link is invalid or has expired.")
-    if not _check_gate(prof, body.get("value")):
+    if not _check_gate(prof, body.value):
         raise HTTPException(403, "Identity check failed.")
-    st = _set_work_state(prof["org_id"], prof["employee_id"], body.get("work_state") or body.get("state"), actor="employee")
+    st = _set_work_state(prof["org_id"], prof["employee_id"], body.work_state or body.state, actor="employee")
     return {"ok": True, "work_state": st}
 
 
@@ -2796,54 +2935,68 @@ def _do_onboard_sign(org_id, employee_id, task_id, form_data, signature, signed_
     return {"ok": True, "status": "submitted", "signed": bool(sig_path)}
 
 
+class OnboardingSignIn(LaxModel):
+    value: Any = None
+    task_id: Any = None
+    form_data: Any = None
+    signature: Any = None
+    signed_name: Any = None
+
+
 @router.post("/public/onboarding/{token}/sign")
-def public_onboarding_sign(token: str, body: dict):
+def public_onboarding_sign(token: str, body: OnboardingSignIn):
     """Credential-less portal: fill & sign an item online (gate re-checked on every call)."""
     prof = _profile_by_token(token)
     if not _token_valid(prof):
         raise HTTPException(404, "This onboarding link is invalid or has expired.")
-    if not _check_gate(prof, (body or {}).get("value")):
+    if not _check_gate(prof, body.value):
         raise HTTPException(403, "Identity check failed.")
-    task = _task_row(prof["org_id"], str((body or {}).get("task_id") or ""))
+    task = _task_row(prof["org_id"], str(body.task_id or ""))
     if not task or task.get("owner_role") != "employee":
         raise HTTPException(403, "That item can't be signed from this portal.")
     return _do_onboard_sign(prof["org_id"], prof["employee_id"], task["id"],
-                             (body or {}).get("form_data"), (body or {}).get("signature") or "",
-                             (body or {}).get("signed_name") or "")
+                             body.form_data, body.signature or "",
+                             body.signed_name or "")
 
 
 @router.post("/onboarding/me/sign")
-def onboarding_me_sign(body: dict, authorization: str = Header(default="")):
+def onboarding_me_sign(body: OnboardingSignIn, authorization: str = Header(default="")):
     """Logged-in portal: fill & sign an item online."""
     me = _me_from_token(authorization)
-    task = _task_row(me["org_id"], str((body or {}).get("task_id") or ""))
+    task = _task_row(me["org_id"], str(body.task_id or ""))
     if not task or task.get("owner_role") != "employee":
         raise HTTPException(403, "That item can't be signed here.")
     return _do_onboard_sign(me["org_id"], me["employee_id"], task["id"],
-                             (body or {}).get("form_data"), (body or {}).get("signature") or "",
-                             (body or {}).get("signed_name") or "")
+                             body.form_data, body.signature or "",
+                             body.signed_name or "")
+
+
+class OnboardingReturnTaskIn(LaxModel):
+    missing_fields: Any = None
+    reason: Any = None
+    actor: Any = None
 
 
 @router.post("/onboarding/employee/{employee_id}/task/{task_id}/return")
-async def onboarding_return_task(employee_id: str, task_id: str, body: dict, org_id: str = ORG_ID):
+async def onboarding_return_task(employee_id: str, task_id: str, body: OnboardingReturnTaskIn, org_id: str = ORG_ID):
     """HR sends a submitted document BACK for corrections (a scan the auto-check can't read, a
     missed signature, the wrong form…), listing what's missing. The employee sees the item flagged
     in their portal and gets an email with the exact list."""
     task = _task_row(org_id, task_id)
     if not task:
         raise HTTPException(404, "unknown onboarding item")
-    missing = [str(m).strip() for m in (body.get("missing_fields") or []) if str(m).strip()]
-    reason = (body.get("reason") or "").strip() or None
+    missing = [str(m).strip() for m in (body.missing_fields or []) if str(m).strip()]
+    reason = (body.reason or "").strip() or None
     if not missing and not reason:
         raise HTTPException(400, "List the missing fields (or give a reason) so the employee knows what to fix.")
     row = {"org_id": org_id, "employee_id": employee_id, "task_id": task_id, "status": "returned",
            "missing_fields": missing or None, "returned_reason": reason,
-           "returned_at": _now_iso(), "returned_by": (body.get("actor") or "HR"), "updated_at": _now_iso()}
+           "returned_at": _now_iso(), "returned_by": (body.actor or "HR"), "updated_at": _now_iso()}
     try:
         _so().table("employee_onboarding").upsert(row, on_conflict="org_id,employee_id,task_id").execute()
     except Exception as e:
         raise HTTPException(400, f"Could not return — is migration 082 applied? {e}")
-    _log_event(org_id, employee_id, "doc_returned", actor=body.get("actor") or "HR",
+    _log_event(org_id, employee_id, "doc_returned", actor=body.actor or "HR",
                detail={"task": task.get("label"), "missing": missing, "reason": reason})
     emailed = await _notify_return(org_id, employee_id, task, missing, reason)
     return {"ok": True, "emailed": emailed}
@@ -2923,15 +3076,21 @@ def onboarding_doc_status(org_id: str = ORG_ID):
     return {"ready": True, "employees": out}
 
 
+class OnboardingSendDocumentsIn(LaxModel):
+    employee_ids: Any = None
+    send_email: Any = True
+    actor: Any = None
+
+
 @router.post("/onboarding/send-documents")
-async def onboarding_send_documents(body: dict, org_id: str = ORG_ID,
+async def onboarding_send_documents(body: OnboardingSendDocumentsIn, org_id: str = ORG_ID,
                                     authorization: str = Header(default=""),
                                     x_active_org: str = Header(default="")):
     """The Documents-board checkbox action: (re)send the onboarding packet to the selected people.
     Per person: an existing identity gate (DOB / last-4) re-issues their token LINK; otherwise a
     portal LOGIN invite goes to the roster email. Stamps docs_sent_at so the board shows who's been
     sent. Body: employee_ids[], send_email? (default true), actor?"""
-    ids = [str(i).strip() for i in (body.get("employee_ids") or []) if str(i).strip()]
+    ids = [str(i).strip() for i in (body.employee_ids or []) if str(i).strip()]
     if not ids:
         raise HTTPException(400, "pass employee_ids[]")
     so = _so()
@@ -2952,8 +3111,8 @@ async def onboarding_send_documents(body: dict, org_id: str = ORG_ID,
                             "error": "no email on file and no identity gate — add an email, or invite them one-on-one with a DOB"})
             continue
         res = await _send_invite(org_id, emp, method, dob=dob, ssn4=ssn4,
-                                 send_email_flag=body.get("send_email", True),
-                                 actor=body.get("actor") or "HR",
+                                 send_email_flag=body.send_email,
+                                 actor=body.actor or "HR",
                                  authorization=authorization, x_active_org=x_active_org)
         if res.get("ok"):
             try:
@@ -2962,7 +3121,7 @@ async def onboarding_send_documents(body: dict, org_id: str = ORG_ID,
                     on_conflict="org_id,employee_id").execute()
             except Exception:
                 pass  # pre-082 — invited_at still marks them as sent
-            _log_event(org_id, eid, "docs_sent", actor=body.get("actor") or "HR",
+            _log_event(org_id, eid, "docs_sent", actor=body.actor or "HR",
                        detail={"method": method, "sent_to": res.get("email")})
         results.append(res)
     ok = sum(1 for r in results if r.get("ok"))
@@ -3034,14 +3193,22 @@ def onboarding_get_accounting_settings(org_id: str = ORG_ID):
 
 
 @router.put("/onboarding/accounting-settings")
-def onboarding_set_accounting_settings(body: dict, org_id: str = ORG_ID):
+class OnboardingSetAccountingSettingsIn(LaxModel):
+    emails: Any = None
+    whatsapps: Any = None
+    subject: str = ""
+    message: str = ""
+    include_portal_link: Any = True
+
+
+def onboarding_set_accounting_settings(body: OnboardingSetAccountingSettingsIn, org_id: str = ORG_ID):
     """Save the accounting-forward destination. emails/whatsapps accept a list or a comma-separated string."""
     row = {"org_id": org_id,
-           "accounting_emails": _recipient_list(body.get("emails")),
-           "accounting_whatsapps": _recipient_list(body.get("whatsapps")),
-           "forward_subject": (body.get("subject") or "").strip() or None,
-           "forward_message": (body.get("message") or "").strip() or None,
-           "include_portal_link": body.get("include_portal_link", True) is not False,
+           "accounting_emails": _recipient_list(body.emails),
+           "accounting_whatsapps": _recipient_list(body.whatsapps),
+           "forward_subject": (body.subject or "").strip() or None,
+           "forward_message": (body.message or "").strip() or None,
+           "include_portal_link": body.include_portal_link is not False,
            "updated_at": _now_iso()}
     try:
         _so().table("hr_onboarding_settings").upsert(row, on_conflict="org_id").execute()
@@ -3055,24 +3222,38 @@ def _is_complete_row(st):
     return bool(st) and st.get("total", 0) > 0 and st.get("pending", 0) == 0 and st.get("returned", 0) == 0
 
 
+class OnboardingApproveIn(LaxModel):
+    force: Any = None
+    actor: Any = None
+    reason: Any = None
+
+
 @router.post("/onboarding/employee/{employee_id}/approve")
-def onboarding_approve(employee_id: str, body: dict, org_id: str = ORG_ID):
+def onboarding_approve(employee_id: str, body: OnboardingApproveIn, org_id: str = ORG_ID):
     """Mark a completed hire's paperwork REVIEWED & APPROVED → advance the workflow to docs_verified.
     Guards that the employee-owned checklist is actually all back (override with body.force=true)."""
     so = _so()
     st = {r["employee_id"]: r for r in onboarding_doc_status(org_id=org_id).get("employees", [])}.get(employee_id)
-    if not body.get("force") and not _is_complete_row(st):
+    if not body.force and not _is_complete_row(st):
         raise HTTPException(400, "Not all documents are back yet — review the outstanding items, or pass force=true.")
     prof = _get_profile(so, org_id, employee_id) or {}
     cur = prof.get("workflow_status") or "invited"
     is_override = STATUS_ORDER.get("docs_verified", 0) != STATUS_ORDER.get(cur, 0) + 1
-    new = _set_status(so, org_id, employee_id, "docs_verified", actor=(body.get("actor") or "HR"),
-                      reason=(body.get("reason") or "Onboarding paperwork reviewed & approved"), is_override=is_override)
+    new = _set_status(so, org_id, employee_id, "docs_verified", actor=(body.actor or "HR"),
+                      reason=(body.reason or "Onboarding paperwork reviewed & approved"), is_override=is_override)
     return {"ok": True, "workflow_status": new}
 
 
+class OnboardingForwardAccountingIn(LaxModel):
+    emails: Any = None
+    subject: Any = None
+    message: Any = None
+    actor: Any = None
+    force: Any = None
+
+
 @router.post("/onboarding/employee/{employee_id}/forward-accounting")
-async def onboarding_forward_accounting(employee_id: str, body: dict, org_id: str = ORG_ID):
+async def onboarding_forward_accounting(employee_id: str, body: OnboardingForwardAccountingIn, org_id: str = ORG_ID):
     """Forward a completed hire's paperwork to the (customizable) accounting recipients: an email with a
     per-document summary + secure 7-day download links. Recipients default to the saved settings; body may
     override emails/subject/message. Stamps accounting_forwarded_at + audits. Body: emails?, subject?,
@@ -3085,17 +3266,17 @@ async def onboarding_forward_accounting(employee_id: str, body: dict, org_id: st
     if not is_configured():
         raise HTTPException(400, "Email isn't configured (RESEND_API_KEY + NOTIFY_FROM_EMAIL) — can't forward.")
     s = _accounting_settings(org_id)
-    emails = _recipient_list(body.get("emails")) or (s.get("accounting_emails") or [])
+    emails = _recipient_list(body.emails) or (s.get("accounting_emails") or [])
     if not emails:
         raise HTTPException(400, "No accounting recipient configured — set one in the Completed tab settings (or pass emails).")
-    if not body.get("force"):
+    if not body.force:
         st = {r["employee_id"]: r for r in onboarding_doc_status(org_id=org_id).get("employees", [])}.get(employee_id)
         if not _is_complete_row(st):
             raise HTTPException(400, "This hire's paperwork isn't complete yet — forward once everything is back (or pass force=true).")
     docs = _completed_docs_for(org_id, employee_id)
     name = emp.get("name") or employee_id
-    subject = (body.get("subject") or s.get("forward_subject") or "Completed onboarding paperwork — {name}").replace("{name}", name)
-    intro = (body.get("message") or s.get("forward_message")
+    subject = (body.subject or s.get("forward_subject") or "Completed onboarding paperwork — {name}").replace("{name}", name)
+    intro = (body.message or s.get("forward_message")
              or "The onboarding paperwork below is complete and approved. Secure download links (valid 7 days) are included for the accounting file.")
     rows_html = "".join(
         '<tr><td style="padding:6px 10px;border-top:1px solid #eee">' + str(d.get("label") or "Document") + "</td>"
@@ -3128,7 +3309,7 @@ async def onboarding_forward_accounting(employee_id: str, body: dict, org_id: st
                 on_conflict="org_id,employee_id").execute()
         except Exception:
             pass  # pre-100 — the forward still went out; just no stamp
-        _log_event(org_id, employee_id, "forwarded_accounting", actor=(body.get("actor") or "HR"),
+        _log_event(org_id, employee_id, "forwarded_accounting", actor=(body.actor or "HR"),
                    detail={"to": sent, "docs": len(docs)})
     if not sent:
         raise HTTPException(400, f"Forward failed for all recipients: {errors}")
@@ -3496,13 +3677,17 @@ def onboarding_attention_config(org_id: str = ORG_ID):
 
 
 @router.put("/onboarding/attention-config")
-def put_onboarding_attention_config(body: dict, org_id: str = ORG_ID,
+class PutOnboardingAttentionConfigIn(LaxModel):
+    stuck_invite_days: Any = None
+
+
+def put_onboarding_attention_config(body: PutOnboardingAttentionConfigIn, org_id: str = ORG_ID,
                                     authorization: str = Header(default="")):
     """Set the tenant's 'stuck onboarding invite' alert threshold (days, clamped 1-90). HR/admin-only
     — same gate as every other HR-config write in this file."""
     org_id, _email, _role = _require_hr_or_admin(authorization)   # the caller's OWN tenant is authoritative
     try:
-        days = int(body.get("stuck_invite_days"))
+        days = int(body.stuck_invite_days)
     except (TypeError, ValueError):
         raise HTTPException(400, "stuck_invite_days must be a whole number of days")
     days = max(1, min(90, days))

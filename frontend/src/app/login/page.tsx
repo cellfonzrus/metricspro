@@ -246,8 +246,23 @@ export default function LoginPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setErr(''); setBusy(true)
+    const em = email.trim().toLowerCase()
+    // Soft lockout (mig 859) — defense-in-depth. Sign-in itself goes straight to Supabase; this just
+    // refuses locally after repeated failures instead of hammering it, and records every attempt so
+    // failed logins are visible. Both calls FAIL OPEN: a precheck/record fault never blocks a real login.
+    try {
+      const pc: any = await api('/api/v1/core/auth/login-precheck', { method: 'POST', body: JSON.stringify({ email: em }) })
+      if (pc?.locked) {
+        setBusy(false)
+        const mins = Math.max(1, Math.ceil((pc.retry_after || 900) / 60))
+        setErr(`Too many failed attempts. Try again in about ${mins} minute${mins === 1 ? '' : 's'}, or reset your password.`)
+        return
+      }
+    } catch { /* fail-open */ }
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
     setBusy(false)
+    // Fire-and-forget: record pass/fail for the ledger + lockout counter.
+    void api('/api/v1/core/auth/login-record', { method: 'POST', body: JSON.stringify({ email: em, success: !error }) }).catch(() => {})
     if (error) { setErr(error.message || 'Sign-in failed'); return }
     // onAuthStateChange in AuthProvider loads the profile; the effect above redirects.
   }

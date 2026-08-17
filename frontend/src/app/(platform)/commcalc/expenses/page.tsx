@@ -5,6 +5,7 @@ import { usePeriod } from '@/lib/period-context'
 import { TrendChart } from '@/components/TrendChart'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { governExport, capMessage } from '@/lib/export'
 
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100
 const shortPeriod = (p: string) => {
@@ -501,8 +502,14 @@ export default function ExpensesPage() {
     const XLSX = await import('xlsx')
     const aoa: any[] = [['store_code', 'expense_name', 'expense_type', 'amount']]
     stores.forEach(s => cats.forEach(c => aoa.push([s.store_code, c.name, c.type, getVal(s.store_code, c.name) || ''])))
+    // Governance (item 7): this "template" is pre-filled with real expense amounts, so it's a data
+    // export — audit it, honor the row cap, and stamp the returned watermark.
+    const audit = await governExport(`expenses-${period}`, 'excel', aoa.length - 1)
+    if (audit.blocked) { alert(capMessage(audit.max)); return }
     const ws = XLSX.utils.aoa_to_sheet(aoa); const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Expenses'); XLSX.writeFile(wb, `expenses-${period.replace(/\s+/g, '-')}.xlsx`)
+    XLSX.utils.book_append_sheet(wb, ws, 'Expenses')
+    if (audit.watermark) XLSX.utils.sheet_add_aoa(ws, [[], [audit.watermark]], { origin: -1 })
+    XLSX.writeFile(wb, `expenses-${period.replace(/\s+/g, '-')}.xlsx`)
   }
   // Accepts BOTH layouts: LONG (columns store_code/expense_name/expense_type/amount) and the natural
   // MATRIX/pivot an owner keeps by hand (col A = expense names, header row = store codes across the top).

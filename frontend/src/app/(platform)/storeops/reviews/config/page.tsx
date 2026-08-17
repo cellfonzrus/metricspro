@@ -19,6 +19,7 @@ const DOW_OPTIONS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d, i)
 interface Cfg {
   enabled: boolean; target_default: number; notify_on_new_reviews: boolean; lookback_days: number
   has_api_key: boolean; api_key_hint: string | null; can_edit: boolean; updated_at?: string
+  search_brand: string | null
 }
 interface SweepCfg {
   enabled: boolean; frequency: string; day_of_week: number; hour: number; timezone: string
@@ -52,7 +53,8 @@ export default function GoogleReviewsConfigPage() {
     if (!cfg) return
     setBusy(true); setMsg('')
     const body: any = { enabled: cfg.enabled, target_default: cfg.target_default,
-      notify_on_new_reviews: cfg.notify_on_new_reviews, lookback_days: cfg.lookback_days }
+      notify_on_new_reviews: cfg.notify_on_new_reviews, lookback_days: cfg.lookback_days,
+      search_brand: (cfg.search_brand || '').trim() }
     if (apiKey.trim()) body.api_key = apiKey.trim()
     api('/api/v1/storeops/google-reviews/config', { method: 'PUT', body: JSON.stringify(body) })
       .then((r: any) => { setCfg(r); setApiKey(''); setMsg('✅ Saved') })
@@ -135,6 +137,17 @@ export default function GoogleReviewsConfigPage() {
             <label style={label}>API key {cfg.has_api_key ? `(set — ${cfg.api_key_hint})` : '(not set)'}</label>
             <input style={{ ...inp, width: '100%' }} type="password" placeholder={cfg.has_api_key ? 'Leave blank to keep the current key' : 'Google Places API key'}
               value={apiKey} onChange={e => setApiKey(e.target.value)} disabled={readOnly} />
+          </div>
+          <div>
+            <label style={label}>Business search token</label>
+            <input style={{ ...inp, width: '100%' }} type="text" placeholder='e.g. "wireless store"'
+              value={cfg.search_brand || ''} onChange={e => setCfg({ ...cfg, search_brand: e.target.value })} disabled={readOnly} />
+            <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 3 }}>
+              Prepended to each store's address when looking it up on Google. Without it, a bare address
+              resolves to the <b>postal address</b> (no rating). It doesn't have to match your brand
+              exactly — any business-ish word (e.g. "wireless store") lands on the storefront.
+              Blank keeps address-only lookup.
+            </div>
           </div>
           <div>
             <label style={label}>Default rating target (all stores)</label>

@@ -107,6 +107,14 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # fixes are done + isolation test passes). Derives org_id from the verified token. Default = no-op.
 app.add_middleware(TenantScopeMiddleware)
 
+# Inbound rate limiting (Security Controls Spec §4, P0). Per-IP fixed-window limiter — strict on
+# auth-sensitive paths, generous elsewhere. Added AFTER TenantScope but BEFORE AccessLog ⇒ OUTER of
+# TenantScope (a flood is refused before the expensive identity/DB path) and INNER of AccessLog (a
+# throttled 429 is still recorded, so a scraper still shows up in the access log). Break-glass:
+# RATE_LIMIT_ENFORCE=0. Fail-open on any limiter fault.
+from app.core.rate_limit import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
+
 # System access log (owner 2026-08-16): one row per request — actor / path / status / IP / GPS. Added
 # AFTER TenantScope ⇒ OUTER of it, so it sees the actor the tenant middleware resolved (via context var)
 # and records the final status even on a middleware rejection (401/403). Best-effort — never blocks or
@@ -176,6 +184,19 @@ app.include_router(recovery_router, prefix="/api/v1")     # Denied-Appeal Commis
 app.include_router(pos_router, prefix="/api/v1")          # POS module — Phase 0 product catalog (mig 724)
 app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
 app.include_router(referral_router, prefix="/api/v1")     # Referral — QR referrals + gated commission (mig 850)
+
+# Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /
+# break-glass states at boot. Best-effort; STARTUP_STRICT=1 makes prod findings fail the boot.
+@app.on_event("startup")
+def _security_posture_startup():
+    try:
+        from app.core.security_posture import check_and_log
+        check_and_log()
+    except RuntimeError:
+        raise           # STARTUP_STRICT opted into fail-to-boot
+    except Exception:
+        pass
+
 
 @app.get("/health")
 def health():

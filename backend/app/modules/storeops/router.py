@@ -3,10 +3,13 @@ import base64
 import os
 import requests
 import time
+from typing import Any, Optional
 from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
+from app.core.schemas import LaxModel
 from app.core import scope as _cscope
 from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops.pto_accrual import (
@@ -342,12 +345,16 @@ def get_timeoff_conflict_mode(org_id: str = ORG_ID):
     return {"mode": _timeoff_conflict_mode(org_id)}
 
 
+class TimeoffConflictModeIn(LaxModel):
+    mode: str = ""
+
+
 @router.put("/timeoff-conflict-mode")
-def set_timeoff_conflict_mode(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def set_timeoff_conflict_mode(body: TimeoffConflictModeIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Manager/admin only. mode must be 'warn' or 'block'."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    mode = str(body.get("mode") or "").strip().lower()
+    mode = str(body.mode or "").strip().lower()
     if mode not in ("warn", "block"):
         raise HTTPException(400, "mode must be 'warn' or 'block'")
     try:
@@ -1801,8 +1808,13 @@ def payroll_chargebacks(month: str = "", authorization: str = Header(default="")
     return {"items": rows}
 
 
+class ChargebackDecisionIn(LaxModel):
+    decision: str = ""
+    period: str = ""
+
+
 @router.post("/payroll-chargebacks/{cb_id}/decision")
-def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_payroll_chargeback(cb_id: str, body: ChargebackDecisionIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """MANAGEMENT-GATED (same _require_manager tier as the shift-extension/DM-approval endpoints
     above): POST a chargeback (status='posted' — becomes a visible deduction on that employee's
     payroll row) or WAIVE it (status='waived' — never deducts). Body: {decision: 'post'|'waive',
@@ -1817,7 +1829,7 @@ def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Heade
     a posted row, including a settlement-created overflow child, at any time."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     if decision not in ("post", "waive"):
         raise HTTPException(400, "decision must be 'post' or 'waive'")
     try:
@@ -1839,7 +1851,7 @@ def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Heade
     upd = {"status": "posted" if decision == "post" else "waived",
            "decided_by": mgr.get("email"), "decided_at": datetime.now(timezone.utc).isoformat()}
     if decision == "post":
-        upd["posted_ref"] = (body.get("period") or "").strip() or None
+        upd["posted_ref"] = (body.period or "").strip() or None
     (get_supabase().schema("commcalc").table("ops_chargeback").update(upd)
      .eq("id", cb_id).eq("org_id", org_id).execute())
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
@@ -1881,11 +1893,16 @@ _PAY_GATED_FIELDS = {"pay_rate", "pay_basis", "pay_amount", "termination_date"}
 _PAY_LOGGED_FIELDS = ("pay_rate", "pay_basis", "pay_amount", "termination_date")
 
 
+class BulkCreateEmployeesIn(LaxModel):
+    employees: Any = None
+    rows: Any = None
+
+
 @router.post("/employees/bulk")
-def bulk_create_employees(body: dict, org_id: str = ORG_ID):
+def bulk_create_employees(body: BulkCreateEmployeesIn, org_id: str = ORG_ID):
     """Bulk-create employees from a filled template (new-tenant setup). Body: {employees:[{...}]}.
     Skips blank-name rows and any employee_id that already exists (so re-upload is idempotent)."""
-    rows_in = body.get("employees") or body.get("rows") or []
+    rows_in = body.employees or body.rows or []
     if not isinstance(rows_in, list):
         raise HTTPException(400, "employees must be a list")
     existing = {str(e.get("employee_id")) for e in
@@ -2045,12 +2062,17 @@ def delete_employee(emp_id: str, org_id: str = ORG_ID):
     return {"ok": True, "deleted": emp_id, "name": e.get("name"), "login": login}
 
 
+class MergeEmployeesIn(LaxModel):
+    dup_id: Any = None
+    target_id: Any = None
+
+
 @router.post("/employees/merge")
-def merge_employees(body: dict, org_id: str = ORG_ID):
+def merge_employees(body: MergeEmployeesIn, org_id: str = ORG_ID):
     """Merge a DUPLICATE employee into a TARGET: reassign the duplicate's shifts + time-off to the
     target (by employee_id and by name), then delete the duplicate (deactivate if delete is blocked)."""
-    dup_id = str(body.get("dup_id") or "").strip()
-    target_id = str(body.get("target_id") or "").strip()
+    dup_id = str(body.dup_id or "").strip()
+    target_id = str(body.target_id or "").strip()
     if not dup_id or not target_id or dup_id == target_id:
         raise HTTPException(400, "dup_id and target_id (different) are required")
     dup = sb().table("employees").select("*").eq("org_id", org_id).eq("id", dup_id).execute().data
@@ -2099,8 +2121,13 @@ def merge_employees(body: dict, org_id: str = ORG_ID):
     return {"ok": True, "merged_into": tgt.get("name"), "moved": moved, "deleted_duplicate": deleted, "login": login}
 
 
+class BulkPayscaleIn(LaxModel):
+    rows: Any = None
+    employees: Any = None
+
+
 @router.post("/employees/bulk-payscale")
-def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def bulk_payscale(body: BulkPayscaleIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Bulk set pay rates from a list. Body: {rows:[{employee_id|name, pay_rate}]}.
     Matches by employee_id, else exact name (case-insensitive). Reports unmatched/bad rows.
     MANAGER-GATED (2026-07-27) — same posture as the single-row PATCH's pay-field gate
@@ -2110,7 +2137,7 @@ def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: s
     Each successfully-updated row now logs the SAME way, entry_point='bulk_payscale', best-effort
     (a log-write failure never blocks the actual rate update, matching every other hook's posture)."""
     _require_manager(authorization, org_id)
-    rows = body.get("rows") or body.get("employees") or []
+    rows = body.rows or body.employees or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
     emps = sb().table("employees").select("id,employee_id,name,pay_rate").eq("org_id", org_id).execute().data or []
@@ -2241,11 +2268,16 @@ def _sync_store_mapping(org_id, stores):
         print(f"WARN store_mapping sync failed: {e}")
 
 
+class BulkCreateStoresIn(LaxModel):
+    stores: Any = None
+    rows: Any = None
+
+
 @router.post("/stores/bulk")
-def bulk_create_stores(body: dict, org_id: str = ORG_ID):
+def bulk_create_stores(body: BulkCreateStoresIn, org_id: str = ORG_ID):
     """Bulk-create stores from a filled template (new-tenant setup). Body: {stores:[{...}]}.
     Skips blank store_code rows and store_codes that already exist (idempotent re-upload)."""
-    rows_in = body.get("stores") or body.get("rows") or []
+    rows_in = body.stores or body.rows or []
     if not isinstance(rows_in, list):
         raise HTTPException(400, "stores must be a list")
     existing = {str(s.get("store_code")).strip().upper() for s in
@@ -2363,9 +2395,13 @@ def get_shift_templates(authorization: str = Header(default=""), org_id: str = O
 
 
 @router.post("/shift-templates/save-week")
-def save_week_as_template(body: dict, org_id: str = ORG_ID):
+class WeekStartIn(LaxModel):
+    week_start: str = ""
+
+
+def save_week_as_template(body: WeekStartIn, org_id: str = ORG_ID):
     """Save a week's shifts as the recurring template (replaces existing templates for those employees)."""
-    week_start = (body.get("week_start") or "").strip()
+    week_start = (body.week_start or "").strip()
     if not week_start:
         raise HTTPException(400, "week_start required")
     we = (datetime.fromisoformat(week_start).date() + timedelta(days=6)).isoformat()
@@ -2413,9 +2449,9 @@ def save_week_as_template(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/shift-templates/apply")
-def apply_templates(body: dict, org_id: str = ORG_ID):
+def apply_templates(body: WeekStartIn, org_id: str = ORG_ID):
     """Create shifts for a week from the saved templates (dedup-safe; skips time-off-blocked days)."""
-    week_start = (body.get("week_start") or "").strip()
+    week_start = (body.week_start or "").strip()
     if not week_start:
         raise HTTPException(400, "week_start required")
     ws = datetime.fromisoformat(week_start).date()
@@ -2855,8 +2891,21 @@ def _scheduled_start_utc(org_id, employee_id, name, store, work_date):
     return min(starts) if starts else None
 
 
+class ClockInIn(LaxModel):
+    store_code: str = ""
+    priority_ack: Any = None
+    priority_ack_count: Any = None
+    selfie: Any = None
+    device: Any = None
+    gps_lat: Any = None
+    gps_lng: Any = None
+    gps_accuracy_m: Any = None
+    face_match_pct: Any = None
+    reason: Any = None
+
+
 @router.post("/timeclock/clock-in")
-def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Record a clock-in (one row). Identity is the SIGNED-IN employee (from the auth token) — a
     body employee_id is ignored, so you can only punch yourself. Selfie (base64) + GPS + face-match%
     are still stored for audit (defense in depth)."""
@@ -2869,7 +2918,7 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
     name, home_store = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
     # Which store is this punch for? The kiosk sends the selected store; fall back to home store.
-    req_store = (body.get("store_code") or "").strip() or home_store
+    req_store = (body.store_code or "").strip() or home_store
     # Business-local date, bucketed in THIS STORE's zone (migration 851) so a late-evening Central-time
     # punch lands on the correct calendar day, not the Eastern one. Falls back to the tenant zone when
     # the store has no own zone set.
@@ -2893,7 +2942,7 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
     # Priority-sell acknowledgment gate (module 095): if the tenant enabled it and this store has
     # devices in the final % of their pay window, the rep must acknowledge before clocking in. Any
     # lookup gap → no block (never trap a rep on a config/migration miss — mirrors the closing gate).
-    if not body.get("priority_ack"):
+    if not body.priority_ack:
         try:
             t = (sb().table("tenants").select("priority_ack_enabled").eq("org_id", org_id).limit(1).execute().data) or []
             if t and t[0].get("priority_ack_enabled"):
@@ -2919,29 +2968,29 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
             is_reclock_pending = bool(prior_auto)
         except Exception:
             is_reclock_pending = False
-    selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
+    selfie_path = _upload_selfie(org_id, employee_id, body.selfie)
     row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name,
            "store_code": req_store,
            "clock_in": now.isoformat(), "work_date": work_date,
-           "device": body.get("device"), "selfie_path": selfie_path,
-           "gps_lat": body.get("gps_lat"), "gps_lng": body.get("gps_lng"),
-           "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct")}
+           "device": body.device, "selfie_path": selfie_path,
+           "gps_lat": body.gps_lat, "gps_lng": body.gps_lng,
+           "gps_accuracy_m": body.gps_accuracy_m, "face_match_pct": body.face_match_pct}
     if is_reclock_pending:
         row["permission_status"] = "pending"
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
-    if body.get("priority_ack"):   # record the "I will prioritize these phones" acknowledgment (module 095)
+    if body.priority_ack:   # record the "I will prioritize these phones" acknowledgment (module 095)
         try:
             get_supabase().schema("commcalc").table("priority_ack_log").insert({
                 "org_id": org_id, "employee_id": employee_id, "store_code": req_store,
-                "ack_date": work_date, "imei_count": int(body.get("priority_ack_count") or 0)}).execute()
+                "ack_date": work_date, "imei_count": int(body.priority_ack_count or 0)}).execute()
         except Exception:
             pass
     resp = {"success": True, "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"),
                                       "store_code": req_store}}
     if is_reclock_pending:
         perm = _create_timeclock_permission(org_id, kind="reclock_in", punch=saved,
-                                             reason=(body.get("reason") or "Re-clock-in after auto clock-out"))
+                                             reason=(body.reason or "Re-clock-in after auto clock-out"))
         resp["needs_dm_permission"] = True
         resp["permission_status"] = "pending"
         resp["pending_permission"] = perm
@@ -2965,16 +3014,27 @@ def timeclock_allowed_stores(authorization: str = Header(default=""), org_id: st
             "stores": allowed or ([_norm_store(home_store)] if home_store else [])}
 
 
+class ClockInOverrideIn(LaxModel):
+    employee_id: str = ""
+    store_code: str = ""
+    selfie: Any = None
+    device: Any = None
+    gps_lat: Any = None
+    gps_lng: Any = None
+    gps_accuracy_m: Any = None
+    face_match_pct: Any = None
+
+
 @router.post("/timeclock/override")
-def clock_in_override(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def clock_in_override(body: ClockInOverrideIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """MANAGER override: a manager (their own token in Authorization) authorizes clocking an employee
     in at a store they're not scheduled for, and ADDS the shift to today's schedule so it's on record
     (exactly what the user asked: 'manager override + update their schedule'). Body: {employee_id,
     store_code, selfie?, gps_lat?, gps_lng?, gps_accuracy_m?, face_match_pct?, device?}."""
     mgr = _require_manager(authorization, org_id)
     org_id = (mgr.get("org_id") or org_id)   # the manager's own tenant is authoritative
-    employee_id = (body.get("employee_id") or "").strip()
-    store_code = (body.get("store_code") or "").strip()
+    employee_id = (body.employee_id or "").strip()
+    store_code = (body.store_code or "").strip()
     if not employee_id or not store_code:
         raise HTTPException(400, "employee_id and store_code are required")
     open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
@@ -3004,11 +3064,11 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
                 pass
     except Exception:
         pass
-    selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
+    selfie_path = _upload_selfie(org_id, employee_id, body.selfie)
     row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name, "store_code": store_code,
-           "clock_in": now.isoformat(), "work_date": work_date, "device": body.get("device") or "kiosk-override",
-           "selfie_path": selfie_path, "gps_lat": body.get("gps_lat"), "gps_lng": body.get("gps_lng"),
-           "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct"),
+           "clock_in": now.isoformat(), "work_date": work_date, "device": body.device or "kiosk-override",
+           "selfie_path": selfie_path, "gps_lat": body.gps_lat, "gps_lng": body.gps_lng,
+           "gps_accuracy_m": body.gps_accuracy_m, "face_match_pct": body.face_match_pct,
            "notes": f"manager override: {mgr.get('email')}"}
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
@@ -3158,12 +3218,18 @@ def _closing_gate_block(org_id, employee_id, store_code, work_date=None):
         return None
 
 
+class ClockOutIn(LaxModel):
+    entry_id: Any = None
+    override: Any = None
+    reason: Any = None
+
+
 @router.post("/timeclock/clock-out")
-def clock_out(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def clock_out(body: ClockOutIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Close the SIGNED-IN employee's open entry (updates the SAME row) and compute hours. Always
     scoped to the caller's own employee_id so one employee can't close another's punch."""
     org_id, employee_id = _caller_identity(authorization)
-    entry_id = body.get("entry_id")
+    entry_id = body.entry_id
     q = (sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")
          .eq("employee_id", employee_id))
     if entry_id:
@@ -3176,7 +3242,7 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     # closing is submitted. Only the assigned closer is gated (per the product decision); other reps
     # clock out normally. Returns needs_closing (no punch change) rather than closing the entry.
     block = _closing_gate_block(org_id, employee_id, entry.get("store_code"), entry.get("work_date"))
-    if block and not body.get("override"):
+    if block and not body.override:
         return {"success": False, "needs_closing": True, "message": block}
     now = datetime.now(timezone.utc)
     out_at = now
@@ -3242,7 +3308,7 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
         extra_permission = _create_timeclock_permission(
             org_id, kind="late_clockout", punch=entry_after,
             anchor_at=out_at, requested_clock_out=now,
-            reason=(body.get("reason") or "Worked past scheduled shift end"))
+            reason=(body.reason or "Worked past scheduled shift end"))
     # Gate-1 N3 (2026-07-27): an auto-stamped branch moves hours away from a raw clock-in/out diff
     # exactly like _do_force_clockout (which IS logged) — log it here too, system-attributed (the
     # employee's own self-service clock-out triggered it, but the HOURS value is a system computation).
@@ -3752,14 +3818,19 @@ def set_face_retention_config(body: dict, authorization: str = Header(default=""
     return {"ok": True, "tenant": after, "purge_result": purge_result}
 
 
+class RunFaceRetentionIn(LaxModel):
+    dry_run: Any = True
+
+
 @router.post("/timeclock/face-retention/run")
-def run_face_retention_now(body: dict = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def run_face_retention_now(body: Optional[RunFaceRetentionIn] = None,
+                           authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Manager-triggered run for the caller's own tenant. `dry_run` defaults TRUE — report only,
     nothing destroyed (matches this codebase's dry-run-before-apply convention, e.g.
     POST /hr/onboarding/reconcile). Pass {"dry_run": false} to actually destroy what's due."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    dry_run = (body or {}).get("dry_run", True) is not False
+    dry_run = (body.dry_run if body else True) is not False
     client = sb()
     computed = _fret.compute_due(org_id, client)
     return _fret.destroy(org_id, client, computed=computed, dry_run=dry_run,
@@ -3773,7 +3844,7 @@ def face_retention_run_due(x_notify_secret: str = Header(default="")):
     destruction sweep across EVERY tenant. Schedule daily (see docs/handoffs/people.md OPERATOR
     ACTIONS — an operator must add the pg_cron schedule; this endpoint is inert until something calls
     it). Idempotent: a descriptor is destroyed at most once (the row is gone after)."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     try:
@@ -3799,9 +3870,13 @@ def get_face_retention_log(authorization: str = Header(default=""), org_id: str 
     return {"rows": _fret.recent_log(org_id, sb(), limit=limit)}
 
 
+class FaceDeletionIn(LaxModel):
+    note: str = ""
+
+
 @router.post("/employees/{emp_id}/face-retention/request-deletion")
-def request_face_deletion(emp_id: str, body: dict = None, authorization: str = Header(default=""),
-                          org_id: str = ORG_ID):
+def request_face_deletion(emp_id: str, body: Optional[FaceDeletionIn] = None,
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
     """BIPA gives an employee the right to demand destruction of their biometric data — this is that
     path: immediate, single-employee, logged with trigger='employee_request'. `emp_id` is the internal
     numeric id (matches PATCH /employees/{id}). Body: {note?} — record how/when the request was made;
@@ -3813,7 +3888,7 @@ def request_face_deletion(emp_id: str, body: dict = None, authorization: str = H
            .limit(1).execute().data or [None])[0]
     if not row:
         raise HTTPException(404, "employee not found")
-    note = ((body or {}).get("note") or "").strip()
+    note = ((body.note if body else "") or "").strip()
     return _fret.destroy_one_employee_request(
         org_id, row.get("employee_id"), row.get("name"), client,
         destroyed_by=(mgr.get("email") or "system"), note=(note or None))
@@ -3980,8 +4055,12 @@ def _face_consent_ok(org_id: str, employee_id: str):
     return (True, "")
 
 
+class SaveFaceIn(LaxModel):
+    descriptor: Any = None
+
+
 @router.post("/timeclock/face")
-def save_face(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def save_face(body: SaveFaceIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Save (or re-register) an averaged 128-float descriptor for the SIGNED-IN employee — identity
     comes from the auth token, so you can only enroll your own face."""
     org_id, employee_id = _caller_identity(authorization)
@@ -4003,7 +4082,7 @@ def save_face(body: dict, authorization: str = Header(default=""), org_id: str =
     _consent_ok, _consent_why = _face_consent_ok(org_id, employee_id)
     if not _consent_ok:
         raise HTTPException(403, _consent_why)
-    descriptor = body.get("descriptor")
+    descriptor = body.descriptor
     if not isinstance(descriptor, list) or len(descriptor) != 128:
         raise HTTPException(400, "a 128-float descriptor is required")
     existing = (sb().table("face_descriptors").select("id,register_count").eq("org_id", org_id)
@@ -4189,7 +4268,7 @@ def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=No
 def force_clockout_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (guarded by NOTIFY_RUN_SECRET) — auto-close overdue open punches across ALL
     tenants. Schedule it every ~15 min. Idempotent: a punch is closed at most once."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     return _do_force_clockout(org_id=None)
 
@@ -4255,26 +4334,37 @@ def _dm_for_store(org_id, store_code):
 
 
 @router.post("/shift-extensions")
-async def request_shift_extension(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+class ShiftExtensionRequestIn(LaxModel):
+    employee_id: str = ""
+    employee_name: str = ""
+    store_code: str = ""
+    shift_date: str = ""
+    requested_end: str = ""
+    reason: str = ""
+    shift_id: Any = None
+    original_end: Any = None
+
+
+async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """A manager files a request to extend an employee's shift past its scheduled end. Resolves the
     District Manager, saves it 'pending', and emails the DM an FYI (the approval itself is the DM's
     in-app tick). Body: {employee_id, employee_name?, store_code, shift_date, requested_end, reason?,
     shift_id?, original_end?}."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    employee_id = (body.get("employee_id") or "").strip()
-    store_code = (body.get("store_code") or "").strip()
-    shift_date = (body.get("shift_date") or "").strip()[:10]
-    requested_end = (body.get("requested_end") or "").strip()
+    employee_id = (body.employee_id or "").strip()
+    store_code = (body.store_code or "").strip()
+    shift_date = (body.shift_date or "").strip()[:10]
+    requested_end = (body.requested_end or "").strip()
     if not (employee_id and shift_date and requested_end):
         raise HTTPException(400, "employee_id, shift_date and requested_end are required")
     dm_eid, dm_email, dm_name = _dm_for_store(org_id, store_code)
     _ids, emp_name = _emp_id_variants(org_id, employee_id)
     row = {"org_id": org_id, "employee_id": employee_id,
-           "employee_name": body.get("employee_name") or emp_name,
-           "store_code": store_code, "shift_id": body.get("shift_id"), "shift_date": shift_date,
-           "original_end": body.get("original_end"), "requested_end": requested_end,
-           "reason": body.get("reason"), "status": "pending",
+           "employee_name": body.employee_name or emp_name,
+           "store_code": store_code, "shift_id": body.shift_id, "shift_date": shift_date,
+           "original_end": body.original_end, "requested_end": requested_end,
+           "reason": body.reason or None, "status": "pending",
            "requested_by": mgr.get("email"), "requested_by_name": mgr.get("email"),
            "dm_employee_id": dm_eid, "dm_email": dm_email}
     try:
@@ -4294,7 +4384,7 @@ async def request_shift_extension(body: dict, authorization: str = Header(defaul
                     html=(f"<p>{mgr.get('email')} requested to extend "
                           f"<b>{row['employee_name'] or employee_id}</b>'s shift at "
                           f"<b>{store_code or '—'}</b> on <b>{shift_date}</b> to <b>{requested_end}</b>.</p>"
-                          f"<p>Reason: {body.get('reason') or '—'}</p>"
+                          f"<p>Reason: {body.reason or '—'}</p>"
                           f"<p>Approve or deny it in MetricsPro → Workforce → Shift Extensions.</p>"))
                 emailed = True
         except Exception:
@@ -4316,14 +4406,19 @@ def list_shift_extensions(status: str = "", authorization: str = Header(default=
     return {"extensions": rows}
 
 
+class DecisionNoteIn(LaxModel):
+    decision: str = ""
+    note: str = ""
+
+
 @router.post("/shift-extensions/{ext_id}/decision")
-def decide_shift_extension(ext_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The DM (or an admin) approves/denies a request IN-APP — the tick is the approval, recorded with
     who + when. Body: {decision: 'approve'|'deny', note?}. Once approved, the forced-clockout job
     honors the extended end for that employee/day."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     if decision not in ("approve", "deny"):
         raise HTTPException(400, "decision must be 'approve' or 'deny'")
     rows = (sb().table("shift_extension").select("*").eq("id", ext_id).eq("org_id", org_id)
@@ -4335,7 +4430,7 @@ def decide_shift_extension(ext_id: str, body: dict, authorization: str = Header(
     upd = {"status": "approved" if decision == "approve" else "denied",
            "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
            "decided_at": datetime.now(timezone.utc).isoformat(),
-           "decision_note": body.get("note")}
+           "decision_note": body.note or None}
     sb().table("shift_extension").update(upd).eq("id", ext_id).eq("org_id", org_id).execute()
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
@@ -4408,7 +4503,7 @@ def list_timeclock_permissions(status: str = "", authorization: str = Header(def
 
 
 @router.post("/timeclock/permissions/{perm_id}/decision")
-def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
     approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
     held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
@@ -4418,7 +4513,7 @@ def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = H
     org_id = mgr.get("org_id") or org_id
     if not _timeclock_432_present():
         raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     if decision not in ("approve", "deny"):
         raise HTTPException(400, "decision must be 'approve' or 'deny'")
     rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
@@ -4432,7 +4527,7 @@ def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = H
     new_status = "approved" if decision == "approve" else "denied"
     sb().table("timeclock_permission").update(
         {"status": new_status, "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
-         "decided_at": now.isoformat(), "decision_note": body.get("note")}
+         "decided_at": now.isoformat(), "decision_note": body.note or None}
     ).eq("id", perm_id).eq("org_id", org_id).execute()
 
     tlid = perm.get("timelog_id")
@@ -4480,8 +4575,14 @@ def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = H
     return {"ok": True, "status": new_status, "decided_by": mgr.get("email")}
 
 
+class ExtraTimeRequestIn(LaxModel):
+    entry_id: str = ""
+    requested_clock_out: str = ""
+    reason: str = ""
+
+
 @router.post("/timeclock/request-extra")
-def request_extra_time(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def request_extra_time(body: ExtraTimeRequestIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """A rep asks for the time they worked PAST their auto-clock-out to be counted (migration 432) —
     the sweep case where they were auto-clocked-out at scheduled_end + grace while still working, so no
     manual clock-out raised the request. Body: {entry_id?, requested_clock_out?(ISO), reason?}. Creates
@@ -4491,7 +4592,7 @@ def request_extra_time(body: dict, authorization: str = Header(default=""), org_
         raise HTTPException(404, "No auto-clocked-out punch found to request extra time for.")
     now = datetime.now(timezone.utc)
     today = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
-    entry_id = body.get("entry_id")
+    entry_id = body.entry_id
     q = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
          .eq("auto_clocked_out", True))
     if entry_id:
@@ -4512,14 +4613,14 @@ def request_extra_time(body: dict, authorization: str = Header(default=""), org_
         anchor_dt = datetime.fromisoformat(str(anchor).replace("Z", "+00:00")) if anchor else None
     except Exception:
         anchor_dt = None
-    rc = body.get("requested_clock_out")
+    rc = body.requested_clock_out
     try:
         rc_dt = datetime.fromisoformat(str(rc).replace("Z", "+00:00")) if rc else now
     except Exception:
         rc_dt = now
     perm = _create_timeclock_permission(org_id, kind="late_clockout", punch=punch,
                                         anchor_at=anchor_dt, requested_clock_out=rc_dt,
-                                        reason=(body.get("reason") or "Worked past auto clock-out"),
+                                        reason=(body.reason or "Worked past auto clock-out"),
                                         requested_by=employee_id)
     return {"ok": True, "status": "pending", "permission": perm}
 
@@ -4645,36 +4746,48 @@ def list_hours_budgets(week: str = "", authorization: str = Header(default=""), 
     return {"week_start": ws, "week_end": we, "budgets": out}
 
 
+class HoursBudgetIn(LaxModel):
+    store_code: str = ""
+    weekly_hours: Any = None
+
+
 @router.put("/hours-budgets")
-def set_hours_budget(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def set_hours_budget(body: HoursBudgetIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Set (or clear) a store's standing weekly hours budget. Manager/admin only."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    store = (body.get("store_code") or "").strip()
+    store = (body.store_code or "").strip()
     if not store:
         raise HTTPException(400, "store_code required")
-    if body.get("weekly_hours") in (None, "", "null"):
+    if body.weekly_hours in (None, "", "null"):
         sb().table("hours_budget").delete().eq("org_id", org_id).eq("store_code", store).execute()
         return {"ok": True, "cleared": True}
-    row = {"org_id": org_id, "store_code": store, "weekly_hours": float(body.get("weekly_hours") or 0),
+    row = {"org_id": org_id, "store_code": store, "weekly_hours": float(body.weekly_hours or 0),
            "updated_by": mgr.get("email"), "updated_at": datetime.now(timezone.utc).isoformat()}
     sb().table("hours_budget").upsert(row, on_conflict="org_id,store_code").execute()
     return {"ok": True, "store_code": store, "weekly_hours": row["weekly_hours"]}
 
 
+class BudgetOverrideRequestIn(LaxModel):
+    store_code: str = ""
+    week_start: str = ""
+    approved_hours: Any = None
+    reason: str = ""
+
+
 @router.post("/budget-overrides")
-async def request_budget_override(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def request_budget_override(body: BudgetOverrideRequestIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """A manager requests DM approval to exceed a store's weekly budget. Resolves the DM, saves it
     'pending', emails the DM an FYI. Body: {store_code, week_start, approved_hours?, reason?}."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    store = (body.get("store_code") or "").strip()
-    week_start = (body.get("week_start") or "").strip()[:10]
+    store = (body.store_code or "").strip()
+    week_start = (body.week_start or "").strip()[:10]
     if not (store and week_start):
         raise HTTPException(400, "store_code and week_start are required")
     dm_eid, dm_email, dm_name = _dm_for_store(org_id, store)
     row = {"org_id": org_id, "store_code": store, "week_start": week_start,
-           "approved_hours": body.get("approved_hours"), "reason": body.get("reason"),
+           "approved_hours": body.approved_hours, "reason": body.reason or None,
            "status": "pending", "requested_by": mgr.get("email"), "requested_by_name": mgr.get("email"),
            "dm_employee_id": dm_eid, "dm_email": dm_email}
     try:
@@ -4692,7 +4805,7 @@ async def request_budget_override(body: dict, authorization: str = Header(defaul
                     subject=f"Hours-budget override needed — {store} (week of {week_start})",
                     html=(f"<p>{mgr.get('email')} requested to schedule <b>{store}</b> past its weekly "
                           f"hours budget for the week of <b>{week_start}</b>.</p>"
-                          f"<p>Reason: {body.get('reason') or '—'}</p>"
+                          f"<p>Reason: {body.reason or '—'}</p>"
                           f"<p>Approve or deny it in MetricsPro → Workforce → Hours Budget.</p>"))
                 emailed = True
         except Exception:
@@ -4716,12 +4829,12 @@ def list_budget_overrides(status: str = "", authorization: str = Header(default=
 
 
 @router.post("/budget-overrides/{ov_id}/decision")
-def decide_budget_override(ov_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_budget_override(ov_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The DM (or admin) approves/denies in-app — the tick is the approval, recorded with who+when.
     Approving unlocks scheduling past budget for that store+week. Body: {decision, note?}."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     if decision not in ("approve", "deny"):
         raise HTTPException(400, "decision must be 'approve' or 'deny'")
     rows = (sb().table("budget_override").select("status").eq("id", ov_id).eq("org_id", org_id)
@@ -4732,7 +4845,7 @@ def decide_budget_override(ov_id: str, body: dict, authorization: str = Header(d
         raise HTTPException(409, f"already {rows[0].get('status')}")
     upd = {"status": "approved" if decision == "approve" else "denied",
            "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
-           "decided_at": datetime.now(timezone.utc).isoformat(), "decision_note": body.get("note")}
+           "decided_at": datetime.now(timezone.utc).isoformat(), "decision_note": body.note or None}
     sb().table("budget_override").update(upd).eq("id", ov_id).eq("org_id", org_id).execute()
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
@@ -4748,14 +4861,22 @@ def get_payroll_settings(employee_id: str, org_id: str = ORG_ID):
             "state": "NY", "extra_withholding": 0, "skipped": False}
 
 
+class PayrollSettingsIn(LaxModel):
+    filing_status: str = ""
+    allowances: Any = None
+    state: str = ""
+    extra_withholding: Any = None
+    skipped: Any = None
+
+
 @router.put("/payroll-settings/{employee_id}")
-def put_payroll_settings(employee_id: str, body: dict, org_id: str = ORG_ID):
+def put_payroll_settings(employee_id: str, body: PayrollSettingsIn, org_id: str = ORG_ID):
     row = {"org_id": org_id, "employee_id": employee_id,
-           "filing_status": body.get("filing_status") or "Single",
-           "allowances": int(body.get("allowances") or 0),
-           "state": (body.get("state") or "NY").upper()[:2],
-           "extra_withholding": float(body.get("extra_withholding") or 0),
-           "skipped": bool(body.get("skipped")),
+           "filing_status": body.filing_status or "Single",
+           "allowances": int(body.allowances or 0),
+           "state": (body.state or "NY").upper()[:2],
+           "extra_withholding": float(body.extra_withholding or 0),
+           "skipped": bool(body.skipped),
            "updated_at": datetime.now(timezone.utc).isoformat()}
     sb().table("payroll_settings").upsert(row, on_conflict="org_id,employee_id").execute()
     return {"ok": True, "employee_id": employee_id}
@@ -4777,17 +4898,25 @@ def list_manual_hours(employee_id: str = "", start: str = "", end: str = "", aut
     return rows
 
 
+class ManualHoursIn(LaxModel):
+    employee_id: str = ""
+    reason: str = ""
+    hours: Any = None
+    work_date: str = ""
+    added_by: str = ""
+
+
 @router.post("/manual-hours")
-def add_manual_hours(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    employee_id = (body.get("employee_id") or "").strip()
-    reason = (body.get("reason") or "").strip()
+def add_manual_hours(body: ManualHoursIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    employee_id = (body.employee_id or "").strip()
+    reason = (body.reason or "").strip()
     if not employee_id or not reason:
         raise HTTPException(400, "employee_id and reason are required")
-    if body.get("hours") in (None, ""):
+    if body.hours in (None, ""):
         raise HTTPException(400, "hours required")
     row = {"org_id": org_id, "employee_id": employee_id,
-           "work_date": body.get("work_date") or datetime.now(timezone.utc).date().isoformat(),
-           "hours": float(body.get("hours")), "reason": reason, "added_by": body.get("added_by")}
+           "work_date": body.work_date or datetime.now(timezone.utc).date().isoformat(),
+           "hours": float(body.hours), "reason": reason, "added_by": body.added_by or None}
     r = sb().table("manual_hours").insert(row).execute()
     saved = r.data[0] if r.data else row
     # Deliverable 4 (Payroll Change Log): a manual-hours adjustment IS a manual change to payroll
@@ -4955,14 +5084,30 @@ def _caller_app_user(authorization: str, org_id: str = ORG_ID) -> dict:
     return rows[0] if rows else {}
 
 
+def _rbac_scope_failclosed() -> bool:
+    """Fail-closed switch for RBAC scope resolution (Security Controls Spec §1, item 4b). Default ON:
+    an UNRESOLVED role (blank, not in the roles table, misconfigured with no scope, or a read error)
+    resolves to the MOST RESTRICTIVE existing scope ('self') instead of widening to the whole org
+    ('all'). Real roles carry an explicit scope and are unaffected. Break-glass
+    RBAC_SCOPE_FAILCLOSED=0 restores the old 'all' fallback via one Railway env change, same
+    never-strand-the-operator posture as REQUIRE_AUTH / STRICT_MEMBERSHIP."""
+    import os
+    return os.environ.get("RBAC_SCOPE_FAILCLOSED", "1").lower() not in ("0", "false", "no", "off")
+
+
 def _role_scope(org_id: str, role: str) -> str:
+    # An unresolved role must not silently grant org-wide reach. Fail CLOSED to 'self' (break-glass
+    # RBAC_SCOPE_FAILCLOSED=0 → old 'all'). A role that exists WITH an explicit scope is always honored.
+    fallback = "self" if _rbac_scope_failclosed() else "all"
     if not role:
-        return "all"
+        return fallback
     try:
         rr = sb().table("roles").select("permissions").eq("org_id", org_id).eq("name", role).limit(1).execute().data or []
-        return (((rr[0].get("permissions") or {}).get("scope")) if rr else "all") or "all"
+        if not rr:
+            return fallback                                    # unknown role → restrictive
+        return ((rr[0].get("permissions") or {}).get("scope")) or fallback
     except Exception:
-        return "all"
+        return fallback                                        # roles read failed → restrictive
 
 
 def _role_permissions(org_id: str, role: str) -> dict:
@@ -5097,6 +5242,42 @@ def org_build_standard(org_id: str = ORG_ID):
             "markets": len(district_by_market), "stores_placed": placed}
 
 
+# ── org-structure request models (item 15 part 7a) — LaxModel so existing callers never break; fields
+#    the handler validates itself (rank/int, is_active) are Any so a 400/no-op path stands, not a 422;
+#    PUT/PATCH handlers use body.model_fields_set to keep "update only the keys actually sent". ──────
+class OrgLevelCreateIn(LaxModel):
+    name: str = ""
+    rank: Any = None
+
+
+class OrgLevelUpdateIn(LaxModel):
+    name: str = ""
+    rank: Any = None
+
+
+class OrgUnitCreateIn(LaxModel):
+    name: str = ""
+    parent_id: Any = None
+    level_id: Any = None
+    sort_order: Any = None
+
+
+class OrgUnitUpdateIn(LaxModel):
+    name: str = ""
+    parent_id: Any = None
+    level_id: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+
+
+class OrgManagerAddIn(LaxModel):
+    employee_id: str = ""
+
+
+class OrgUnitRefIn(LaxModel):
+    unit_id: Any = None
+
+
 # ── levels ───────────────────────────────────────────────────────────────────────────────────────
 @router.get("/org/levels")
 def org_levels_list(org_id: str = ORG_ID):
@@ -5104,11 +5285,11 @@ def org_levels_list(org_id: str = ORG_ID):
 
 
 @router.post("/org/levels")
-def org_level_create(body: dict, org_id: str = ORG_ID):
-    name = (body.get("name") or "").strip()
+def org_level_create(body: OrgLevelCreateIn, org_id: str = ORG_ID):
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Level name required.")
-    rank = body.get("rank")
+    rank = body.rank
     if rank is None:
         top = sb().table("org_levels").select("rank").eq("org_id", org_id).order("rank", desc=True).limit(1).execute().data or []
         rank = (top[0]["rank"] + 1) if top else 0
@@ -5118,13 +5299,14 @@ def org_level_create(body: dict, org_id: str = ORG_ID):
 
 
 @router.put("/org/levels/{level_id}")
-def org_level_update(level_id: int, body: dict, org_id: str = ORG_ID):
+def org_level_update(level_id: int, body: OrgLevelUpdateIn, org_id: str = ORG_ID):
     """org_id-scoped so a foreign level_id is a no-op instead of a cross-tenant write."""
     upd = {}
-    if "name" in body:
-        upd["name"] = (body.get("name") or "").strip()
-    if "rank" in body:
-        upd["rank"] = int(body.get("rank"))
+    sent = body.model_fields_set
+    if "name" in sent:
+        upd["name"] = (body.name or "").strip()
+    if "rank" in sent:
+        upd["rank"] = int(body.rank)
     if upd:
         sb().table("org_levels").update(upd).eq("id", level_id).eq("org_id", org_id).execute()
     return {"ok": True}
@@ -5142,24 +5324,25 @@ def org_level_delete(level_id: int, org_id: str = ORG_ID):
 
 # ── units ────────────────────────────────────────────────────────────────────────────────────────
 @router.post("/org/units")
-def org_unit_create(body: dict, org_id: str = ORG_ID):
-    name = (body.get("name") or "").strip()
+def org_unit_create(body: OrgUnitCreateIn, org_id: str = ORG_ID):
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Unit name required.")
-    row = {"org_id": org_id, "name": name, "parent_id": body.get("parent_id"),
-           "level_id": body.get("level_id"), "sort_order": body.get("sort_order") or 0}
+    row = {"org_id": org_id, "name": name, "parent_id": body.parent_id,
+           "level_id": body.level_id, "sort_order": body.sort_order or 0}
     r = sb().table("org_units").insert(row).execute()
     return r.data[0] if r.data else row
 
 
 @router.put("/org/units/{unit_id}")
-def org_unit_update(unit_id: str, body: dict, org_id: str = ORG_ID):
+def org_unit_update(unit_id: str, body: OrgUnitUpdateIn, org_id: str = ORG_ID):
     """Rename / re-level / reorder / MOVE (set parent_id). Guards against cycles (can't move a unit
     under itself or a descendant)."""
     upd = {}
+    sent = body.model_fields_set
     for k in ("name", "parent_id", "level_id", "sort_order", "is_active"):
-        if k in body:
-            upd[k] = body.get(k)
+        if k in sent:
+            upd[k] = getattr(body, k)
     if "name" in upd:
         upd["name"] = (upd["name"] or "").strip()
     new_parent = upd.get("parent_id")
@@ -5192,8 +5375,8 @@ def org_unit_delete(unit_id: str, org_id: str = ORG_ID):
 
 # ── managers ───────────────────────────────────────────────────────────────────────────────────
 @router.post("/org/units/{unit_id}/managers")
-def org_unit_add_manager(unit_id: str, body: dict, org_id: str = ORG_ID):
-    eid = (body.get("employee_id") or "").strip()
+def org_unit_add_manager(unit_id: str, body: OrgManagerAddIn, org_id: str = ORG_ID):
+    eid = (body.employee_id or "").strip()
     if not eid:
         raise HTTPException(400, "employee_id required.")
     existing = (sb().table("org_managers").select("id").eq("org_id", org_id).eq("unit_id", unit_id)
@@ -5214,10 +5397,10 @@ def org_unit_remove_manager(unit_id: str, employee_id: str, org_id: str = ORG_ID
 
 # ── attach a store to a unit (or unassign with unit_id=null) ─────────────────────────────────────
 @router.put("/org/stores/{store_code}/unit")
-def org_assign_store(store_code: str, body: dict, org_id: str = ORG_ID):
+def org_assign_store(store_code: str, body: OrgUnitRefIn, org_id: str = ORG_ID):
     """org_id-scoped so a foreign store_code is a no-op instead of a cross-tenant write — this
     previously took NO org filter at all."""
-    sb().table("stores").update({"org_unit_id": body.get("unit_id")}).eq("store_code", store_code).eq("org_id", org_id).execute()
+    sb().table("stores").update({"org_unit_id": body.unit_id}).eq("store_code", store_code).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
@@ -5258,14 +5441,14 @@ def org_employees(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.put("/org/employees/{row_id}/unit")
-def org_assign_employee(row_id: str, body: dict, org_id: str = ORG_ID):
+def org_assign_employee(row_id: str, body: OrgUnitRefIn, org_id: str = ORG_ID):
     """Place an employee directly on a unit (overrides the home-store rollup — for managers / roving /
     overhead staff). unit_id=null clears the override so they fall back to their home store's unit.
 
     Keys on the employees PRIMARY KEY (id), NOT the optional business employee_id — that field is NULL
     for some staff, so keying on it made unplaced/no-Emp-ID employees impossible to assign (the update
     matched no row and silently no-op'd)."""
-    sb().table("employees").update({"org_unit_id": body.get("unit_id")}) \
+    sb().table("employees").update({"org_unit_id": body.unit_id}) \
         .eq("id", row_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
@@ -5995,14 +6178,27 @@ _PAYEX_TAX_FIELDS = ("enabled", "fica_ss_rate", "fica_ss_wage_base", "medicare_r
                       "futa_rate", "futa_wage_base", "suta_rate", "suta_wage_base")
 
 
+class PayrollTaxConfigIn(LaxModel):
+    enabled: Any = None
+    fica_ss_rate: Any = None
+    fica_ss_wage_base: Any = None
+    medicare_rate: Any = None
+    futa_rate: Any = None
+    futa_wage_base: Any = None
+    suta_rate: Any = None
+    suta_wage_base: Any = None
+    updated_by: str = ""
+
+
 @router.put("/payroll-tax-config")
-def put_payroll_tax_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_payroll_tax_config(body: PayrollTaxConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert the org's ONE payroll tax config row. Manager-gated (changes a cost the business books
     every payroll run)."""
     _require_manager(authorization, org_id)
-    fields = {k: body[k] for k in _PAYEX_TAX_FIELDS if k in body}
+    sent = body.model_fields_set
+    fields = {k: getattr(body, k) for k in _PAYEX_TAX_FIELDS if k in sent}
     row = {**fields, "updated_at": datetime.now(timezone.utc).isoformat(),
-           "updated_by": body.get("updated_by") or "admin"}
+           "updated_by": body.updated_by or "admin"}
     existing = (sb().table("payroll_tax_config").select("id").eq("org_id", org_id).limit(1).execute().data or [])
     if existing:
         sb().table("payroll_tax_config").update(row).eq("id", existing[0]["id"]).eq("org_id", org_id).execute()
@@ -6026,26 +6222,38 @@ def get_payroll_expense_items(org_id: str = ORG_ID):
 _PAYEX_ITEM_FIELDS = ("key", "name", "calc_method", "rate_or_amount", "wage_cap", "scope", "enabled", "sort_order")
 
 
+class PayrollExpenseItemIn(LaxModel):
+    key: str = ""
+    name: str = ""
+    calc_method: str = ""
+    rate_or_amount: Any = None
+    wage_cap: Any = None
+    scope: str = ""
+    enabled: Any = True
+    sort_order: Any = None
+    updated_by: str = ""
+
+
 @router.post("/payroll-expense-items")
-def create_payroll_expense_item(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def create_payroll_expense_item(body: PayrollExpenseItemIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Add a custom payroll expense item (Unemployment Insurance / Workers Comp are seeded by
     migration 404; this is for any ADDITIONAL operator-defined item). Manager-gated."""
     _require_manager(authorization, org_id)
-    key = (body.get("key") or "").strip().lower().replace(" ", "_")
-    name = (body.get("name") or "").strip()
+    key = (body.key or "").strip().lower().replace(" ", "_")
+    name = (body.name or "").strip()
     if not key or not name:
         raise HTTPException(400, "key and name are required")
-    calc_method = body.get("calc_method") or "pct_wages"
+    calc_method = body.calc_method or "pct_wages"
     if calc_method not in PAYEX_CALC_METHODS:
         raise HTTPException(400, f"calc_method must be one of {PAYEX_CALC_METHODS}")
-    scope = body.get("scope") or "store"
+    scope = body.scope or "store"
     if scope not in PAYEX_ITEM_SCOPES:
         raise HTTPException(400, f"scope must be one of {PAYEX_ITEM_SCOPES}")
     row = {"org_id": org_id, "key": key, "name": name, "calc_method": calc_method,
-           "rate_or_amount": float(body.get("rate_or_amount") or 0),
-           "wage_cap": (None if body.get("wage_cap") in (None, "") else float(body.get("wage_cap"))),
-           "scope": scope, "enabled": bool(body.get("enabled", True)),
-           "sort_order": int(body.get("sort_order") or 0), "updated_by": body.get("updated_by") or "admin"}
+           "rate_or_amount": float(body.rate_or_amount or 0),
+           "wage_cap": (None if body.wage_cap in (None, "") else float(body.wage_cap)),
+           "scope": scope, "enabled": bool(body.enabled),
+           "sort_order": int(body.sort_order or 0), "updated_by": body.updated_by or "admin"}
     try:
         r = sb().table("payroll_expense_item").insert(row).execute()
     except Exception as e:
@@ -6056,11 +6264,12 @@ def create_payroll_expense_item(body: dict, authorization: str = Header(default=
 
 
 @router.patch("/payroll-expense-items/{item_id}")
-def update_payroll_expense_item(item_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def update_payroll_expense_item(item_id: str, body: PayrollExpenseItemIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Edit an existing item (rate, calc_method, scope, enabled, …). Org-scoped so a foreign id is a
     no-op. Manager-gated."""
     _require_manager(authorization, org_id)
-    fields = {k: body[k] for k in _PAYEX_ITEM_FIELDS if k in body}
+    sent = body.model_fields_set
+    fields = {k: getattr(body, k) for k in _PAYEX_ITEM_FIELDS if k in sent}
     if "calc_method" in fields and fields["calc_method"] not in PAYEX_CALC_METHODS:
         raise HTTPException(400, f"calc_method must be one of {PAYEX_CALC_METHODS}")
     if "scope" in fields and fields["scope"] not in PAYEX_ITEM_SCOPES:
@@ -6068,7 +6277,7 @@ def update_payroll_expense_item(item_id: str, body: dict, authorization: str = H
     if "wage_cap" in fields and fields["wage_cap"] in ("", None):
         fields["wage_cap"] = None
     fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-    fields["updated_by"] = body.get("updated_by") or "admin"
+    fields["updated_by"] = body.updated_by or "admin"
     sb().table("payroll_expense_item").update(fields).eq("id", item_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
@@ -6596,7 +6805,7 @@ def additional_payroll_run_due(x_notify_secret: str = Header(default="")):
     Additional Payroll for every org that has EVER recorded a salary advance. An operator must add the
     pg_cron schedule (see docs/handoffs/people.md OPERATOR ACTIONS) — this endpoint is inert (never
     called) until something invokes it; NEVER an unauthenticated trigger."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     period = datetime.now(_BIZ_TZ).strftime("%Y-%m")
     try:
@@ -6614,8 +6823,17 @@ def additional_payroll_run_due(x_notify_secret: str = Header(default="")):
     return {"period": period, "orgs_processed": len(orgs), "results": results}
 
 
+class SalaryAdvanceIn(LaxModel):
+    employee_id: str = ""
+    amount: Any = None
+    paid_date: str = ""
+    store_code: str = ""
+    withdrawal_ref: str = ""
+    recorded_by: str = ""
+
+
 @router.post("/salary-advance/record")
-def record_salary_advance(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def record_salary_advance(body: SalaryAdvanceIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Records a cash salary advance from the daily-closing envelope, then recomputes + pushes THIS
     employee's period's Additional Payroll. OWNER RULE (verbatim intent): this NEVER touches
     payroll_gross / GET /storeops/payroll — it only appends to storeops.salary_advance_ledger and, if
@@ -6624,20 +6842,19 @@ def record_salary_advance(body: dict, authorization: str = Header(default=""), o
     QUERY param (RULE ONE). employee_id is validated against the real roster — pick-don't-type, never
     a free-text id (RULE THREE)."""
     u = _require_manager(authorization, org_id)
-    body = body or {}
-    employee_id = str(body.get("employee_id") or "").strip()
+    employee_id = str(body.employee_id or "").strip()
     if not employee_id:
         raise HTTPException(400, "employee_id is required")
     emp_rows = _employees_with_pay_fields(org_id, "id,name,employee_id,home_store", eq={"employee_id": employee_id})
     if not emp_rows:
         raise HTTPException(400, "Unknown employee_id — pick an existing employee (no free-text ids).")
     try:
-        amount = float(body.get("amount"))
+        amount = float(body.amount)
     except (TypeError, ValueError):
         raise HTTPException(400, "amount must be a number")
     if amount <= 0:
         raise HTTPException(400, "amount must be greater than 0")
-    paid_date_raw = str(body.get("paid_date") or "").strip()
+    paid_date_raw = str(body.paid_date or "").strip()
     try:
         paid_date = _date.fromisoformat(paid_date_raw[:10])
     except ValueError:
@@ -6645,9 +6862,9 @@ def record_salary_advance(body: dict, authorization: str = Header(default=""), o
 
     row = {
         "org_id": org_id, "employee_id": employee_id, "amount": amount, "paid_date": paid_date.isoformat(),
-        "method": "envelope_cash", "store_code": body.get("store_code") or None,
-        "withdrawal_ref": body.get("withdrawal_ref") or None,
-        "recorded_by": body.get("recorded_by") or u.get("email") or u.get("employee_id") or "manager",
+        "method": "envelope_cash", "store_code": body.store_code or None,
+        "withdrawal_ref": body.withdrawal_ref or None,
+        "recorded_by": body.recorded_by or u.get("email") or u.get("employee_id") or "manager",
     }
     try:
         ins = sb().table("salary_advance_ledger").insert(row).execute()
@@ -6872,36 +7089,61 @@ def get_google_reviews_config(authorization: str = Header(default=""),
     return out
 
 
+def _is_db_permission_error(e: Exception) -> bool:
+    """A Postgres 42501 (permission denied) surfacing from a Supabase write on a google_review_*
+    table — almost always the service-role GRANTs not applied in this tenant's DB (re-run migration
+    411). Detecting it lets the handlers say THAT instead of blaming Google Places (2026-08-17)."""
+    s = str(e).lower()
+    return "42501" in s or "permission denied" in s
+
+
+_DB_GRANT_HINT = ("Database permission error (Postgres 42501): the backend cannot write the Google "
+                  "Reviews tables. The service-role grants are missing in this tenant's database — "
+                  "re-run migration 411 (and 412/420/430) on it, then try again.")
+
+
+class GoogleReviewsConfigIn(LaxModel):
+    enabled: Any = None
+    target_default: Any = None
+    notify_on_new_reviews: Any = None
+    lookback_days: Any = None
+    search_brand: Any = None
+    api_key: str = ""
+
+
 @router.put("/google-reviews/config")
-def put_google_reviews_config(body: dict, authorization: str = Header(default=""),
+def put_google_reviews_config(body: GoogleReviewsConfigIn, authorization: str = Header(default=""),
                               x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     """api_key is WRITE-ONLY: send it to (re)set it, omit/blank to keep the existing one — same
     posture as every other credential config (VIP/DLAR/epay sweep configs)."""
     org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
     row = {"org_id": org_id, "updated_at": datetime.now(timezone.utc).isoformat()}
-    if "enabled" in body:
-        row["enabled"] = bool(body["enabled"])
-    if "target_default" in body:
-        row["target_default"] = _gr.clamp_target(body["target_default"])
-    if "notify_on_new_reviews" in body:
-        row["notify_on_new_reviews"] = bool(body["notify_on_new_reviews"])
-    if "lookback_days" in body:
+    sent = body.model_fields_set
+    if "enabled" in sent:
+        row["enabled"] = bool(body.enabled)
+    if "target_default" in sent:
+        row["target_default"] = _gr.clamp_target(body.target_default)
+    if "notify_on_new_reviews" in sent:
+        row["notify_on_new_reviews"] = bool(body.notify_on_new_reviews)
+    if "lookback_days" in sent:
         # Phase 1.5: how far back an employee's store-set lookup looks for a shift (migration 420).
         # Pre-migration this key simply doesn't exist on the table yet — the upsert then fails and
         # the generic except below turns it into a clear 400 naming the migration (same posture as
         # every other not-yet-run-migration write here); GET always still returns the code default
         # (30) regardless via google_reviews.get_config's degrade-gracefully shape.
-        row["lookback_days"] = _gr.clamp_lookback_days(body["lookback_days"])
-    if "search_brand" in body:
+        row["lookback_days"] = _gr.clamp_lookback_days(body.lookback_days)
+    if "search_brand" in sent:
         # mig 430 — the business token prepended to the Places text search. Empty string clears it back
         # to address-only (which resolves to the postal address and yields no rating — see the migration).
-        row["search_brand"] = (str(body["search_brand"] or "").strip() or None)
-    key = (body.get("api_key") or "").strip()
+        row["search_brand"] = (str(body.search_brand or "").strip() or None)
+    key = (body.api_key or "").strip()
     if key:
         row["api_key"] = key
     try:
         sb().table("google_review_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
+        if _is_db_permission_error(e):
+            raise HTTPException(500, _DB_GRANT_HINT)
         raise HTTPException(400, f"Could not save (run migration 411 first? migration 420 for "
                                  f"lookback_days?): {str(e)[:160]}")
     return _gr.public_config(_gr.get_config(sb(), org_id))
@@ -6917,15 +7159,24 @@ def get_google_reviews_sweep_config(authorization: str = Header(default=""), org
                                     "last_status", "last_detail")}
 
 
+class GoogleReviewsSweepConfigIn(LaxModel):
+    enabled: Any = None
+    frequency: Any = None
+    day_of_week: Any = None
+    hour: Any = None
+    timezone: Any = None
+
+
 @router.put("/google-reviews/sweep-config")
-def put_google_reviews_sweep_config(body: dict, authorization: str = Header(default=""),
+def put_google_reviews_sweep_config(body: GoogleReviewsSweepConfigIn, authorization: str = Header(default=""),
                                     x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
     cur = _gr.get_sweep_config(sb(), org_id)
     row = {"org_id": org_id}
+    sent = body.model_fields_set
     for k in ("enabled", "frequency", "day_of_week", "hour", "timezone"):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
+        if k in sent and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
     merged = {**cur, **row}
     row["next_run_at"] = _gr.next_run_at(merged.get("frequency") or "daily", merged.get("day_of_week"),
                                          merged.get("hour"), merged.get("timezone"))
@@ -6937,8 +7188,12 @@ def put_google_reviews_sweep_config(body: dict, authorization: str = Header(defa
     return get_google_reviews_sweep_config(authorization=authorization, org_id=org_id)
 
 
+class GoogleReviewsRunNowIn(LaxModel):
+    store_codes: Any = None
+
+
 @router.post("/google-reviews/sweep/run-now")
-def post_google_reviews_run_now(background_tasks: BackgroundTasks, body: dict = None,
+def post_google_reviews_run_now(background_tasks: BackgroundTasks, body: Optional[GoogleReviewsRunNowIn] = None,
                                 authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Manual 'Refresh now' from the admin/DM page."""
     u = _require_manager(authorization, org_id)
@@ -6946,7 +7201,7 @@ def post_google_reviews_run_now(background_tasks: BackgroundTasks, body: dict = 
     cfg = _gr.get_config(sb(), org_id)
     if not cfg.get("api_key"):
         raise HTTPException(400, "Set the Google Places API key first.")
-    store_codes = (body or {}).get("store_codes") if body else None
+    store_codes = body.store_codes if body else None
     background_tasks.add_task(_do_google_reviews_sweep, org_id, store_codes)
     return {"status": "started"}
 
@@ -6956,7 +7211,7 @@ def post_google_reviews_run_due(background_tasks: BackgroundTasks,
                                 x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed. Secret-gated —
     NEVER an unauthenticated trigger. Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -7028,8 +7283,18 @@ def list_google_review_stores(authorization: str = Header(default=""), org_id: s
     return {"stores": out, "target_default": cfg.get("target_default", _gr.DEFAULT_TARGET)}
 
 
+class GoogleReviewStoreConfigIn(LaxModel):
+    clear_target_override: Any = None
+    target_override: Any = None
+    clear_place_id: Any = None
+    place_id: str = ""
+    resolved_address: Any = None
+    resolved_display_name: Any = None
+
+
 @router.put("/google-reviews/store-config/{store_code}")
-def put_google_review_store_config(store_code: str, body: dict, authorization: str = Header(default=""),
+def put_google_review_store_config(store_code: str, body: GoogleReviewStoreConfigIn,
+                                   authorization: str = Header(default=""),
                                    x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     """Manual place_id / target overrides (pick-don't-type: store_code comes from the existing store
     roster the page already renders, never free-typed)."""
@@ -7038,23 +7303,25 @@ def put_google_review_store_config(store_code: str, body: dict, authorization: s
     if not store_code:
         raise HTTPException(400, "store_code is required")
     row = {"org_id": org_id, "store_code": store_code, "updated_at": datetime.now(timezone.utc).isoformat()}
-    if body.get("clear_target_override"):
+    if body.clear_target_override:
         row["target_override"] = None
-    elif "target_override" in body and body["target_override"] not in (None, ""):
-        row["target_override"] = _gr.clamp_target(body["target_override"])
-    if body.get("clear_place_id"):
+    elif "target_override" in body.model_fields_set and body.target_override not in (None, ""):
+        row["target_override"] = _gr.clamp_target(body.target_override)
+    if body.clear_place_id:
         row["place_id"] = None
         row["place_id_source"] = "manual"
-    elif (body.get("place_id") or "").strip():
-        row["place_id"] = body["place_id"].strip()
+    elif (body.place_id or "").strip():
+        row["place_id"] = body.place_id.strip()
         row["place_id_source"] = "manual"
-        if body.get("resolved_address"):
-            row["resolved_address"] = body["resolved_address"]
-        if body.get("resolved_display_name"):
-            row["resolved_display_name"] = body["resolved_display_name"]
+        if body.resolved_address:
+            row["resolved_address"] = body.resolved_address
+        if body.resolved_display_name:
+            row["resolved_display_name"] = body.resolved_display_name
     try:
         sb().table("google_review_store").upsert(row, on_conflict="org_id,store_code").execute()
     except Exception as e:
+        if _is_db_permission_error(e):
+            raise HTTPException(500, _DB_GRANT_HINT)
         raise HTTPException(400, f"Could not save (run migration 411 first?): {str(e)[:160]}")
     # Return what actually PERSISTED, read back from the table — not an unconditional {"ok": True}
     # (2026-08-10). The old shape could not distinguish a real write from a no-op, so the settings
@@ -7078,13 +7345,18 @@ def put_google_review_store_config(store_code: str, body: dict, authorization: s
             "resolved_display_name": saved.get("resolved_display_name")}
 
 
+class ResolvePlaceIn(LaxModel):
+    store_code: str = ""
+    address: str = ""
+
+
 @router.post("/google-reviews/resolve-place")
-def post_resolve_place(body: dict, authorization: str = Header(default=""),
+def post_resolve_place(body: ResolvePlaceIn, authorization: str = Header(default=""),
                        x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     """Google Places Text Search on the store's OWN address (from the existing store registry — no
     free-typed address here). Costs a real Places API call, so it's admin-gated."""
     org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
-    store_code = (body.get("store_code") or "").strip()
+    store_code = (body.store_code or "").strip()
     if not store_code:
         raise HTTPException(400, "store_code is required")
     client = sb()
@@ -7096,12 +7368,15 @@ def post_resolve_place(body: dict, authorization: str = Header(default=""),
               .eq("store_code", store_code).limit(1).execute().data) or []
     except Exception:
         st = []
-    address = (st[0].get("address") if st else None) or (body.get("address") or "").strip()
+    address = (st[0].get("address") if st else None) or (body.address or "").strip()
     if not address:
         raise HTTPException(400, "This store has no address on file — add one, or set the place_id manually.")
     try:
-        row = _gr.resolve_place_for_store(client, org_id, store_code, address, cfg["api_key"])
+        row = _gr.resolve_place_for_store(client, org_id, store_code, address, cfg["api_key"],
+                                          brand=cfg.get("search_brand"))
     except Exception as e:
+        if _is_db_permission_error(e):
+            raise HTTPException(500, _DB_GRANT_HINT)
         raise HTTPException(400, f"Google Places lookup failed: {e}")
     return {"ok": True, **row}
 
@@ -7416,10 +7691,19 @@ def list_action_plans(status: str = "", store_code: str = "", authorization: str
 
 
 @router.post("/action-plans/{plan_id}/submit")
-def submit_action_plan(plan_id: str, body: dict, authorization: str = Header(default="")):
+class ActionPlanSubmitIn(LaxModel):
+    plan_text: str = ""
+
+
+class ActionPlanReviewIn(LaxModel):
+    due_date: str = ""
+    dm_comments: str = ""
+
+
+def submit_action_plan(plan_id: str, body: ActionPlanSubmitIn, authorization: str = Header(default="")):
     """Self-service: an employee submits their OWN required action plan. identity from token."""
     org_id, employee_id = _caller_identity(authorization)
-    plan_text = (body.get("plan_text") or "").strip()
+    plan_text = (body.plan_text or "").strip()
     if not plan_text:
         raise HTTPException(400, "plan_text is required")
     try:
@@ -7441,13 +7725,13 @@ def submit_action_plan(plan_id: str, body: dict, authorization: str = Header(def
 
 
 @router.post("/action-plans/{plan_id}/push-back")
-def push_back_action_plan(plan_id: str, body: dict, authorization: str = Header(default=""),
+def push_back_action_plan(plan_id: str, body: ActionPlanReviewIn, authorization: str = Header(default=""),
                           org_id: str = ORG_ID):
     """DM/manager review: send a submitted plan back with comments + a due date."""
     u = _require_manager(authorization, org_id)
     org_id = u.get("org_id") or org_id
-    due_date = (body.get("due_date") or "").strip()[:10]
-    dm_comments = (body.get("dm_comments") or "").strip()
+    due_date = (body.due_date or "").strip()[:10]
+    dm_comments = (body.dm_comments or "").strip()
     if not due_date:
         raise HTTPException(400, "due_date is required")
     try:
@@ -7469,7 +7753,7 @@ def push_back_action_plan(plan_id: str, body: dict, authorization: str = Header(
 
 
 @router.post("/action-plans/{plan_id}/approve")
-def approve_action_plan(plan_id: str, body: dict = None, authorization: str = Header(default=""),
+def approve_action_plan(plan_id: str, body: Optional[ActionPlanReviewIn] = None, authorization: str = Header(default=""),
                         org_id: str = ORG_ID):
     """DM/manager accepts a submitted plan as-is (optionally with a due date/comments) — moves it
     straight to in_progress without a 'needs revision' round trip."""
@@ -7485,15 +7769,15 @@ def approve_action_plan(plan_id: str, body: dict = None, authorization: str = He
     row = rows[0]
     if row.get("status") != "submitted":
         raise HTTPException(400, f"This plan is '{row.get('status')}' — only a submitted plan can be approved.")
-    body = body or {}
-    due_date = (body.get("due_date") or "").strip()[:10] or None
+    body = body or ActionPlanReviewIn()
+    due_date = (body.due_date or "").strip()[:10] or None
     now_iso = datetime.now(timezone.utc).isoformat()
     upd = {"status": "in_progress", "reviewed_at": now_iso,
           "reviewed_by": u.get("email") or u.get("employee_id"), "updated_at": now_iso}
     if due_date:
         upd["due_date"] = due_date
-    if body.get("dm_comments"):
-        upd["dm_comments"] = body["dm_comments"]
+    if body.dm_comments:
+        upd["dm_comments"] = body.dm_comments
     (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
     return {"ok": True, **row, **upd}
 
@@ -7524,7 +7808,7 @@ def employee_mark_action_plan_done(plan_id: str, authorization: str = Header(def
 
 
 @router.post("/action-plans/{plan_id}/dm-confirm-complete")
-def dm_confirm_action_plan(plan_id: str, body: dict = None, authorization: str = Header(default=""),
+def dm_confirm_action_plan(plan_id: str, body: Optional[ActionPlanReviewIn] = None, authorization: str = Header(default=""),
                            org_id: str = ORG_ID):
     """DM/manager confirms the employee's completed work — the ONLY path to 'completed' (terminal)."""
     u = _require_manager(authorization, org_id)
@@ -7542,8 +7826,8 @@ def dm_confirm_action_plan(plan_id: str, body: dict = None, authorization: str =
     now_iso = datetime.now(timezone.utc).isoformat()
     upd = {"status": "completed", "completed_at": now_iso, "reviewed_at": now_iso,
           "reviewed_by": u.get("email") or u.get("employee_id"), "updated_at": now_iso}
-    if body and body.get("dm_comments"):
-        upd["dm_comments"] = body["dm_comments"]
+    if body and body.dm_comments:
+        upd["dm_comments"] = body.dm_comments
     (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
     return {"ok": True, **row, **upd}
 

@@ -16,9 +16,13 @@ import time
 import uuid
 from datetime import datetime, timezone, timedelta
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Header, Request, BackgroundTasks
 from app.core.database import get_supabase, get_supabase_admin
 from app.core.config import settings
+from app.core.schemas import StrictModel, LaxModel
+from app.core.run_secret import verify_notify_secret
 from app.modules.core.entitlements import (
     MODULE_CATALOG, ROLE_GATE_KEYS, load_module_catalog,
     sync_tenant, sync_all_tenants, needs_sync, SEED_VERSION,
@@ -74,8 +78,12 @@ def get_auth_config():
     return {"rbac_enabled": _rbac_enabled_flag()}
 
 
+class AuthConfigIn(LaxModel):
+    rbac_enabled: bool = False
+
+
 @router.put("/auth-config")
-def set_auth_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def set_auth_config(body: AuthConfigIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                     x_active_org: str = Header(default="")):
     """Flip login enforcement on/off (from the Roles admin). Once ON, every user must sign in.
 
@@ -84,7 +92,7 @@ def set_auth_config(body: dict, org_id: str = ORG_ID, authorization: str = Heade
     admin must NOT be able to flip it for everyone: it is gated to super-admins (or the bootstrap
     house-org admin), exactly like the other platform-level operations."""
     _require_super_admin(authorization, x_active_org)
-    enabled = bool(body.get("rbac_enabled"))
+    enabled = bool(body.rbac_enabled)
     if enabled:
         # LOCKOUT GUARD (2026-08-14 incident): turning enforcement ON while no active account holds the
         # Admin role locks EVERYONE out — the "You're signed in, but no role has been assigned" self-
@@ -121,21 +129,29 @@ def get_portal_reports(org_id: str = ORG_ID):
                                    "label": r.get("label"), "category": r.get("category")} for r in rows if r.get("href")}}
 
 
+class SetPortalReportIn(LaxModel):
+    href: Any = None
+    enabled: Any = True
+    roles: Any = None
+    label: Any = None
+    category: Any = None
+
+
 @router.put("/portal-reports")
-def set_portal_report(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def set_portal_report(body: SetPortalReportIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Upsert one report's portal config. Body: {href, enabled, roles[], label?, category?}."""
     _require_setting(authorization, x_active_org, "security")
-    href = (body.get("href") or "").strip()
+    href = (body.href or "").strip()
     if not href:
         raise HTTPException(400, "href required")
     # H6 (2026-08-05): this href is rendered as a <Link> on the employee portal + /employee.
     if not is_safe_href(href):
         raise HTTPException(400, "href must be a site path (e.g. /commcalc/reports) or an http(s) URL")
     row = {"org_id": org_id, "href": href,
-           "enabled": bool(body.get("enabled", True)),
-           "roles": body.get("roles") or [],
-           "label": body.get("label"), "category": body.get("category"),
+           "enabled": bool(body.enabled),
+           "roles": body.roles or [],
+           "label": body.label, "category": body.category,
            "updated_at": datetime.now(timezone.utc).isoformat()}
     try:
         sb().schema("storeops").table("portal_reports").upsert(row, on_conflict="org_id,href").execute()
@@ -407,8 +423,22 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
     # active tenant/user. Best-effort — un-run migs degrade to code defaults / 2FA off (no lockout).
     pw_policy = _load_password_policy(client, org_id, t=t)
     tw_policy = _load_twofa_policy(client, org_id, t=t)
-    twofa = {"required": _twofa_required_for(tw_policy, u.get("role"), u.get("twofa_enabled")),
-             "verified": bool(_sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts())),
+    tw_required = _twofa_required_for(tw_policy, u.get("role"), u.get("twofa_enabled"))
+    tw_verified = bool(_sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts()))
+    # item 10 — admin 2FA. When ADMIN_2FA_ENFORCE is on, a super-admin is REQUIRED to 2FA regardless of
+    # tenant policy (the middleware enforces it with an any-org marker check). Tell the client so the
+    # existing 2FA prompt fires instead of the super-admin hitting a silent 401 loop, and mirror the
+    # any-org acceptance for `verified` so a marker minted in another tenant still counts.
+    import os as _os2
+    if u.get("super_admin") and _os2.environ.get("ADMIN_2FA_ENFORCE", "").lower() in ("1", "true", "yes"):
+        tw_required = True
+        if not tw_verified:
+            try:
+                _p = _sec.verify_2fa_token(x_2fa_token, _sec.now_ts())
+                tw_verified = bool(_p and _p.get("a") == uid)
+            except Exception:
+                pass
+    twofa = {"required": tw_required, "verified": tw_verified,
              "mode": tw_policy["mode"], "user_channels": u.get("twofa_channels") or ["email"]}
     # Admin "view as employee": the SERVER tells the client it is inside an impersonated session, so
     # the high-contrast banner is driven by verified server state rather than by anything the browser
@@ -577,6 +607,150 @@ def access_log(authorization: str = Header(default=""), x_active_org: str = Head
     return {"rows": rows, "count": len(rows)}
 
 
+@router.post("/audit/prune/run-due")
+def prune_audit_logs(x_notify_secret: str = Header(default=""),
+                     access_days: int = 0, failure_days: int = 0):
+    """Retention sweep for the audit logs (Security Controls Spec §3, P0). Deletes access_log rows
+    older than `access_days` (default 365) and failure_log rows older than `failure_days` (default 180),
+    keeping a 30-day floor. The impersonation log and crm_lookup_audit — the audit-of-record — are
+    never touched. Secret-guarded like /notify/run-due, with a CONSTANT-TIME compare; pg_cron may also
+    call the SQL function directly (mig 857). Path ends in /run-due so the tenant middleware allowlists
+    it for the JWT-less scheduler."""
+    import hmac
+    secret = settings.NOTIFY_RUN_SECRET or ""
+    if not secret or not hmac.compare_digest(x_notify_secret or "", secret):
+        raise HTTPException(403, "forbidden")
+    args = {"p_access_retain_days": int(access_days) if access_days else 365,
+            "p_failure_retain_days": int(failure_days) if failure_days else 180}
+    try:
+        rows = (get_supabase_admin().schema("core").rpc("prune_audit_logs", args).execute().data) or []
+        deleted = {r.get("table_name"): r.get("rows_deleted") for r in rows}
+        return {"ok": True, "deleted": deleted}
+    except Exception as e:
+        # function absent (mig 857 un-run) or DB error → report, never 500 the scheduler
+        return {"ok": False, "error": f"{e} (is migration 857 applied?)"}
+
+
+# ── Incident-response containment tools (External Threat Defense Plan §1.1 / §4.2) ────────────────
+@router.get("/ip-block")
+def ip_block_list(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """List blocked IPs (super-admin). Backs the IRP 'block malicious source IPs' step (mig 860)."""
+    _require_super_admin(authorization, x_active_org)
+    from app.core import ip_block
+    try:
+        return {"rows": ip_block.listing()}
+    except Exception as e:
+        return {"rows": [], "ready": False, "error": f"{e} (is migration 860 applied?)"}
+
+
+class IpBlockIn(StrictModel):
+    ip: str = ""
+    reason: str = ""
+    minutes: int | None = None
+
+
+class IpUnblockIn(StrictModel):
+    ip: str = ""
+
+
+class SessionRevokeIn(StrictModel):
+    auth_id: str = ""
+
+
+@router.post("/ip-block")
+def ip_block_add(body: IpBlockIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Block an IP now (super-admin). Optional `minutes` for a temporary block; omit for permanent.
+    Takes effect within ~30s fleet-wide (immediately in the process that handled the request)."""
+    caller = _require_super_admin(authorization, x_active_org)
+    ip = (body.ip or "").strip()
+    if not ip:
+        raise HTTPException(400, "ip required")
+    expires_at = None
+    if body.minutes:
+        from datetime import datetime, timezone, timedelta
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=int(body.minutes))).isoformat()
+    from app.core import ip_block
+    ip_block.add(ip, reason=(body.reason or ""),
+                 created_by=(caller.get("email") or caller.get("auth_id") or ""), expires_at=expires_at)
+    return {"ok": True}
+
+
+@router.post("/ip-block/remove")
+def ip_block_remove(body: IpUnblockIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Unblock an IP (super-admin)."""
+    _require_super_admin(authorization, x_active_org)
+    ip = (body.ip or "").strip()
+    if not ip:
+        raise HTTPException(400, "ip required")
+    from app.core import ip_block
+    ip_block.remove(ip)
+    return {"ok": True}
+
+
+@router.post("/sessions/revoke")
+def sessions_revoke(body: SessionRevokeIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """IRP session purge (super-admin): end all active sessions, or one user's (`auth_id`). ENFORCED
+    when SESSION_ENFORCE is on — the response reports whether it's currently enforced."""
+    _require_super_admin(authorization, x_active_org)
+    from app.core import session_guard
+    auth_id = (body.auth_id or "").strip() or None
+    n = session_guard.revoke(auth_id)
+    return {"ok": True, "revoked": n, "enforced": session_guard.enforce()}
+
+
+# ── Export governance (Security Controls Spec §3/§4, item 7) ─────────────────────────────────────
+class ExportEventIn(StrictModel):
+    report: str = ""
+    format: str = ""
+    total_rows: int = 0
+    sheets: list | None = None
+
+
+@router.post("/export-event")
+def export_event(body: ExportEventIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Record a user-initiated export (audit + volume cap + watermark). Any signed-in user. Returns a
+    server-derived watermark to stamp on the file and whether the row count exceeds the cap
+    (EXPORT_MAX_ROWS, default 50000; super-admins exempt). Best-effort audit — the export itself
+    repackages data the caller already fetched through gated APIs, so a log fault never blocks it."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    import os
+    from datetime import datetime, timezone
+    client = sb()
+    caller = _resolve_caller(client, uid, (x_active_org or "").strip() or None) or {}
+    email = (_email_for_uid(client, uid) or "").strip().lower()
+    org_id = caller.get("org_id") or (x_active_org or "").strip() or ORG_ID
+    rows = int(body.total_rows or 0)
+    cap = int(os.environ.get("EXPORT_MAX_ROWS", "50000") or 50000)
+    over = bool(cap > 0 and rows > cap and not caller.get("super_admin"))
+    ts = datetime.now(timezone.utc)
+    who = email or caller.get("role") or "user"
+    watermark = f"Exported by {who} • {ts.strftime('%Y-%m-%d %H:%M UTC')} • MetricsPro"
+    try:
+        get_supabase_admin().schema("core").table("export_event").insert({
+            "org_id": org_id, "actor_auth_id": uid, "actor_email": email or None,
+            "actor_role": caller.get("role"), "report": str(body.report or "")[:200],
+            "format": str(body.format or "")[:20], "total_rows": rows,
+            "sheets": body.sheets or None, "over_cap": over, "blocked": over,
+        }).execute()
+    except Exception:
+        pass   # best-effort audit
+    return {"ok": True, "watermark": watermark, "over_cap": over, "blocked": over, "max_rows": cap}
+
+
+@router.get("/export-event")
+def export_event_list(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                      limit: int = 200):
+    """Recent exports (super-admin) — who exported what report, how many rows, in what format."""
+    _require_super_admin(authorization, x_active_org)
+    try:
+        return {"rows": (get_supabase_admin().schema("core").table("export_event").select("*")
+                         .order("created_at", desc=True).limit(min(max(limit, 1), 2000)).execute().data) or []}
+    except Exception as e:
+        return {"rows": [], "ready": False, "error": f"{e} (is migration 862 applied?)"}
+
+
 def _require_setting(authorization: str, active_org: str, area: str):
     """Server-side gate for a permission-controlled ADMIN operation. Resolves the caller from the
     verified JWT (never from a client-set body/header) and requires edit rights on `area` via the
@@ -667,16 +841,24 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
             "temp_password": (None if password else pw), "auth_created": created, "auth_error": err}
 
 
+class CreateTenantIn(LaxModel):
+    name: str = ""
+    admin_email: str = ""
+    admin_name: str = ""
+    temp_password: str = ""
+    slug: str = ""
+
+
 @router.post("/tenants")
-def create_tenant(body: dict, authorization: str = Header(default="")):
+def create_tenant(body: CreateTenantIn, authorization: str = Header(default="")):
     """Super-admin: create a tenant + provision its first admin login (returns a temp password)."""
     _require_super_admin(authorization)
-    name = (body.get("name") or "").strip()
-    admin_email = (body.get("admin_email") or "").strip().lower()
+    name = (body.name or "").strip()
+    admin_email = (body.admin_email or "").strip().lower()
     if not name or not admin_email:
         raise HTTPException(400, "name and admin_email required")
-    return _provision_tenant(sb(), name, admin_email, body.get("admin_name"),
-                             password=body.get("temp_password"), slug=body.get("slug"), must_reset=True)
+    return _provision_tenant(sb(), name, admin_email, (body.admin_name or None),
+                             password=(body.temp_password or None), slug=(body.slug or None), must_reset=True)
 
 
 # ─────────────────────────────────────────────
@@ -695,14 +877,20 @@ def list_super_admins(authorization: str = Header(default="")):
     return {"super_admins": rows}
 
 
+class CreateSuperAdminIn(LaxModel):
+    email: str = ""
+    temp_password: str = ""
+    full_name: str = ""
+
+
 @router.post("/super-admins")
-def create_super_admin(body: dict, authorization: str = Header(default="")):
+def create_super_admin(body: CreateSuperAdminIn, authorization: str = Header(default="")):
     """Super-admin: mint OR elevate a PLATFORM super-admin. A brand-new email gets a Supabase Auth
     login created (house org = the platform home; super_admin bypasses tenant scoping regardless of
     org_id) and a temp password returned. An EXISTING login is simply flagged — its password is left
     untouched. Idempotent."""
     _require_super_admin(authorization)
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
     client = sb()
@@ -715,13 +903,13 @@ def create_super_admin(body: dict, authorization: str = Header(default="")):
         ).eq("id", existing[0]["id"]).execute()
         return {"email": email, "elevated": True, "created": False, "temp_password": None}
     # New login (or an orphan row without an auth account) → create/link auth + stamp super_admin.
-    chose_pw = bool((body.get("temp_password") or "").strip())
-    pw = (body.get("temp_password") or "").strip() or _gen_temp_pw()
+    chose_pw = bool((body.temp_password or "").strip())
+    pw = (body.temp_password or "").strip() or _gen_temp_pw()
     auth_id, created, err = _create_or_link_auth(get_supabase_admin(), email, pw)
     if not auth_id:
         raise HTTPException(500, f"could not create login: {err}")
     fields = {"org_id": ORG_ID, "auth_id": auth_id, "email": email,
-              "full_name": (body.get("full_name") or "").strip() or None,
+              "full_name": (body.full_name or "").strip() or None,
               "role": "admin", "is_active": True, "super_admin": True,
               "must_reset_password": not chose_pw}
     if existing:
@@ -766,7 +954,7 @@ def sync_tenants_endpoint(authorization: str = Header(default=""), x_notify_secr
     """Reconcile EVERY tenant — module entitlement (all-access default) + tenant-safe default
     content — bringing tenants created before a feature shipped up to date. Auth: super-admin,
     OR the NOTIFY_RUN_SECRET header (so a post-deploy / cron backfill can run without a UI token)."""
-    if not (settings.NOTIFY_RUN_SECRET and x_notify_secret == settings.NOTIFY_RUN_SECRET):
+    if not verify_notify_secret(x_notify_secret):
         _require_super_admin(authorization)
     return sync_all_tenants(sb())
 
@@ -788,16 +976,23 @@ def signup_status():
     return {"open": _signups_open()}
 
 
+class SignupIn(LaxModel):
+    name: Any = None
+    admin_email: Any = None
+    password: Any = None
+    admin_name: Any = None
+
+
 @router.post("/signup")
-def signup(body: dict):
+def signup(body: SignupIn):
     """PUBLIC self-serve signup — GATED on env SIGNUPS_OPEN (default OFF). Creates a new company + its
     admin login with the chosen password. ⚠️ v1 auto-confirms the email — add real email verification
     + rate-limit/captcha before opening this to the public internet."""
     if not _signups_open():
         raise HTTPException(403, "signups are closed")
-    name = (body.get("name") or "").strip()
-    admin_email = (body.get("admin_email") or "").strip().lower()
-    password = body.get("password") or ""
+    name = (body.name or "").strip()
+    admin_email = (body.admin_email or "").strip().lower()
+    password = body.password or ""
     if not name or not admin_email:
         raise HTTPException(400, "company name and email are required")
     if "@" not in admin_email or "." not in admin_email.split("@")[-1]:
@@ -809,19 +1004,27 @@ def signup(body: dict):
     client = sb()
     if client.schema("storeops").table("app_users").select("id").eq("email", admin_email).limit(1).execute().data:
         raise HTTPException(409, "an account with this email already exists")
-    res = _provision_tenant(client, name, admin_email, body.get("admin_name"), password=password, must_reset=False)
+    res = _provision_tenant(client, name, admin_email, body.admin_name, password=password, must_reset=False)
     return {"org_id": res["org_id"], "name": name, "admin_email": admin_email,
             "message": "Company created — sign in with your email and password."}
 
 
+class UpdateTenantIn(LaxModel):
+    name: str = ""
+    is_active: bool = True
+
+
 @router.patch("/tenants/{org_id}")
-def update_tenant(org_id: str, body: dict, authorization: str = Header(default="")):
+def update_tenant(org_id: str, body: UpdateTenantIn, authorization: str = Header(default="")):
     _require_super_admin(authorization)
     upd = {}
-    if "name" in body:
-        upd["name"] = body["name"]
-    if "is_active" in body:
-        upd["is_active"] = bool(body["is_active"])
+    # model_fields_set preserves the original "was this key provided?" semantics (a PATCH updates only
+    # the keys actually sent, not every model field).
+    sent = body.model_fields_set
+    if "name" in sent:
+        upd["name"] = body.name
+    if "is_active" in sent:
+        upd["is_active"] = bool(body.is_active)
     if not upd:
         raise HTTPException(400, "nothing to update")
     sb().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
@@ -1488,15 +1691,28 @@ def failure_types(authorization: str = Header(default="")):
 
 
 @router.post("/failures")
-def record_failure(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+class RecordFailureIn(LaxModel):
+    org_id: Any = None
+    category: Any = None
+    severity: Any = None
+    source: Any = None
+    employee_id: Any = None
+    employee_name: Any = None
+    store_code: Any = None
+    message: Any = None
+    detail: Any = None
+    remediation: Any = None
+
+
+def record_failure(body: RecordFailureIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Record a failure (best-effort — never raises). Any authed surface may call it; org comes from the
     caller (falls back to body/house org for system callers). Remediation is auto-filled by category, and a
     category the tenant has DISABLED is silently skipped (configurable)."""
     uid = _uid_from_token(authorization)
     client = sb()
     caller = _resolve_caller(client, uid, x_active_org) if uid else None
-    org_id = (caller["org_id"] if caller else None) or body.get("org_id") or ORG_ID
-    category = (body.get("category") or "other").strip().lower()
+    org_id = (caller["org_id"] if caller else None) or body.org_id or ORG_ID
+    category = (body.category or "other").strip().lower()
     try:
         t = _tenant_row(client, org_id) or {}
         disabled = [str(d).strip().lower() for d in (t.get("failure_log_disabled_categories") or [])]
@@ -1507,14 +1723,14 @@ def record_failure(body: dict, authorization: str = Header(default=""), x_active
     meta = FAILURE_TYPES.get(category, FAILURE_TYPES["other"])
     row = {
         "org_id": org_id, "category": category,
-        "severity": (body.get("severity") or meta["severity"]),
-        "source": (body.get("source") or "")[:200] or None,
-        "employee_id": body.get("employee_id"),
-        "employee_name": (body.get("employee_name") or "")[:200] or None,
-        "store_code": (body.get("store_code") or "")[:80] or None,
-        "message": (body.get("message") or meta["label"])[:1000],
-        "detail": body.get("detail"),
-        "remediation": body.get("remediation") or meta["remediation"],
+        "severity": (body.severity or meta["severity"]),
+        "source": (body.source or "")[:200] or None,
+        "employee_id": body.employee_id,
+        "employee_name": (body.employee_name or "")[:200] or None,
+        "store_code": (body.store_code or "")[:80] or None,
+        "message": (body.message or meta["label"])[:1000],
+        "detail": body.detail,
+        "remediation": body.remediation or meta["remediation"],
     }
     try:
         r = client.schema("core").table("failure_log").insert(row).execute()
@@ -1549,7 +1765,12 @@ def list_failures(authorization: str = Header(default=""), x_active_org: str = H
 
 
 @router.patch("/failures/{fid}")
-def update_failure(fid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+class UpdateFailureIn(LaxModel):
+    status: Any = None
+    resolved_note: Any = None
+
+
+def update_failure(fid: str, body: UpdateFailureIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -1558,12 +1779,12 @@ def update_failure(fid: str, body: dict, authorization: str = Header(default="")
     if not _can_view_failures(caller):
         raise HTTPException(403, "admin only")
     patch = {}
-    if "status" in body:
-        patch["status"] = (body.get("status") or "open").strip().lower()
+    if "status" in body.model_fields_set:
+        patch["status"] = (body.status or "open").strip().lower()
         patch["resolved_at"] = datetime.now(timezone.utc).isoformat() if patch["status"] != "open" else None
         patch["resolved_by"] = (caller.get("role") or "admin")
-    if "resolved_note" in body:
-        patch["resolved_note"] = body.get("resolved_note")
+    if "resolved_note" in body.model_fields_set:
+        patch["resolved_note"] = body.resolved_note
     if not patch:
         raise HTTPException(400, "nothing to update")
     client.schema("core").table("failure_log").update(patch).eq("org_id", caller["org_id"]).eq("id", fid).execute()
@@ -1590,7 +1811,12 @@ def get_failures_config(authorization: str = Header(default=""), x_active_org: s
 
 
 @router.put("/failures/config")
-def put_failures_config(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+class PutFailuresConfigIn(LaxModel):
+    face_match_threshold: Any = None
+    disabled_categories: Any = None
+
+
+def put_failures_config(body: PutFailuresConfigIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -1599,14 +1825,14 @@ def put_failures_config(body: dict, authorization: str = Header(default=""), x_a
     if not _can_edit_setting(caller, "failures"):
         raise HTTPException(403, "you don't have permission to configure Failure Logs")
     patch = {}
-    if "face_match_threshold" in body:
+    if "face_match_threshold" in body.model_fields_set:
         try:
-            v = float(body["face_match_threshold"])
+            v = float(body.face_match_threshold)
         except (TypeError, ValueError):
             raise HTTPException(400, "face_match_threshold must be a number")
         patch["face_match_threshold"] = max(0.45, min(0.72, v))  # clamp to a safe band
-    if "disabled_categories" in body:
-        dc = body.get("disabled_categories") or []
+    if "disabled_categories" in body.model_fields_set:
+        dc = body.disabled_categories or []
         patch["failure_log_disabled_categories"] = [str(x).strip().lower() for x in dc if str(x).strip()]
     if not patch:
         raise HTTPException(400, "nothing to update")
@@ -1627,20 +1853,33 @@ def failure_kind_docs(authorization: str = Header(default=""), x_active_org: str
 
 
 @router.post("/failure-kind-docs")
-def upsert_failure_kind_doc(body: dict, authorization: str = Header(default=""),
+class UpsertFailureKindDocIn(LaxModel):
+    kind: Any = None
+    updated_by: Any = None
+    label: Any = None
+    module: Any = None
+    severity: Any = None
+    layman_meaning: Any = None
+    layman_fix: Any = None
+    escalate_when: Any = None
+    code_hint: Any = None
+    is_active: Any = None
+
+
+def upsert_failure_kind_doc(body: UpsertFailureKindDocIn, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Create/update one plain-English kind doc in the HOUSE global registry. Support-gated (the SAME gate
     as the support docs editor). Keyed by (org_id, kind)."""
     if not _support_gate(authorization, x_active_org):
         raise HTTPException(403, "Editing the plain-English error registry is restricted to house support staff.")
-    kind = (body.get("kind") or "").strip().lower()
+    kind = (body.kind or "").strip().lower()
     if not kind:
         raise HTTPException(422, "kind is required")
-    row = {"org_id": ORG_ID, "kind": kind, "updated_by": (body.get("updated_by") or None),
+    row = {"org_id": ORG_ID, "kind": kind, "updated_by": (body.updated_by or None),
            "updated_at": datetime.now(timezone.utc).isoformat()}
     for f in (*_KIND_DOC_FIELDS, "is_active"):
-        if f in body:
-            row[f] = body[f]
+        if f in body.model_fields_set:
+            row[f] = getattr(body, f)
     try:
         sb().schema("core").table("failure_kind_doc").upsert(row, on_conflict="org_id,kind").execute()
     except Exception as e:
@@ -1674,7 +1913,12 @@ def failures_grouped(authorization: str = Header(default=""), x_active_org: str 
 
 
 @router.post("/failures/bulk-review")
-def failures_bulk_review(body: dict, authorization: str = Header(default=""),
+class FailuresBulkReviewIn(LaxModel):
+    ids: Any = None
+    reviewed: Any = True
+
+
+def failures_bulk_review(body: FailuresBulkReviewIn, authorization: str = Header(default=""),
                                x_active_org: str = Header(default="")):
     """The CLEAR action: mark selected failure rows reviewed (or un-reviewed) — keeps the rows for the audit
     trail, org-scoped to the caller's tenant. body: {ids:[...], reviewed:true|false}."""
@@ -1685,10 +1929,10 @@ def failures_bulk_review(body: dict, authorization: str = Header(default=""),
     caller = _resolve_caller(client, uid, x_active_org)
     if not _can_view_failures(caller):
         raise HTTPException(403, "Failure Logs are admin-only.")
-    ids = [str(i) for i in (body.get("ids") or []) if i]
+    ids = [str(i) for i in (body.ids or []) if i]
     if not ids:
         raise HTTPException(422, "ids[] required")
-    reviewed = bool(body.get("reviewed", True))
+    reviewed = bool(body.reviewed)
     patch = {"reviewed": reviewed,
              "reviewed_by": ((caller.get("role") or "admin") if reviewed else None),
              "reviewed_at": (datetime.now(timezone.utc).isoformat() if reviewed else None)}
@@ -1766,8 +2010,18 @@ def get_tenant_settings(authorization: str = Header(default=""), x_active_org: s
             "preview": _next_periods(s)}
 
 
+class PutTenantSettingsIn(LaxModel):
+    org_id: Any = None
+    work_week_start_dow: Any = None
+    pay_period_type: Any = None
+    payday_dow: Any = None
+    payday_weeks_after: Any = None
+    biweekly_anchor: Any = None
+    timezone: Any = None
+
+
 @router.put("/tenant-settings")
-def put_tenant_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def put_tenant_settings(body: PutTenantSettingsIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The tenant ADMIN defines/updates the pay period (captured at onboarding). Saving a complete,
     valid definition marks the tenant setup_complete (clears the setup banner). Super-admins may pass
     org_id to set it for any tenant; otherwise it targets the caller's own tenant."""
@@ -1778,13 +2032,13 @@ def put_tenant_settings(body: dict, authorization: str = Header(default=""), x_a
     caller = _resolve_caller(client, uid, x_active_org)
     if not caller:
         raise HTTPException(403, "no tenant for this login")
-    org_id = (body.get("org_id") if caller["super_admin"] else None) or caller["org_id"] or ORG_ID
+    org_id = (body.org_id if caller["super_admin"] else None) or caller["org_id"] or ORG_ID
     if not _can_edit_setting(caller, "pay_period"):
         raise HTTPException(403, "you don't have permission to edit pay-period settings")
     upd = {}
     for k in _PP_FIELDS:
-        if k in body:
-            v = body[k]
+        if k in body.model_fields_set:
+            v = getattr(body, k)
             if k in ("work_week_start_dow", "payday_dow", "payday_weeks_after"):
                 try:
                     v = int(v)
@@ -1880,29 +2134,40 @@ def list_roles(org_id: str = ORG_ID):
     return {"roles": rows}
 
 
+class CreateRoleIn(LaxModel):
+    name: Any = None
+    display_name: Any = None
+    permissions: Any = None
+
+
 @router.post("/roles")
-def create_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def create_role(body: CreateRoleIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     _require_setting(authorization, x_active_org, "security")
-    name = (body.get("name") or "").strip().lower().replace(" ", "_")
+    name = (body.name or "").strip().lower().replace(" ", "_")
     if not name:
         raise HTTPException(400, "name required")
     row = {"org_id": org_id, "name": name,
-           "display_name": body.get("display_name") or name.replace("_", " ").title(),
-           "permissions": body.get("permissions") or {}}
+           "display_name": body.display_name or name.replace("_", " ").title(),
+           "permissions": body.permissions or {}}
     res = sb().schema("storeops").table("roles").upsert(row, on_conflict="org_id,name").execute()
     return (res.data or [{}])[0]
 
 
+class UpdateRoleIn(LaxModel):
+    display_name: Any = None
+    permissions: Any = None
+
+
 @router.put("/roles/{role_id}")
-def update_role(role_id: int, body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def update_role(role_id: int, body: UpdateRoleIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     _require_setting(authorization, x_active_org, "security")
     upd = {}
-    if "display_name" in body:
-        upd["display_name"] = body["display_name"]
-    if "permissions" in body:
-        upd["permissions"] = body["permissions"]
+    if "display_name" in body.model_fields_set:
+        upd["display_name"] = body.display_name
+    if "permissions" in body.model_fields_set:
+        upd["permissions"] = body.permissions
     if not upd:
         raise HTTPException(400, "nothing to update")
     # role_id is a GLOBAL primary key (BIGSERIAL, enumerable 1,2,3…). WITHOUT an org filter the old
@@ -2354,15 +2619,19 @@ async def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Hea
     return (res.data or [{}])[0]
 
 
+class BulkAssignIn(LaxModel):
+    users: Any = None
+
+
 @router.post("/users/bulk-assign")
-def bulk_assign(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def bulk_assign(body: BulkAssignIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     """Bulk upsert app_users (assign roles) from a list — powers the employee-sheet upload and
     the multi-add form. Body: {users:[{email, full_name, role, market, store_code}]}. Does NOT
     create logins (call /users/bulk-provision or per-row create-login after). Role names are
     validated against storeops.roles; bad rows are reported, the rest still apply."""
     _require_setting(authorization, x_active_org, "security")
-    users = body.get("users")
+    users = body.users
     if not isinstance(users, list) or not users:
         raise HTTPException(400, "users[] required")
     client = sb()
@@ -2812,7 +3081,13 @@ def _pending_connections_payload(client, uid, email=None):
 
 
 @router.post("/connect-tenant")
-async def connect_tenant(body: dict, authorization: str = Header(default="")):
+class ConnectTenantIn(LaxModel):
+    org_id: Any = None
+    code: Any = None
+    connect_token: Any = None
+
+
+async def connect_tenant(body: ConnectTenantIn, authorization: str = Header(default="")):
     """The authenticated user ACCEPTS a pending invite: attach the inviting tenant as a membership on
     their EXISTING login (mig 706 shared model → the top-bar tenant switcher then applies). Requires
     the access code the admin gave them (consent). Idempotent. org_id comes from the BODY (the invite
@@ -2821,8 +3096,8 @@ async def connect_tenant(body: dict, authorization: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
-    target_org = (body.get("org_id") or "").strip()
-    code = (body.get("code") or body.get("connect_token") or "").strip()
+    target_org = (body.org_id or "").strip()
+    code = (body.code or body.connect_token or "").strip()
     if not target_org or not code:
         raise HTTPException(400, "org_id and access code required")
     client = sb()
@@ -2853,7 +3128,7 @@ async def connect_tenant(body: dict, authorization: str = Header(default="")):
 
 
 @router.post("/disable-and-switch")
-async def disable_and_switch(body: dict, authorization: str = Header(default="")):
+async def disable_and_switch(body: ConnectTenantIn, authorization: str = Header(default="")):
     """The authenticated user chooses to DISABLE their existing/old login and take a FRESH, isolated
     login for the inviting tenant instead (the stale-old-account case). Requires the access code.
     Mints the new tenant-aliased login FIRST, then bans the old auth account (Supabase ban → its token
@@ -2862,8 +3137,8 @@ async def disable_and_switch(body: dict, authorization: str = Header(default="")
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
-    target_org = (body.get("org_id") or "").strip()
-    code = (body.get("code") or body.get("connect_token") or "").strip()
+    target_org = (body.org_id or "").strip()
+    code = (body.code or body.connect_token or "").strip()
     if not target_org or not code:
         raise HTTPException(400, "org_id and access code required")
     client = sb()
@@ -2900,14 +3175,19 @@ async def disable_and_switch(body: dict, authorization: str = Header(default="")
                        "helpdesk ticket. Sign in with your new login and the access code above.")}
 
 
+class ReinstateLoginIn(LaxModel):
+    email: Any = None
+    auth_id: Any = None
+
+
 @router.post("/reinstate-login")
-async def reinstate_login(body: dict, authorization: str = Header(default="")):
+async def reinstate_login(body: ReinstateLoginIn, authorization: str = Header(default="")):
     """Super-admin ONLY: reinstate a login disabled via disable-and-switch (un-ban the auth account +
     re-activate its app_users rows). This is the sole reinstatement path — no tenant-admin or
     self-service (policy). Identify the login by {email} (its real email) or {auth_id}."""
     caller = _require_super_admin(authorization)
-    email = (body.get("email") or "").strip().lower()
-    auth_id = (body.get("auth_id") or "").strip()
+    email = (body.email or "").strip().lower()
+    auth_id = (body.auth_id or "").strip()
     client = sb()
     admin = get_supabase_admin()
     if not auth_id:
@@ -3029,8 +3309,13 @@ def get_security_settings(authorization: str = Header(default=""), x_active_org:
             "can_edit": _can_edit_setting(caller, "security")}
 
 
+class PutSecuritySettingsIn(LaxModel):
+    password_policy: Any = None
+    twofa_policy: Any = None
+
+
 @router.put("/security-settings")
-def put_security_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def put_security_settings(body: PutSecuritySettingsIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Update the tenant password policy and/or 2FA policy. Gated on the 'security' setting permission.
     Values are normalized + clamped (max_length <= 128 hard cap) before persisting."""
     uid = _uid_from_token(authorization)
@@ -3042,10 +3327,10 @@ def put_security_settings(body: dict, authorization: str = Header(default=""), x
         raise HTTPException(403, "you don't have permission to edit Security settings")
     org_id = caller["org_id"]
     upd = {}
-    if "password_policy" in body:
-        upd["password_policy"] = _sec.normalize_policy(body.get("password_policy"))
-    if "twofa_policy" in body:
-        upd["twofa_policy"] = _normalize_twofa_policy(body.get("twofa_policy"))
+    if "password_policy" in body.model_fields_set:
+        upd["password_policy"] = _sec.normalize_policy(body.password_policy)
+    if "twofa_policy" in body.model_fields_set:
+        upd["twofa_policy"] = _normalize_twofa_policy(body.twofa_policy)
     if not upd:
         raise HTTPException(400, "nothing to update")
     try:
@@ -3058,8 +3343,13 @@ def put_security_settings(body: dict, authorization: str = Header(default=""), x
 
 
 # ── Authenticated self password change (reroutes the client-side supabase-js set → policy enforced) ──
+class SetPasswordIn(LaxModel):
+    new_password: str = ""
+    password: str = ""
+
+
 @router.post("/me/set-password")
-def set_own_password(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def set_own_password(body: SetPasswordIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The signed-in user sets their OWN password (must-reset first-login screen + normal change). Routed
     through the backend so the tenant password policy CANNOT be bypassed client-side (the old screen
     called supabase.auth.updateUser directly). Validates → sets via the admin API → clears must_reset."""
@@ -3069,7 +3359,7 @@ def set_own_password(body: dict, authorization: str = Header(default=""), x_acti
     client = sb()
     caller = _resolve_caller(client, uid, x_active_org)
     org_id = (caller or {}).get("org_id") or ORG_ID
-    pw = body.get("new_password") or body.get("password") or ""
+    pw = body.new_password or body.password or ""
     validate_password(client, org_id, pw)
     try:
         get_supabase_admin().auth.admin.update_user_by_id(uid, {"password": pw})
@@ -3099,14 +3389,25 @@ _RESET_GENERIC = {"ok": True, "message": "If this email has an account, a reset 
 _UNAVAIL = {"ok": False, "message": "Password reset is temporarily unavailable. Please try again shortly."}
 
 
+class ForgotPasswordIn(LaxModel):
+    email: str = ""
+
+
+class ResetPasswordIn(LaxModel):
+    email: str = ""
+    code: str = ""
+    new_password: str = ""
+    password: str = ""            # legacy alias accepted by the handler
+
+
 @router.post("/auth/forgot-password")
-async def forgot_password(body: dict, request: Request, background: BackgroundTasks):
+async def forgot_password(body: ForgotPasswordIn, request: Request, background: BackgroundTasks):
     """PUBLIC: request a reset code. ANTI-ENUMERATION — the response is ALWAYS the same generic message
     (and same code path/timing) whether or not the account exists; existence, tenant membership and
     disabled status are NEVER revealed. Sends over email (+ verified WhatsApp phone if on file). The
     email send is dispatched AFTER the response (BackgroundTasks) so the network round-trip isn't an
     inline timing delta for existing accounts."""
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     client = sb()
     if not _otp_store_ok(client):
         return _UNAVAIL   # uniform for ALL emails (global infra state, not per-email) → no oracle
@@ -3142,15 +3443,48 @@ async def forgot_password(body: dict, request: Request, background: BackgroundTa
     return _RESET_GENERIC
 
 
+class LoginPrecheckIn(StrictModel):
+    email: str = ""
+
+
+class LoginRecordIn(StrictModel):
+    email: str = ""
+    success: bool = False
+
+
+@router.post("/auth/login-precheck")
+def login_precheck(body: LoginPrecheckIn, request: Request):
+    """PUBLIC (pre-login): is this email under a soft lockout from repeated failures? The login page
+    calls this BEFORE attempting Supabase sign-in. Returns {locked, retry_after, failures}. Never
+    reveals whether the account exists — a lock only ever reflects recorded attempts. Fail-open.
+    (Login itself goes browser → Supabase directly; this is defense-in-depth + visibility, mig 859.)"""
+    email = (body.email or "").strip().lower()
+    if not email:
+        return {"locked": False}
+    from app.core import login_guard
+    return login_guard.check(email)
+
+
+@router.post("/auth/login-record")
+def login_record(body: LoginRecordIn, request: Request):
+    """PUBLIC (pre-login): record a login attempt {email, success} in the ledger so failed logins are
+    visible and the soft lockout can trip. Best-effort; always returns {ok:true}."""
+    email = (body.email or "").strip().lower()
+    from app.core import login_guard
+    login_guard.record(email, _client_ip(request), bool(body.success),
+                        request.headers.get("user-agent", ""))
+    return {"ok": True}
+
+
 @router.post("/auth/reset-password")
-def reset_password_otp(body: dict):
+def reset_password_otp(body: ResetPasswordIn):
     """PUBLIC: complete a reset with {email, code, new_password}. Uniform 'Invalid or expired code.' for
     every failure mode (missing/expired/attempts/wrong) so nothing is revealed. The new password is
     validated against the tenant policy ONLY AFTER a valid code is proven (so policy detail is never a
     pre-code oracle), and the code is consumed ONLY once the password also passes (good UX on a weak pw)."""
-    email = (body.get("email") or "").strip().lower()
-    code = (body.get("code") or "").strip()
-    new_pw = body.get("new_password") or body.get("password") or ""
+    email = (body.email or "").strip().lower()
+    code = (body.code or "").strip()
+    new_pw = body.new_password or body.password or ""
     if not email or not code or not new_pw:
         raise HTTPException(400, "email, code and a new password are required")
     client = sb()
@@ -3219,8 +3553,12 @@ def _resend_rate_ok(client, email):
         return True
 
 
+class ResendInviteIn(LaxModel):
+    email: Any = None
+
+
 @router.post("/users/resend-invite")
-async def resend_invite(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+async def resend_invite(body: ResendInviteIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                         x_active_org: str = Header(default="")):
     """Admin: RESEND the access/invite code for an assigned email in THIS tenant (newest-wins). Refreshes
     a pending account-link invite (new code + expiry) OR re-issues a temp password for a fresh/reset
@@ -3230,7 +3568,7 @@ async def resend_invite(body: dict, org_id: str = ORG_ID, authorization: str = H
     if not caller or not (caller.get("super_admin") or (caller.get("role") or "").lower() == "admin"
                           or _can_edit_setting(caller, "security")):
         raise HTTPException(403, "admin only")
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
     client = sb()
@@ -3274,8 +3612,12 @@ async def resend_invite(body: dict, org_id: str = ORG_ID, authorization: str = H
     return {"ok": True, "email": email, "access_code": code, "temp_password": code, **delivery}
 
 
+class RevealCodeIn(LaxModel):
+    email: Any = None
+
+
 @router.post("/users/reveal-code")
-def reveal_code(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def reveal_code(body: RevealCodeIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Reveal the CURRENT active invite/access code for troubleshooting hand-off. Allowed for a
     super-admin OR the tenant's own admin (their own tenant's data — doctrine-compatible; NEVER exposes
@@ -3287,7 +3629,7 @@ def reveal_code(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
     if not caller or not (caller.get("super_admin") or (caller.get("role") or "").lower() == "admin"
                           or _can_edit_setting(caller, "security")):
         raise HTTPException(403, "admin only")
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
     client = sb()
@@ -3304,8 +3646,14 @@ def reveal_code(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
             "resent_count": inv.get("resent_count") or 0}
 
 
+class AdminSetPasswordIn(LaxModel):
+    email: Any = None
+    password: Any = None
+    require_change: Any = True
+
+
 @router.post("/users/set-password")
-async def admin_set_password(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+async def admin_set_password(body: AdminSetPasswordIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                              x_active_org: str = Header(default="")):
     """Admin: set a SPECIFIC password for an employee in THIS tenant (generalizes create-login / Reset
     pw — one path, not a fork). Gated on the 'security' setting permission. The password must pass the
@@ -3316,9 +3664,9 @@ async def admin_set_password(body: dict, org_id: str = ORG_ID, authorization: st
     caller = _resolve_caller(sb(), uid, x_active_org) if uid else None
     if not _can_edit_setting(caller, "security"):
         raise HTTPException(403, "you don't have permission to set passwords (Security setting)")
-    email = (body.get("email") or "").strip().lower()
-    pw = body.get("password") or ""
-    require_change = bool(body.get("require_change", True))
+    email = (body.email or "").strip().lower()
+    pw = body.password or ""
+    require_change = bool(body.require_change)
     if not email:
         raise HTTPException(400, "email required")
     client = sb()
@@ -3372,8 +3720,24 @@ def get_2fa_status(authorization: str = Header(default=""), x_active_org: str = 
             "channels_status": _anotify.channels_status()}
 
 
+class Start2FAIn(LaxModel):
+    channel: str = ""
+
+
+class Verify2FAIn(LaxModel):
+    code: str = ""
+    remember: bool = False
+    device_id: str = ""
+    label: str = ""
+
+
+class Set2FASettingsIn(LaxModel):
+    enabled: bool = False
+    channels: list = []
+
+
 @router.post("/me/2fa/start")
-async def start_2fa(body: dict, request: Request, authorization: str = Header(default=""),
+async def start_2fa(body: Start2FAIn, request: Request, authorization: str = Header(default=""),
                     x_active_org: str = Header(default="")):
     """Issue a 2FA OTP over the chosen channel (email always available; whatsapp only if a verified phone
     is on file). Best-effort delivery; the code row exists regardless so a channel hiccup isn't fatal."""
@@ -3387,7 +3751,7 @@ async def start_2fa(body: dict, request: Request, authorization: str = Header(de
     org_id = u.get("org_id") or ORG_ID
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
     policy = _load_twofa_policy(client, org_id)
-    want = (body.get("channel") or "").strip().lower()
+    want = (body.channel or "").strip().lower()
     channel = want if want in policy["channels"] else policy["channels"][0]
     if channel == "whatsapp" and not (u.get("phone_verified") and u.get("phone")):
         channel = "email"   # no verified phone → fall back to email
@@ -3407,7 +3771,7 @@ async def start_2fa(body: dict, request: Request, authorization: str = Header(de
 
 
 @router.post("/me/2fa/verify")
-def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def verify_2fa(body: Verify2FAIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Verify a 2FA code and mint a signed 'verified session' marker (x-2fa-token) the client sends on
     every request. 'remember' → a 30-day device marker; otherwise a 12-hour session marker. Uniform
     'Invalid or expired code.' on any failure."""
@@ -3420,21 +3784,21 @@ def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org
         raise HTTPException(403, "no tenant for this login")
     org_id = u.get("org_id") or ORG_ID
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
-    code = (body.get("code") or "").strip()
+    code = (body.code or "").strip()
     ok, reason = _verify_otp(client, email=email, purpose="2fa", code=code)
     if not ok:
         if reason == "unavailable":
             raise HTTPException(503, "Two-factor is temporarily unavailable. Please try again shortly.")
         raise HTTPException(400, "Invalid or expired code.")
-    remember = bool(body.get("remember"))
-    device = (body.get("device_id") or "").strip() or secrets.token_urlsafe(9)
+    remember = bool(body.remember)
+    device = (body.device_id or "").strip() or secrets.token_urlsafe(9)
     ttl = (30 * 86400) if remember else (12 * 3600)
     exp = _sec.now_ts() + ttl
     token = _sec.mint_2fa_token(uid, org_id, device, exp)
     try:
         client.schema("core").table("twofa_device").insert({
             "auth_id": uid, "org_id": org_id, "device_id": device,
-            "label": (body.get("label") or None),
+            "label": (body.label or None),
             "expires_at": datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()}).execute()
     except Exception:
         pass  # mig 711 un-run → the stateless marker still works; the device audit row is best-effort
@@ -3445,7 +3809,7 @@ def verify_2fa(body: dict, authorization: str = Header(default=""), x_active_org
 
 
 @router.post("/me/2fa/settings")
-def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def set_2fa_settings(body: Set2FASettingsIn, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                           x_2fa_token: str = Header(default="")):
     """The user turns 2FA on/off for themselves (matters under the 'optional' tenant mode) and picks
     channels. Cannot turn OFF when the tenant policy is 'required'. When 2FA is currently required for
@@ -3461,10 +3825,10 @@ def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_acti
     org_id = u.get("org_id") or ORG_ID
     _enforce_self_2fa(client, org_id, uid, u.get("role"), u.get("twofa_enabled"), x_2fa_token)
     policy = _load_twofa_policy(client, org_id)
-    enabled = bool(body.get("enabled"))
+    enabled = bool(body.enabled)
     if policy["mode"] == "required":
         enabled = True   # can't self-disable a required policy
-    channels = [c for c in (body.get("channels") or []) if c in ("email", "whatsapp")] or ["email"]
+    channels = [c for c in (body.channels or []) if c in ("email", "whatsapp")] or ["email"]
     try:
         client.schema("storeops").table("app_users").update(
             {"twofa_enabled": enabled, "twofa_channels": channels}).eq("id", u["id"]).execute()
@@ -3475,8 +3839,12 @@ def set_2fa_settings(body: dict, authorization: str = Header(default=""), x_acti
     return {"ok": True, "enabled": enabled, "channels": channels}
 
 
+class SetPhoneIn(LaxModel):
+    phone: Any = None
+
+
 @router.post("/me/phone")
-async def set_phone(body: dict, request: Request, authorization: str = Header(default=""),
+async def set_phone(body: SetPhoneIn, request: Request, authorization: str = Header(default=""),
                     x_active_org: str = Header(default=""), x_2fa_token: str = Header(default="")):
     """Set/replace the user's phone (unverified) and send a WhatsApp verification code. The phone becomes
     a usable 2FA channel only AFTER it's verified. When 2FA is currently required for this user, a valid
@@ -3494,7 +3862,7 @@ async def set_phone(body: dict, request: Request, authorization: str = Header(de
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
     # Auto-correct the country code: a bare 10-digit → tenant default_cc (+1) + digits; an already-CC'd
     # or international number is kept verbatim. Un-normalizable → clear 400 (never silently mangled).
-    phone, perr = _sec.normalize_phone(body.get("phone") or "", _load_default_cc(client, org_id))
+    phone, perr = _sec.normalize_phone(body.phone or "", _load_default_cc(client, org_id))
     if perr or not phone:
         raise HTTPException(400, perr or "Enter a valid phone number (with country code).")
     try:
@@ -3515,8 +3883,12 @@ async def set_phone(body: dict, request: Request, authorization: str = Header(de
                         "We couldn't send a WhatsApp code — check the number or try email 2FA instead.")}
 
 
+class VerifyPhoneIn(LaxModel):
+    code: Any = None
+
+
 @router.post("/me/phone/verify")
-def verify_phone(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+def verify_phone(body: VerifyPhoneIn, authorization: str = Header(default=""), x_active_org: str = Header(default=""),
                        x_2fa_token: str = Header(default="")):
     """Verify the phone with the WhatsApp code → mark it verified + enable WhatsApp as a 2FA channel. When
     2FA is currently required for this user, a valid 2FA marker is required (same channel-bypass guard as
@@ -3531,7 +3903,7 @@ def verify_phone(body: dict, authorization: str = Header(default=""), x_active_o
     org_id = u.get("org_id") or ORG_ID
     _enforce_self_2fa(client, org_id, uid, u.get("role"), u.get("twofa_enabled"), x_2fa_token)
     email = (u.get("email") or _email_for_uid(client, uid) or "").strip().lower()
-    ok, reason = _verify_otp(client, email=email, purpose="phone_verify", code=(body.get("code") or "").strip())
+    ok, reason = _verify_otp(client, email=email, purpose="phone_verify", code=(body.code or "").strip())
     if not ok:
         if reason == "unavailable":
             raise HTTPException(503, "Phone verification is temporarily unavailable. Please try again shortly.")
@@ -3548,21 +3920,26 @@ def verify_phone(body: dict, authorization: str = Header(default=""), x_active_o
     return {"ok": True, "verified": True}
 
 
+class ResetPasswordIn(LaxModel):
+    email: Any = None
+    temp_password: Any = None
+
+
 @router.post("/users/reset-password")
-def reset_password(body: dict, authorization: str = Header(default="")):
+def reset_password(body: ResetPasswordIn, authorization: str = Header(default="")):
     """Super-admin: reset ANY user's password by email, ACROSS ALL TENANTS (not org-scoped, unlike
     /users/create-login). Uses the admin SDK to (re)set the Supabase Auth password and forces a change
     on next login wherever the email has an app_users row. Returns the temp password to hand out. Pass
     {email, temp_password?} — temp_password optional (auto-generated if omitted)."""
     _require_super_admin(authorization)
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
     admin = get_supabase_admin()
     existing = _find_auth_user_by_email(admin, email)
     if not existing:
         raise HTTPException(404, f"no auth account exists for {email} — create their login first (Roles & Access).")
-    chosen = (body.get("temp_password") or "").strip()
+    chosen = (body.temp_password or "").strip()
     if chosen:
         # Cross-tenant reset (no single org) → enforce the owner DEFAULT policy on an admin-chosen pw.
         perr = _sec.password_errors(_sec.DEFAULT_PASSWORD_POLICY, chosen)
@@ -3582,8 +3959,13 @@ def reset_password(body: dict, authorization: str = Header(default="")):
     return {"ok": True, "email": email, "temp_password": temp_pw, "auth_id": existing}
 
 
+class ResetTenantAdminPasswordIn(LaxModel):
+    email: Any = None
+    temp_password: Any = None
+
+
 @router.post("/tenants/{org_id}/reset-admin-password")
-def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: str = Header(default="")):
+def reset_tenant_admin_password(org_id: str, body: ResetTenantAdminPasswordIn = None, authorization: str = Header(default="")):
     """Super-admin: reset a TENANT's admin login password (on request from that tenant's admin who
     is locked out). Finds the tenant's admin app_users row(s) that have a provisioned login — the
     common case is exactly one, which is reset directly. If a tenant has MORE than one admin login,
@@ -3591,7 +3973,7 @@ def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: s
     temp password + forces a change on next login. Returns the temp password to hand back. Body is
     optional: {email? (disambiguate), temp_password? (auto-generated if omitted)}."""
     _require_super_admin(authorization)
-    body = body or {}
+    body = body or ResetTenantAdminPasswordIn()
     client = sb()
     ten = (client.schema("storeops").table("tenants").select("org_id,name")
            .eq("org_id", org_id).limit(1).execute().data) or []
@@ -3602,7 +3984,7 @@ def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: s
     logins = [a for a in admins if a.get("auth_id") and a.get("email")]
     if not logins:
         raise HTTPException(404, "this tenant has no admin login yet — create the tenant admin first (＋ Add a company, or Roles & Access).")
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if email:
         target = next((a for a in logins if (a.get("email") or "").lower() == email), None)
         if not target:
@@ -3618,7 +4000,7 @@ def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: s
     existing = _find_auth_user_by_email(admin, target_email)
     if not existing:
         raise HTTPException(404, f"no auth account exists for {target_email} — create their login first (Roles & Access).")
-    chosen = (body.get("temp_password") or "").strip()
+    chosen = (body.temp_password or "").strip()
     if chosen:
         validate_password(client, org_id, chosen)   # tenant policy for this tenant's admin pw
     temp_pw = chosen or _gen_temp_pw(client, org_id)
@@ -3637,7 +4019,11 @@ def reset_tenant_admin_password(org_id: str, body: dict = None, authorization: s
 
 
 @router.post("/users/bulk-provision")
-def bulk_provision(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+class BulkProvisionIn(LaxModel):
+    emails: Any = None
+
+
+def bulk_provision(body: BulkProvisionIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                    x_active_org: str = Header(default="")):
     """Create logins for every assigned core.users row that has an email and no auth_id yet
     (optionally limited to body['emails']). Returns the per-user temp passwords to distribute."""
@@ -3645,7 +4031,7 @@ def bulk_provision(body: dict, org_id: str = ORG_ID, authorization: str = Header
     client = sb()
     rows = client.schema("storeops").table("app_users").select("*").eq("org_id", org_id) \
         .execute().data or []
-    want = set((e or "").lower() for e in (body.get("emails") or []))
+    want = set((e or "").lower() for e in (body.emails or []))
     admin = get_supabase_admin()
     created, skipped, results = 0, 0, []
     for u in rows:
@@ -3668,12 +4054,16 @@ def bulk_provision(body: dict, org_id: str = ORG_ID, authorization: str = Header
     return {"created": created, "skipped": skipped, "results": results}
 
 
+class DeleteUserIn(LaxModel):
+    email: Any = None
+
+
 @router.post("/users/delete")
-def delete_user(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def delete_user(body: DeleteUserIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     """Hard-delete an app user: remove the storeops.app_users row AND its Supabase Auth account."""
     _require_setting(authorization, x_active_org, "security")
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
     client = sb()
@@ -3692,16 +4082,21 @@ def delete_user(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
     return {"deleted": bool(rows), "auth_deleted": auth_deleted}
 
 
+class DeactivateUserIn(LaxModel):
+    email: Any = None
+    is_active: Any = False
+
+
 @router.post("/users/deactivate")
-def deactivate_user(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def deactivate_user(body: DeactivateUserIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                     x_active_org: str = Header(default="")):
     """Soft-disable an app user (keeps the auth account; flip is_active)."""
     _require_setting(authorization, x_active_org, "security")
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
     res = sb().schema("storeops").table("app_users").update(
-        {"is_active": bool(body.get("is_active", False))}) \
+        {"is_active": bool(body.is_active)}) \
         .eq("org_id", org_id).eq("email", email).execute()
     return {"updated": len(res.data or [])}
 
@@ -3755,8 +4150,16 @@ def purge_app_user(org_id, *, email=None, employee_id=None, hard=True):
     return {"matched": len(rows), "deleted": len(ids), "auth_deleted": auth_deleted}
 
 
+class PurgeEmployeeIn(LaxModel):
+    mode: Any = None
+    employee_pk: Any = None
+    id: Any = None
+    email: Any = None
+    employee_id: Any = None
+
+
 @router.post("/employees/purge")
-def purge_employee(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def purge_employee(body: PurgeEmployeeIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                    x_active_org: str = Header(default="")):
     """Delete or deactivate a person from BOTH the StoreOps roster and the Roles module in one
     call (the Roles & Access remove action). Identify by employee_pk (storeops.employees.id) for
@@ -3764,11 +4167,11 @@ def purge_employee(body: dict, org_id: str = ORG_ID, authorization: str = Header
     employees row). mode='delete' hard-removes the employees row + login + Supabase Auth account;
     mode='deactivate' flips both is_active=False and revokes access (keeps the auth account)."""
     _require_setting(authorization, x_active_org, "security")
-    mode = (body.get("mode") or "delete").strip().lower()
+    mode = (body.mode or "delete").strip().lower()
     hard = mode != "deactivate"
-    emp_pk = body.get("employee_pk", body.get("id"))
-    email = (body.get("email") or "").strip().lower()
-    employee_id = body.get("employee_id")
+    emp_pk = body.employee_pk if "employee_pk" in body.model_fields_set else body.id
+    email = (body.email or "").strip().lower()
+    employee_id = body.employee_id
     client = sb()
     name = None
     # Synthetic negative ids are Roles-only manual users (no employees row) — skip the roster op.
@@ -4063,18 +4466,24 @@ def employee_dashboard(employee_id: str = "", period: str = "",
 
 
 @router.put("/employee-widgets")
-def set_employee_widget_overrides(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+class SetEmployeeWidgetOverridesIn(LaxModel):
+    employee_id: Any = None
+    email: Any = None
+    widget_overrides: Any = None
+
+
+def set_employee_widget_overrides(body: SetEmployeeWidgetOverridesIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Per-employee Employee-Dashboard widget overrides (#1b). Body:
     {employee_id?, email?, widget_overrides: {widget_key: bool} | null}. Writes onto the
     person's storeops.app_users row (so they must be assigned a role first). null/{} = clear
     (inherit the role default). Unknown widget keys are dropped."""
     _require_setting(authorization, x_active_org, "security")
-    eid = (body.get("employee_id") or "").strip()
-    email = (body.get("email") or "").strip().lower()
+    eid = (body.employee_id or "").strip()
+    email = (body.email or "").strip().lower()
     if not eid and not email:
         raise HTTPException(400, "employee_id or email required")
-    raw = body.get("widget_overrides")
+    raw = body.widget_overrides
     if raw in (None, {}):
         ovr = None
     elif isinstance(raw, dict):

@@ -101,6 +101,8 @@ _PUBLIC_EXACT = frozenset({
     "/api/v1/core/password-policy/public",  # PUBLIC: owner DEFAULT policy for pre-login strength hints
     "/api/v1/core/auth/forgot-password",  # PUBLIC self-serve reset request (anti-enumeration; anonymous)
     "/api/v1/core/auth/reset-password",   # PUBLIC self-serve reset completion (code-gated; anonymous)
+    "/api/v1/core/auth/login-precheck",   # PUBLIC pre-login soft-lockout check (mig 859; anonymous)
+    "/api/v1/core/auth/login-record",     # PUBLIC pre-login attempt ledger write (mig 859; anonymous)
     "/api/v1/remediation/whatsapp-webhook",  # Meta webhook. EXACT path + METHOD-SCOPED below to
                                           # {GET, POST} only (2026-08-05: it was a PREFIX, so any future
                                           # sibling path under it would have been public too, and every
@@ -360,12 +362,67 @@ def _twofa_marker_ok(token: str, uid: str, org: str) -> bool:
         return True
 
 
+def _admin_2fa_enforce() -> bool:
+    """Require a valid 2FA marker for SUPER-ADMIN requests (Security Controls Spec §1, item 10). Default
+    OFF — behaviour-changing (a super-admin who hasn't enrolled 2FA would be prompted to), so an operator
+    enables it deliberately after super-admins enroll. The 2FA enroll/verify endpoints live under the
+    allowlisted /core/me prefix, so a super-admin can always reach them to obtain a marker. Because the
+    marker EXPIRES (12h session / 30d device), this also TIME-BOXES the standing super-admin's elevated
+    access — they must re-verify periodically. Break-glass ADMIN_2FA_ENFORCE=0."""
+    return os.environ.get("ADMIN_2FA_ENFORCE", "").lower() in ("1", "true", "yes")
+
+
+def _twofa_marker_uid_ok(token: str, uid: str) -> bool:
+    """Valid 2FA marker for THIS login, any org — super-admins are cross-tenant, so the org the marker
+    was minted for is not the point; 'did this human do 2FA recently' is. FAILS OPEN on verifier error."""
+    try:
+        from app.modules.core.auth_security import verify_2fa_token, now_ts
+        p = verify_2fa_token(token, now_ts())
+        return bool(p and p.get("a") == (uid or ""))
+    except Exception:
+        return True
+
+
 async def _reject_2fa(send):
     body = b'{"detail":"two-factor authentication required","code":"2fa_required"}'
     await send({"type": "http.response.start", "status": 401,
                 "headers": [(b"content-type", b"application/json"),
                             (b"content-length", str(len(body)).encode())]})
     await send({"type": "http.response.body", "body": body})
+
+
+async def _reject_session(send, verdict: str):
+    """Server-side session control (session_guard) ended this session. 401 so the client tears down
+    and returns to login; distinct `code` lets the UI show "signed out for inactivity" vs "session
+    expired" instead of a generic auth error."""
+    if verdict == "absolute":
+        detail, code = ("Your session has reached its maximum length. Please sign in again.",
+                        "session_expired")
+    else:
+        detail, code = ("You were signed out due to inactivity. Please sign in again.",
+                        "session_idle")
+    import json as _json
+    body = _json.dumps({"detail": detail, "code": code}).encode()
+    await send({"type": "http.response.start", "status": 401,
+                "headers": [(b"content-type", b"application/json"),
+                            (b"content-length", str(len(body)).encode())]})
+    await send({"type": "http.response.body", "body": body})
+
+
+async def _session_guard_verdict(token, uid, org, role, scope, headers):
+    """Return 'ok' unless SESSION_ENFORCE is on AND the session has timed out. Best-effort and
+    fail-open: any error resolves to 'ok' so a logging fault can never strand a valid login. Impersonated
+    requests never reach here (they take `_handle_impersonated`), so they are unaffected by design."""
+    try:
+        from app.core import session_guard as _sg
+        if not _sg.enforce():
+            return "ok"
+        sid = _sg.session_id_from_token(token, fallback_uid=uid)
+        return await asyncio.to_thread(
+            _sg.touch, sid, auth_id=uid, org_id=org, role=role,
+            ip=_client_ip_from(scope, headers))
+    except Exception:
+        return "ok"
 
 
 def _is_public(path: str) -> bool:
@@ -822,12 +879,25 @@ class TenantScopeMiddleware:
             if _require_auth():
                 return await _reject_401(send)
             return await self.app(scope, receive, send)
+        # ── SESSION CONTROLS (Security Controls Spec §1) ─────────────────────────────────────────
+        # Identity is valid from here. When SESSION_ENFORCE is on, apply the idle + absolute-lifetime
+        # guard once, before any branch dispatches — so it covers super-admin, membership-less and
+        # normal logins alike. Default OFF ⇒ this returns 'ok' with no DB work, zero behaviour change.
+        _sess_role = "super_admin" if super_admin else (org_info.get(default_org) or {}).get("role")
+        _sv = await _session_guard_verdict(token, uid, default_org, _sess_role, scope, headers)
+        if _sv != "ok":
+            return await _reject_session(send, _sv)
         if super_admin:
             # Super-admin ⇒ no rewrite; the client-supplied org_id is honored (cross-tenant admin).
             # Publish the tenant they declared so a token-gated handler administers THAT tenant
             # instead of silently falling back to whichever membership row sorted first.
             _set_acting((headers.get(_ACTIVE_ORG_HEADER, "") or "").strip() or None, super_admin=True)
             _set_actor({"uid": uid, "super_admin": True, "role": "super_admin"})
+            # ADMIN 2FA (item 10): a standing super-admin no longer bypasses 2FA when the operator turns
+            # this on. The marker's expiry time-boxes the elevated access. Enroll/verify are allowlisted,
+            # so this never permanently strands an admin. Default OFF ⇒ unchanged bypass.
+            if _admin_2fa_enforce() and not _twofa_marker_uid_ok(headers.get("x-2fa-token", ""), uid):
+                return await _reject_2fa(send)
             return await self.app(scope, receive, send)
         if not member_orgs:
             # H2 (2026-08-05): the token VERIFIED but the login has NO tenant membership (no app_users

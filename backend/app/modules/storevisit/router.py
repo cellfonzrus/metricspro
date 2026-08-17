@@ -4,12 +4,85 @@ Photos go to the Supabase Storage bucket `store-visits` (created on first upload
 only the storage PATH, served to the UI as a short-lived signed URL. Tables live in storeops.*
 (migration 027). A DM = the Market Manager role (scope: market) and acts on stores in their market.
 """
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Header
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 from datetime import datetime, timezone
 import uuid
 
 router = APIRouter(prefix="/storevisit", tags=["Store Visits"])
+
+
+# ── Request bodies (Item 15 Pydantic rollout — lax so legacy callers never break) ──────────────
+class PutStorevisitConfigIn(LaxModel):
+    accessory_order_url: Any = None
+    accessory_order_label: Any = None
+
+
+class ChecklistItemIn(LaxModel):
+    item_key: Any = None
+    label: Any = None
+    category: Any = None
+    input_type: Any = None
+    sort_order: Any = None
+    is_active: Any = True
+
+
+class UpdateChecklistItemIn(LaxModel):
+    label: Any = None
+    category: Any = None
+    input_type: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+
+
+class CreateVisitIn(LaxModel):
+    store_code: Any = None
+    store_address: Any = None
+    market: Any = None
+    dm_email: Any = None
+    dm_name: Any = None
+    check_in_at: Any = None
+    check_in_lat: Any = None
+    check_in_lng: Any = None
+    check_in_accuracy: Any = None
+    scheduled_rep: Any = None
+    actual_rep: Any = None
+    rep_discrepancy_reason: Any = None
+
+
+class UpdateVisitIn(LaxModel):
+    store_code: Any = None
+    store_address: Any = None
+    market: Any = None
+    dm_email: Any = None
+    dm_name: Any = None
+    check_out_at: Any = None
+    scheduled_rep: Any = None
+    actual_rep: Any = None
+    rep_discrepancy_reason: Any = None
+    extra_notes: Any = None
+    check_in_lat: Any = None
+    check_in_lng: Any = None
+    check_in_accuracy: Any = None
+    responses: Any = None
+    accessories: Any = None
+
+
+class SaveActionItemsIn(LaxModel):
+    items: Any = None
+
+
+class SaveActionPlanIn(LaxModel):
+    plan: Any = None
+
+
+class SignoffIn(LaxModel):
+    who: Any = None
+    name: Any = None
+    signed: Any = True
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 BUCKET = "store-visits"
@@ -52,12 +125,12 @@ def get_storevisit_config(org_id: str = ORG_ID):
 
 
 @router.put("/config")
-def put_storevisit_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_storevisit_config(body: PutStorevisitConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set (or clear, via blank strings -> back to the default) the tenant's accessory-reorder link."""
     if not _can_edit_visit_setting(_caller_perms(authorization)):
         raise HTTPException(403, "Editing store-visit settings is permission-restricted.")
-    url = (body.get("accessory_order_url") or "").strip()
-    label = (body.get("accessory_order_label") or "").strip()
+    url = (body.accessory_order_url or "").strip()
+    label = (body.accessory_order_label or "").strip()
     row = {"org_id": org_id, "accessory_order_url": url or None, "accessory_order_label": label or None,
            "updated_at": _now()}
     try:
@@ -159,27 +232,27 @@ def list_checklist_items(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.post("/checklist-items")
-def create_checklist_item(item: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def create_checklist_item(item: ChecklistItemIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     if not _can_edit_visit_setting(_caller_perms(authorization)):
         raise HTTPException(403, "Editing the visit checklist template is permission-restricted.")
-    label = (item.get("label") or "").strip()
+    label = (item.label or "").strip()
     if not label:
         raise HTTPException(400, "label required")
     body = {
         "org_id": org_id,
-        "item_key": (item.get("item_key") or f"custom_{uuid.uuid4().hex[:8]}"),
+        "item_key": (item.item_key or f"custom_{uuid.uuid4().hex[:8]}"),
         "label": label,
-        "category": item.get("category") or "general",
-        "input_type": item.get("input_type") or "check",
-        "sort_order": int(item.get("sort_order") or 100),
-        "is_active": bool(item.get("is_active", True)),
+        "category": item.category or "general",
+        "input_type": item.input_type or "check",
+        "sort_order": int(item.sort_order or 100),
+        "is_active": bool(item.is_active),
     }
     r = sb().table("checklist_items").insert(body).execute()
     return r.data[0] if r.data else body
 
 
 @router.patch("/checklist-items/{item_id}")
-def update_checklist_item(item_id: str, updates: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def update_checklist_item(item_id: str, updates: UpdateChecklistItemIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """2026-07-26 settings audit: `org_id` was entirely MISSING from this endpoint's signature — the
     multi-tenant middleware rewrites the query param, but with nothing here to catch it, the UPDATE
     below matched by `id` alone, org-unscoped (a caller in one tenant could edit ANOTHER tenant's
@@ -187,7 +260,7 @@ def update_checklist_item(item_id: str, updates: dict, org_id: str = ORG_ID, aut
     if not _can_edit_visit_setting(_caller_perms(authorization)):
         raise HTTPException(403, "Editing the visit checklist template is permission-restricted.")
     allowed = ("label", "category", "input_type", "sort_order", "is_active")
-    body = {k: updates[k] for k in allowed if k in updates}
+    body = {k: getattr(updates, k) for k in allowed if k in updates.model_fields_set}
     body["updated_at"] = _now()
     r = sb().table("checklist_items").update(body).eq("id", item_id).eq("org_id", org_id).execute()
     return r.data[0] if r.data else body
@@ -238,21 +311,21 @@ def list_visits(market: str = None, store_code: str = None, status: str = None,
 
 
 @router.post("/visits")
-def create_visit(payload: dict, org_id: str = ORG_ID):
+def create_visit(payload: CreateVisitIn, org_id: str = ORG_ID):
     body = {
         "org_id": org_id,
-        "store_code": payload.get("store_code"),
-        "store_address": payload.get("store_address"),
-        "market": payload.get("market"),
-        "dm_email": payload.get("dm_email"),
-        "dm_name": payload.get("dm_name"),
-        "check_in_at": payload.get("check_in_at") or _now(),
-        "check_in_lat": payload.get("check_in_lat"),
-        "check_in_lng": payload.get("check_in_lng"),
-        "check_in_accuracy": payload.get("check_in_accuracy"),
-        "scheduled_rep": payload.get("scheduled_rep"),
-        "actual_rep": payload.get("actual_rep"),
-        "rep_discrepancy_reason": payload.get("rep_discrepancy_reason"),
+        "store_code": payload.store_code,
+        "store_address": payload.store_address,
+        "market": payload.market,
+        "dm_email": payload.dm_email,
+        "dm_name": payload.dm_name,
+        "check_in_at": payload.check_in_at or _now(),
+        "check_in_lat": payload.check_in_lat,
+        "check_in_lng": payload.check_in_lng,
+        "check_in_accuracy": payload.check_in_accuracy,
+        "scheduled_rep": payload.scheduled_rep,
+        "actual_rep": payload.actual_rep,
+        "rep_discrepancy_reason": payload.rep_discrepancy_reason,
         "status": "in_progress",
     }
     r = sb().table("store_visits").insert(body).execute()
@@ -279,17 +352,17 @@ def get_visit(visit_id: str, org_id: str = ORG_ID):
 
 
 @router.patch("/visits/{visit_id}")
-def update_visit(visit_id: str, payload: dict, org_id: str = ORG_ID):
+def update_visit(visit_id: str, payload: UpdateVisitIn, org_id: str = ORG_ID):
     header = ("store_code", "store_address", "market", "dm_email", "dm_name", "check_out_at",
               "scheduled_rep", "actual_rep", "rep_discrepancy_reason", "extra_notes",
               "check_in_lat", "check_in_lng", "check_in_accuracy")
-    updates = {k: payload[k] for k in header if k in payload}
+    updates = {k: getattr(payload, k) for k in header if k in payload.model_fields_set}
     if updates:
         updates["updated_at"] = _now()
         sb().table("store_visits").update(updates).eq("id", visit_id).eq("org_id", org_id).execute()
 
     # Checklist answers: full replace for this visit (delete-then-insert).
-    if "responses" in payload:
+    if "responses" in payload.model_fields_set:
         sb().table("store_visit_responses").delete().eq("visit_id", visit_id).eq("org_id", org_id).execute()
         rows = [{
             "org_id": org_id, "visit_id": visit_id,
@@ -299,15 +372,15 @@ def update_visit(visit_id: str, payload: dict, org_id: str = ORG_ID):
             "checked": r.get("checked"),
             "note": r.get("note"),
             "photo_path": r.get("photo_path"),
-        } for r in (payload["responses"] or [])]
+        } for r in (payload.responses or [])]
         if rows:
             sb().table("store_visit_responses").insert(rows).execute()
 
     # Accessories-to-order: full replace.
-    if "accessories" in payload:
+    if "accessories" in payload.model_fields_set:
         sb().table("store_visit_accessories").delete().eq("visit_id", visit_id).eq("org_id", org_id).execute()
         rows = []
-        for a in (payload["accessories"] or []):
+        for a in (payload.accessories or []):
             name = (a.get("accessory_name") or "").strip()
             if not name:
                 continue
@@ -385,11 +458,11 @@ def get_visit_action(visit_id: str, org_id: str = ORG_ID):
 
 
 @router.put("/visits/{visit_id}/action-items")
-def save_action_items(visit_id: str, payload: dict, org_id: str = ORG_ID):
+def save_action_items(visit_id: str, payload: SaveActionItemsIn, org_id: str = ORG_ID):
     """Full replace of the DM's discussion overlay for this visit (delete-then-insert)."""
     sb().table("visit_action_items").delete().eq("visit_id", visit_id).eq("org_id", org_id).execute()
     rows = []
-    for it in (payload.get("items") or []):
+    for it in (payload.items or []):
         key = (it.get("item_key") or "").strip()
         if not key:
             continue
@@ -406,11 +479,11 @@ def save_action_items(visit_id: str, payload: dict, org_id: str = ORG_ID):
 
 
 @router.put("/visits/{visit_id}/action-plan")
-def save_action_plan(visit_id: str, payload: dict, org_id: str = ORG_ID):
+def save_action_plan(visit_id: str, payload: SaveActionPlanIn, org_id: str = ORG_ID):
     """Full replace of the agreed rep action plan for this visit (delete-then-insert)."""
     sb().table("visit_action_plan").delete().eq("visit_id", visit_id).eq("org_id", org_id).execute()
     rows = []
-    for p in (payload.get("plan") or []):
+    for p in (payload.plan or []):
         desc = (p.get("description") or "").strip()
         if not desc:
             continue
@@ -426,14 +499,14 @@ def save_action_plan(visit_id: str, payload: dict, org_id: str = ORG_ID):
 
 
 @router.post("/visits/{visit_id}/signoff")
-def signoff(visit_id: str, payload: dict, org_id: str = ORG_ID):
+def signoff(visit_id: str, payload: SignoffIn, org_id: str = ORG_ID):
     """Record a rep or DM sign-off on the agreed action plan."""
-    who = (payload.get("who") or "").lower()
-    name = payload.get("name") or ""
+    who = (payload.who or "").lower()
+    name = payload.name or ""
     if who not in ("rep", "dm"):
         raise HTTPException(400, "who must be 'rep' or 'dm'")
     pre = "plan_rep" if who == "rep" else "plan_dm"
-    signed = payload.get("signed", True)
+    signed = payload.signed
     upd = {f"{pre}_signed": bool(signed), "updated_at": _now()}
     upd[f"{pre}_signed_by"] = name if signed else None
     upd[f"{pre}_signed_at"] = _now() if signed else None

@@ -27,11 +27,14 @@ from __future__ import annotations
 import calendar
 import html as _html
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
 
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 
 from .letters_logic import (
     clamp_int, compute_lateness, grace_minutes_from_config, render_template,
@@ -616,31 +619,38 @@ def list_templates(org_id: str = ORG_ID, authorization: str = Header(default="")
     return {"templates": rows, "categories": CATEGORY_LABELS, "merge_fields": CATEGORY_MERGE_FIELDS}
 
 
+class UpdateTemplateIn(LaxModel):
+    subject: Any = None
+    body: Any = None
+    delivery_mode: Any = None
+    active: Any = None
+
+
 @router.put("/templates/{template_key}")
-def update_template(template_key: str, body: dict, org_id: str = ORG_ID,
+def update_template(template_key: str, body: UpdateTemplateIn, org_id: str = ORG_ID,
                     authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     _require_letters_admin(authorization, x_active_org, org_id)
     existing = _get_template(org_id, template_key)
     if not existing:
         raise HTTPException(404, "unknown template_key for this org — is migration 408 applied?")
     upd = {}
-    if "subject" in body:
-        s = str(body.get("subject") or "").strip()
+    if "subject" in body.model_fields_set:
+        s = str(body.subject or "").strip()
         if not s:
             raise HTTPException(400, "subject cannot be blank")
         upd["subject"] = s
-    if "body" in body:
-        b = str(body.get("body") or "").strip()
+    if "body" in body.model_fields_set:
+        b = str(body.body or "").strip()
         if not b:
             raise HTTPException(400, "body cannot be blank")
         upd["body"] = b
-    if "delivery_mode" in body:
-        dm = (body.get("delivery_mode") or "").strip()
+    if "delivery_mode" in body.model_fields_set:
+        dm = (body.delivery_mode or "").strip()
         if dm not in ("auto", "approval"):
             raise HTTPException(400, "delivery_mode must be 'auto' or 'approval'")
         upd["delivery_mode"] = dm
-    if "active" in body:
-        upd["active"] = bool(body["active"])
+    if "active" in body.model_fields_set:
+        upd["active"] = bool(body.active)
     if not upd:
         return existing
     upd["is_default"] = False
@@ -671,11 +681,22 @@ def merge_defaults(org_id: str = ORG_ID, employee_id: str = "", template_key: st
     return out
 
 
+class SendLetterIn(LaxModel):
+    employee_id: Any = None
+    template_key: Any = None
+    incident_date: Any = None
+    period: Any = None
+    merge_overrides: Any = None
+    subject: Any = None
+    body: Any = None
+    force_send: Any = None
+
+
 @router.post("/send")
-async def send_letter(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+async def send_letter(body: SendLetterIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     _, email, _role = _require_hr_or_admin(authorization)
-    employee_id = (body.get("employee_id") or "").strip()
-    template_key = (body.get("template_key") or "").strip()
+    employee_id = (body.employee_id or "").strip()
+    template_key = (body.template_key or "").strip()
     if not employee_id or not template_key:
         raise HTTPException(400, "employee_id and template_key are required")
     employee = _find_employee(org_id, employee_id)
@@ -686,21 +707,21 @@ async def send_letter(body: dict, org_id: str = ORG_ID, authorization: str = Hea
         raise HTTPException(400, f"unknown template_key '{template_key}' — is migration 408 applied?")
     if not template.get("active", True):
         raise HTTPException(400, "this template is inactive — activate it in the template library first")
-    incident_date = (body.get("incident_date") or "").strip() or None
-    period = (body.get("period") or "").strip() or None
+    incident_date = (body.incident_date or "").strip() or None
+    period = (body.period or "").strip() or None
     defaults = build_merge_defaults(org_id, employee, template.get("category"), incident_date, period)
     merge = dict(defaults.get("merge") or {})
-    for k, v in (body.get("merge_overrides") or {}).items():
+    for k, v in (body.merge_overrides or {}).items():
         if v is not None and str(v).strip() != "":
             merge[k] = v
     incident_final = incident_date or defaults.get("derived_incident_date")
     period_final = period or defaults.get("derived_period")
     tenant = _tenant_row(org_id)
-    subject_override = body.get("subject")
-    body_override = body.get("body")
+    subject_override = body.subject
+    body_override = body.body
     letter = await _create_and_dispatch_letter(
         org_id, tenant, employee, template, merge, incident_date=incident_final, period=period_final,
-        trigger="manual", sender=email, force_send=bool(body.get("force_send")),
+        trigger="manual", sender=email, force_send=bool(body.force_send),
         subject_override=(str(subject_override) if subject_override else None),
         body_override=(str(body_override) if body_override else None))
     if not letter:
@@ -719,8 +740,13 @@ def list_queue(org_id: str = ORG_ID, authorization: str = Header(default="")):
     return {"queue": rows}
 
 
+class ApproveLetterIn(LaxModel):
+    subject: Any = None
+    body: Any = None
+
+
 @router.post("/queue/{letter_id}/approve")
-async def approve_letter(letter_id: str, body: dict = None, org_id: str = ORG_ID,
+async def approve_letter(letter_id: str, body: ApproveLetterIn = None, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """GATE-1 LOW-1 fix: the letter is CLAIMED (status -> 'sending') by an UPDATE that only ever
     matches while status is still 'queued_approval'/'failed' — the exact same "filtered update as an
@@ -731,12 +757,12 @@ async def approve_letter(letter_id: str, body: dict = None, org_id: str = ORG_ID
     FINAL status (after the email is already out) is surfaced as a warning in the response, never a
     bare 500 that could look like "nothing happened" to the caller."""
     _, email, _role = _require_hr_or_admin(authorization)
-    body = body or {}
+    body = body or ApproveLetterIn()
     claim_patch = {"status": "sending"}
-    if body.get("subject"):
-        claim_patch["subject"] = str(body["subject"])
-    if body.get("body"):
-        claim_patch["body"] = str(body["body"])
+    if body.subject:
+        claim_patch["subject"] = str(body.subject)
+    if body.body:
+        claim_patch["body"] = str(body.body)
     claim = (_so().table("sent_letter").update(claim_patch).eq("org_id", org_id).eq("id", letter_id)
              .in_("status", ["queued_approval", "failed"]).execute())
     claimed = claim.data or []
@@ -764,16 +790,20 @@ async def approve_letter(letter_id: str, body: dict = None, org_id: str = ORG_ID
         return out
 
 
+class RejectLetterIn(LaxModel):
+    reason: Any = None
+
+
 @router.post("/queue/{letter_id}/reject")
-def reject_letter(letter_id: str, body: dict = None, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def reject_letter(letter_id: str, body: RejectLetterIn = None, org_id: str = ORG_ID, authorization: str = Header(default="")):
     _, email, _role = _require_hr_or_admin(authorization)
-    body = body or {}
+    body = body or RejectLetterIn()
     rows = (_so().table("sent_letter").select("*").eq("org_id", org_id).eq("id", letter_id).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(404, "letter not found")
     if rows[0].get("status") not in ("queued_approval", "failed"):
         raise HTTPException(409, f"letter is already '{rows[0].get('status')}'")
-    upd = {"status": "rejected", "rejected_reason": (body.get("reason") or "").strip() or None,
+    upd = {"status": "rejected", "rejected_reason": (body.reason or "").strip() or None,
           "approved_by": email, "approved_at": _now_iso()}
     r = _so().table("sent_letter").update(upd).eq("org_id", org_id).eq("id", letter_id).execute()
     return (r.data or [dict(rows[0], **upd)])[0]
@@ -826,11 +856,16 @@ def get_letters_config(org_id: str = ORG_ID, authorization: str = Header(default
     return {"late_clockin": lc, "metrics_miss": mm}
 
 
+class PutLettersConfigIn(LaxModel):
+    late_clockin: Any = None
+    metrics_miss: Any = None
+
+
 @router.put("/config")
-def put_letters_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def put_letters_config(body: PutLettersConfigIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                        x_active_org: str = Header(default="")):
     _require_letters_admin(authorization, x_active_org, org_id)
-    lc_in, mm_in = (body.get("late_clockin") or {}), (body.get("metrics_miss") or {})
+    lc_in, mm_in = (body.late_clockin or {}), (body.metrics_miss or {})
     cfg = {
         "late_clockin": {"enabled": bool(lc_in.get("enabled")),
                         "grace_minutes": grace_minutes_from_config(lc_in),
@@ -972,7 +1007,7 @@ async def late_checkin_run_due(x_notify_secret: str = Header(default=""), eval_d
     Schedule once daily (e.g. 03:00 business-local) so `eval_date` defaults to a FULLY COMPLETED
     business day (yesterday) — evaluating "today" mid-shift would false-negative anyone who simply
     hasn't clocked in yet. Idempotent per (org, employee, work_date) — safe to re-run/retry."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     try:
         tens = _so().table("tenants").select("org_id,name,hr_letters_config,timezone").execute().data or []
@@ -1000,7 +1035,7 @@ async def late_checkin_run_due(x_notify_secret: str = Header(default=""), eval_d
 async def metrics_miss_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — schedule monthly (e.g. the 2nd of the month, after the prior month's
     commissions have been calculated). Idempotent per (org, employee, period)."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     try:
         tens = _so().table("tenants").select("org_id,name,hr_letters_config,timezone").execute().data or []

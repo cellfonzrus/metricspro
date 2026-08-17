@@ -261,6 +261,9 @@ function withOrgScope(path: string): string {
 //   • api()'s THROWN ERROR IS UNCHANGED for every status including 401 (same errMsg(), same
 //     `new Error(...)`) — 210 files consume that contract and none of them may change behaviour.
 const DEAD_SESSION_DETAIL = 'authentication required'   // verbatim tenant_middleware.py::_reject_401
+// Server-side session controls (SESSION_ENFORCE) end a session with these codes + a friendly detail
+// (session_guard). Treat them exactly like the dead-session detail above: latch once, route to sign-in.
+const DEAD_SESSION_CODES = new Set(['session_idle', 'session_expired'])
 
 // API paths whose own 401 must never be read as "the session died" (they ARE the sign-in path).
 const AUTH_FLOW_PATH_RE =
@@ -320,10 +323,14 @@ function markTenantChoiceRequired(err: unknown) {
   }
 }
 
-function markSessionInvalid(path: string, detail: unknown, hadToken: boolean) {
+function markSessionInvalid(path: string, err: unknown, hadToken: boolean) {
   if (!hadToken) return                                            // no session believed → not our case
-  if (typeof detail !== 'string') return
-  if (detail.trim().toLowerCase() !== DEAD_SESSION_DETAIL) return  // exact middleware string only
+  const detail = (err as { detail?: unknown } | null)?.detail
+  const code = (err as { code?: unknown } | null)?.code
+  const deadByDetail = typeof detail === 'string'
+    && detail.trim().toLowerCase() === DEAD_SESSION_DETAIL         // exact middleware string only
+  const deadByCode = typeof code === 'string' && DEAD_SESSION_CODES.has(code)
+  if (!deadByDetail && !deadByCode) return
   if (AUTH_FLOW_PATH_RE.test(path)) return                         // no storms off the login path
   if (typeof window === 'undefined') return
   if (PUBLIC_ROUTE_RE.test(window.location.pathname)) return       // public / token-auth pages
@@ -429,7 +436,7 @@ export async function api(path: string, opts: RequestInit = {}) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     // Detect-only: never changes what is thrown (see DEAD CLIENT SESSION block above).
-    if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)
+    if (res.status === 401) markSessionInvalid(path, err, !!authHeader.Authorization)
     if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
     if (res.status === 409) markTenantChoiceRequired(err)
     throw new Error(errMsg(err, res.status))
@@ -446,7 +453,7 @@ export async function apiUpload(path: string, form: FormData) {
     headers: { ...authHeader, ...activeOrgHeader(), ...twofaHeader(), ...impersonationHeader(path), ...geoHeader() } })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    if (res.status === 401) markSessionInvalid(path, (err as any)?.detail, !!authHeader.Authorization)
+    if (res.status === 401) markSessionInvalid(path, err, !!authHeader.Authorization)
     if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
     if (res.status === 409) markTenantChoiceRequired(err)
     throw new Error(errMsg(err, res.status))
@@ -465,7 +472,7 @@ async function authedFileGet(path: string): Promise<Response> {
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    if (res.status === 401) markSessionInvalid(path, (err as { detail?: unknown })?.detail, !!authHeader.Authorization)
+    if (res.status === 401) markSessionInvalid(path, err, !!authHeader.Authorization)
     if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
     if (res.status === 409) markTenantChoiceRequired(err)
     throw new Error(errMsg(err, res.status))

@@ -460,24 +460,29 @@ export default function SchedulePage() {
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        // Freeze panes: the grid scrolls inside its OWN bounded box (not the page), so the day
+        // header row stays pinned on vertical scroll (position:sticky top) and the Store/Employee
+        // column stays pinned on horizontal scroll (position:sticky left). Sticky cells need their
+        // OWN opaque background or the scrolled content shows through; today's tint is composited
+        // over an opaque --surface2 so it stays theme-aware AND opaque.
+        <div style={{ overflow: 'auto', maxHeight: 'calc(100vh - 200px)', position: 'relative' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
-              <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
-                <th style={{ padding: '10px 14px', color: 'var(--text)', fontSize: 12, fontWeight: 700, textAlign: 'left', width: 170 }}>
+              <tr style={{ background: 'var(--surface2)' }}>
+                <th style={{ padding: '10px 14px', color: 'var(--text)', fontSize: 12, fontWeight: 700, textAlign: 'left', width: 170, position: 'sticky', top: 0, left: 0, zIndex: 3, background: 'var(--surface2)', boxShadow: 'inset 0 -2px 0 var(--border)' }}>
                   {view === 'store' ? 'Store' : 'Employee'}
                 </th>
                 {weekDates.map(date => {
                   const { dow, md } = dayLabel(date)
                   const isToday = date === today
                   return (
-                    <th key={date} style={{ padding: '8px', color: 'var(--text)', fontSize: 12, fontWeight: 700, textAlign: 'center', background: isToday ? 'rgba(37,99,235,0.12)' : undefined, borderBottom: isToday ? '2px solid var(--accent)' : undefined }}>
+                    <th key={date} style={{ padding: '8px', color: 'var(--text)', fontSize: 12, fontWeight: 700, textAlign: 'center', position: 'sticky', top: 0, zIndex: 2, background: isToday ? 'linear-gradient(rgba(37,99,235,0.12), rgba(37,99,235,0.12)), var(--surface2)' : 'var(--surface2)', boxShadow: isToday ? 'inset 0 -2px 0 var(--accent)' : 'inset 0 -2px 0 var(--border)' }}>
                       <div>{dow}</div>
                       <div style={{ fontWeight: 500, color: 'var(--text2)' }}>{md}</div>
                     </th>
                   )
                 })}
-                <th style={{ padding: '10px 14px', color: 'var(--text)', fontSize: 12, fontWeight: 700, textAlign: 'right' }}>Total Hrs</th>
+                <th style={{ padding: '10px 14px', color: 'var(--text)', fontSize: 12, fontWeight: 700, textAlign: 'right', position: 'sticky', top: 0, zIndex: 2, background: 'var(--surface2)', boxShadow: 'inset 0 -2px 0 var(--border)' }}>Total Hrs</th>
               </tr>
             </thead>
             <tbody>
@@ -487,9 +492,10 @@ export default function SchedulePage() {
                 const sub = isStore ? (r.market || r.address?.substring(0, 22)) : r.role
                 const rowShifts = isStore ? shiftsOf(s => s.store_code === r.store_code) : shiftsOf(s => s.employee_name === r.name)
                 const total = rowShifts.reduce((a, s) => a + (s.scheduled_hours || 0), 0)
+                const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'
                 return (
-                  <tr key={r.id ?? label} style={{ background: ri % 2 === 1 ? 'var(--surface2)' : 'white' }}>
-                    <td style={{ padding: '8px 14px', fontWeight: 600, fontSize: 13, borderRight: '1px solid var(--border)' }}>
+                  <tr key={r.id ?? label} style={{ background: rowBg }}>
+                    <td style={{ padding: '8px 14px', fontWeight: 600, fontSize: 13, borderRight: '1px solid var(--border)', position: 'sticky', left: 0, zIndex: 1, background: rowBg }}>
                       <div>{label}</div>
                       <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>{sub}</div>
                     </td>

@@ -6,6 +6,49 @@
 import { useState } from 'react'
 import { pinSheetCellTypes } from '@/lib/cell-safety'
 import { isSafeMediaSrc } from '@/lib/safe-url'
+import { api } from '@/lib/client'
+
+// Export governance (Security Controls Spec item 7). Every user-initiated export reports through one
+// endpoint: it's AUDITED (who exported what/how much), volume-CAPPED (server decides), and the server
+// returns a WATERMARK to stamp on the file. Fail-open: an audit hiccup never blocks a legitimate export
+// (the data was already fetched through gated APIs) — but a returned `blocked` (over the row cap) does.
+export type ExportAudit = { watermark?: string; blocked?: boolean; max?: number }
+
+// Low-level: report an export to the governance endpoint. Fail-open ({} on error) so a logging hiccup
+// never blocks a legitimate export; a returned `blocked` (over the row cap) is respected by callers.
+export async function governExport(report: string, format: 'excel' | 'pdf' | 'print',
+                                   totalRows: number,
+                                   sheets?: { name: string; rows: number }[]): Promise<ExportAudit> {
+  try {
+    const r: any = await api('/api/v1/core/export-event', {
+      method: 'POST',
+      body: JSON.stringify({
+        report, format, total_rows: totalRows,
+        sheets: sheets || [{ name: report, rows: totalRows }],
+      }),
+    })
+    return { watermark: r?.watermark, blocked: !!r?.blocked, max: r?.max_rows }
+  } catch { return {} }
+}
+async function auditExport(p: ExportPayload, format: 'excel' | 'pdf' | 'print'): Promise<ExportAudit> {
+  const total = p.sheets.reduce((n, s) => n + (s.rows?.length || 0), 0)
+  return governExport(p.title || p.filename, format, total,
+    p.sheets.map(s => ({ name: s.name, rows: s.rows?.length || 0 })))
+}
+export function capMessage(max?: number): string {
+  return `This export exceeds the ${max ? max.toLocaleString() : ''}-row limit. Narrow the filters, or ask an administrator to run a larger export.`
+}
+function stampPdfFooter(doc: any, watermark: string) {
+  const n = doc.getNumberOfPages()
+  const pageW = doc.internal.pageSize.getWidth()
+  const pageH = doc.internal.pageSize.getHeight()
+  for (let i = 1; i <= n; i++) {
+    doc.setPage(i)
+    doc.setFontSize(7); doc.setTextColor(150, 163, 175)
+    doc.text(watermark, 40, pageH - 14)
+    doc.text(`${i} / ${n}`, pageW - 40, pageH - 14, { align: 'right' })
+  }
+}
 
 export type ExportColumn = {
   header: string
@@ -80,7 +123,14 @@ async function buildWorkbook(p: ExportPayload) {
   return { XLSX, wb }
 }
 export async function exportToExcel(p: ExportPayload) {
+  const audit = await auditExport(p, 'excel')
+  if (audit.blocked) { alert(capMessage(audit.max)); return }
   const { XLSX, wb } = await buildWorkbook(p)
+  if (audit.watermark && wb.SheetNames[0]) {
+    // Trailing attribution row after a blank line on the first sheet — visible, and a blank row keeps
+    // any re-import that reads contiguous rows from picking it up as data.
+    XLSX.utils.sheet_add_aoa(wb.Sheets[wb.SheetNames[0]], [[], [audit.watermark]], { origin: -1 })
+  }
   XLSX.writeFile(wb, `${p.filename}.xlsx`)
 }
 // Same workbook, returned as base64 for server-side delivery (Send to rep).
@@ -152,7 +202,10 @@ export async function renderPdfBase64(p: ExportPayload) {
   return { filename: `${p.filename}.pdf`, mime: 'application/pdf', content_b64: uri.slice(uri.indexOf(',') + 1) }
 }
 export async function exportToPDF(p: ExportPayload) {
+  const audit = await auditExport(p, 'pdf')
+  if (audit.blocked) { alert(capMessage(audit.max)); return }
   const doc = await buildPdfDoc(p)
+  if (audit.watermark) stampPdfFooter(doc, audit.watermark)
   doc.save(`${p.filename}.pdf`)
 }
 
@@ -160,9 +213,12 @@ export async function exportToPDF(p: ExportPayload) {
 function esc(s: any) {
   return String(s ?? '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch] as string))
 }
-export function printReport(p: ExportPayload) {
+export async function printReport(p: ExportPayload) {
+  // Open the window SYNCHRONOUSLY (inside the click) so the pop-up blocker doesn't eat it, THEN audit.
   const w = window.open('', '_blank', 'width=1100,height=800')
   if (!w) { alert('Pop-up blocked — allow pop-ups to print.'); return }
+  const audit = await auditExport(p, 'print')
+  if (audit.blocked) { try { w.close() } catch { /* noop */ } alert(capMessage(audit.max)); return }
   const tables = p.sheets.map(sheet => `
     ${p.sheets.length > 1 ? `<h2>${esc(sheet.name)}</h2>` : ''}
     <table>
@@ -180,12 +236,14 @@ export function printReport(p: ExportPayload) {
       td{padding:4px 8px;border-bottom:1px solid #e2e8f0}
       tr:nth-child(even) td{background:#f1f5f9}
       .r{text-align:right} img.chart{max-width:100%;height:auto;margin:0 0 18px;border:1px solid #e2e8f0;border-radius:8px}
+      .wm{margin-top:18px;padding-top:8px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:10px}
       @media print{body{margin:10mm}}
     </style></head><body>
     <h1>${esc(p.title)}</h1>${p.subtitle ? `<p class="sub">${esc(p.subtitle)}</p>` : ''}
     ${[p.chartImage, ...(p.chartImages || [])].filter(Boolean).filter(isSafeMediaSrc)
       .map(src => `<img class="chart" src="${esc(src)}"/>`).join('')}
     ${tables}
+    ${audit.watermark ? `<div class="wm">${esc(audit.watermark)}</div>` : ''}
     <script>window.onload=function(){window.print()}</script>
     </body></html>`)
   w.document.close()

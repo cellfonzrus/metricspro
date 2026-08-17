@@ -5,15 +5,29 @@ GETs are open for easy curl verification (same convention as /commcalc/sales-dia
 The only mutating endpoint is POST /rebuild.
 """
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 from app.modules.asset.router import _norm_imei, _vip_invoice_map, _epay_payments_map
 from app.modules.payables import engine
 
 router = APIRouter()
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+class PayablesPutSettingsIn(LaxModel):
+    priority_ack_enabled: Any = None
+    priority_window_pct: Any = None
+
+
+class UpsertPhoneMapIn(LaxModel):
+    raw_model: Any = None
+    canonical_model: Any = None
+    carrier_id: Any = None
+    side: Any = None
 PAGE = 1000
 DEV_DEPTS = {"android - xp", "iphone - xp", "tablet - xp"}   # device box lines (mig 013 daily_sales_actuals)
 DEV_DEPTS_EXACT = ["Android - XP", "IPHONE - XP", "TABLET - XP"]   # exact-case for server-side .in_()
@@ -497,14 +511,14 @@ def get_settings(org_id: str = ORG_ID):
 
 
 @router.put("/settings")
-def put_settings(body: dict, org_id: str = ORG_ID):
+def put_settings(body: PayablesPutSettingsIn, org_id: str = ORG_ID):
     client = sb()
     upd = {}
-    if "priority_ack_enabled" in body:
-        upd["priority_ack_enabled"] = bool(body["priority_ack_enabled"])
-    if "priority_window_pct" in body:
+    if "priority_ack_enabled" in body.model_fields_set:
+        upd["priority_ack_enabled"] = bool(body.priority_ack_enabled)
+    if "priority_window_pct" in body.model_fields_set:
         try:
-            upd["priority_window_pct"] = max(1, min(100, int(body["priority_window_pct"])))
+            upd["priority_window_pct"] = max(1, min(100, int(body.priority_window_pct)))
         except Exception:
             pass
     if upd:
@@ -579,14 +593,14 @@ def phone_map_candidates(limit: int = 300, days: int = 180, org_id: str = ORG_ID
 
 
 @router.post("/phone-map")
-def upsert_phone_map(body: dict, org_id: str = ORG_ID):
+def upsert_phone_map(body: UpsertPhoneMapIn, org_id: str = ORG_ID):
     client = sb()
-    raw = (body.get("raw_model") or "").strip()
+    raw = (body.raw_model or "").strip()
     if not raw:
         raise HTTPException(400, "raw_model required")
     row = {"org_id": org_id, "raw_model": raw,
-           "canonical_model": (body.get("canonical_model") or raw).strip(),
-           "carrier_id": body.get("carrier_id") or None, "side": body.get("side"), "source": "manual"}
+           "canonical_model": (body.canonical_model or raw).strip(),
+           "carrier_id": body.carrier_id or None, "side": body.side, "source": "manual"}
     r = (client.schema("commcalc").table("device_model_alias")
          .upsert(row, on_conflict="org_id,raw_model").execute())
     return {"saved": True, "row": (r.data or [None])[0]}

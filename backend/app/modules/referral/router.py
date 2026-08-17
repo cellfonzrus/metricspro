@@ -24,11 +24,13 @@ Design notes (identical doctrine to crm/router.py):
     /api/v1/referral/redeem (boundary-matched), which is where they are registered.
 """
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Response
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.schemas import LaxModel
 from app.modules.referral import referral_core as core
 
 router = APIRouter(prefix="/referral", tags=["Referral"])
@@ -42,6 +44,52 @@ _STATE_STAMP = {
     "approved": "approved_at", "paid": "paid_at",
 }
 _CLOSING_STATES = {"expired", "rejected", "void", "flagged_fraud"}
+
+
+# ── Request bodies (Item 15 Pydantic rollout — lax so legacy callers never break) ──────────────
+class CreateReferralIn(LaxModel):
+    referrer_name: Any = None
+    referrer_phone: Any = None
+    referrer_email: Any = None
+    customer_name: Any = None
+    customer_phone: Any = None
+    products: Any = None
+    commission_amount: Any = None   # handler-validated via float() → 400; keep Any so Pydantic won't 422
+    payout_date: Any = None
+    store_code: Any = None
+    market: Any = None
+    notes: Any = None
+
+
+class ReferralNoteIn(LaxModel):
+    note: Any = None
+
+
+class LogSaleIn(LaxModel):
+    sale_ref: Any = None
+    note: Any = None
+
+
+class ActivateReferralIn(LaxModel):
+    activation_ref: Any = None
+    note: Any = None
+
+
+class ReferralReasonIn(LaxModel):
+    reason: Any = None
+    note: Any = None
+
+
+class ApproveReferralIn(LaxModel):
+    commission_amount: Any = None   # handler-validated via float() → 400
+    payout_date: Any = None
+    note: Any = None
+
+
+class RedeemSubmitIn(LaxModel):
+    customer_name: Any = None
+    customer_phone: Any = None
+    products: Any = None
 
 
 def sb():
@@ -367,7 +415,7 @@ def get_referral(referral_id: str, org_id: str = ORG_ID, authorization: str = He
 # Create
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 @router.post("/referrals")
-def create_referral(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def create_referral(body: CreateReferralIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                     x_active_org: str = Header(default="")):
     """Create a referral capturing the REFERRING party. The referred customer's details are captured
     later at the store when the QR is scanned (the public redeem endpoint). Runs the create-time fraud
@@ -378,20 +426,20 @@ def create_referral(body: dict, org_id: str = ORG_ID, authorization: str = Heade
     cfg = _cfg(org_id)
     now = _now()
 
-    referrer_phone = str(body.get("referrer_phone") or "").strip()
-    if not referrer_phone and not str(body.get("referrer_email") or "").strip():
+    referrer_phone = str(body.referrer_phone or "").strip()
+    if not referrer_phone and not str(body.referrer_email or "").strip():
         raise HTTPException(400, "A referral needs the referring party's phone number (or email) so we "
                                  "can send them the QR.")
 
     # Product interest is captured at redeem, but a rep may pre-fill it; validate against the six bubbles.
-    ok, products, rejected = core.validate_products(body.get("products"))
+    ok, products, rejected = core.validate_products(body.products)
     if not ok:
         raise HTTPException(400, f"Not a valid product option: {', '.join(rejected)}. "
                                  f"Choose from: {', '.join(core.ALLOWED_PRODUCTS)}.")
 
     # Commission amount / payout date are USER-DEFINED per referral, defaulting from config. Stored now
     # so the rep can set them up front; the actual payout is still approval-gated + activation-gated.
-    amount = body.get("commission_amount")
+    amount = body.commission_amount
     try:
         amount = round(max(0.0, float(amount)), 2) if amount not in (None, "") else None
     except (TypeError, ValueError):
@@ -399,22 +447,22 @@ def create_referral(body: dict, org_id: str = ORG_ID, authorization: str = Heade
 
     row = {
         "org_id": org_id,
-        "referrer_name": core.normalize_name(body.get("referrer_name")) or None,
+        "referrer_name": core.normalize_name(body.referrer_name) or None,
         "referrer_phone": referrer_phone or None,
-        "referrer_email": (body.get("referrer_email") or "").strip() or None,
-        "customer_name": core.normalize_name(body.get("customer_name")) or None,
-        "customer_phone": (str(body.get("customer_phone") or "").strip() or None),
+        "referrer_email": (body.referrer_email or "").strip() or None,
+        "customer_name": core.normalize_name(body.customer_name) or None,
+        "customer_phone": (str(body.customer_phone or "").strip() or None),
         "products": products,
         "status": "created",
         "token_version": 1,
         "redeem_expires_at": None,   # stamped when the QR is sent
         "commission_amount": amount,
-        "payout_date": body.get("payout_date") or None,
-        "store_code": body.get("store_code") or (caller or {}).get("store_code"),
-        "market": body.get("market") or (caller or {}).get("market"),
+        "payout_date": body.payout_date or None,
+        "store_code": body.store_code or (caller or {}).get("store_code"),
+        "market": body.market or (caller or {}).get("market"),
         "created_by": (caller or {}).get("employee_id"),
         "created_by_app_user_id": (caller or {}).get("id"),
-        "notes": body.get("notes"),
+        "notes": body.notes,
     }
     try:
         created = (sb().table("referral").insert(row).execute().data or [{}])[0]
@@ -544,11 +592,11 @@ def _deliver_qr(org_id: str, referral: dict, url: str) -> dict:
 
 
 @router.post("/referrals/{referral_id}/send")
-def send_qr(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def send_qr(referral_id: str, body: ReferralNoteIn = None, org_id: str = ORG_ID,
             authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Mark the QR delivered to the referrer (created → sent) and stamp the redemption deadline. Fires a
     best-effort notify. Re-sending an already-sent referral just re-delivers without changing state."""
-    body = body or {}
+    body = body or ReferralNoteIn()
     caller = _caller(authorization, x_active_org)
     cfg = _cfg(org_id)
     r = _get_referral(org_id, referral_id)
@@ -574,58 +622,58 @@ def send_qr(referral_id: str, body: dict = None, org_id: str = ORG_ID,
 # Staff lifecycle steps: log-sale → activate → submit → approve → pay  (+ reject / void / flag)
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 @router.post("/referrals/{referral_id}/log-sale")
-def log_sale(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def log_sale(referral_id: str, body: LogSaleIn = None, org_id: str = ORG_ID,
              authorization: str = Header(default=""), x_active_org: str = Header(default="")):
-    body = body or {}
+    body = body or LogSaleIn()
     caller = _caller(authorization, x_active_org)
     r = _get_referral(org_id, referral_id)
     extra = {}
-    if body.get("sale_ref"):
-        extra["sale_ref"] = str(body["sale_ref"])[:200]
+    if body.sale_ref:
+        extra["sale_ref"] = str(body.sale_ref)[:200]
     r = _apply_transition(org_id, r, "sale_logged", caller, "staff",
-                          body.get("note") or "Sale logged against the referral", extra=extra)
+                          body.note or "Sale logged against the referral", extra=extra)
     return {"referral": _decorate(r)}
 
 
 @router.post("/referrals/{referral_id}/activate")
-def activate(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def activate(referral_id: str, body: ActivateReferralIn = None, org_id: str = ORG_ID,
              authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Mark the referred customer's line ACTIVATED — the gate that makes commission eligible. NOTE: this
     is a human attestation with an optional activation reference; there is no automated verification
     against a carrier activation feed yet (that data source does not exist in this system), so the
     approval step (a different person) is the real control, not this flag."""
-    body = body or {}
+    body = body or ActivateReferralIn()
     caller = _caller(authorization, x_active_org)
     r = _get_referral(org_id, referral_id)
     extra = {}
-    if body.get("activation_ref"):
-        extra["activation_ref"] = str(body["activation_ref"])[:200]
+    if body.activation_ref:
+        extra["activation_ref"] = str(body.activation_ref)[:200]
     r = _apply_transition(org_id, r, "activated", caller, "staff",
-                          body.get("note") or "Line activated for the referred customer", extra=extra)
+                          body.note or "Line activated for the referred customer", extra=extra)
     return {"referral": _decorate(r)}
 
 
 @router.post("/referrals/{referral_id}/submit")
-def submit_for_approval(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def submit_for_approval(referral_id: str, body: ReferralNoteIn = None, org_id: str = ORG_ID,
                         authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Send an activated referral to the approval queue (activated → commission_pending). A rep can do
     this; the APPROVAL itself (money) is gated separately."""
-    body = body or {}
+    body = body or ReferralNoteIn()
     caller = _caller(authorization, x_active_org)
     r = _get_referral(org_id, referral_id)
     r = _apply_transition(org_id, r, "commission_pending", caller, "staff",
-                          body.get("note") or "Submitted for commission approval")
+                          body.note or "Submitted for commission approval")
     return {"referral": _decorate(r)}
 
 
 @router.post("/referrals/{referral_id}/approve")
-def approve(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def approve(referral_id: str, body: ApproveReferralIn = None, org_id: str = ORG_ID,
             authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Approve the referral payout with a USER-DEFINED amount + payout date (commission_pending →
     approved). Permission-gated AND segregation-of-duties-gated: the approver can never be the rep who
     created the referral. Activation-gating is already enforced by the state machine — you cannot reach
     commission_pending without passing through `activated`."""
-    body = body or {}
+    body = body or ApproveReferralIn()
     caller = _caller(authorization, x_active_org)
     _require_approver(caller)
     cfg = _cfg(org_id)
@@ -636,7 +684,7 @@ def approve(referral_id: str, body: dict = None, org_id: str = ORG_ID,
         raise HTTPException(403, conflict)
 
     # User-defined amount + date; fall back to the referral's stored values, then tenant defaults.
-    amount = body.get("commission_amount")
+    amount = body.commission_amount
     if amount in (None, ""):
         amount = core.compute_commission(r, cfg)
     else:
@@ -644,14 +692,14 @@ def approve(referral_id: str, body: dict = None, org_id: str = ORG_ID,
             amount = round(max(0.0, float(amount)), 2)
         except (TypeError, ValueError):
             raise HTTPException(400, "Commission amount must be a number.")
-    ref_for_date = {**r, "payout_date": body.get("payout_date") or r.get("payout_date")}
+    ref_for_date = {**r, "payout_date": body.payout_date or r.get("payout_date")}
     payout_date = core.resolve_payout_date(ref_for_date, cfg, _now())
 
     extra = {"commission_amount": amount, "payout_date": payout_date,
              "approver_employee_id": (caller or {}).get("employee_id"),
              "approver_app_user_id": (caller or {}).get("id")}
     r = _apply_transition(org_id, r, "approved", caller, "staff",
-                          body.get("note") or f"Approved ${amount} payable {payout_date}", extra=extra,
+                          body.note or f"Approved ${amount} payable {payout_date}", extra=extra,
                           meta={"amount": amount, "payout_date": payout_date})
     _audit(org_id, referral_id, "approve", "commission_pending", "approved",
            f"Approved ${amount} payable {payout_date}", caller, "staff",
@@ -661,54 +709,54 @@ def approve(referral_id: str, body: dict = None, org_id: str = ORG_ID,
 
 
 @router.post("/referrals/{referral_id}/pay")
-def mark_paid(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def mark_paid(referral_id: str, body: ReferralNoteIn = None, org_id: str = ORG_ID,
               authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Record the payout as PAID (approved → paid). Permission-gated. The state machine guarantees this
     is only reachable from `approved`, so nothing is ever paid that was not explicitly approved first."""
-    body = body or {}
+    body = body or ReferralNoteIn()
     caller = _caller(authorization, x_active_org)
     _require_approver(caller)
     r = _get_referral(org_id, referral_id)
     r = _apply_transition(org_id, r, "paid", caller, "staff",
-                          body.get("note") or "Referral payout marked paid")
+                          body.note or "Referral payout marked paid")
     _audit(org_id, referral_id, "pay", "approved", "paid",
-           body.get("note") or "Marked paid", caller, "staff")
+           body.note or "Marked paid", caller, "staff")
     return {"referral": _decorate(r)}
 
 
 @router.post("/referrals/{referral_id}/reject")
-def reject(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def reject(referral_id: str, body: ReferralReasonIn = None, org_id: str = ORG_ID,
            authorization: str = Header(default=""), x_active_org: str = Header(default="")):
-    body = body or {}
+    body = body or ReferralReasonIn()
     caller = _caller(authorization, x_active_org)
     _require_approver(caller)
     r = _get_referral(org_id, referral_id)
-    reason = body.get("reason") or body.get("note") or "Referral rejected"
+    reason = body.reason or body.note or "Referral rejected"
     r = _apply_transition(org_id, r, "rejected", caller, "staff", reason)
     _audit(org_id, referral_id, "reject", None, "rejected", reason, caller, "staff")
     return {"referral": _decorate(r)}
 
 
 @router.post("/referrals/{referral_id}/void")
-def void(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def void(referral_id: str, body: ReferralReasonIn = None, org_id: str = ORG_ID,
          authorization: str = Header(default=""), x_active_org: str = Header(default="")):
-    body = body or {}
+    body = body or ReferralReasonIn()
     caller = _caller(authorization, x_active_org)
     r = _get_referral(org_id, referral_id)
-    reason = body.get("reason") or body.get("note") or "Referral voided"
+    reason = body.reason or body.note or "Referral voided"
     r = _apply_transition(org_id, r, "void", caller, "staff", reason)
     return {"referral": _decorate(r)}
 
 
 @router.post("/referrals/{referral_id}/flag")
-def flag_fraud(referral_id: str, body: dict = None, org_id: str = ORG_ID,
+def flag_fraud(referral_id: str, body: ReferralReasonIn = None, org_id: str = ORG_ID,
                authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Manually flag a referral as suspected fraud. Sets flagged_fraud WITH a reason (never a silent
     kill). Allowed from any live working state by the state machine."""
-    body = body or {}
+    body = body or ReferralReasonIn()
     caller = _caller(authorization, x_active_org)
     r = _get_referral(org_id, referral_id)
-    reason = body.get("reason") or body.get("note") or "Manually flagged as suspected fraud"
+    reason = body.reason or body.note or "Manually flagged as suspected fraud"
     r = _apply_transition(org_id, r, "flagged_fraud", caller, "staff", reason,
                           extra={"fraud_flag": True, "fraud_reason": reason[:2000]})
     _audit(org_id, referral_id, "fraud_check", None, "flagged_fraud", reason, caller, "staff")
@@ -815,7 +863,7 @@ def redeem_view(token: str):
 
 
 @router.post("/redeem/{token}")
-def redeem_submit(token: str, body: dict):
+def redeem_submit(token: str, body: RedeemSubmitIn):
     """The customer submits their NAME, PHONE and product bubbles at the store. Captures the intake,
     runs the anti-fraud battery WITH the customer phone now known, and moves the referral to `redeemed`
     (or `flagged_fraud` if a check trips). The response is UNIFORM regardless of the fraud outcome, so a
@@ -828,11 +876,11 @@ def redeem_submit(token: str, body: dict):
     cfg = _cfg(org_id)
     now = _now()
 
-    name = core.normalize_name(body.get("customer_name"))
-    phone = str(body.get("customer_phone") or "").strip()
+    name = core.normalize_name(body.customer_name)
+    phone = str(body.customer_phone or "").strip()
     if not phone or not core.normalize_phone(phone):
         raise HTTPException(400, "Please enter a valid phone number.")
-    ok, products, rejected = core.validate_products(body.get("products"))
+    ok, products, rejected = core.validate_products(body.products)
     if not ok:
         raise HTTPException(400, f"Not a valid product option: {', '.join(rejected)}.")
 

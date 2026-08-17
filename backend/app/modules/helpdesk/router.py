@@ -15,10 +15,13 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
+from typing import Any, Optional
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Header
 
 from app.core.config import settings
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 
 router = APIRouter(prefix="/helpdesk", tags=["Helpdesk"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -205,10 +208,14 @@ def team_update(rid: str, body: dict, org_id: str = ORG_ID): _require_module(org
 @router.delete("/config/teams/{rid}")
 def team_delete(rid: str, org_id: str = ORG_ID): _require_module(org_id); return _cfg_delete("ticket_teams", rid)
 
+class TeamAddMemberIn(LaxModel):
+    member: str = ""
+
+
 @router.post("/config/teams/{tid}/members")
-def team_add_member(tid: str, body: dict, org_id: str = ORG_ID):
+def team_add_member(tid: str, body: TeamAddMemberIn, org_id: str = ORG_ID):
     _require_module(org_id)
-    member = (body.get("member") or "").strip()
+    member = (body.member or "").strip()
     if not member:
         raise HTTPException(400, "member required")
     db("ticket_team_members").upsert(
@@ -229,13 +236,21 @@ def get_settings(org_id: str = ORG_ID):
     rows = db("ticket_settings").select("*").eq("org_id", org_id).limit(1).execute().data or []
     return rows[0] if rows else {"org_id": org_id}
 
+class TicketSettingsIn(LaxModel):
+    default_assignee: Any = None
+    notify_emails: Any = None
+    brand_logo_url: Any = None
+    brand_color: Any = None
+    business_hours: Any = None
+
+
 @router.put("/config/settings")
-def put_settings(body: dict, org_id: str = ORG_ID):
+def put_settings(body: TicketSettingsIn, org_id: str = ORG_ID):
     _require_module(org_id)
     row = {"org_id": org_id, "updated_at": _now()}
     for k in ("default_assignee", "notify_emails", "brand_logo_url", "brand_color", "business_hours"):
-        if k in body:
-            row[k] = body[k]
+        if k in body.model_fields_set:
+            row[k] = getattr(body, k)
     db("ticket_settings").upsert(row, on_conflict="org_id").execute()
     return get_settings(org_id)
 
@@ -261,17 +276,32 @@ def _decorate(t: dict, st, pr, ca, te) -> dict:
 
 
 # ── Tickets ──────────────────────────────────────────────────────────────────────────────────
+class CreateTicketIn(LaxModel):
+    subject: str = ""
+    description: str = ""
+    custom_fields: Any = None
+    status_id: Any = None
+    priority_id: Any = None
+    category_id: Any = None
+    team_id: Any = None
+    requester_id: Any = None
+    requester_name: Any = None
+    requester_email: Any = None
+    store_code: Any = None
+    assignee: Any = None
+
+
 @router.post("/tickets")
-async def create_ticket(body: dict, org_id: str = ORG_ID):
+async def create_ticket(body: CreateTicketIn, org_id: str = ORG_ID):
     _require_module(org_id)
-    subject = (body.get("subject") or "").strip()
-    description = (body.get("description") or "").strip()
+    subject = (body.subject or "").strip()
+    description = (body.description or "").strip()
     if not subject or not description:
         raise HTTPException(422, "subject and description are required")
 
     # validate custom fields against THIS tenant's active definitions
     defs = db("ticket_custom_fields").select("*").eq("org_id", org_id).eq("is_active", True).execute().data or []
-    incoming = body.get("custom_fields") or {}
+    incoming = body.custom_fields or {}
     cleaned = {}
     for d in defs:
         val = incoming.get(d["field_key"])
@@ -281,7 +311,7 @@ async def create_ticket(body: dict, org_id: str = ORG_ID):
             cleaned[d["field_key"]] = val
 
     # default to the tenant's lowest-sort 'open'-stage status if none supplied
-    status_id = body.get("status_id")
+    status_id = body.status_id
     if not status_id:
         opens = (db("ticket_statuses").select("id,sort_order").eq("org_id", org_id)
                  .eq("stage", "open").order("sort_order").limit(1).execute().data or [])
@@ -289,19 +319,19 @@ async def create_ticket(body: dict, org_id: str = ORG_ID):
 
     row = {
         "org_id": org_id, "subject": subject, "description": description,
-        "status_id": status_id, "priority_id": body.get("priority_id"),
-        "category_id": body.get("category_id"), "team_id": body.get("team_id"),
-        "requester_id": body.get("requester_id"), "requester_name": body.get("requester_name"),
-        "requester_email": body.get("requester_email"), "store_code": body.get("store_code"),
-        "assignee": body.get("assignee"), "custom_fields": cleaned,
+        "status_id": status_id, "priority_id": body.priority_id,
+        "category_id": body.category_id, "team_id": body.team_id,
+        "requester_id": body.requester_id, "requester_name": body.requester_name,
+        "requester_email": body.requester_email, "store_code": body.store_code,
+        "assignee": body.assignee, "custom_fields": cleaned,
     }
     ticket = (db("tickets").insert(row).execute().data or [{}])[0]
     db("ticket_events").insert({
         "org_id": org_id, "ticket_id": ticket.get("id"),
-        "actor": body.get("requester_name") or body.get("requester_email"),
+        "actor": body.requester_name or body.requester_email,
         "event_type": "created", "detail": {"subject": subject}}).execute()
 
-    await _notify_new_ticket(org_id, ticket, body.get("requester_name") or body.get("requester_email"))
+    await _notify_new_ticket(org_id, ticket, body.requester_name or body.requester_email)
     st, pr, ca, te = _maps(org_id)
     return _decorate(ticket, st, pr, ca, te)
 
@@ -369,8 +399,16 @@ def ticket_detail(tid: str, org_id: str = ORG_ID, agent: bool = False):
             "support_case": _ticket_support_case(org_id, tid)}
 
 
+class UpdateTicketIn(LaxModel):
+    status_id: Any = None
+    priority_id: Any = None
+    category_id: Any = None
+    team_id: Any = None
+    assignee: Any = None
+
+
 @router.patch("/tickets/{tid}")
-def update_ticket(tid: str, body: dict, org_id: str = ORG_ID, actor: str = ""):
+def update_ticket(tid: str, body: UpdateTicketIn, org_id: str = ORG_ID, actor: str = ""):
     _require_module(org_id)
     cur = db("tickets").select("*").eq("org_id", org_id).eq("id", tid).limit(1).execute().data or []
     if not cur:
@@ -379,9 +417,9 @@ def update_ticket(tid: str, body: dict, org_id: str = ORG_ID, actor: str = ""):
     upd: dict = {"updated_at": _now()}
     events = []
     for f in ("status_id", "priority_id", "category_id", "team_id", "assignee"):
-        if f in body and body[f] != cur.get(f):
-            upd[f] = body[f]
-            events.append((f, cur.get(f), body[f]))
+        if f in body.model_fields_set and getattr(body, f) != cur.get(f):
+            upd[f] = getattr(body, f)
+            events.append((f, cur.get(f), getattr(body, f)))
 
     # lifecycle timestamps off the new status's stage (skip if status is being cleared → no id to look up)
     if upd.get("status_id"):
@@ -414,19 +452,26 @@ def delete_ticket(tid: str, org_id: str = ORG_ID):
     return {"deleted": True}
 
 
+class AddCommentIn(LaxModel):
+    body: str = ""
+    is_internal: Any = None
+    author: Any = None
+    author_name: Any = None
+
+
 @router.post("/tickets/{tid}/comments")
-def add_comment(tid: str, body: dict, org_id: str = ORG_ID, agent: bool = False):
+def add_comment(tid: str, body: AddCommentIn, org_id: str = ORG_ID, agent: bool = False):
     _require_module(org_id)
-    text = (body.get("body") or "").strip()
+    text = (body.body or "").strip()
     if not text:
         raise HTTPException(422, "comment body required")
-    is_internal = bool(body.get("is_internal")) and agent   # employees can't post internal notes
-    row = {"org_id": org_id, "ticket_id": tid, "author": body.get("author"),
-           "author_name": body.get("author_name"), "body": text, "is_internal": is_internal}
+    is_internal = bool(body.is_internal) and agent   # employees can't post internal notes
+    row = {"org_id": org_id, "ticket_id": tid, "author": body.author,
+           "author_name": body.author_name, "body": text, "is_internal": is_internal}
     c = (db("ticket_comments").insert(row).execute().data or [{}])[0]
     db("tickets").update({"updated_at": _now()}).eq("id", tid).execute()
     db("ticket_events").insert({
-        "org_id": org_id, "ticket_id": tid, "actor": body.get("author_name") or body.get("author"),
+        "org_id": org_id, "ticket_id": tid, "actor": body.author_name or body.author,
         "event_type": "internal_note" if is_internal else "comment"}).execute()
     return c
 
@@ -601,14 +646,20 @@ def ai_assist_status(org_id: str = ORG_ID):
             "model": settings.ACCOUNT_ENGINE_MODEL}
 
 
+class AiAssistIn(LaxModel):
+    message: str = ""
+    question: str = ""
+    history: Any = None
+
+
 @router.post("/ai-assist")
-async def ai_assist(body: dict, org_id: str = ORG_ID):
+async def ai_assist(body: AiAssistIn, org_id: str = ORG_ID):
     """Tenant-scoped AI support assistant (Phase 2). Answers product / how-to / 'why is X empty' questions
     grounded in THIS tenant's context. READ-ONLY by construction — no data-mutation path, and the model is
     told it may only speak about the caller's tenant. Multi-tenant safe: org_id is the caller's tenant
     (enforcement rewrites it from the JWT). Body: {message, history?: [{role, content}]}."""
     _require_module(org_id, "ai_assistant")
-    question = (body.get("message") or body.get("question") or "").strip()
+    question = (body.message or body.question or "").strip()
     if not question:
         raise HTTPException(400, "message required")
     question = question[:4000]
@@ -618,7 +669,7 @@ async def ai_assist(body: dict, org_id: str = ORG_ID):
     ctx = _tenant_ai_context(org_id)
     system = _AI_SUPPORT_SYSTEM.replace("{tenant_name}", ctx["tenant_name"]).replace("{modules}", ctx["modules"])
     msgs = []
-    for h in (body.get("history") or [])[-10:]:
+    for h in (body.history or [])[-10:]:
         role = (h.get("role") or "").lower()
         content = (h.get("content") or "").strip()
         if role in ("user", "assistant") and content:
@@ -817,15 +868,19 @@ def _case_event(org_id, case_id, kind, body=None, author_email=None, visible_to_
 
 
 # ── Escalation (TENANT-facing: a helpdesk agent escalates one of THEIR tickets) ─────────────────
+class EscalateTicketIn(LaxModel):
+    page_key: str = ""
+
+
 @router.post("/tickets/{tid}/escalate")
-async def escalate_ticket(tid: str, body: dict = None, org_id: str = ORG_ID, actor: str = ""):
+async def escalate_ticket(tid: str, body: Optional[EscalateTicketIn] = None, org_id: str = ORG_ID, actor: str = ""):
     """Escalate a tenant helpdesk ticket to the house tech-support console. Idempotent per ticket
     (UNIQUE org_id,ticket_id): a second call returns the existing case. Stamps sla_due_at from the HOUSE
     SLA policy for the ticket's priority, records a VISIBLE event on the tenant ticket ('Escalated to
     tech support' — so the requester sees it in their existing helpdesk thread) and best-effort emails
     the tenant's helpdesk notify list. org_id is the (middleware-rewritten) tenant query param."""
     _require_module(org_id)
-    body = body or {}
+    body = body or EscalateTicketIn()
     rows = db("tickets").select("*").eq("org_id", org_id).eq("id", tid).limit(1).execute().data or []
     if not rows:
         raise HTTPException(404, "ticket not found")
@@ -843,7 +898,7 @@ async def escalate_ticket(tid: str, body: dict = None, org_id: str = ORG_ID, act
     priority = _support_priority_from_ticket(plabel)
     now = _now()
     sla = _sla_due_at(_house_sla_policy(), priority, now)
-    row = {"org_id": org_id, "ticket_id": tid, "page_key": (body.get("page_key") or None),
+    row = {"org_id": org_id, "ticket_id": tid, "page_key": (body.page_key or None),
            "status": "new", "priority": priority, "sla_due_at": sla,
            "created_at": now, "updated_at": now}
     try:
@@ -1018,13 +1073,17 @@ def _touch_case(cid, patch):
     db("support_case").update(patch).eq("id", cid).execute()
 
 
+class SupportCaseTextIn(LaxModel):
+    body: str = ""
+
+
 @router.post("/support/cases/{cid}/reply")
-async def support_case_reply(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+async def support_case_reply(cid: str, body: SupportCaseTextIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Post a reply visible to the tenant user. Records a case event (kind='reply', visible_to_user=true)
     AND fans the reply into the tenant's helpdesk ticket thread (storeops.ticket_comments + a ticket_event)
     so the user sees it in their existing helpdesk UI, plus a best-effort notify email. House-gated."""
     ctx = _require_support(authorization, x_active_org)
-    text = (body.get("body") or "").strip()
+    text = (body.body or "").strip()
     if not text:
         raise HTTPException(422, "reply body required")
     case = _load_case(cid)
@@ -1072,10 +1131,10 @@ async def _notify_ticket_reply(org_id, ticket_id):
 
 
 @router.post("/support/cases/{cid}/note")
-def support_case_note(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_note(cid: str, body: SupportCaseTextIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Internal note — NEVER fanned to the tenant (visible_to_user=false). House-gated."""
     ctx = _require_support(authorization, x_active_org)
-    text = (body.get("body") or "").strip()
+    text = (body.body or "").strip()
     if not text:
         raise HTTPException(422, "note body required")
     case = _load_case(cid)
@@ -1085,11 +1144,15 @@ def support_case_note(cid: str, body: dict, authorization: str = Header(default=
     return {"ok": True}
 
 
+class SupportCaseAssignIn(LaxModel):
+    assignee_email: str = ""
+
+
 @router.post("/support/cases/{cid}/assign")
-def support_case_assign(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_assign(cid: str, body: SupportCaseAssignIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Assign the case to a support agent (assignee_email). House-gated."""
     ctx = _require_support(authorization, x_active_org)
-    assignee = (body.get("assignee_email") or "").strip() or None
+    assignee = (body.assignee_email or "").strip() or None
     case = _load_case(cid)
     _touch_case(cid, {"assignee_email": assignee})
     _case_event(case.get("org_id"), cid, "assign",
@@ -1098,23 +1161,29 @@ def support_case_assign(cid: str, body: dict, authorization: str = Header(defaul
     return {"ok": True, "assignee_email": assignee}
 
 
+class SupportCaseStatusIn(LaxModel):
+    status: str = ""
+    resolution: str = ""
+    priority: str = ""
+
+
 @router.post("/support/cases/{cid}/status")
-def support_case_status(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_status(cid: str, body: SupportCaseStatusIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Change case status/priority. Resolving (status='resolved') REQUIRES resolution text. House-gated."""
     ctx = _require_support(authorization, x_active_org)
     case = _load_case(cid)
     patch = {}
-    new_status = (body.get("status") or "").strip().lower()
+    new_status = (body.status or "").strip().lower()
     if new_status:
         if new_status not in _SUPPORT_STATUSES:
             raise HTTPException(400, f"invalid status; use one of {list(_SUPPORT_STATUSES)}")
-        resolution = (body.get("resolution") or "").strip()
+        resolution = (body.resolution or "").strip()
         if new_status == "resolved" and not resolution and not (case.get("resolution") or "").strip():
             raise HTTPException(422, "a resolution note is required to resolve a case")
         patch["status"] = new_status
         if resolution:
             patch["resolution"] = resolution
-    new_priority = (body.get("priority") or "").strip().lower()
+    new_priority = (body.priority or "").strip().lower()
     if new_priority:
         if new_priority not in _SUPPORT_PRIORITIES:
             raise HTTPException(400, f"invalid priority; use one of {list(_SUPPORT_PRIORITIES)}")
@@ -1151,20 +1220,27 @@ def canned_list(authorization: str = Header(default=""), x_active_org: str = Hea
     return {"canned": rows, "can_edit": _support_can_edit(authorization, x_active_org)}
 
 
+class CannedCreateIn(LaxModel):
+    title: str = ""
+    body: str = ""
+    category: str = ""
+    id: Any = None
+
+
 @router.post("/support/canned-responses")
-def canned_create(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def canned_create(body: CannedCreateIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     _require_support(authorization, x_active_org)
     if not _support_can_edit(authorization, x_active_org):
         raise HTTPException(403, "you don't have permission to edit support canned responses")
-    title = (body.get("title") or "").strip()
-    text = (body.get("body") or "").strip()
+    title = (body.title or "").strip()
+    text = (body.body or "").strip()
     if not title or not text:
         raise HTTPException(422, "title and body are required")
     row = {"org_id": HOUSE_ORG, "title": title, "body": text,
-           "category": (body.get("category") or None), "updated_at": _now()}
-    if body.get("id"):
-        db("support_canned_response").update(row).eq("id", body["id"]).eq("org_id", HOUSE_ORG).execute()
-        return {"ok": True, "id": body["id"]}
+           "category": (body.category or None), "updated_at": _now()}
+    if body.id:
+        db("support_canned_response").update(row).eq("id", body.id).eq("org_id", HOUSE_ORG).execute()
+        return {"ok": True, "id": body.id}
     r = (db("support_canned_response").insert(row).execute().data or [{}])[0]
     return {"ok": True, "id": r.get("id")}
 
@@ -1185,13 +1261,19 @@ def sla_get(authorization: str = Header(default=""), x_active_org: str = Header(
             "can_edit": _support_can_edit(authorization, x_active_org)}
 
 
+class SlaPutIn(LaxModel):
+    priority: str = ""
+    response_hours: Any = None
+    resolve_hours: Any = None
+
+
 @router.put("/support/sla-policy")
-def sla_put(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def sla_put(body: SlaPutIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Upsert one priority's SLA (body: {priority, response_hours, resolve_hours}). House config."""
     _require_support(authorization, x_active_org)
     if not _support_can_edit(authorization, x_active_org):
         raise HTTPException(403, "you don't have permission to edit the support SLA policy")
-    priority = (body.get("priority") or "").strip().lower()
+    priority = (body.priority or "").strip().lower()
     if priority not in _SUPPORT_PRIORITIES:
         raise HTTPException(400, f"invalid priority; use one of {list(_SUPPORT_PRIORITIES)}")
     def _int(v):
@@ -1200,8 +1282,8 @@ def sla_put(body: dict, authorization: str = Header(default=""), x_active_org: s
         except (TypeError, ValueError):
             return None
     row = {"org_id": HOUSE_ORG, "priority": priority,
-           "response_hours": _int(body.get("response_hours")),
-           "resolve_hours": _int(body.get("resolve_hours")), "updated_at": _now()}
+           "response_hours": _int(body.response_hours),
+           "resolve_hours": _int(body.resolve_hours), "updated_at": _now()}
     db("support_sla_policy").upsert(row, on_conflict="org_id,priority").execute()
     return {"ok": True, **row}
 
@@ -1265,16 +1347,21 @@ def support_failures(authorization: str = Header(default=""), x_active_org: str 
             "tenants": [{"org_id": x["org_id"], "name": x.get("name")} for x in all_tenants if x.get("org_id")]}
 
 
+class SupportFailuresBulkReviewIn(LaxModel):
+    ids: Any = None
+    reviewed: Any = True
+
+
 @router.post("/support/failures/bulk-review")
-def support_failures_bulk_review(body: dict, authorization: str = Header(default=""),
+def support_failures_bulk_review(body: SupportFailuresBulkReviewIn, authorization: str = Header(default=""),
                                        x_active_org: str = Header(default="")):
     """CROSS-TENANT clear: mark the given failure rows reviewed/un-reviewed BY ID (house-gated — the failure
     ids carry their own org_id, so no org filter is applied; this is the sanctioned cross-tenant write)."""
     ctx = _require_support(authorization, x_active_org)
-    ids = [str(i) for i in (body.get("ids") or []) if i]
+    ids = [str(i) for i in (body.ids or []) if i]
     if not ids:
         raise HTTPException(422, "ids[] required")
-    reviewed = bool(body.get("reviewed", True))
+    reviewed = bool(body.reviewed)
     patch = {"reviewed": reviewed,
              "reviewed_by": ((ctx.get("email") or "support") if reviewed else None),
              "reviewed_at": (_now() if reviewed else None)}
@@ -1363,8 +1450,14 @@ def support_fix_request_detail(fid: str, authorization: str = Header(default="")
             "statuses": list(t.statuses), "can_approve": bool(ctx.get("super_admin"))}
 
 
+class SupportFixRequestStatusIn(LaxModel):
+    status: str = ""
+    resolution: str = ""
+    mark_reviewed: Any = None
+
+
 @router.post("/support/fix-requests/{fid}/status")
-def support_fix_request_status(fid: str, body: dict, authorization: str = Header(default=""),
+def support_fix_request_status(fid: str, body: SupportFixRequestStatusIn, authorization: str = Header(default=""),
                                      x_active_org: str = Header(default="")):
     """Move a fix request through the pipeline. approve/reject REQUIRE a super_admin (the approval gate);
     other transitions are open to any support agent. Resolving with mark_reviewed=true bulk-marks the
@@ -1374,7 +1467,7 @@ def support_fix_request_status(fid: str, body: dict, authorization: str = Header
     if not rows:
         raise HTTPException(404, "fix request not found")
     fr = rows[0]
-    target = str(body.get("status") or "").strip().lower()
+    target = str(body.status or "").strip().lower()
     ok, reason = _core_triage().status_change(fr.get("status"), target, bool(ctx.get("super_admin")))
     if not ok:
         raise HTTPException(403 if "super-admin" in reason else 400, reason)
@@ -1383,10 +1476,10 @@ def support_fix_request_status(fid: str, body: dict, authorization: str = Header
         patch["approved_by"] = ctx.get("email")
         patch["approved_at"] = _now()
     if target == "resolved":
-        res = (body.get("resolution") or "").strip()
+        res = (body.resolution or "").strip()
         patch["resolution"] = res or fr.get("resolution")
         patch["resolved_at"] = _now()
-        if body.get("mark_reviewed"):
+        if body.mark_reviewed:
             ids = [str(i) for i in (fr.get("sample_failure_ids") or []) if i]
             if ids:
                 try:
