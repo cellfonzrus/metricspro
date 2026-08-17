@@ -239,9 +239,15 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     rollout — promote to enforcing after the console is clean).
 
 ### Phase 3 — Assurance & resilience (P1/P2)
-12. **CI security gates** — SAST, dependency/SCA, secret scanning.
+12. **CI security gates** — SAST, dependency/SCA, secret scanning. ✅ **Built
+    (report-only).** `.github/workflows/security.yml` — bandit + semgrep (SAST),
+    pip-audit + npm audit (SCA), trufflehog (secrets). Non-blocking to start;
+    promote to required after the baseline is clean.
 13. **Audit-log tamper-evidence** — WORM triggers / hash-chain on security logs.
-14. **RPO/RTO + tested restore runbook + incident-response runbook.**
+14. **RPO/RTO + tested restore runbook + incident-response runbook.** ✅ **Built.**
+    `docs/INCIDENT_RESPONSE_PLAN.md` + `docs/BACKUP_DR_PLAN.md` (RPO ≤5 min w/
+    PITR, RTO ≤2 h, restore procedure + quarterly drill). _Remaining: run the
+    first drill; confirm PITR is on._
 15. **Typed request schemas (Pydantic)** rolled out across write endpoints.
 16. **DSAR / erasure workflow.**
 

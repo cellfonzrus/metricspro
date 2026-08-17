@@ -79,6 +79,16 @@ session requires the actor's 2FA.
   flow). The enroll/verify endpoints are always reachable, but enrolling first avoids a scramble.
 - **Then:** set `ADMIN_2FA_ENFORCE=1` in Railway. Startup warns while it's off. Break-glass `=0`.
 
+### 13. ⬜ Promote CI security gates from report-only → blocking
+`.github/workflows/security.yml` runs bandit, semgrep, pip-audit, npm audit, trufflehog — all
+`continue-on-error` (report-only). Review the first runs' findings; once the baseline is clean, drop
+`continue-on-error` (or mark them required checks) to enforce.
+
+### 14. ⬜ DR: confirm PITR + run the first restore drill
+Per `docs/BACKUP_DR_PLAN.md`: (a) confirm Supabase **PITR** is enabled (else RPO is up to 24 h, not
+≤5 min); (b) run the quarterly restore drill once to make "tested backups" true; (c) escrow
+`FIELD_ENCRYPTION_KEY` offline (a DB restore without it can't decrypt SSN/bank).
+
 ### 8. ⬜ Promote CSP from Report-Only → enforcing
 `next.config.ts` ships a **Content-Security-Policy-Report-Only** (Phase 2 item 11). It blocks nothing
 yet — it surfaces violations so we can confirm the policy fits the app (inline styles, Next inline

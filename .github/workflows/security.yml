@@ -1,0 +1,83 @@
+name: security
+
+# Security gates (Security Controls Spec §5, item 12): SAST, dependency/SCA, and secret scanning.
+#
+# REPORT-ONLY to start: every scan step is `continue-on-error`, so findings are surfaced in the job
+# summary and logs but do NOT fail the build yet. Once the baseline is clean, drop `continue-on-error`
+# (or make these required checks) to enforce — tracked in docs/SECURITY_DAILY_QUESTIONS.md.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"   # weekly drift check, Mondays 06:00 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-sast:
+    name: Python SAST (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install bandit
+      - name: bandit
+        continue-on-error: true
+        run: bandit -r backend/app -ll -f txt | tee "$GITHUB_STEP_SUMMARY"
+
+  python-deps:
+    name: Python deps (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install pip-audit
+      - name: pip-audit
+        continue-on-error: true
+        run: pip-audit -r backend/requirements.txt --desc | tee "$GITHUB_STEP_SUMMARY"
+
+  frontend-deps:
+    name: Frontend deps (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: npm audit
+        continue-on-error: true
+        working-directory: frontend
+        run: npm audit --audit-level=high || true
+
+  semgrep:
+    name: SAST (semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install semgrep
+      - name: semgrep
+        continue-on-error: true
+        run: semgrep scan --config auto --error --output-format text backend/app || semgrep scan --config auto backend/app || true
+
+  secrets:
+    name: Secret scan (trufflehog)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: trufflehog
+        continue-on-error: true
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
