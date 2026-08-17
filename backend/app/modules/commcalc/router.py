@@ -5862,8 +5862,19 @@ def accessory_definition_pay_impact(period: str, org_id: str = ORG_ID):
                      "on AND Run Commission is pressed for this period.")}
 
 
+class UpsertAccessoryDefinitionIn(LaxModel):
+    match_field: str = ""
+    match_value: str = ""
+    accessory_class: Any = None
+    status: str = ""
+    force: Any = None
+    period: Any = None
+    is_accessory: Any = True
+    note: Any = None
+
+
 @router.post("/accessory-definition")
-def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def upsert_accessory_definition(body: UpsertAccessoryDefinitionIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """Create/update ONE mapping. body: {match_field, match_value, is_accessory?, accessory_class?,
     status?, note?}.
 
@@ -5871,24 +5882,24 @@ def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization:
     free text is refused with the closest matches suggested (RULE THREE). 400 (not 500) until 257 runs.
     """
     require_org(org_id)
-    mf = str(body.get("match_field") or "").strip().lower()
+    mf = str(body.match_field or "").strip().lower()
     if mf not in accessory_definition.MATCH_FIELDS:
         raise HTTPException(400, f"match_field must be one of {list(accessory_definition.MATCH_FIELDS)}")
-    mv = str(body.get("match_value") or "").strip()
+    mv = str(body.match_value or "").strip()
     if not mv:
         raise HTTPException(400, "match_value is required — pick a real value from your own sales data.")
     client = sb()
-    cls = accessory_definition.normalize_class(body.get("accessory_class"))
+    cls = accessory_definition.normalize_class(body.accessory_class)
     classes, _cr = _ad_classes(client, org_id)
     allowed = {c["class_key"] for c in classes}
     if cls and cls not in allowed:
         raise HTTPException(400, f"unknown accessory class `{cls}` — allowed: {sorted(allowed)}")
-    status = str(body.get("status") or "proposed").strip().lower()
+    status = str(body.status or "proposed").strip().lower()
     if status not in accessory_definition.STATUSES:
         raise HTTPException(400, f"status must be one of {list(accessory_definition.STATUSES)}")
     # RULE THREE: the value must EXIST in the tenant's own data (or already be mapped).
-    if not body.get("force"):
-        rows, _m = _ad_sales(client, org_id, str(body.get("period") or ""))
+    if not body.force:
+        rows, _m = _ad_sales(client, org_id, str(body.period or ""))
         have = {accessory_definition.normalize(r.get(mf)) for r in rows}
         map_rows, _mr = _ad_map_rows(client, org_id)
         have |= {accessory_definition.normalize(m.get("match_value")) for m in map_rows
@@ -5898,8 +5909,8 @@ def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization:
             raise HTTPException(400, f"`{mv}` is not a {mf} value present in your sales data. "
                                      + (f"Closest: {near}." if near else "Pick one from the list."))
     row = {"org_id": org_id, "match_field": mf, "match_value": mv,
-           "is_accessory": bool(body.get("is_accessory", True)),
-           "accessory_class": cls, "status": status, "note": (body.get("note") or None),
+           "is_accessory": bool(body.is_accessory),
+           "accessory_class": cls, "status": status, "note": (body.note or None),
            "updated_at": column_mapping.now_iso()}
     if status == "confirmed":
         row["confirmed_by"] = _mpc_who(authorization)
@@ -5915,24 +5926,31 @@ def upsert_accessory_definition(body: dict, org_id: str = ORG_ID, authorization:
         raise HTTPException(400, f"Could not save — run migration 257_commission_accessory_definition.sql first. [{e}]")
 
 
+class ConfirmAccessoryDefinitionIn(LaxModel):
+    ids: Any = None
+    all: Any = None
+    classes: Any = None
+    all_classes: Any = None
+
+
 @router.post("/accessory-definition/confirm")
-def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def confirm_accessory_definition(body: ConfirmAccessoryDefinitionIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """CONFIRM proposals — the owner's decision step, for mappings and/or the seeded classes.
     body: {ids:[..]} | {all: true} | {classes:[class_key,..]} | {all_classes: true}.
     Confirming only changes `status`; it never re-classifies anything and never touches a payout."""
     require_org(org_id)
     client = sb()
     who, now = _mpc_who(authorization), column_mapping.now_iso()
-    ids = [str(i) for i in (body.get("ids") or []) if str(i).strip()]
+    ids = [str(i) for i in (body.ids or []) if str(i).strip()]
     done_maps, done_classes = [], []
-    if ids or body.get("all"):
+    if ids or body.all:
         map_rows, ready = _ad_map_rows(client, org_id)
         if not ready:
             raise HTTPException(400, "Run migration 257_commission_accessory_definition.sql first.")
         for r in map_rows:
             if str(r.get("status") or "proposed") == "confirmed":
                 continue
-            if not (body.get("all") or str(r.get("id")) in ids):
+            if not (body.all or str(r.get("id")) in ids):
                 continue
             try:
                 (client.schema("commcalc").table(accessory_definition.MAP_TABLE)
@@ -5942,8 +5960,8 @@ def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization
                 done_maps.append(str(r.get("id")))
             except Exception:
                 pass
-    keys = [accessory_definition.normalize_class(k) for k in (body.get("classes") or [])]
-    if keys or body.get("all_classes"):
+    keys = [accessory_definition.normalize_class(k) for k in (body.classes or [])]
+    if keys or body.all_classes:
         try:
             rows = (client.schema("commcalc").table(accessory_definition.CLASS_TABLE).select("*")
                     .eq("org_id", org_id).limit(1000).execute().data) or []
@@ -5952,7 +5970,7 @@ def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization
         for r in rows:
             if str(r.get("status") or "proposed") == "confirmed":
                 continue
-            if not (body.get("all_classes") or accessory_definition.normalize_class(r.get("class_key")) in keys):
+            if not (body.all_classes or accessory_definition.normalize_class(r.get("class_key")) in keys):
                 continue
             try:
                 (client.schema("commcalc").table(accessory_definition.CLASS_TABLE)
@@ -5962,7 +5980,7 @@ def confirm_accessory_definition(body: dict, org_id: str = ORG_ID, authorization
                 done_classes.append(str(r.get("class_key")))
             except Exception:
                 pass
-    if not ids and not keys and not body.get("all") and not body.get("all_classes"):
+    if not ids and not keys and not body.all and not body.all_classes:
         raise HTTPException(400, "ids[] / classes[] / all / all_classes is required")
     return {"ok": True, "confirmed_mappings": done_maps, "confirmed_classes": done_classes,
             "confirmed_count": len(done_maps) + len(done_classes)}
@@ -6022,8 +6040,15 @@ def put_accessory_definition_field_rule(body: dict, authorization: str = Header(
                      "field, never a product name: " + ", ".join(refused))}
 
 
+class ProposeAccessoryDefinitionIn(LaxModel):
+    period: Any = None
+    store: Any = None
+    rep: Any = None
+    dry_run: Any = None
+
+
 @router.post("/accessory-definition/propose-from-data")
-def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_ID):
+def propose_accessory_definition_from_data(body: Optional[ProposeAccessoryDefinitionIn] = None, org_id: str = ORG_ID):
     """Infer PROPOSED product-description mappings from THIS tenant's own sale lines, and (unless
     `dry_run`) write them as status='proposed' for the owner to confirm.
 
@@ -6038,7 +6063,7 @@ def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_
     Nothing is inferred from a product NAME, nothing is proposed for a product no evidence touched, and
     set-up fees are excluded first. `dry_run=true` returns the list without writing anything."""
     require_org(org_id)
-    body = body or {}
+    body = body or ProposeAccessoryDefinitionIn()
     client = sb()
     map_rows, map_ready = _ad_map_rows(client, org_id)
     rule, _refused, _rr = _ad_field_rule(client, org_id)
@@ -6047,14 +6072,14 @@ def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_
         setup_kws = set((_accessory_config(client, org_id) or {}).get("setup_fee_products") or ())
     except Exception:
         setup_kws = set()
-    rows, meta = _ad_sales(client, org_id, str(body.get("period") or ""),
-                           str(body.get("store") or ""), str(body.get("rep") or ""))
+    rows, meta = _ad_sales(client, org_id, str(body.period or ""),
+                           str(body.store or ""), str(body.rep or ""))
     live = [r for r in rows
             if str(r.get("voided") or "").strip().upper() not in ("YES", "Y", "TRUE", "1")
             and str(r.get("trans_type") or "").strip() != "Return"]
     index = accessory_definition.build_index(map_rows)
     proposals = accessory_definition.propose_from_data(live, index, rule, setup_kws)
-    if body.get("dry_run"):
+    if body.dry_run:
         return {"ok": True, "dry_run": True, "proposals": proposals, "count": len(proposals),
                 "meta": meta, "ready": map_ready}
     if not map_ready:
@@ -6065,7 +6090,7 @@ def propose_accessory_definition_from_data(body: dict = None, org_id: str = ORG_
                       "note": ("Proposed from your own %s data: this product is already an accessory on "
                                "%d of its %d line(s) (%s said so on %s). Mapping the description also "
                                "covers the %d line(s) whose department/category is spelled differently."
-                               % (str(body.get("period") or "sales"), p["covered_lines"], p["lines"],
+                               % (str(body.period or "sales"), p["covered_lines"], p["lines"],
                                   (p["evidence"] or {}).get("matched_by") or "the definition",
                                   (p["evidence"] or {}).get("date") or "an earlier line",
                                   p["uncovered_lines"]))}

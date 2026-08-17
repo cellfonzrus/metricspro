@@ -304,8 +304,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     presence via model_fields_set, int/enum-validated fields typed Any).
     **Part 12:** commcalc MA class wiring (mode flip, class→leg map) + MA
     product-class (upsert one, confirm proposals) → lax; normalize/enum-validated
-    fields typed Any. ~334 `dict` bodies remain (body-threading endpoints get a
-    dedicated pass; POS skipped — incomplete/no data).
+    fields typed Any. **Part 13:** commcalc accessory-definition (upsert mapping,
+    confirm proposals, propose-from-data optional body) → lax; the field-rule PUT
+    threads `body` into `normalize_field_rule` (deferred). ~331 `dict` bodies remain
+    (body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
+    data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

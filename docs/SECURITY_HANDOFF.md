@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt12) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt13) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–12 = 99 endpoints; ~334 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–13 = 102 endpoints; ~331 remain) |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -89,11 +89,11 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   nav-layout → lax). commcalc is the big one (~124 dict bodies, money-sensitive) — take in careful
   batches, reading each function's exact span first. **Part 11:** commcalc mapping/registry upserts
   (column-mapping, commission-field, target-field, commission-category-map). **Part 12:** MA class wiring
-  (mode/leg) + MA product-class (upsert/confirm). Next commcalc candidates: accessory defs
-  (upsert/confirm/field-rule), upload-duty/item-category/item-mapping config, connector-schedule,
-  add-device-model, then the money-sensitive plan/category settings group (put_commission_settings,
-  save_plan_installment, put_activation_matcher, put_category_payout, expected-commission — read each
-  first). hr (~32,
+  (mode/leg) + MA product-class (upsert/confirm). **Part 13:** accessory-definition (upsert/confirm/
+  propose-from-data; field-rule PUT threads body → deferred). Next commcalc candidates:
+  upload-duty/item-category/item-mapping config, connector-schedule, add-device-model, accessory-flags,
+  then the money-sensitive plan/category settings group (put_commission_settings, save_plan_installment,
+  put_activation_matcher, put_category_payout, expected-commission — read each first). hr (~32,
   many freeform-intake / public-token endpoints — treat like body-threading). **POS skipped** — module
   incomplete / no data. **Rules:** skip
   endpoints that
