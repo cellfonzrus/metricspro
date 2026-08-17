@@ -345,12 +345,16 @@ def get_timeoff_conflict_mode(org_id: str = ORG_ID):
     return {"mode": _timeoff_conflict_mode(org_id)}
 
 
+class TimeoffConflictModeIn(LaxModel):
+    mode: str = ""
+
+
 @router.put("/timeoff-conflict-mode")
-def set_timeoff_conflict_mode(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def set_timeoff_conflict_mode(body: TimeoffConflictModeIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Manager/admin only. mode must be 'warn' or 'block'."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    mode = str(body.get("mode") or "").strip().lower()
+    mode = str(body.mode or "").strip().lower()
     if mode not in ("warn", "block"):
         raise HTTPException(400, "mode must be 'warn' or 'block'")
     try:
@@ -4664,36 +4668,48 @@ def list_hours_budgets(week: str = "", authorization: str = Header(default=""), 
     return {"week_start": ws, "week_end": we, "budgets": out}
 
 
+class HoursBudgetIn(LaxModel):
+    store_code: str = ""
+    weekly_hours: Any = None
+
+
 @router.put("/hours-budgets")
-def set_hours_budget(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def set_hours_budget(body: HoursBudgetIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Set (or clear) a store's standing weekly hours budget. Manager/admin only."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    store = (body.get("store_code") or "").strip()
+    store = (body.store_code or "").strip()
     if not store:
         raise HTTPException(400, "store_code required")
-    if body.get("weekly_hours") in (None, "", "null"):
+    if body.weekly_hours in (None, "", "null"):
         sb().table("hours_budget").delete().eq("org_id", org_id).eq("store_code", store).execute()
         return {"ok": True, "cleared": True}
-    row = {"org_id": org_id, "store_code": store, "weekly_hours": float(body.get("weekly_hours") or 0),
+    row = {"org_id": org_id, "store_code": store, "weekly_hours": float(body.weekly_hours or 0),
            "updated_by": mgr.get("email"), "updated_at": datetime.now(timezone.utc).isoformat()}
     sb().table("hours_budget").upsert(row, on_conflict="org_id,store_code").execute()
     return {"ok": True, "store_code": store, "weekly_hours": row["weekly_hours"]}
 
 
+class BudgetOverrideRequestIn(LaxModel):
+    store_code: str = ""
+    week_start: str = ""
+    approved_hours: Any = None
+    reason: str = ""
+
+
 @router.post("/budget-overrides")
-async def request_budget_override(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def request_budget_override(body: BudgetOverrideRequestIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """A manager requests DM approval to exceed a store's weekly budget. Resolves the DM, saves it
     'pending', emails the DM an FYI. Body: {store_code, week_start, approved_hours?, reason?}."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    store = (body.get("store_code") or "").strip()
-    week_start = (body.get("week_start") or "").strip()[:10]
+    store = (body.store_code or "").strip()
+    week_start = (body.week_start or "").strip()[:10]
     if not (store and week_start):
         raise HTTPException(400, "store_code and week_start are required")
     dm_eid, dm_email, dm_name = _dm_for_store(org_id, store)
     row = {"org_id": org_id, "store_code": store, "week_start": week_start,
-           "approved_hours": body.get("approved_hours"), "reason": body.get("reason"),
+           "approved_hours": body.approved_hours, "reason": body.reason or None,
            "status": "pending", "requested_by": mgr.get("email"), "requested_by_name": mgr.get("email"),
            "dm_employee_id": dm_eid, "dm_email": dm_email}
     try:
@@ -4711,7 +4727,7 @@ async def request_budget_override(body: dict, authorization: str = Header(defaul
                     subject=f"Hours-budget override needed — {store} (week of {week_start})",
                     html=(f"<p>{mgr.get('email')} requested to schedule <b>{store}</b> past its weekly "
                           f"hours budget for the week of <b>{week_start}</b>.</p>"
-                          f"<p>Reason: {body.get('reason') or '—'}</p>"
+                          f"<p>Reason: {body.reason or '—'}</p>"
                           f"<p>Approve or deny it in MetricsPro → Workforce → Hours Budget.</p>"))
                 emailed = True
         except Exception:
