@@ -70,10 +70,12 @@ import re
 import threading
 import time
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 from app.modules.core.safe_href import safe_href
 
 # NO prefix: this sub-router is mounted ONTO core/router.py's `router` (which already carries
@@ -1305,27 +1307,40 @@ def sync_import_feeds(org_id: str = ORG_ID, authorization: str = Header(default=
             "added": max(0, len(h.get("feeds") or []) - len(before)), "derived_new": h.get("derived_new", 0)}
 
 
+class CreateImportFeedIn(LaxModel):
+    feed_key: Any = None
+    label: Any = None
+    module: Any = None
+    source_type: Any = None
+    cadence_hours: Any = None
+    grace_hours: Any = None
+    deep_link: Any = None
+    evidence: Any = None
+    enabled: Any = True
+    notes: Any = None
+
+
 @router.post("/import-feeds")
-def create_import_feed(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def create_import_feed(body: CreateImportFeedIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                              x_active_org: str = Header(default="")):
     """Register a feed the auto-derivation can't know about (a vendor emailing a file to a person, etc.)."""
     client, caller, org = _gate(authorization, x_active_org, org_id, edit=True)
-    key = (body.get("feed_key") or "").strip() or f"custom:{_slug(body.get('label'))}"
-    cad = float(body.get("cadence_hours") or _MANUAL_CADENCE_HOURS)
+    key = (body.feed_key or "").strip() or f"custom:{_slug(body.label)}"
+    cad = float(body.cadence_hours or _MANUAL_CADENCE_HOURS)
     row = {
         "org_id": org, "feed_key": key,
-        "label": (body.get("label") or key)[:200],
-        "module": (body.get("module") or "commissions")[:60],
-        "source_type": (body.get("source_type") or "manual_expected")[:40],
+        "label": (body.label or key)[:200],
+        "module": (body.module or "commissions")[:60],
+        "source_type": (body.source_type or "manual_expected")[:40],
         "cadence_hours": cad,
-        "grace_hours": float(body.get("grace_hours") if body.get("grace_hours") is not None
+        "grace_hours": float(body.grace_hours if body.grace_hours is not None
                              else default_grace(cad)),
         # H6 (2026-08-05): rendered as the "Fix / Upload →" link on /admin/import-health.
-        "deep_link": safe_href((body.get("deep_link") or "/commcalc/upload")[:300], "/commcalc/upload"),
-        "evidence": body.get("evidence") or [],
-        "enabled": bool(body.get("enabled", True)),
+        "deep_link": safe_href((body.deep_link or "/commcalc/upload")[:300], "/commcalc/upload"),
+        "evidence": body.evidence or [],
+        "enabled": bool(body.enabled),
         "auto_derived": False, "derived_from": None,
-        "notes": (body.get("notes") or None), "updated_by": (caller.get("role") or "admin"),
+        "notes": (body.notes or None), "updated_by": (caller.get("role") or "admin"),
     }
     try:
         res = client.schema("core").table("import_feed").insert(row).execute()
@@ -1338,12 +1353,25 @@ _EDITABLE = ("label", "module", "source_type", "cadence_hours", "grace_hours", "
              "evidence", "enabled", "muted_until", "notes")
 
 
+class UpdateImportFeedIn(LaxModel):
+    label: Any = None
+    module: Any = None
+    source_type: Any = None
+    cadence_hours: Any = None
+    grace_hours: Any = None
+    deep_link: Any = None
+    evidence: Any = None
+    enabled: Any = None
+    muted_until: Any = None
+    notes: Any = None
+
+
 @router.put("/import-feeds/{feed_id}")
-def update_import_feed(feed_id: str, body: dict, org_id: str = ORG_ID,
+def update_import_feed(feed_id: str, body: UpdateImportFeedIn, org_id: str = ORG_ID,
                              authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Edit one feed (cadence / grace / deep link / enabled / snooze). org-scoped on the UPDATE itself."""
     client, caller, org = _gate(authorization, x_active_org, org_id, edit=True)
-    patch = {k: body[k] for k in _EDITABLE if k in body}
+    patch = {k: getattr(body, k) for k in _EDITABLE if k in body.model_fields_set}
     if not patch:
         raise HTTPException(400, "nothing to update")
     for k in ("cadence_hours", "grace_hours"):

@@ -44,15 +44,33 @@ import json
 import time
 import base64
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Header, Request
 
 from app.core.database import get_supabase, get_supabase_admin
+from app.core.schemas import LaxModel
 from app.core import impersonation as _imp
 
 router = APIRouter(prefix="/impersonation", tags=["Core / Impersonation"])
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+class ImpersonationStartIn(LaxModel):
+    target: Any = None
+    target_auth_id: Any = None
+    reason: Any = None
+
+
+class ImpersonationStopIn(LaxModel):
+    session_id: Any = None
+    reason: Any = None
+
+
+class ImpersonationReauthIn(LaxModel):
+    session_id: Any = None
+    token: Any = None
 PERMISSION_KEY = "impersonate"      # storeops.roles.permissions.impersonate — DEFAULT-DENY, no bypass
 
 
@@ -184,7 +202,7 @@ def list_targets(org_id: str = ORG_ID, authorization: str = Header(default="")):
 
 # ── Start / stop ────────────────────────────────────────────────────────────────────────────────
 @router.post("/start")
-def start(body: dict, request: Request, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def start(body: ImpersonationStartIn, request: Request, org_id: str = ORG_ID, authorization: str = Header(default=""),
           x_2fa_token: str = Header(default="")):
     """Begin a "view as employee" session. Returns the signed grant the client presents as
     `x-impersonate` on every subsequent request.
@@ -213,7 +231,7 @@ def start(body: dict, request: Request, org_id: str = ORG_ID, authorization: str
     if not _mw_enabled():
         raise HTTPException(503, "Viewing the app as an employee needs tenant enforcement to be on "
                                  "(MULTI_TENANT_ENFORCE). Ask your operator to enable it.")
-    target_id = str(body.get("target") or body.get("target_auth_id") or "").strip()
+    target_id = str(body.target or body.target_auth_id or "").strip()
     if not target_id:
         raise HTTPException(400, "Choose the employee you want to view the app as.")
     client = sb()
@@ -247,7 +265,7 @@ def start(body: dict, request: Request, org_id: str = ORG_ID, authorization: str
         "actor_name": me.get("full_name"), "actor_role": me.get("role"),
         "target_auth_id": target_id, "target_app_user": str(t.get("id") or ""),
         "target_email": t.get("email"), "target_name": t.get("full_name"), "target_role": t.get("role"),
-        "reason": (str(body.get("reason") or "").strip() or None),
+        "reason": (str(body.reason or "").strip() or None),
         "started_at": now.isoformat(), "expires_at": expires.isoformat(),
         "ip": _client_ip(request), "user_agent": _ua(request),
     }
@@ -268,7 +286,7 @@ def start(body: dict, request: Request, org_id: str = ORG_ID, authorization: str
 
 
 @router.post("/stop")
-def stop(body: dict, request: Request, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def stop(body: ImpersonationStopIn, request: Request, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """End a session (the banner's "Exit / return to my account"). Called with the ADMIN's own token
     and NO x-impersonate header — the whole prefix is refused inside an impersonated session — so the
     stop is always recorded against the real human. Idempotent: stopping an already-ended session is
@@ -277,7 +295,7 @@ def stop(body: dict, request: Request, org_id: str = ORG_ID, authorization: str 
     if not uid:
         raise HTTPException(401, "not authenticated")
     _imp.assert_not_impersonating("ending an impersonation session")
-    sid = str(body.get("session_id") or "").strip()
+    sid = str(body.session_id or "").strip()
     if not sid:
         raise HTTPException(400, "session_id is required")
     client = sb()
@@ -296,7 +314,7 @@ def stop(body: dict, request: Request, org_id: str = ORG_ID, authorization: str 
         try:
             (client.schema("core").table("impersonation_session")
              .update({"ended_at": datetime.now(timezone.utc).isoformat(),
-                      "end_reason": str(body.get("reason") or "exit")[:32]})
+                      "end_reason": str(body.reason or "exit")[:32]})
              .eq("id", sid).is_("ended_at", "null").execute())
         except Exception:
             raise HTTPException(503, "Could not end the session cleanly — please retry.")
@@ -353,7 +371,7 @@ def _jwt_claims(token: str) -> dict:
 
 
 @router.post("/reauth")
-def reauth(body: dict, request: Request, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def reauth(body: ImpersonationReauthIn, request: Request, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Prove the EMPLOYEE just entered their own password, and mint ONE unlock for a clock-in or
     clock-out. This is the owner's carve-out, enforced server-side.
 
@@ -374,8 +392,8 @@ def reauth(body: dict, request: Request, org_id: str = ORG_ID, authorization: st
     if not uid:
         raise HTTPException(401, "not authenticated")
     _imp.assert_not_impersonating("unlocking clock in/out")
-    sid = str(body.get("session_id") or "").strip()
-    emp_token = str(body.get("token") or "").strip()
+    sid = str(body.session_id or "").strip()
+    emp_token = str(body.token or "").strip()
     if not sid or not emp_token:
         raise HTTPException(400, "session_id and token are required")
     client = sb()

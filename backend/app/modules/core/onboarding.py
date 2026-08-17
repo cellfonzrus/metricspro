@@ -37,9 +37,12 @@ MULTI-TENANT (AGENT_CONTRACT §2)
 """
 import re as _re
 
+from typing import Any
+
 from fastapi import APIRouter, Header, HTTPException
 
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 
 router = APIRouter(prefix="/onboarding", tags=["Core / Onboarding"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"   # middleware rewrites the query param
@@ -1190,21 +1193,26 @@ def get_onboarding_status(module_key: str, org_id: str = ORG_ID):
                               "total", "done", "next_task_key")}
 
 
+class SetTaskStateIn(LaxModel):
+    status: Any = None
+    notes: Any = None
+
+
 @router.post("/{module_key}/task/{task_key}")
-def set_task_state(module_key: str, task_key: str, body: dict,
+def set_task_state(module_key: str, task_key: str, body: SetTaskStateIn,
                    authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Skip / un-skip / acknowledge a task. Cannot fake a data-backed task complete: a task whose
     predicate is a real count stays incomplete until the data exists, and `acknowledged` on such a
     task is recorded but ignored by build_status (the predicate wins)."""
     _require_setup_rights(authorization, org_id)
-    status = (body.get("status") or "").strip().lower()
+    status = (body.status or "").strip().lower()
     if status not in ("pending", "skipped", "acknowledged"):
         raise HTTPException(400, "status must be pending, skipped or acknowledged")
     known = {t["task_key"] for t in load_tasks(org_id, module_key)}
     if task_key not in known:
         raise HTTPException(404, f"unknown task '{task_key}' for module '{module_key}'")
     row = {"org_id": org_id, "module_key": module_key, "task_key": task_key, "status": status,
-           "notes": (body.get("notes") or "").strip() or None,
+           "notes": (body.notes or "").strip() or None,
            "actor": _actor(authorization, org_id) or None, "acted_at": "now()",
            "updated_at": "now()"}
     try:
@@ -1256,8 +1264,12 @@ def import_preview(source: str, org_id: str = ORG_ID, variant: str = ""):
     return preview_import(source, org_id, variant)
 
 
+class ImportApplyIn(LaxModel):
+    variant: Any = None
+
+
 @router.post("/import-sources/{source}/apply")
-def import_apply(source: str, body: dict = None, authorization: str = Header(default=""),
+def import_apply(source: str, body: ImportApplyIn = None, authorization: str = Header(default=""),
                  org_id: str = ORG_ID, variant: str = ""):
     _require_setup_rights(authorization, org_id)
-    return apply_import(source, org_id, variant or ((body or {}).get("variant") or ""))
+    return apply_import(source, org_id, variant or ((body or ImportApplyIn()).variant or ""))

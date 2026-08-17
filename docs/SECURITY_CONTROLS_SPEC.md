@@ -433,8 +433,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     (dynamic count/tender config axes + nested expense_lines). **Part 49 (account +
     storeops/payroll_approval + hr/letters — all swept):** account journal/inventory-values/
     config; payroll approvals decide/payer/override/payer-CRUD/store-payers/dispatch;
-    hr letters template/send/approve/reject/config → lax. ~114 `dict` bodies remain
-    (core — mostly auth/admin already typed early — + misc; POS skipped — incomplete/no data).
+    hr letters template/send/approve/reject/config → lax. **Part 50 (core small
+    files):** import_health feed create/update; onboarding task-state + import-apply;
+    impersonation start/stop/reauth → lax (whats_new/training + impersonation
+    put_policy deferred — freeform helper-threaders). ~107 `dict` bodies remain
+    (core/router — mostly auth/admin already typed early — + fix_pipeline + storeops
+    misc; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

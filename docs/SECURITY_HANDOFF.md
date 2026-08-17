@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt49 — account/payroll-approval/hr-letters) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt50 — core small files) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–49 = 319 endpoints; ~114 remain). Fully swept: commcalc, hr(+letters), crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router), closing(27/28), account, storeops/payroll_approval; payables all-but-1. Remaining: core (32, mostly auth/admin done early), storeops/router misc, small core/* files. |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–50 = 326 endpoints; ~107 remain). Fully swept: commcalc, hr(+letters), crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router), closing(27/28), account, storeops/payroll_approval, core small files (import_health/onboarding/impersonation-start-stop-reauth). Remaining: core/router (31), core/fix_pipeline (4), storeops/router misc (7); deferred: whats_new+training (clean_* threaders), impersonation put_policy (else body). |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -216,8 +216,15 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   payroll_approval decide, set_payer, override, create_payer, update_payer (allow-list),
   set_store_payers, dispatch; hr/letters update_template, send_letter, approve_letter (opt),
   reject_letter (opt), put_letters_config (all with a Pydantic field literally named `body` where the
-  endpoint's own param is also `body` — `body.body` works in v2). Then core (32, many
-  auth/admin already done early) + misc small files (core/* helpers, storeops/router misc). Next: run
+  endpoint's own param is also `body` — `body.body` works in v2).
+  **Part 50 (core small files):** import_health create/update_import_feed; onboarding set_task_state,
+  import_apply (opt); impersonation start/stop/reauth (auth-sensitive — target/session_id/token/reason
+  fields). DEFERRED: whats_new save_note+ingest and training save_tour (thread `body` into
+  `clean_entry`/`clean_tour` freeform helpers, and ingest uses the `else [body]` freeform pattern);
+  impersonation put_policy (`normalize_policy(body.get("policy") if dict else body)` — freeform `else
+  body`). Then core/router (31 remaining `body: dict` — MANY already typed in early parts 1–6; the
+  raw ones left are a mix, read each) + core/fix_pipeline (4, wide named-field handlers — convertible
+  but large) + storeops/router misc (7, mostly config setters that thread body — likely defer). Next: run
   `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data).
   **Rules:** skip endpoints that thread the raw
   `body` dict into shared helpers (unless the callee is also being typed — then share/inherit a model),
