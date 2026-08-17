@@ -24930,14 +24930,26 @@ def list_report_pull_map(processor: str = "", org_id: str = ORG_ID):
 
 
 @router.put("/report-pull-map")
-def save_report_pull_map(body: dict, org_id: str = ORG_ID):
+class SaveReportPullMapIn(LaxModel):
+    report_key: Any = None
+    display_name: Any = None
+    target_table: Any = None
+    column_map: Any = None
+    param_spec: Any = None
+    export_pref: Any = None
+    enabled: Any = None
+    sort_order: Any = None
+    processor: Any = None
+
+
+def save_report_pull_map(body: SaveReportPullMapIn, org_id: str = ORG_ID):
     """Create/update THIS org's override for one report_key (never mutates the house default row — a
     tenant edit becomes a tenant-scoped override). Upserts on (org_id, report_key)."""
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
+    rk = (body.report_key or "").strip()
     if not rk:
         raise HTTPException(400, "report_key is required")
-    row = {k: body[k] for k in _RPM_FIELDS if k in body}
+    row = {k: getattr(body, k) for k in _RPM_FIELDS if k in body.model_fields_set}
     row["org_id"] = org_id
     row["report_key"] = rk
     row["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -25117,28 +25129,37 @@ async def manual_upload_detect(report_key: str = Form(...), carrier_id: str = Fo
 
 
 @router.post("/manual-upload/mapping")
-def manual_upload_save_mapping(body: dict, org_id: str = ORG_ID):
+class ManualUploadSaveMappingIn(LaxModel):
+    report_key: str = ""
+    carrier_id: str = ""
+    column_map: Any = None
+    field_sources: Any = None
+    sample_headers: Any = None
+    saved_by: Any = None
+
+
+def manual_upload_save_mapping(body: ManualUploadSaveMappingIn, org_id: str = ORG_ID):
     """Persist the per-(org,carrier,report_key) manual column mapping. Accepts either a ready column_map
     or a {dest_col: source_header} selection (field_sources) — the latter inherits value TYPES from the
     report_pull default so numeric/date casting is preserved. SAP: map once, upload against it forever."""
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
-    carrier_id = (body.get("carrier_id") or "").strip()
+    rk = (body.report_key or "").strip()
+    carrier_id = (body.carrier_id or "").strip()
     if not rk or not carrier_id:
         raise HTTPException(400, "report_key and carrier_id are required")
     spec = _ma_effective_spec(org_id, rk) or {}
     default_map = spec.get("column_map") or {}
-    column_map = body.get("column_map")
+    column_map = body.column_map
     if not (isinstance(column_map, dict) and column_map):
-        column_map = ma_upload.build_column_map(body.get("field_sources") or {}, default_map)
+        column_map = ma_upload.build_column_map(body.field_sources or {}, default_map)
     if not column_map:
         raise HTTPException(400, "no columns mapped")
     row = {
         "org_id": org_id, "carrier_id": carrier_id, "report_key": rk,
         "target_table": spec.get("target_table"),
         "column_map": column_map,
-        "sample_headers": body.get("sample_headers"),
-        "saved_by": (body.get("saved_by") or None),
+        "sample_headers": body.sample_headers,
+        "saved_by": (body.saved_by or None),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     client = sb()
@@ -25156,12 +25177,17 @@ def manual_upload_save_mapping(body: dict, org_id: str = ORG_ID):
         raise HTTPException(400, f"Could not save mapping — is migration 212 applied? {e}")
 
 
+class ManualUploadResetMappingIn(LaxModel):
+    report_key: str = ""
+    carrier_id: str = ""
+
+
 @router.post("/manual-upload/reset-mapping")
-def manual_upload_reset_mapping(body: dict, org_id: str = ORG_ID):
+def manual_upload_reset_mapping(body: ManualUploadResetMappingIn, org_id: str = ORG_ID):
     """Drop the saved override for (org,carrier,report_key) so it falls back to the report_pull default."""
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
-    carrier_id = (body.get("carrier_id") or "").strip()
+    rk = (body.report_key or "").strip()
+    carrier_id = (body.carrier_id or "").strip()
     if not rk or not carrier_id:
         raise HTTPException(400, "report_key and carrier_id are required")
     try:
@@ -25544,14 +25570,18 @@ async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, o
                        "Watch the status; the 2FA prompt appears here when it's ready."}
 
 
+class LoginCodeIn(LaxModel):
+    code: str = ""
+
+
 @router.post("/data-sources/{sid}/login/verify")
-async def data_source_login_verify(sid: str, body: dict, org_id: str = ORG_ID):
+async def data_source_login_verify(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
     """Phase 2: submit the 2FA code against the pending session and, on success, store the durable
     authenticated session so scheduled/manual pulls reuse it until the portal invalidates it."""
     require_org(org_id)
     from app.modules.commcalc import vidapay_sweep as vp
     from fastapi.concurrency import run_in_threadpool
-    code = str((body or {}).get("code") or "").strip()
+    code = str(body.code or "").strip()
     if not code:
         raise HTTPException(400, "Enter the verification code.")
     client = sb()
@@ -25832,12 +25862,12 @@ def live_login_state(sid: str, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/live-login/submit")
-def live_login_submit(sid: str, body: dict, org_id: str = ORG_ID):
+def live_login_submit(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
     """Enqueue the operator's 2FA code into the LIVE session. The worker thread fills it into the same
     open page, selects the trust radio and clicks Verify — the UI polls /state for the outcome."""
     require_org(org_id)
     from app.modules.commcalc import live_login
-    code = str((body or {}).get("code") or "").strip()
+    code = str(body.code or "").strip()
     if not code:
         raise HTTPException(400, "Enter the verification code.")
     sess = live_login.get_session(sid, org_id)
@@ -25860,7 +25890,12 @@ def live_login_resend(sid: str, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/live-login/click")
-def live_login_click(sid: str, body: dict, org_id: str = ORG_ID):
+class LiveLoginClickIn(LaxModel):
+    x: Any = None
+    y: Any = None
+
+
+def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     """'Take control': forward an operator click (NORMALIZED x/y in 0..1 of the streamed image) to the
     live page, so they can press a control the auto-clicker missed (e.g. the portal's Next button)."""
     require_org(org_id)
@@ -25869,7 +25904,7 @@ def live_login_click(sid: str, body: dict, org_id: str = ORG_ID):
     if not sess:
         raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
     try:
-        nx = float((body or {}).get("x")); ny = float((body or {}).get("y"))
+        nx = float(body.x); ny = float(body.y)
     except (TypeError, ValueError):
         raise HTTPException(400, "click needs numeric x,y in 0..1")
     sess.click(nx, ny)
@@ -25877,7 +25912,16 @@ def live_login_click(sid: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/data-sources/{sid}/live-login/input")
-def live_login_input(sid: str, body: dict, org_id: str = ORG_ID):
+class LiveLoginInputIn(LaxModel):
+    type: Any = None
+    x: Any = None
+    y: Any = None
+    text: Any = None
+    key: Any = None
+    deltaY: Any = None
+
+
+def live_login_input(sid: str, body: LiveLoginInputIn, org_id: str = ORG_ID):
     """Forward a raw human input event to the LIVE page with HIGH priority (drained before SUBMIT_CODE /
     RESEND / PULL). type ∈ click|dblclick|type|key|scroll. Click coords are NORMALIZED (0..1 of the
     streamed image) and multiplied by the live viewport size server-side (DPR-proof — the img is rendered
@@ -25887,23 +25931,22 @@ def live_login_input(sid: str, body: dict, org_id: str = ORG_ID):
     sess = live_login.get_session(sid, org_id)
     if not sess:
         raise HTTPException(400, "No live session running — click 🔴 Live login to start one.")
-    ev = body or {}
-    et = str(ev.get("type") or "").strip().lower()
+    et = str(body.type or "").strip().lower()
     if et not in ("click", "dblclick", "type", "key", "scroll"):
         raise HTTPException(400, "input type must be one of click|dblclick|type|key|scroll")
     norm = {"type": et}
     if et in ("click", "dblclick"):
         try:
-            norm["x"] = float(ev.get("x")); norm["y"] = float(ev.get("y"))
+            norm["x"] = float(body.x); norm["y"] = float(body.y)
         except (TypeError, ValueError):
             raise HTTPException(400, "click needs numeric x,y in 0..1")
     elif et == "type":
-        norm["text"] = str(ev.get("text") or "")
+        norm["text"] = str(body.text or "")
     elif et == "key":
-        norm["key"] = str(ev.get("key") or "")
+        norm["key"] = str(body.key or "")
     elif et == "scroll":
         try:
-            norm["deltaY"] = float(ev.get("deltaY") or 0)
+            norm["deltaY"] = float(body.deltaY or 0)
         except (TypeError, ValueError):
             norm["deltaY"] = 0.0
     sess.input_event(norm)

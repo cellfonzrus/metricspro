@@ -349,7 +349,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     sales-derive window, POS profile, data-source login (SSRF-guarded portal/proxy
     URLs, password-keep-on-blank), proxy test → lax; `_SOURCE_FIELDS` allow-list
     filter becomes a model_fields_set loop, defaults preserved via model_fields_set.
-    ~276 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
+    **Part 29:** commcalc report-pull-map save, manual-upload save/reset mapping,
+    data-source login verify + live-login submit/click/input → lax; `_RPM_FIELDS`
+    allow-list via model_fields_set, float-validated click coords typed Any.
+    ~269 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
     skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
