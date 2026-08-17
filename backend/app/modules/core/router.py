@@ -16,6 +16,8 @@ import time
 import uuid
 from datetime import datetime, timezone, timedelta
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Header, Request, BackgroundTasks
 from app.core.database import get_supabase, get_supabase_admin
 from app.core.config import settings
@@ -127,21 +129,29 @@ def get_portal_reports(org_id: str = ORG_ID):
                                    "label": r.get("label"), "category": r.get("category")} for r in rows if r.get("href")}}
 
 
+class SetPortalReportIn(LaxModel):
+    href: Any = None
+    enabled: Any = True
+    roles: Any = None
+    label: Any = None
+    category: Any = None
+
+
 @router.put("/portal-reports")
-def set_portal_report(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def set_portal_report(body: SetPortalReportIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Upsert one report's portal config. Body: {href, enabled, roles[], label?, category?}."""
     _require_setting(authorization, x_active_org, "security")
-    href = (body.get("href") or "").strip()
+    href = (body.href or "").strip()
     if not href:
         raise HTTPException(400, "href required")
     # H6 (2026-08-05): this href is rendered as a <Link> on the employee portal + /employee.
     if not is_safe_href(href):
         raise HTTPException(400, "href must be a site path (e.g. /commcalc/reports) or an http(s) URL")
     row = {"org_id": org_id, "href": href,
-           "enabled": bool(body.get("enabled", True)),
-           "roles": body.get("roles") or [],
-           "label": body.get("label"), "category": body.get("category"),
+           "enabled": bool(body.enabled),
+           "roles": body.roles or [],
+           "label": body.label, "category": body.category,
            "updated_at": datetime.now(timezone.utc).isoformat()}
     try:
         sb().schema("storeops").table("portal_reports").upsert(row, on_conflict="org_id,href").execute()
@@ -1674,15 +1684,28 @@ def failure_types(authorization: str = Header(default="")):
 
 
 @router.post("/failures")
-def record_failure(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+class RecordFailureIn(LaxModel):
+    org_id: Any = None
+    category: Any = None
+    severity: Any = None
+    source: Any = None
+    employee_id: Any = None
+    employee_name: Any = None
+    store_code: Any = None
+    message: Any = None
+    detail: Any = None
+    remediation: Any = None
+
+
+def record_failure(body: RecordFailureIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Record a failure (best-effort — never raises). Any authed surface may call it; org comes from the
     caller (falls back to body/house org for system callers). Remediation is auto-filled by category, and a
     category the tenant has DISABLED is silently skipped (configurable)."""
     uid = _uid_from_token(authorization)
     client = sb()
     caller = _resolve_caller(client, uid, x_active_org) if uid else None
-    org_id = (caller["org_id"] if caller else None) or body.get("org_id") or ORG_ID
-    category = (body.get("category") or "other").strip().lower()
+    org_id = (caller["org_id"] if caller else None) or body.org_id or ORG_ID
+    category = (body.category or "other").strip().lower()
     try:
         t = _tenant_row(client, org_id) or {}
         disabled = [str(d).strip().lower() for d in (t.get("failure_log_disabled_categories") or [])]
@@ -1693,14 +1716,14 @@ def record_failure(body: dict, authorization: str = Header(default=""), x_active
     meta = FAILURE_TYPES.get(category, FAILURE_TYPES["other"])
     row = {
         "org_id": org_id, "category": category,
-        "severity": (body.get("severity") or meta["severity"]),
-        "source": (body.get("source") or "")[:200] or None,
-        "employee_id": body.get("employee_id"),
-        "employee_name": (body.get("employee_name") or "")[:200] or None,
-        "store_code": (body.get("store_code") or "")[:80] or None,
-        "message": (body.get("message") or meta["label"])[:1000],
-        "detail": body.get("detail"),
-        "remediation": body.get("remediation") or meta["remediation"],
+        "severity": (body.severity or meta["severity"]),
+        "source": (body.source or "")[:200] or None,
+        "employee_id": body.employee_id,
+        "employee_name": (body.employee_name or "")[:200] or None,
+        "store_code": (body.store_code or "")[:80] or None,
+        "message": (body.message or meta["label"])[:1000],
+        "detail": body.detail,
+        "remediation": body.remediation or meta["remediation"],
     }
     try:
         r = client.schema("core").table("failure_log").insert(row).execute()
@@ -1735,7 +1758,12 @@ def list_failures(authorization: str = Header(default=""), x_active_org: str = H
 
 
 @router.patch("/failures/{fid}")
-def update_failure(fid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+class UpdateFailureIn(LaxModel):
+    status: Any = None
+    resolved_note: Any = None
+
+
+def update_failure(fid: str, body: UpdateFailureIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -1744,12 +1772,12 @@ def update_failure(fid: str, body: dict, authorization: str = Header(default="")
     if not _can_view_failures(caller):
         raise HTTPException(403, "admin only")
     patch = {}
-    if "status" in body:
-        patch["status"] = (body.get("status") or "open").strip().lower()
+    if "status" in body.model_fields_set:
+        patch["status"] = (body.status or "open").strip().lower()
         patch["resolved_at"] = datetime.now(timezone.utc).isoformat() if patch["status"] != "open" else None
         patch["resolved_by"] = (caller.get("role") or "admin")
-    if "resolved_note" in body:
-        patch["resolved_note"] = body.get("resolved_note")
+    if "resolved_note" in body.model_fields_set:
+        patch["resolved_note"] = body.resolved_note
     if not patch:
         raise HTTPException(400, "nothing to update")
     client.schema("core").table("failure_log").update(patch).eq("org_id", caller["org_id"]).eq("id", fid).execute()
@@ -1776,7 +1804,12 @@ def get_failures_config(authorization: str = Header(default=""), x_active_org: s
 
 
 @router.put("/failures/config")
-def put_failures_config(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+class PutFailuresConfigIn(LaxModel):
+    face_match_threshold: Any = None
+    disabled_categories: Any = None
+
+
+def put_failures_config(body: PutFailuresConfigIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
         raise HTTPException(401, "not authenticated")
@@ -1785,14 +1818,14 @@ def put_failures_config(body: dict, authorization: str = Header(default=""), x_a
     if not _can_edit_setting(caller, "failures"):
         raise HTTPException(403, "you don't have permission to configure Failure Logs")
     patch = {}
-    if "face_match_threshold" in body:
+    if "face_match_threshold" in body.model_fields_set:
         try:
-            v = float(body["face_match_threshold"])
+            v = float(body.face_match_threshold)
         except (TypeError, ValueError):
             raise HTTPException(400, "face_match_threshold must be a number")
         patch["face_match_threshold"] = max(0.45, min(0.72, v))  # clamp to a safe band
-    if "disabled_categories" in body:
-        dc = body.get("disabled_categories") or []
+    if "disabled_categories" in body.model_fields_set:
+        dc = body.disabled_categories or []
         patch["failure_log_disabled_categories"] = [str(x).strip().lower() for x in dc if str(x).strip()]
     if not patch:
         raise HTTPException(400, "nothing to update")
@@ -1813,20 +1846,33 @@ def failure_kind_docs(authorization: str = Header(default=""), x_active_org: str
 
 
 @router.post("/failure-kind-docs")
-def upsert_failure_kind_doc(body: dict, authorization: str = Header(default=""),
+class UpsertFailureKindDocIn(LaxModel):
+    kind: Any = None
+    updated_by: Any = None
+    label: Any = None
+    module: Any = None
+    severity: Any = None
+    layman_meaning: Any = None
+    layman_fix: Any = None
+    escalate_when: Any = None
+    code_hint: Any = None
+    is_active: Any = None
+
+
+def upsert_failure_kind_doc(body: UpsertFailureKindDocIn, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Create/update one plain-English kind doc in the HOUSE global registry. Support-gated (the SAME gate
     as the support docs editor). Keyed by (org_id, kind)."""
     if not _support_gate(authorization, x_active_org):
         raise HTTPException(403, "Editing the plain-English error registry is restricted to house support staff.")
-    kind = (body.get("kind") or "").strip().lower()
+    kind = (body.kind or "").strip().lower()
     if not kind:
         raise HTTPException(422, "kind is required")
-    row = {"org_id": ORG_ID, "kind": kind, "updated_by": (body.get("updated_by") or None),
+    row = {"org_id": ORG_ID, "kind": kind, "updated_by": (body.updated_by or None),
            "updated_at": datetime.now(timezone.utc).isoformat()}
     for f in (*_KIND_DOC_FIELDS, "is_active"):
-        if f in body:
-            row[f] = body[f]
+        if f in body.model_fields_set:
+            row[f] = getattr(body, f)
     try:
         sb().schema("core").table("failure_kind_doc").upsert(row, on_conflict="org_id,kind").execute()
     except Exception as e:
@@ -1860,7 +1906,12 @@ def failures_grouped(authorization: str = Header(default=""), x_active_org: str 
 
 
 @router.post("/failures/bulk-review")
-def failures_bulk_review(body: dict, authorization: str = Header(default=""),
+class FailuresBulkReviewIn(LaxModel):
+    ids: Any = None
+    reviewed: Any = True
+
+
+def failures_bulk_review(body: FailuresBulkReviewIn, authorization: str = Header(default=""),
                                x_active_org: str = Header(default="")):
     """The CLEAR action: mark selected failure rows reviewed (or un-reviewed) — keeps the rows for the audit
     trail, org-scoped to the caller's tenant. body: {ids:[...], reviewed:true|false}."""
@@ -1871,10 +1922,10 @@ def failures_bulk_review(body: dict, authorization: str = Header(default=""),
     caller = _resolve_caller(client, uid, x_active_org)
     if not _can_view_failures(caller):
         raise HTTPException(403, "Failure Logs are admin-only.")
-    ids = [str(i) for i in (body.get("ids") or []) if i]
+    ids = [str(i) for i in (body.ids or []) if i]
     if not ids:
         raise HTTPException(422, "ids[] required")
-    reviewed = bool(body.get("reviewed", True))
+    reviewed = bool(body.reviewed)
     patch = {"reviewed": reviewed,
              "reviewed_by": ((caller.get("role") or "admin") if reviewed else None),
              "reviewed_at": (datetime.now(timezone.utc).isoformat() if reviewed else None)}
@@ -4314,18 +4365,24 @@ def employee_dashboard(employee_id: str = "", period: str = "",
 
 
 @router.put("/employee-widgets")
-def set_employee_widget_overrides(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+class SetEmployeeWidgetOverridesIn(LaxModel):
+    employee_id: Any = None
+    email: Any = None
+    widget_overrides: Any = None
+
+
+def set_employee_widget_overrides(body: SetEmployeeWidgetOverridesIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Per-employee Employee-Dashboard widget overrides (#1b). Body:
     {employee_id?, email?, widget_overrides: {widget_key: bool} | null}. Writes onto the
     person's storeops.app_users row (so they must be assigned a role first). null/{} = clear
     (inherit the role default). Unknown widget keys are dropped."""
     _require_setting(authorization, x_active_org, "security")
-    eid = (body.get("employee_id") or "").strip()
-    email = (body.get("email") or "").strip().lower()
+    eid = (body.employee_id or "").strip()
+    email = (body.email or "").strip().lower()
     if not eid and not email:
         raise HTTPException(400, "employee_id or email required")
-    raw = body.get("widget_overrides")
+    raw = body.widget_overrides
     if raw in (None, {}):
         ovr = None
     elif isinstance(raw, dict):

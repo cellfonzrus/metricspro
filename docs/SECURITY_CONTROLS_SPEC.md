@@ -438,8 +438,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     impersonation start/stop/reauth → lax (whats_new/training + impersonation
     put_policy deferred — freeform helper-threaders). **Part 51 (core/fix_pipeline —
     fully swept):** create/patch pipeline request, patch action, upsert token-rate → lax.
-    ~103 `dict` bodies remain (core/router — mostly auth/admin already typed early — +
-    storeops misc; POS skipped — incomplete/no data).
+    **Part 52 (core/router — failures + config):** record/update_failure,
+    failures-config, kind-doc upsert, bulk-review, portal-reports, widget-overrides
+    → lax (create_fix_request + support_docs deferred — helper-threaders). ~96
+    `dict` bodies remain — the core/router remainder is ~24 auth/tenant-credential
+    handlers (many thread body into auth helpers; convert-or-defer per handler) +
+    storeops misc; POS skipped — incomplete/no data.
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

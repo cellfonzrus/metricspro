@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt51 — core/fix_pipeline) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt52 — core/router failures + config) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–51 = 330 endpoints; ~103 remain). Fully swept: commcalc, hr(+letters), crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router), closing(27/28), account, storeops/payroll_approval, core small files, core/fix_pipeline. Remaining CONVERTIBLE: core/router (31 raw — many already typed early, remainder mixed), storeops/router misc (7, likely config threaders). Deferred: whats_new+training (clean_* threaders), impersonation put_policy (else body), commcalc-20/helpdesk/hr-3/crm-3 (classified earlier), pos (40, skipped). |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–52 = 337 endpoints; ~96 remain). Fully swept: commcalc, hr(+letters), crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router), closing(27/28), account, storeops/payroll_approval, core small files, core/fix_pipeline. core/router: failures cluster + portal-reports + widget-overrides done; **~24 raw remain = auth/tenant-credential handlers** (signup, create_login, assign_role, bulk_assign, connect_tenant, admin_set_password, reset_password, set/verify_phone, put_tenant_settings, put_security_settings, create/update_role, resend_invite, reveal_code, bulk_provision, delete/deactivate/purge_user, disable_and_switch, reinstate_login, reset_tenant_admin_password) — security-critical, MANY thread body into auth helpers → read each carefully, expect a mix of convert + defer. Deferred: whats_new+training (clean_* threaders), impersonation put_policy + core support_docs + create_fix_request (else body / helper-threaders), commcalc-20/helpdesk/hr-3/crm-3 (classified earlier), pos (40, skipped). |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -226,8 +226,18 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   **Part 51 (core/fix_pipeline — fully swept):** create_pipeline_request (16-field),
   patch_pipeline_request (18-field `_PATCHABLE` allow-list via model_fields_set + user_actions/status/
   note), patch_pipeline_request_action (status), upsert_token_rate (float-validated rate fields stay
-  `Any`, output_share default 0.20). Then core/router (31 remaining `body: dict` — MANY already typed
-  in early parts 1–6; the raw ones left are a mix, read each) + storeops/router misc (7, mostly config
+  `Any`, output_share default 0.20).
+  **Part 52 (core/router — failures cluster + config setters):** record_failure, update_failure,
+  put_failures_config, upsert_failure_kind_doc (allow-list over `_KIND_DOC_FIELDS`), failures_bulk_review,
+  set_portal_report, set_employee_widget_overrides. DEFERRED in core/router: create_fix_request (threads
+  `body` into `_new_fix_request_row`), support_docs_upsert/import (thread `body` into `_clean_doc`).
+  **~24 raw core/router handlers remain — all auth/tenant-credential** (signup, create_login,
+  assign_role, bulk_assign, connect_tenant, admin_set_password, reset_password, set/verify_phone,
+  put_tenant_settings, put_security_settings, create/update_role, resend_invite, reveal_code,
+  bulk_provision, delete/deactivate/purge_user, disable_and_switch, reinstate_login,
+  reset_tenant_admin_password). These are the most security-sensitive endpoints and many thread `body`
+  into auth helpers (`assign_role`→`_normalize_grant_write`, `create_login`→core auth) — read each
+  span first; expect a mix of convert + defer. Then storeops/router misc (7, mostly config
   setters that thread body — likely defer). Next: run
   `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data).
   **Rules:** skip endpoints that thread the raw
