@@ -7089,6 +7089,19 @@ def get_google_reviews_config(authorization: str = Header(default=""),
     return out
 
 
+def _is_db_permission_error(e: Exception) -> bool:
+    """A Postgres 42501 (permission denied) surfacing from a Supabase write on a google_review_*
+    table — almost always the service-role GRANTs not applied in this tenant's DB (re-run migration
+    411). Detecting it lets the handlers say THAT instead of blaming Google Places (2026-08-17)."""
+    s = str(e).lower()
+    return "42501" in s or "permission denied" in s
+
+
+_DB_GRANT_HINT = ("Database permission error (Postgres 42501): the backend cannot write the Google "
+                  "Reviews tables. The service-role grants are missing in this tenant's database — "
+                  "re-run migration 411 (and 412/420/430) on it, then try again.")
+
+
 class GoogleReviewsConfigIn(LaxModel):
     enabled: Any = None
     target_default: Any = None
@@ -7129,6 +7142,8 @@ def put_google_reviews_config(body: GoogleReviewsConfigIn, authorization: str = 
     try:
         sb().table("google_review_config").upsert(row, on_conflict="org_id").execute()
     except Exception as e:
+        if _is_db_permission_error(e):
+            raise HTTPException(500, _DB_GRANT_HINT)
         raise HTTPException(400, f"Could not save (run migration 411 first? migration 420 for "
                                  f"lookback_days?): {str(e)[:160]}")
     return _gr.public_config(_gr.get_config(sb(), org_id))
@@ -7305,6 +7320,8 @@ def put_google_review_store_config(store_code: str, body: GoogleReviewStoreConfi
     try:
         sb().table("google_review_store").upsert(row, on_conflict="org_id,store_code").execute()
     except Exception as e:
+        if _is_db_permission_error(e):
+            raise HTTPException(500, _DB_GRANT_HINT)
         raise HTTPException(400, f"Could not save (run migration 411 first?): {str(e)[:160]}")
     # Return what actually PERSISTED, read back from the table — not an unconditional {"ok": True}
     # (2026-08-10). The old shape could not distinguish a real write from a no-op, so the settings
@@ -7355,8 +7372,11 @@ def post_resolve_place(body: ResolvePlaceIn, authorization: str = Header(default
     if not address:
         raise HTTPException(400, "This store has no address on file — add one, or set the place_id manually.")
     try:
-        row = _gr.resolve_place_for_store(client, org_id, store_code, address, cfg["api_key"])
+        row = _gr.resolve_place_for_store(client, org_id, store_code, address, cfg["api_key"],
+                                          brand=cfg.get("search_brand"))
     except Exception as e:
+        if _is_db_permission_error(e):
+            raise HTTPException(500, _DB_GRANT_HINT)
         raise HTTPException(400, f"Google Places lookup failed: {e}")
     return {"ok": True, **row}
 
