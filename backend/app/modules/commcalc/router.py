@@ -1,11 +1,12 @@
 """CommCalc API Router — all /api/v1/commcalc/* endpoints"""
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header, Query
 from fastapi.responses import JSONResponse
-from typing import List, Optional
+from typing import List, Optional, Any
 import pandas as pd
 import io
 import re
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
@@ -3137,14 +3138,20 @@ def list_carriers(org_id: str = ORG_ID):
     return (sb().schema("commcalc").table("carrier").select("*").eq("org_id", org_id).order("name").execute().data) or []
 
 
+class CarrierIn(LaxModel):
+    name: str = ""
+    code: str = ""
+    is_default: Any = None
+
+
 @router.post("/carriers")
-def create_carrier(body: dict, org_id: str = ORG_ID):
+def create_carrier(body: CarrierIn, org_id: str = ORG_ID):
     require_org(org_id)
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
-    is_default = bool(body.get("is_default"))
-    row = {"org_id": org_id, "name": name, "code": (body.get("code") or "").strip() or None,
+    is_default = bool(body.is_default)
+    row = {"org_id": org_id, "name": name, "code": (body.code or "").strip() or None,
            "is_default": is_default}
     client = sb()
     if is_default:  # only one default carrier per org
@@ -3154,18 +3161,18 @@ def create_carrier(body: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/carriers/{cid}")
-def update_carrier(cid: str, body: dict, org_id: str = ORG_ID):
+def update_carrier(cid: str, body: CarrierIn, org_id: str = ORG_ID):
     require_org(org_id)
     patch = {}
-    if "name" in body:
-        nm = (body.get("name") or "").strip()
+    if "name" in body.model_fields_set:
+        nm = (body.name or "").strip()
         if not nm:
             raise HTTPException(400, "name cannot be empty")
         patch["name"] = nm
-    if "code" in body:
-        patch["code"] = (body.get("code") or "").strip() or None
-    if "is_default" in body:
-        patch["is_default"] = bool(body.get("is_default"))
+    if "code" in body.model_fields_set:
+        patch["code"] = (body.code or "").strip() or None
+    if "is_default" in body.model_fields_set:
+        patch["is_default"] = bool(body.is_default)
     if not patch:
         raise HTTPException(400, "nothing to update")
     client = sb()
@@ -6751,34 +6758,51 @@ def _safe_portal_url(raw):
         raise HTTPException(400, e.message)
 
 
+class ConnectorIn(LaxModel):
+    vendor_name: str = ""
+    label: Any = None
+    sweep_kind: str = ""
+    portal_url: Any = None
+    auth_type: Any = None
+    twofa_method: Any = None
+    twofa_status: Any = None
+    automatable: Any = True
+    config_table: str = ""
+    account_id: str = ""
+    login_username: str = ""
+    sort_order: Any = None
+    enabled: Any = None
+    notes: Any = None
+
+
 @router.post("/connectors")
-def create_connector(body: dict, org_id: str = ORG_ID):
+def create_connector(body: ConnectorIn, org_id: str = ORG_ID):
     """Onboard a new vendor connector to the registry (no SQL). Upsert by vendor_name."""
     require_org(org_id)
-    name = (body.get('vendor_name') or '').strip()
+    name = (body.vendor_name or '').strip()
     if not name:
         raise HTTPException(400, "vendor_name required")
-    row = {'org_id': org_id, 'vendor_name': name, 'label': body.get('label'),
-           'sweep_kind': (body.get('sweep_kind') or 'manual').strip(),
-           'portal_url': _safe_portal_url(body.get('portal_url')),
-           'auth_type': body.get('auth_type') or 'form', 'twofa_method': body.get('twofa_method') or 'none',
-           'twofa_status': body.get('twofa_status') or 'needs_setup',
-           'automatable': body.get('automatable', True) is not False, 'enabled': True,
-           'config_table': (body.get('config_table') or '').strip() or None,
-           'account_id': (body.get('account_id') or '').strip() or None,        # e.g. Total Wireless retailer #
-           'login_username': (body.get('login_username') or '').strip() or None,
-           'sort_order': int(body.get('sort_order') or 100),
+    row = {'org_id': org_id, 'vendor_name': name, 'label': body.label,
+           'sweep_kind': (body.sweep_kind or 'manual').strip(),
+           'portal_url': _safe_portal_url(body.portal_url),
+           'auth_type': body.auth_type or 'form', 'twofa_method': body.twofa_method or 'none',
+           'twofa_status': body.twofa_status or 'needs_setup',
+           'automatable': body.automatable is not False, 'enabled': True,
+           'config_table': (body.config_table or '').strip() or None,
+           'account_id': (body.account_id or '').strip() or None,        # e.g. Total Wireless retailer #
+           'login_username': (body.login_username or '').strip() or None,
+           'sort_order': int(body.sort_order or 100),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('connector_instances').upsert(row, on_conflict='org_id,vendor_name').execute()
     return r.data[0] if r.data else row
 
 
 @router.patch("/connectors/{cid}")
-def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
+def update_connector(cid: str, body: ConnectorIn, org_id: str = ORG_ID):
     require_org(org_id)
     allow = ('label', 'enabled', 'automatable', 'twofa_method', 'twofa_status', 'portal_url', 'sort_order', 'notes',
              'account_id', 'login_username')
-    row = {k: body[k] for k in allow if k in body}
+    row = {k: getattr(body, k) for k in allow if k in body.model_fields_set}
     if 'portal_url' in row:
         row['portal_url'] = _safe_portal_url(row['portal_url'])
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
@@ -6786,27 +6810,49 @@ def update_connector(cid: str, body: dict, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+class ReportDefIn(LaxModel):
+    report_key: str = ""
+    connector_id: Any = None
+    label: Any = None
+    source_name: Any = None
+    report_id: Any = None
+    period_mode: Any = None
+    target_table: Any = None
+    upload_endpoint: Any = None
+    source_url: Any = None
+    auto: Any = None
+    refresh_months: Any = None
+    carrier_id: Any = None
+    sort_order: Any = None
+    note: Any = None
+    daily_upload: Any = None
+    upload_assignee: Any = None
+    upload_instructions: Any = None
+    reminder_hour: Any = None
+    reminder_minute: Any = None
+
+
 @router.post("/report-definitions")
-def create_report_def(body: dict, org_id: str = ORG_ID):
+def create_report_def(body: ReportDefIn, org_id: str = ORG_ID):
     """Add a report to a connector in the registry (no SQL). Upsert by report_key."""
     require_org(org_id)
-    rk = (body.get('report_key') or '').strip()
+    rk = (body.report_key or '').strip()
     if not rk:
         raise HTTPException(400, "report_key required")
-    row = {'org_id': org_id, 'connector_id': body.get('connector_id'), 'report_key': rk,
-           'label': body.get('label'), 'source_name': body.get('source_name'), 'report_id': body.get('report_id'),
-           'period_mode': body.get('period_mode') or 'current', 'target_table': body.get('target_table'),
-           'upload_endpoint': body.get('upload_endpoint'), 'source_url': body.get('source_url'),
-           'auto': bool(body.get('auto')), 'refresh_months': int(body.get('refresh_months') or 1),
-           'carrier_id': (body.get('carrier_id') or None),   # NULL = carrier-agnostic (mig 291)
-           'sort_order': int(body.get('sort_order') or 100),
+    row = {'org_id': org_id, 'connector_id': body.connector_id, 'report_key': rk,
+           'label': body.label, 'source_name': body.source_name, 'report_id': body.report_id,
+           'period_mode': body.period_mode or 'current', 'target_table': body.target_table,
+           'upload_endpoint': body.upload_endpoint, 'source_url': body.source_url,
+           'auto': bool(body.auto), 'refresh_months': int(body.refresh_months or 1),
+           'carrier_id': (body.carrier_id or None),   # NULL = carrier-agnostic (mig 291)
+           'sort_order': int(body.sort_order or 100),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
     return r.data[0] if r.data else row
 
 
 @router.patch("/report-definitions/{rid}")
-def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
+def update_report_def(rid: str, body: ReportDefIn, org_id: str = ORG_ID):
     require_org(org_id)
     allow = ('label', 'source_name', 'report_id', 'period_mode', 'target_table', 'upload_endpoint',
              'source_url', 'auto', 'refresh_months', 'sort_order', 'note', 'carrier_id',
@@ -6814,7 +6860,7 @@ def update_report_def(rid: str, body: dict, org_id: str = ORG_ID):
              # so these must be editable from the Imports screen, not seeded from here.
              'daily_upload', 'upload_assignee', 'upload_instructions',
              'reminder_hour', 'reminder_minute')
-    row = {k: body[k] for k in allow if k in body}
+    row = {k: getattr(body, k) for k in allow if k in body.model_fields_set}
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     sb().schema('commcalc').table('report_definitions').update(row).eq('org_id', org_id).eq('id', rid).execute()
     return {"ok": True}
@@ -12354,14 +12400,20 @@ def get_nav_config(org_id: str = ORG_ID):
     return {"labels": labels, "capabilities": caps, "layout": layout}
 
 
+class NavLabelIn(LaxModel):
+    scope: str = ""
+    key: str = ""
+    label: str = ""
+
+
 @router.post("/nav-labels")
-def set_nav_label(body: dict, org_id: str = ORG_ID):
+def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID):
     """Upsert one display nickname. body: {scope?: 'nav'|'group', key, label}. An empty label REMOVES
     the override (reverts to the built-in label). Clear 400 (not 500) if migration 068 isn't applied.
     Display-only: this never touches a DB column, route, report_key or data path."""
-    scope = (body.get('scope') or 'nav').strip()
-    key = (body.get('key') or '').strip()
-    label = (body.get('label') or '').strip()
+    scope = (body.scope or 'nav').strip()
+    key = (body.key or '').strip()
+    label = (body.label or '').strip()
     if not key:
         raise HTTPException(400, "key required")
     client = sb()
@@ -12379,8 +12431,17 @@ def set_nav_label(body: dict, org_id: str = ORG_ID):
     return {"ok": True, "scope": scope, "key": key, "label": label}
 
 
+class NavLayoutIn(LaxModel):
+    items: Any = None
+    hideReportsDirectory: Any = None
+    groups: Any = None
+    groupOrder: Any = None
+    subOrder: Any = None
+    itemOrder: Any = None
+
+
 @router.post("/nav-layout")
-def set_nav_layout(body: dict, org_id: str = ORG_ID):
+def set_nav_layout(body: NavLayoutIn, org_id: str = ORG_ID):
     """Save the per-tenant sidebar LAYOUT (admin config): which group each nav item appears under, plus
     hidden items, SUB-CATEGORIES and explicit drag-and-drop order.
     Body = {items: {<href>: {group?: str, sub?: str, hidden?: bool, also?: [str]}}, groups?: [str],
@@ -12397,9 +12458,9 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
     (scope='layout', reusing mig 068 — no new migration); an empty layout (no items AND no groups) clears
     it (reverts to the built-in menu). Display-only — never touches routes, data, or access control."""
     import json as _json
-    raw_items = (body or {}).get('items') or {}
+    raw_items = body.items or {}
     # platform-core hide-reports-directory toggle: preserve the flag through the layout payload
-    hide = bool((body or {}).get('hideReportsDirectory'))
+    hide = bool(body.hideReportsDirectory)
     items = {}
     for h, v in raw_items.items():
         if not isinstance(v, dict):
@@ -12428,7 +12489,7 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
         items[h] = entry
     # admin-created group names (may be empty of items) — de-duped, non-empty
     groups = []
-    for gname in ((body or {}).get('groups') or []):
+    for gname in (body.groups or []):
         gname = (gname or '').strip() if isinstance(gname, str) else ''
         if gname and gname not in groups:
             groups.append(gname)
@@ -12443,7 +12504,7 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
                 out.append(s)
         return out
 
-    group_order = _names((body or {}).get('groupOrder'))
+    group_order = _names(body.groupOrder)
 
     def _order_map(raw):
         out = {}
@@ -12455,8 +12516,8 @@ def set_nav_layout(body: dict, org_id: str = ORG_ID):
                     out[gname] = vals
         return out
 
-    sub_order = _order_map((body or {}).get('subOrder'))
-    item_order = _order_map((body or {}).get('itemOrder'))
+    sub_order = _order_map(body.subOrder)
+    item_order = _order_map(body.itemOrder)
 
     client = sb()
     try:

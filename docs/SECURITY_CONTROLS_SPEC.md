@@ -294,9 +294,13 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     (deferred by rule). **Part 9:** helpdesk ticket core (create/update/comment,
     team-member add, settings put, AI-assist, escalate → lax; presence loops via
     model_fields_set, passthrough ids typed Any to keep None-when-absent). Helpdesk
-    now fully swept bar the `_clean`/`new_fix_row` threaders. ~350 `dict` bodies
-    remain (body-threading endpoints get a dedicated pass; POS skipped —
-    incomplete/no data).
+    now fully swept bar the `_clean`/`new_fix_row` threaders. **Part 10:** commcalc
+    config CRUD (carrier create/update, connector create/update, report-definition
+    create/update, nav-label + nav-layout → lax; presence loops via
+    model_fields_set, handler-validated int/url fields typed Any). commcalc is the
+    large module (~124 dict bodies) — being taken in careful money-sensitive
+    batches. ~342 `dict` bodies remain (body-threading endpoints get a dedicated
+    pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
