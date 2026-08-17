@@ -5086,8 +5086,16 @@ def get_ma_product_class(source_report: str = "ma_daily_tx", period: str = "", s
             "ready": ready, "migration": None if ready else "254_commission_ma_product_class.sql"}
 
 
+class UpsertMaProductClassIn(LaxModel):
+    source_report: str = ""
+    product_name: Any = None
+    product_class: Any = None
+    status: str = ""
+    note: Any = None
+
+
 @router.post("/ma-product-class")
-def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def upsert_ma_product_class(body: UpsertMaProductClassIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """Create/update ONE product-name -> class mapping.
     body: {product_name, product_class, source_report?, status?, note?}.
 
@@ -5095,9 +5103,9 @@ def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str
     matched byte-exact thereafter. The reserved class 'unmapped' can never be assigned — to unmap a
     name, DELETE its row. 400 (not 500) until migration 254 is applied."""
     require_org(org_id)
-    sr = (body.get("source_report") or "ma_daily_tx").strip()
-    name = ma_product_class.normalize(body.get("product_name"))
-    cls = ma_product_class.normalize(body.get("product_class"))
+    sr = (body.source_report or "ma_daily_tx").strip()
+    name = ma_product_class.normalize(body.product_name)
+    cls = ma_product_class.normalize(body.product_class)
     if not name or not cls:
         raise HTTPException(400, "product_name and product_class are required")
     client = sb()
@@ -5107,11 +5115,11 @@ def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str
         raise HTTPException(400, "'unmapped' is a reserved class — delete the mapping instead of assigning it")
     if cls not in allowed:
         raise HTTPException(400, f"unknown class `{cls}` — allowed: {', '.join(allowed)}")
-    status = (body.get("status") or "proposed").strip().lower()
+    status = (body.status or "proposed").strip().lower()
     if status not in ma_product_class.STATUSES:
         raise HTTPException(400, f"status must be one of {', '.join(ma_product_class.STATUSES)}")
     row = {"org_id": org_id, "source_report": sr, "product_name": name, "product_class": cls,
-           "status": status, "note": (body.get("note") or None),
+           "status": status, "note": (body.note or None),
            "updated_at": column_mapping.now_iso()}
     if status == "confirmed":
         row["confirmed_by"] = _mpc_who(authorization)
@@ -5127,14 +5135,21 @@ def upsert_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str
         raise HTTPException(400, f"Could not save — run migration 254_commission_ma_product_class.sql first. [{e}]")
 
 
+class ConfirmMaProductClassIn(LaxModel):
+    source_report: str = ""
+    product_names: Any = None
+    items: Any = None
+    all: Any = None
+
+
 @router.post("/ma-product-class/confirm")
-def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def confirm_ma_product_class(body: ConfirmMaProductClassIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """CONFIRM proposals — the owner's decision step. body: {product_names: [..]} or {all: true} to
     confirm every proposed row for the source. Confirming only changes `status`; it never re-classifies
     a name and never touches a payout. Returns what it confirmed."""
     require_org(org_id)
-    sr = (body.get("source_report") or "ma_daily_tx").strip()
-    names = [ma_product_class.normalize(n) for n in (body.get("product_names") or []) if str(n).strip()]
+    sr = (body.source_report or "ma_daily_tx").strip()
+    names = [ma_product_class.normalize(n) for n in (body.product_names or []) if str(n).strip()]
     # OWNER REPORT 2026-08-11: "the proposed mapping when you hit confirm does not save it and the
     # subsidy is not going away". CONFIRM USED TO ONLY *UPDATE* ROWS THAT ALREADY EXISTED. The page
     # lists every distinct product_name in the feed and shows the built-in PROPOSAL beside it — but a
@@ -5146,14 +5161,14 @@ def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: st
     # caller's own `items` (what the UI displayed), else from the built-in proposal for that exact
     # name. A name with neither is still reported in `not_found` rather than guessed at.
     items = {}
-    for it in (body.get("items") or []):
+    for it in (body.items or []):
         n = ma_product_class.normalize((it or {}).get("product_name"))
         c = ma_product_class.normalize((it or {}).get("product_class"))
         if n and c:
             items[n] = c
             if n not in names:
                 names.append(n)
-    if not names and not body.get("all"):
+    if not names and not body.all:
         raise HTTPException(400, "product_names[], items[] or all=true is required")
     client = sb()
     map_rows, ready = _mpc_map_rows(client, org_id, sr)
@@ -5166,7 +5181,7 @@ def confirm_ma_product_class(body: dict, org_id: str = ORG_ID, authorization: st
     who, now = _mpc_who(authorization), column_mapping.now_iso()
     targets = [r for r in map_rows
                if (r.get("status") or "proposed") != "confirmed"
-               and (body.get("all") or ma_product_class.normalize(r.get("product_name")) in names)]
+               and (body.all or ma_product_class.normalize(r.get("product_name")) in names)]
     done = []
     for r in targets:
         try:
@@ -5347,21 +5362,28 @@ def _can_edit_ma_class_wiring(authorization, org_id):
         return True
 
 
+class MaClassWiringModeIn(LaxModel):
+    consumer: str = ""
+    mode: str = ""
+    source_report: str = ""
+    note: Any = None
+
+
 @router.put("/ma-class-wiring/mode")
-def put_ma_class_wiring_mode(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def put_ma_class_wiring_mode(body: MaClassWiringModeIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """Flip ONE consumer between 'legacy' and 'class'. body: {consumer, mode, source_report?, note?}.
     Admin-gated (money posture). 400 — never 500 — until migration 265 is applied."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    consumer = (body.get("consumer") or "").strip()
-    mode = (body.get("mode") or "").strip().lower()
+    consumer = (body.consumer or "").strip()
+    mode = (body.mode or "").strip().lower()
     if consumer not in ma_class_wiring.CONSUMERS:
         raise HTTPException(400, "consumer must be one of %s" % ", ".join(ma_class_wiring.CONSUMERS))
     if mode not in ma_class_wiring.MODES:
         raise HTTPException(400, "mode must be one of %s" % ", ".join(ma_class_wiring.MODES))
     row = {"org_id": org_id, "consumer": consumer, "mode": mode,
-           "source_report": (body.get("source_report") or "ma_daily_tx").strip(),
-           "note": (body.get("note") or None),
+           "source_report": (body.source_report or "ma_daily_tx").strip(),
+           "note": (body.note or None),
            "updated_by": _mpc_who(authorization), "updated_at": column_mapping.now_iso()}
     try:
         (sb().schema("commcalc").table(ma_class_wiring.CONFIG_TABLE)
@@ -5375,14 +5397,19 @@ def put_ma_class_wiring_mode(body: dict, org_id: str = ORG_ID, authorization: st
                        "This consumer is back on its legacy selection — nothing here reads a class.")}
 
 
+class MaClassWiringLegIn(LaxModel):
+    product_class: Any = None
+    income_leg: Any = None
+
+
 @router.put("/ma-class-wiring/leg")
-def put_ma_class_wiring_leg(body: dict, org_id: str = ORG_ID, authorization: str = Header(None)):
+def put_ma_class_wiring_leg(body: MaClassWiringLegIn, org_id: str = ORG_ID, authorization: str = Header(None)):
     """Map ONE product class to a carrier-income leg. body: {product_class, income_leg}.
     Only takes effect while carrier_income is in 'class' mode. Admin-gated."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    cls = ma_class_wiring.normalize(body.get("product_class"))
-    leg = ma_class_wiring.normalize(body.get("income_leg")).lower()
+    cls = ma_class_wiring.normalize(body.product_class)
+    leg = ma_class_wiring.normalize(body.income_leg).lower()
     if not cls or cls == ma_product_class.UNMAPPED:
         raise HTTPException(400, "product_class is required and may not be the reserved 'unmapped'")
     if leg not in ma_class_wiring.INCOME_LEGS:

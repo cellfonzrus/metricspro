@@ -302,8 +302,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     batches. **Part 11:** commcalc mapping/registry upserts (column-mapping,
     commission-field create, target-field create, commission-category-map → lax;
     presence via model_fields_set, int/enum-validated fields typed Any).
-    ~338 `dict` bodies remain (body-threading endpoints get a dedicated
-    pass; POS skipped — incomplete/no data).
+    **Part 12:** commcalc MA class wiring (mode flip, class→leg map) + MA
+    product-class (upsert one, confirm proposals) → lax; normalize/enum-validated
+    fields typed Any. ~334 `dict` bodies remain (body-threading endpoints get a
+    dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
