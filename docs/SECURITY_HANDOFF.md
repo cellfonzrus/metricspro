@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt6) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt7a) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–6 = 25 endpoints; ~408 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–7a = 32 endpoints; ~401 remain) |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -77,7 +77,7 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
 ## 4. In flight / next steps
 
 - **Item 15 (Pydantic), continue incrementally.** Done: parts 1–5 (containment/export/auth-ledger
-  strict; auth self-service, admin/RBAC, CRM writes, asset borrowings, account company mgmt lax). Next candidates by size:
+  strict; auth self-service, admin/RBAC, CRM writes, asset borrowings, account company mgmt, storeops org-structure lax). Next candidates by size:
   commcalc (125), storeops (50), pos (43), hr (32), helpdesk (29). **Rules:** skip endpoints that
   thread the raw `body` dict into shared helpers; preserve None-vs-empty + downstream `.get()`; for a
   field the handler validates itself (e.g. `float(amount)` → 400), type it `Any` so Pydantic doesn't

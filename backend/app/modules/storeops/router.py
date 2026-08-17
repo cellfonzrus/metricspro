@@ -3,11 +3,13 @@ import base64
 import os
 import requests
 import time
+from typing import Any
 from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
+from app.core.schemas import LaxModel
 from app.core import scope as _cscope
 from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops.pto_accrual import (
@@ -5114,6 +5116,42 @@ def org_build_standard(org_id: str = ORG_ID):
             "markets": len(district_by_market), "stores_placed": placed}
 
 
+# ── org-structure request models (item 15 part 7a) — LaxModel so existing callers never break; fields
+#    the handler validates itself (rank/int, is_active) are Any so a 400/no-op path stands, not a 422;
+#    PUT/PATCH handlers use body.model_fields_set to keep "update only the keys actually sent". ──────
+class OrgLevelCreateIn(LaxModel):
+    name: str = ""
+    rank: Any = None
+
+
+class OrgLevelUpdateIn(LaxModel):
+    name: str = ""
+    rank: Any = None
+
+
+class OrgUnitCreateIn(LaxModel):
+    name: str = ""
+    parent_id: Any = None
+    level_id: Any = None
+    sort_order: Any = None
+
+
+class OrgUnitUpdateIn(LaxModel):
+    name: str = ""
+    parent_id: Any = None
+    level_id: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+
+
+class OrgManagerAddIn(LaxModel):
+    employee_id: str = ""
+
+
+class OrgUnitRefIn(LaxModel):
+    unit_id: Any = None
+
+
 # ── levels ───────────────────────────────────────────────────────────────────────────────────────
 @router.get("/org/levels")
 def org_levels_list(org_id: str = ORG_ID):
@@ -5121,11 +5159,11 @@ def org_levels_list(org_id: str = ORG_ID):
 
 
 @router.post("/org/levels")
-def org_level_create(body: dict, org_id: str = ORG_ID):
-    name = (body.get("name") or "").strip()
+def org_level_create(body: OrgLevelCreateIn, org_id: str = ORG_ID):
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Level name required.")
-    rank = body.get("rank")
+    rank = body.rank
     if rank is None:
         top = sb().table("org_levels").select("rank").eq("org_id", org_id).order("rank", desc=True).limit(1).execute().data or []
         rank = (top[0]["rank"] + 1) if top else 0
@@ -5135,13 +5173,14 @@ def org_level_create(body: dict, org_id: str = ORG_ID):
 
 
 @router.put("/org/levels/{level_id}")
-def org_level_update(level_id: int, body: dict, org_id: str = ORG_ID):
+def org_level_update(level_id: int, body: OrgLevelUpdateIn, org_id: str = ORG_ID):
     """org_id-scoped so a foreign level_id is a no-op instead of a cross-tenant write."""
     upd = {}
-    if "name" in body:
-        upd["name"] = (body.get("name") or "").strip()
-    if "rank" in body:
-        upd["rank"] = int(body.get("rank"))
+    sent = body.model_fields_set
+    if "name" in sent:
+        upd["name"] = (body.name or "").strip()
+    if "rank" in sent:
+        upd["rank"] = int(body.rank)
     if upd:
         sb().table("org_levels").update(upd).eq("id", level_id).eq("org_id", org_id).execute()
     return {"ok": True}
@@ -5159,24 +5198,25 @@ def org_level_delete(level_id: int, org_id: str = ORG_ID):
 
 # ── units ────────────────────────────────────────────────────────────────────────────────────────
 @router.post("/org/units")
-def org_unit_create(body: dict, org_id: str = ORG_ID):
-    name = (body.get("name") or "").strip()
+def org_unit_create(body: OrgUnitCreateIn, org_id: str = ORG_ID):
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Unit name required.")
-    row = {"org_id": org_id, "name": name, "parent_id": body.get("parent_id"),
-           "level_id": body.get("level_id"), "sort_order": body.get("sort_order") or 0}
+    row = {"org_id": org_id, "name": name, "parent_id": body.parent_id,
+           "level_id": body.level_id, "sort_order": body.sort_order or 0}
     r = sb().table("org_units").insert(row).execute()
     return r.data[0] if r.data else row
 
 
 @router.put("/org/units/{unit_id}")
-def org_unit_update(unit_id: str, body: dict, org_id: str = ORG_ID):
+def org_unit_update(unit_id: str, body: OrgUnitUpdateIn, org_id: str = ORG_ID):
     """Rename / re-level / reorder / MOVE (set parent_id). Guards against cycles (can't move a unit
     under itself or a descendant)."""
     upd = {}
+    sent = body.model_fields_set
     for k in ("name", "parent_id", "level_id", "sort_order", "is_active"):
-        if k in body:
-            upd[k] = body.get(k)
+        if k in sent:
+            upd[k] = getattr(body, k)
     if "name" in upd:
         upd["name"] = (upd["name"] or "").strip()
     new_parent = upd.get("parent_id")
@@ -5209,8 +5249,8 @@ def org_unit_delete(unit_id: str, org_id: str = ORG_ID):
 
 # ── managers ───────────────────────────────────────────────────────────────────────────────────
 @router.post("/org/units/{unit_id}/managers")
-def org_unit_add_manager(unit_id: str, body: dict, org_id: str = ORG_ID):
-    eid = (body.get("employee_id") or "").strip()
+def org_unit_add_manager(unit_id: str, body: OrgManagerAddIn, org_id: str = ORG_ID):
+    eid = (body.employee_id or "").strip()
     if not eid:
         raise HTTPException(400, "employee_id required.")
     existing = (sb().table("org_managers").select("id").eq("org_id", org_id).eq("unit_id", unit_id)
@@ -5231,10 +5271,10 @@ def org_unit_remove_manager(unit_id: str, employee_id: str, org_id: str = ORG_ID
 
 # ── attach a store to a unit (or unassign with unit_id=null) ─────────────────────────────────────
 @router.put("/org/stores/{store_code}/unit")
-def org_assign_store(store_code: str, body: dict, org_id: str = ORG_ID):
+def org_assign_store(store_code: str, body: OrgUnitRefIn, org_id: str = ORG_ID):
     """org_id-scoped so a foreign store_code is a no-op instead of a cross-tenant write — this
     previously took NO org filter at all."""
-    sb().table("stores").update({"org_unit_id": body.get("unit_id")}).eq("store_code", store_code).eq("org_id", org_id).execute()
+    sb().table("stores").update({"org_unit_id": body.unit_id}).eq("store_code", store_code).eq("org_id", org_id).execute()
     return {"ok": True}
 
 
@@ -5275,14 +5315,14 @@ def org_employees(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.put("/org/employees/{row_id}/unit")
-def org_assign_employee(row_id: str, body: dict, org_id: str = ORG_ID):
+def org_assign_employee(row_id: str, body: OrgUnitRefIn, org_id: str = ORG_ID):
     """Place an employee directly on a unit (overrides the home-store rollup — for managers / roving /
     overhead staff). unit_id=null clears the override so they fall back to their home store's unit.
 
     Keys on the employees PRIMARY KEY (id), NOT the optional business employee_id — that field is NULL
     for some staff, so keying on it made unplaced/no-Emp-ID employees impossible to assign (the update
     matched no row and silently no-op'd)."""
-    sb().table("employees").update({"org_unit_id": body.get("unit_id")}) \
+    sb().table("employees").update({"org_unit_id": body.unit_id}) \
         .eq("id", row_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
