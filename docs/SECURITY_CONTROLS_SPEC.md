@@ -430,8 +430,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     cash-config, store-closer, alert-recipient, ops-chargeback policy + decision, cash
     pickup/deposit/undo + config, sweep config, expense category/line + decision,
     envelope config + withdrawal, release-row) → lax. `create_row` stays deferred
-    (dynamic count/tender config axes + nested expense_lines). ~129 `dict` bodies remain
-    (core, storeops helpers, misc; POS skipped — incomplete/no data).
+    (dynamic count/tender config axes + nested expense_lines). **Part 49 (account +
+    storeops/payroll_approval + hr/letters — all swept):** account journal/inventory-values/
+    config; payroll approvals decide/payer/override/payer-CRUD/store-payers/dispatch;
+    hr letters template/send/approve/reject/config → lax. ~114 `dict` bodies remain
+    (core — mostly auth/admin already typed early — + misc; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

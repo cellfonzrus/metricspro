@@ -31,14 +31,70 @@ sentinel object instead of a string — the exact class of bug that made the HR 
 Never call a route handler in-process without passing its header params as real strings.
 """
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
 
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 
 router = APIRouter()
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+class PayrollDecideIn(LaxModel):
+    stage: Any = None
+    period_start: Any = None
+    period_end: Any = None
+    rows: Any = None
+
+
+class SetPayerIn(LaxModel):
+    period_start: Any = None
+    period_end: Any = None
+    employee_ids: Any = None
+    payer_id: Any = None
+
+
+class PayrollOverrideIn(LaxModel):
+    period_start: Any = None
+    period_end: Any = None
+    employee_ids: Any = None
+    clear: Any = None
+    reason: Any = None
+
+
+class CreatePayerIn(LaxModel):
+    name: Any = None
+    kind: Any = None
+    email: Any = None
+    phone: Any = None
+    dm_employee_id: Any = None
+    note: Any = None
+    is_default: Any = None
+
+
+class UpdatePayerIn(LaxModel):
+    name: Any = None
+    email: Any = None
+    phone: Any = None
+    dm_employee_id: Any = None
+    note: Any = None
+    kind: Any = None
+    is_active: Any = None
+    is_default: Any = None
+
+
+class SetStorePayersIn(LaxModel):
+    stores: Any = None
+
+
+class PayrollDispatchIn(LaxModel):
+    period_start: Any = None
+    period_end: Any = None
+    employee_ids: Any = None
+    dry_run: Any = None
 
 _STAGES = ("dm", "hr")
 _ACTIONS = ("approve", "send_back", "reset")
@@ -617,7 +673,7 @@ def _base_row(org_id, s, e, eid, store, src):
 
 
 @router.post("/payroll/approvals/decide")
-def decide(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide(body: PayrollDecideIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Record DM or HR decisions for one or more employees.
 
     Body: {stage:'dm'|'hr', period_start, period_end, rows:[{employee_id, action:'approve'|
@@ -629,16 +685,16 @@ def decide(body: dict, authorization: str = Header(default=""), org_id: str = OR
     Management-gated (the same tier as every other hours-affecting write)."""
     from app.modules.storeops.router import _require_manager, _log_payroll_change
 
-    stage = (body.get("stage") or "").strip().lower()
+    stage = (body.stage or "").strip().lower()
     if stage not in _STAGES:
         raise HTTPException(400, "stage must be 'dm' or 'hr'")
-    rows = body.get("rows") or []
+    rows = body.rows or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
 
     who = _require_manager(authorization, org_id) or {}
     actor = (who.get("email") or "").strip() or "unknown"
-    s, e = _resolve_period(org_id, body.get("period_start"), body.get("period_end"))
+    s, e = _resolve_period(org_id, body.period_start, body.period_end)
 
     hours = {h.get("employee_id"): h for h in _hours_for_period(org_id, s, e, authorization)}
     saved = _existing(org_id, s, e)
@@ -756,18 +812,18 @@ def decide(body: dict, authorization: str = Header(default=""), org_id: str = OR
 
 
 @router.post("/payroll/approvals/payer")
-def set_payer(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def set_payer(body: SetPayerIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Route employees to a payer for THIS period. Body: {period_start, period_end, employee_ids[],
     payer_id | null}. null clears the override so the row falls back to its store's default."""
     from app.modules.storeops.router import _require_manager
     _require_manager(authorization, org_id)
-    ids = [str(i).strip() for i in (body.get("employee_ids") or []) if str(i).strip()]
+    ids = [str(i).strip() for i in (body.employee_ids or []) if str(i).strip()]
     if not ids:
         raise HTTPException(400, "employee_ids[] required")
-    payer_id = body.get("payer_id") or None
+    payer_id = body.payer_id or None
     if payer_id and not any(p["id"] == payer_id for p in _payers(org_id)):
         raise HTTPException(400, "unknown payer for this company")
-    s, e = _resolve_period(org_id, body.get("period_start"), body.get("period_end"))
+    s, e = _resolve_period(org_id, body.period_start, body.period_end)
     hours = {h.get("employee_id"): h for h in _hours_for_period(org_id, s, e, authorization)}
     n = 0
     for eid in ids:
@@ -783,7 +839,7 @@ def set_payer(body: dict, authorization: str = Header(default=""), org_id: str =
 
 
 @router.post("/payroll/approvals/override")
-def override(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def override(body: PayrollOverrideIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin escape hatch: include an employee in the payout despite a missing approval.
 
     Body: {period_start, period_end, employee_ids[], reason}. The reason is REQUIRED and recorded
@@ -797,14 +853,14 @@ def override(body: dict, authorization: str = Header(default=""), org_id: str = 
     # have been a silent always-false: that key is not in _require_manager's payload.
     if not _is_admin(authorization, org_id, who):
         raise HTTPException(403, "only an admin can pay hours that were never approved")
-    ids = [str(i).strip() for i in (body.get("employee_ids") or []) if str(i).strip()]
+    ids = [str(i).strip() for i in (body.employee_ids or []) if str(i).strip()]
     if not ids:
         raise HTTPException(400, "employee_ids[] required")
-    clear = bool(body.get("clear"))
-    reason = (body.get("reason") or "").strip()
+    clear = bool(body.clear)
+    reason = (body.reason or "").strip()
     if not clear and not reason:
         raise HTTPException(400, "a reason is required to pay unapproved hours")
-    s, e = _resolve_period(org_id, body.get("period_start"), body.get("period_end"))
+    s, e = _resolve_period(org_id, body.period_start, body.period_end)
     hours = {h.get("employee_id"): h for h in _hours_for_period(org_id, s, e, authorization)}
     actor = (who.get("email") or "").strip() or "unknown"
     n = 0
@@ -841,7 +897,7 @@ def list_payers(authorization: str = Header(default=""), org_id: str = ORG_ID):
 
 
 @router.post("/payroll/payers")
-def create_payer(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def create_payer(body: CreatePayerIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Add a payer. Body: {name, kind:'accounting'|'dm'|'third_party', email?, phone?,
     dm_employee_id?, note?, is_default?}.
 
@@ -852,21 +908,21 @@ def create_payer(body: dict, authorization: str = Header(default=""), org_id: st
     who = _require_manager(authorization, org_id) or {}
     if not _is_admin(authorization, org_id, who):
         raise HTTPException(403, "only an admin can change who payroll is paid by")
-    name = (body.get("name") or "").strip()
-    kind = (body.get("kind") or "").strip().lower()
+    name = (body.name or "").strip()
+    kind = (body.kind or "").strip().lower()
     if not name:
         raise HTTPException(400, "name required")
     if kind not in ("accounting", "dm", "third_party"):
         raise HTTPException(400, "kind must be accounting, dm or third_party")
-    email = (body.get("email") or "").strip().lower() or None
+    email = (body.email or "").strip().lower() or None
     if kind in ("accounting", "third_party") and not email:
         raise HTTPException(400, f"a '{kind}' payer needs an email — that is where the payout statement goes")
     row = {"org_id": org_id, "name": name, "kind": kind, "email": email,
-           "phone": (body.get("phone") or "").strip() or None,
-           "dm_employee_id": (body.get("dm_employee_id") or "").strip() or None,
-           "note": (body.get("note") or "").strip() or None,
+           "phone": (body.phone or "").strip() or None,
+           "dm_employee_id": (body.dm_employee_id or "").strip() or None,
+           "note": (body.note or "").strip() or None,
            "created_by": (who.get("email") or "")[:200] or None}
-    if body.get("is_default"):
+    if body.is_default:
         _clear_default(org_id)
         row["is_default"] = True
     try:
@@ -885,7 +941,7 @@ def _clear_default(org_id):
 
 
 @router.patch("/payroll/payers/{payer_id}")
-def update_payer(payer_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def update_payer(payer_id: str, body: UpdatePayerIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Edit a payer. Only the fields present are touched. Setting is_default demotes the incumbent."""
     from app.modules.storeops.router import _require_manager
     who = _require_manager(authorization, org_id) or {}
@@ -893,18 +949,18 @@ def update_payer(payer_id: str, body: dict, authorization: str = Header(default=
         raise HTTPException(403, "only an admin can change who payroll is paid by")
     patch = {}
     for k in ("name", "email", "phone", "dm_employee_id", "note"):
-        if k in body:
-            patch[k] = (str(body[k]).strip() or None)
-    if "kind" in body:
-        if body["kind"] not in ("accounting", "dm", "third_party"):
+        if k in body.model_fields_set:
+            patch[k] = (str(getattr(body, k)).strip() or None)
+    if "kind" in body.model_fields_set:
+        if body.kind not in ("accounting", "dm", "third_party"):
             raise HTTPException(400, "kind must be accounting, dm or third_party")
-        patch["kind"] = body["kind"]
-    if "is_active" in body:
-        patch["is_active"] = bool(body["is_active"])
-    if body.get("is_default"):
+        patch["kind"] = body.kind
+    if "is_active" in body.model_fields_set:
+        patch["is_active"] = bool(body.is_active)
+    if body.is_default:
         _clear_default(org_id)
         patch["is_default"] = True
-    elif "is_default" in body:
+    elif "is_default" in body.model_fields_set:
         patch["is_default"] = False
     if not patch:
         raise HTTPException(400, "nothing to update")
@@ -928,14 +984,14 @@ def delete_payer(payer_id: str, authorization: str = Header(default=""), org_id:
 
 
 @router.put("/payroll/store-payers")
-def set_store_payers(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def set_store_payers(body: SetStorePayersIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Set the DEFAULT payer for one or more stores. Body: {stores:{store_code: payer_id|null}}.
     null removes the mapping so the store falls back to the org default."""
     from app.modules.storeops.router import _require_manager
     who = _require_manager(authorization, org_id) or {}
     if not _is_admin(authorization, org_id, who):
         raise HTTPException(403, "only an admin can change who payroll is paid by")
-    stores = body.get("stores")
+    stores = body.stores
     if not isinstance(stores, dict) or not stores:
         raise HTTPException(400, "stores{} required")
     valid = {p["id"] for p in _payers(org_id)}
@@ -1002,7 +1058,7 @@ def _statement_html(tenant_name, payer_label, s, e, rows, total_hours, total_pay
 
 
 @router.post("/payroll/approvals/dispatch")
-async def dispatch(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def dispatch(body: PayrollDispatchIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """HR's final action: send each payer the employees THEY pay.
 
     Body: {period_start, period_end, employee_ids?[] (default: every payable row), dry_run?}.
@@ -1013,12 +1069,12 @@ async def dispatch(body: dict, authorization: str = Header(default=""), org_id: 
     who = _require_manager(authorization, org_id) or {}
     if not _is_admin(authorization, org_id, who):
         raise HTTPException(403, "only an admin or HR lead can send payroll to the payers")
-    s, e = _resolve_period(org_id, body.get("period_start"), body.get("period_end"))
+    s, e = _resolve_period(org_id, body.period_start, body.period_end)
     listing = list_approvals(start=s.isoformat(), end=e.isoformat(),
                              authorization=authorization, org_id=org_id)
     if not listing.get("ready"):
         raise HTTPException(400, listing.get("note") or "payroll approvals not installed")
-    only = {str(i).strip() for i in (body.get("employee_ids") or []) if str(i).strip()}
+    only = {str(i).strip() for i in (body.employee_ids or []) if str(i).strip()}
     rows = [r for r in listing["rows"] if (not only or r["employee_id"] in only)]
     held = [r for r in rows if not r["payable"]]
     payable = [r for r in rows if r["payable"]]
@@ -1046,7 +1102,7 @@ async def dispatch(body: dict, authorization: str = Header(default=""), org_id: 
             continue
         groups.setdefault(email, {"label": label or email, "rows": []})["rows"].append(r)
 
-    if body.get("dry_run"):
+    if body.dry_run:
         return {"period_start": s.isoformat(), "period_end": e.isoformat(), "dry_run": True,
                 "would_send": [{"to": k, "label": v["label"], "employees": len(v["rows"]),
                                 "pay": round(sum(x["pay_effective"] or 0 for x in v["rows"]), 2)}

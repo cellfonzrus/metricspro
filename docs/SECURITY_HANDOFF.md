@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt48 — closing fully swept) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt49 — account/payroll-approval/hr-letters) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–48 = 304 endpoints; ~129 remain). Fully swept: commcalc, hr, crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router), **closing** (27/28, create_row deferred); payables all-but-1. |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–49 = 319 endpoints; ~114 remain). Fully swept: commcalc, hr(+letters), crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router), closing(27/28), account, storeops/payroll_approval; payables all-but-1. Remaining: core (32, mostly auth/admin done early), storeops/router misc, small core/* files. |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -210,9 +210,14 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   `will_deposit_more` preserves its 3-state None/absent semantics the same way; `create_expense_line`
   hands `_validate_expense_line` (shared dict-based helper, also fed nested rows from create_row) an
   explicit dict built from the model. ONLY `create_row` stays DEFERRED (huge money-handler with
-  dynamic `counts`/`custom_tenders` config-driven axes + nested `expense_lines`). Then core (32, many
-  auth/admin already done early) + misc small files (storeops/payroll_approval 7, hr/letters 5,
-  account 3, core/* helpers). Next: run
+  dynamic `counts`/`custom_tenders` config-driven axes + nested `expense_lines`).
+  **Part 49 (account + storeops/payroll_approval + hr/letters — all swept):** account put_journal /
+  put_inventory_values (nested `rows`) / put_config (5 finance knobs, presence via model_fields_set);
+  payroll_approval decide, set_payer, override, create_payer, update_payer (allow-list),
+  set_store_payers, dispatch; hr/letters update_template, send_letter, approve_letter (opt),
+  reject_letter (opt), put_letters_config (all with a Pydantic field literally named `body` where the
+  endpoint's own param is also `body` — `body.body` works in v2). Then core (32, many
+  auth/admin already done early) + misc small files (core/* helpers, storeops/router misc). Next: run
   `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data).
   **Rules:** skip endpoints that thread the raw
   `body` dict into shared helpers (unless the callee is also being typed — then share/inherit a model),
