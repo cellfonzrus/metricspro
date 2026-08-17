@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt10) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt11) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–10 = 91 endpoints; ~342 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–11 = 95 endpoints; ~338 remain) |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -87,8 +87,11 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   settings put, AI-assist, escalate → lax). **helpdesk done** except `_clean`/`new_fix_row` threaders
   (deferred). **Part 10:** commcalc config CRUD (carrier/connector/report-def create+update, nav-label,
   nav-layout → lax). commcalc is the big one (~124 dict bodies, money-sensitive) — take in careful
-  batches, reading each function's exact span first. Next commcalc candidates: config upserts
-  (column-mapping, commission/target fields, category maps, MA class wiring, accessory defs). hr (~32,
+  batches, reading each function's exact span first. **Part 11:** commcalc mapping/registry upserts
+  (column-mapping, commission-field, target-field, commission-category-map). Next commcalc candidates:
+  MA class wiring (put mode/leg, product-class upsert/confirm), accessory defs, upload-duty/item-category
+  config, connector-schedule, plan/category settings (put_commission_settings et al — money-sensitive,
+  read each first). hr (~32,
   many freeform-intake / public-token endpoints — treat like body-threading). **POS skipped** — module
   incomplete / no data. **Rules:** skip
   endpoints that

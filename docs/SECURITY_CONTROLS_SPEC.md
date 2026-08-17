@@ -299,7 +299,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     create/update, nav-label + nav-layout → lax; presence loops via
     model_fields_set, handler-validated int/url fields typed Any). commcalc is the
     large module (~124 dict bodies) — being taken in careful money-sensitive
-    batches. ~342 `dict` bodies remain (body-threading endpoints get a dedicated
+    batches. **Part 11:** commcalc mapping/registry upserts (column-mapping,
+    commission-field create, target-field create, commission-category-map → lax;
+    presence via model_fields_set, int/enum-validated fields typed Any).
+    ~338 `dict` bodies remain (body-threading endpoints get a dedicated
     pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

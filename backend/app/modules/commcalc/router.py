@@ -3435,26 +3435,37 @@ def column_mapping_readiness(carrier_id: str = "", org_id: str = ORG_ID):
     return {"reports": reports, "outputs": outputs}
 
 
+class ColumnMappingIn(LaxModel):
+    report_key: str = ""
+    target_field: str = ""
+    source_header: str = ""
+    transform: str = ""
+    carrier_id: Any = None
+    is_active: Any = True
+    priority: Any = None
+    id: Any = None
+
+
 @router.post("/column-mapping")
-def upsert_column_mapping(body: dict, org_id: str = ORG_ID):
+def upsert_column_mapping(body: ColumnMappingIn, org_id: str = ORG_ID):
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
-    tf = (body.get("target_field") or "").strip()
-    sh = (body.get("source_header") or "").strip()
+    rk = (body.report_key or "").strip()
+    tf = (body.target_field or "").strip()
+    sh = (body.source_header or "").strip()
     if not rk or not tf or not sh:
         raise HTTPException(400, "report_key, target_field and source_header are required")
-    transform = (body.get("transform") or "text").strip()
+    transform = (body.transform or "text").strip()
     if transform not in column_mapping.TRANSFORMS:
         raise HTTPException(400, "transform must be one of " + "|".join(column_mapping.TRANSFORM_KEYS))
-    row = {"org_id": org_id, "report_key": rk, "carrier_id": body.get("carrier_id") or None,
+    row = {"org_id": org_id, "report_key": rk, "carrier_id": body.carrier_id or None,
            "target_field": tf, "source_header": sh, "transform": transform,
-           "is_active": body.get("is_active", True) is not False,
-           "priority": int(body.get("priority") or 100),
+           "is_active": body.is_active is not False,
+           "priority": int(body.priority or 100),
            "updated_at": column_mapping.now_iso()}
     client = sb()
-    if body.get("id"):
-        client.schema("commcalc").table("column_mapping").update(row).eq("id", body["id"]).execute()
-        return {"ok": True, "id": body["id"]}
+    if body.id:
+        client.schema("commcalc").table("column_mapping").update(row).eq("id", body.id).execute()
+        return {"ok": True, "id": body.id}
     r = client.schema("commcalc").table("column_mapping").upsert(
         row, on_conflict="org_id,report_key,carrier_id,target_field").execute()
     return r.data[0] if r.data else row
@@ -3886,21 +3897,32 @@ def list_commission_fields(report_key: str = "carrier_commission", org_id: str =
             "catalog_ready": bool(raw)}
 
 
+class CommissionFieldIn(LaxModel):
+    label: str = ""
+    target_field: Any = None
+    report_key: Any = None
+    kind: Any = None
+    data_type: Any = None
+    is_amount: Any = None
+    month_index: Any = None
+    sort_order: Any = None
+
+
 @router.post("/commission-fields")
-def create_commission_field(body: dict, org_id: str = ORG_ID):
+def create_commission_field(body: CommissionFieldIn, org_id: str = ORG_ID):
     """Create a NEW commission category → adds the physical column on carrier_commission (via RPC) AND a
     catalog row. body: {report_key?, label, kind?, data_type?, is_amount?, month_index?, target_field?}.
     Returns a clear 400 (not a 500) if migration 067 isn't installed yet."""
     require_org(org_id)
-    label = (body.get("label") or "").strip()
-    if not label and not body.get("target_field"):
+    label = (body.label or "").strip()
+    if not label and not body.target_field:
         raise HTTPException(400, "label (or target_field) is required")
     try:
         row = commission_catalog.add_field(
-            sb(), org_id, body.get("report_key") or "carrier_commission",
-            label=label, kind=body.get("kind") or "other", data_type=body.get("data_type") or "number",
-            is_amount=body.get("is_amount"), month_index=body.get("month_index"),
-            target_field=body.get("target_field"), sort_order=int(body.get("sort_order") or 100))
+            sb(), org_id, body.report_key or "carrier_commission",
+            label=label, kind=body.kind or "other", data_type=body.data_type or "number",
+            is_amount=body.is_amount, month_index=body.month_index,
+            target_field=body.target_field, sort_order=int(body.sort_order or 100))
     except RuntimeError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "field": row}
@@ -3940,27 +3962,38 @@ def list_target_fields(report_key: str = "", org_id: str = ORG_ID):
             "registry_ready": target_registry.table_ready(client)}
 
 
+class TargetFieldIn(LaxModel):
+    report_key: str = ""
+    label: str = ""
+    target_field: Any = None
+    transform: str = ""
+    required: Any = None
+    default_source: Any = None
+    aliases: Any = None
+    sort_order: Any = None
+
+
 @router.post("/target-fields")
-def create_target_field(body: dict, org_id: str = ORG_ID):
+def create_target_field(body: TargetFieldIn, org_id: str = ORG_ID):
     """Create/update a per-tenant target field for ANY report_key. body: {report_key, label, transform?,
     required?, default_source?, aliases?(list|comma-string), sort_order?, target_field?}. NO DDL — this is
     purely the mappable field list. Returns a clear 400 (not a 500) if migration 070 isn't applied."""
     require_org(org_id)
-    rk = (body.get("report_key") or "").strip()
-    label = (body.get("label") or "").strip()
+    rk = (body.report_key or "").strip()
+    label = (body.label or "").strip()
     if not rk:
         raise HTTPException(400, "report_key is required")
-    if not label and not body.get("target_field"):
+    if not label and not body.target_field:
         raise HTTPException(400, "label (or target_field) is required")
-    transform = (body.get("transform") or "text").strip()
+    transform = (body.transform or "text").strip()
     if transform not in column_mapping.TRANSFORMS:
         raise HTTPException(400, "transform must be one of " + "|".join(column_mapping.TRANSFORM_KEYS))
     try:
         row = target_registry.add_field(
             sb(), org_id, rk, label=label, transform=transform,
-            required=bool(body.get("required")), default_source=body.get("default_source") or "",
-            aliases=body.get("aliases"), sort_order=int(body.get("sort_order") or 100),
-            target_field=body.get("target_field"))
+            required=bool(body.required), default_source=body.default_source or "",
+            aliases=body.aliases, sort_order=int(body.sort_order or 100),
+            target_field=body.target_field)
     except Exception as e:
         raise HTTPException(400, f"Could not save — run migration 070_target_field_registry.sql first. [{e}]")
     return {"ok": True, "field": row}
@@ -4750,38 +4783,50 @@ def get_commission_category_map(source_report: str = "ma_daily_tx", org_id: str 
                          "labels whose month-of-life the source never states.")}
 
 
+class CommissionCategoryMapIn(LaxModel):
+    source_report: str = ""
+    pattern: str = ""
+    category: str = ""
+    match_field: str = ""
+    match_op: str = ""
+    sign_rule: str = ""
+    priority: Any = None
+    leg_bucket: Any = None
+    id: Any = None
+
+
 @router.post("/commission-category-map")
-def upsert_commission_category_map(body: dict, org_id: str = ORG_ID):
+def upsert_commission_category_map(body: CommissionCategoryMapIn, org_id: str = ORG_ID):
     """Create/update one classification rule. body: {id?, source_report, match_field, match_op, pattern,
     category, sign_rule?, priority?}. 400 (not 500) if migration 071 isn't applied."""
     require_org(org_id)
-    sr = (body.get("source_report") or "ma_daily_tx").strip()
-    pattern = (body.get("pattern") or "").strip()
-    category = (body.get("category") or "").strip().lower()
+    sr = (body.source_report or "ma_daily_tx").strip()
+    pattern = (body.pattern or "").strip()
+    category = (body.category or "").strip().lower()
     if not pattern or not category:
         raise HTTPException(400, "pattern and category are required")
-    mf = (body.get("match_field") or "product_name").strip()
-    op = (body.get("match_op") or "contains").strip()
-    sign = (body.get("sign_rule") or "negative_only").strip()
+    mf = (body.match_field or "product_name").strip()
+    op = (body.match_op or "contains").strip()
+    sign = (body.sign_rule or "negative_only").strip()
     if mf not in commission_ledger.MATCH_FIELDS or op not in commission_ledger.MATCH_OPS or sign not in commission_ledger.SIGN_RULES:
         raise HTTPException(400, "invalid match_field / match_op / sign_rule")
     row = {"org_id": org_id, "source_report": sr, "match_field": mf, "match_op": op, "pattern": pattern,
-           "category": category, "sign_rule": sign, "priority": int(body.get("priority") or 100),
+           "category": category, "sign_rule": sign, "priority": int(body.priority or 100),
            "is_seeded": False, "updated_at": column_mapping.now_iso()}
     client = sb()
     # COMMISSION LEG override (mig 274). '' / absent = DERIVE (the default, and what every existing rule
     # keeps). Only written when the column actually exists, so this endpoint still works pre-274.
-    if "leg_bucket" in body:
-        lb = str(body.get("leg_bucket") or "").strip().lower()
+    if "leg_bucket" in body.model_fields_set:
+        lb = str(body.leg_bucket or "").strip().lower()
         if lb and lb not in commission_ledger.LEG_BUCKETS:
             raise HTTPException(400, f"leg_bucket must be blank (derive) or one of "
                                      f"{', '.join(commission_ledger.LEG_BUCKETS)}")
         if "leg_bucket" in _known_columns(client, "commission_category_map", ["leg_bucket"]):
             row["leg_bucket"] = lb or None
     try:
-        if body.get("id"):
-            client.schema("commcalc").table("commission_category_map").update(row).eq("id", body["id"]).execute()
-            return {"ok": True, "id": body["id"]}
+        if body.id:
+            client.schema("commcalc").table("commission_category_map").update(row).eq("id", body.id).execute()
+            return {"ok": True, "id": body.id}
         r = client.schema("commcalc").table("commission_category_map").upsert(
             row, on_conflict="org_id,source_report,match_field,match_op,pattern").execute()
         return {"ok": True, "rule": (r.data[0] if r.data else row)}
