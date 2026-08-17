@@ -27061,18 +27061,26 @@ def agency_delete_link(link_id: str, org_id: str = ORG_ID, authorization: str = 
     return _agency.delete_link(sb(), org_id, link_id)
 
 
+class AgencySetConsentIn(LaxModel):
+    status: str = ""
+
+
 @router.post("/agency/links/{link_id}/consent")
-def agency_set_consent(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def agency_set_consent(link_id: str, body: AgencySetConsentIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
     _require_agency_edit(authorization, org_id)   # M2: master-recorded (offline) consent is admin-gated
-    return _agency.set_consent(sb(), org_id, link_id, (body.get("status") or ""), _agency_who(authorization, org_id))
+    return _agency.set_consent(sb(), org_id, link_id, (body.status or ""), _agency_who(authorization, org_id))
+
+
+class AgencySetCarriersIn(LaxModel):
+    carrier_ids: Any = None
 
 
 @router.post("/agency/links/{link_id}/carriers")
-def agency_set_carriers(link_id: str, body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def agency_set_carriers(link_id: str, body: AgencySetCarriersIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     require_org(org_id)
     _require_agency_edit(authorization, org_id)
-    return _agency.set_carriers(sb(), org_id, link_id, (body.get("carrier_ids") or []), _agency_who(authorization, org_id))
+    return _agency.set_carriers(sb(), org_id, link_id, (body.carrier_ids or []), _agency_who(authorization, org_id))
 
 
 @router.get("/agency/sub-lookup")
@@ -27243,12 +27251,16 @@ def agency_reject_transfer(tid: str, org_id: str = ORG_ID, authorization: str = 
 
 
 # ── invoices ──────────────────────────────────────────────────────────────────────────────────────────
+class AgencyGenerateInvoiceIn(LaxModel):
+    period: str = ""
+
+
 @router.post("/agency/links/{link_id}/invoices/generate")
-def agency_generate_invoice(link_id: str, body: dict = None, period: str = "", org_id: str = ORG_ID,
+def agency_generate_invoice(link_id: str, body: Optional[AgencyGenerateInvoiceIn] = None, period: str = "", org_id: str = ORG_ID,
                             authorization: str = Header(default="")):
     require_org(org_id)
     _require_agency_edit(authorization, org_id)
-    per = period or ((body or {}).get("period") or "")
+    per = period or ((body.period if body else "") or "")
     if not per:
         raise HTTPException(400, "period is required")
     return _agency.generate_invoice(sb(), org_id, link_id, per, _agency_who(authorization, org_id))

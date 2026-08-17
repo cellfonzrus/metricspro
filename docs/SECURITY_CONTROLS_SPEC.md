@@ -355,8 +355,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     **Part 30:** commcalc ma-overview recon (tile-config put — 17-field TILE_FIELDS
     allow-list via model_fields_set — and carrier rate-plan put) → lax.
     custom-report-defs save threads `body` into `validate_definition` (deferred).
-    ~267 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
-    skipped — incomplete/no data).
+    **Part 31:** commcalc agency set-consent, set-carriers, generate-invoice
+    (optional body) → lax; the six agency `upsert_*` / add-transfer handlers thread
+    `body` into `_agency.*` helpers (deferred). ~264 `dict` bodies remain
+    (body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
+    data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
