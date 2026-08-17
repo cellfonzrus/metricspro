@@ -76,8 +76,12 @@ def get_auth_config():
     return {"rbac_enabled": _rbac_enabled_flag()}
 
 
+class AuthConfigIn(LaxModel):
+    rbac_enabled: bool = False
+
+
 @router.put("/auth-config")
-def set_auth_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def set_auth_config(body: AuthConfigIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                     x_active_org: str = Header(default="")):
     """Flip login enforcement on/off (from the Roles admin). Once ON, every user must sign in.
 
@@ -86,7 +90,7 @@ def set_auth_config(body: dict, org_id: str = ORG_ID, authorization: str = Heade
     admin must NOT be able to flip it for everyone: it is gated to super-admins (or the bootstrap
     house-org admin), exactly like the other platform-level operations."""
     _require_super_admin(authorization, x_active_org)
-    enabled = bool(body.get("rbac_enabled"))
+    enabled = bool(body.rbac_enabled)
     if enabled:
         # LOCKOUT GUARD (2026-08-14 incident): turning enforcement ON while no active account holds the
         # Admin role locks EVERYONE out — the "You're signed in, but no role has been assigned" self-
@@ -827,16 +831,24 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
             "temp_password": (None if password else pw), "auth_created": created, "auth_error": err}
 
 
+class CreateTenantIn(LaxModel):
+    name: str = ""
+    admin_email: str = ""
+    admin_name: str = ""
+    temp_password: str = ""
+    slug: str = ""
+
+
 @router.post("/tenants")
-def create_tenant(body: dict, authorization: str = Header(default="")):
+def create_tenant(body: CreateTenantIn, authorization: str = Header(default="")):
     """Super-admin: create a tenant + provision its first admin login (returns a temp password)."""
     _require_super_admin(authorization)
-    name = (body.get("name") or "").strip()
-    admin_email = (body.get("admin_email") or "").strip().lower()
+    name = (body.name or "").strip()
+    admin_email = (body.admin_email or "").strip().lower()
     if not name or not admin_email:
         raise HTTPException(400, "name and admin_email required")
-    return _provision_tenant(sb(), name, admin_email, body.get("admin_name"),
-                             password=body.get("temp_password"), slug=body.get("slug"), must_reset=True)
+    return _provision_tenant(sb(), name, admin_email, (body.admin_name or None),
+                             password=(body.temp_password or None), slug=(body.slug or None), must_reset=True)
 
 
 # ─────────────────────────────────────────────
@@ -855,14 +867,20 @@ def list_super_admins(authorization: str = Header(default="")):
     return {"super_admins": rows}
 
 
+class CreateSuperAdminIn(LaxModel):
+    email: str = ""
+    temp_password: str = ""
+    full_name: str = ""
+
+
 @router.post("/super-admins")
-def create_super_admin(body: dict, authorization: str = Header(default="")):
+def create_super_admin(body: CreateSuperAdminIn, authorization: str = Header(default="")):
     """Super-admin: mint OR elevate a PLATFORM super-admin. A brand-new email gets a Supabase Auth
     login created (house org = the platform home; super_admin bypasses tenant scoping regardless of
     org_id) and a temp password returned. An EXISTING login is simply flagged — its password is left
     untouched. Idempotent."""
     _require_super_admin(authorization)
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if not email:
         raise HTTPException(400, "email required")
     client = sb()
@@ -875,13 +893,13 @@ def create_super_admin(body: dict, authorization: str = Header(default="")):
         ).eq("id", existing[0]["id"]).execute()
         return {"email": email, "elevated": True, "created": False, "temp_password": None}
     # New login (or an orphan row without an auth account) → create/link auth + stamp super_admin.
-    chose_pw = bool((body.get("temp_password") or "").strip())
-    pw = (body.get("temp_password") or "").strip() or _gen_temp_pw()
+    chose_pw = bool((body.temp_password or "").strip())
+    pw = (body.temp_password or "").strip() or _gen_temp_pw()
     auth_id, created, err = _create_or_link_auth(get_supabase_admin(), email, pw)
     if not auth_id:
         raise HTTPException(500, f"could not create login: {err}")
     fields = {"org_id": ORG_ID, "auth_id": auth_id, "email": email,
-              "full_name": (body.get("full_name") or "").strip() or None,
+              "full_name": (body.full_name or "").strip() or None,
               "role": "admin", "is_active": True, "super_admin": True,
               "must_reset_password": not chose_pw}
     if existing:
@@ -974,14 +992,22 @@ def signup(body: dict):
             "message": "Company created — sign in with your email and password."}
 
 
+class UpdateTenantIn(LaxModel):
+    name: str = ""
+    is_active: bool = True
+
+
 @router.patch("/tenants/{org_id}")
-def update_tenant(org_id: str, body: dict, authorization: str = Header(default="")):
+def update_tenant(org_id: str, body: UpdateTenantIn, authorization: str = Header(default="")):
     _require_super_admin(authorization)
     upd = {}
-    if "name" in body:
-        upd["name"] = body["name"]
-    if "is_active" in body:
-        upd["is_active"] = bool(body["is_active"])
+    # model_fields_set preserves the original "was this key provided?" semantics (a PATCH updates only
+    # the keys actually sent, not every model field).
+    sent = body.model_fields_set
+    if "name" in sent:
+        upd["name"] = body.name
+    if "is_active" in sent:
+        upd["is_active"] = bool(body.is_active)
     if not upd:
         raise HTTPException(400, "nothing to update")
     sb().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
