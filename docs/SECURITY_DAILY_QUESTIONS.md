@@ -6,9 +6,8 @@ off as they're settled. See `docs/SECURITY_CONTROLS_SPEC.md` for the full plan.
 
 Status legend: ⬜ open · ⏳ in discussion · ✅ decided (record the decision + date inline)
 
-**Migrations status:** 857 ✅ · 858 ✅ · 859 ✅ · 860 ✅ · 861 ✅ · **862 ⬜** (export_event +
-extends the prune function — export governance). Idempotent; backend tolerates it un-run (audit is
-best-effort; watermark/cap still returned).
+**Migrations status:** 857–861 ✅ · **862 ⬜** (export_event + prune) · **863 ⬜** (audit WORM
+triggers — run AFTER 862, it redefines the same prune function). Idempotent.
 
 ---
 

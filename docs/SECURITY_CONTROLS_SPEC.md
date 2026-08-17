@@ -244,6 +244,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     pip-audit + npm audit (SCA), trufflehog (secrets). Non-blocking to start;
     promote to required after the baseline is clean.
 13. **Audit-log tamper-evidence** — WORM triggers / hash-chain on security logs.
+    ✅ **Built.** `core.worm_guard()` (mig 863) makes access_log / login_attempt /
+    export_event / crm_lookup_audit append-only: UPDATE always blocked, DELETE
+    allowed only from inside the retention job (transaction-local flag). Blocks
+    tampering even with the service role.
 14. **RPO/RTO + tested restore runbook + incident-response runbook.** ✅ **Built.**
     `docs/INCIDENT_RESPONSE_PLAN.md` + `docs/BACKUP_DR_PLAN.md` (RPO ≤5 min w/
     PITR, RTO ≤2 h, restore procedure + quarterly drill). _Remaining: run the
