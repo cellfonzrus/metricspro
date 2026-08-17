@@ -345,9 +345,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     months) → lax; list-of-cell payloads typed Any, read locally. **Part 27:**
     commcalc FTP + email sweep config/test (ftp config+test, email config+test) →
     lax; write-only password field stays Any and is only persisted when non-empty
-    (unchanged), presence-merge loops via model_fields_set. ~280 `dict` bodies
-    remain (body-threading endpoints get a dedicated pass; POS skipped — incomplete/
-    no data).
+    (unchanged), presence-merge loops via model_fields_set. **Part 28:** commcalc
+    sales-derive window, POS profile, data-source login (SSRF-guarded portal/proxy
+    URLs, password-keep-on-blank), proxy test → lax; `_SOURCE_FIELDS` allow-list
+    filter becomes a model_fields_set loop, defaults preserved via model_fields_set.
+    ~276 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
+    skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

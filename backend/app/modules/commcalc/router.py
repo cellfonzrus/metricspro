@@ -23672,7 +23672,13 @@ def get_sales_derive_config(org_id: str = ORG_ID):
 
 
 @router.put("/sales/derive-config")
-def put_sales_derive_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+class PutSalesDeriveConfigIn(LaxModel):
+    enabled: Any = None
+    days: Any = None
+    retain: Any = None
+
+
+def put_sales_derive_config(body: PutSalesDeriveConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's month-boundary grace window (migration 266). Import-channel setting, so it is
     gated on the SAME 'import_health' settings area as the mailbox/portal editors — not the commission
     pay gate, because this changes WHEN sales are derived and never what anyone is paid.
@@ -23684,9 +23690,9 @@ def put_sales_derive_config(body: dict, org_id: str = ORG_ID, authorization: str
     require_org(org_id)
     _require_import_admin(authorization, org_id)
     cfg = sales_derive.resolve({
-        "enabled": body.get("enabled", True),
-        "days": body.get("days", sales_derive.DEFAULT["days"]),
-        "retain": body.get("retain"),
+        "enabled": body.enabled if "enabled" in body.model_fields_set else True,
+        "days": body.days if "days" in body.model_fields_set else sales_derive.DEFAULT["days"],
+        "retain": body.retain,
     })
     row = {"org_id": org_id, sales_derive.CONFIG_COLUMN: cfg,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
@@ -24008,18 +24014,28 @@ def list_pos_profiles(org_id: str = ORG_ID, pos_key: str = "b2bsoft"):
 
 
 @router.put("/pos-profiles")
-def put_pos_profile(body: dict, org_id: str = ORG_ID):
+class PutPosProfileIn(LaxModel):
+    pos_key: str = ""
+    label: str = ""
+    imap_defaults: Any = None
+    filename_rules: Any = None
+    schedule_defaults: Any = None
+    report_defs: Any = None
+    is_active: Any = True
+
+
+def put_pos_profile(body: PutPosProfileIn, org_id: str = ORG_ID):
     """Edit this tenant's POS standard profile (SAP-configurable — the standard is a config row, not code).
     Degrades gracefully: if mig 200 isn't applied yet, returns ok=False with a hint instead of 500."""
     require_org(org_id)
-    pos_key = (body.get("pos_key") or "b2bsoft").strip() or "b2bsoft"
+    pos_key = (body.pos_key or "b2bsoft").strip() or "b2bsoft"
     row = {"org_id": org_id, "pos_key": pos_key,
-           "label": (body.get("label") or "").strip() or None,
-           "imap_defaults": body.get("imap_defaults") or {},
-           "filename_rules": body.get("filename_rules") or [],
-           "schedule_defaults": body.get("schedule_defaults") or {},
-           "report_defs": body.get("report_defs") or [],
-           "is_active": body.get("is_active", True) is not False,
+           "label": (body.label or "").strip() or None,
+           "imap_defaults": body.imap_defaults or {},
+           "filename_rules": body.filename_rules or [],
+           "schedule_defaults": body.schedule_defaults or {},
+           "report_defs": body.report_defs or [],
+           "is_active": body.is_active is not False,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     try:
         sb().schema("commcalc").table("pos_profile").upsert(row, on_conflict="org_id,pos_key").execute()
@@ -24680,12 +24696,31 @@ def list_data_sources(org_id: str = ORG_ID):
 
 
 @router.put("/data-sources")
-def save_data_source(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+class SaveDataSourceIn(LaxModel):
+    id: Any = None
+    distributor_id: Any = None
+    carrier_id: Any = None
+    processor: Any = None
+    label: Any = None
+    portal_url: Any = None
+    username: Any = None
+    account_id: Any = None
+    password: Any = None
+    proxy_url: Any = None
+    enabled: Any = None
+    frequency: Any = None
+    hour: Any = None
+    notes: Any = None
+    months_back: Any = None
+    auto_pull_after_login: Any = None
+
+
+def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Create/update one login. Omitting password on an update KEEPS the stored one."""
     require_org(org_id)
     _require_import_admin(authorization, org_id)
-    row = {k: body[k] for k in _SOURCE_FIELDS if k in body}
-    if not (row.get("processor") or "").strip() and not body.get("id"):
+    row = {k: getattr(body, k) for k in _SOURCE_FIELDS if k in body.model_fields_set}
+    if not (row.get("processor") or "").strip() and not body.id:
         raise HTTPException(400, "processor is required (e.g. vidapay, total_access, epay)")
     for k in ("distributor_id", "carrier_id"):
         if k in row and not (row[k] or "").strip():
@@ -24711,10 +24746,10 @@ def save_data_source(body: dict, org_id: str = ORG_ID, authorization: str = Head
                 raise HTTPException(400, e.message)
     client = sb()
     try:
-        if body.get("id"):
+        if body.id:
             client.schema("commcalc").table("data_source").update(row)\
-                .eq("id", body["id"]).eq("org_id", org_id).execute()
-            return {"ok": True, "id": body["id"]}
+                .eq("id", body.id).eq("org_id", org_id).execute()
+            return {"ok": True, "id": body.id}
         row["org_id"] = org_id
         r = client.schema("commcalc").table("data_source").insert(row).execute()
         return {"ok": True, "id": (r.data or [{}])[0].get("id")}
@@ -24730,13 +24765,17 @@ def delete_data_source(sid: str, org_id: str = ORG_ID, authorization: str = Head
     return {"ok": True}
 
 
+class TestProxyIn(LaxModel):
+    proxy_url: str = ""
+
+
 @router.post("/data-source/test-proxy")
-def test_proxy(body: dict, org_id: str = ORG_ID):
+def test_proxy(body: TestProxyIn, org_id: str = ORG_ID):
     """Make ONE request through the given proxy_url to an IP-echo, so an operator can confirm a
     residential/allow-listed proxy WORKS (and see the egress IP + country) BEFORE fighting a portal's 2FA.
     Also probes the server's OWN egress (no proxy) for comparison, so 'routed through proxy' is provable.
     Read-only; nothing is stored."""
-    proxy_url = (body.get("proxy_url") or "").strip()
+    proxy_url = (body.proxy_url or "").strip()
     if not proxy_url:
         raise HTTPException(400, "enter a proxy_url first (http://user:pass@host:port)")
     # SSRF GUARD (C4): this endpoint makes a request THROUGH the caller-supplied proxy and returns the
