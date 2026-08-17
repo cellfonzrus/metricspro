@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt36) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt37 — commcalc swept) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–36 = 185 endpoints; ~248 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–37 = 187 endpoints; ~246 remain). **commcalc swept** — 20 leftover handlers all deferred (threaders/freeform/spread). |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -125,7 +125,16 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   `_finreg.normalize_*` → deferred). **Part 34:** mi_save_plan (note: `_actor` internal key needs a
   Pydantic `Field(alias="_actor")` — leading-underscore names are reserved), mi_compute,
   mi_payout_decision, mi_resolve. **Part 35:** atu_config_set, put_flag_rules, upsert_category_rule.
-  After commcalc: hr (~32, many freeform-intake / public-token →
+  **Part 36:** whatif_put_source_config, pay_simulator_simulate, apply_ma_class_wiring_rule_proposals,
+  commission_rule_impact. **Part 37:** seed_ma_product_class, seed_accessory_definition_classes.
+  **✅ commcalc convertible surface COMPLETE** — the 20 remaining `body: dict` handlers are all
+  deferred: body-threaders (save_plan_installment/update_plan_installment→_write_installment_schedule,
+  put_accessory_definition_field_rule→normalize_field_rule, custom_report_defs_save→validate_definition,
+  6× agency→_agency.*, payout_record→record_payout, put_payout_accrual_config→save_config,
+  save_financing_vendor→normalize_vendor, add_financing_detection_rule→normalize_matcher); freeform
+  `else body` maps (put_category_qualification, put_category_payout, put_expected_commission_config,
+  save_setup_fee_config, save_pay_gate); `{**body}` spread (save_payout_exclusion).
+  Next: hr (~32, many freeform-intake / public-token →
   treat like body-threading), then `grep -rn 'body: dict' app/modules` for any other module. The
   group (put_expenses/bulk_apply/upsert_expense_system_line/put_expense_apply_config/apply_expenses),
   ftp/email/data-source/proxy config, report-pull/manual-upload maps, live-login, ma-overview,

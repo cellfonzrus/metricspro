@@ -5257,13 +5257,17 @@ def confirm_ma_product_class(body: ConfirmMaProductClassIn, org_id: str = ORG_ID
             "not_found": unresolved}
 
 
+class SeedMaProductClassIn(LaxModel):
+    source_report: str = ""
+
+
 @router.post("/ma-product-class/seed-proposals")
-def seed_ma_product_class(body: dict = None, org_id: str = ORG_ID):
+def seed_ma_product_class(body: Optional[SeedMaProductClassIn] = None, org_id: str = ORG_ID):
     """Materialise the built-in PROPOSALS as rows for THIS tenant (status='proposed'), skipping names
     already mapped. Migration 254 seeds the house org only; every other tenant seeds itself here, with
     org_id stamped on every insert (RULE ONE: config rows carry the tenant). Idempotent."""
     require_org(org_id)
-    sr = ((body or {}).get("source_report") or "ma_daily_tx").strip()
+    sr = ((body.source_report if body else "") or "ma_daily_tx").strip()
     client = sb()
     map_rows, ready = _mpc_map_rows(client, org_id, sr)
     if not ready:
@@ -6030,7 +6034,7 @@ def confirm_accessory_definition(body: ConfirmAccessoryDefinitionIn, org_id: str
 
 
 @router.post("/accessory-definition/seed-classes")
-def seed_accessory_definition_classes(body: dict = None, org_id: str = ORG_ID):
+def seed_accessory_definition_classes(body: Optional[LaxModel] = None, org_id: str = ORG_ID):
     """Materialise the owner's built-in accessory CLASSES as rows for THIS tenant (status='proposed'),
     skipping keys that already exist. Migration 257 seeds the house org only; every other tenant seeds
     itself here, with org_id stamped on every insert (RULE ONE). Idempotent. No MAPPINGS are seeded —

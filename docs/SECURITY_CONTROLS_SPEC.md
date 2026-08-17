@@ -371,8 +371,13 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     thread `body` into `payout_accrual.*` (deferred). **Part 36:** commcalc whatif
     source-config, pay-simulator (read-only, optional body), MA-class-wiring
     rule-proposals apply, commission-rule-impact (read-only blast radius) → lax.
-    ~248 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
-    skipped — incomplete/no data).
+    **Part 37:** commcalc seed endpoints (ma-product-class seed-proposals,
+    accessory-definition seed-classes; optional bodies) → lax. **commcalc is now
+    fully swept** — all 20 remaining `body: dict` handlers are legitimately deferred
+    (body-threaders into module helpers, freeform `else body` category maps, or
+    `{**body}` spreads). ~246 `dict` bodies remain across other modules (hr next;
+    body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
+    data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
