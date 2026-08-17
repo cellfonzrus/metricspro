@@ -318,7 +318,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     commcalc category-rule + expected-commission money-writes (save-category-rule,
     promote, revoke) → lax; the qualification/payout/expected-config PUTs use `body`
     itself as a freeform category map (the `else body` fallback) and are deferred as
-    freeform-map bodies. ~317 `dict` bodies remain (body-threading endpoints get a
+    freeform-map bodies. **Part 18:** commcalc MRC/payout config (mrc-mapping
+    confirm + bulk-classify, payout-schedule save, product-mrc save) → lax; int/
+    float-validated + presence fields typed Any, per-line loops kept local.
+    update_plan_installment threads `body` into `_write_installment_schedule`
+    (deferred). ~313 `dict` bodies remain (body-threading endpoints get a
     dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

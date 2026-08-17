@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt17) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt18) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–17 = 116 endpoints; ~317 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–18 = 120 endpoints; ~313 remain) |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -97,9 +97,11 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   save-category-rule + expected-commission promote/revoke; **new skip pattern** — put_category_qualification,
   put_category_payout, put_expected_commission_config use `body` ITSELF as a freeform category map
   (`raw = body.get("config") if isinstance(...) else body`), so LaxModel would drop the top-level keys →
-  treat like body-threading, SKIP. Next commcalc candidates: update_plan_installment (check threading),
-  mrc_mapping_confirm/bulk_classify, save_payout_schedule, save_product_mrc, carrier_template_clone,
-  save_distributor — read each first, watch for body-threading AND freeform-map fallbacks. hr (~32,
+  treat like body-threading, SKIP. **Part 18:** mrc-mapping confirm+bulk-classify, payout-schedule,
+  product-mrc; update_plan_installment threads body → deferred. Next commcalc candidates:
+  carrier_template_clone, save_distributor, plus the remaining dict bodies below line ~12500 (sweep with
+  grep 'body: dict' in commcalc/router.py — read each first, watch for body-threading AND freeform-map
+  fallbacks). hr (~32,
   many freeform-intake / public-token endpoints — treat like body-threading). **POS skipped** — module
   incomplete / no data. **Rules:** skip
   endpoints that

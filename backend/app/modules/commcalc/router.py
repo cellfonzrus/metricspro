@@ -12025,18 +12025,24 @@ async def mrc_mapping_candidates(period: str, org_id: str = ORG_ID):
     return {"period": period, "candidates": out, "count": len(out)}
 
 
+class MrcMappingConfirmIn(LaxModel):
+    carrier_id: Any = None
+    match_op: str = ""
+    items: Any = None
+
+
 @router.post("/mrc-mapping/confirm")
-async def mrc_mapping_confirm(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def mrc_mapping_confirm(body: MrcMappingConfirmIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert user-confirmed product_mrc rows (money config → admin-only). Body: {carrier_id?, match_op?,
     items:[{plan, mrc, classification?}]}. Marks each row confirmed=true. Reuses the existing product_mrc
     table (mig 074) — never a new mapping table."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
-    carrier_id = body.get("carrier_id") or None
-    match_op = (body.get("match_op") or "equals").strip() or "equals"
+    carrier_id = body.carrier_id or None
+    match_op = (body.match_op or "equals").strip() or "equals"
     saved = 0
-    for it in (body.get("items") or []):
+    for it in (body.items or []):
         plan = str(it.get("plan") or "").strip()
         if not plan:
             continue
@@ -12121,8 +12127,16 @@ def _mrc_crossmenu_conflicts(item_rows, plans, classification):
     return conflicts
 
 
+class MrcMappingBulkClassifyIn(LaxModel):
+    classification: str = ""
+    carrier_id: Any = None
+    match_op: str = ""
+    dry_run: Any = None
+    items: Any = None
+
+
 @router.post("/mrc-mapping/bulk-classify")
-async def mrc_mapping_bulk_classify(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def mrc_mapping_bulk_classify(body: MrcMappingBulkClassifyIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Assign ONE classification to MANY product_mrc mappings in a single round trip (bulk companion to
     /mrc-mapping/confirm). Body: {items:[{plan, mrc?, source_desc?, prefill_mrc?} | str], classification,
     carrier_id?, match_op?, dry_run?}. CROSS-MENU GUARD: every plan is checked against the Item / Model
@@ -12135,15 +12149,15 @@ async def mrc_mapping_bulk_classify(body: dict, authorization: str = Header(defa
     Calculation. Admin-gated (money config surface)."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    classification = (body.get("classification") or "").strip()
+    classification = (body.classification or "").strip()
     if not classification:
         raise HTTPException(400, "classification is required")
-    carrier_id = body.get("carrier_id") or None
-    match_op = (body.get("match_op") or "equals").strip() or "equals"
-    dry_run = bool(body.get("dry_run"))
+    carrier_id = body.carrier_id or None
+    match_op = (body.match_op or "equals").strip() or "equals"
+    dry_run = bool(body.dry_run)
     # de-dupe the requested plans (case-insensitive), preserving any per-plan mrc/prefill payload
     items, seen = [], set()
-    for it in (body.get("items") or []):
+    for it in (body.items or []):
         plan = str((it.get("plan") if isinstance(it, dict) else it) or "").strip()
         if not plan or plan.lower() in seen:
             continue
@@ -12241,26 +12255,38 @@ async def list_payout_schedules(org_id: str = ORG_ID):
     return {"schedules": scheds, "ready": True}
 
 
+class SavePayoutScheduleIn(LaxModel):
+    id: Any = None
+    company_id: Any = None
+    carrier_id: Any = None
+    activation_type: str = ""
+    num_months: Any = None
+    gate_signal: Any = None
+    bypass_tier: Any = True
+    is_active: Any = True
+    lines: Any = None
+
+
 @router.post("/payout-schedule")
-async def save_payout_schedule(body: dict, org_id: str = ORG_ID):
+async def save_payout_schedule(body: SavePayoutScheduleIn, org_id: str = ORG_ID):
     """Create/replace a schedule + its lines. Body: {id?, company_id?, carrier_id?, activation_type?,
     num_months, gate_signal?, bypass_tier?, is_active?, lines:[{month_index, payout_kind, flat_amount?,
     mrc_pct?, mrc_basis?, requires_paid}]}. Replaces the lines for the schedule (delete-then-insert)."""
     client = sb()
     head = {
         "org_id": org_id,
-        "company_id": body.get("company_id") or None,
-        "carrier_id": body.get("carrier_id") or None,
-        "activation_type": (body.get("activation_type") or "*").strip() or "*",
-        "num_months": int(body.get("num_months") or 1),
-        "gate_signal": body.get("gate_signal") or "paid_residual",
-        "bypass_tier": bool(body.get("bypass_tier", True)),
-        "is_active": bool(body.get("is_active", True)),
+        "company_id": body.company_id or None,
+        "carrier_id": body.carrier_id or None,
+        "activation_type": (body.activation_type or "*").strip() or "*",
+        "num_months": int(body.num_months or 1),
+        "gate_signal": body.gate_signal or "paid_residual",
+        "bypass_tier": bool(body.bypass_tier),
+        "is_active": bool(body.is_active),
     }
     try:
-        if body.get("id"):
-            client.schema('commcalc').table('payout_schedule').update(head).eq('id', body['id']).eq('org_id', org_id).execute()
-            sid = body['id']
+        if body.id:
+            client.schema('commcalc').table('payout_schedule').update(head).eq('id', body.id).eq('org_id', org_id).execute()
+            sid = body.id
         else:
             r = client.schema('commcalc').table('payout_schedule').upsert(
                 head, on_conflict='org_id,company_id,carrier_id,activation_type').execute()
@@ -12269,7 +12295,7 @@ async def save_payout_schedule(body: dict, org_id: str = ORG_ID):
             raise HTTPException(500, "could not save schedule header")
         client.schema('commcalc').table('payout_schedule_line').delete().eq('org_id', org_id).eq('schedule_id', sid).execute()
         lines = []
-        for ln in (body.get("lines") or []):
+        for ln in (body.lines or []):
             lines.append({
                 "org_id": org_id, "schedule_id": sid,
                 "month_index": int(ln.get("month_index") or 1),
@@ -12323,31 +12349,42 @@ async def list_product_mrc(org_id: str = ORG_ID):
     return {"items": rows, "ready": True}
 
 
+class SaveProductMrcIn(LaxModel):
+    id: Any = None
+    carrier_id: Any = None
+    plan_pattern: str = ""
+    match_op: str = ""
+    mrc: Any = None
+    priority: Any = None
+    is_active: Any = True
+    note: Any = None
+
+
 @router.post("/product-mrc")
-async def save_product_mrc(body: dict, org_id: str = ORG_ID):
+async def save_product_mrc(body: SaveProductMrcIn, org_id: str = ORG_ID):
     """Create/update one catalog entry. Body: {id?, carrier_id?, plan_pattern, match_op?, mrc, priority?,
     is_active?, note?}. plan_pattern is matched (case-insensitive) against raw_mi.customer_plan."""
     client = sb()
-    plan = (body.get("plan_pattern") or "").strip()
+    plan = (body.plan_pattern or "").strip()
     if not plan:
         raise HTTPException(400, "plan_pattern is required")
-    op = (body.get("match_op") or "equals").strip()
+    op = (body.match_op or "equals").strip()
     if op not in ("equals", "contains"):
         raise HTTPException(400, "match_op must be 'equals' or 'contains'")
     rec = {
         "org_id": org_id,
-        "carrier_id": body.get("carrier_id") or None,
+        "carrier_id": body.carrier_id or None,
         "plan_pattern": plan,
         "match_op": op,
-        "mrc": safe_float(body.get("mrc")),
-        "priority": int(body.get("priority") or 100),
-        "is_active": bool(body.get("is_active", True)),
-        "note": (body.get("note") or "").strip() or None,
+        "mrc": safe_float(body.mrc),
+        "priority": int(body.priority or 100),
+        "is_active": bool(body.is_active),
+        "note": (body.note or "").strip() or None,
     }
     try:
-        if body.get("id"):
-            client.schema('commcalc').table('product_mrc').update(rec).eq('id', body['id']).eq('org_id', org_id).execute()
-            return {"id": body["id"]}
+        if body.id:
+            client.schema('commcalc').table('product_mrc').update(rec).eq('id', body.id).eq('org_id', org_id).execute()
+            return {"id": body.id}
         r = client.schema('commcalc').table('product_mrc').insert(rec).execute()
         return {"id": (r.data or [{}])[0].get("id")}
     except Exception as e:
