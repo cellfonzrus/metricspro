@@ -260,7 +260,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     forgot/reset-password → lax). **Part 2:** auth self-service (me/set-password,
     me/2fa/start·verify·settings → lax). **Part 3:** admin/RBAC writes
     (auth-config, tenants create/patch, super-admins create → lax; PATCH keeps
-    "only-sent-keys" semantics via `model_fields_set`). ~417 `dict` bodies remain.
+    "only-sent-keys" semantics via `model_fields_set`). **Part 4:** CRM writes
+    (tasks create, agency-response, dedupe-check → lax). ~414 `dict` bodies remain
+    (endpoints that thread the raw body into shared helpers, e.g. lead
+    create/bulk-assign, get a dedicated pass).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

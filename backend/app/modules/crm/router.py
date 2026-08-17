@@ -23,6 +23,7 @@ from fastapi import APIRouter, Header, HTTPException
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
+from app.core.schemas import LaxModel
 from app.modules.crm import customer360, pipeline_core as core
 
 router = APIRouter(prefix="/crm", tags=["CRM"])
@@ -650,13 +651,18 @@ def create_lead(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
     return {"lead": _decorate(created, vocab), "tasks_booked": booked}
 
 
+class DedupeCheckIn(LaxModel):
+    phone: str = ""
+    email: str = ""
+
+
 @router.post("/leads/dedupe-check")
-def dedupe_check(body: dict, org_id: str = ORG_ID):
+def dedupe_check(body: DedupeCheckIn, org_id: str = ORG_ID):
     """Live duplicate warning for the capture form. Advisory, not a block: a real second lead for the
     same number happens (a customer coming back), and refusing it just teaches reps to fake a digit."""
     cfg = _cfg(org_id)
-    phone = core.normalize_phone(body.get("phone"))
-    email = core.normalize_email(body.get("email"))
+    phone = core.normalize_phone(body.phone)
+    email = core.normalize_email(body.email)
     if not phone and not email:
         return {"duplicates": []}
     rows = []
@@ -867,8 +873,12 @@ def bulk_dispose(body: dict, org_id: str = ORG_ID, authorization: str = Header(d
     return {"disposed": done, "failed": failed}
 
 
+class AgencyResponseIn(LaxModel):
+    accepted: bool = False
+
+
 @router.post("/leads/{lead_id}/agency-response")
-def agency_response(lead_id: str, body: dict, org_id: str = ORG_ID,
+def agency_response(lead_id: str, body: AgencyResponseIn, org_id: str = ORG_ID,
                     authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """An agency accepts or declines the lead. A decline returns it to the previous owner with the
     reason attached — an un-answered agency assignment ages into the escalation path like anything
@@ -877,7 +887,7 @@ def agency_response(lead_id: str, body: dict, org_id: str = ORG_ID,
     lead = _get_lead(org_id, lead_id)
     if not lead.get("agency_id"):
         raise HTTPException(400, "This lead is not assigned to an agency.")
-    accepted = bool(body.get("accepted"))
+    accepted = bool(body.accepted)
     now = _iso(_now())
     if accepted:
         upd = {"agency_accepted_at": now, "last_activity_at": now, "updated_at": now}
@@ -1045,25 +1055,35 @@ def list_tasks(org_id: str = ORG_ID, scope: str = "mine", status: str = "open",
     return {"rows": out, "total": len(out)}
 
 
+class TaskCreateIn(LaxModel):
+    lead_id: str = ""
+    due_at: str = ""
+    title: str = ""
+    body: str = ""              # the note text (field is literally named "body")
+    type: str = ""
+    remind_at: str = ""
+    assigned_employee_id: str = ""
+
+
 @router.post("/tasks")
-def create_task(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def create_task(body: TaskCreateIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     caller = _caller(authorization, x_active_org)
-    if not body.get("lead_id"):
+    if not body.lead_id:
         raise HTTPException(400, "A follow-up has to belong to a lead.")
-    lead = _get_lead(org_id, body["lead_id"])
-    due = core._dt(body.get("due_at"))
+    lead = _get_lead(org_id, body.lead_id)
+    due = core._dt(body.due_at)
     if due is None:
         raise HTTPException(400, "Pick when this follow-up is due.")
     task = _book_task(org_id, lead, {
-        "title": body.get("title") or "Follow up", "body": body.get("body"),
-        "type": body.get("type") or "call",
-        "due_at": _iso(due), "remind_at": _iso(core._dt(body.get("remind_at")) or due),
+        "title": body.title or "Follow up", "body": (body.body or None),
+        "type": body.type or "call",
+        "due_at": _iso(due), "remind_at": _iso(core._dt(body.remind_at) or due),
         "assign_to": "owner",
     }, caller)
-    if body.get("assigned_employee_id") and task:
+    if body.assigned_employee_id and task:
         try:
-            sb().table("crm_task").update({"assigned_employee_id": body["assigned_employee_id"]}) \
+            sb().table("crm_task").update({"assigned_employee_id": body.assigned_employee_id}) \
                 .eq("org_id", org_id).eq("id", task["id"]).execute()
         except Exception:
             pass
