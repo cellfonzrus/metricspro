@@ -443,7 +443,13 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     → lax (create_fix_request + support_docs deferred — helper-threaders). ~96
     `dict` bodies remain — the core/router remainder is ~24 auth/tenant-credential
     handlers (many thread body into auth helpers; convert-or-defer per handler) +
-    storeops misc; POS skipped — incomplete/no data.
+    storeops misc; POS skipped — incomplete/no data. **Part 53–54 (core/router):**
+    roles + settings (create/update_role, security-settings, tenant-settings) and
+    the credential handlers (phone set/verify, reveal-code, password reset/admin-set,
+    tenant-admin-reset, bulk-provision, delete/deactivate user, connect-tenant,
+    disable-and-switch, reinstate, resend-invite) → lax. ~79 remain — the last
+    core/router raw handlers are signup/purge_employee/bulk_assign plus
+    create_login/assign_role (in-process hr callers + helper-threaders); POS skipped.
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
