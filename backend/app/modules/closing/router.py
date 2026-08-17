@@ -4,10 +4,12 @@ Upload the closing sheet (one row per rep per day), DM evening verification (per
 missing-rep check vs the schedule), and reconciliation against B2B actual daily sales. Tables live
 in commcalc.* (migration 029).
 """
+from typing import Any
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header
 from app.core.database import get_supabase
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
+from app.core.schemas import LaxModel
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from dateutil import parser as dateparser
@@ -1378,39 +1380,60 @@ def closing_summary(date: str = None, date_from: str = None, date_to: str = None
 
 
 # ── DM verification upsert ────────────────────────────────────────────────────────────────
+class VerifyStoreIn(LaxModel):
+    store_code: Any = None
+    close_date: Any = None
+    store_name: Any = None
+    verified: Any = True
+    verified_by: Any = None
+    dm_store_cash: Any = None
+    dm_store_cc: Any = None
+    dm_epay_cash: Any = None
+    dm_epay_cc: Any = None
+    dm_acc_sale: Any = None
+    dm_other: Any = None
+    note: Any = None
+
+
 @router.post("/verify")
-def verify_store(payload: dict, org_id: str = ORG_ID):
-    code = payload.get("store_code")
-    date = payload.get("close_date")
+def verify_store(payload: VerifyStoreIn, org_id: str = ORG_ID):
+    code = payload.store_code
+    date = payload.close_date
     if not code or not date:
         raise HTTPException(400, "store_code and close_date required")
     body = {
         "org_id": org_id, "close_date": date, "store_code": code,
-        "store_name": payload.get("store_name"),
-        "verified": bool(payload.get("verified", True)),
-        "verified_by": payload.get("verified_by"),
-        "verified_at": _now() if payload.get("verified", True) else None,
-        "dm_store_cash": payload.get("dm_store_cash"), "dm_store_cc": payload.get("dm_store_cc"),
-        "dm_epay_cash": payload.get("dm_epay_cash"), "dm_epay_cc": payload.get("dm_epay_cc"),
-        "dm_acc_sale": payload.get("dm_acc_sale"), "dm_other": payload.get("dm_other"),
-        "note": payload.get("note"), "updated_at": _now(),
+        "store_name": payload.store_name,
+        "verified": bool(payload.verified),
+        "verified_by": payload.verified_by,
+        "verified_at": _now() if payload.verified else None,
+        "dm_store_cash": payload.dm_store_cash, "dm_store_cc": payload.dm_store_cc,
+        "dm_epay_cash": payload.dm_epay_cash, "dm_epay_cc": payload.dm_epay_cc,
+        "dm_acc_sale": payload.dm_acc_sale, "dm_other": payload.dm_other,
+        "note": payload.note, "updated_at": _now(),
     }
     (sb().schema("commcalc").table("daily_closing_verification")
      .upsert(body, on_conflict="org_id,close_date,store_code").execute())
     return {"ok": True, "store_code": code, "close_date": date}
 
 
+class ApproveExpenseIn(LaxModel):
+    row_id: Any = None
+    approved: Any = True
+    approved_by: Any = None
+
+
 @router.post("/expense/approve")
-def approve_expense(payload: dict, org_id: str = ORG_ID):
+def approve_expense(payload: ApproveExpenseIn, org_id: str = ORG_ID):
     """DM approval of a rep's daily-closing expense — a single toggle. Body: {row_id, approved(bool),
     approved_by?}. Sets expense_approved(+by/at) on that daily_closing row; unchecking clears them."""
-    row_id = (payload.get("row_id") or "").strip()
+    row_id = (payload.row_id or "").strip()
     if not row_id:
         raise HTTPException(400, "row_id required")
-    approved = bool(payload.get("approved", True))
+    approved = bool(payload.approved)
     upd = {
         "expense_approved": approved,
-        "expense_approved_by": (payload.get("approved_by") or "DM") if approved else None,
+        "expense_approved_by": (payload.approved_by or "DM") if approved else None,
         "expense_approved_at": _now() if approved else None,
         "updated_at": _now(),
     }
@@ -1465,11 +1488,15 @@ def _signed_envelope(path):
         return path
 
 
+class UploadEnvelopePhotoIn(LaxModel):
+    image: Any = None
+
+
 @router.post("/envelope-photo")
-def upload_envelope_photo(body: dict, org_id: str = ORG_ID):
+def upload_envelope_photo(body: UploadEnvelopePhotoIn, org_id: str = ORG_ID):
     """Store a captured envelope photo (base64) → return its path + a signed URL. The path goes into
     daily_closing.envelope_picture on submit."""
-    path = _upload_envelope(org_id, body.get("image"))
+    path = _upload_envelope(org_id, body.image)
     if not path:
         raise HTTPException(400, "no image provided")
     return {"path": path, "url": _signed_envelope(path)}
@@ -2334,8 +2361,15 @@ def get_tender_config(org_id: str = ORG_ID):
     return {"defs": defs, "maps": maps, "standard": standard, "recon_mode": mode, "custom": custom}
 
 
+class PutTenderConfigIn(LaxModel):
+    defs: Any = None
+    maps: Any = None
+    recon_mode: Any = None
+    custom: Any = None
+
+
 @router.put("/tender-config")
-def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_tender_config(payload: PutTenderConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's tender defs + maps + recon mode. Body {defs:[...], maps:[...], recon_mode, custom}.
     Full replace (delete-then-insert) — the wizard always sends the complete set. Gated to the 'closing'
     settings area (2026-07-26 settings audit: /closing/tender-config is already nav-restricted to
@@ -2345,8 +2379,8 @@ def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = 
     client = sb()
     if not _can_edit_closing_setting(_caller_perms(client, authorization)):
         raise HTTPException(403, "Editing tender configuration is permission-restricted.")
-    defs = payload.get("defs") or []
-    maps = payload.get("maps") or []
+    defs = payload.defs or []
+    maps = payload.maps or []
     rows = []
     for i, dd in enumerate(defs):
         key = (dd.get("tender_key") or "").strip()
@@ -2396,10 +2430,10 @@ def put_tender_config(payload: dict, org_id: str = ORG_ID, authorization: str = 
         client.schema("commcalc").table("closing_tender_map").insert(mrows).execute()
     try:
         upd = {}
-        if "recon_mode" in payload:
-            upd["closing_recon_mode"] = payload.get("recon_mode") or "3way"
-        if "custom" in payload:
-            upd["closing_tenders_custom"] = bool(payload.get("custom"))
+        if "recon_mode" in payload.model_fields_set:
+            upd["closing_recon_mode"] = payload.recon_mode or "3way"
+        if "custom" in payload.model_fields_set:
+            upd["closing_tenders_custom"] = bool(payload.custom)
         if upd:
             client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
     except Exception:
@@ -2701,26 +2735,34 @@ def get_deposit_config(org_id: str = ORG_ID):
     return cfg
 
 
+class PutDepositConfigIn(LaxModel):
+    match_target: Any = None
+    ocr_model: Any = None
+    include_expenses_default: Any = None
+    include_bill_payments_default: Any = None
+    include_other_adj_default: Any = None
+
+
 @router.put("/deposit-config")
-def put_deposit_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_deposit_config(body: PutDepositConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """2026-07-26 settings audit: this was the ONE gap already flagged by a prior Gate-1 review
     ('deposit-config PUT ungated = SETTING_AREAS doctrine gap') — closed the same way as the other
     closing settings writes."""
     if not _can_edit_closing_setting(_caller_perms(sb(), authorization)):
         raise HTTPException(403, "Editing deposit-recon configuration is permission-restricted.")
-    target = (body.get("match_target") or "total_cash").strip()
+    target = (body.match_target or "total_cash").strip()
     if target not in _DEPOSIT_MATCH_TARGETS:
         raise HTTPException(400, f"match_target must be one of {_DEPOSIT_MATCH_TARGETS}")
     row = {"org_id": org_id, "match_target": target, "updated_at": _now()}
-    model = (body.get("ocr_model") or "").strip()
+    model = (body.ocr_model or "").strip()
     if model:
         row["ocr_model"] = model
     # mig 509 — Cash Deposit Recon default adjustment toggles (org-level "excluded by default";
     # the report itself can override per-run without touching this config). Only written when the
     # caller explicitly sends the key, so a plain OCR-settings save from the old UI never resets them.
     for k in ("include_expenses_default", "include_bill_payments_default", "include_other_adj_default"):
-        if k in body:
-            row[k] = bool(body.get(k))
+        if k in body.model_fields_set:
+            row[k] = bool(getattr(body, k))
     try:
         sb().schema("commcalc").table("closing_deposit_config").upsert(row, on_conflict="org_id").execute()
     except Exception:

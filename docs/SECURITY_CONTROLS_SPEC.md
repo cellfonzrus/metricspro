@@ -422,9 +422,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     claim-update/claim-send; remediation playbook/propose/decide (nested params +
     assignee stay `Any`); asset purchase-orders vendor CRUD, settings, PO create/
     update (status-transition validated) / line-receive (nested lines + units Any);
-    asset b2b-inventory upload + investigation → lax. ~156 `dict` bodies remain
-    across other modules (core, closing, storeops helpers, misc; POS skipped —
-    incomplete/no data).
+    asset b2b-inventory upload + investigation → lax. **Part 47 (closing started,
+    5/28):** verify_store, approve_expense, upload_envelope_photo, put_tender_config,
+    put_deposit_config → lax. `create_row` deferred (dynamic count/tender config axes +
+    nested expense_lines). ~151 `dict` bodies remain (closing ~23 more, core, storeops
+    helpers, misc; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

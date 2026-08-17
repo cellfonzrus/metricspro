@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt46 — payables/recovery/remediation/asset) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt47 — closing started) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–46 = 277 endpoints; ~156 remain). commcalc + hr + crm-leads + referral + notify + storevisit + billing + recovery + remediation + asset(PO+router) fully swept; payables all-but-1. |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–47 = 282 endpoints; ~151 remain). Fully swept: commcalc, hr, crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router); payables all-but-1. **closing STARTED** (5/28 done). |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -191,9 +191,22 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   update_claim, send_claim; remediation upsert_playbook, propose (nested `params`/`assignee` stay
   `Any`), decide; asset PO create/update_vendor, put_po_settings, create_po (nested `lines` Any),
   update_po (status-transition validated), receive_po_line (nested `units` Any); asset router
-  upload_b2b_inventory, set_investigation. Next: run
-  `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data;
-  core/closing/storeops-helpers/misc untouched). **Rules:** skip endpoints that thread the raw
+  upload_b2b_inventory, set_investigation.
+  **Part 47 (closing STARTED — 5/28):** verify_store, approve_expense, upload_envelope_photo,
+  put_tender_config (nested defs/maps Any + recon_mode/custom presence), put_deposit_config (toggle
+  presence via model_fields_set). `create_row` DEFERRED (huge money-handler with dynamic
+  `counts`/`custom_tenders` config-driven axes + nested `expense_lines`, like hr_create_employee).
+  closing remaining ~23 (mostly simple named-field/allow-list config setters + action toggles):
+  put_count_config, bank_deposit, put_deposit_categories, put_deposit_adjustment_types,
+  create_deposit_adjustment, update_bank_deposit_meta, put_cash_config, set_store_closer,
+  upsert_alert_recipient, put_ops_chargeback_policy, decide_missed_dm_verify, record_deposit,
+  confirm_pickup, undo_pickup, put_pickup_config, closing_sweep_put_config, put_expense_categories,
+  create_expense_line, decide_expense_line, put_envelope_config, record_envelope_withdrawal,
+  release_closing_row — read each span first (bank_deposit/record_deposit may thread nested payloads).
+  Then core (32, many auth/admin already done early) + misc small files (storeops/payroll_approval 7,
+  hr/letters 5, account 3, core/* helpers). Next: run
+  `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data).
+  **Rules:** skip endpoints that thread the raw
   `body` dict into shared helpers (unless the callee is also being typed — then share/inherit a model),
   use `body` itself as a freeform map (`else body`), spread `{**body}`, or loudly reject unknown keys;
   preserve None-vs-empty + downstream `.get()`; type handler-validated fields (`float(amount)` → 400)
