@@ -322,7 +322,9 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     confirm + bulk-classify, payout-schedule save, product-mrc save) → lax; int/
     float-validated + presence fields typed Any, per-line loops kept local.
     update_plan_installment threads `body` into `_write_installment_schedule`
-    (deferred). ~313 `dict` bodies remain (body-threading endpoints get a
+    (deferred). **Part 19:** commcalc distributor/template (carrier-template clone,
+    distributor save, distributor-payment add) → lax; int/float-coerced fields
+    typed Any. ~310 `dict` bodies remain (body-threading endpoints get a
     dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

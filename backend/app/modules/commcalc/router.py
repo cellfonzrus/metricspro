@@ -12567,8 +12567,14 @@ def carrier_template_sources(org_id: str = ORG_ID):
     return template_clone.list_shared_sources(sb(), org_id)
 
 
+class CarrierTemplateCloneIn(LaxModel):
+    source_org_id: str = ""
+    source_carrier_id: str = ""
+    dry_run: Any = None
+
+
 @router.post("/carrier-template/clone")
-def carrier_template_clone(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def carrier_template_clone(body: CarrierTemplateCloneIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Clone a shareable source carrier's payout config into THIS org (org_id = target, from the JWT via
     middleware). Body: {source_org_id, source_carrier_id, dry_run?}. dry_run=true returns the full
     would-create/would-skip manifest and writes nothing; the real run returns the same shape with created
@@ -12577,9 +12583,9 @@ def carrier_template_clone(body: dict, authorization: str = Header(default=""), 
     _require_carrier_template_edit(authorization, org_id)
     return template_clone.clone_carrier_template(
         sb(), target_org_id=org_id,
-        source_org_id=(body.get("source_org_id") or "").strip(),
-        source_carrier_id=(body.get("source_carrier_id") or "").strip(),
-        dry_run=bool(body.get("dry_run", False)),
+        source_org_id=(body.source_org_id or "").strip(),
+        source_carrier_id=(body.source_carrier_id or "").strip(),
+        dry_run=bool(body.dry_run),
     )
 
 
@@ -12801,27 +12807,41 @@ async def list_distributors(org_id: str = ORG_ID):
     return {"distributors": rows, "ready": True}
 
 
+class SaveDistributorIn(LaxModel):
+    id: Any = None
+    name: str = ""
+    carrier_id: Any = None
+    arrangement: Any = None
+    terms_days: Any = None
+    billing_cycle: Any = None
+    has_asset_lending: Any = None
+    default_funding: Any = None
+    portal_provider: Any = None
+    is_active: Any = True
+    notes: Any = None
+
+
 @router.post("/distributors")
-async def save_distributor(body: dict, org_id: str = ORG_ID):
-    name = (body.get("name") or "").strip()
+async def save_distributor(body: SaveDistributorIn, org_id: str = ORG_ID):
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
     row = {
         "org_id": org_id, "name": name,
-        "carrier_id": body.get("carrier_id") or None,
-        "arrangement": (body.get("arrangement") or "terms"),
-        "terms_days": int(body.get("terms_days") or 0) or None,
-        "billing_cycle": body.get("billing_cycle") or "net",
-        "has_asset_lending": bool(body.get("has_asset_lending")),
-        "default_funding": body.get("default_funding") or "own",
-        "portal_provider": body.get("portal_provider") or None,
-        "is_active": bool(body.get("is_active", True)),
-        "notes": body.get("notes") or None,
+        "carrier_id": body.carrier_id or None,
+        "arrangement": (body.arrangement or "terms"),
+        "terms_days": int(body.terms_days or 0) or None,
+        "billing_cycle": body.billing_cycle or "net",
+        "has_asset_lending": bool(body.has_asset_lending),
+        "default_funding": body.default_funding or "own",
+        "portal_provider": body.portal_provider or None,
+        "is_active": bool(body.is_active),
+        "notes": body.notes or None,
     }
     client = sb()
     try:
-        if body.get("id"):
-            r = client.schema('commcalc').table('distributors').update(row).eq('id', body['id']).eq('org_id', org_id).execute()
+        if body.id:
+            r = client.schema('commcalc').table('distributors').update(row).eq('id', body.id).eq('org_id', org_id).execute()
         else:
             r = client.schema('commcalc').table('distributors').upsert(row, on_conflict='org_id,name').execute()
         return (r.data or [{}])[0]
@@ -12853,15 +12873,26 @@ async def list_distributor_payments(distributor_id: str = "", org_id: str = ORG_
             "totals": {"own": round(own, 2), "borrowed": round(borrowed, 2), "total": round(own + borrowed, 2)}}
 
 
+class AddDistributorPaymentIn(LaxModel):
+    distributor_id: Any = None
+    pay_date: Any = None
+    period: Any = None
+    amount: Any = None
+    funding_source: Any = None
+    account_label: Any = None
+    ref: Any = None
+    notes: Any = None
+
+
 @router.post("/distributor-payments")
-async def add_distributor_payment(body: dict, org_id: str = ORG_ID):
+async def add_distributor_payment(body: AddDistributorPaymentIn, org_id: str = ORG_ID):
     row = {
-        "org_id": org_id, "distributor_id": body.get("distributor_id") or None,
-        "pay_date": body.get("pay_date") or None, "period": body.get("period") or None,
-        "amount": safe_float(body.get("amount")),
-        "funding_source": body.get("funding_source") or "own",
-        "account_label": body.get("account_label") or None,
-        "ref": body.get("ref") or None, "notes": body.get("notes") or None,
+        "org_id": org_id, "distributor_id": body.distributor_id or None,
+        "pay_date": body.pay_date or None, "period": body.period or None,
+        "amount": safe_float(body.amount),
+        "funding_source": body.funding_source or "own",
+        "account_label": body.account_label or None,
+        "ref": body.ref or None, "notes": body.notes or None,
     }
     client = sb()
     try:
