@@ -19556,7 +19556,17 @@ async def get_targets(period: str, include_inactive: bool = False,
 
 
 @router.put("/targets/{period}")
-async def save_target(period: str, body: dict, authorization: str = Header(default=""),
+class SaveTargetIn(LaxModel):
+    store_code: Any = None
+    activations_monthly: Any = None
+    upgrades_monthly: Any = None
+    accessories_monthly: Any = None
+    byod_pct: Any = None
+    notes: Any = None
+    updated_by: Any = None
+
+
+async def save_target(period: str, body: SaveTargetIn, authorization: str = Header(default=""),
                       org_id: str = ORG_ID):
     """Upsert one store's monthly target config (Target Settings save, and the DM per-store
     drill-down under My Targets).
@@ -19564,7 +19574,7 @@ async def save_target(period: str, body: dict, authorization: str = Header(defau
     GATED (2026-08-03) on the EXISTING 'targets' settings area + the caller's own store span — see
     `_require_target_edit`. This endpoint previously took no Authorization header at all."""
     client = sb()
-    code = str(body.get('store_code', '') or '').strip()
+    code = str(body.store_code or '').strip()
     if not code:
         raise HTTPException(400, "store_code required")
     _require_target_edit(authorization, org_id, code)
@@ -19572,23 +19582,27 @@ async def save_target(period: str, body: dict, authorization: str = Header(defau
     row = {
         'org_id': org_id, 'store_code': code, 'period': period,
         'period_month': pm['month'], 'period_year': pm['year'],
-        'activations_monthly': safe_float(body.get('activations_monthly')),
-        'upgrades_monthly': safe_float(body.get('upgrades_monthly')),
-        'accessories_monthly': safe_float(body.get('accessories_monthly')),
+        'activations_monthly': safe_float(body.activations_monthly),
+        'upgrades_monthly': safe_float(body.upgrades_monthly),
+        'accessories_monthly': safe_float(body.accessories_monthly),
         # Blank field → NULL (fall back to KPI default), not 0% which would zero the BYOD target.
-        'byod_pct': (safe_float(body.get('byod_pct'))
-                     if str(body.get('byod_pct') if body.get('byod_pct') is not None else '').strip() != ''
+        'byod_pct': (safe_float(body.byod_pct)
+                     if str(body.byod_pct if body.byod_pct is not None else '').strip() != ''
                      else None),
-        'notes': body.get('notes'),
-        'updated_by': body.get('updated_by') or 'web',
+        'notes': body.notes,
+        'updated_by': body.updated_by or 'web',
     }
     r = (client.schema('commcalc').table('targets')
          .upsert(row, on_conflict='org_id,store_code,period').execute())
     return r.data[0] if r.data else row
 
 
+class RollForwardTargetsIn(LaxModel):
+    overwrite: Any = None
+
+
 @router.post("/targets/{period}/roll-forward")
-async def roll_forward_targets(period: str, body: dict = None,
+async def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = None,
                                authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Persist the month-over-month carry-forward into `period`: each store's prior-month target
     carried forward, or +10% where last month's target was met (see _carry_forward_map). By default
@@ -19601,7 +19615,7 @@ async def roll_forward_targets(period: str, body: dict = None,
     client = sb()
     _require_target_edit(authorization, org_id)
     pm = parse_period(period)
-    overwrite = bool((body or {}).get('overwrite'))
+    overwrite = bool(body.overwrite) if body else False
     existing = {str(r.get('store_code', '')).upper()
                 for r in ((client.schema('commcalc').table('targets')
                            .select('store_code').eq('org_id', org_id)
@@ -20257,22 +20271,34 @@ def list_carrier_kpi_metrics(carrier_id: str = "", org_id: str = ORG_ID):
     return {"metrics": rows, "ready": True, "default_carrier": _KPI_DEFAULT_CARRIER}
 
 
+class SaveCarrierKpiMetricIn(LaxModel):
+    metric_key: str = ""
+    carrier_id: Any = None
+    label: Any = None
+    target_default: Any = None
+    payout_config_col: Any = None
+    sort: Any = None
+    is_active: Any = True
+    source_mode: Any = None
+    id: Any = None
+
+
 @router.post("/carrier-kpi-metrics")
-def save_carrier_kpi_metric(body: dict, org_id: str = ORG_ID):
+def save_carrier_kpi_metric(body: SaveCarrierKpiMetricIn, org_id: str = ORG_ID):
     """Create/edit one KPI metric definition. carrier_id omitted/blank → the org default (nil) set."""
-    key = (body.get("metric_key") or "").strip()
+    key = (body.metric_key or "").strip()
     if not key:
         raise HTTPException(400, "metric_key required")
-    row = {"org_id": org_id, "carrier_id": body.get("carrier_id") or _KPI_DEFAULT_CARRIER,
-           "metric_key": key, "label": body.get("label") or key,
-           "target_default": safe_float(body.get("target_default")),
-           "payout_config_col": body.get("payout_config_col") or f"kpi_{key}_target",
-           "sort": int(body.get("sort") or 0), "is_active": bool(body.get("is_active", True))}
-    if "source_mode" in body:   # only when the toggle is used, so metric saves still work pre-mig-853
-        row["source_mode"] = body.get("source_mode") or "manual"
+    row = {"org_id": org_id, "carrier_id": body.carrier_id or _KPI_DEFAULT_CARRIER,
+           "metric_key": key, "label": body.label or key,
+           "target_default": safe_float(body.target_default),
+           "payout_config_col": body.payout_config_col or f"kpi_{key}_target",
+           "sort": int(body.sort or 0), "is_active": bool(body.is_active)}
+    if "source_mode" in body.model_fields_set:   # only when the toggle is used, so metric saves still work pre-mig-853
+        row["source_mode"] = body.source_mode or "manual"
     try:
-        if body.get("id"):
-            r = sb().schema('commcalc').table('carrier_kpi_metric').update(row).eq('id', body['id']).eq('org_id', org_id).execute()
+        if body.id:
+            r = sb().schema('commcalc').table('carrier_kpi_metric').update(row).eq('id', body.id).eq('org_id', org_id).execute()
         else:
             r = sb().schema('commcalc').table('carrier_kpi_metric').upsert(row, on_conflict='org_id,carrier_id,metric_key').execute()
         return (r.data or [{}])[0]
@@ -20343,17 +20369,24 @@ def list_kpi_actuals(period: str, scope: str = 'store', org_id: str = ORG_ID):
             "source_modes": _kpi_source_mode_map(sb(), org_id)}
 
 
+class SaveKpiActualsIn(LaxModel):
+    period: str = ""
+    scope: Any = None
+    updated_by: Any = None
+    entries: Any = None
+
+
 @router.post("/kpi-actuals")
-def save_kpi_actuals(body: dict, org_id: str = ORG_ID):
+def save_kpi_actuals(body: SaveKpiActualsIn, org_id: str = ORG_ID):
     """Upsert MANUAL KPI values. Body {period, scope?, updated_by?, entries:[{entity, metric_key, value}]}.
     Writes source='manual' only — never touches an 'email' row, so flipping source mode loses nothing."""
-    period = (body.get("period") or "").strip()
+    period = (body.period or "").strip()
     if not period:
         raise HTTPException(400, "period required")
-    scope = body.get("scope") or "store"
-    who = body.get("updated_by")
+    scope = body.scope or "store"
+    who = body.updated_by
     rows = []
-    for e in (body.get("entries") or []):
+    for e in (body.entries or []):
         ent = (str(e.get("entity") or "")).strip()
         mk = (str(e.get("metric_key") or "")).strip()
         if not ent or not mk:
@@ -20371,23 +20404,30 @@ def save_kpi_actuals(body: dict, org_id: str = ORG_ID):
         raise HTTPException(500, f"save kpi actuals failed (is migration 853 applied?): {ex}")
 
 
+class ImportParamountMtdIn(LaxModel):
+    period: str = ""
+    html: Any = None
+    dry_run: Any = None
+    updated_by: Any = None
+
+
 @router.post("/kpi-import/paramount")
-def import_paramount_mtd(body: dict, org_id: str = ORG_ID):
+def import_paramount_mtd(body: ImportParamountMtdIn, org_id: str = ORG_ID):
     """Parse a Paramount Wireless MTD report (HTML email body) → store zulu / tmr3 / twp per door (Door
     TSP = store_code) as source='email' KPI actuals. Body {period, html, dry_run?}. Feeds only the
     qualifier gates — component counts stay on the rep-pay basis (owner decision)."""
     from app.modules.commcalc.paramount_kpi import parse_paramount_mtd_kpis
-    period = (body.get("period") or "").strip()
-    html = body.get("html") or ""
+    period = (body.period or "").strip()
+    html = body.html or ""
     if not period or not str(html).strip():
         raise HTTPException(400, "period and html are required")
     parsed = parse_paramount_mtd_kpis(html)
     preview = [{"store_code": c, **m} for c, m in sorted(parsed.items())]
     entries = [(c, mk, val) for c, mets in parsed.items() for mk, val in mets.items()]
-    if body.get("dry_run"):
+    if body.dry_run:
         return {"stores": len(parsed), "values": len(entries), "preview": preview, "saved": 0}
     rows = [{"org_id": org_id, "scope": "store", "entity": c, "period": period, "metric_key": mk,
-             "value": val, "source": "email", "updated_by": body.get("updated_by")} for (c, mk, val) in entries]
+             "value": val, "source": "email", "updated_by": body.updated_by} for (c, mk, val) in entries]
     saved = 0
     if rows:
         try:
