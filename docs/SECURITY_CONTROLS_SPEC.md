@@ -436,9 +436,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     hr letters template/send/approve/reject/config → lax. **Part 50 (core small
     files):** import_health feed create/update; onboarding task-state + import-apply;
     impersonation start/stop/reauth → lax (whats_new/training + impersonation
-    put_policy deferred — freeform helper-threaders). ~107 `dict` bodies remain
-    (core/router — mostly auth/admin already typed early — + fix_pipeline + storeops
-    misc; POS skipped — incomplete/no data).
+    put_policy deferred — freeform helper-threaders). **Part 51 (core/fix_pipeline —
+    fully swept):** create/patch pipeline request, patch action, upsert token-rate → lax.
+    ~103 `dict` bodies remain (core/router — mostly auth/admin already typed early — +
+    storeops misc; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
