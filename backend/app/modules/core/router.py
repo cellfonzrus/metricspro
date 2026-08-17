@@ -669,6 +669,52 @@ def sessions_revoke(body: dict, authorization: str = Header(default=""), x_activ
     return {"ok": True, "revoked": n, "enforced": session_guard.enforce()}
 
 
+# ── Export governance (Security Controls Spec §3/§4, item 7) ─────────────────────────────────────
+@router.post("/export-event")
+def export_event(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Record a user-initiated export (audit + volume cap + watermark). Any signed-in user. Returns a
+    server-derived watermark to stamp on the file and whether the row count exceeds the cap
+    (EXPORT_MAX_ROWS, default 50000; super-admins exempt). Best-effort audit — the export itself
+    repackages data the caller already fetched through gated APIs, so a log fault never blocks it."""
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "not authenticated")
+    import os
+    from datetime import datetime, timezone
+    client = sb()
+    caller = _resolve_caller(client, uid, (x_active_org or "").strip() or None) or {}
+    email = (_email_for_uid(client, uid) or "").strip().lower()
+    org_id = caller.get("org_id") or (x_active_org or "").strip() or ORG_ID
+    rows = int(body.get("total_rows") or 0)
+    cap = int(os.environ.get("EXPORT_MAX_ROWS", "50000") or 50000)
+    over = bool(cap > 0 and rows > cap and not caller.get("super_admin"))
+    ts = datetime.now(timezone.utc)
+    who = email or caller.get("role") or "user"
+    watermark = f"Exported by {who} • {ts.strftime('%Y-%m-%d %H:%M UTC')} • MetricsPro"
+    try:
+        get_supabase_admin().schema("core").table("export_event").insert({
+            "org_id": org_id, "actor_auth_id": uid, "actor_email": email or None,
+            "actor_role": caller.get("role"), "report": str(body.get("report") or "")[:200],
+            "format": str(body.get("format") or "")[:20], "total_rows": rows,
+            "sheets": body.get("sheets") or None, "over_cap": over, "blocked": over,
+        }).execute()
+    except Exception:
+        pass   # best-effort audit
+    return {"ok": True, "watermark": watermark, "over_cap": over, "blocked": over, "max_rows": cap}
+
+
+@router.get("/export-event")
+def export_event_list(authorization: str = Header(default=""), x_active_org: str = Header(default=""),
+                      limit: int = 200):
+    """Recent exports (super-admin) — who exported what report, how many rows, in what format."""
+    _require_super_admin(authorization, x_active_org)
+    try:
+        return {"rows": (get_supabase_admin().schema("core").table("export_event").select("*")
+                         .order("created_at", desc=True).limit(min(max(limit, 1), 2000)).execute().data) or []}
+    except Exception as e:
+        return {"rows": [], "ready": False, "error": f"{e} (is migration 862 applied?)"}
+
+
 def _require_setting(authorization: str, active_org: str, area: str):
     """Server-side gate for a permission-controlled ADMIN operation. Resolves the caller from the
     verified JWT (never from a client-set body/header) and requires edit rights on `area` via the

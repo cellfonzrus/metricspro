@@ -207,8 +207,14 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
    own rate limits (operator config — daily item).
 
 ### Phase 2 — Data protection & DLP (P1)
-7. **Server-side exports** — move export generation behind an endpoint so it can
-   be authorized, rate-limited, **audited**, and **watermarked**; add volume caps.
+7. **Export governance** — audit, watermark, volume-cap. ✅ **Built.** Every
+   user-initiated export flows through `src/lib/export.tsx` → `POST
+   /core/export-event`: recorded in `core.export_event` (mig 862, who/what/rows/
+   format), stamped with a server-derived **watermark** (Excel trailing row, PDF
+   page footer, Print footer), and refused over `EXPORT_MAX_ROWS` (super-admins
+   exempt). `GET /core/export-event` lets a super-admin review exports. Generation
+   stays client-side (the data is already gated per-API); this adds the DLP layer
+   on top rather than a full server-render rewrite.
 8. **Customer PII masking** — mask phone/email by default; reveal is audited.
    ✅ **Built (Customer 360).** `mask_pii()` masks phone/email in every 360 section
    by default; `?reveal=true` returns them unmasked and stamps `pii_revealed` on
