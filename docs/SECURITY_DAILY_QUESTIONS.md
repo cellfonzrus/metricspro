@@ -78,6 +78,18 @@ session requires the actor's 2FA.
   flow). The enroll/verify endpoints are always reachable, but enrolling first avoids a scramble.
 - **Then:** set `ADMIN_2FA_ENFORCE=1` in Railway. Startup warns while it's off. Break-glass `=0`.
 
+### 15. ⬜ Gate Vercel preview deployments (Deployment Protection)
+Vercel **preview** URLs (`metricspro-git-…vercel.app` + `…` hash inspector URLs) are public by default.
+The backend's `CORS_ORIGIN_REGEX` intentionally allows any `metricspro*.vercel.app` to call the prod
+API, so a reachable preview can talk to the real backend (with a login). Production is
+`metricspro-five.vercel.app` (public by design, login-gated).
+- **Do:** Vercel → Project → Settings → **Deployment Protection** → enable **Vercel Authentication
+  (Standard Protection)** so previews require Vercel SSO. Optionally Password Protection / Trusted IPs.
+- **Verify:** the **Preview** environment's `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_API_URL` point at
+  **staging**, not prod data.
+- **Optional (trade-off):** narrow the backend `CORS_ORIGIN_REGEX` so previews can't call the prod API
+  (breaks preview→prod-API testing — only if previews use staging).
+
 ### 13. ⬜ Promote CI security gates from report-only → blocking
 `.github/workflows/security.yml` runs bandit, semgrep, pip-audit, npm audit, trufflehog — all
 `continue-on-error` (report-only). Review the first runs' findings; once the baseline is clean, drop
