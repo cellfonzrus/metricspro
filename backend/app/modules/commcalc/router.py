@@ -22520,13 +22520,17 @@ def _system_line_keys(client, org_id, pv):
 
 
 @router.put("/expenses/{period}")
-async def put_expenses(period: str, body: dict, org_id: str = ORG_ID):
+class PutExpensesIn(LaxModel):
+    rows: Any = None
+
+
+async def put_expenses(period: str, body: PutExpensesIn, org_id: str = ORG_ID):
     """Replace all MANUAL expenses for the period (matrix save + bulk upload). Body:
     {rows:[{store_code, expense_name, expense_type, amount}]}. Zero/blank rows are dropped.
     AUTO 'system' lines (source_key not null — e.g. the payroll-computed Paid Leave Accumulated) are
     NEVER deleted or shadowed here: the delete is manual-only, and an incoming row that collides with a
     system (store, expense) is dropped (the system line owns that cell), so GP never double-counts."""
-    rows = body.get('rows') or []
+    rows = body.rows or []
     client = sb()
     pv = _pvariants(period)
     sys_keys = _system_line_keys(client, org_id, pv)
@@ -22578,8 +22582,12 @@ def _bulk_apply_expand(cells):
     return by_expense, ins, cleared
 
 
+class BulkApplyExpensesIn(LaxModel):
+    cells: Any = None
+
+
 @router.post("/expenses/{period}/bulk-apply")
-async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
+async def bulk_apply_expenses(period: str, body: BulkApplyExpensesIn, org_id: str = ORG_ID):
     """Idempotent per-CELL upsert of specific (store, expense) cells for a period — powers the
     'copy one column to many stores' and 'multi-store common expense' bulk actions in ONE request
     (never N sequential saves). Body: {cells:[{store_code, expense_name, expense_type, amount}]}.
@@ -22588,7 +22596,7 @@ async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
     amount 0 CLEARS the cell. Delete-then-insert-nonzero per (expense_name × affected stores) → no
     unique index required and safe to re-run. org-scoped on every read AND write."""
     require_org(org_id)
-    by_expense, ins_bare, cleared = _bulk_apply_expand(body.get('cells') or [])
+    by_expense, ins_bare, cleared = _bulk_apply_expand(body.cells or [])
     client = sb()
     pv = _pvariants(period)
     # Clear every affected (period, expense_name, store_code) cell. Compound (store,expense) IN isn't
@@ -22607,8 +22615,15 @@ async def bulk_apply_expenses(period: str, body: dict, org_id: str = ORG_ID):
             "stores": stores_touched, "expenses": len(by_expense), "period": period}
 
 
+class UpsertExpenseSystemLineIn(LaxModel):
+    source_key: str = ""
+    label: str = ""
+    cells: Any = None
+    expense_type: Any = None
+
+
 @router.post("/expenses/{period}/system-line")
-async def upsert_expense_system_line(period: str, body: dict, org_id: str = ORG_ID):
+async def upsert_expense_system_line(period: str, body: UpsertExpenseSystemLineIn, org_id: str = ORG_ID):
     """RECEIVER for an AUTO-COMPUTED ('system') store-expense line. mod-people's payroll run is the CALLER:
     it computes the per-store cost (e.g. 'Paid Leave Accumulated' / PTO accrual) and POSTs it here to be
     inserted into the Store Expenses matrix. The line coexists with manual expenses and rolls into the SAME
@@ -22624,14 +22639,14 @@ async def upsert_expense_system_line(period: str, body: dict, org_id: str = ORG_
     rate, tier, or plan changes, and it does NOT recompute anything. Returns {ok, period, source_key, label,
     stores_written, total}."""
     require_org(org_id)
-    source_key = str(body.get('source_key') or '').strip()
-    label = str(body.get('label') or '').strip()
+    source_key = str(body.source_key or '').strip()
+    label = str(body.label or '').strip()
     if not source_key:
         return {"ok": False, "error": "source_key required"}
     if not label:
         return {"ok": False, "error": "label required"}
     ins = _system_line_expand(org_id, period, source_key, label,
-                              body.get('cells') or [], body.get('expense_type') or 'Fixed')
+                              body.cells or [], body.expense_type or 'Fixed')
     client = sb()
     pv = _pvariants(period)
     # Replace the prior values for THIS (source_key, period): delete-by-source_key then insert the non-zero
@@ -22753,13 +22768,17 @@ async def get_expense_apply_config(org_id: str = ORG_ID):
             "default_tokens": list(_EXPENSE_APPLY_DEFAULT_TOKENS)}
 
 
+class PutExpenseApplyConfigIn(LaxModel):
+    tokens: Any = None
+
+
 @router.put("/expenses/apply-config")
-async def put_expense_apply_config(body: dict, org_id: str = ORG_ID):
+async def put_expense_apply_config(body: PutExpenseApplyConfigIn, org_id: str = ORG_ID):
     """Replace the org's excluded-expense tokens (the admin-editable protected set). Body {tokens:[...]}.
     Case-insensitively deduped. Degrades gracefully (ok=false + hint) until mig 205 creates the table."""
     require_org(org_id)
     toks = []
-    for t in (body.get('tokens') or []):
+    for t in (body.tokens or []):
         t = str(t or '').strip()
         if t and t.lower() not in [x.lower() for x in toks]:
             toks.append(t)
@@ -22775,8 +22794,15 @@ async def put_expense_apply_config(body: dict, org_id: str = ORG_ID):
                 "hint": "run migration 205_commission_expense_apply_config.sql"}
 
 
+class ApplyExpensesToMonthsIn(LaxModel):
+    source_period: str = ""
+    target_periods: Any = None
+    source_cells: Any = None
+    expense_names: Any = None
+
+
 @router.post("/expenses/apply-to-months")
-async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
+async def apply_expenses_to_months(body: ApplyExpensesToMonthsIn, org_id: str = ORG_ID):
     """Copy a SOURCE month's store expenses onto a chosen set of TARGET months — EXCEPT the configured
     protected expenses (commission + salary by default; see GET/PUT /expenses/apply-config). Body:
       { source_period: 'July 2026',
@@ -22789,18 +22815,18 @@ async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
     period-spelling. Does NOT recompute commissions or GP: writing expenses into a closed prior month
     SHIFTS that month's Gross Profit / P&L — re-run Calculation (or refresh the P&L) to reflect it."""
     require_org(org_id)
-    source_period = str(body.get('source_period') or '').strip()
+    source_period = str(body.source_period or '').strip()
     if not source_period:
         return {"ok": False, "error": "source_period required"}
     targets = []
-    for p in (body.get('target_periods') or []):
+    for p in (body.target_periods or []):
         p = str(p or '').strip()
         if p and p != source_period and p not in targets:   # never write back onto the source month
             targets.append(p)
     if not targets:
         return {"ok": False, "error": "no target_periods (after dropping the source month)"}
     client = sb()
-    src_override = body.get('source_cells')
+    src_override = body.source_cells
     if isinstance(src_override, list) and src_override:
         src_rows = src_override                     # LIVE grid passed by the page (WYSIWYG for the open month)
     else:
@@ -22816,7 +22842,7 @@ async def apply_expenses_to_months(body: dict, org_id: str = ORG_ID):
                         .select('store_code,expense_name,expense_type,amount')
                         .eq('org_id', org_id).in_('period', _spv).execute().data) or []
     excluded_tokens = _expense_apply_tokens(client, org_id)
-    selection = body.get('expense_names')
+    selection = body.expense_names
     sel = selection if (isinstance(selection, list) and selection) else None
     rows, affected, skipped = _apply_to_months_expand(src_rows, targets, excluded_tokens, sel)
     # Idempotent per-cell delete-then-insert into each target period (never a whole-month wipe). Compound
