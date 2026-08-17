@@ -13,6 +13,21 @@ interface Employee {
 const sel: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }
 
+// Role is display-only here (it's assigned in HR / Roles & Access, same as pay) — this column just
+// makes it easy to see at a glance who is a manager vs. a sales rep.
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'Admin', owner: 'Owner', market_manager: 'Market Manager', district_manager: 'District Manager',
+  regional_manager: 'Regional Manager', store_manager: 'Store Manager', general_manager: 'General Manager',
+  director: 'Director', executive: 'Executive', rep: 'Sales Rep', sales_rep: 'Sales Rep', employee: 'Employee',
+}
+function prettyRole(role: string | null): string {
+  if (!role) return '—'
+  return ROLE_LABELS[role.toLowerCase()] || role.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+function isManagerRole(role: string | null): boolean {
+  return /manager|admin|owner|director|executive|lead|supervisor|regional|district/.test((role || '').toLowerCase())
+}
+
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
@@ -98,6 +113,7 @@ export default function EmployeesPage() {
     { header: 'Name', field: 'name', role: 'rep', get: e => e.name || '' },
     { header: 'Emp ID', field: 'employee_id', get: e => e.employee_id || '' },
     { header: 'Home Store', field: 'home_store', role: 'store', get: e => e.home_store || '' },
+    { header: 'Role', field: 'role', get: e => prettyRole(e.role) },
     { header: 'Email', field: 'email', get: e => e.email || '' },
     { header: 'Phone', field: 'phone', get: e => e.phone || '' },
     { header: 'ePay Login', field: 'epay_login', get: e => e.epay_login || '' },
@@ -132,7 +148,7 @@ export default function EmployeesPage() {
         <div className="table-wrapper" style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
-              {['', 'Name', 'Emp ID', 'Home store', 'Email', 'Phone', 'ePay login', 'ePay salesperson', 'Active', ''].map((h, i) =>
+              {['', 'Name', 'Emp ID', 'Home store', 'Role', 'Email', 'Phone', 'ePay login', 'ePay salesperson', 'Active', ''].map((h, i) =>
                 <th key={h + i} style={{ textAlign: 'left', padding: '8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
             </tr></thead>
             <tbody>
@@ -151,6 +167,11 @@ export default function EmployeesPage() {
                     <td style={cell}><input style={{ ...sel, width: 150 }} value={e.name || ''} onChange={ev => setEmp(e.id, { name: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 90 }} value={e.employee_id || ''} placeholder="—" onChange={ev => setEmp(e.id, { employee_id: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 100 }} value={e.home_store || ''} onChange={ev => setEmp(e.id, { home_store: ev.target.value })} /></td>
+                    <td style={cell}>
+                      {e.role
+                        ? <span title="Set in HR / Roles & Access" style={{ fontSize: 11.5, fontWeight: 600, padding: '3px 9px', borderRadius: 999, whiteSpace: 'nowrap', border: '1px solid var(--border)', background: isManagerRole(e.role) ? 'rgba(37,99,235,0.12)' : 'var(--surface2)', color: isManagerRole(e.role) ? 'var(--accent)' : 'var(--text2)' }}>{prettyRole(e.role)}</span>
+                        : <span style={{ color: 'var(--text3)' }}>—</span>}
+                    </td>
                     <td style={cell}><input style={{ ...sel, width: 180 }} type="email" value={e.email || ''} placeholder="add email…" onChange={ev => setEmp(e.id, { email: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 120 }} value={e.phone || ''} onChange={ev => setEmp(e.id, { phone: ev.target.value })} /></td>
                     <td style={cell}><input style={{ ...sel, width: 120 }} value={e.epay_login || ''} onChange={ev => setEmp(e.id, { epay_login: ev.target.value })} /></td>
@@ -170,7 +191,7 @@ export default function EmployeesPage() {
                   </tr>
                   {expanded === e.id && e.employee_id && (
                     <tr>
-                      <td colSpan={10} style={{ padding: '4px 8px 12px 34px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
+                      <td colSpan={11} style={{ padding: '4px 8px 12px 34px', borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
                         <GoogleReviewsCard employeeId={e.employee_id} compact compactTitle={`⭐ Google Reviews — ${e.name}'s store(s)`} />
                       </td>
                     </tr>
