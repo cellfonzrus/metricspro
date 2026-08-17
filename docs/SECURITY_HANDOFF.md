@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt40 — hr) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt41 — hr fully swept) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–40 = 197 endpoints; ~236 remain). commcalc swept; hr in progress. |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–41 = 215 endpoints; ~218 remain). commcalc + hr fully swept. |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -135,13 +135,21 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   `else body` maps (put_category_qualification, put_category_payout, put_expected_commission_config,
   save_setup_fee_config, save_pay_gate); `{**body}` spread (save_payout_exclusion).
   **Part 38 (hr started):** onboarding_save_category, onboarding_update_category, onboarding_save_task,
-  onboarding_update_task (TASK_FIELDS allow-list via model_fields_set). hr_create_employee /
-  hr_update_employee are EMP_FIELDS-driven freeform employee records → deferred (like storeops's own
-  create_employee). Next hr candidates (read each first — many onboarding endpoints thread body or use
-  freeform intake / public tokens → likely defer): intake_field_save/update,
-  onboarding_set_accounting_settings, put_onboarding_attention_config, onboarding_mint_token,
-  onboarding_advance, onboarding_approve, onboarding_set_profile, etc. After hr:
-  `grep -rn 'body: dict' app/modules` for any module not yet touched. **POS skipped** — module
+  onboarding_update_task (TASK_FIELDS allow-list via model_fields_set). **Parts 39–40:** intake_field_save/
+  update (INTAKE_FIELD_COLS), onboarding_set_accounting_settings, put_onboarding_attention_config,
+  onboarding_approve, onboarding_advance. **Part 41 (hr FULLY swept):** onboarding_provision
+  (docs+compliance override gates), onboarding_set_profile (work_state via model_fields_set),
+  onboarding_update_status (note presence via model_fields_set), onboarding_reattach_orphan,
+  onboarding_mint_token, onboarding_return_task, onboarding_send_documents, onboarding_forward_accounting,
+  onboarding_invite_one/bulk, onboarding_reconcile, onboarding_me_state, public_onboarding_state,
+  public_onboarding_view, onboarding_me_dd_disclaimer, public_onboarding_dd_disclaimer,
+  public_onboarding_sign, onboarding_me_sign (token-gated handlers still keep their `value` identity
+  gate as a `value: Any` field + `form_data: Any` opaque). **✅ hr convertible surface COMPLETE** — 4
+  `body: dict` handlers remain deferred: hr_create_employee / hr_update_employee (EMP_FIELDS-driven
+  freeform employee records, like storeops's own create_employee); onboarding_me_intake /
+  public_onboarding_intake (freeform intake map threaded/spread into `_apply_intake`). Next: run
+  `grep -rn 'body: dict' app/modules` for any module not yet touched (crm `create_lead` 25-field +
+  `bulk-assign/dispose` still pending; check pos is still skipped). **POS skipped** — module
   incomplete / no data. **Rules:** skip endpoints that thread the raw `body` dict into shared helpers,
   use `body` itself as a freeform map (`else body`), or spread `{**body}`; preserve None-vs-empty +
   downstream `.get()`; type handler-validated fields (`float(amount)` → 400) as `Any` so Pydantic

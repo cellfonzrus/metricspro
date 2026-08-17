@@ -383,7 +383,16 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     **Part 39:** hr intake-field save/update (INTAKE_FIELD_COLS allow-list),
     accounting-forward settings, onboarding-attention config → lax. **Part 40:**
     hr onboarding-approve + onboarding-advance (workflow transitions, compliance
-    override) → lax.
+    override) → lax. **Part 41 (hr fully swept):** onboarding provision (docs +
+    separately-audited compliance override gates), set-profile, update-status,
+    reattach-orphan, mint-token, return-task, send-documents, forward-accounting,
+    invite one/bulk, reconcile, plus the token-gated portal handlers
+    (me/public state, view, dd-disclaimer, sign — each keeps its `value` identity
+    gate as a typed field and `form_data` as an opaque `Any`) → lax. **hr is now
+    fully swept** — 4 `body: dict` handlers remain deferred: create/update-employee
+    (EMP_FIELDS freeform records) and me/public onboarding-intake (freeform intake
+    map into `_apply_intake`). ~228 `dict` bodies remain across other modules
+    (crm `create_lead` + bulk-assign/dispose next; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
