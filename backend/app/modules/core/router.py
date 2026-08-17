@@ -602,6 +602,59 @@ def prune_audit_logs(x_notify_secret: str = Header(default=""),
         return {"ok": False, "error": f"{e} (is migration 857 applied?)"}
 
 
+# ── Incident-response containment tools (External Threat Defense Plan §1.1 / §4.2) ────────────────
+@router.get("/ip-block")
+def ip_block_list(authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """List blocked IPs (super-admin). Backs the IRP 'block malicious source IPs' step (mig 860)."""
+    _require_super_admin(authorization, x_active_org)
+    from app.core import ip_block
+    try:
+        return {"rows": ip_block.listing()}
+    except Exception as e:
+        return {"rows": [], "ready": False, "error": f"{e} (is migration 860 applied?)"}
+
+
+@router.post("/ip-block")
+def ip_block_add(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Block an IP now (super-admin). Optional `minutes` for a temporary block; omit for permanent.
+    Takes effect within ~30s fleet-wide (immediately in the process that handled the request)."""
+    caller = _require_super_admin(authorization, x_active_org)
+    ip = (body.get("ip") or "").strip()
+    if not ip:
+        raise HTTPException(400, "ip required")
+    expires_at = None
+    if body.get("minutes"):
+        from datetime import datetime, timezone, timedelta
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=int(body["minutes"]))).isoformat()
+    from app.core import ip_block
+    ip_block.add(ip, reason=(body.get("reason") or ""),
+                 created_by=(caller.get("email") or caller.get("auth_id") or ""), expires_at=expires_at)
+    return {"ok": True}
+
+
+@router.post("/ip-block/remove")
+def ip_block_remove(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Unblock an IP (super-admin)."""
+    _require_super_admin(authorization, x_active_org)
+    ip = (body.get("ip") or "").strip()
+    if not ip:
+        raise HTTPException(400, "ip required")
+    from app.core import ip_block
+    ip_block.remove(ip)
+    return {"ok": True}
+
+
+@router.post("/sessions/revoke")
+def sessions_revoke(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """IRP session purge (super-admin): end all active sessions, or one user's (`auth_id`). ENFORCED
+    when SESSION_ENFORCE is on — the response reports whether it's currently enforced."""
+    _require_super_admin(authorization, x_active_org)
+    from app.core import session_guard
+    auth_id = (body.get("auth_id") or "").strip() or None
+    n = session_guard.revoke(auth_id)
+    return {"ok": True, "revoked": n, "enforced": session_guard.enforce()}
+
+
 def _require_setting(authorization: str, active_org: str, area: str):
     """Server-side gate for a permission-controlled ADMIN operation. Resolves the caller from the
     verified JWT (never from a client-set body/header) and requires edit rights on `area` via the

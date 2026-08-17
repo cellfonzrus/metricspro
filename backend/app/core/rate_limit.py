@@ -35,6 +35,13 @@ _AUTH_PREFIXES = (
     "/api/v1/core/me/2fa",          # OTP start/verify
 )
 
+# Password-reset gets an even stricter cap (External Threat Defense Plan §1.2: 3/hour/IP). These are the
+# reset REQUEST + completion paths; matched before the general auth tier.
+_RESET_PREFIXES = (
+    "/api/v1/core/auth/forgot-password",
+    "/api/v1/core/auth/reset-password",
+)
+
 # Never rate-limit infrastructure/probe paths.
 _SKIP_PREFIXES = ("/health", "/favicon", "/static", "/_next", "/openapi", "/docs", "/redoc")
 
@@ -59,11 +66,24 @@ def _limits():
             60)
 
 
-def _is_auth_path(path: str) -> bool:
-    for p in _AUTH_PREFIXES:
+def _reset_limit():
+    """(requests, window_seconds) for password-reset paths — 3/hour/IP by default (plan §1.2)."""
+    return (_int_env("RATE_LIMIT_RESET_PER_HOUR", 3), 3600)
+
+
+def _match(path: str, prefixes) -> bool:
+    for p in prefixes:
         if path == p or path.startswith(p + "/"):
             return True
     return False
+
+
+def _is_reset_path(path: str) -> bool:
+    return _match(path, _RESET_PREFIXES)
+
+
+def _is_auth_path(path: str) -> bool:
+    return _match(path, _AUTH_PREFIXES)
 
 
 def _skip(path: str) -> bool:
@@ -103,6 +123,17 @@ class RateLimiter:
             self._buckets.pop(k, None)
 
 
+async def _reject_403_blocked(send):
+    import json as _json
+    body = _json.dumps({"detail": "Access from your network has been blocked.",
+                        "code": "ip_blocked"}).encode()
+    await send({"type": "http.response.start", "status": 403, "headers": [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+    ]})
+    await send({"type": "http.response.body", "body": body})
+
+
 async def _reject_429(send, retry_after: int):
     import json as _json
     body = _json.dumps({
@@ -133,11 +164,22 @@ class RateLimitMiddleware:
                 return await self.app(scope, receive, send)
             headers = {k.decode().lower(): v.decode() for k, v in (scope.get("headers") or [])}
             ip = _client_ip_from(scope, headers) or "unknown"
-            general, auth_lim, window = _limits()
-            is_auth = _is_auth_path(path)
-            limit = auth_lim if is_auth else general
-            key = (("auth:" if is_auth else "gen:") + ip)
+            # Incident containment: a super-admin-blocked IP is refused outright (mig 860). Fail-open.
+            try:
+                from app.core import ip_block
+                if ip != "unknown" and ip_block.is_blocked(ip):
+                    return await _reject_403_blocked(send)
+            except Exception:
+                pass
             now = time.time()
+            general, auth_lim, window = _limits()
+            if _is_reset_path(path):
+                limit, window = _reset_limit()               # 3/hour/IP (plan §1.2)
+                key = "reset:" + ip
+            else:
+                is_auth = _is_auth_path(path)
+                limit = auth_lim if is_auth else general
+                key = (("auth:" if is_auth else "gen:") + ip)
             self._limiter.sweep(window, now)
             allowed, retry = self._limiter.check(key, limit, window, now)
             if not allowed:
@@ -168,4 +210,6 @@ if __name__ == "__main__":
     assert _is_auth_path("/api/v1/core/me/2fa/verify") is True
     assert _is_auth_path("/api/v1/commcalc/summary") is False
     assert _skip("/health") is True and _skip("/api/v1/core/me") is False
+    assert _is_reset_path("/api/v1/core/auth/forgot-password") is True
+    assert _is_reset_path("/api/v1/core/auth/login-precheck") is False
     print("rate_limit self-tests passed")

@@ -6,8 +6,8 @@ off as they're settled. See `docs/SECURITY_CONTROLS_SPEC.md` for the full plan.
 
 Status legend: ⬜ open · ⏳ in discussion · ✅ decided (record the decision + date inline)
 
-**Migrations status:** 857 ✅ applied · 858 ✅ applied · **859 ⬜ to run** (login_attempt +
-extends the prune function — safe/idempotent).
+**Migrations status:** 857 ✅ · 858 ✅ · 859 ✅ applied · **860 ⬜ to run** (ip_block — IRP
+containment blocklist).
 
 ---
 
@@ -84,6 +84,23 @@ scripts, Supabase + Railway origins).
 Rotation is now zero-downtime (Phase 2 item 9): set `NOTIFY_RUN_SECRET_NEXT` to the new value, update
 the schedulers/cron to send it, then move it to `NOTIFY_RUN_SECRET` and clear `_NEXT`. No forced
 rotation needed — available when wanted.
+
+### 10. ⬜ Edge / infra controls from the External Threat Defense Plan
+These close the plan's remaining items but live at a layer we don't own in code (see
+`docs/INCIDENT_RESPONSE_PLAN.md` §6). Operator decisions:
+- **Managed WAF/CDN** (Cloudflare/AWS WAF) in front of Vercel + Railway — OWASP rules in BLOCK mode, bot
+  management, L3/L4 + L7 DDoS, geofencing, Tor/IP-reputation blocking.
+- **CAPTCHA/Turnstile** on login + signup + reset (needs a provider key).
+- **Supabase Auth rate limits** (already item 6) — the authoritative sign-in throttle.
+- **ZTNA / private admin surface**, **CI security gates** (SAST/SCA/secret scan, EASM, ≤24h CVE SLA),
+  **tested backup restore + RPO/RTO**.
+
+### 11. ⬜ Try the incident-response containment tools
+Now available (mig 860) — worth a dry run so they're familiar before you need them:
+- `/admin/access-log` → **Block** an IP (or the API `POST /core/ip-block`), and unblock from the
+  Blocked-IPs panel.
+- **Revoke all sessions** button (enforced once `SESSION_ENFORCE=1`).
+- Full playbook in `docs/INCIDENT_RESPONSE_PLAN.md`.
 
 ---
 

@@ -148,6 +148,35 @@ def _mark_ended(session_id, reason):
         pass
 
 
+def invalidate():
+    """Drop the in-process session cache so every session re-reads its row on the next request. Called
+    after a revoke so a purge takes effect promptly (a cached active session would otherwise not see the
+    ended flag until its entry aged out)."""
+    _cache.clear()
+
+
+def revoke(auth_id=None):
+    """IRP session purge (External Threat Defense Plan §4.2 Phase 2). Marks sessions ended with reason
+    'revoked' — all active sessions, or just one auth_id's. ENFORCED when SESSION_ENFORCE is on: the guard
+    then returns non-ok for a revoked session and the client is signed out. Returns the row count touched
+    (best-effort). Also busts the local cache."""
+    n = 0
+    try:
+        from datetime import datetime, timezone
+        from app.core.database import get_supabase_admin
+        q = (get_supabase_admin().schema("core").table("session_activity")
+             .update({"ended_at": datetime.now(timezone.utc).isoformat(), "ended_reason": "revoked"})
+             .is_("ended_at", "null"))
+        if auth_id:
+            q = q.eq("auth_id", auth_id)
+        res = q.execute()
+        n = len(res.data or [])
+    except Exception:
+        pass
+    invalidate()
+    return n
+
+
 def touch(session_id, *, auth_id=None, org_id=None, email=None, role=None, ip=None):
     """Register activity on a session and return its verdict: 'ok' | 'idle' | 'absolute'.
 

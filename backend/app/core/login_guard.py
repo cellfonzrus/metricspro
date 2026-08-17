@@ -38,9 +38,36 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _params():
-    return (_int_env("LOGIN_MAX_FAILURES", 8),
+    # Default 5 consecutive failures per External Threat Defense Plan §2.1.
+    return (_int_env("LOGIN_MAX_FAILURES", 5),
             _int_env("LOGIN_WINDOW_MIN", 15) * 60,
             _int_env("LOGIN_LOCK_MIN", 15) * 60)
+
+
+# Throttle lockout alerts: one core.failure_log row per email per lock window, not one per request.
+_last_alert = {}
+
+
+def _alert_lockout(email, failures):
+    try:
+        now = time.time()
+        if now - _last_alert.get(email, 0) < 300:
+            return
+        _last_alert[email] = now
+        import os
+        from app.core.database import get_supabase
+        get_supabase().schema("core").table("failure_log").insert({
+            "org_id": os.environ.get("PLATFORM_ORG_ID", "00000000-0000-0000-0000-000000000001"),
+            "category": "security_auth", "severity": "warning",
+            "source": "core/login_guard:lockout",
+            "message": ("Account soft-locked after %d failed sign-in attempts." % failures)[:1000],
+            "detail": {"email": email, "failures": failures},
+            "remediation": ("Repeated failed logins for this email. If unexpected, the account may be "
+                            "under a credential-stuffing attempt — consider a password reset and check "
+                            "the access log / login_attempt ledger for the source IPs."),
+        }).execute()
+    except Exception:
+        pass
 
 
 def lock_state(failure_epochs, now, max_failures, window_seconds, lock_seconds):
@@ -105,7 +132,10 @@ def check(email: str):
         max_f, window_s, lock_s = _params()
         now = time.time()
         fails = _failures_since_success(email, max(window_s, lock_s), now)
-        return lock_state(fails, now, max_f, window_s, lock_s)
+        st = lock_state(fails, now, max_f, window_s, lock_s)
+        if st.get("locked"):
+            _alert_lockout(email, st.get("failures"))       # throttled admin alert
+        return st
     except Exception:
         return {"locked": False, "failures": 0, "retry_after": 0}
 
