@@ -328,7 +328,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     tiers + assignments delete-then-insert) → lax; tier presence via
     model_fields_set, child-list dicts read locally. setup-fee/pay-gate configs
     (freeform `else body` map) + payout-exclusion (`{**body}` spread) deferred.
-    ~309 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
+    **Part 21:** commcalc coverage/assign/store (coverage-excluded-sellers put,
+    bulk-assign commission plan, store update, store-alias add) → lax; the
+    `body.items()` allow-list filter becomes a model_fields_set loop.
+    ~305 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
     skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

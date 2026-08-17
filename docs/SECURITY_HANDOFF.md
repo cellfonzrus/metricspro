@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt20) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt21) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–20 = 124 endpoints; ~309 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–21 = 128 endpoints; ~305 remain) |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -101,8 +101,9 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   product-mrc; update_plan_installment threads body → deferred. **Part 19:** carrier-template clone,
   distributor save, distributor-payment add. **Part 20:** save_commission_plan (large: header+rules+
   tiers+assignments); setup-fee/pay-gate use freeform `else body` maps and payout-exclusion uses
-  `{**body}` spread → all three deferred (freeform-map family). Next commcalc candidates (grep
-  'body: dict'): put_coverage_excluded_sellers, bulk_assign_commission_plan, update_store, add_store_alias,
+  `{**body}` spread → all three deferred (freeform-map family). **Part 21:** coverage-excluded-sellers,
+  bulk-assign commission plan, update_store (body.items() allow-list → model_fields_set loop),
+  add_store_alias. Next commcalc candidates (grep 'body: dict'):
   put_ingest_guard_config, set_gp_category_map, set_commission_leg_label/config, update_chargeback,
   put_accessory_config, put_catalog_override, save_target, KPI/exec/productivity/expense/ftp/email/
   data-source/agency groups — ~50+ more. Read each first, watch for body-threading AND freeform-map

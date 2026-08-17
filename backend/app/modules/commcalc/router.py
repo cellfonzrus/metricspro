@@ -14074,7 +14074,12 @@ async def get_coverage_excluded_sellers(org_id: str = ORG_ID):
 
 
 @router.put("/commission-plans/coverage-excluded")
-async def put_coverage_excluded_sellers(body: dict, authorization: str = Header(default=""),
+class PutCoverageExcludedSellersIn(LaxModel):
+    sellers: Any = None
+    artifact_hints: Any = None
+
+
+async def put_coverage_excluded_sellers(body: PutCoverageExcludedSellersIn, authorization: str = Header(default=""),
                                         org_id: str = ORG_ID):
     """Admin-only. Sets the tenant's excluded-seller list (and optionally the artifact word list).
     Body: {sellers:[str], artifact_hints?:[str]}.
@@ -14083,7 +14088,7 @@ async def put_coverage_excluded_sellers(body: dict, authorization: str = Header(
     'sellers with no plan attached' panel — the payout loop never sees it, so no rep's pay can move."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    sellers = body.get("sellers")
+    sellers = body.sellers
     if sellers is None or not isinstance(sellers, list):
         raise HTTPException(400, "sellers must be a list of seller names")
     clean, seen = [], set()
@@ -14096,8 +14101,8 @@ async def put_coverage_excluded_sellers(body: dict, authorization: str = Header(
         clean.append(v)
     row = {"org_id": org_id, "coverage_excluded_sellers": clean,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if isinstance(body.get("artifact_hints"), list):
-        row["coverage_artifact_hints"] = [str(h).strip().lower() for h in body["artifact_hints"]
+    if isinstance(body.artifact_hints, list):
+        row["coverage_artifact_hints"] = [str(h).strip().lower() for h in body.artifact_hints
                                           if str(h or "").strip()]
     try:
         sb().schema('commcalc').table('commission_org_config').upsert(row, on_conflict='org_id').execute()
@@ -14479,7 +14484,13 @@ async def commission_plan_assignment_audit(org_id: str = ORG_ID, include_inactiv
 
 
 @router.post("/commission-plans/bulk-assign")
-async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
+class BulkAssignCommissionPlanIn(LaxModel):
+    plan_id: str = ""
+    people: Any = None
+    replace_existing: Any = None
+
+
+async def bulk_assign_commission_plan(body: BulkAssignCommissionPlanIn, org_id: str = ORG_ID):
     """Assign ONE commission plan to MANY employees in a single action (owner directive 2026-07-23).
 
     Body: {plan_id, people:[<scope_value> | {value}...], replace_existing?:bool}. Additive to single-
@@ -14494,12 +14505,12 @@ async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
                             rows deleted + new row inserted ('replaced' = # rows removed for them)
       • skipped_has_other — person had a different direct plan and replace_existing=false (needs confirm)
     """
-    plan_id = (body.get("plan_id") or "").strip()
+    plan_id = (body.plan_id or "").strip()
     if not plan_id:
         raise HTTPException(400, "plan_id required")
     # normalize + dedupe the selection (accept plain strings or {value} objects), first-seen order
     seen, values = set(), []
-    for p in (body.get("people") or []):
+    for p in (body.people or []):
         v = str((p.get("value") if isinstance(p, dict) else p) or "").strip()
         k = _norm_assign(v)
         if not v or k in seen:
@@ -14508,7 +14519,7 @@ async def bulk_assign_commission_plan(body: dict, org_id: str = ORG_ID):
         values.append(v)
     if not values:
         raise HTTPException(400, "no people selected")
-    replace_existing = bool(body.get("replace_existing"))
+    replace_existing = bool(body.replace_existing)
     client = sb()
     # plan must exist for THIS org (guards a stale / cross-tenant plan_id)
     try:
@@ -14637,9 +14648,18 @@ async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     return r.data or []
 
 @router.put("/stores/{store_id}")
-async def update_store(store_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+class UpdateStoreIn(LaxModel):
+    market: Any = None
+    store_code: Any = None
+    store_address: Any = None
+    is_active: Any = None
+    salesforce_id: Any = None
+
+
+async def update_store(store_id: str, body: UpdateStoreIn, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    allowed = {k: v for k, v in body.items() if k in ['market', 'store_code', 'store_address', 'is_active', 'salesforce_id']}
+    allowed = {k: getattr(body, k) for k in ('market', 'store_code', 'store_address', 'is_active', 'salesforce_id')
+               if k in body.model_fields_set}
     if not allowed:
         raise HTTPException(400, "No valid fields to update")
     # market is normalized for EVERY caller, not just the settings dropdown: trimmed, and snapped to the
@@ -14681,11 +14701,16 @@ async def store_resolution(period: str = "", org_id: str = ORG_ID):
     return _store_resolution_report(sb(), org_id, period=(period or None))
 
 
+class AddStoreAliasIn(LaxModel):
+    alias: str = ""
+    store_code: str = ""
+
+
 @router.post("/store-aliases")
-async def add_store_alias(body: dict, org_id: str = ORG_ID):
+async def add_store_alias(body: AddStoreAliasIn, org_id: str = ORG_ID):
     require_org(org_id)
-    alias = (body.get('alias') or '').strip()
-    code = (body.get('store_code') or '').strip()
+    alias = (body.alias or '').strip()
+    code = (body.store_code or '').strip()
     if not alias or not code:
         raise HTTPException(400, "alias and store_code required")
     client = sb()
