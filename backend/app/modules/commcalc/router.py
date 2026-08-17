@@ -23036,34 +23036,59 @@ def get_ftp_config(org_id: str = ORG_ID):
 
 
 @router.put("/ftp-sweep/config")
-def put_ftp_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+class PutFtpConfigIn(LaxModel):
+    host: str = ""
+    port: Any = None
+    username: str = ""
+    use_tls: Any = None
+    passive: Any = True
+    remote_dir: str = ""
+    patterns: Any = None
+    enabled: Any = None
+    frequency: Any = None
+    hour: Any = None
+    password: Any = None
+
+
+def put_ftp_config(body: PutFtpConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save config. Password only updated when a non-empty value is supplied (so it isn't wiped)."""
     require_org(org_id)
     _require_import_admin(authorization, org_id)
-    row = {"org_id": org_id, "host": (body.get("host") or "").strip() or None,
-           "port": int(body.get("port") or 21), "username": (body.get("username") or "").strip() or None,
-           "use_tls": bool(body.get("use_tls")), "passive": body.get("passive", True) is not False,
-           "remote_dir": (body.get("remote_dir") or "/").strip(),
-           "patterns": body.get("patterns") or [], "enabled": bool(body.get("enabled")),
-           "frequency": body.get("frequency") or "daily", "hour": int(body.get("hour") or 7),
+    row = {"org_id": org_id, "host": (body.host or "").strip() or None,
+           "port": int(body.port or 21), "username": (body.username or "").strip() or None,
+           "use_tls": bool(body.use_tls), "passive": body.passive is not False,
+           "remote_dir": (body.remote_dir or "/").strip(),
+           "patterns": body.patterns or [], "enabled": bool(body.enabled),
+           "frequency": body.frequency or "daily", "hour": int(body.hour or 7),
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if (body.get("password") or "").strip():
-        row["password"] = body["password"]
-    if body.get("enabled"):
+    if (body.password or "").strip():
+        row["password"] = body.password
+    if body.enabled:
         row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
     sb().schema("commcalc").table("ftp_sweep_config").upsert(row, on_conflict="org_id").execute()
     return {"ok": True}
 
 
+class TestFtpIn(LaxModel):
+    host: Any = None
+    port: Any = None
+    username: Any = None
+    password: Any = None
+    use_tls: Any = None
+    passive: Any = None
+    remote_dir: Any = None
+    patterns: Any = None
+
+
 @router.post("/ftp-sweep/test")
-def test_ftp(body: dict, org_id: str = ORG_ID):
+def test_ftp(body: TestFtpIn, org_id: str = ORG_ID):
     """List the remote directory (merging any unsaved overrides from the body) + which files match a
     pattern. Used by the 'Test connection' button before saving creds."""
     require_org(org_id)
     cfg = dict(_ftp_cfg(sb(), org_id) or {})
     for k in ("host", "port", "username", "password", "use_tls", "passive", "remote_dir", "patterns"):
-        if k in body and body[k] not in (None, ""):
-            cfg[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) not in (None, ""):
+            cfg[k] = getattr(body, k)
     try:
         files = _ftp.list_files(cfg)
     except Exception as e:
@@ -23840,25 +23865,43 @@ def get_email_config(org_id: str = ORG_ID, account: str = "default"):
     return _strip_pw(cfg)
 
 
+class PutEmailConfigIn(LaxModel):
+    account: str = ""
+    label: str = ""
+    imap_host: str = ""
+    imap_port: Any = None
+    username: str = ""
+    use_ssl: Any = True
+    mailbox: str = ""
+    from_filter: str = ""
+    since_days: Any = None
+    patterns: Any = None
+    enabled: Any = None
+    frequency: Any = None
+    hour: Any = None
+    password: Any = None
+    acknowledge_cross_org: Any = None
+
+
 @router.put("/email-sweep/config")
-def put_email_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_email_config(body: PutEmailConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save one mailbox. `account` keys which mailbox (default 'default'); pass a distinct key + label to
     add another (e.g. account='total', label='Total Wireless'). Password only updated when supplied."""
     require_org(org_id)
     _require_import_admin(authorization, org_id)
-    account = (body.get("account") or "default").strip() or "default"
-    row = {"org_id": org_id, "account": account, "label": (body.get("label") or "").strip() or None,
-           "imap_host": (body.get("imap_host") or "").strip() or None,
-           "imap_port": int(body.get("imap_port") or 993), "username": (body.get("username") or "").strip() or None,
-           "use_ssl": body.get("use_ssl", True) is not False, "mailbox": (body.get("mailbox") or "INBOX").strip(),
-           "from_filter": (body.get("from_filter") or "").strip() or None,
-           "since_days": int(body.get("since_days") or 14),
-           "patterns": body.get("patterns") or [], "enabled": bool(body.get("enabled")),
-           "frequency": body.get("frequency") or "daily", "hour": int(body.get("hour") or 7),
+    account = (body.account or "default").strip() or "default"
+    row = {"org_id": org_id, "account": account, "label": (body.label or "").strip() or None,
+           "imap_host": (body.imap_host or "").strip() or None,
+           "imap_port": int(body.imap_port or 993), "username": (body.username or "").strip() or None,
+           "use_ssl": body.use_ssl is not False, "mailbox": (body.mailbox or "INBOX").strip(),
+           "from_filter": (body.from_filter or "").strip() or None,
+           "since_days": int(body.since_days or 14),
+           "patterns": body.patterns or [], "enabled": bool(body.enabled),
+           "frequency": body.frequency or "daily", "hour": int(body.hour or 7),
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if (body.get("password") or "").strip():
-        row["password"] = body["password"]
-    if body.get("enabled"):
+    if (body.password or "").strip():
+        row["password"] = body.password
+    if body.enabled:
         row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
     # MISFILE GUARD (the cross-org class has bitten twice — the Luxelink mailbox filed under the HOUSE
     # org would ingest Total sales into Boost, and the same physical inbox enabled under two orgs makes
@@ -23867,7 +23910,7 @@ def put_email_config(body: dict, org_id: str = ORG_ID, authorization: str = Head
     # save with acknowledge_cross_org) goes through but still carries the warning so the UI can surface it.
     conflicts = _mailbox_cross_org(sb(), row.get("username"), org_id)
     enabled_conflicts = [c for c in conflicts if c.get("enabled")]
-    if row.get("enabled") and enabled_conflicts and not body.get("acknowledge_cross_org"):
+    if row.get("enabled") and enabled_conflicts and not body.acknowledge_cross_org:
         return {"ok": False, "account": account, "warning": "cross_org_mailbox",
                 "message": (f"The mailbox '{row.get('username')}' is already configured and ENABLED under "
                             f"another tenant. Enabling it here too would make BOTH tenants ingest the same "
@@ -23901,15 +23944,28 @@ def delete_email_account(account: str, org_id: str = ORG_ID):
     return {"deleted": account}
 
 
+class TestEmailIn(LaxModel):
+    account: Any = None
+    imap_host: Any = None
+    imap_port: Any = None
+    username: Any = None
+    password: Any = None
+    use_ssl: Any = None
+    mailbox: Any = None
+    from_filter: Any = None
+    since_days: Any = None
+    patterns: Any = None
+
+
 @router.post("/email-sweep/test")
-def test_email(body: dict, org_id: str = ORG_ID):
+def test_email(body: TestEmailIn, org_id: str = ORG_ID):
     """Connect to the mailbox (merging any unsaved overrides) and list recent messages + their
     attachments and which match a pattern. Used by the 'Test connection' button before saving creds."""
     require_org(org_id)
-    cfg = dict(_email_cfg(sb(), org_id, (body.get("account") or "default").strip() or "default") or {})
+    cfg = dict(_email_cfg(sb(), org_id, (body.account or "default").strip() or "default") or {})
     for k in ("imap_host", "imap_port", "username", "password", "use_ssl", "mailbox", "from_filter", "since_days", "patterns"):
-        if k in body and body[k] not in (None, ""):
-            cfg[k] = body[k]
+        if k in body.model_fields_set and getattr(body, k) not in (None, ""):
+            cfg[k] = getattr(body, k)
     try:
         msgs = _email.list_messages(cfg)
     except Exception as e:

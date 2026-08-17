@@ -342,7 +342,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     productivity-item config (mixed is-not-None + model_fields_set presence loops),
     rep-aliases merge → lax. **Part 26:** commcalc store-expenses group (put/matrix
     replace, bulk-apply cells, system-line receiver, apply-config tokens, apply-to-
-    months) → lax; list-of-cell payloads typed Any, read locally. ~284 `dict` bodies
+    months) → lax; list-of-cell payloads typed Any, read locally. **Part 27:**
+    commcalc FTP + email sweep config/test (ftp config+test, email config+test) →
+    lax; write-only password field stays Any and is only persisted when non-empty
+    (unchanged), presence-merge loops via model_fields_set. ~280 `dict` bodies
     remain (body-threading endpoints get a dedicated pass; POS skipped — incomplete/
     no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
