@@ -278,7 +278,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     (submit/push-back/approve/dm-confirm) + google-reviews resolve-place → lax
     (optional bodies via Optional[Model] + `body or Model()`). **Part 7g:** storeops
     google-reviews config/sweep-config/run-now → lax (presence via model_fields_set;
-    write-only api_key). ~379 `dict` bodies remain (body-threading endpoints get a
+    write-only api_key). **Part 7h:** storeops schedule-templates
+    (save-week/apply-templates), shift-extension request, face-retention
+    request-deletion (optional body), google-reviews store-config PUT → lax
+    (presence via model_fields_set; place_id/target handler-validated typed Any).
+    ~374 `dict` bodies remain (body-threading endpoints get a
     dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

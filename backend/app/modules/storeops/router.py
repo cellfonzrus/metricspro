@@ -2375,9 +2375,13 @@ def get_shift_templates(authorization: str = Header(default=""), org_id: str = O
 
 
 @router.post("/shift-templates/save-week")
-def save_week_as_template(body: dict, org_id: str = ORG_ID):
+class WeekStartIn(LaxModel):
+    week_start: str = ""
+
+
+def save_week_as_template(body: WeekStartIn, org_id: str = ORG_ID):
     """Save a week's shifts as the recurring template (replaces existing templates for those employees)."""
-    week_start = (body.get("week_start") or "").strip()
+    week_start = (body.week_start or "").strip()
     if not week_start:
         raise HTTPException(400, "week_start required")
     we = (datetime.fromisoformat(week_start).date() + timedelta(days=6)).isoformat()
@@ -2425,9 +2429,9 @@ def save_week_as_template(body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/shift-templates/apply")
-def apply_templates(body: dict, org_id: str = ORG_ID):
+def apply_templates(body: WeekStartIn, org_id: str = ORG_ID):
     """Create shifts for a week from the saved templates (dedup-safe; skips time-off-blocked days)."""
-    week_start = (body.get("week_start") or "").strip()
+    week_start = (body.week_start or "").strip()
     if not week_start:
         raise HTTPException(400, "week_start required")
     ws = datetime.fromisoformat(week_start).date()
@@ -3811,9 +3815,13 @@ def get_face_retention_log(authorization: str = Header(default=""), org_id: str 
     return {"rows": _fret.recent_log(org_id, sb(), limit=limit)}
 
 
+class FaceDeletionIn(LaxModel):
+    note: str = ""
+
+
 @router.post("/employees/{emp_id}/face-retention/request-deletion")
-def request_face_deletion(emp_id: str, body: dict = None, authorization: str = Header(default=""),
-                          org_id: str = ORG_ID):
+def request_face_deletion(emp_id: str, body: Optional[FaceDeletionIn] = None,
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
     """BIPA gives an employee the right to demand destruction of their biometric data — this is that
     path: immediate, single-employee, logged with trigger='employee_request'. `emp_id` is the internal
     numeric id (matches PATCH /employees/{id}). Body: {note?} — record how/when the request was made;
@@ -3825,7 +3833,7 @@ def request_face_deletion(emp_id: str, body: dict = None, authorization: str = H
            .limit(1).execute().data or [None])[0]
     if not row:
         raise HTTPException(404, "employee not found")
-    note = ((body or {}).get("note") or "").strip()
+    note = ((body.note if body else "") or "").strip()
     return _fret.destroy_one_employee_request(
         org_id, row.get("employee_id"), row.get("name"), client,
         destroyed_by=(mgr.get("email") or "system"), note=(note or None))
@@ -4267,26 +4275,37 @@ def _dm_for_store(org_id, store_code):
 
 
 @router.post("/shift-extensions")
-async def request_shift_extension(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+class ShiftExtensionRequestIn(LaxModel):
+    employee_id: str = ""
+    employee_name: str = ""
+    store_code: str = ""
+    shift_date: str = ""
+    requested_end: str = ""
+    reason: str = ""
+    shift_id: Any = None
+    original_end: Any = None
+
+
+async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """A manager files a request to extend an employee's shift past its scheduled end. Resolves the
     District Manager, saves it 'pending', and emails the DM an FYI (the approval itself is the DM's
     in-app tick). Body: {employee_id, employee_name?, store_code, shift_date, requested_end, reason?,
     shift_id?, original_end?}."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    employee_id = (body.get("employee_id") or "").strip()
-    store_code = (body.get("store_code") or "").strip()
-    shift_date = (body.get("shift_date") or "").strip()[:10]
-    requested_end = (body.get("requested_end") or "").strip()
+    employee_id = (body.employee_id or "").strip()
+    store_code = (body.store_code or "").strip()
+    shift_date = (body.shift_date or "").strip()[:10]
+    requested_end = (body.requested_end or "").strip()
     if not (employee_id and shift_date and requested_end):
         raise HTTPException(400, "employee_id, shift_date and requested_end are required")
     dm_eid, dm_email, dm_name = _dm_for_store(org_id, store_code)
     _ids, emp_name = _emp_id_variants(org_id, employee_id)
     row = {"org_id": org_id, "employee_id": employee_id,
-           "employee_name": body.get("employee_name") or emp_name,
-           "store_code": store_code, "shift_id": body.get("shift_id"), "shift_date": shift_date,
-           "original_end": body.get("original_end"), "requested_end": requested_end,
-           "reason": body.get("reason"), "status": "pending",
+           "employee_name": body.employee_name or emp_name,
+           "store_code": store_code, "shift_id": body.shift_id, "shift_date": shift_date,
+           "original_end": body.original_end, "requested_end": requested_end,
+           "reason": body.reason or None, "status": "pending",
            "requested_by": mgr.get("email"), "requested_by_name": mgr.get("email"),
            "dm_employee_id": dm_eid, "dm_email": dm_email}
     try:
@@ -4306,7 +4325,7 @@ async def request_shift_extension(body: dict, authorization: str = Header(defaul
                     html=(f"<p>{mgr.get('email')} requested to extend "
                           f"<b>{row['employee_name'] or employee_id}</b>'s shift at "
                           f"<b>{store_code or '—'}</b> on <b>{shift_date}</b> to <b>{requested_end}</b>.</p>"
-                          f"<p>Reason: {body.get('reason') or '—'}</p>"
+                          f"<p>Reason: {body.reason or '—'}</p>"
                           f"<p>Approve or deny it in MetricsPro → Workforce → Shift Extensions.</p>"))
                 emailed = True
         except Exception:
@@ -7190,8 +7209,18 @@ def list_google_review_stores(authorization: str = Header(default=""), org_id: s
     return {"stores": out, "target_default": cfg.get("target_default", _gr.DEFAULT_TARGET)}
 
 
+class GoogleReviewStoreConfigIn(LaxModel):
+    clear_target_override: Any = None
+    target_override: Any = None
+    clear_place_id: Any = None
+    place_id: str = ""
+    resolved_address: Any = None
+    resolved_display_name: Any = None
+
+
 @router.put("/google-reviews/store-config/{store_code}")
-def put_google_review_store_config(store_code: str, body: dict, authorization: str = Header(default=""),
+def put_google_review_store_config(store_code: str, body: GoogleReviewStoreConfigIn,
+                                   authorization: str = Header(default=""),
                                    x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     """Manual place_id / target overrides (pick-don't-type: store_code comes from the existing store
     roster the page already renders, never free-typed)."""
@@ -7200,20 +7229,20 @@ def put_google_review_store_config(store_code: str, body: dict, authorization: s
     if not store_code:
         raise HTTPException(400, "store_code is required")
     row = {"org_id": org_id, "store_code": store_code, "updated_at": datetime.now(timezone.utc).isoformat()}
-    if body.get("clear_target_override"):
+    if body.clear_target_override:
         row["target_override"] = None
-    elif "target_override" in body and body["target_override"] not in (None, ""):
-        row["target_override"] = _gr.clamp_target(body["target_override"])
-    if body.get("clear_place_id"):
+    elif "target_override" in body.model_fields_set and body.target_override not in (None, ""):
+        row["target_override"] = _gr.clamp_target(body.target_override)
+    if body.clear_place_id:
         row["place_id"] = None
         row["place_id_source"] = "manual"
-    elif (body.get("place_id") or "").strip():
-        row["place_id"] = body["place_id"].strip()
+    elif (body.place_id or "").strip():
+        row["place_id"] = body.place_id.strip()
         row["place_id_source"] = "manual"
-        if body.get("resolved_address"):
-            row["resolved_address"] = body["resolved_address"]
-        if body.get("resolved_display_name"):
-            row["resolved_display_name"] = body["resolved_display_name"]
+        if body.resolved_address:
+            row["resolved_address"] = body.resolved_address
+        if body.resolved_display_name:
+            row["resolved_display_name"] = body.resolved_display_name
     try:
         sb().table("google_review_store").upsert(row, on_conflict="org_id,store_code").execute()
     except Exception as e:
