@@ -338,7 +338,9 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     — 14 presence-gated list/map fields via model_fields_set — and catalog-override)
     → lax. **Part 24:** commcalc targets + KPI (save-target, roll-forward optional
     body, carrier-kpi-metric save, kpi-actuals upsert, paramount MTD import) → lax;
-    safe_float/int-coerced fields typed Any. ~292 `dict` bodies remain (body-threading
+    safe_float/int-coerced fields typed Any. **Part 25:** commcalc exec-metric config,
+    productivity-item config (mixed is-not-None + model_fields_set presence loops),
+    rep-aliases merge → lax. ~289 `dict` bodies remain (body-threading
     endpoints get a dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

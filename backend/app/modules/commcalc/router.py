@@ -21335,15 +21335,21 @@ def get_exec_metric_config(org_id: str = ORG_ID):
 
 
 @router.put("/exec-metric-config")
-def put_exec_metric_config(body: dict, org_id: str = ORG_ID):
+class PutExecMetricConfigIn(LaxModel):
+    bucket: str = ""
+    rules: Any = None
+    basis: Any = None
+
+
+def put_exec_metric_config(body: PutExecMetricConfigIn, org_id: str = ORG_ID):
     """Upsert one bucket's metric definition (org-scoped). body = {bucket, rules:{...}, basis}. Only the
     six known buckets are accepted. Degrades gracefully if mig 204 hasn't run (returns ok=false hint)."""
     require_org(org_id)
-    bucket = str(body.get('bucket') or '').strip()
+    bucket = str(body.bucket or '').strip()
     if bucket not in _EXEC_BUCKETS:
         raise HTTPException(400, f"unknown bucket (allowed: {', '.join(_EXEC_BUCKETS)})")
-    rules = body.get('rules') if isinstance(body.get('rules'), dict) else {}
-    basis = 'ext_price' if str(body.get('basis') or 'count') == 'ext_price' else 'count'
+    rules = body.rules if isinstance(body.rules, dict) else {}
+    basis = 'ext_price' if str(body.basis or 'count') == 'ext_price' else 'count'
     try:
         sb().schema('commcalc').table('exec_metric_config').upsert(
             {'org_id': org_id, 'bucket': bucket, 'rules': rules, 'basis': basis,
@@ -21779,31 +21785,45 @@ def _require_perf_review_edit(authorization, org_id):
 
 
 @router.put("/productivity/config")
-def put_productivity_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+class PutProductivityConfigIn(LaxModel):
+    item_key: str = ""
+    label: Any = None
+    source_key: Any = None
+    standard_type: Any = None
+    standard: Any = None
+    weight: Any = None
+    count_in_stack_ranker: Any = None
+    count_in_review: Any = None
+    enabled: Any = None
+    hidden: Any = None
+    sort: Any = None
+
+
+def put_productivity_config(body: PutProductivityConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert ONE registry item (add a custom item or edit/enable/disable a default). item_key required;
     source_key must be in the SOURCE CATALOG (pick-don't-type — no free-form formula). Degrades with a hint
     if mig 215 isn't applied. GATED on the 'performance_review' settings permission (B5)."""
     require_org(org_id)
     _require_perf_review_edit(authorization, org_id)
-    item_key = str(body.get('item_key') or '').strip()
+    item_key = str(body.item_key or '').strip()
     if not item_key:
         raise HTTPException(400, "item_key required")
-    source_key = str(body.get('source_key') or '').strip()
+    source_key = str(body.source_key or '').strip()
     if source_key and source_key not in _prod.SOURCE_CATALOG:
         raise HTTPException(400, f"unknown source_key (pick from the catalog): {source_key}")
     row = {'org_id': org_id, 'item_key': item_key}
     for c in ('label', 'source_key', 'standard_type'):
-        if body.get(c) is not None:
-            row[c] = str(body.get(c))
-    if 'standard' in body:
-        row['standard'] = None if body.get('standard') in (None, '') else safe_float(body.get('standard'))
-    if 'weight' in body:
-        row['weight'] = safe_float(body.get('weight'))
+        if getattr(body, c) is not None:
+            row[c] = str(getattr(body, c))
+    if 'standard' in body.model_fields_set:
+        row['standard'] = None if body.standard in (None, '') else safe_float(body.standard)
+    if 'weight' in body.model_fields_set:
+        row['weight'] = safe_float(body.weight)
     for b in ('count_in_stack_ranker', 'count_in_review', 'enabled', 'hidden'):
-        if b in body:
-            row[b] = bool(body.get(b))
-    if 'sort' in body:
-        row['sort'] = int(safe_float(body.get('sort')))
+        if b in body.model_fields_set:
+            row[b] = bool(getattr(body, b))
+    if 'sort' in body.model_fields_set:
+        row['sort'] = int(safe_float(body.sort))
     row['is_seed_default'] = item_key in {d['item_key'] for d in _prod.DEFAULT_ITEMS}
     row['updated_at'] = _datetime.now(_timezone.utc).isoformat()
     try:
@@ -22360,10 +22380,15 @@ async def get_rep_aliases(org_id: str = ORG_ID):
 
 
 @router.post("/rep-aliases")
-async def post_rep_aliases(body: dict, org_id: str = ORG_ID):
+class PostRepAliasesIn(LaxModel):
+    canonical: str = ""
+    aliases: Any = None
+
+
+async def post_rep_aliases(body: PostRepAliasesIn, org_id: str = ORG_ID):
     """Merge rep name-variants into one canonical. Body: {canonical, aliases:[...]}."""
-    canonical = (body.get('canonical') or '').strip()
-    aliases = body.get('aliases') or []
+    canonical = (body.canonical or '').strip()
+    aliases = body.aliases or []
     if not canonical or not isinstance(aliases, list) or not aliases:
         raise HTTPException(400, "canonical + aliases[] required")
     client = sb()

@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt24) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt25) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–24 = 141 endpoints; ~292 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–25 = 144 endpoints; ~289 remain) |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -106,7 +106,8 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   add_store_alias. **Part 22:** ingest-guard config+decide, gp-category-map, commission-leg label+config.
   **Part 23:** update_chargeback, put_accessory_config (14 presence fields), put_catalog_override.
   **Part 24:** save_target, roll_forward_targets, save_carrier_kpi_metric, save_kpi_actuals, import_paramount_mtd.
-  Next commcalc candidates (grep 'body: dict'): put_exec_metric_config, put_productivity_config, post_rep_aliases, the expense
+  **Part 25:** put_exec_metric_config, put_productivity_config, post_rep_aliases.
+  Next commcalc candidates (grep 'body: dict'): the expense
   group (put_expenses/bulk_apply/upsert_expense_system_line/put_expense_apply_config/apply_expenses),
   ftp/email/data-source/proxy config, report-pull/manual-upload maps, live-login, ma-overview,
   custom-report-defs, and the agency_* group (~9). Read each first, watch for body-threading AND
