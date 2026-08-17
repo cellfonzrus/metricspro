@@ -365,8 +365,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     — deferred). **Part 34:** commcalc management-incentive (mi save-plan +
     header/children, compute, payout-decision, resolve) → lax; the `_actor` internal
     key uses a Pydantic alias (`Field(alias="_actor")`) since leading-underscore
-    field names are reserved. ~255 `dict` bodies remain (body-threading endpoints
-    get a dedicated pass; POS skipped — incomplete/no data).
+    field names are reserved. **Part 35:** commcalc atu-config set, flag-rules put,
+    carrier-category-rule upsert → lax (presence loops via model_fields_set /
+    is-not-None; float-clamp preserved). payout-record + payout-accrual-config
+    thread `body` into `payout_accrual.*` (deferred). ~252 `dict` bodies remain
+    (body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
+    data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

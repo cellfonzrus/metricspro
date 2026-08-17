@@ -6473,23 +6473,34 @@ def list_category_map(carrier_id: str = "", org_id: str = ORG_ID):
 
 
 @router.post("/carrier-category-map")
-def upsert_category_rule(body: dict, org_id: str = ORG_ID):
+class UpsertCategoryRuleIn(LaxModel):
+    component: str = ""
+    raw_category: str = ""
+    carrier_id: Any = None
+    match_type: str = ""
+    subtype: str = ""
+    priority: Any = None
+    is_active: Any = True
+    id: Any = None
+
+
+def upsert_category_rule(body: UpsertCategoryRuleIn, org_id: str = ORG_ID):
     require_org(org_id)
-    comp = (body.get("component") or "").strip().upper()
+    comp = (body.component or "").strip().upper()
     if comp not in carrier_map.COMPONENTS:
         raise HTTPException(400, "component must be one of " + "|".join(carrier_map.COMPONENTS))
-    raw = (body.get("raw_category") or "").strip()
+    raw = (body.raw_category or "").strip()
     if not raw:
         raise HTTPException(400, "raw_category required")
-    row = {"org_id": org_id, "carrier_id": body.get("carrier_id") or None, "raw_category": raw,
-           "match_type": (body.get("match_type") or "exact").lower(), "component": comp,
-           "subtype": (body.get("subtype") or "").strip() or None,
-           "priority": int(body.get("priority") or 100),
-           "is_active": body.get("is_active", True) is not False,
+    row = {"org_id": org_id, "carrier_id": body.carrier_id or None, "raw_category": raw,
+           "match_type": (body.match_type or "exact").lower(), "component": comp,
+           "subtype": (body.subtype or "").strip() or None,
+           "priority": int(body.priority or 100),
+           "is_active": body.is_active is not False,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if body.get("id"):
-        sb().schema("commcalc").table("carrier_category_map").update(row).eq("id", body["id"]).execute()
-        return {"ok": True, "id": body["id"]}
+    if body.id:
+        sb().schema("commcalc").table("carrier_category_map").update(row).eq("id", body.id).execute()
+        return {"ok": True, "id": body.id}
     r = sb().schema("commcalc").table("carrier_category_map").upsert(
         row, on_conflict="org_id,carrier_id,raw_category,match_type").execute()
     return r.data[0] if r.data else row
@@ -7912,15 +7923,21 @@ def get_flag_rules(org_id: str = ORG_ID):
 
 
 @router.put("/flag-rules")
-def put_flag_rules(body: dict, org_id: str = ORG_ID):
+class PutFlagRulesIn(LaxModel):
+    accessory_threshold: Any = None
+    accessory_chargeback_amount: Any = None
+    accessory_min_threshold: Any = None
+
+
+def put_flag_rules(body: PutFlagRulesIn, org_id: str = ORG_ID):
     require_org(org_id)
     row = {"id": 1, "org_id": org_id, "updated_at": _cb_now()}
-    if body.get("accessory_threshold") is not None:
-        row["accessory_threshold"] = safe_float(body.get("accessory_threshold"))
-    if body.get("accessory_chargeback_amount") is not None:
-        row["accessory_chargeback_amount"] = safe_float(body.get("accessory_chargeback_amount"))
-    if body.get("accessory_min_threshold") is not None:
-        row["accessory_min_threshold"] = safe_float(body.get("accessory_min_threshold"))
+    if body.accessory_threshold is not None:
+        row["accessory_threshold"] = safe_float(body.accessory_threshold)
+    if body.accessory_chargeback_amount is not None:
+        row["accessory_chargeback_amount"] = safe_float(body.accessory_chargeback_amount)
+    if body.accessory_min_threshold is not None:
+        row["accessory_min_threshold"] = safe_float(body.accessory_min_threshold)
     try:
         sb().schema("commcalc").table("flag_rules").upsert(row, on_conflict="id").execute()
         _invalidate_accessory_config(org_id)   # legacy fallback source for _accessory_config (②)
@@ -29475,15 +29492,22 @@ def atu_config_get(org_id: str = ORG_ID):
 
 
 @router.post("/atu-config")
-def atu_config_set(body: dict, org_id: str = ORG_ID):
+class AtuConfigSetIn(LaxModel):
+    saving_per_month: Any = None
+    boost_rate_pct: Any = None
+    total_rate_pct: Any = None
+    total_recharge_base: Any = None
+
+
+def atu_config_set(body: AtuConfigSetIn, org_id: str = ORG_ID):
     """Save the assumptions. org_id is STAMPED (RULE ONE). Values are clamped to >= 0 — a negative rate
     would silently flip the sign of the whole report."""
     require_org(org_id)
     payload = {"org_id": org_id}
     for k in _ATU_DEFAULTS:
-        if k in (body or {}):
+        if k in body.model_fields_set:
             try:
-                payload[k] = max(0.0, float((body or {}).get(k)))
+                payload[k] = max(0.0, float(getattr(body, k)))
             except (TypeError, ValueError):
                 continue
     payload["updated_at"] = _datetime.now(_timezone.utc).isoformat()
