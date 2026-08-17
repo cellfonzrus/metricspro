@@ -19,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Header, Request, BackgroundTasks
 from app.core.database import get_supabase, get_supabase_admin
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from app.modules.core.entitlements import (
     MODULE_CATALOG, ROLE_GATE_KEYS, load_module_catalog,
     sync_tenant, sync_all_tenants, needs_sync, SEED_VERSION,
@@ -790,7 +791,7 @@ def sync_tenants_endpoint(authorization: str = Header(default=""), x_notify_secr
     """Reconcile EVERY tenant — module entitlement (all-access default) + tenant-safe default
     content — bringing tenants created before a feature shipped up to date. Auth: super-admin,
     OR the NOTIFY_RUN_SECRET header (so a post-deploy / cron backfill can run without a UI token)."""
-    if not (settings.NOTIFY_RUN_SECRET and x_notify_secret == settings.NOTIFY_RUN_SECRET):
+    if not verify_notify_secret(x_notify_secret):
         _require_super_admin(authorization)
     return sync_all_tenants(sb())
 

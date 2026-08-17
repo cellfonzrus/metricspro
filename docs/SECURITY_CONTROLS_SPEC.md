@@ -211,10 +211,16 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
    be authorized, rate-limited, **audited**, and **watermarked**; add volume caps.
 8. **Customer PII masking** — mask phone/email by default; reveal is audited.
 9. **Constant-time secret compare + per-purpose secrets + rotation** for
-   `NOTIFY_RUN_SECRET` and inbound webhook auth.
+   `NOTIFY_RUN_SECRET` and inbound webhook auth. ✅ **Built.** Shared
+   `run_secret.verify_notify_secret()` — `hmac.compare_digest` across all ~24
+   `run-due`/cron sites, plus rotation via `NOTIFY_RUN_SECRET_NEXT`. Fixed a
+   fail-open site in `recovery/router.py` (unset secret used to allow the sweep).
 10. **2FA/TOTP for admin + impersonation**; time-box the standing super-admin and
-    require step-up.
-11. **CSP + frontend security headers.**
+    require step-up. _(Not started — larger, own pass.)_
+11. **CSP + frontend security headers.** ✅ **Built.** `next.config.ts` sets
+    nosniff / frame-DENY / Referrer-Policy / Permissions-Policy (geolocation
+    allowed for self) / HSTS on every route, and a **Report-Only** CSP (safe
+    rollout — promote to enforcing after the console is clean).
 
 ### Phase 3 — Assurance & resilience (P1/P2)
 12. **CI security gates** — SAST, dependency/SCA, secret scanning.

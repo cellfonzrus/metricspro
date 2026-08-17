@@ -57,6 +57,7 @@ from app.modules.commcalc import atu_opportunity as _atu
 from app.modules.commcalc import productivity as _prod
 from app.modules.commcalc import payout_accrual
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
 from uuid import uuid4 as _uuid4
 # Plain names too: 45+ call sites across this router use bare datetime/timezone/timedelta (all the
@@ -3098,7 +3099,7 @@ async def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG
 async def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -7018,7 +7019,7 @@ def connectors_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     (enabled + next_run_at), dispatches the due ones by sweep_kind, and advances next_run_at.
     Additive: the per-vendor run-dues still work; point a single cron here and disable the others to
     avoid double-runs. Guarded by NOTIFY_RUN_SECRET (reused — no new env var)."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -8516,7 +8517,7 @@ async def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = OR
 async def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -8644,7 +8645,7 @@ async def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG
 async def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -8837,7 +8838,7 @@ async def epay_discover_reports(org_id: str = ORG_ID):
 async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -22552,7 +22553,7 @@ def ftp_processed(org_id: str = ORG_ID, limit: int = 100):
 @router.post("/ftp-sweep/run-due")
 async def ftp_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — run the FTP sweep if enabled + due, then advance next_run_at."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -23274,7 +23275,7 @@ def sales_promote_due(x_notify_secret: str = Header(default=""), period: str = N
     double-count. Schedule hourly (offset from the email-sweep cron) so raw_sales never lags the feed for
     any tenant. With no `period` it also re-derives the JUST-CLOSED month inside each tenant's
     month-boundary grace window (sales_derive.py) — still with no recompute anywhere."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     return _promote_all_due(sb(), period)
 
@@ -23701,7 +23702,7 @@ def connector_health(org_id: str = ORG_ID):
 async def connector_health_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (hourly): WhatsApp/email the assigned person for any errored/stale data source.
     Deduped via alert_log so it won't re-alert every tick until the source recovers."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     failures = _scan_connector_health(client)
@@ -23722,7 +23723,7 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
 @router.post("/email-sweep/run-due")
 async def email_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — run the email sweep if enabled + due, then advance next_run_at."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
@@ -24734,7 +24735,7 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
     this, any signed-in user could trigger pulls for every tenant on the platform.
     NOTE the cron itself does not exist yet: nothing scheduled this endpoint, so the "VidaPay runs on a
     schedule" expectation has never been true. The SQL to schedule it is in migration 241."""
-    cron = bool(settings.NOTIFY_RUN_SECRET) and x_notify_secret == settings.NOTIFY_RUN_SECRET
+    cron = verify_notify_secret(x_notify_secret)
     if not cron:
         require_org(org_id)
     client = sb()
@@ -28336,7 +28337,7 @@ async def payout_accrual_run_due(x_notify_secret: str = Header(default="")):
     The accrual ALSO runs at the tail of /sales/promote-due (right after the feed lands), so this
     endpoint is the belt to that braces: schedule it once a day if you want a fixed-time run, or rely
     on the promote sweep alone. Both paths are idempotent, so running both is harmless."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     return payout_accrual.run_all_due(sb())
 

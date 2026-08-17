@@ -22,6 +22,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from app.modules.crm import customer360, pipeline_core as core
 
 router = APIRouter(prefix="/crm", tags=["CRM"])
@@ -1492,7 +1493,7 @@ def run_reminders(x_notify_secret: str = Header(default=""), org_id: str = ""):
     """Scheduler entrypoint — pg_cron via pg_net, every 15 minutes. Secret-guarded exactly like
     notify's /run-due, and each tenant runs under `core.run_for_tenant` so a deactivated tenant is
     skipped and every pass leaves a job_run audit row."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     orgs = []
     if org_id:

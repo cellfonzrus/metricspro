@@ -1094,7 +1094,8 @@ async def run_weekly_notice(x_notify_secret: str = Header(default=""), eval_date
 
     Idempotent: it sends a reminder, it writes no decision, so a retry is harmless."""
     from app.core.config import settings
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    from app.core.run_secret import verify_notify_secret
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     from app.modules.notify.channels.email_resend import send_email, is_configured
     from app.modules.storeops.router import _dm_for_store

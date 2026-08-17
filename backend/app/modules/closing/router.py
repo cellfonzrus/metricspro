@@ -7,6 +7,7 @@ in commcalc.* (migration 029).
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks, Header
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from dateutil import parser as dateparser
@@ -3849,7 +3850,7 @@ def _biz_now_hhmm():
 async def cash_alerts_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (NOTIFY_RUN_SECRET) — run both the missing-closing and cash-unpicked alert
     sweeps across all tenants. Schedule hourly. Deduped, so re-running is safe."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     missing = await _run_closing_missing_alerts()
     unpicked = await _run_cash_unpicked_alerts()
@@ -4676,7 +4677,7 @@ def closing_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_I
 @router.post("/sweep/run-due")
 def closing_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — run every enabled config whose next_run_at has passed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = _now()
@@ -5910,7 +5911,7 @@ def expense_pl_sweep_run(org_id: str = ORG_ID):
 def expense_pl_sweep_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (NOTIFY_RUN_SECRET) — nightly, across every tenant. Idempotent (full
     recompute per category+period), safe to re-run."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     try:

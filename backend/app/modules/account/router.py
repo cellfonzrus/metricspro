@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from app.modules.account import coa, engine, autocompute, report_gates
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
@@ -436,7 +437,7 @@ async def run_due(x_notify_secret: str = Header(default=""), only_org: str = "",
     /notify/run-due); each tenant runs under core.run_for_tenant (money_scope="none"). `only_org`
     targets a single tenant; `force=true` recomputes regardless of staleness. This changes WHEN
     compute runs, never WHAT it computes."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     # SEV-1 2026-07-30 — same reason as /compute, and worse here: this sweep walks EVERY tenant x 2
     # periods, so it is N x (all the blocking Supabase work + one Claude narrative). On the event loop

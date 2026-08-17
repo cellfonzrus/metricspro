@@ -70,6 +70,21 @@ Built this phase, defaulted conservatively so nothing breaks on deploy:
 - `MULTI_TENANT_ENFORCE=1` — the deliberate tenant-isolation go-live (see item 3-adjacent). Startup now
   warns while it's off. Needs the isolation test before flipping.
 
+### 8. ⬜ Promote CSP from Report-Only → enforcing
+`next.config.ts` ships a **Content-Security-Policy-Report-Only** (Phase 2 item 11). It blocks nothing
+yet — it surfaces violations so we can confirm the policy fits the app (inline styles, Next inline
+scripts, Supabase + Railway origins).
+- **Do:** after deploy, browse the app with devtools open and watch for `[Report Only]` CSP violations.
+  When clean, rename the header `Content-Security-Policy-Report-Only` → `Content-Security-Policy` to
+  enforce.
+- **Watch:** `connect-src` currently allows `*.supabase.co` + `*.up.railway.app`; if the API/host
+  changes, update it before enforcing or calls will be blocked.
+
+### 9. ⬜ Optional: rotate NOTIFY_RUN_SECRET
+Rotation is now zero-downtime (Phase 2 item 9): set `NOTIFY_RUN_SECRET_NEXT` to the new value, update
+the schedulers/cron to send it, then move it to `NOTIFY_RUN_SECRET` and clear `_NEXT`. No forced
+rotation needed — available when wanted.
+
 ---
 
 _Add new operational questions here as later phases land, so the daily has one running list._

@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
 from app.modules.core import auth_security as _sec
 from . import report_registry, render, download_token, whatsapp_window
@@ -755,7 +756,7 @@ def _log_schedule_config_error(org_id, sub, err) -> None:
 @router.post("/run-due")
 async def run_due(x_notify_secret: str = Header(default="")):
     """Fire every subscription whose next_run_at has passed. Secret-guarded."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     now_iso = datetime.now(timezone.utc).isoformat()
     due = sb().table("subscriptions").select("*") \

@@ -11,6 +11,7 @@ from fastapi.responses import Response
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from . import engine
 
 router = APIRouter(prefix="/recovery", tags=["recovery"])
@@ -279,7 +280,9 @@ def _next_weekly(now, dow, hour):
 async def run_due(request: Request):
     """Weekly driver: for each enabled config whose next_run_at is due, rebuild the ledger, generate a
     claim, deliver it, and advance next_run_at. Scheduled by pg_cron with the x-notify-secret header."""
-    if settings.NOTIFY_RUN_SECRET and request.headers.get("x-notify-secret", "") != settings.NOTIFY_RUN_SECRET:
+    # Fail CLOSED: the old form only checked when the secret was SET, so an unset secret let anyone hit
+    # this sweep. verify_notify_secret returns False when nothing is configured (Spec §4, item 9).
+    if not verify_notify_secret(request.headers.get("x-notify-secret", "")):
         raise HTTPException(403, "forbidden")
     client = sb()
     today, now = _today(), datetime.now(timezone.utc)

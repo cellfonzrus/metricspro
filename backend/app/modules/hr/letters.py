@@ -31,6 +31,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Header, HTTPException
 
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from app.core.database import get_supabase
 
 from .letters_logic import (
@@ -972,7 +973,7 @@ async def late_checkin_run_due(x_notify_secret: str = Header(default=""), eval_d
     Schedule once daily (e.g. 03:00 business-local) so `eval_date` defaults to a FULLY COMPLETED
     business day (yesterday) — evaluating "today" mid-shift would false-negative anyone who simply
     hasn't clocked in yet. Idempotent per (org, employee, work_date) — safe to re-run/retry."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     try:
         tens = _so().table("tenants").select("org_id,name,hr_letters_config,timezone").execute().data or []
@@ -1000,7 +1001,7 @@ async def late_checkin_run_due(x_notify_secret: str = Header(default=""), eval_d
 async def metrics_miss_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — schedule monthly (e.g. the 2nd of the month, after the prior month's
     commissions have been calculated). Idempotent per (org, employee, period)."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     try:
         tens = _so().table("tenants").select("org_id,name,hr_letters_config,timezone").execute().data or []

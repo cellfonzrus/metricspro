@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.run_secret import verify_notify_secret
 from app.core import scope as _cscope
 from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops.pto_accrual import (
@@ -3773,7 +3774,7 @@ def face_retention_run_due(x_notify_secret: str = Header(default="")):
     destruction sweep across EVERY tenant. Schedule daily (see docs/handoffs/people.md OPERATOR
     ACTIONS — an operator must add the pg_cron schedule; this endpoint is inert until something calls
     it). Idempotent: a descriptor is destroyed at most once (the row is gone after)."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     try:
@@ -4189,7 +4190,7 @@ def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=No
 def force_clockout_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint (guarded by NOTIFY_RUN_SECRET) — auto-close overdue open punches across ALL
     tenants. Schedule it every ~15 min. Idempotent: a punch is closed at most once."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     return _do_force_clockout(org_id=None)
 
@@ -6612,7 +6613,7 @@ def additional_payroll_run_due(x_notify_secret: str = Header(default="")):
     Additional Payroll for every org that has EVER recorded a salary advance. An operator must add the
     pg_cron schedule (see docs/handoffs/people.md OPERATOR ACTIONS) — this endpoint is inert (never
     called) until something invokes it; NEVER an unauthenticated trigger."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     period = datetime.now(_BIZ_TZ).strftime("%Y-%m")
     try:
@@ -6972,7 +6973,7 @@ def post_google_reviews_run_due(background_tasks: BackgroundTasks,
                                 x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed. Secret-gated —
     NEVER an unauthenticated trigger. Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
-    if not settings.NOTIFY_RUN_SECRET or x_notify_secret != settings.NOTIFY_RUN_SECRET:
+    if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
     client = sb()
     now_iso = datetime.now(timezone.utc).isoformat()
