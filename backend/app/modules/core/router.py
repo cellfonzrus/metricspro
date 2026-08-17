@@ -2003,8 +2003,18 @@ def get_tenant_settings(authorization: str = Header(default=""), x_active_org: s
             "preview": _next_periods(s)}
 
 
+class PutTenantSettingsIn(LaxModel):
+    org_id: Any = None
+    work_week_start_dow: Any = None
+    pay_period_type: Any = None
+    payday_dow: Any = None
+    payday_weeks_after: Any = None
+    biweekly_anchor: Any = None
+    timezone: Any = None
+
+
 @router.put("/tenant-settings")
-def put_tenant_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def put_tenant_settings(body: PutTenantSettingsIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """The tenant ADMIN defines/updates the pay period (captured at onboarding). Saving a complete,
     valid definition marks the tenant setup_complete (clears the setup banner). Super-admins may pass
     org_id to set it for any tenant; otherwise it targets the caller's own tenant."""
@@ -2015,13 +2025,13 @@ def put_tenant_settings(body: dict, authorization: str = Header(default=""), x_a
     caller = _resolve_caller(client, uid, x_active_org)
     if not caller:
         raise HTTPException(403, "no tenant for this login")
-    org_id = (body.get("org_id") if caller["super_admin"] else None) or caller["org_id"] or ORG_ID
+    org_id = (body.org_id if caller["super_admin"] else None) or caller["org_id"] or ORG_ID
     if not _can_edit_setting(caller, "pay_period"):
         raise HTTPException(403, "you don't have permission to edit pay-period settings")
     upd = {}
     for k in _PP_FIELDS:
-        if k in body:
-            v = body[k]
+        if k in body.model_fields_set:
+            v = getattr(body, k)
             if k in ("work_week_start_dow", "payday_dow", "payday_weeks_after"):
                 try:
                     v = int(v)
@@ -2117,29 +2127,40 @@ def list_roles(org_id: str = ORG_ID):
     return {"roles": rows}
 
 
+class CreateRoleIn(LaxModel):
+    name: Any = None
+    display_name: Any = None
+    permissions: Any = None
+
+
 @router.post("/roles")
-def create_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def create_role(body: CreateRoleIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     _require_setting(authorization, x_active_org, "security")
-    name = (body.get("name") or "").strip().lower().replace(" ", "_")
+    name = (body.name or "").strip().lower().replace(" ", "_")
     if not name:
         raise HTTPException(400, "name required")
     row = {"org_id": org_id, "name": name,
-           "display_name": body.get("display_name") or name.replace("_", " ").title(),
-           "permissions": body.get("permissions") or {}}
+           "display_name": body.display_name or name.replace("_", " ").title(),
+           "permissions": body.permissions or {}}
     res = sb().schema("storeops").table("roles").upsert(row, on_conflict="org_id,name").execute()
     return (res.data or [{}])[0]
 
 
+class UpdateRoleIn(LaxModel):
+    display_name: Any = None
+    permissions: Any = None
+
+
 @router.put("/roles/{role_id}")
-def update_role(role_id: int, body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def update_role(role_id: int, body: UpdateRoleIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     _require_setting(authorization, x_active_org, "security")
     upd = {}
-    if "display_name" in body:
-        upd["display_name"] = body["display_name"]
-    if "permissions" in body:
-        upd["permissions"] = body["permissions"]
+    if "display_name" in body.model_fields_set:
+        upd["display_name"] = body.display_name
+    if "permissions" in body.model_fields_set:
+        upd["permissions"] = body.permissions
     if not upd:
         raise HTTPException(400, "nothing to update")
     # role_id is a GLOBAL primary key (BIGSERIAL, enumerable 1,2,3…). WITHOUT an org filter the old
@@ -3266,8 +3287,13 @@ def get_security_settings(authorization: str = Header(default=""), x_active_org:
             "can_edit": _can_edit_setting(caller, "security")}
 
 
+class PutSecuritySettingsIn(LaxModel):
+    password_policy: Any = None
+    twofa_policy: Any = None
+
+
 @router.put("/security-settings")
-def put_security_settings(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def put_security_settings(body: PutSecuritySettingsIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Update the tenant password policy and/or 2FA policy. Gated on the 'security' setting permission.
     Values are normalized + clamped (max_length <= 128 hard cap) before persisting."""
     uid = _uid_from_token(authorization)
@@ -3279,10 +3305,10 @@ def put_security_settings(body: dict, authorization: str = Header(default=""), x
         raise HTTPException(403, "you don't have permission to edit Security settings")
     org_id = caller["org_id"]
     upd = {}
-    if "password_policy" in body:
-        upd["password_policy"] = _sec.normalize_policy(body.get("password_policy"))
-    if "twofa_policy" in body:
-        upd["twofa_policy"] = _normalize_twofa_policy(body.get("twofa_policy"))
+    if "password_policy" in body.model_fields_set:
+        upd["password_policy"] = _sec.normalize_policy(body.password_policy)
+    if "twofa_policy" in body.model_fields_set:
+        upd["twofa_policy"] = _normalize_twofa_policy(body.twofa_policy)
     if not upd:
         raise HTTPException(400, "nothing to update")
     try:
