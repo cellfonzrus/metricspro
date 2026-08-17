@@ -261,7 +261,9 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     me/2fa/start·verify·settings → lax). **Part 3:** admin/RBAC writes
     (auth-config, tenants create/patch, super-admins create → lax; PATCH keeps
     "only-sent-keys" semantics via `model_fields_set`). **Part 4:** CRM writes
-    (tasks create, agency-response, dedupe-check → lax). ~414 `dict` bodies remain
+    (tasks create, agency-response, dedupe-check → lax). **Part 5:** asset
+    borrowings (create/patch/payment → lax; `amount` kept as `Any` so the handler's
+    own 400 validation stands, not a Pydantic 422). ~411 `dict` bodies remain
     (endpoints that thread the raw body into shared helpers, e.g. lead
     create/bulk-assign, get a dedicated pass).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
