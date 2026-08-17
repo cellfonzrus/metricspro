@@ -450,6 +450,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     disable-and-switch, reinstate, resend-invite) → lax. ~79 remain — the last
     core/router raw handlers are signup/purge_employee/bulk_assign plus
     create_login/assign_role (in-process hr callers + helper-threaders); POS skipped.
+    **Part 55:** signup, purge_employee, bulk_assign → lax; **core/router convertible
+    surface is now complete.** create_login/assign_role stay deferred (7 in-process
+    dict callers across hr + assign_role threads into _normalize_grant_write). ~76
+    `dict` bodies remain and are ALL deferred-by-rule (threaders / freeform maps /
+    dynamic-axis records / in-process dict callers) or the skipped POS module.
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

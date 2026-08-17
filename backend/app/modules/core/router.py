@@ -976,16 +976,23 @@ def signup_status():
     return {"open": _signups_open()}
 
 
+class SignupIn(LaxModel):
+    name: Any = None
+    admin_email: Any = None
+    password: Any = None
+    admin_name: Any = None
+
+
 @router.post("/signup")
-def signup(body: dict):
+def signup(body: SignupIn):
     """PUBLIC self-serve signup — GATED on env SIGNUPS_OPEN (default OFF). Creates a new company + its
     admin login with the chosen password. ⚠️ v1 auto-confirms the email — add real email verification
     + rate-limit/captcha before opening this to the public internet."""
     if not _signups_open():
         raise HTTPException(403, "signups are closed")
-    name = (body.get("name") or "").strip()
-    admin_email = (body.get("admin_email") or "").strip().lower()
-    password = body.get("password") or ""
+    name = (body.name or "").strip()
+    admin_email = (body.admin_email or "").strip().lower()
+    password = body.password or ""
     if not name or not admin_email:
         raise HTTPException(400, "company name and email are required")
     if "@" not in admin_email or "." not in admin_email.split("@")[-1]:
@@ -997,7 +1004,7 @@ def signup(body: dict):
     client = sb()
     if client.schema("storeops").table("app_users").select("id").eq("email", admin_email).limit(1).execute().data:
         raise HTTPException(409, "an account with this email already exists")
-    res = _provision_tenant(client, name, admin_email, body.get("admin_name"), password=password, must_reset=False)
+    res = _provision_tenant(client, name, admin_email, body.admin_name, password=password, must_reset=False)
     return {"org_id": res["org_id"], "name": name, "admin_email": admin_email,
             "message": "Company created — sign in with your email and password."}
 
@@ -2612,15 +2619,19 @@ async def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Hea
     return (res.data or [{}])[0]
 
 
+class BulkAssignIn(LaxModel):
+    users: Any = None
+
+
 @router.post("/users/bulk-assign")
-def bulk_assign(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def bulk_assign(body: BulkAssignIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     """Bulk upsert app_users (assign roles) from a list — powers the employee-sheet upload and
     the multi-add form. Body: {users:[{email, full_name, role, market, store_code}]}. Does NOT
     create logins (call /users/bulk-provision or per-row create-login after). Role names are
     validated against storeops.roles; bad rows are reported, the rest still apply."""
     _require_setting(authorization, x_active_org, "security")
-    users = body.get("users")
+    users = body.users
     if not isinstance(users, list) or not users:
         raise HTTPException(400, "users[] required")
     client = sb()
@@ -4139,8 +4150,16 @@ def purge_app_user(org_id, *, email=None, employee_id=None, hard=True):
     return {"matched": len(rows), "deleted": len(ids), "auth_deleted": auth_deleted}
 
 
+class PurgeEmployeeIn(LaxModel):
+    mode: Any = None
+    employee_pk: Any = None
+    id: Any = None
+    email: Any = None
+    employee_id: Any = None
+
+
 @router.post("/employees/purge")
-def purge_employee(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def purge_employee(body: PurgeEmployeeIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                    x_active_org: str = Header(default="")):
     """Delete or deactivate a person from BOTH the StoreOps roster and the Roles module in one
     call (the Roles & Access remove action). Identify by employee_pk (storeops.employees.id) for
@@ -4148,11 +4167,11 @@ def purge_employee(body: dict, org_id: str = ORG_ID, authorization: str = Header
     employees row). mode='delete' hard-removes the employees row + login + Supabase Auth account;
     mode='deactivate' flips both is_active=False and revokes access (keeps the auth account)."""
     _require_setting(authorization, x_active_org, "security")
-    mode = (body.get("mode") or "delete").strip().lower()
+    mode = (body.mode or "delete").strip().lower()
     hard = mode != "deactivate"
-    emp_pk = body.get("employee_pk", body.get("id"))
-    email = (body.get("email") or "").strip().lower()
-    employee_id = body.get("employee_id")
+    emp_pk = body.employee_pk if "employee_pk" in body.model_fields_set else body.id
+    email = (body.email or "").strip().lower()
+    employee_id = body.employee_id
     client = sb()
     name = None
     # Synthetic negative ids are Roles-only manual users (no employees row) — skip the roster op.
