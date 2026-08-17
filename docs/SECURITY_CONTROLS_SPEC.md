@@ -253,7 +253,15 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     PITR, RTO ≤2 h, restore procedure + quarterly drill). _Remaining: run the
     first drill; confirm PITR is on._
 15. **Typed request schemas (Pydantic)** rolled out across write endpoints.
-16. **DSAR / erasure workflow.**
+    🟡 **In progress (incremental).** `app/core/schemas.py` — `StrictModel`
+    (extra=forbid → rejects unknown fields) / `LaxModel` (ignores unknown, for
+    legacy). **Part 1:** the containment + auth endpoints authored this cycle
+    (ip-block ×2, sessions/revoke, export-event, login-precheck/record → strict;
+    forgot/reset-password → lax). Remaining ~425 `dict` bodies migrate in later
+    parts, highest-risk write endpoints first.
+16. **DSAR / erasure workflow.** _(Deferred by recommendation — see
+    SECURITY_DAILY_QUESTIONS; no SSN data yet + 1st month, so build the DSAR
+    export first, defer erasure until a retention policy is set.)_
 
 ### Phase 4 — Enterprise & compliance (P2)
 17. SSO (SAML/OIDC), SIEM shipping, DAST, compliance-framework mapping.

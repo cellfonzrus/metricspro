@@ -6,8 +6,21 @@ off as they're settled. See `docs/SECURITY_CONTROLS_SPEC.md` for the full plan.
 
 Status legend: ⬜ open · ⏳ in discussion · ✅ decided (record the decision + date inline)
 
-**Migrations status:** 857–861 ✅ · **862 ⬜** (export_event + prune) · **863 ⬜** (audit WORM
-triggers — run AFTER 862, it redefines the same prune function). Idempotent.
+**Migrations status:** 857–862 ✅ · **863 ⬜** (audit WORM triggers — run AFTER 862, it redefines the
+same prune function). Idempotent.
+
+### 16. ⬜ DECISION NEEDED — DSAR / erasure scope (item 16)
+Context (owner, 2026-08-17): no SSN data yet, ~1st month of full deployment, minimal audit history.
+Given that, my recommendation:
+- **Build now — DSAR *export* (low effort):** reuse Customer-360's `build_360` to produce a
+  "everything we hold about this customer" package (audited reveal) for a data-subject request. ~80%
+  already exists.
+- **Defer — *erasure*/anonymization:** premature with little data and no set retention policy, and it
+  collides with the new WORM audit tables (you often must RETAIN audit trails). When needed, do scoped
+  anonymization of operational PII (pos.customers, crm_lead) leaving WORM audit intact; crypto-shred
+  (drop the field key) is the nuclear option once SSN/bank data exists.
+- **Owner to confirm:** OK to build the DSAR export now and defer erasure? Any regulatory deadline
+  (GDPR/CCPA) that changes the priority?
 
 ---
 

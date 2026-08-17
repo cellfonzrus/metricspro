@@ -19,6 +19,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Header, Request, BackgroundTasks
 from app.core.database import get_supabase, get_supabase_admin
 from app.core.config import settings
+from app.core.schemas import StrictModel, LaxModel
 from app.core.run_secret import verify_notify_secret
 from app.modules.core.entitlements import (
     MODULE_CATALOG, ROLE_GATE_KEYS, load_module_catalog,
@@ -628,29 +629,43 @@ def ip_block_list(authorization: str = Header(default=""), x_active_org: str = H
         return {"rows": [], "ready": False, "error": f"{e} (is migration 860 applied?)"}
 
 
+class IpBlockIn(StrictModel):
+    ip: str = ""
+    reason: str = ""
+    minutes: int | None = None
+
+
+class IpUnblockIn(StrictModel):
+    ip: str = ""
+
+
+class SessionRevokeIn(StrictModel):
+    auth_id: str = ""
+
+
 @router.post("/ip-block")
-def ip_block_add(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def ip_block_add(body: IpBlockIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Block an IP now (super-admin). Optional `minutes` for a temporary block; omit for permanent.
     Takes effect within ~30s fleet-wide (immediately in the process that handled the request)."""
     caller = _require_super_admin(authorization, x_active_org)
-    ip = (body.get("ip") or "").strip()
+    ip = (body.ip or "").strip()
     if not ip:
         raise HTTPException(400, "ip required")
     expires_at = None
-    if body.get("minutes"):
+    if body.minutes:
         from datetime import datetime, timezone, timedelta
-        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=int(body["minutes"]))).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=int(body.minutes))).isoformat()
     from app.core import ip_block
-    ip_block.add(ip, reason=(body.get("reason") or ""),
+    ip_block.add(ip, reason=(body.reason or ""),
                  created_by=(caller.get("email") or caller.get("auth_id") or ""), expires_at=expires_at)
     return {"ok": True}
 
 
 @router.post("/ip-block/remove")
-def ip_block_remove(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def ip_block_remove(body: IpUnblockIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Unblock an IP (super-admin)."""
     _require_super_admin(authorization, x_active_org)
-    ip = (body.get("ip") or "").strip()
+    ip = (body.ip or "").strip()
     if not ip:
         raise HTTPException(400, "ip required")
     from app.core import ip_block
@@ -659,19 +674,26 @@ def ip_block_remove(body: dict, authorization: str = Header(default=""), x_activ
 
 
 @router.post("/sessions/revoke")
-def sessions_revoke(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def sessions_revoke(body: SessionRevokeIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """IRP session purge (super-admin): end all active sessions, or one user's (`auth_id`). ENFORCED
     when SESSION_ENFORCE is on — the response reports whether it's currently enforced."""
     _require_super_admin(authorization, x_active_org)
     from app.core import session_guard
-    auth_id = (body.get("auth_id") or "").strip() or None
+    auth_id = (body.auth_id or "").strip() or None
     n = session_guard.revoke(auth_id)
     return {"ok": True, "revoked": n, "enforced": session_guard.enforce()}
 
 
 # ── Export governance (Security Controls Spec §3/§4, item 7) ─────────────────────────────────────
+class ExportEventIn(StrictModel):
+    report: str = ""
+    format: str = ""
+    total_rows: int = 0
+    sheets: list | None = None
+
+
 @router.post("/export-event")
-def export_event(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def export_event(body: ExportEventIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Record a user-initiated export (audit + volume cap + watermark). Any signed-in user. Returns a
     server-derived watermark to stamp on the file and whether the row count exceeds the cap
     (EXPORT_MAX_ROWS, default 50000; super-admins exempt). Best-effort audit — the export itself
@@ -685,7 +707,7 @@ def export_event(body: dict, authorization: str = Header(default=""), x_active_o
     caller = _resolve_caller(client, uid, (x_active_org or "").strip() or None) or {}
     email = (_email_for_uid(client, uid) or "").strip().lower()
     org_id = caller.get("org_id") or (x_active_org or "").strip() or ORG_ID
-    rows = int(body.get("total_rows") or 0)
+    rows = int(body.total_rows or 0)
     cap = int(os.environ.get("EXPORT_MAX_ROWS", "50000") or 50000)
     over = bool(cap > 0 and rows > cap and not caller.get("super_admin"))
     ts = datetime.now(timezone.utc)
@@ -694,9 +716,9 @@ def export_event(body: dict, authorization: str = Header(default=""), x_active_o
     try:
         get_supabase_admin().schema("core").table("export_event").insert({
             "org_id": org_id, "actor_auth_id": uid, "actor_email": email or None,
-            "actor_role": caller.get("role"), "report": str(body.get("report") or "")[:200],
-            "format": str(body.get("format") or "")[:20], "total_rows": rows,
-            "sheets": body.get("sheets") or None, "over_cap": over, "blocked": over,
+            "actor_role": caller.get("role"), "report": str(body.report or "")[:200],
+            "format": str(body.format or "")[:20], "total_rows": rows,
+            "sheets": body.sheets or None, "over_cap": over, "blocked": over,
         }).execute()
     except Exception:
         pass   # best-effort audit
@@ -3237,14 +3259,25 @@ _RESET_GENERIC = {"ok": True, "message": "If this email has an account, a reset 
 _UNAVAIL = {"ok": False, "message": "Password reset is temporarily unavailable. Please try again shortly."}
 
 
+class ForgotPasswordIn(LaxModel):
+    email: str = ""
+
+
+class ResetPasswordIn(LaxModel):
+    email: str = ""
+    code: str = ""
+    new_password: str = ""
+    password: str = ""            # legacy alias accepted by the handler
+
+
 @router.post("/auth/forgot-password")
-async def forgot_password(body: dict, request: Request, background: BackgroundTasks):
+async def forgot_password(body: ForgotPasswordIn, request: Request, background: BackgroundTasks):
     """PUBLIC: request a reset code. ANTI-ENUMERATION — the response is ALWAYS the same generic message
     (and same code path/timing) whether or not the account exists; existence, tenant membership and
     disabled status are NEVER revealed. Sends over email (+ verified WhatsApp phone if on file). The
     email send is dispatched AFTER the response (BackgroundTasks) so the network round-trip isn't an
     inline timing delta for existing accounts."""
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     client = sb()
     if not _otp_store_ok(client):
         return _UNAVAIL   # uniform for ALL emails (global infra state, not per-email) → no oracle
@@ -3280,13 +3313,22 @@ async def forgot_password(body: dict, request: Request, background: BackgroundTa
     return _RESET_GENERIC
 
 
+class LoginPrecheckIn(StrictModel):
+    email: str = ""
+
+
+class LoginRecordIn(StrictModel):
+    email: str = ""
+    success: bool = False
+
+
 @router.post("/auth/login-precheck")
-def login_precheck(body: dict, request: Request):
+def login_precheck(body: LoginPrecheckIn, request: Request):
     """PUBLIC (pre-login): is this email under a soft lockout from repeated failures? The login page
     calls this BEFORE attempting Supabase sign-in. Returns {locked, retry_after, failures}. Never
     reveals whether the account exists — a lock only ever reflects recorded attempts. Fail-open.
     (Login itself goes browser → Supabase directly; this is defense-in-depth + visibility, mig 859.)"""
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     if not email:
         return {"locked": False}
     from app.core import login_guard
@@ -3294,25 +3336,25 @@ def login_precheck(body: dict, request: Request):
 
 
 @router.post("/auth/login-record")
-def login_record(body: dict, request: Request):
+def login_record(body: LoginRecordIn, request: Request):
     """PUBLIC (pre-login): record a login attempt {email, success} in the ledger so failed logins are
     visible and the soft lockout can trip. Best-effort; always returns {ok:true}."""
-    email = (body.get("email") or "").strip().lower()
+    email = (body.email or "").strip().lower()
     from app.core import login_guard
-    login_guard.record(email, _client_ip(request), bool(body.get("success")),
+    login_guard.record(email, _client_ip(request), bool(body.success),
                         request.headers.get("user-agent", ""))
     return {"ok": True}
 
 
 @router.post("/auth/reset-password")
-def reset_password_otp(body: dict):
+def reset_password_otp(body: ResetPasswordIn):
     """PUBLIC: complete a reset with {email, code, new_password}. Uniform 'Invalid or expired code.' for
     every failure mode (missing/expired/attempts/wrong) so nothing is revealed. The new password is
     validated against the tenant policy ONLY AFTER a valid code is proven (so policy detail is never a
     pre-code oracle), and the code is consumed ONLY once the password also passes (good UX on a weak pw)."""
-    email = (body.get("email") or "").strip().lower()
-    code = (body.get("code") or "").strip()
-    new_pw = body.get("new_password") or body.get("password") or ""
+    email = (body.email or "").strip().lower()
+    code = (body.code or "").strip()
+    new_pw = body.new_password or body.password or ""
     if not email or not code or not new_pw:
         raise HTTPException(400, "email, code and a new password are required")
     client = sb()
