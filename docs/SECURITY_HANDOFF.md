@@ -76,9 +76,11 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
 
 ## 4. In flight / next steps
 
-- **Item 15 (Pydantic), continue incrementally.** Done: parts 1–7a (containment/export/auth-ledger
-  strict; auth self-service, admin/RBAC, CRM writes, asset borrowings, account company mgmt, storeops org-structure + approvals lax). Next candidates by size: commcalc (125), storeops (~43 left), hr (32),
-  helpdesk (29). **POS skipped** — module incomplete / no data. **Rules:** skip endpoints that
+- **Item 15 (Pydantic), continue incrementally.** Done: parts 1–7c (containment/export/auth-ledger
+  strict; auth self-service, admin/RBAC, CRM writes, asset borrowings, account company mgmt, storeops
+  org-structure + approvals + config/requests lax). Next candidates by size: commcalc (125), storeops
+  (~40 left), hr (32), helpdesk (29). **POS skipped** — module incomplete / no data. **Rules:** skip
+  endpoints that
   thread the raw `body` dict into shared helpers; preserve None-vs-empty + downstream `.get()`; for a
   field the handler validates itself (e.g. `float(amount)` → 400), type it `Any` so Pydantic doesn't
   pre-empt with a 422; for PATCH use `model_fields_set` to keep "only-sent-keys". `create_lead`
