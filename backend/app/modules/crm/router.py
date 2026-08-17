@@ -1289,12 +1289,13 @@ def report_conversion(org_id: str = ORG_ID, start: str = "", end: str = "",
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 
 @router.get("/customer-360")
-def customer_360(phone: str = "", org_id: str = ORG_ID, authorization: str = Header(default=""),
-                 x_active_org: str = Header(default="")):
+def customer_360(phone: str = "", reveal: bool = False, org_id: str = ORG_ID,
+                 authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Enter a phone number → everything this company knows about that customer.
 
     Gated three ways (module, `customer_360` grant, `customer_360_financial` for the $) and audited
-    on BOTH outcomes. See crm/customer360.py for the section-by-section sourcing."""
+    on BOTH outcomes. Customer phone/email are MASKED by default; `reveal=true` returns them unmasked
+    and records the reveal in the audit trail (item 8). See crm/customer360.py."""
     caller = _caller(authorization, x_active_org)
     cfg = _cfg(org_id)
     client = get_supabase()
@@ -1305,7 +1306,8 @@ def customer_360(phone: str = "", org_id: str = ORG_ID, authorization: str = Hea
                                  "permission. Ask an administrator to grant it on your role.")
     money_ok = customer360.customer_360_financial_allowed(caller)
     ks = _keyset(authorization, org_id)
-    return customer360.build_360(client, org_id, phone, caller=caller, money_ok=money_ok, keyset=ks)
+    return customer360.build_360(client, org_id, phone, caller=caller, money_ok=money_ok, keyset=ks,
+                                 reveal=bool(reveal))
 
 
 @router.get("/customer-360/audit")

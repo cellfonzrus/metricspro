@@ -6,8 +6,9 @@ off as they're settled. See `docs/SECURITY_CONTROLS_SPEC.md` for the full plan.
 
 Status legend: ⬜ open · ⏳ in discussion · ✅ decided (record the decision + date inline)
 
-**Migrations status:** 857 ✅ · 858 ✅ · 859 ✅ applied · **860 ⬜ to run** (ip_block — IRP
-containment blocklist).
+**Migrations status:** 857 ✅ · 858 ✅ · 859 ✅ · **860 ⬜** (ip_block — IRP containment) ·
+**861 ⬜** (crm_lookup_audit.pii_revealed — Customer-360 reveal marker). Both idempotent; backend
+tolerates them being un-run.
 
 ---
 

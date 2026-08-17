@@ -15,6 +15,7 @@ interface Result {
   phone_masked?: string
   error?: string
   money_visible?: boolean
+  pii_revealed?: boolean
   summary?: {
     name: string | null; is_customer: boolean; purchase_count: number; device_count: number
     line_count: number; open_leads: number; first_purchase: string | null
@@ -60,12 +61,12 @@ export default function CustomerLookupPage() {
   const [loading, setLoading] = useState(false)
   const [msg, setMsg] = useState('')
 
-  async function search(e?: React.FormEvent) {
+  async function search(e?: React.FormEvent, reveal = false) {
     e?.preventDefault()
     if (!phone.trim()) return
-    setLoading(true); setMsg(''); setData(null)
+    setLoading(true); setMsg(''); if (!reveal) setData(null)
     try {
-      setData(await api(`/api/v1/crm/customer-360?phone=${encodeURIComponent(phone.trim())}`))
+      setData(await api(`/api/v1/crm/customer-360?phone=${encodeURIComponent(phone.trim())}${reveal ? '&reveal=true' : ''}`))
     } catch (err: any) { setMsg(err?.message || String(err)) }
     setLoading(false)
   }
@@ -117,7 +118,12 @@ export default function CustomerLookupPage() {
           <div style={{ ...panel, marginBottom: 14 }}>
             <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'baseline' }}>
               <div style={{ fontSize: 20, fontWeight: 700 }}>{s.name || 'Unknown name'}</div>
-              <div style={{ fontSize: 13, color: 'var(--text2)' }}>{fmtPhone(data.phone)}</div>
+              <div style={{ fontSize: 13, color: 'var(--text2)' }}>{data.phone ? fmtPhone(data.phone) : (data.phone_masked || '••••')}</div>
+              {data.pii_revealed
+                ? <span style={{ fontSize: 11, color: '#b45309' }}>👁 contact info revealed (recorded)</span>
+                : <button type="button" onClick={() => search(undefined, true)} disabled={loading}
+                    style={{ fontSize: 11, border: '1px solid var(--border)', background: 'var(--surface2)', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}
+                    title="Show full phone & email — this reveal is recorded in the lookup audit">🔒 Reveal contact info</button>}
               <div style={{ padding: '2px 8px', borderRadius: 999, fontSize: 11, fontWeight: 600,
                             background: s.is_customer ? '#16a34a22' : '#6b728022',
                             color: s.is_customer ? '#16a34a' : '#6b7280' }}>

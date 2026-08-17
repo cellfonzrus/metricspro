@@ -210,6 +210,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
 7. **Server-side exports** — move export generation behind an endpoint so it can
    be authorized, rate-limited, **audited**, and **watermarked**; add volume caps.
 8. **Customer PII masking** — mask phone/email by default; reveal is audited.
+   ✅ **Built (Customer 360).** `mask_pii()` masks phone/email in every 360 section
+   by default; `?reveal=true` returns them unmasked and stamps `pii_revealed` on
+   the `crm_lookup_audit` row (mig 861). Frontend shows a masked view with a
+   "Reveal contact info" action. _(Other CRM surfaces — leads list, agencies — can
+   follow the same pattern.)_
 9. **Constant-time secret compare + per-purpose secrets + rotation** for
    `NOTIFY_RUN_SECRET` and inbound webhook auth. ✅ **Built.** Shared
    `run_secret.verify_notify_secret()` — `hmac.compare_digest` across all ~24

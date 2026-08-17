@@ -25,7 +25,43 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.modules.crm.pipeline_core import mask_phone, normalize_phone
+from app.modules.crm.pipeline_core import mask_phone, mask_email, normalize_phone
+
+# Customer PII masked by DEFAULT in a 360 response (Security Controls Spec §2, item 8). A caller with
+# the lookup grant still only sees masked phone/email unless they explicitly REVEAL, which is a
+# separately-audited action. Money is a different axis (MONEY_FIELDS / the financial grant).
+PII_PHONE_FIELDS = {"phone", "phone_primary", "phone_secondary", "cell_number", "mobile_phone", "mdn"}
+PII_EMAIL_FIELDS = {"email"}
+
+
+def mask_pii(sections: dict, reveal: bool) -> dict:
+    """PURE. Return a copy of `sections` with customer phone/email masked in every row, unless `reveal`.
+    Untouched when reveal is True (the caller asked for the unmasked view and it's audited as such)."""
+    if reveal:
+        return sections
+
+    def _mask_row(r):
+        if not isinstance(r, dict):
+            return r
+        out = {}
+        for k, v in r.items():
+            if v and k in PII_PHONE_FIELDS:
+                out[k] = mask_phone(v)
+            elif v and k in PII_EMAIL_FIELDS:
+                out[k] = mask_email(v)
+            else:
+                out[k] = v
+        return out
+
+    masked = {}
+    for name, sec in (sections or {}).items():
+        if isinstance(sec, dict) and isinstance(sec.get("rows"), list):
+            s = dict(sec)
+            s["rows"] = [_mask_row(r) for r in sec["rows"]]
+            masked[name] = s
+        else:
+            masked[name] = sec
+    return masked
 
 # Columns that are MONEY and therefore ride the `customer_360_financial` grant. Anything not on this
 # list is operational (what/when/where/who) and rides only the `customer_360` grant.
@@ -336,28 +372,37 @@ def suggested_actions(sections: dict, now: datetime) -> list:
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 
 def write_audit(client, org_id: str, *, phone, caller, allowed: bool, sections: dict,
-                matched_customer_id=None, matched_lead_id=None) -> None:
+                matched_customer_id=None, matched_lead_id=None, revealed: bool = False) -> None:
     """One row per lookup, allowed or denied. Best-effort: an audit failure must never be the reason
-    a rep can't help a customer — but it is logged loudly enough to notice if it starts failing."""
+    a rep can't help a customer — but it is logged loudly enough to notice if it starts failing.
+    `revealed` marks a lookup that UNMASKED the customer's phone/email (item 8) — the accountability
+    trail for a PII reveal. Falls back to an insert without the column if mig 861 is un-run, so the
+    audit row is never lost."""
+    base = {
+        "org_id": org_id,
+        "actor_app_user_id": (caller or {}).get("id"),
+        "actor_employee_id": (caller or {}).get("employee_id"),
+        "phone_masked": mask_phone(phone),
+        "matched_customer_id": matched_customer_id,
+        "matched_lead_id": matched_lead_id,
+        "allowed": bool(allowed),
+        "sections": {k: {"available": v.get("available"), "count": v.get("count"),
+                         "withheld": v.get("withheld")}
+                     for k, v in (sections or {}).items()},
+    }
     try:
-        client.schema("core").table("crm_lookup_audit").insert({
-            "org_id": org_id,
-            "actor_app_user_id": (caller or {}).get("id"),
-            "actor_employee_id": (caller or {}).get("employee_id"),
-            "phone_masked": mask_phone(phone),
-            "matched_customer_id": matched_customer_id,
-            "matched_lead_id": matched_lead_id,
-            "allowed": bool(allowed),
-            "sections": {k: {"available": v.get("available"), "count": v.get("count"),
-                             "withheld": v.get("withheld")}
-                         for k, v in (sections or {}).items()},
-        }).execute()
+        client.schema("core").table("crm_lookup_audit").insert({**base, "pii_revealed": bool(revealed)}).execute()
     except Exception:
-        pass
+        try:
+            client.schema("core").table("crm_lookup_audit").insert(base).execute()   # pre-mig-861
+        except Exception:
+            pass
 
 
-def build_360(client, org_id: str, raw_phone: str, *, caller, money_ok: bool, keyset) -> dict:
-    """Assemble every section for a phone number. The caller has already passed the lookup gate."""
+def build_360(client, org_id: str, raw_phone: str, *, caller, money_ok: bool, keyset,
+              reveal: bool = False) -> dict:
+    """Assemble every section for a phone number. The caller has already passed the lookup gate.
+    Customer phone/email are MASKED unless `reveal` (item 8); a reveal is recorded in the audit row."""
     phone = normalize_phone(raw_phone)
     now = datetime.now(timezone.utc)
     if not phone:
@@ -408,15 +453,20 @@ def build_360(client, org_id: str, raw_phone: str, *, caller, money_ok: bool, ke
     }
 
     matched_lead_id = next((l.get("id") for l in sections["crm"].get("rows") or []), None)
+    # Suggested actions read raw section rows (device ages, purchase depts), so compute them BEFORE
+    # masking. Then mask phone/email unless the caller explicitly revealed — and record the reveal.
+    actions = suggested_actions(sections, now)
     write_audit(client, org_id, phone=raw_phone, caller=caller, allowed=True, sections=sections,
                 matched_customer_id=customer_ids[0] if customer_ids else None,
-                matched_lead_id=matched_lead_id)
+                matched_lead_id=matched_lead_id, revealed=bool(reveal))
+    out_sections = mask_pii(sections, bool(reveal))
 
     return {
-        "phone": phone,
+        "phone": phone if reveal else None,          # full normalized number only on an audited reveal
         "phone_masked": mask_phone(raw_phone),
         "summary": summary,
-        "sections": sections,
+        "sections": out_sections,
         "money_visible": bool(money_ok),
-        "suggested_actions": suggested_actions(sections, now),
+        "pii_revealed": bool(reveal),
+        "suggested_actions": actions,
     }
