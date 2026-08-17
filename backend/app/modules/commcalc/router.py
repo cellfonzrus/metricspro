@@ -29206,8 +29206,14 @@ async def delete_financing_vendor(vendor_key: str, org_id: str = ORG_ID,
                      "enabled=false to switch one off permanently.")}
 
 
+class AddFinancingVendorCarrierIn(LaxModel):
+    carrier_id: Any = None
+    carrier_name: Any = None
+    enabled: Any = True
+
+
 @router.post("/financing/vendors/{vendor_key}/carriers")
-async def add_financing_vendor_carrier(vendor_key: str, body: dict, org_id: str = ORG_ID,
+async def add_financing_vendor_carrier(vendor_key: str, body: AddFinancingVendorCarrierIn, org_id: str = ORG_ID,
                                        authorization: str = Header(default="")):
     """Assign a vendor to a carrier. A vendor may serve MANY carriers — this is the whole mechanism
     behind "ACIMA could also be added to Total at a later date": one row, no release."""
@@ -29215,9 +29221,9 @@ async def add_financing_vendor_carrier(vendor_key: str, body: dict, org_id: str 
     _require_commission_admin(authorization, org_id)
     client = sb()
     row = {"org_id": org_id, "vendor_key": _finreg.clean_key(vendor_key),
-           "carrier_id": (body or {}).get("carrier_id") or None,
-           "carrier_name": ((body or {}).get("carrier_name") or "").strip() or None,
-           "enabled": bool((body or {}).get("enabled", True))}
+           "carrier_id": body.carrier_id or None,
+           "carrier_name": (body.carrier_name or "").strip() or None,
+           "enabled": bool(body.enabled)}
     if not row["carrier_id"] and not row["carrier_name"]:
         raise HTTPException(400, "pick a carrier")
     try:
@@ -29341,7 +29347,16 @@ async def get_financing_targets(period: str, include_inactive: bool = False,
 
 
 @router.put("/financing/targets/{period}")
-async def save_financing_target(period: str, body: dict, authorization: str = Header(default=""),
+class SaveFinancingTargetIn(LaxModel):
+    store_code: Any = None
+    vendor_key: Any = None
+    target_amount: Any = None
+    target_units: Any = None
+    notes: Any = None
+    updated_by: Any = None
+
+
+async def save_financing_target(period: str, body: SaveFinancingTargetIn, authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """Set ONE store's monthly financing target (optionally per vendor). Gated on the SAME 'targets'
     settings area + store span as the existing Target Settings save.
@@ -29351,18 +29366,18 @@ async def save_financing_target(period: str, body: dict, authorization: str = He
     table from commcalc.targets so this cannot break the existing target save."""
     require_org(org_id)
     client = sb()
-    code = str((body or {}).get('store_code') or '').strip()
+    code = str(body.store_code or '').strip()
     if not code:
         raise HTTPException(400, "store_code required")
     _require_target_edit(authorization, org_id, code)
-    vk = str((body or {}).get('vendor_key') or '').strip().lower()
-    amt = (body or {}).get('target_amount')
+    vk = str(body.vendor_key or '').strip().lower()
+    amt = body.target_amount
     row = {'org_id': org_id, 'period': period, 'store_code': code,
            'vendor_key': (vk or None),
-           'target_units': safe_float((body or {}).get('target_units')),
+           'target_units': safe_float(body.target_units),
            'target_amount': (safe_float(amt) if str(amt if amt is not None else '').strip() != '' else None),
-           'notes': (body or {}).get('notes'),
-           'updated_by': (body or {}).get('updated_by') or 'web',
+           'notes': body.notes,
+           'updated_by': body.updated_by or 'web',
            'updated_at': datetime.now(timezone.utc).isoformat()}
     try:
         r = (client.schema('commcalc').table(_finreg.TARGET_TABLE)
