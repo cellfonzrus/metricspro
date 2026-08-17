@@ -101,6 +101,8 @@ _PUBLIC_EXACT = frozenset({
     "/api/v1/core/password-policy/public",  # PUBLIC: owner DEFAULT policy for pre-login strength hints
     "/api/v1/core/auth/forgot-password",  # PUBLIC self-serve reset request (anti-enumeration; anonymous)
     "/api/v1/core/auth/reset-password",   # PUBLIC self-serve reset completion (code-gated; anonymous)
+    "/api/v1/core/auth/login-precheck",   # PUBLIC pre-login soft-lockout check (mig 859; anonymous)
+    "/api/v1/core/auth/login-record",     # PUBLIC pre-login attempt ledger write (mig 859; anonymous)
     "/api/v1/remediation/whatsapp-webhook",  # Meta webhook. EXACT path + METHOD-SCOPED below to
                                           # {GET, POST} only (2026-08-05: it was a PREFIX, so any future
                                           # sibling path under it would have been public too, and every

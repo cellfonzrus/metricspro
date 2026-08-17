@@ -3166,6 +3166,30 @@ async def forgot_password(body: dict, request: Request, background: BackgroundTa
     return _RESET_GENERIC
 
 
+@router.post("/auth/login-precheck")
+def login_precheck(body: dict, request: Request):
+    """PUBLIC (pre-login): is this email under a soft lockout from repeated failures? The login page
+    calls this BEFORE attempting Supabase sign-in. Returns {locked, retry_after, failures}. Never
+    reveals whether the account exists — a lock only ever reflects recorded attempts. Fail-open.
+    (Login itself goes browser → Supabase directly; this is defense-in-depth + visibility, mig 859.)"""
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        return {"locked": False}
+    from app.core import login_guard
+    return login_guard.check(email)
+
+
+@router.post("/auth/login-record")
+def login_record(body: dict, request: Request):
+    """PUBLIC (pre-login): record a login attempt {email, success} in the ledger so failed logins are
+    visible and the soft lockout can trip. Best-effort; always returns {ok:true}."""
+    email = (body.get("email") or "").strip().lower()
+    from app.core import login_guard
+    login_guard.record(email, _client_ip(request), bool(body.get("success")),
+                        request.headers.get("user-agent", ""))
+    return {"ok": True}
+
+
 @router.post("/auth/reset-password")
 def reset_password_otp(body: dict):
     """PUBLIC: complete a reset with {email, code, new_password}. Uniform 'Invalid or expired code.' for

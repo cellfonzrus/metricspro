@@ -6,6 +6,9 @@ off as they're settled. See `docs/SECURITY_CONTROLS_SPEC.md` for the full plan.
 
 Status legend: ⬜ open · ⏳ in discussion · ✅ decided (record the decision + date inline)
 
+**Migrations status:** 857 ✅ applied · 858 ✅ applied · **859 ⬜ to run** (login_attempt +
+extends the prune function — safe/idempotent).
+
 ---
 
 ### 1. ✅ Prune fallback if pg_cron is unavailable — RESOLVED 2026-08-16
@@ -46,6 +49,26 @@ and nothing warns.
   set.
 - Fail-**closed** hardening for this (refuse to store sensitive fields without a key in prod) is Phase 1
   item 4 — tracked in the spec, not yet built.
+
+### 6. ⬜ Supabase Auth rate limits — the authoritative login lockout
+Primary sign-in is browser → **Supabase Auth directly**, so our backend can't enforce a hard login
+lockout. The in-app ledger + soft lockout (mig 859) is defense-in-depth and visibility only.
+- **Decide/verify:** confirm Supabase Auth's built-in rate limits are configured in the Supabase
+  dashboard (Auth → Rate Limits) — this is the control that actually throttles brute-force at the
+  sign-in endpoint. Our per-IP limiter only covers our own API, not the Supabase auth host.
+- Soft-lockout tuning (advisory): `LOGIN_MAX_FAILURES=8`, `LOGIN_WINDOW_MIN=15`, `LOGIN_LOCK_MIN=15`;
+  `LOGIN_LOCKOUT_ENFORCE=0` disables the lockout (attempts are still recorded). Tradeoff: per-email
+  lockout is DoS-able by design — kept short to limit that.
+
+### 7. ⬜ Enable the new fail-closed switches once verified
+Built this phase, defaulted conservatively so nothing breaks on deploy:
+- `FIELD_ENCRYPTION_STRICT=1` — **after** confirming `FIELD_ENCRYPTION_KEY` is set (ties to item 5).
+  Then a missing key refuses to store plaintext instead of failing open.
+- `RBAC_SCOPE_FAILCLOSED` — already **ON** by default (unresolved role → `self`, not `all`). Break-glass
+  `=0` if it ever over-restricts a real role.
+- `STARTUP_STRICT=1` — optional: make the app refuse to boot in prod when a posture finding exists.
+- `MULTI_TENANT_ENFORCE=1` — the deliberate tenant-isolation go-live (see item 3-adjacent). Startup now
+  warns while it's off. Needs the isolation test before flipping.
 
 ---
 

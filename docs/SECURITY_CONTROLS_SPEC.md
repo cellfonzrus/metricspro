@@ -188,10 +188,23 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
 4. **Fail-closed hardening** — (a) field encryption raises in prod when no key;
    (b) `_role_scope` unknown-role → no scope; (c) `MULTI_TENANT_ENFORCE` on by
    default, "off" is a logged break-glass state.
+   🟡 **Built.** (a) `crypto.py` raises `EncryptionKeyMissing` in prod when
+   `FIELD_ENCRYPTION_STRICT=1` and no key (default OFF — enable once key set).
+   (b) ✅ `_role_scope` unresolved-role → `self`, break-glass
+   `RBAC_SCOPE_FAILCLOSED=0`. (c) Default **not** flipped in code (outage risk
+   without the isolation test) — startup now flags the off state loudly; the flip
+   stays an operator go-live (daily item).
 5. **Secrets documentation + startup assertion** — add `FIELD_ENCRYPTION_KEY`,
    `NOTIFY_RUN_SECRET`, `MULTI_TENANT_ENFORCE` to `.env.example`; assert presence
-   on prod boot.
+   on prod boot. ✅ **Built.** `.env.example` documents them + every switch;
+   `security_posture.check_and_log()` warns/records at boot; `STARTUP_STRICT=1`
+   fails the boot on prod findings.
 6. **Login lockout** — back-off / lock after N failed attempts.
+   🟡 **Built (ledger + soft lockout).** `core.login_attempt` (mig 859) +
+   `login_guard.py` + `/core/auth/login-precheck|login-record`, enforced by the
+   login page. **Note:** sign-in goes browser → Supabase directly, so this is
+   defense-in-depth + visibility; the *authoritative* lockout is Supabase Auth's
+   own rate limits (operator config — daily item).
 
 ### Phase 2 — Data protection & DLP (P1)
 7. **Server-side exports** — move export generation behind an endpoint so it can
