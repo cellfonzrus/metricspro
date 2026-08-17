@@ -7011,31 +7011,41 @@ def get_google_reviews_config(authorization: str = Header(default=""),
     return out
 
 
+class GoogleReviewsConfigIn(LaxModel):
+    enabled: Any = None
+    target_default: Any = None
+    notify_on_new_reviews: Any = None
+    lookback_days: Any = None
+    search_brand: Any = None
+    api_key: str = ""
+
+
 @router.put("/google-reviews/config")
-def put_google_reviews_config(body: dict, authorization: str = Header(default=""),
+def put_google_reviews_config(body: GoogleReviewsConfigIn, authorization: str = Header(default=""),
                               x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     """api_key is WRITE-ONLY: send it to (re)set it, omit/blank to keep the existing one — same
     posture as every other credential config (VIP/DLAR/epay sweep configs)."""
     org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
     row = {"org_id": org_id, "updated_at": datetime.now(timezone.utc).isoformat()}
-    if "enabled" in body:
-        row["enabled"] = bool(body["enabled"])
-    if "target_default" in body:
-        row["target_default"] = _gr.clamp_target(body["target_default"])
-    if "notify_on_new_reviews" in body:
-        row["notify_on_new_reviews"] = bool(body["notify_on_new_reviews"])
-    if "lookback_days" in body:
+    sent = body.model_fields_set
+    if "enabled" in sent:
+        row["enabled"] = bool(body.enabled)
+    if "target_default" in sent:
+        row["target_default"] = _gr.clamp_target(body.target_default)
+    if "notify_on_new_reviews" in sent:
+        row["notify_on_new_reviews"] = bool(body.notify_on_new_reviews)
+    if "lookback_days" in sent:
         # Phase 1.5: how far back an employee's store-set lookup looks for a shift (migration 420).
         # Pre-migration this key simply doesn't exist on the table yet — the upsert then fails and
         # the generic except below turns it into a clear 400 naming the migration (same posture as
         # every other not-yet-run-migration write here); GET always still returns the code default
         # (30) regardless via google_reviews.get_config's degrade-gracefully shape.
-        row["lookback_days"] = _gr.clamp_lookback_days(body["lookback_days"])
-    if "search_brand" in body:
+        row["lookback_days"] = _gr.clamp_lookback_days(body.lookback_days)
+    if "search_brand" in sent:
         # mig 430 — the business token prepended to the Places text search. Empty string clears it back
         # to address-only (which resolves to the postal address and yields no rating — see the migration).
-        row["search_brand"] = (str(body["search_brand"] or "").strip() or None)
-    key = (body.get("api_key") or "").strip()
+        row["search_brand"] = (str(body.search_brand or "").strip() or None)
+    key = (body.api_key or "").strip()
     if key:
         row["api_key"] = key
     try:
@@ -7056,15 +7066,24 @@ def get_google_reviews_sweep_config(authorization: str = Header(default=""), org
                                     "last_status", "last_detail")}
 
 
+class GoogleReviewsSweepConfigIn(LaxModel):
+    enabled: Any = None
+    frequency: Any = None
+    day_of_week: Any = None
+    hour: Any = None
+    timezone: Any = None
+
+
 @router.put("/google-reviews/sweep-config")
-def put_google_reviews_sweep_config(body: dict, authorization: str = Header(default=""),
+def put_google_reviews_sweep_config(body: GoogleReviewsSweepConfigIn, authorization: str = Header(default=""),
                                     x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
     cur = _gr.get_sweep_config(sb(), org_id)
     row = {"org_id": org_id}
+    sent = body.model_fields_set
     for k in ("enabled", "frequency", "day_of_week", "hour", "timezone"):
-        if k in body and body[k] is not None:
-            row[k] = body[k]
+        if k in sent and getattr(body, k) is not None:
+            row[k] = getattr(body, k)
     merged = {**cur, **row}
     row["next_run_at"] = _gr.next_run_at(merged.get("frequency") or "daily", merged.get("day_of_week"),
                                          merged.get("hour"), merged.get("timezone"))
@@ -7076,8 +7095,12 @@ def put_google_reviews_sweep_config(body: dict, authorization: str = Header(defa
     return get_google_reviews_sweep_config(authorization=authorization, org_id=org_id)
 
 
+class GoogleReviewsRunNowIn(LaxModel):
+    store_codes: Any = None
+
+
 @router.post("/google-reviews/sweep/run-now")
-def post_google_reviews_run_now(background_tasks: BackgroundTasks, body: dict = None,
+def post_google_reviews_run_now(background_tasks: BackgroundTasks, body: Optional[GoogleReviewsRunNowIn] = None,
                                 authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Manual 'Refresh now' from the admin/DM page."""
     u = _require_manager(authorization, org_id)
@@ -7085,7 +7108,7 @@ def post_google_reviews_run_now(background_tasks: BackgroundTasks, body: dict = 
     cfg = _gr.get_config(sb(), org_id)
     if not cfg.get("api_key"):
         raise HTTPException(400, "Set the Google Places API key first.")
-    store_codes = (body or {}).get("store_codes") if body else None
+    store_codes = body.store_codes if body else None
     background_tasks.add_task(_do_google_reviews_sweep, org_id, store_codes)
     return {"status": "started"}
 

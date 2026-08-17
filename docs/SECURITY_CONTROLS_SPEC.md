@@ -276,8 +276,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     payroll-config (payroll-tax-config, expense-item create/patch → lax;
     presence-loops via model_fields_set). **Part 7f:** storeops action-plans
     (submit/push-back/approve/dm-confirm) + google-reviews resolve-place → lax
-    (optional bodies via Optional[Model] + `body or Model()`). ~382 `dict` bodies
-    remain (body-threading endpoints get a dedicated pass; POS skipped — incomplete/no data).
+    (optional bodies via Optional[Model] + `body or Model()`). **Part 7g:** storeops
+    google-reviews config/sweep-config/run-now → lax (presence via model_fields_set;
+    write-only api_key). ~379 `dict` bodies remain (body-threading endpoints get a
+    dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
