@@ -16145,11 +16145,16 @@ async def get_chargebacks(period: str, authorization: str = Header(default=""), 
     return [c for c in rows if in_keyset(ks, c.get('store'))]
 
 @router.put("/chargebacks/{item_id}")
-async def update_chargeback(item_id: str, body: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+class UpdateChargebackIn(LaxModel):
+    deduct: Any = False
+    decided_by: Any = None
+
+
+async def update_chargeback(item_id: str, body: UpdateChargebackIn, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
-    update = {'deduct': bool(body.get('deduct', False)), 'decided_at': 'now()'}
-    if body.get('decided_by'):
-        update['decided_by'] = body['decided_by']
+    update = {'deduct': bool(body.deduct), 'decided_at': 'now()'}
+    if body.decided_by:
+        update['decided_by'] = body.decided_by
     r = client.schema('commcalc').table('chargeback_items').update(update).eq('id', item_id).execute()
     return r.data[0] if r.data else {}
 
@@ -16789,7 +16794,24 @@ def get_accessory_config(org_id: str = ORG_ID):
 
 
 @router.put("/accessory-config")
-def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+class PutAccessoryConfigIn(LaxModel):
+    departments: Any = None
+    categories: Any = None
+    product_keywords: Any = None
+    acima_tenders: Any = None
+    box_departments: Any = None
+    setup_fee_keywords: Any = None
+    billpay_products: Any = None
+    contract_type_map: Any = None
+    activation_rules: Any = None
+    box_count_buckets: Any = None
+    catalog_classify_enabled: Any = None
+    catalog_accessory_categories: Any = None
+    apply_to_gp: Any = None
+    definition_drives_pay: Any = None
+
+
+def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set what counts as accessory sales + which Tender Type = an ACIMA lease. Body: {departments:[...],
     categories:[...], product_keywords:[...], acima_tenders:[...]}. A line is an accessory if its
     department OR category is listed OR its product description contains a keyword. ACIMA commission =
@@ -16810,28 +16832,28 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
     row = {"org_id": org_id, "updated_at": _cb_now(),
            "departments": cur["departments_list"], "categories": cur["categories_list"],
            "product_keywords": cur["products_list"], "acima_tenders": cur["acima_tenders_list"]}
-    if "departments" in body or "categories" in body or "product_keywords" in body:
-        row["departments"] = [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()]
-        row["categories"] = [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()]
-        row["product_keywords"] = [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()]
-    if "acima_tenders" in body:
-        row["acima_tenders"] = [str(x).strip() for x in (body.get("acima_tenders") or []) if str(x).strip()]
+    if "departments" in body.model_fields_set or "categories" in body.model_fields_set or "product_keywords" in body.model_fields_set:
+        row["departments"] = [str(x).strip() for x in (body.departments or []) if str(x).strip()]
+        row["categories"] = [str(x).strip() for x in (body.categories or []) if str(x).strip()]
+        row["product_keywords"] = [str(x).strip() for x in (body.product_keywords or []) if str(x).strip()]
+    if "acima_tenders" in body.model_fields_set:
+        row["acima_tenders"] = [str(x).strip() for x in (body.acima_tenders or []) if str(x).strip()]
     # BOX departments (mig 218). Included defensively: pre-218 the column doesn't exist, so a save carrying
     # it 500s — we retry WITHOUT it so editing the accessory lists never breaks before 218 is applied (box
     # counting then falls back to the code default _BOX_DEPTS).
-    row["box_departments"] = ([str(x).strip() for x in (body.get("box_departments") or []) if str(x).strip()]
-                              if "box_departments" in body else cur["box_departments_list"])
+    row["box_departments"] = ([str(x).strip() for x in (body.box_departments or []) if str(x).strip()]
+                              if "box_departments" in body.model_fields_set else cur["box_departments_list"])
     # Device SET-UP FEE keywords (mig 217, pkg A field — editable from the shared Classification-settings UI).
-    row["setup_fee_keywords"] = ([str(x).strip() for x in (body.get("setup_fee_keywords") or []) if str(x).strip()]
-                                 if "setup_fee_keywords" in body else cur["setup_fee_keywords_list"])
+    row["setup_fee_keywords"] = ([str(x).strip() for x in (body.setup_fee_keywords or []) if str(x).strip()]
+                                 if "setup_fee_keywords" in body.model_fields_set else cur["setup_fee_keywords_list"])
     # BILL-PAYMENT products (mig 214 — editable from the shared Classification-settings UI). Empty list =
     # fall back to the hard-coded Boost tokens in the aggregation (conversion byte-identical for the house).
-    row["billpay_products"] = ([str(x).strip() for x in (body.get("billpay_products") or []) if str(x).strip()]
-                               if "billpay_products" in body else cur["billpay_products_list"])
+    row["billpay_products"] = ([str(x).strip() for x in (body.billpay_products or []) if str(x).strip()]
+                               if "billpay_products" in body.model_fields_set else cur["billpay_products_list"])
     # CONTRACT-TYPE -> activation-bucket map (mig 213 — editable from the shared Classification-settings UI).
     # Sanitize to {str contract_type : bucket} with bucket in premium|upgrade|byod|none (unknown dropped).
-    if "contract_type_map" in body:
-        _raw = body.get("contract_type_map") or {}
+    if "contract_type_map" in body.model_fields_set:
+        _raw = body.contract_type_map or {}
         _ok = {"premium", "upgrade", "byod", "none"}
         row["contract_type_map"] = {str(k).strip(): str(v).strip().lower()
                                     for k, v in ((_raw.items()) if isinstance(_raw, dict) else [])
@@ -16842,7 +16864,7 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
     # Sanitize each rule to {bucket in premium|upgrade|byod, all_of:[cond], none_of:[cond]} where a cond is
     # {field:str, contains_any:[str], equals_any:[str]}; malformed rules/conds dropped. Empty list = the
     # blank-ct engine is a no-op (Boost byte-identical).
-    if "activation_rules" in body:
+    if "activation_rules" in body.model_fields_set:
         # n2 (Gate-1): the cond `field` must be a REAL matchable sales column (pick-don't-type over these);
         # a typo'd field would silently never match, so drop it at save time.
         _KNOWN_RULE_FIELDS = {'department', 'category', 'product_desc', 'trans_type', 'contract_type',
@@ -16866,7 +16888,7 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
                 o['equals_any'] = ea
             return o
         _rules = []
-        for _r in (body.get('activation_rules') or []):
+        for _r in (body.activation_rules or []):
             if not isinstance(_r, dict):
                 continue
             _b = str(_r.get('bucket') or '').strip().lower()
@@ -16885,28 +16907,28 @@ def put_accessory_config(body: dict, org_id: str = ORG_ID, authorization: str = 
         row["activation_rules"] = cur["activation_rules"]
     # BOX-COUNT buckets (mig 231) — which activation buckets add to "total boxes sold". Sanitized to the
     # known bucket vocabulary. Empty = device-line boxes only (byte-identical).
-    if "box_count_buckets" in body:
-        row["box_count_buckets"] = [str(b).strip().lower() for b in (body.get("box_count_buckets") or [])
+    if "box_count_buckets" in body.model_fields_set:
+        row["box_count_buckets"] = [str(b).strip().lower() for b in (body.box_count_buckets or [])
                                     if str(b).strip().lower() in ("byod", "upgrade", "premium")]
     else:
         row["box_count_buckets"] = cur["box_count_buckets_list"]
     # CATALOG-driven accessory classification toggle + accessory categories (mig 231).
-    if "catalog_classify_enabled" in body:
-        row["catalog_classify_enabled"] = bool(body.get("catalog_classify_enabled"))
+    if "catalog_classify_enabled" in body.model_fields_set:
+        row["catalog_classify_enabled"] = bool(body.catalog_classify_enabled)
     else:
         row["catalog_classify_enabled"] = cur["catalog_classify_enabled"]
-    if "catalog_accessory_categories" in body:
-        row["catalog_accessory_categories"] = [str(x).strip() for x in (body.get("catalog_accessory_categories") or []) if str(x).strip()]
+    if "catalog_accessory_categories" in body.model_fields_set:
+        row["catalog_accessory_categories"] = [str(x).strip() for x in (body.catalog_accessory_categories or []) if str(x).strip()]
     else:
         row["catalog_accessory_categories"] = cur["catalog_accessory_categories_list"]
     # GP-report adoption flag (mig 250 — editable from the shared Classification-settings UI).
-    row["apply_to_gp"] = (bool(body.get("apply_to_gp")) if "apply_to_gp" in body
+    row["apply_to_gp"] = (bool(body.apply_to_gp) if "apply_to_gp" in body.model_fields_set
                           else bool(cur.get("apply_to_gp", False)))
     # ACCESSORY DEFINITION AS A PAY BASIS (mig 276) — A MONEY SWITCH. It changes nothing until the next
     # recalculation, and it is strictly additive (it can only ADD accessory lines to what a plan rule
     # keyed on `accessory` matches). Written only when the caller sent it; default false.
-    row["definition_drives_pay"] = (bool(body.get("definition_drives_pay"))
-                                    if "definition_drives_pay" in body
+    row["definition_drives_pay"] = (bool(body.definition_drives_pay)
+                                    if "definition_drives_pay" in body.model_fields_set
                                     else bool(cur.get("definition_drives_pay", False)))
     # Persist defensively: pre-mig-214/213/217/218/231 those columns don't exist, so a save carrying them
     # 500s — retry progressively dropping the NEWEST columns first (mig-231 columns are the newest) so
@@ -17052,8 +17074,14 @@ def catalog_overrides(org_id: str = ORG_ID):
     return {"ok": True, "org_id": org_id, "overrides": rows}
 
 
+class PutCatalogOverrideIn(LaxModel):
+    match_type: str = ""
+    match_value: Any = None
+    category: str = ""
+
+
 @router.put("/catalog/override")
-def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def put_catalog_override(body: PutCatalogOverrideIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set (or CLEAR) a category override for one catalog product — the user-editable, NON-destructive layer
     on top of the loaded catalog file (deliverable 3). Body:
       {match_type:'upc'|'sku'|'product_id'|'product_desc', match_value:str, category:str}
@@ -17065,10 +17093,10 @@ def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = 
     if not _can_edit_classification(authorization, org_id):
         raise HTTPException(403, "You don't have permission to edit Classification settings.")
     from app.modules.commcalc import accessory_catalog as _accat
-    mt = str(body.get("match_type") or "").strip().lower()
+    mt = str(body.match_type or "").strip().lower()
     if mt not in ("upc", "sku", "product_id", "product_desc"):
         raise HTTPException(400, "match_type must be one of upc / sku / product_id / product_desc.")
-    raw_val = body.get("match_value")
+    raw_val = body.match_value
     if mt == "product_desc":
         mv = _accat.norm_desc(raw_val)
     elif mt == "product_id":
@@ -17077,7 +17105,7 @@ def put_catalog_override(body: dict, org_id: str = ORG_ID, authorization: str = 
         mv = _accat.clean_key(raw_val)
     if not mv:
         raise HTTPException(400, "match_value is required.")
-    cat = str(body.get("category") or "").strip()
+    cat = str(body.category or "").strip()
     client = sb()
     try:
         if not cat:

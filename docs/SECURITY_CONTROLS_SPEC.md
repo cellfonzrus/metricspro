@@ -334,8 +334,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     **Part 22:** commcalc ingest-guard (config put, queue-item decide) + reporting
     config (gp-category-map, commission-leg label + config) → lax; presence loops
     (`'k' in body`) via model_fields_set, int/regex-validated fields typed Any.
-    ~300 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
-    skipped — incomplete/no data).
+    **Part 23:** commcalc chargeback-update + classification config (accessory-config
+    — 14 presence-gated list/map fields via model_fields_set — and catalog-override)
+    → lax. ~297 `dict` bodies remain (body-threading endpoints get a dedicated pass;
+    POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
