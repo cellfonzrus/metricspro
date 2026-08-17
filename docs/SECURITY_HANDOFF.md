@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt42 — crm leads/tasks + agency-decline bugfix) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt43 — referral module) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–42 = 227 endpoints; ~206 remain). commcalc + hr + crm-leads fully swept. |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–43 = 238 endpoints; ~195 remain). commcalc + hr + crm-leads + referral fully swept. |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -161,9 +161,15 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   → would AttributeError on every agency *decline*; added `reason` field + attribute access. crm
   config CRUD (put_config/create_config/update_config) DEFERRED — they iterate `body.keys()` and
   LOUDLY reject unknown keys with a custom 400 ("Nothing was saved"); a LaxModel would silently drop
-  them (the exact documented bug) and a StrictModel would change the 400→422 contract. Next: run
+  them (the exact documented bug) and a StrictModel would change the 400→422 contract.
+  **Part 43 (referral — fully swept):** create_referral, redeem_submit (public token), and the whole
+  staff lifecycle — send_qr, log_sale, activate, submit_for_approval, approve (float-validated
+  commission stays `Any`), mark_paid, reject, void, flag_fraud. Optional-body handlers typed as
+  `Model = None` + `body or Model()`; shared models `ReferralNoteIn` / `ReferralReasonIn` reused across
+  the note-only and reason-or-note transitions. referral put_config DEFERRED (same loud unknown-key
+  rejection as crm). Next: run
   `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data;
-  core/closing/notify/referral/billing/etc. untouched). **Rules:** skip endpoints that thread the raw
+  core/closing/notify/billing/storevisit/etc. untouched). **Rules:** skip endpoints that thread the raw
   `body` dict into shared helpers (unless the callee is also being typed — then share/inherit a model),
   use `body` itself as a freeform map (`else body`), spread `{**body}`, or loudly reject unknown keys;
   preserve None-vs-empty + downstream `.get()`; type handler-validated fields (`float(amount)` → 400)

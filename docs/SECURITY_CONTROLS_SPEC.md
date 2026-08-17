@@ -401,8 +401,14 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     still called `body.get("reason")` (would AttributeError on every agency decline);
     added the field + attribute access. crm config CRUD deferred (loud unknown-key
     rejection — a lax model drops silently, a strict model changes the 400→422
-    contract). ~206 `dict` bodies remain across other modules (core, closing, notify,
-    referral, billing, storeops helpers, storevisit, …; POS skipped — incomplete/no data).
+    contract). **Part 43 (referral fully swept):** create_referral, redeem_submit
+    (public token), and the staff lifecycle — send_qr, log_sale, activate, submit,
+    approve (float-validated commission stays `Any`), pay, reject, void, flag →
+    lax. Optional bodies typed `Model = None` + `body or Model()`; shared
+    `ReferralNoteIn`/`ReferralReasonIn` reused. referral put_config deferred (same
+    loud unknown-key rejection). ~195 `dict` bodies remain across other modules
+    (core, closing, notify, billing, storeops helpers, storevisit, …; POS skipped —
+    incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
