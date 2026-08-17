@@ -324,8 +324,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     update_plan_installment threads `body` into `_write_installment_schedule`
     (deferred). **Part 19:** commcalc distributor/template (carrier-template clone,
     distributor save, distributor-payment add) → lax; int/float-coerced fields
-    typed Any. ~310 `dict` bodies remain (body-threading endpoints get a
-    dedicated pass; POS skipped — incomplete/no data).
+    typed Any. **Part 20:** commcalc save-commission-plan (plan header + rules +
+    tiers + assignments delete-then-insert) → lax; tier presence via
+    model_fields_set, child-list dicts read locally. setup-fee/pay-gate configs
+    (freeform `else body` map) + payout-exclusion (`{**body}` spread) deferred.
+    ~309 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
+    skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

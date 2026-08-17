@@ -13179,42 +13179,59 @@ def commission_statements_batch(period: str, reps: str = "", store: str = "", ma
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+class SaveCommissionPlanIn(LaxModel):
+    id: Any = None
+    name: str = ""
+    carrier_id: Any = None
+    base_tier_metric: Any = None
+    is_active: Any = True
+    notes: Any = None
+    tier_count_basis: Any = None
+    tier_match_field: Any = None
+    tier_match_op: Any = None
+    tier_match_value: Any = None
+    tier_below_min_multiplier: Any = None
+    rules: Any = None
+    tiers: Any = None
+    assignments: Any = None
+
+
 @router.post("/commission-plans")
-async def save_commission_plan(body: dict, org_id: str = ORG_ID):
+async def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
     client = sb()
     plan_row = {
         "org_id": org_id, "name": name,
-        "carrier_id": body.get("carrier_id") or None,
-        "base_tier_metric": body.get("base_tier_metric") or None,
-        "is_active": bool(body.get("is_active", True)),
-        "notes": body.get("notes") or None,
+        "carrier_id": body.carrier_id or None,
+        "base_tier_metric": body.base_tier_metric or None,
+        "is_active": bool(body.is_active),
+        "notes": body.notes or None,
     }
     # TIER ATTAINMENT CONFIG (mig 232) — only written when the caller sent the field AND the column exists,
     # so a pre-migration database saves exactly as before instead of 500-ing on an unknown column.
     if _plan_tier_cols_present(client):
-        if "tier_count_basis" in body:
-            _b = (body.get("tier_count_basis") or "").strip().lower()
+        if "tier_count_basis" in body.model_fields_set:
+            _b = (body.tier_count_basis or "").strip().lower()
             plan_row["tier_count_basis"] = _b if _b in ("lines", "transactions") else None
         for _k in ("tier_match_field", "tier_match_op", "tier_match_value"):
-            if _k in body:
-                _v = str(body.get(_k) or "").strip()
+            if _k in body.model_fields_set:
+                _v = str(getattr(body, _k) or "").strip()
                 if _k == "tier_match_field" and _v and _v not in commission_engine.MATCH_FIELDS:
                     _v = "any"
                 if _k == "tier_match_op" and _v and _v not in ("equals", "contains", "in"):
                     _v = "equals"
                 plan_row[_k] = _v or None
-        if "tier_below_min_multiplier" in body:
-            _m = body.get("tier_below_min_multiplier")
+        if "tier_below_min_multiplier" in body.model_fields_set:
+            _m = body.tier_below_min_multiplier
             plan_row["tier_below_min_multiplier"] = (
                 None if _m is None or str(_m).strip() == "" else safe_float(_m))
     try:
-        if body.get("id"):
-            r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body['id']).eq('org_id', org_id).execute()
-            plan_id = body['id']
+        if body.id:
+            r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body.id).eq('org_id', org_id).execute()
+            plan_id = body.id
         else:
             r = client.schema('commcalc').table('commission_plan').upsert(plan_row, on_conflict='org_id,name').execute()
             plan_id = (r.data or [{}])[0].get('id')
@@ -13230,7 +13247,7 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
             client.schema('commcalc').table(tbl).delete().eq('org_id', org_id).eq('plan_id', plan_id).execute()
 
         rules = []
-        for i, rl in enumerate(body.get("rules") or []):
+        for i, rl in enumerate(body.rules or []):
             mf = (rl.get("match_field") or "any")
             if mf not in commission_engine.MATCH_FIELDS:
                 mf = "any"
@@ -13273,10 +13290,10 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
             client.schema('commcalc').table('commission_rule').insert(rules).execute()
 
         tiers = []
-        for i, t in enumerate(body.get("tiers") or []):
+        for i, t in enumerate(body.tiers or []):
             tiers.append({
                 "org_id": org_id, "plan_id": plan_id,
-                "metric": t.get("metric") or body.get("base_tier_metric") or None,
+                "metric": t.get("metric") or body.base_tier_metric or None,
                 "min_count": int(t.get("min_count") or 0),
                 "multiplier": safe_float(t.get("multiplier")) or 1,
                 "sort": int(t.get("sort") if t.get("sort") is not None else i),
@@ -13285,7 +13302,7 @@ async def save_commission_plan(body: dict, org_id: str = ORG_ID):
             client.schema('commcalc').table('commission_tier').insert(tiers).execute()
 
         assigns = []
-        for a in body.get("assignments") or []:
+        for a in body.assignments or []:
             scope = (a.get("scope") or "default")
             assigns.append({
                 "org_id": org_id, "plan_id": plan_id, "scope": scope,
