@@ -71,6 +71,14 @@ Built this phase, defaulted conservatively so nothing breaks on deploy:
 - `MULTI_TENANT_ENFORCE=1` — the deliberate tenant-isolation go-live (see item 3-adjacent). Startup now
   warns while it's off. Needs the isolation test before flipping.
 
+### 12. ⬜ Enable admin 2FA (`ADMIN_2FA_ENFORCE`)
+Built this phase (item 10), default OFF. When on, super-admins must present a valid 2FA marker on every
+request (its 12h/30d expiry also time-boxes their standing access), and starting an impersonation
+session requires the actor's 2FA.
+- **Before enabling:** have every super-admin enroll 2FA (`/admin/security` → 2FA, or the `/me/2fa`
+  flow). The enroll/verify endpoints are always reachable, but enrolling first avoids a scramble.
+- **Then:** set `ADMIN_2FA_ENFORCE=1` in Railway. Startup warns while it's off. Break-glass `=0`.
+
 ### 8. ⬜ Promote CSP from Report-Only → enforcing
 `next.config.ts` ships a **Content-Security-Policy-Report-Only** (Phase 2 item 11). It blocks nothing
 yet — it surfaces violations so we can confirm the policy fits the app (inline styles, Next inline

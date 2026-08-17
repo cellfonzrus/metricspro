@@ -362,6 +362,27 @@ def _twofa_marker_ok(token: str, uid: str, org: str) -> bool:
         return True
 
 
+def _admin_2fa_enforce() -> bool:
+    """Require a valid 2FA marker for SUPER-ADMIN requests (Security Controls Spec §1, item 10). Default
+    OFF — behaviour-changing (a super-admin who hasn't enrolled 2FA would be prompted to), so an operator
+    enables it deliberately after super-admins enroll. The 2FA enroll/verify endpoints live under the
+    allowlisted /core/me prefix, so a super-admin can always reach them to obtain a marker. Because the
+    marker EXPIRES (12h session / 30d device), this also TIME-BOXES the standing super-admin's elevated
+    access — they must re-verify periodically. Break-glass ADMIN_2FA_ENFORCE=0."""
+    return os.environ.get("ADMIN_2FA_ENFORCE", "").lower() in ("1", "true", "yes")
+
+
+def _twofa_marker_uid_ok(token: str, uid: str) -> bool:
+    """Valid 2FA marker for THIS login, any org — super-admins are cross-tenant, so the org the marker
+    was minted for is not the point; 'did this human do 2FA recently' is. FAILS OPEN on verifier error."""
+    try:
+        from app.modules.core.auth_security import verify_2fa_token, now_ts
+        p = verify_2fa_token(token, now_ts())
+        return bool(p and p.get("a") == (uid or ""))
+    except Exception:
+        return True
+
+
 async def _reject_2fa(send):
     body = b'{"detail":"two-factor authentication required","code":"2fa_required"}'
     await send({"type": "http.response.start", "status": 401,
@@ -872,6 +893,11 @@ class TenantScopeMiddleware:
             # instead of silently falling back to whichever membership row sorted first.
             _set_acting((headers.get(_ACTIVE_ORG_HEADER, "") or "").strip() or None, super_admin=True)
             _set_actor({"uid": uid, "super_admin": True, "role": "super_admin"})
+            # ADMIN 2FA (item 10): a standing super-admin no longer bypasses 2FA when the operator turns
+            # this on. The marker's expiry time-boxes the elevated access. Enroll/verify are allowlisted,
+            # so this never permanently strands an admin. Default OFF ⇒ unchanged bypass.
+            if _admin_2fa_enforce() and not _twofa_marker_uid_ok(headers.get("x-2fa-token", ""), uid):
+                return await _reject_2fa(send)
             return await self.app(scope, receive, send)
         if not member_orgs:
             # H2 (2026-08-05): the token VERIFIED but the login has NO tenant membership (no app_users

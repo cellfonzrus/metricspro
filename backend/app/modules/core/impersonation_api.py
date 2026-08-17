@@ -184,7 +184,8 @@ def list_targets(org_id: str = ORG_ID, authorization: str = Header(default="")):
 
 # ── Start / stop ────────────────────────────────────────────────────────────────────────────────
 @router.post("/start")
-def start(body: dict, request: Request, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def start(body: dict, request: Request, org_id: str = ORG_ID, authorization: str = Header(default=""),
+          x_2fa_token: str = Header(default="")):
     """Begin a "view as employee" session. Returns the signed grant the client presents as
     `x-impersonate` on every subsequent request.
 
@@ -192,6 +193,19 @@ def start(body: dict, request: Request, org_id: str = ORG_ID, authorization: str
     FIRST; only if that write succeeds is a grant minted. If mig 730 is un-run, or the audit store is
     unreachable, the write raises and NO grant exists — impersonation simply cannot happen."""
     uid, me = _require_impersonator(authorization, org_id)
+    # 2FA on impersonation (item 10): borrowing another person's identity is a high-privilege action, so
+    # when ADMIN_2FA_ENFORCE is on the actor must be 2FA-verified to OBTAIN a grant. Gated + fail-open on
+    # verifier error, mirroring the middleware's admin-2FA gate.
+    import os
+    if os.environ.get("ADMIN_2FA_ENFORCE", "").lower() in ("1", "true", "yes"):
+        try:
+            from app.modules.core.auth_security import verify_2fa_token, now_ts
+            p = verify_2fa_token(x_2fa_token, now_ts())
+            verified = bool(p and p.get("a") == str(uid))
+        except Exception:
+            verified = True   # never block on a verifier glitch
+        if not verified:
+            raise HTTPException(401, "Two-factor verification is required to view the app as an employee.")
     # The whole mechanism is enforced by TenantScopeMiddleware, which is inert when
     # MULTI_TENANT_ENFORCE is off. Minting a grant that nothing would honour would drop the admin
     # into a session that silently still acts as themselves — refuse instead of confusing them.

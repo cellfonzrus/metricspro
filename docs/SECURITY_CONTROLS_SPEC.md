@@ -221,7 +221,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
    `run-due`/cron sites, plus rotation via `NOTIFY_RUN_SECRET_NEXT`. Fixed a
    fail-open site in `recovery/router.py` (unset secret used to allow the sweep).
 10. **2FA/TOTP for admin + impersonation**; time-box the standing super-admin and
-    require step-up. _(Not started — larger, own pass.)_
+    require step-up. 🟡 **Built (gated).** `ADMIN_2FA_ENFORCE` makes super-admins
+    present a valid 2FA marker (middleware, any-org check) — the marker's 12h/30d
+    expiry **time-boxes** their standing access. Starting an impersonation session
+    requires the actor's 2FA. `/me` reports `required` for super-admins so the
+    existing prompt fires. Default OFF (enroll super-admins first); startup warns
+    while off. _(Reuses the existing OTP/marker infra — no new 2FA mechanism.)_
 11. **CSP + frontend security headers.** ✅ **Built.** `next.config.ts` sets
     nosniff / frame-DENY / Referrer-Policy / Permissions-Policy (geolocation
     allowed for self) / HSTS on every route, and a **Report-Only** CSP (safe

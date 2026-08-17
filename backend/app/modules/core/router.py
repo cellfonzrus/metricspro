@@ -408,8 +408,22 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
     # active tenant/user. Best-effort — un-run migs degrade to code defaults / 2FA off (no lockout).
     pw_policy = _load_password_policy(client, org_id, t=t)
     tw_policy = _load_twofa_policy(client, org_id, t=t)
-    twofa = {"required": _twofa_required_for(tw_policy, u.get("role"), u.get("twofa_enabled")),
-             "verified": bool(_sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts())),
+    tw_required = _twofa_required_for(tw_policy, u.get("role"), u.get("twofa_enabled"))
+    tw_verified = bool(_sec.twofa_token_valid_for(x_2fa_token, uid, org_id, _sec.now_ts()))
+    # item 10 — admin 2FA. When ADMIN_2FA_ENFORCE is on, a super-admin is REQUIRED to 2FA regardless of
+    # tenant policy (the middleware enforces it with an any-org marker check). Tell the client so the
+    # existing 2FA prompt fires instead of the super-admin hitting a silent 401 loop, and mirror the
+    # any-org acceptance for `verified` so a marker minted in another tenant still counts.
+    import os as _os2
+    if u.get("super_admin") and _os2.environ.get("ADMIN_2FA_ENFORCE", "").lower() in ("1", "true", "yes"):
+        tw_required = True
+        if not tw_verified:
+            try:
+                _p = _sec.verify_2fa_token(x_2fa_token, _sec.now_ts())
+                tw_verified = bool(_p and _p.get("a") == uid)
+            except Exception:
+                pass
+    twofa = {"required": tw_required, "verified": tw_verified,
              "mode": tw_policy["mode"], "user_channels": u.get("twofa_channels") or ["email"]}
     # Admin "view as employee": the SERVER tells the client it is inside an impersonated session, so
     # the high-contrast banner is driven by verified server state rather than by anything the browser

@@ -41,6 +41,7 @@ def evaluate() -> dict:
         "SESSION_ENFORCE": _on("SESSION_ENFORCE", "0"),
         "RATE_LIMIT_ENFORCE": _on("RATE_LIMIT_ENFORCE", "1"),
         "RBAC_SCOPE_FAILCLOSED": _on("RBAC_SCOPE_FAILCLOSED", "1"),
+        "ADMIN_2FA_ENFORCE": _on("ADMIN_2FA_ENFORCE", "0"),
         "FIELD_ENCRYPTION_STRICT": _on("FIELD_ENCRYPTION_STRICT", "0"),
         "field_key_set": _set("FIELD_ENCRYPTION_KEY") or _set("FIELD_ENCRYPTION_KEYS"),
         "notify_secret_set": _set("NOTIFY_RUN_SECRET"),
@@ -57,6 +58,9 @@ def evaluate() -> dict:
         if not posture["MULTI_TENANT_ENFORCE"]:
             findings.append("MULTI_TENANT_ENFORCE is OFF — tenant isolation is NOT enforced server-side "
                             "(break-glass state). Enable it after the isolation test passes.")
+        if not posture["ADMIN_2FA_ENFORCE"]:
+            findings.append("ADMIN_2FA_ENFORCE is OFF — super-admins bypass 2FA. Have super-admins enroll "
+                            "2FA, then enable it to require 2FA (and time-box their standing access).")
         if posture["field_key_set"] and not posture["FIELD_ENCRYPTION_STRICT"]:
             findings.append("FIELD_ENCRYPTION_STRICT is OFF — a future key removal would silently fall "
                             "back to plaintext. Enable it now that the key is set.")
