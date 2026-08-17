@@ -287,7 +287,11 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     face-retention run, face descriptor save → lax; selfie/gps/descriptor/entry_id
     handler-validated typed Any). **storeops now fully swept** — the 7 remaining
     `dict` handlers thread `body` into shared config helpers (deferred by rule).
-    ~365 `dict` bodies remain (body-threading endpoints get a
+    **Part 8:** helpdesk support-console writes (case reply/note/assign/status,
+    canned-response upsert, SLA-policy put, failures bulk-review, fix-request
+    status → lax; ids/hours/mark_reviewed handler-validated typed Any). Config
+    CRUD + create-fix-request thread `body` into `_cfg_*`/`new_fix_row` helpers
+    (deferred by rule). ~357 `dict` bodies remain (body-threading endpoints get a
     dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

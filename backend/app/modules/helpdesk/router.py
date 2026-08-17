@@ -15,10 +15,13 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
+from typing import Any, Optional
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Header
 
 from app.core.config import settings
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 
 router = APIRouter(prefix="/helpdesk", tags=["Helpdesk"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -1018,13 +1021,17 @@ def _touch_case(cid, patch):
     db("support_case").update(patch).eq("id", cid).execute()
 
 
+class SupportCaseTextIn(LaxModel):
+    body: str = ""
+
+
 @router.post("/support/cases/{cid}/reply")
-async def support_case_reply(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+async def support_case_reply(cid: str, body: SupportCaseTextIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Post a reply visible to the tenant user. Records a case event (kind='reply', visible_to_user=true)
     AND fans the reply into the tenant's helpdesk ticket thread (storeops.ticket_comments + a ticket_event)
     so the user sees it in their existing helpdesk UI, plus a best-effort notify email. House-gated."""
     ctx = _require_support(authorization, x_active_org)
-    text = (body.get("body") or "").strip()
+    text = (body.body or "").strip()
     if not text:
         raise HTTPException(422, "reply body required")
     case = _load_case(cid)
@@ -1072,10 +1079,10 @@ async def _notify_ticket_reply(org_id, ticket_id):
 
 
 @router.post("/support/cases/{cid}/note")
-def support_case_note(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_note(cid: str, body: SupportCaseTextIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Internal note — NEVER fanned to the tenant (visible_to_user=false). House-gated."""
     ctx = _require_support(authorization, x_active_org)
-    text = (body.get("body") or "").strip()
+    text = (body.body or "").strip()
     if not text:
         raise HTTPException(422, "note body required")
     case = _load_case(cid)
@@ -1085,11 +1092,15 @@ def support_case_note(cid: str, body: dict, authorization: str = Header(default=
     return {"ok": True}
 
 
+class SupportCaseAssignIn(LaxModel):
+    assignee_email: str = ""
+
+
 @router.post("/support/cases/{cid}/assign")
-def support_case_assign(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_assign(cid: str, body: SupportCaseAssignIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Assign the case to a support agent (assignee_email). House-gated."""
     ctx = _require_support(authorization, x_active_org)
-    assignee = (body.get("assignee_email") or "").strip() or None
+    assignee = (body.assignee_email or "").strip() or None
     case = _load_case(cid)
     _touch_case(cid, {"assignee_email": assignee})
     _case_event(case.get("org_id"), cid, "assign",
@@ -1098,23 +1109,29 @@ def support_case_assign(cid: str, body: dict, authorization: str = Header(defaul
     return {"ok": True, "assignee_email": assignee}
 
 
+class SupportCaseStatusIn(LaxModel):
+    status: str = ""
+    resolution: str = ""
+    priority: str = ""
+
+
 @router.post("/support/cases/{cid}/status")
-def support_case_status(cid: str, body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def support_case_status(cid: str, body: SupportCaseStatusIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Change case status/priority. Resolving (status='resolved') REQUIRES resolution text. House-gated."""
     ctx = _require_support(authorization, x_active_org)
     case = _load_case(cid)
     patch = {}
-    new_status = (body.get("status") or "").strip().lower()
+    new_status = (body.status or "").strip().lower()
     if new_status:
         if new_status not in _SUPPORT_STATUSES:
             raise HTTPException(400, f"invalid status; use one of {list(_SUPPORT_STATUSES)}")
-        resolution = (body.get("resolution") or "").strip()
+        resolution = (body.resolution or "").strip()
         if new_status == "resolved" and not resolution and not (case.get("resolution") or "").strip():
             raise HTTPException(422, "a resolution note is required to resolve a case")
         patch["status"] = new_status
         if resolution:
             patch["resolution"] = resolution
-    new_priority = (body.get("priority") or "").strip().lower()
+    new_priority = (body.priority or "").strip().lower()
     if new_priority:
         if new_priority not in _SUPPORT_PRIORITIES:
             raise HTTPException(400, f"invalid priority; use one of {list(_SUPPORT_PRIORITIES)}")
@@ -1151,20 +1168,27 @@ def canned_list(authorization: str = Header(default=""), x_active_org: str = Hea
     return {"canned": rows, "can_edit": _support_can_edit(authorization, x_active_org)}
 
 
+class CannedCreateIn(LaxModel):
+    title: str = ""
+    body: str = ""
+    category: str = ""
+    id: Any = None
+
+
 @router.post("/support/canned-responses")
-def canned_create(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def canned_create(body: CannedCreateIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     _require_support(authorization, x_active_org)
     if not _support_can_edit(authorization, x_active_org):
         raise HTTPException(403, "you don't have permission to edit support canned responses")
-    title = (body.get("title") or "").strip()
-    text = (body.get("body") or "").strip()
+    title = (body.title or "").strip()
+    text = (body.body or "").strip()
     if not title or not text:
         raise HTTPException(422, "title and body are required")
     row = {"org_id": HOUSE_ORG, "title": title, "body": text,
-           "category": (body.get("category") or None), "updated_at": _now()}
-    if body.get("id"):
-        db("support_canned_response").update(row).eq("id", body["id"]).eq("org_id", HOUSE_ORG).execute()
-        return {"ok": True, "id": body["id"]}
+           "category": (body.category or None), "updated_at": _now()}
+    if body.id:
+        db("support_canned_response").update(row).eq("id", body.id).eq("org_id", HOUSE_ORG).execute()
+        return {"ok": True, "id": body.id}
     r = (db("support_canned_response").insert(row).execute().data or [{}])[0]
     return {"ok": True, "id": r.get("id")}
 
@@ -1185,13 +1209,19 @@ def sla_get(authorization: str = Header(default=""), x_active_org: str = Header(
             "can_edit": _support_can_edit(authorization, x_active_org)}
 
 
+class SlaPutIn(LaxModel):
+    priority: str = ""
+    response_hours: Any = None
+    resolve_hours: Any = None
+
+
 @router.put("/support/sla-policy")
-def sla_put(body: dict, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+def sla_put(body: SlaPutIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Upsert one priority's SLA (body: {priority, response_hours, resolve_hours}). House config."""
     _require_support(authorization, x_active_org)
     if not _support_can_edit(authorization, x_active_org):
         raise HTTPException(403, "you don't have permission to edit the support SLA policy")
-    priority = (body.get("priority") or "").strip().lower()
+    priority = (body.priority or "").strip().lower()
     if priority not in _SUPPORT_PRIORITIES:
         raise HTTPException(400, f"invalid priority; use one of {list(_SUPPORT_PRIORITIES)}")
     def _int(v):
@@ -1200,8 +1230,8 @@ def sla_put(body: dict, authorization: str = Header(default=""), x_active_org: s
         except (TypeError, ValueError):
             return None
     row = {"org_id": HOUSE_ORG, "priority": priority,
-           "response_hours": _int(body.get("response_hours")),
-           "resolve_hours": _int(body.get("resolve_hours")), "updated_at": _now()}
+           "response_hours": _int(body.response_hours),
+           "resolve_hours": _int(body.resolve_hours), "updated_at": _now()}
     db("support_sla_policy").upsert(row, on_conflict="org_id,priority").execute()
     return {"ok": True, **row}
 
@@ -1265,16 +1295,21 @@ def support_failures(authorization: str = Header(default=""), x_active_org: str 
             "tenants": [{"org_id": x["org_id"], "name": x.get("name")} for x in all_tenants if x.get("org_id")]}
 
 
+class SupportFailuresBulkReviewIn(LaxModel):
+    ids: Any = None
+    reviewed: Any = True
+
+
 @router.post("/support/failures/bulk-review")
-def support_failures_bulk_review(body: dict, authorization: str = Header(default=""),
+def support_failures_bulk_review(body: SupportFailuresBulkReviewIn, authorization: str = Header(default=""),
                                        x_active_org: str = Header(default="")):
     """CROSS-TENANT clear: mark the given failure rows reviewed/un-reviewed BY ID (house-gated — the failure
     ids carry their own org_id, so no org filter is applied; this is the sanctioned cross-tenant write)."""
     ctx = _require_support(authorization, x_active_org)
-    ids = [str(i) for i in (body.get("ids") or []) if i]
+    ids = [str(i) for i in (body.ids or []) if i]
     if not ids:
         raise HTTPException(422, "ids[] required")
-    reviewed = bool(body.get("reviewed", True))
+    reviewed = bool(body.reviewed)
     patch = {"reviewed": reviewed,
              "reviewed_by": ((ctx.get("email") or "support") if reviewed else None),
              "reviewed_at": (_now() if reviewed else None)}
@@ -1363,8 +1398,14 @@ def support_fix_request_detail(fid: str, authorization: str = Header(default="")
             "statuses": list(t.statuses), "can_approve": bool(ctx.get("super_admin"))}
 
 
+class SupportFixRequestStatusIn(LaxModel):
+    status: str = ""
+    resolution: str = ""
+    mark_reviewed: Any = None
+
+
 @router.post("/support/fix-requests/{fid}/status")
-def support_fix_request_status(fid: str, body: dict, authorization: str = Header(default=""),
+def support_fix_request_status(fid: str, body: SupportFixRequestStatusIn, authorization: str = Header(default=""),
                                      x_active_org: str = Header(default="")):
     """Move a fix request through the pipeline. approve/reject REQUIRE a super_admin (the approval gate);
     other transitions are open to any support agent. Resolving with mark_reviewed=true bulk-marks the
@@ -1374,7 +1415,7 @@ def support_fix_request_status(fid: str, body: dict, authorization: str = Header
     if not rows:
         raise HTTPException(404, "fix request not found")
     fr = rows[0]
-    target = str(body.get("status") or "").strip().lower()
+    target = str(body.status or "").strip().lower()
     ok, reason = _core_triage().status_change(fr.get("status"), target, bool(ctx.get("super_admin")))
     if not ok:
         raise HTTPException(403 if "super-admin" in reason else 400, reason)
@@ -1383,10 +1424,10 @@ def support_fix_request_status(fid: str, body: dict, authorization: str = Header
         patch["approved_by"] = ctx.get("email")
         patch["approved_at"] = _now()
     if target == "resolved":
-        res = (body.get("resolution") or "").strip()
+        res = (body.resolution or "").strip()
         patch["resolution"] = res or fr.get("resolution")
         patch["resolved_at"] = _now()
-        if body.get("mark_reviewed"):
+        if body.mark_reviewed:
             ids = [str(i) for i in (fr.get("sample_failure_ids") or []) if i]
             if ids:
                 try:
