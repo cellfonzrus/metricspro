@@ -6,8 +6,9 @@ off as they're settled. See `docs/SECURITY_CONTROLS_SPEC.md` for the full plan.
 
 Status legend: ⬜ open · ⏳ in discussion · ✅ decided (record the decision + date inline)
 
-**Migrations status:** 857–862 ✅ · **863 ⬜** (audit WORM triggers — run AFTER 862, it redefines the
-same prune function). Idempotent.
+**Migrations status:** 857–863 ✅ all applied. (Retention + WORM tamper-evidence now fully live:
+prune runs daily via pg_cron; access_log / login_attempt / export_event / crm_lookup_audit are
+append-only, deletable only by the retention job.)
 
 ### 16. ⬜ DECISION NEEDED — DSAR / erasure scope (item 16)
 Context (owner, 2026-08-17): no SSN data yet, ~1st month of full deployment, minimal audit history.
