@@ -3,7 +3,7 @@ import base64
 import os
 import requests
 import time
-from typing import Any
+from typing import Any, Optional
 from datetime import datetime, timezone, timedelta, date as _date
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Response
 from app.core.database import get_supabase
@@ -7217,13 +7217,18 @@ def put_google_review_store_config(store_code: str, body: dict, authorization: s
             "resolved_display_name": saved.get("resolved_display_name")}
 
 
+class ResolvePlaceIn(LaxModel):
+    store_code: str = ""
+    address: str = ""
+
+
 @router.post("/google-reviews/resolve-place")
-def post_resolve_place(body: dict, authorization: str = Header(default=""),
+def post_resolve_place(body: ResolvePlaceIn, authorization: str = Header(default=""),
                        x_active_org: str = Header(default=""), org_id: str = ORG_ID):
     """Google Places Text Search on the store's OWN address (from the existing store registry — no
     free-typed address here). Costs a real Places API call, so it's admin-gated."""
     org_id = _require_google_reviews_admin(authorization, x_active_org, org_id)
-    store_code = (body.get("store_code") or "").strip()
+    store_code = (body.store_code or "").strip()
     if not store_code:
         raise HTTPException(400, "store_code is required")
     client = sb()
@@ -7235,7 +7240,7 @@ def post_resolve_place(body: dict, authorization: str = Header(default=""),
               .eq("store_code", store_code).limit(1).execute().data) or []
     except Exception:
         st = []
-    address = (st[0].get("address") if st else None) or (body.get("address") or "").strip()
+    address = (st[0].get("address") if st else None) or (body.address or "").strip()
     if not address:
         raise HTTPException(400, "This store has no address on file — add one, or set the place_id manually.")
     try:
@@ -7555,10 +7560,19 @@ def list_action_plans(status: str = "", store_code: str = "", authorization: str
 
 
 @router.post("/action-plans/{plan_id}/submit")
-def submit_action_plan(plan_id: str, body: dict, authorization: str = Header(default="")):
+class ActionPlanSubmitIn(LaxModel):
+    plan_text: str = ""
+
+
+class ActionPlanReviewIn(LaxModel):
+    due_date: str = ""
+    dm_comments: str = ""
+
+
+def submit_action_plan(plan_id: str, body: ActionPlanSubmitIn, authorization: str = Header(default="")):
     """Self-service: an employee submits their OWN required action plan. identity from token."""
     org_id, employee_id = _caller_identity(authorization)
-    plan_text = (body.get("plan_text") or "").strip()
+    plan_text = (body.plan_text or "").strip()
     if not plan_text:
         raise HTTPException(400, "plan_text is required")
     try:
@@ -7580,13 +7594,13 @@ def submit_action_plan(plan_id: str, body: dict, authorization: str = Header(def
 
 
 @router.post("/action-plans/{plan_id}/push-back")
-def push_back_action_plan(plan_id: str, body: dict, authorization: str = Header(default=""),
+def push_back_action_plan(plan_id: str, body: ActionPlanReviewIn, authorization: str = Header(default=""),
                           org_id: str = ORG_ID):
     """DM/manager review: send a submitted plan back with comments + a due date."""
     u = _require_manager(authorization, org_id)
     org_id = u.get("org_id") or org_id
-    due_date = (body.get("due_date") or "").strip()[:10]
-    dm_comments = (body.get("dm_comments") or "").strip()
+    due_date = (body.due_date or "").strip()[:10]
+    dm_comments = (body.dm_comments or "").strip()
     if not due_date:
         raise HTTPException(400, "due_date is required")
     try:
@@ -7608,7 +7622,7 @@ def push_back_action_plan(plan_id: str, body: dict, authorization: str = Header(
 
 
 @router.post("/action-plans/{plan_id}/approve")
-def approve_action_plan(plan_id: str, body: dict = None, authorization: str = Header(default=""),
+def approve_action_plan(plan_id: str, body: Optional[ActionPlanReviewIn] = None, authorization: str = Header(default=""),
                         org_id: str = ORG_ID):
     """DM/manager accepts a submitted plan as-is (optionally with a due date/comments) — moves it
     straight to in_progress without a 'needs revision' round trip."""
@@ -7624,15 +7638,15 @@ def approve_action_plan(plan_id: str, body: dict = None, authorization: str = He
     row = rows[0]
     if row.get("status") != "submitted":
         raise HTTPException(400, f"This plan is '{row.get('status')}' — only a submitted plan can be approved.")
-    body = body or {}
-    due_date = (body.get("due_date") or "").strip()[:10] or None
+    body = body or ActionPlanReviewIn()
+    due_date = (body.due_date or "").strip()[:10] or None
     now_iso = datetime.now(timezone.utc).isoformat()
     upd = {"status": "in_progress", "reviewed_at": now_iso,
           "reviewed_by": u.get("email") or u.get("employee_id"), "updated_at": now_iso}
     if due_date:
         upd["due_date"] = due_date
-    if body.get("dm_comments"):
-        upd["dm_comments"] = body["dm_comments"]
+    if body.dm_comments:
+        upd["dm_comments"] = body.dm_comments
     (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
     return {"ok": True, **row, **upd}
 
@@ -7663,7 +7677,7 @@ def employee_mark_action_plan_done(plan_id: str, authorization: str = Header(def
 
 
 @router.post("/action-plans/{plan_id}/dm-confirm-complete")
-def dm_confirm_action_plan(plan_id: str, body: dict = None, authorization: str = Header(default=""),
+def dm_confirm_action_plan(plan_id: str, body: Optional[ActionPlanReviewIn] = None, authorization: str = Header(default=""),
                            org_id: str = ORG_ID):
     """DM/manager confirms the employee's completed work — the ONLY path to 'completed' (terminal)."""
     u = _require_manager(authorization, org_id)
@@ -7681,8 +7695,8 @@ def dm_confirm_action_plan(plan_id: str, body: dict = None, authorization: str =
     now_iso = datetime.now(timezone.utc).isoformat()
     upd = {"status": "completed", "completed_at": now_iso, "reviewed_at": now_iso,
           "reviewed_by": u.get("email") or u.get("employee_id"), "updated_at": now_iso}
-    if body and body.get("dm_comments"):
-        upd["dm_comments"] = body["dm_comments"]
+    if body and body.dm_comments:
+        upd["dm_comments"] = body.dm_comments
     (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
     return {"ok": True, **row, **upd}
 
