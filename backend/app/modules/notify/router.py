@@ -8,12 +8,14 @@ browser export. Scheduling is driven by Supabase pg_cron hitting POST /notify/ru
 import base64
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Header, Response
 from starlette.concurrency import run_in_threadpool
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.schemas import LaxModel
 from app.core.run_secret import verify_notify_secret
 from app.modules.core.run_for_tenant import run_for_tenant_async, TenantNotRunnable
 from app.modules.core import auth_security as _sec
@@ -22,6 +24,76 @@ from .channels import email_resend, whatsapp_meta
 
 router = APIRouter(prefix="/notify", tags=["Notify"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+# ── Request bodies (Item 15 Pydantic rollout — lax so legacy callers never break) ──────────────
+class CreateRecipientIn(LaxModel):
+    name: Any = None
+    email: Any = None
+    phone: Any = None
+    employee_id: Any = None
+
+
+class UpdateRecipientIn(LaxModel):
+    name: Any = None
+    email: Any = None
+    phone: Any = None
+    employee_id: Any = None
+
+
+class PutReportConfigIn(LaxModel):
+    recipient_ids: Any = None
+    ad_hoc_emails: Any = None
+    ad_hoc_phones: Any = None
+    channels: Any = None
+    formats: Any = None
+    is_active: Any = True
+
+
+class SendToDesignatedIn(LaxModel):
+    report_key: Any = None
+    filters: Any = None
+    message: Any = None
+
+
+class SendNowIn(LaxModel):
+    report_key: Any = None
+    filters: Any = None
+    channels: Any = None
+    formats: Any = None
+    emails: Any = None
+    phones: Any = None
+    recipient_ids: Any = None
+    message: Any = None
+
+
+class PutNotifySettingsIn(LaxModel):
+    download_link_expiry_days: Any = None
+
+
+class SendEmailPlainIn(LaxModel):
+    to: Any = None
+    subject: Any = None
+    html: Any = None
+    text: Any = None
+
+
+class SubscriptionIn(LaxModel):
+    report_key: Any = None
+    filters: Any = None
+    channels: Any = None
+    formats: Any = None
+    recipient_ids: Any = None
+    ad_hoc_emails: Any = None
+    ad_hoc_phones: Any = None
+    frequency: Any = None
+    day_of_week: Any = None
+    day_of_month: Any = None
+    hour: Any = None
+    timezone: Any = None
+    is_active: Any = None
+    name: Any = None
+    created_by: Any = None
 
 
 def sb():
@@ -114,16 +186,17 @@ def _norm_save_phone(org_id, raw):
 
 
 @router.post("/recipients")
-def create_recipient(body: dict, org_id: str = ORG_ID):
-    row = {"org_id": org_id, "name": body.get("name"), "email": body.get("email"),
-           "phone": _norm_save_phone(org_id, body.get("phone")), "employee_id": body.get("employee_id")}
+def create_recipient(body: CreateRecipientIn, org_id: str = ORG_ID):
+    row = {"org_id": org_id, "name": body.name, "email": body.email,
+           "phone": _norm_save_phone(org_id, body.phone), "employee_id": body.employee_id}
     r = sb().table("recipients").insert(row).execute()
     return r.data[0] if r.data else row
 
 
 @router.put("/recipients/{rid}")
-def update_recipient(rid: str, body: dict, org_id: str = ORG_ID):
-    allowed = {k: v for k, v in body.items() if k in ("name", "email", "phone", "employee_id")}
+def update_recipient(rid: str, body: UpdateRecipientIn, org_id: str = ORG_ID):
+    allowed = {k: getattr(body, k) for k in ("name", "email", "phone", "employee_id")
+               if k in body.model_fields_set}
     if "phone" in allowed:
         allowed["phone"] = _norm_save_phone(org_id, allowed.get("phone"))
     r = sb().table("recipients").update(allowed).eq("org_id", org_id).eq("id", rid).execute()
@@ -221,7 +294,7 @@ def get_report_config(org_id: str = ORG_ID):
 
 
 @router.put("/report-config/{report_key}")
-def put_report_config(report_key: str, body: dict, org_id: str = ORG_ID):
+def put_report_config(report_key: str, body: PutReportConfigIn, org_id: str = ORG_ID):
     """Set the designated recipients + channels for one report."""
     if report_key not in report_registry.REPORTS:
         raise HTTPException(400, f"unknown report_key '{report_key}'")
@@ -229,16 +302,16 @@ def put_report_config(report_key: str, body: dict, org_id: str = ORG_ID):
     # entry verbatim so nothing is silently lost (the send-time normalize gives it a second pass).
     _cc = _tenant_default_cc(org_id)
     _phones = []
-    for p in (body.get("ad_hoc_phones") or []):
+    for p in (body.ad_hoc_phones or []):
         v, _e = _sec.normalize_phone(p, _cc)
         _phones.append(v or p)
     row = {"org_id": org_id, "report_key": report_key,
-           "recipient_ids": body.get("recipient_ids") or [],
-           "ad_hoc_emails": body.get("ad_hoc_emails") or [],
+           "recipient_ids": body.recipient_ids or [],
+           "ad_hoc_emails": body.ad_hoc_emails or [],
            "ad_hoc_phones": _phones,
-           "channels": body.get("channels") or ["email"],
-           "formats": body.get("formats") or ["xlsx", "pdf"],
-           "is_active": body.get("is_active", True),
+           "channels": body.channels or ["email"],
+           "formats": body.formats or ["xlsx", "pdf"],
+           "is_active": body.is_active,
            "updated_at": datetime.now(timezone.utc).isoformat()}
     try:
         sb().table("report_config").upsert(row, on_conflict="org_id,report_key").execute()
@@ -248,12 +321,12 @@ def put_report_config(report_key: str, body: dict, org_id: str = ORG_ID):
 
 
 @router.post("/send-to-designated")
-async def send_to_designated(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+async def send_to_designated(body: SendToDesignatedIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Send a report to its CONFIGURED designated recipients (report_config). The single entry point
     every module uses for 'send this to the designated person' — envelope-mismatch alerts, daily
     targets, cash pickup, etc. Body: report_key, filters?. No recipients in the body — they come from
     the routing config."""
-    report_key = body.get("report_key")
+    report_key = body.report_key
     if report_key not in report_registry.REPORTS:
         raise HTTPException(400, f"unknown report_key '{report_key}'")
     cfg = (sb().table("report_config").select("*").eq("org_id", org_id)
@@ -272,8 +345,8 @@ async def send_to_designated(body: dict, org_id: str = ORG_ID, authorization: st
         # NOTE: other modules call this function IN-PROCESS (commcalc sales-recon) without the
         # header, which binds FastAPI's Header sentinel; build_payload normalizes a non-str to ""
         # (= no caller ⇒ the handler's own org-wide path), so that path cannot crash.
-        return await _dispatch(org_id, report_key, body.get("filters") or {}, channels,
-                               cfg.get("formats"), emails, phones, body.get("message"),
+        return await _dispatch(org_id, report_key, body.filters or {}, channels,
+                               cfg.get("formats"), emails, phones, body.message,
                                triggered_by="designated", authorization=authorization)
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
@@ -555,7 +628,7 @@ def get_settings(org_id: str = ORG_ID):
 
 
 @router.put("/settings")
-def put_settings(body: dict, org_id: str = ORG_ID,
+def put_settings(body: PutNotifySettingsIn, org_id: str = ORG_ID,
                        authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     # M1 (per-setting edit-permissions doctrine): gate on the 'notify_policy' settings area, resolving the
     # caller from the auth header (same shape as core's put_tenant_settings). GET stays open to the org.
@@ -569,7 +642,7 @@ def put_settings(body: dict, org_id: str = ORG_ID,
     if not _can_edit_setting(caller, "notify_policy"):
         raise HTTPException(403, "you don't have permission to edit notify settings")
     try:
-        days = max(1, min(int(body.get("download_link_expiry_days")), 90))
+        days = max(1, min(int(body.download_link_expiry_days), 90))
     except Exception:
         raise HTTPException(400, "download_link_expiry_days must be a number between 1 and 90")
     try:
@@ -590,41 +663,42 @@ def put_settings(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/send")
-async def send_now(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+async def send_now(body: SendNowIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """On-demand send. Body: report_key, filters, channels[], formats[],
     emails[], phones[], recipient_ids[], message."""
-    report_key = body.get("report_key")
+    report_key = body.report_key
     if report_key not in report_registry.REPORTS:
         raise HTTPException(400, f"unknown report_key '{report_key}'")
-    emails, phones = _resolve_targets(sb(), org_id, body)
+    emails, phones = _resolve_targets(sb(), org_id, {"emails": body.emails, "phones": body.phones,
+                                                     "recipient_ids": body.recipient_ids})
     if not emails and not phones:
         raise HTTPException(400, "no recipients (provide emails, phones, or recipient_ids)")
-    channels = body.get("channels") or (["email"] if emails else []) + (["whatsapp"] if phones else [])
+    channels = body.channels or (["email"] if emails else []) + (["whatsapp"] if phones else [])
     try:
         # The caller's header rides along so a caller-scoped report (flags / commissions / gp /
         # action_plan) exports exactly what that caller may see (AGENT_CONTRACT §3c) instead of
         # 500-ing on the FastAPI Header sentinel.
-        return await _dispatch(org_id, report_key, body.get("filters") or {}, channels,
-                               body.get("formats"), emails, phones, body.get("message"),
+        return await _dispatch(org_id, report_key, body.filters or {}, channels,
+                               body.formats, emails, phones, body.message,
                                triggered_by="manual", authorization=authorization)
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
 
 
 @router.post("/send-email")
-async def send_email_plain(body: dict, org_id: str = ORG_ID):
+async def send_email_plain(body: SendEmailPlainIn, org_id: str = ORG_ID):
     """Send a PLAIN email (not a registered report) via Resend — for handoff / action-item notes.
     Body: {to: str|[str], subject, html?|text?}. Returns per-recipient message id or error."""
-    to = body.get("to") or []
+    to = body.to or []
     if isinstance(to, str):
         to = [to]
     to = [t for t in to if t]
     if not to:
         raise HTTPException(400, "no recipient (provide `to`)")
-    subject = (body.get("subject") or "MetricsPro").strip()
-    html = body.get("html")
+    subject = (body.subject or "MetricsPro").strip()
+    html = body.html
     if not html:
-        text = body.get("text") or ""
+        text = body.text or ""
         import html as _h
         html = "<pre style='font-family:system-ui,-apple-system,sans-serif;white-space:pre-wrap'>" + _h.escape(text) + "</pre>"
     sent = []
@@ -679,7 +753,7 @@ def _compute_next_run(frequency, day_of_week, day_of_month, hour, tzname) -> str
 
 
 def _sub_with_next(body, org_id):
-    row = {k: body.get(k) for k in (
+    row = {k: getattr(body, k) for k in (
         "report_key", "filters", "channels", "formats", "recipient_ids",
         "ad_hoc_emails", "ad_hoc_phones", "frequency", "day_of_week", "day_of_month",
         "hour", "timezone", "is_active", "name", "created_by")}
@@ -699,15 +773,15 @@ def list_subscriptions(org_id: str = ORG_ID):
 
 
 @router.post("/subscriptions")
-def create_subscription(body: dict, org_id: str = ORG_ID):
-    if body.get("report_key") not in report_registry.REPORTS:
-        raise HTTPException(400, f"unknown report_key '{body.get('report_key')}'")
+def create_subscription(body: SubscriptionIn, org_id: str = ORG_ID):
+    if body.report_key not in report_registry.REPORTS:
+        raise HTTPException(400, f"unknown report_key '{body.report_key}'")
     r = sb().table("subscriptions").insert(_sub_with_next(body, org_id)).execute()
     return r.data[0] if r.data else {}
 
 
 @router.put("/subscriptions/{sid}")
-def update_subscription(sid: str, body: dict, org_id: str = ORG_ID):
+def update_subscription(sid: str, body: SubscriptionIn, org_id: str = ORG_ID):
     r = sb().table("subscriptions").update(_sub_with_next(body, org_id)) \
         .eq("org_id", org_id).eq("id", sid).execute()
     return r.data[0] if r.data else {}

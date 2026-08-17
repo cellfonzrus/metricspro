@@ -406,9 +406,15 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     approve (float-validated commission stays `Any`), pay, reject, void, flag →
     lax. Optional bodies typed `Model = None` + `body or Model()`; shared
     `ReferralNoteIn`/`ReferralReasonIn` reused. referral put_config deferred (same
-    loud unknown-key rejection). ~195 `dict` bodies remain across other modules
-    (core, closing, notify, billing, storeops helpers, storevisit, …; POS skipped —
-    incomplete/no data).
+    loud unknown-key rejection). **Part 44 (notify — swept):** create/update_recipient,
+    put_report_config, send_to_designated, put_settings, send_now, send_email_plain,
+    create/update_subscription → lax. commcalc's in-process
+    `N.send_to_designated({...})` call updated to build `N.SendToDesignatedIn(...)`
+    now that the handler is typed; `_sub_with_next` switched to `getattr` so the
+    typed subscription body threads through. notify `send_file` deferred (threads
+    body into `_resolve_targets` + nested base64 file payload). ~186 `dict` bodies
+    remain across other modules (core, closing, billing, storeops helpers,
+    storevisit, …; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

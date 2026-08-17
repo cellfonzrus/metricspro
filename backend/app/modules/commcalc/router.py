@@ -17414,9 +17414,9 @@ async def sales_recon_sync_flags(period: str = "", notify: bool = False,
         try:
             from app.modules.notify import router as N  # lazy: avoids notify↔commcalc import cycle
             result["notify"] = await N.send_to_designated(
-                {"report_key": "sales_recon", "filters": {"period": result["period"]},
-                 "message": (f"{result['missing_in_monthly']} sales-feed leak(s) totalling "
-                             f"${(result.get('leak_total') or 0):,.2f} detected for {result['period']}.")},
+                N.SendToDesignatedIn(report_key="sales_recon", filters={"period": result["period"]},
+                                     message=(f"{result['missing_in_monthly']} sales-feed leak(s) totalling "
+                                              f"${(result.get('leak_total') or 0):,.2f} detected for {result['period']}.")),
                 org_id=org_id)
         except Exception as e:
             result["notify_error"] = str(e)
