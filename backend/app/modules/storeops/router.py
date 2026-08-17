@@ -6100,14 +6100,27 @@ _PAYEX_TAX_FIELDS = ("enabled", "fica_ss_rate", "fica_ss_wage_base", "medicare_r
                       "futa_rate", "futa_wage_base", "suta_rate", "suta_wage_base")
 
 
+class PayrollTaxConfigIn(LaxModel):
+    enabled: Any = None
+    fica_ss_rate: Any = None
+    fica_ss_wage_base: Any = None
+    medicare_rate: Any = None
+    futa_rate: Any = None
+    futa_wage_base: Any = None
+    suta_rate: Any = None
+    suta_wage_base: Any = None
+    updated_by: str = ""
+
+
 @router.put("/payroll-tax-config")
-def put_payroll_tax_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_payroll_tax_config(body: PayrollTaxConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert the org's ONE payroll tax config row. Manager-gated (changes a cost the business books
     every payroll run)."""
     _require_manager(authorization, org_id)
-    fields = {k: body[k] for k in _PAYEX_TAX_FIELDS if k in body}
+    sent = body.model_fields_set
+    fields = {k: getattr(body, k) for k in _PAYEX_TAX_FIELDS if k in sent}
     row = {**fields, "updated_at": datetime.now(timezone.utc).isoformat(),
-           "updated_by": body.get("updated_by") or "admin"}
+           "updated_by": body.updated_by or "admin"}
     existing = (sb().table("payroll_tax_config").select("id").eq("org_id", org_id).limit(1).execute().data or [])
     if existing:
         sb().table("payroll_tax_config").update(row).eq("id", existing[0]["id"]).eq("org_id", org_id).execute()
@@ -6131,26 +6144,38 @@ def get_payroll_expense_items(org_id: str = ORG_ID):
 _PAYEX_ITEM_FIELDS = ("key", "name", "calc_method", "rate_or_amount", "wage_cap", "scope", "enabled", "sort_order")
 
 
+class PayrollExpenseItemIn(LaxModel):
+    key: str = ""
+    name: str = ""
+    calc_method: str = ""
+    rate_or_amount: Any = None
+    wage_cap: Any = None
+    scope: str = ""
+    enabled: Any = True
+    sort_order: Any = None
+    updated_by: str = ""
+
+
 @router.post("/payroll-expense-items")
-def create_payroll_expense_item(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def create_payroll_expense_item(body: PayrollExpenseItemIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Add a custom payroll expense item (Unemployment Insurance / Workers Comp are seeded by
     migration 404; this is for any ADDITIONAL operator-defined item). Manager-gated."""
     _require_manager(authorization, org_id)
-    key = (body.get("key") or "").strip().lower().replace(" ", "_")
-    name = (body.get("name") or "").strip()
+    key = (body.key or "").strip().lower().replace(" ", "_")
+    name = (body.name or "").strip()
     if not key or not name:
         raise HTTPException(400, "key and name are required")
-    calc_method = body.get("calc_method") or "pct_wages"
+    calc_method = body.calc_method or "pct_wages"
     if calc_method not in PAYEX_CALC_METHODS:
         raise HTTPException(400, f"calc_method must be one of {PAYEX_CALC_METHODS}")
-    scope = body.get("scope") or "store"
+    scope = body.scope or "store"
     if scope not in PAYEX_ITEM_SCOPES:
         raise HTTPException(400, f"scope must be one of {PAYEX_ITEM_SCOPES}")
     row = {"org_id": org_id, "key": key, "name": name, "calc_method": calc_method,
-           "rate_or_amount": float(body.get("rate_or_amount") or 0),
-           "wage_cap": (None if body.get("wage_cap") in (None, "") else float(body.get("wage_cap"))),
-           "scope": scope, "enabled": bool(body.get("enabled", True)),
-           "sort_order": int(body.get("sort_order") or 0), "updated_by": body.get("updated_by") or "admin"}
+           "rate_or_amount": float(body.rate_or_amount or 0),
+           "wage_cap": (None if body.wage_cap in (None, "") else float(body.wage_cap)),
+           "scope": scope, "enabled": bool(body.enabled),
+           "sort_order": int(body.sort_order or 0), "updated_by": body.updated_by or "admin"}
     try:
         r = sb().table("payroll_expense_item").insert(row).execute()
     except Exception as e:
@@ -6161,11 +6186,12 @@ def create_payroll_expense_item(body: dict, authorization: str = Header(default=
 
 
 @router.patch("/payroll-expense-items/{item_id}")
-def update_payroll_expense_item(item_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def update_payroll_expense_item(item_id: str, body: PayrollExpenseItemIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Edit an existing item (rate, calc_method, scope, enabled, …). Org-scoped so a foreign id is a
     no-op. Manager-gated."""
     _require_manager(authorization, org_id)
-    fields = {k: body[k] for k in _PAYEX_ITEM_FIELDS if k in body}
+    sent = body.model_fields_set
+    fields = {k: getattr(body, k) for k in _PAYEX_ITEM_FIELDS if k in sent}
     if "calc_method" in fields and fields["calc_method"] not in PAYEX_CALC_METHODS:
         raise HTTPException(400, f"calc_method must be one of {PAYEX_CALC_METHODS}")
     if "scope" in fields and fields["scope"] not in PAYEX_ITEM_SCOPES:
@@ -6173,7 +6199,7 @@ def update_payroll_expense_item(item_id: str, body: dict, authorization: str = H
     if "wage_cap" in fields and fields["wage_cap"] in ("", None):
         fields["wage_cap"] = None
     fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-    fields["updated_by"] = body.get("updated_by") or "admin"
+    fields["updated_by"] = body.updated_by or "admin"
     sb().table("payroll_expense_item").update(fields).eq("id", item_id).eq("org_id", org_id).execute()
     return {"ok": True}
 
