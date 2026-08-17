@@ -2336,30 +2336,38 @@ def _compliance_block_message(reasons):
 
 
 # ── Workflow transitions + provisioning ──────────────────────────────────────────────────────────
+class OnboardingAdvanceIn(LaxModel):
+    to_status: str = ""
+    override_compliance: Any = None
+    compliance_override_reason: str = ""
+    actor: Any = None
+    reason: Any = None
+
+
 @router.post("/onboarding/employee/{employee_id}/advance")
-def onboarding_advance(employee_id: str, body: dict, org_id: str = ORG_ID):
+def onboarding_advance(employee_id: str, body: OnboardingAdvanceIn, org_id: str = ORG_ID):
     """HR moves the workflow to a specific status. An out-of-order move is recorded as an OVERRIDE
     (with reason) but always allowed — the flow stays in the system, HR stays in control. EXCEPTION
     (item 4): moving to provisioned/active is hard-gated on work-authorization docs + a known work
     state; see _blocking_gate."""
-    to = (body.get("to_status") or "").strip()
+    to = (body.to_status or "").strip()
     if to not in WORKFLOW_STATUSES:
         raise HTTPException(400, f"to_status must be one of {WORKFLOW_STATUSES}")
     gate_reasons = {}
     if to in ("provisioned", "active"):
         blocked, gate_reasons = _blocking_gate(org_id, employee_id)
-        if blocked and not (body.get("override_compliance") and (body.get("compliance_override_reason") or "").strip()):
+        if blocked and not (body.override_compliance and (body.compliance_override_reason or "").strip()):
             raise HTTPException(400, {"code": "compliance_blocked",
                                       "message": _compliance_block_message(gate_reasons), "reasons": gate_reasons})
     so = _so()
     prof = _get_profile(so, org_id, employee_id) or {}
     cur = prof.get("workflow_status") or "invited"
     is_override = STATUS_ORDER.get(to, 0) != STATUS_ORDER.get(cur, 0) + 1
-    st = _set_status(so, org_id, employee_id, to, actor=(body.get("actor") or "HR"),
-                     reason=(body.get("reason") or None), is_override=is_override)
+    st = _set_status(so, org_id, employee_id, to, actor=(body.actor or "HR"),
+                     reason=(body.reason or None), is_override=is_override)
     if gate_reasons:   # the gate was blocked above and explicitly overridden to get here
-        _log_event(org_id, employee_id, "compliance_override", actor=(body.get("actor") or "HR"),
-                   reason=(body.get("compliance_override_reason") or None), is_override=True, detail=gate_reasons)
+        _log_event(org_id, employee_id, "compliance_override", actor=(body.actor or "HR"),
+                   reason=(body.compliance_override_reason or None), is_override=True, detail=gate_reasons)
     return {"ok": True, "workflow_status": st, "was_override": is_override}
 
 
@@ -3110,19 +3118,25 @@ def _is_complete_row(st):
     return bool(st) and st.get("total", 0) > 0 and st.get("pending", 0) == 0 and st.get("returned", 0) == 0
 
 
+class OnboardingApproveIn(LaxModel):
+    force: Any = None
+    actor: Any = None
+    reason: Any = None
+
+
 @router.post("/onboarding/employee/{employee_id}/approve")
-def onboarding_approve(employee_id: str, body: dict, org_id: str = ORG_ID):
+def onboarding_approve(employee_id: str, body: OnboardingApproveIn, org_id: str = ORG_ID):
     """Mark a completed hire's paperwork REVIEWED & APPROVED → advance the workflow to docs_verified.
     Guards that the employee-owned checklist is actually all back (override with body.force=true)."""
     so = _so()
     st = {r["employee_id"]: r for r in onboarding_doc_status(org_id=org_id).get("employees", [])}.get(employee_id)
-    if not body.get("force") and not _is_complete_row(st):
+    if not body.force and not _is_complete_row(st):
         raise HTTPException(400, "Not all documents are back yet — review the outstanding items, or pass force=true.")
     prof = _get_profile(so, org_id, employee_id) or {}
     cur = prof.get("workflow_status") or "invited"
     is_override = STATUS_ORDER.get("docs_verified", 0) != STATUS_ORDER.get(cur, 0) + 1
-    new = _set_status(so, org_id, employee_id, "docs_verified", actor=(body.get("actor") or "HR"),
-                      reason=(body.get("reason") or "Onboarding paperwork reviewed & approved"), is_override=is_override)
+    new = _set_status(so, org_id, employee_id, "docs_verified", actor=(body.actor or "HR"),
+                      reason=(body.reason or "Onboarding paperwork reviewed & approved"), is_override=is_override)
     return {"ok": True, "workflow_status": new}
 
 
