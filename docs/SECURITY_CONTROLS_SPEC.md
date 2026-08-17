@@ -266,8 +266,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     own 400 validation stands, not a Pydantic 422). **Part 6:** account company
     mgmt (companies create/patch, companies/assign → lax). **Part 7a:** storeops
     org-structure CRUD (levels/units create·update, unit managers, store/employee
-    unit-assign → lax; null-to-unassign + PUT presence preserved). ~401 `dict`
-    bodies remain (endpoints that thread the raw body into shared helpers get a
+    unit-assign → lax; null-to-unassign + PUT presence preserved). **Part 7b:**
+    storeops approvals — shift-extension / timeclock-permission / budget-override
+    decisions, payroll-chargeback decision, request-extra-time → lax (note kept
+    null-when-empty). ~396 `dict` bodies remain (body-threading endpoints get a
     dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

@@ -1804,8 +1804,13 @@ def payroll_chargebacks(month: str = "", authorization: str = Header(default="")
     return {"items": rows}
 
 
+class ChargebackDecisionIn(LaxModel):
+    decision: str = ""
+    period: str = ""
+
+
 @router.post("/payroll-chargebacks/{cb_id}/decision")
-def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_payroll_chargeback(cb_id: str, body: ChargebackDecisionIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """MANAGEMENT-GATED (same _require_manager tier as the shift-extension/DM-approval endpoints
     above): POST a chargeback (status='posted' — becomes a visible deduction on that employee's
     payroll row) or WAIVE it (status='waived' — never deducts). Body: {decision: 'post'|'waive',
@@ -1820,7 +1825,7 @@ def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Heade
     a posted row, including a settlement-created overflow child, at any time."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     if decision not in ("post", "waive"):
         raise HTTPException(400, "decision must be 'post' or 'waive'")
     try:
@@ -1842,7 +1847,7 @@ def decide_payroll_chargeback(cb_id: str, body: dict, authorization: str = Heade
     upd = {"status": "posted" if decision == "post" else "waived",
            "decided_by": mgr.get("email"), "decided_at": datetime.now(timezone.utc).isoformat()}
     if decision == "post":
-        upd["posted_ref"] = (body.get("period") or "").strip() or None
+        upd["posted_ref"] = (body.period or "").strip() or None
     (get_supabase().schema("commcalc").table("ops_chargeback").update(upd)
      .eq("id", cb_id).eq("org_id", org_id).execute())
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
@@ -4319,14 +4324,19 @@ def list_shift_extensions(status: str = "", authorization: str = Header(default=
     return {"extensions": rows}
 
 
+class DecisionNoteIn(LaxModel):
+    decision: str = ""
+    note: str = ""
+
+
 @router.post("/shift-extensions/{ext_id}/decision")
-def decide_shift_extension(ext_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The DM (or an admin) approves/denies a request IN-APP — the tick is the approval, recorded with
     who + when. Body: {decision: 'approve'|'deny', note?}. Once approved, the forced-clockout job
     honors the extended end for that employee/day."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     if decision not in ("approve", "deny"):
         raise HTTPException(400, "decision must be 'approve' or 'deny'")
     rows = (sb().table("shift_extension").select("*").eq("id", ext_id).eq("org_id", org_id)
@@ -4338,7 +4348,7 @@ def decide_shift_extension(ext_id: str, body: dict, authorization: str = Header(
     upd = {"status": "approved" if decision == "approve" else "denied",
            "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
            "decided_at": datetime.now(timezone.utc).isoformat(),
-           "decision_note": body.get("note")}
+           "decision_note": body.note or None}
     sb().table("shift_extension").update(upd).eq("id", ext_id).eq("org_id", org_id).execute()
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
@@ -4411,7 +4421,7 @@ def list_timeclock_permissions(status: str = "", authorization: str = Header(def
 
 
 @router.post("/timeclock/permissions/{perm_id}/decision")
-def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
     approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
     held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
@@ -4421,7 +4431,7 @@ def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = H
     org_id = mgr.get("org_id") or org_id
     if not _timeclock_432_present():
         raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     if decision not in ("approve", "deny"):
         raise HTTPException(400, "decision must be 'approve' or 'deny'")
     rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
@@ -4435,7 +4445,7 @@ def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = H
     new_status = "approved" if decision == "approve" else "denied"
     sb().table("timeclock_permission").update(
         {"status": new_status, "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
-         "decided_at": now.isoformat(), "decision_note": body.get("note")}
+         "decided_at": now.isoformat(), "decision_note": body.note or None}
     ).eq("id", perm_id).eq("org_id", org_id).execute()
 
     tlid = perm.get("timelog_id")
@@ -4483,8 +4493,14 @@ def decide_timeclock_permission(perm_id: str, body: dict, authorization: str = H
     return {"ok": True, "status": new_status, "decided_by": mgr.get("email")}
 
 
+class ExtraTimeRequestIn(LaxModel):
+    entry_id: str = ""
+    requested_clock_out: str = ""
+    reason: str = ""
+
+
 @router.post("/timeclock/request-extra")
-def request_extra_time(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def request_extra_time(body: ExtraTimeRequestIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """A rep asks for the time they worked PAST their auto-clock-out to be counted (migration 432) —
     the sweep case where they were auto-clocked-out at scheduled_end + grace while still working, so no
     manual clock-out raised the request. Body: {entry_id?, requested_clock_out?(ISO), reason?}. Creates
@@ -4494,7 +4510,7 @@ def request_extra_time(body: dict, authorization: str = Header(default=""), org_
         raise HTTPException(404, "No auto-clocked-out punch found to request extra time for.")
     now = datetime.now(timezone.utc)
     today = now.astimezone(_biz_tz_for(org_id)).date().isoformat()
-    entry_id = body.get("entry_id")
+    entry_id = body.entry_id
     q = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
          .eq("auto_clocked_out", True))
     if entry_id:
@@ -4515,14 +4531,14 @@ def request_extra_time(body: dict, authorization: str = Header(default=""), org_
         anchor_dt = datetime.fromisoformat(str(anchor).replace("Z", "+00:00")) if anchor else None
     except Exception:
         anchor_dt = None
-    rc = body.get("requested_clock_out")
+    rc = body.requested_clock_out
     try:
         rc_dt = datetime.fromisoformat(str(rc).replace("Z", "+00:00")) if rc else now
     except Exception:
         rc_dt = now
     perm = _create_timeclock_permission(org_id, kind="late_clockout", punch=punch,
                                         anchor_at=anchor_dt, requested_clock_out=rc_dt,
-                                        reason=(body.get("reason") or "Worked past auto clock-out"),
+                                        reason=(body.reason or "Worked past auto clock-out"),
                                         requested_by=employee_id)
     return {"ok": True, "status": "pending", "permission": perm}
 
@@ -4719,12 +4735,12 @@ def list_budget_overrides(status: str = "", authorization: str = Header(default=
 
 
 @router.post("/budget-overrides/{ov_id}/decision")
-def decide_budget_override(ov_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def decide_budget_override(ov_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The DM (or admin) approves/denies in-app — the tick is the approval, recorded with who+when.
     Approving unlocks scheduling past budget for that store+week. Body: {decision, note?}."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     if decision not in ("approve", "deny"):
         raise HTTPException(400, "decision must be 'approve' or 'deny'")
     rows = (sb().table("budget_override").select("status").eq("id", ov_id).eq("org_id", org_id)
@@ -4735,7 +4751,7 @@ def decide_budget_override(ov_id: str, body: dict, authorization: str = Header(d
         raise HTTPException(409, f"already {rows[0].get('status')}")
     upd = {"status": "approved" if decision == "approve" else "denied",
            "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
-           "decided_at": datetime.now(timezone.utc).isoformat(), "decision_note": body.get("note")}
+           "decided_at": datetime.now(timezone.utc).isoformat(), "decision_note": body.note or None}
     sb().table("budget_override").update(upd).eq("id", ov_id).eq("org_id", org_id).execute()
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
