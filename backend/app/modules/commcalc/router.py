@@ -14803,20 +14803,28 @@ def get_ingest_guard_config(org_id: str = ORG_ID):
 
 
 @router.put("/ingest-guard/config")
-def put_ingest_guard_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+class PutIngestGuardConfigIn(LaxModel):
+    mode: str = ""
+    block_min_rows: Any = None
+    allow_creates_alias: Any = True
+    notify_on_flag: Any = True
+    updated_by: Any = None
+
+
+def put_ingest_guard_config(body: PutIngestGuardConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Set the enforcement mode / thresholds. Permission-gated; org-scoped (org_id is the query
     param the tenant middleware rewrites from the caller's JWT — never a body field)."""
     require_org(org_id)
     _require_guard_edit(authorization, org_id)
-    mode = str(body.get("mode") or "warn").strip().lower()
+    mode = str(body.mode or "warn").strip().lower()
     if mode not in _isg.MODES:
         raise HTTPException(400, f"mode must be one of {', '.join(_isg.MODES)}")
     row = {
         "org_id": org_id, "mode": mode,
-        "block_min_rows": max(0, int(safe_float(body.get("block_min_rows")) or 0)),
-        "allow_creates_alias": bool(body.get("allow_creates_alias", True)),
-        "notify_on_flag": bool(body.get("notify_on_flag", True)),
-        "updated_by": (body.get("updated_by") or "web"),
+        "block_min_rows": max(0, int(safe_float(body.block_min_rows) or 0)),
+        "allow_creates_alias": bool(body.allow_creates_alias),
+        "notify_on_flag": bool(body.notify_on_flag),
+        "updated_by": (body.updated_by or "web"),
     }
     try:
         sb().schema("commcalc").table("ingest_store_guard").upsert(row, on_conflict="org_id").execute()
@@ -14847,8 +14855,15 @@ def get_ingest_guard_queue(status: str = "pending", limit: int = 200, org_id: st
     return {"ok": True, "count": len(rows), "items": rows, "status": status}
 
 
+class DecideIngestGuardItemIn(LaxModel):
+    decision: str = ""
+    store_code: str = ""
+    decided_by: Any = None
+    note: Any = None
+
+
 @router.post("/ingest-guard/queue/{item_id}/decide")
-def decide_ingest_guard_item(item_id: str, body: dict = None,
+def decide_ingest_guard_item(item_id: str, body: Optional[DecideIngestGuardItemIn] = None,
                              authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Rule on one flagged store.
 
@@ -14864,8 +14879,8 @@ def decide_ingest_guard_item(item_id: str, body: dict = None,
     to 'released', so a second call is a no-op)."""
     require_org(org_id)
     _require_guard_edit(authorization, org_id)
-    body = body or {}
-    decision = str(body.get("decision") or "").strip().lower()
+    body = body or DecideIngestGuardItemIn()
+    decision = str(body.decision or "").strip().lower()
     if decision not in ("allow", "reject"):
         raise HTTPException(400, "decision must be 'allow' or 'reject'")
     client = sb()
@@ -14883,7 +14898,7 @@ def decide_ingest_guard_item(item_id: str, body: dict = None,
     released, alias = 0, None
     if decision == "allow":
         cfg = _isg.get_config(client, org_id)
-        code = str(body.get("store_code") or "").strip()
+        code = str(body.store_code or "").strip()
         if code and cfg.get("allow_creates_alias"):
             # pick-don't-type: the code MUST be one of the org's real stores.
             M = _store_maps(client, org_id)
@@ -14910,8 +14925,8 @@ def decide_ingest_guard_item(item_id: str, body: dict = None,
         client.schema("commcalc").table("ingest_store_quarantine").update({
             "status": ("released" if released else ("allowed" if decision == "allow" else "rejected")),
             "decided_at": _datetime.now(timezone.utc).isoformat(),
-            "decided_by": (body.get("decided_by") or "web"),
-            "decision_note": (body.get("note") or None),
+            "decided_by": (body.decided_by or "web"),
+            "decision_note": (body.note or None),
         }).eq("org_id", org_id).eq("id", item_id).execute()
     except Exception as e:
         print(f"WARN guard decision not recorded: {e}")
@@ -15323,14 +15338,19 @@ async def get_gp_category_map(org_id: str = ORG_ID):
             "defaults": {"device": sorted(DEVICE_DEPTS), "accessory": [ONDIGO_DEPT]}}
 
 
+class SetGpCategoryMapIn(LaxModel):
+    department: Any = None
+    category: str = ""
+
+
 @router.post("/gp-category-map")
-async def set_gp_category_map(body: dict, org_id: str = ORG_ID):
+async def set_gp_category_map(body: SetGpCategoryMapIn, org_id: str = ORG_ID):
     """Upsert ONE department→category override. body: {department, category}. An empty category REMOVES
     the override (reverts to the built-in default). 400 (not 500) if migration 069 isn't applied."""
-    if 'department' not in body:
+    if 'department' not in body.model_fields_set:
         raise HTTPException(400, "department required")
-    dept = str(body.get('department') or '').strip()
-    cat = str(body.get('category') or '').strip().lower()
+    dept = str(body.department or '').strip()
+    cat = str(body.category or '').strip().lower()
     try:
         if not cat:
             sb().schema('commcalc').table('gp_category_map').delete() \
@@ -15768,15 +15788,22 @@ async def commission_leg_labels(period: str = "", months: int = 6, org_id: str =
             'unsplit_total': round(sum(x['amount'] for x in out if x['bucket'] == 'unsplit'), 2)}
 
 
+class SetCommissionLegLabelIn(LaxModel):
+    label: str = ""
+    bucket: str = ""
+    leg_month: Any = None
+    note: Any = None
+
+
 @router.post("/commission-leg-labels")
-async def set_commission_leg_label(body: dict, org_id: str = ORG_ID):
+async def set_commission_leg_label(body: SetCommissionLegLabelIn, org_id: str = ORG_ID):
     """Map ONE exact carrier label to a leg bucket. bucket '' REMOVES the override (back to the regex).
     Reporting only — this moves a dollar between two REPORT columns, never between two people."""
     require_org(org_id)
-    label = str(body.get('label') or '').strip()
+    label = str(body.label or '').strip()
     if not label:
         raise HTTPException(400, 'label required')
-    bucket = str(body.get('bucket') or '').strip().lower()
+    bucket = str(body.bucket or '').strip().lower()
     sc = sb().schema('commcalc')
     try:
         if not bucket:
@@ -15784,10 +15811,10 @@ async def set_commission_leg_label(body: dict, org_id: str = ORG_ID):
             return {'ok': True, 'removed': label}
         if bucket not in _commission_legs.BUCKETS:
             raise HTTPException(400, f"bucket must be one of {', '.join(_commission_legs.BUCKETS)}")
-        lm = body.get('leg_month')
+        lm = body.leg_month
         row = {'org_id': org_id, 'label': label, 'bucket': bucket,
                'leg_month': int(lm) if str(lm or '').strip().isdigit() else None,
-               'note': str(body.get('note') or '').strip() or None,
+               'note': str(body.note or '').strip() or None,
                'updated_at': _datetime.now(_timezone.utc).isoformat()}
         sc.table('commission_leg_label_map').upsert(row, on_conflict='org_id,label').execute()
     except HTTPException:
@@ -15818,25 +15845,38 @@ async def get_commission_leg_config(org_id: str = ORG_ID):
             'resolved': legcls.describe(), 'buckets': list(_commission_legs.BUCKETS)}
 
 
+class SetCommissionLegConfigIn(LaxModel):
+    carrier_mode: Any = None
+    label_month_regex: Any = None
+    unlabeled_bucket: Any = None
+    ma_month_field_prefix: Any = None
+    notes: Any = None
+    m1_month: Any = None
+    max_leg_month: Any = None
+    ma_max_month: Any = None
+    mi_split_by_activation: Any = None
+    ma_m1_fields: Any = None
+
+
 @router.post("/commission-leg-config")
-async def set_commission_leg_config(body: dict, org_id: str = ORG_ID):
+async def set_commission_leg_config(body: SetCommissionLegConfigIn, org_id: str = ORG_ID):
     """Upsert THIS org's mode-default leg-attribution row (carrier_id = nil). Reporting config only."""
     require_org(org_id)
     sc = sb().schema('commcalc')
-    mode = str(body.get('carrier_mode') or 'boost').strip().lower() or 'boost'
+    mode = str(body.carrier_mode or 'boost').strip().lower() or 'boost'
     row = {'org_id': org_id, 'carrier_id': '00000000-0000-0000-0000-000000000000',
            'carrier_mode': mode, 'is_active': True,
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     for k in ('label_month_regex', 'unlabeled_bucket', 'ma_month_field_prefix', 'notes'):
-        if k in body and str(body.get(k) or '').strip():
-            row[k] = str(body[k]).strip()
+        if k in body.model_fields_set and str(getattr(body, k) or '').strip():
+            row[k] = str(getattr(body, k)).strip()
     for k in ('m1_month', 'max_leg_month', 'ma_max_month'):
-        if k in body and str(body.get(k) or '').strip().isdigit():
-            row[k] = int(body[k])
-    if 'mi_split_by_activation' in body:
-        row['mi_split_by_activation'] = bool(body['mi_split_by_activation'])
-    if isinstance(body.get('ma_m1_fields'), list):
-        row['ma_m1_fields'] = [str(x).strip() for x in body['ma_m1_fields'] if str(x).strip()]
+        if k in body.model_fields_set and str(getattr(body, k) or '').strip().isdigit():
+            row[k] = int(getattr(body, k))
+    if 'mi_split_by_activation' in body.model_fields_set:
+        row['mi_split_by_activation'] = bool(body.mi_split_by_activation)
+    if isinstance(body.ma_m1_fields, list):
+        row['ma_m1_fields'] = [str(x).strip() for x in body.ma_m1_fields if str(x).strip()]
     if row.get('unlabeled_bucket') and row['unlabeled_bucket'] not in _commission_legs.BUCKETS:
         raise HTTPException(400, f"unlabeled_bucket must be one of {', '.join(_commission_legs.BUCKETS)}")
     if row.get('label_month_regex'):

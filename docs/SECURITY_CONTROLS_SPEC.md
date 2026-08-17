@@ -331,7 +331,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     **Part 21:** commcalc coverage/assign/store (coverage-excluded-sellers put,
     bulk-assign commission plan, store update, store-alias add) → lax; the
     `body.items()` allow-list filter becomes a model_fields_set loop.
-    ~305 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
+    **Part 22:** commcalc ingest-guard (config put, queue-item decide) + reporting
+    config (gp-category-map, commission-leg label + config) → lax; presence loops
+    (`'k' in body`) via model_fields_set, int/regex-validated fields typed Any.
+    ~300 `dict` bodies remain (body-threading endpoints get a dedicated pass; POS
     skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
