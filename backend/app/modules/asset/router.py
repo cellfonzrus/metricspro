@@ -1199,8 +1199,13 @@ async def inventory_recon(org_id: str = ORG_ID, store: str = "", market: str = "
     }
 
 
+class UploadB2bInventoryIn(LaxModel):
+    as_of_date: Any = None
+    rows: Any = None
+
+
 @router.post("/b2b-inventory/upload")
-async def upload_b2b_inventory(body: dict, org_id: str = ORG_ID):
+async def upload_b2b_inventory(body: UploadB2bInventoryIn, org_id: str = ORG_ID):
     """Manual b2bsoft inventory load (until the portal sweep is wired). Body:
     {as_of_date, rows:[{store, category, qty, value?}]}. Category is normalized to a bucket;
     unmappable categories are skipped + reported (for the qty/category recon below). Replaces
@@ -1229,10 +1234,10 @@ async def upload_b2b_inventory(body: dict, org_id: str = ORG_ID):
     works uniformly for every tenant, not just Boost/VIP ones. Degrades silently if
     commcalc.inventory_value doesn't exist yet (pre-migration-026 tenant) — the qty/category
     recon upload below is unaffected either way."""
-    as_of = (body.get("as_of_date") or "").strip()
+    as_of = (body.as_of_date or "").strip()
     if not as_of:
         raise HTTPException(400, "as_of_date required")
-    rows = body.get("rows") or []
+    rows = body.rows or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
     client = sb()
@@ -1710,18 +1715,25 @@ def _attach_investigation(client, org_id, rows):
         r["investigation_remark"] = (x or {}).get("remark") or ""
 
 
+class SetInvestigationIn(LaxModel):
+    esn_imei: Any = None
+    physically_missing: Any = None
+    remark: Any = None
+    investigated_by: Any = None
+
+
 @router.post("/investigation")
-async def set_investigation(body: dict, org_id: str = ORG_ID):
+async def set_investigation(body: SetInvestigationIn, org_id: str = ORG_ID):
     """Record an aging investigation for a device (physically-missing flag + remark). Upsert by ESN/IMEI
     so it survives asset_ledger re-uploads."""
     client = sb()
-    imei = (body.get("esn_imei") or "").strip()
+    imei = (body.esn_imei or "").strip()
     if not imei:
         raise HTTPException(400, "esn_imei required")
     row = {"org_id": org_id, "esn_imei": imei,
-           "physically_missing": bool(body.get("physically_missing")),
-           "remark": (body.get("remark") or "").strip() or None,
-           "investigated_by": (body.get("investigated_by") or "").strip() or None,
+           "physically_missing": bool(body.physically_missing),
+           "remark": (body.remark or "").strip() or None,
+           "investigated_by": (body.investigated_by or "").strip() or None,
            "updated_at": datetime.now(timezone.utc).isoformat()}
     client.schema("commcalc").table("asset_investigation").upsert(row, on_conflict="org_id,esn_imei").execute()
     return {"ok": True, "esn_imei": imei, "physically_missing": row["physically_missing"]}

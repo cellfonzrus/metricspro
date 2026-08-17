@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt45 — storevisit + billing) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt46 — payables/recovery/remediation/asset) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–45 = 261 endpoints; ~172 remain). commcalc + hr + crm-leads + referral + notify + storevisit + billing fully swept. |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–46 = 277 endpoints; ~156 remain). commcalc + hr + crm-leads + referral + notify + storevisit + billing + recovery + remediation + asset(PO+router) fully swept; payables all-but-1. |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -185,9 +185,15 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   literally named `items` is fine — v2 BaseModel has no `.items()` method). billing — upsert_plan,
   generate_invoice, update_invoice (presence via model_fields_set), mark_paid (optional),
   upsert_platform_connector (write-only `credential` persisted only when non-masked — stays `Any`),
-  refresh_platform_costs (optional). Next: run
+  refresh_platform_costs (optional).
+  **Part 46 (payables/recovery/remediation/asset — swept):** payables put_settings + upsert_phone_map
+  (upsert_source_map DEFERRED — `dict(body)` full spread); recovery put_config (11-field allow-list),
+  update_claim, send_claim; remediation upsert_playbook, propose (nested `params`/`assignee` stay
+  `Any`), decide; asset PO create/update_vendor, put_po_settings, create_po (nested `lines` Any),
+  update_po (status-transition validated), receive_po_line (nested `units` Any); asset router
+  upload_b2b_inventory, set_investigation. Next: run
   `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data;
-  core/closing/payables/recovery/remediation/asset/storeops-helpers etc. untouched). **Rules:** skip endpoints that thread the raw
+  core/closing/storeops-helpers/misc untouched). **Rules:** skip endpoints that thread the raw
   `body` dict into shared helpers (unless the callee is also being typed — then share/inherit a model),
   use `body` itself as a freeform map (`else body`), spread `{**body}`, or loudly reject unknown keys;
   preserve None-vs-empty + downstream `.get()`; type handler-validated fields (`float(amount)` → 400)

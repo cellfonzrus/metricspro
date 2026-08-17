@@ -30,14 +30,72 @@ one function that calls it — safe regardless of load order, since by the time 
 runs, every module has finished loading.
 """
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Header
 
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 
 router = APIRouter()
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+class CreateVendorIn(LaxModel):
+    name: Any = None
+    contact_name: Any = None
+    email: Any = None
+    phone: Any = None
+    terms: Any = None
+    notes: Any = None
+
+
+class UpdateVendorIn(LaxModel):
+    name: Any = None
+    contact_name: Any = None
+    email: Any = None
+    phone: Any = None
+    terms: Any = None
+    notes: Any = None
+    is_active: Any = None
+
+
+class PutPoSettingsIn(LaxModel):
+    aging_flag_days: Any = None
+
+
+class CreatePoIn(LaxModel):
+    lines: Any = None
+    vendor_id: Any = None
+    ship_to_store: Any = None
+    market: Any = None
+    status: Any = None
+    order_date: Any = None
+    buyer: Any = None
+    expected_delivery_date: Any = None
+    notes: Any = None
+    source: Any = None
+
+
+class UpdatePoIn(LaxModel):
+    status: Any = None
+    vendor_id: Any = None
+    order_date: Any = None
+    ship_to_store: Any = None
+    market: Any = None
+    buyer: Any = None
+    expected_delivery_date: Any = None
+    notes: Any = None
+
+
+class ReceivePoLineIn(LaxModel):
+    po_line_id: Any = None
+    qty_received: Any = None
+    received_date: Any = None
+    units: Any = None
+    received_by: Any = None
+    notes: Any = None
 _MIGRATION_MSG = ("Purchase Orders migration pending — ask the operator to run "
                    "database/migrations/301_asset_purchase_orders.sql in the Supabase SQL Editor.")
 _PO_STATUSES = ("draft", "submitted", "partially_received", "received", "closed", "cancelled")
@@ -134,9 +192,9 @@ def list_vendors(active_only: bool = True, org_id: str = ORG_ID):
 
 
 @router.post("/po/vendors")
-def create_vendor(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def create_vendor(body: CreateVendorIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     _require_po_admin(authorization, org_id)
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "Vendor name is required.")
     client = sb()
@@ -147,9 +205,9 @@ def create_vendor(body: dict, authorization: str = Header(default=""), org_id: s
             raise HTTPException(400, f"A vendor named '{name}' already exists.")
         row = {
             "org_id": org_id, "name": name,
-            "contact_name": body.get("contact_name") or None, "email": body.get("email") or None,
-            "phone": body.get("phone") or None, "terms": body.get("terms") or None,
-            "notes": body.get("notes") or None, "is_active": True,
+            "contact_name": body.contact_name or None, "email": body.email or None,
+            "phone": body.phone or None, "terms": body.terms or None,
+            "notes": body.notes or None, "is_active": True,
         }
         res = client.schema("commcalc").table("po_vendor").insert(row).execute()
         return {"ok": True, "vendor": (res.data or [row])[0]}
@@ -162,12 +220,12 @@ def create_vendor(body: dict, authorization: str = Header(default=""), org_id: s
 
 
 @router.patch("/po/vendors/{vendor_id}")
-def update_vendor(vendor_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def update_vendor(vendor_id: str, body: UpdateVendorIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     _require_po_admin(authorization, org_id)
     patch = {}
     for f in ("name", "contact_name", "email", "phone", "terms", "notes", "is_active"):
-        if f in body:
-            patch[f] = body[f]
+        if f in body.model_fields_set:
+            patch[f] = getattr(body, f)
     if not patch:
         return {"ok": True, "unchanged": True}
     patch["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -197,9 +255,9 @@ def get_po_settings(org_id: str = ORG_ID):
 
 
 @router.put("/po/settings")
-def put_po_settings(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_po_settings(body: PutPoSettingsIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     _require_po_admin(authorization, org_id)
-    days = _int(body.get("aging_flag_days"), -1)
+    days = _int(body.aging_flag_days, -1)
     if days < 1 or days > 365:
         raise HTTPException(400, "aging_flag_days must be an integer between 1 and 365.")
     client = sb()
@@ -416,12 +474,12 @@ def list_pos(store: str = "", market: str = "", status: str = "", vendor_id: str
 
 
 @router.post("/po")
-def create_po(body: dict, org_id: str = ORG_ID):
+def create_po(body: CreatePoIn, org_id: str = ORG_ID):
     client = sb()
-    lines_in = body.get("lines") or []
+    lines_in = body.lines or []
     if not lines_in:
         raise HTTPException(400, "At least one line item is required.")
-    vendor_id = body.get("vendor_id") or None
+    vendor_id = body.vendor_id or None
     vendor_name = None
     try:
         if vendor_id:
@@ -445,21 +503,21 @@ def create_po(body: dict, org_id: str = ORG_ID):
             "org_id": org_id, "line_no": i + 1,
             "sku": (l.get("sku") or None), "device_model": l.get("device_model") or l.get("model") or "Unknown",
             "qty_ordered": qty, "unit_cost": cost, "extended_cost": ext, "qty_received": 0,
-            "store": l.get("store") or body.get("ship_to_store") or None,
-            "market": l.get("market") or body.get("market") or None,
+            "store": l.get("store") or body.ship_to_store or None,
+            "market": l.get("market") or body.market or None,
             "notes": l.get("notes") or None,
         })
-    status = body.get("status") if body.get("status") in ("draft", "submitted") else "draft"
+    status = body.status if body.status in ("draft", "submitted") else "draft"
     po_row = {
         "org_id": org_id, "po_number": po_number,
-        "order_date": body.get("order_date") or datetime.now(timezone.utc).date().isoformat(),
+        "order_date": body.order_date or datetime.now(timezone.utc).date().isoformat(),
         "vendor_id": vendor_id, "vendor_name_snapshot": vendor_name,
-        "ship_to_store": body.get("ship_to_store") or None, "market": body.get("market") or None,
-        "buyer": body.get("buyer") or None, "status": status,
+        "ship_to_store": body.ship_to_store or None, "market": body.market or None,
+        "buyer": body.buyer or None, "status": status,
         "subtotal": round(subtotal, 2), "total": round(subtotal, 2),
-        "expected_delivery_date": body.get("expected_delivery_date") or None,
-        "notes": body.get("notes") or None, "source": body.get("source") or "manual",
-        "created_by": body.get("buyer") or None,
+        "expected_delivery_date": body.expected_delivery_date or None,
+        "notes": body.notes or None, "source": body.source or "manual",
+        "created_by": body.buyer or None,
     }
     try:
         pres = client.schema("commcalc").table("purchase_order").insert(po_row).execute()
@@ -547,7 +605,7 @@ def get_po(po_id: str, org_id: str = ORG_ID):
 
 
 @router.patch("/po/{po_id}")
-def update_po(po_id: str, body: dict, org_id: str = ORG_ID):
+def update_po(po_id: str, body: UpdatePoIn, org_id: str = ORG_ID):
     client = sb()
     try:
         cur = (client.schema("commcalc").table("purchase_order").select("status")
@@ -555,12 +613,12 @@ def update_po(po_id: str, body: dict, org_id: str = ORG_ID):
         if not cur:
             raise HTTPException(404, "Purchase order not found.")
         patch = {}
-        if "status" in body:
-            _validate_status_transition(cur[0]["status"], body["status"])
-            patch["status"] = body["status"]
+        if "status" in body.model_fields_set:
+            _validate_status_transition(cur[0]["status"], body.status)
+            patch["status"] = body.status
         for f in ("vendor_id", "order_date", "ship_to_store", "market", "buyer", "expected_delivery_date", "notes"):
-            if f in body:
-                patch[f] = body[f]
+            if f in body.model_fields_set:
+                patch[f] = getattr(body, f)
         if not patch:
             return {"ok": True, "unchanged": True}
         patch["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -594,16 +652,16 @@ def _recompute_po_status(client, org_id, po_id):
 
 
 @router.post("/po/{po_id}/receive")
-def receive_po_line(po_id: str, body: dict, org_id: str = ORG_ID):
+def receive_po_line(po_id: str, body: ReceivePoLineIn, org_id: str = ORG_ID):
     """Receive against ONE PO line — qty + date, optional per-unit IMEI/serial capture. Partial receipts
     supported (call this again later against the same line for the remainder). Auto-advances PO status."""
     client = sb()
-    po_line_id = body.get("po_line_id")
-    qty = _int(body.get("qty_received"))
+    po_line_id = body.po_line_id
+    qty = _int(body.qty_received)
     if not po_line_id or qty <= 0:
         raise HTTPException(400, "po_line_id and a positive qty_received are required.")
-    received_date = body.get("received_date") or datetime.now(timezone.utc).date().isoformat()
-    units = body.get("units") or []
+    received_date = body.received_date or datetime.now(timezone.utc).date().isoformat()
+    units = body.units or []
     try:
         line = (client.schema("commcalc").table("purchase_order_line").select("*")
                 .eq("org_id", org_id).eq("id", po_line_id).eq("po_id", po_id).limit(1).execute().data) or []
@@ -613,7 +671,7 @@ def receive_po_line(po_id: str, body: dict, org_id: str = ORG_ID):
         receipt = {
             "org_id": org_id, "po_id": po_id, "po_line_id": po_line_id,
             "received_date": received_date, "qty_received": qty,
-            "received_by": body.get("received_by") or None, "notes": body.get("notes") or None,
+            "received_by": body.received_by or None, "notes": body.notes or None,
         }
         rres = client.schema("commcalc").table("po_receipt").insert(receipt).execute()
         receipt_id = (rres.data or [{}])[0].get("id")

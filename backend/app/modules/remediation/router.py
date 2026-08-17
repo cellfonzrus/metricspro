@@ -14,16 +14,46 @@ import os
 import secrets
 from datetime import datetime, timezone
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.schemas import LaxModel
 from app.modules.notify import whatsapp_window
 from . import playbooks as pb
 
 router = APIRouter(prefix="/remediation", tags=["remediation"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+class UpsertPlaybookIn(LaxModel):
+    key: Any = None
+    name: Any = None
+    description: Any = None
+    risk_level: Any = None
+    enabled: Any = True
+    requires_approval: Any = True
+    params_schema: Any = None
+
+
+class ProposeIn(LaxModel):
+    issue: Any = None
+    playbook_key: Any = None
+    params: Any = None
+    diagnosis: Any = None
+    proposed_action: Any = None
+    assignee: Any = None
+    requested_by: Any = None
+    source: Any = None
+
+
+class DecideIn(LaxModel):
+    decision: Any = None
+    token: Any = None
+    decided_by: Any = None
 _ISSUE_STATUSES = ("proposed", "awaiting_approval", "approved", "rejected", "executed",
                    "failed", "escalated", "expired")
 
@@ -53,17 +83,17 @@ def list_playbooks(org_id: str = ORG_ID):
 
 
 @router.post("/playbooks")
-def upsert_playbook(body: dict, org_id: str = ORG_ID):
-    key = (body.get("key") or "").strip()
+def upsert_playbook(body: UpsertPlaybookIn, org_id: str = ORG_ID):
+    key = (body.key or "").strip()
     if not key:
         raise HTTPException(400, "key required")
     row = {"org_id": org_id, "key": key,
-           "name": (body.get("name") or key).strip(),
-           "description": body.get("description"),
-           "risk_level": (body.get("risk_level") or "low"),
-           "enabled": bool(body.get("enabled", True)),
-           "requires_approval": bool(body.get("requires_approval", True)),
-           "params_schema": body.get("params_schema") or {}}
+           "name": (body.name or key).strip(),
+           "description": body.description,
+           "risk_level": (body.risk_level or "low"),
+           "enabled": bool(body.enabled),
+           "requires_approval": bool(body.requires_approval),
+           "params_schema": body.params_schema or {}}
     r = (sb().schema("commcalc").table("remediation_playbook")
          .upsert(row, on_conflict="org_id,key").execute())
     return {"playbook": (r.data or [row])[0]}
@@ -200,21 +230,21 @@ async def _send_approval(req, approval_url):
 
 # ── propose ────────────────────────────────────────────────────────────────────────────────────────
 @router.post("/propose")
-async def propose(body: dict, org_id: str = ORG_ID):
+async def propose(body: ProposeIn, org_id: str = ORG_ID):
     """Propose a remediation. Body: {issue, playbook_key?, params?, assignee?:{name,email,whatsapp},
     requested_by?, source?}. If playbook_key is given → manual mode (no AI). Otherwise the agent
     diagnoses + picks a playbook. Creates an awaiting-approval request + magic-link, notifies the
     assignee, and returns the request + approval_url. Code-class issues are escalated, not executed."""
     client = sb()
-    issue = (body.get("issue") or "").strip()
-    if not issue and not body.get("playbook_key"):
+    issue = (body.issue or "").strip()
+    if not issue and not body.playbook_key:
         raise HTTPException(400, "issue (or an explicit playbook_key) is required")
     catalog = _catalog(client, org_id, only_enabled=True)
 
-    playbook_key = (body.get("playbook_key") or "").strip() or None
-    params = body.get("params") or {}
-    diagnosis = body.get("diagnosis") or ""
-    proposed_action = body.get("proposed_action") or ""
+    playbook_key = (body.playbook_key or "").strip() or None
+    params = body.params or {}
+    diagnosis = body.diagnosis or ""
+    proposed_action = body.proposed_action or ""
     issue_class = "data"
 
     if not playbook_key:  # let the agent decide
@@ -231,8 +261,8 @@ async def propose(body: dict, org_id: str = ORG_ID):
         row = {"org_id": org_id, "issue": issue, "diagnosis": diagnosis or "",
                "proposed_action": proposed_action or "Needs a developer / no automatic playbook fits.",
                "issue_class": issue_class if issue_class == "code" else "data",
-               "status": "escalated", "source": body.get("source") or "manual",
-               "requested_by": body.get("requested_by"), "title": (issue[:80] or playbook_key or "issue")}
+               "status": "escalated", "source": body.source or "manual",
+               "requested_by": body.requested_by, "title": (issue[:80] or playbook_key or "issue")}
         r = client.schema("commcalc").table("remediation_request").insert(row).execute()
         out = (r.data or [row])[0]
         out["escalated"] = True
@@ -248,8 +278,8 @@ async def propose(body: dict, org_id: str = ORG_ID):
            "issue": issue, "diagnosis": diagnosis, "proposed_action": proposed_action or pbrow.get("name"),
            "params": params, "preview": preview.get("summary"), "issue_class": "data",
            "status": "awaiting_approval", "approval_token": token,
-           "assignee_contact": body.get("assignee") or {}, "source": body.get("source") or "manual",
-           "requested_by": body.get("requested_by")}
+           "assignee_contact": body.assignee or {}, "source": body.source or "manual",
+           "requested_by": body.requested_by}
     r = client.schema("commcalc").table("remediation_request").insert(row).execute()
     req = (r.data or [row])[0]
     approval_url = _approval_url(req["id"], token)
@@ -306,12 +336,12 @@ def _apply_decision(client, org_id, req, decision, decided_by):
 
 
 @router.post("/requests/{req_id}/decision")
-def decide(req_id: str, body: dict, org_id: str = ORG_ID):
+def decide(req_id: str, body: DecideIn, org_id: str = ORG_ID):
     """Approve or reject a pending remediation. Body: {decision:'approve'|'reject', token, decided_by?}.
     The token must match the one minted at propose time. Approve → execute the one bounded playbook."""
     client = sb()
-    decision = (body.get("decision") or "").strip().lower()
-    token = (body.get("token") or "").strip()
+    decision = (body.decision or "").strip().lower()
+    token = (body.token or "").strip()
     if decision not in ("approve", "reject"):
         raise HTTPException(400, "decision must be 'approve' or 'reject'")
     rows = (client.schema("commcalc").table("remediation_request").select("*")
@@ -321,7 +351,7 @@ def decide(req_id: str, body: dict, org_id: str = ORG_ID):
     req = rows[0]
     if not req.get("approval_token") or token != req.get("approval_token"):
         raise HTTPException(403, "invalid or missing approval token")
-    decided_by = body.get("decided_by") or (req.get("assignee_contact") or {}).get("name") or "approver"
+    decided_by = body.decided_by or (req.get("assignee_contact") or {}).get("name") or "approver"
     out = _apply_decision(client, org_id, req, decision, decided_by)
     already = out.pop("_already", False)
     out.pop("approval_token", None)

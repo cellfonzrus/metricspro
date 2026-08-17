@@ -5,17 +5,43 @@ the buckets, and generate a claim of the recoverable devices (with per-device re
 the carrier. Config-driven (window / look-back / evidence / categories / match keys / recipients).
 """
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from app.core.database import get_supabase
 from app.core.config import settings
+from app.core.schemas import LaxModel
 from app.core.run_secret import verify_notify_secret
 from . import engine
 
 router = APIRouter(prefix="/recovery", tags=["recovery"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+
+class RecoveryPutConfigIn(LaxModel):
+    clawback_window_days: Any = None
+    lookback_days: Any = None
+    evidence_mode: Any = None
+    match_mdn: Any = None
+    match_imei: Any = None
+    recoverable_categories: Any = None
+    weekly_day_of_week: Any = None
+    weekly_hour: Any = None
+    enabled: Any = None
+    recipients: Any = None
+    payment_source: Any = None
+
+
+class UpdateClaimIn(LaxModel):
+    status: Any = None
+    form_ref: Any = None
+    notes: Any = None
+
+
+class SendClaimIn(LaxModel):
+    recipients: Any = None
 _CFG_FIELDS = ("clawback_window_days", "lookback_days", "evidence_mode", "match_mdn", "match_imei",
                "recoverable_categories", "weekly_day_of_week", "weekly_hour", "enabled",
                "recipients", "payment_source")
@@ -50,10 +76,10 @@ def get_config(org_id: str = ORG_ID):
 
 
 @router.put("/config")
-def put_config(body: dict, org_id: str = ORG_ID):
+def put_config(body: RecoveryPutConfigIn, org_id: str = ORG_ID):
     client = sb()
     _get_cfg(client, org_id)  # ensure the row exists
-    upd = {k: body[k] for k in _CFG_FIELDS if k in body}
+    upd = {k: getattr(body, k) for k in _CFG_FIELDS if k in body.model_fields_set}
     upd["updated_at"] = _now_iso()
     client.schema("commcalc").table("appeal_recovery_config").update(upd).eq("org_id", org_id).execute()
     return {"config": _get_cfg(client, org_id)}
@@ -152,10 +178,10 @@ def get_claim(claim_id: str, org_id: str = ORG_ID):
 
 
 @router.patch("/claims/{claim_id}")
-def update_claim(claim_id: str, body: dict, org_id: str = ORG_ID):
+def update_claim(claim_id: str, body: UpdateClaimIn, org_id: str = ORG_ID):
     """Move a claim through submitted/paid/rejected + notes."""
     client = sb()
-    upd = {k: body[k] for k in ("status", "form_ref", "notes") if k in body}
+    upd = {k: getattr(body, k) for k in ("status", "form_ref", "notes") if k in body.model_fields_set}
     if not upd:
         raise HTTPException(400, "nothing to update")
     r = (client.schema("commcalc").table("appeal_claim").update(upd)
@@ -243,7 +269,7 @@ def claim_document(claim_id: str, fmt: str = "pdf", org_id: str = ORG_ID):
 
 
 @router.post("/claims/{claim_id}/send")
-async def send_claim(claim_id: str, body: dict = None, org_id: str = ORG_ID):
+async def send_claim(claim_id: str, body: SendClaimIn = None, org_id: str = ORG_ID):
     """Deliver a claim now. Uses the config recipients, or override with body {recipients:[{email,whatsapp}]}."""
     client = sb()
     rows = (client.schema("commcalc").table("appeal_claim").select("*")
@@ -251,8 +277,8 @@ async def send_claim(claim_id: str, body: dict = None, org_id: str = ORG_ID):
     if not rows:
         raise HTTPException(404, "not found")
     cfg = _get_cfg(client, org_id)
-    if body and body.get("recipients"):
-        cfg = {**cfg, "recipients": body["recipients"]}
+    if body and body.recipients:
+        cfg = {**cfg, "recipients": body.recipients}
     lines = _claim_lines(client, org_id, claim_id)
     delivered = await _deliver_claim(cfg, rows[0], lines)
     return {"delivered": delivered, "count": len(delivered)}
