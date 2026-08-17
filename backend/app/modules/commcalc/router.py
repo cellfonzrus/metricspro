@@ -7,6 +7,7 @@ import io
 import re
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
+from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
 from app.modules.commcalc.calculator import calc_rep_commissions, parse_period, safe_float, classify_contract_type
 from app.modules.commcalc import whatif
@@ -29618,33 +29619,50 @@ def mi_list_plans(org_id: str = ORG_ID):
     return {"plans": _mi_load_plans(sb(), org_id)}
 
 
+class MiSavePlanIn(LaxModel):
+    id: Any = None
+    name: str = ""
+    level: Any = None
+    carrier_id: Any = None
+    period_type: Any = None
+    consolidated_bonus_amount: Any = 300
+    is_active: Any = True
+    is_default: Any = False
+    notes: Any = None
+    actor: Any = _Field(default=None, alias="_actor")
+    components: Any = None
+    bonuses: Any = None
+    qualifiers: Any = None
+    assignments: Any = None
+
+
 @router.post("/management-incentive/plans")
-def mi_save_plan(body: dict, org_id: str = ORG_ID):
+def mi_save_plan(body: MiSavePlanIn, org_id: str = ORG_ID):
     """Upsert a plan and REPLACE its children (components / bonuses / qualifiers / assignments) —
     delete-then-insert, the same shape as save_commission_plan. `assignments` is how an employee/role/
     level is attached to the plan (scope precedence employee>role>store>market>default). Editing a plan
     stamps updated_by so the platform seeder never clobbers it again."""
     require_org(org_id)
-    name = (body.get("name") or "").strip()
+    name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
     client = sb()
     header = {
         "org_id": org_id, "name": name,
-        "level": (body.get("level") or None),
-        "carrier_id": body.get("carrier_id") or None,
-        "period_type": (body.get("period_type") or "monthly"),
-        "consolidated_bonus_amount": safe_float(body.get("consolidated_bonus_amount", 300)),
-        "is_active": bool(body.get("is_active", True)),
-        "is_default": bool(body.get("is_default", False)),
-        "notes": body.get("notes") or None,
-        "updated_by": (body.get("_actor") or "admin"),
+        "level": (body.level or None),
+        "carrier_id": body.carrier_id or None,
+        "period_type": (body.period_type or "monthly"),
+        "consolidated_bonus_amount": safe_float(body.consolidated_bonus_amount),
+        "is_active": bool(body.is_active),
+        "is_default": bool(body.is_default),
+        "notes": body.notes or None,
+        "updated_by": (body.actor or "admin"),
     }
     try:
-        if body.get("id"):
+        if body.id:
             client.schema("commcalc").table("management_incentive_plan").update(header) \
-                  .eq("id", body["id"]).eq("org_id", org_id).execute()
-            plan_id = body["id"]
+                  .eq("id", body.id).eq("org_id", org_id).execute()
+            plan_id = body.id
         else:
             r = client.schema("commcalc").table("management_incentive_plan") \
                       .upsert(header, on_conflict="org_id,name").execute()
@@ -29658,7 +29676,7 @@ def mi_save_plan(body: dict, org_id: str = ORG_ID):
 
         def _kids(key, table, fields):
             client.schema("commcalc").table(table).delete().eq("org_id", org_id).eq("plan_id", plan_id).execute()
-            rows = body.get(key) or []
+            rows = getattr(body, key) or []
             clean = []
             for i, raw in enumerate(rows):
                 row = {k: raw.get(k) for k in fields if k in raw}
@@ -29697,8 +29715,26 @@ def mi_delete_plan(plan_id: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+class MiComputeIn(LaxModel):
+    plan_id: Any = None
+    employee_id: Any = None
+    employee_name: Any = None
+    role: Any = None
+    store: Any = None
+    market: Any = None
+    store_keys: Any = None
+    store_codes: Any = None
+    manager_store_count: Any = None
+    actuals: Any = None
+    qualifier_values: Any = None
+    derived: Any = None
+    overrides: Any = None
+    period: Any = None
+    save: Any = None
+
+
 @router.post("/management-incentive/compute")
-def mi_compute(body: dict, org_id: str = ORG_ID):
+def mi_compute(body: MiComputeIn, org_id: str = ORG_ID):
     """Compute a manager's incentive for a period and (optionally) save it as a draft payout.
 
     Body: {plan_id?, employee_id, employee_name?, role?, store?, market?, store_keys?, period,
@@ -29709,34 +29745,34 @@ def mi_compute(body: dict, org_id: str = ORG_ID):
     require_org(org_id)
     from app.modules.commcalc import management_incentive as _mi
     client = sb()
-    plans = _mi_load_plans(client, org_id, plan_id=body.get("plan_id"), active_only=not body.get("plan_id"))
-    if body.get("plan_id"):
+    plans = _mi_load_plans(client, org_id, plan_id=body.plan_id, active_only=not body.plan_id)
+    if body.plan_id:
         plan = plans[0] if plans else None
     else:
         plan = _mi.resolve_plan(
-            plans, employee_name=body.get("employee_name"), role=body.get("role"),
-            store=body.get("store"), market=body.get("market"), store_keys=body.get("store_keys"))
+            plans, employee_name=body.employee_name, role=body.role,
+            store=body.store, market=body.market, store_keys=body.store_keys)
     if not plan:
         raise HTTPException(404, "no management-incentive plan resolves for this manager")
 
-    store_codes = body.get("store_codes") or []
-    store_count = body.get("manager_store_count")
+    store_codes = body.store_codes or []
+    store_count = body.manager_store_count
     if store_count is None:
         store_count = len(store_codes)
     result = _mi.compute_payout(
         plan,
-        actuals=body.get("actuals") or {},
-        qualifier_values=body.get("qualifier_values") or {},
+        actuals=body.actuals or {},
+        qualifier_values=body.qualifier_values or {},
         manager_store_count=store_count,
-        derived=body.get("derived") or {},
-        overrides=body.get("overrides") or {})
+        derived=body.derived or {},
+        overrides=body.overrides or {})
 
-    period = (body.get("period") or "").strip()
+    period = (body.period or "").strip()
     saved = None
-    if body.get("save") and period and body.get("employee_id"):
+    if body.save and period and body.employee_id:
         row = {
             "org_id": org_id, "plan_id": plan.get("id"),
-            "employee_id": str(body["employee_id"]), "employee_name": body.get("employee_name"),
+            "employee_id": str(body.employee_id), "employee_name": body.employee_name,
             "period": period, "store_codes": store_codes, "breakdown": result,
             "component_total": result["component_total"], "bonus_total": result["bonus_total"],
             "total": result["total"], "qualified": result["consolidated_qualified"],
@@ -29771,21 +29807,28 @@ def mi_list_payouts(period: str = "", employee_id: str = "", status: str = "", o
     return {"payouts": rows}
 
 
+class MiPayoutDecisionIn(LaxModel):
+    decision: str = ""
+    who: Any = None
+    who_name: Any = None
+    note: Any = None
+
+
 @router.post("/management-incentive/payouts/{payout_id}/decision")
-def mi_payout_decision(payout_id: str, body: dict, org_id: str = ORG_ID):
+def mi_payout_decision(payout_id: str, body: MiPayoutDecisionIn, org_id: str = ORG_ID):
     """Approve / deny / mark-paid a computed payout — the ledger transition (draft → approved → paid).
     Body: {decision:'approve'|'deny'|'pay', note?, who?, who_name?}. Denying keeps the row for the audit
     trail but zeroes nothing here — payroll readers act on status. Nothing is paid until 'pay'."""
     require_org(org_id)
-    decision = (body.get("decision") or "").strip().lower()
+    decision = (body.decision or "").strip().lower()
     status = {"approve": "approved", "deny": "draft", "pay": "paid"}.get(decision)
     if status is None:
         raise HTTPException(400, "decision must be 'approve', 'deny', or 'pay'")
     _iso = datetime.now(timezone.utc).isoformat()
-    upd = {"status": status, "decided_by": body.get("who"), "decided_by_name": body.get("who_name"),
+    upd = {"status": status, "decided_by": body.who, "decided_by_name": body.who_name,
            "decided_at": _iso, "updated_at": _iso}
-    if body.get("note") is not None:
-        upd["override_note"] = body.get("note")
+    if body.note is not None:
+        upd["override_note"] = body.note
     try:
         r = (sb().schema("commcalc").table("management_incentive_payout").update(upd)
              .eq("id", payout_id).eq("org_id", org_id).execute())
@@ -30084,19 +30127,25 @@ def _f_num(v):
         return 0.0
 
 
+class MiResolveIn(LaxModel):
+    employee_id: Any = None
+    period: Any = None
+    plan_id: Any = None
+
+
 @router.post("/management-incentive/resolve")
-def mi_resolve(body: dict, org_id: str = ORG_ID):
+def mi_resolve(body: MiResolveIn, org_id: str = ORG_ID):
     """Auto-pull a manager's numbers for a period, aggregated over the stores they manage — reusing the
     app's own accessory/DLAR/deposit/inventory math. Body: {plan_id, employee_id, period}. Returns
     pre-fill {store_codes, manager_store_count, actuals, qualifier_values, derived, resolved[],
     unresolved[], notes{}} for the Compute tab; the manager reviews before saving. Never computes pay."""
     require_org(org_id)
-    employee_id = str(body.get("employee_id") or "").strip()
-    period = str(body.get("period") or "").strip()
+    employee_id = str(body.employee_id or "").strip()
+    period = str(body.period or "").strip()
     if not employee_id or not period:
         raise HTTPException(400, "employee_id and period are required")
     client = sb()
-    plans = _mi_load_plans(client, org_id, plan_id=body.get("plan_id"))
+    plans = _mi_load_plans(client, org_id, plan_id=body.plan_id)
     plan = plans[0] if plans else None
     if not plan:
         raise HTTPException(404, "plan not found")

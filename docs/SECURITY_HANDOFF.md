@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt33) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt34) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–33 = 174 endpoints; ~259 remain) |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–34 = 178 endpoints; ~255 remain) |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -119,10 +119,13 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   convertible candidates: pay_simulator_simulate, whatif_put_source_config, apply_ma_class_wiring_rule_
   proposals, upsert_category_rule, put_flag_rules, commission_rule_impact, payout_record,
   put_payout_accrual_config, save_financing_vendor, add_financing_vendor_carrier/detection_rule,
-  atu_config_set, mi_save_plan/compute/payout_decision/resolve, seed_* (optional bodies), payout_record,
-  put_payout_accrual_config — read each first. **Part 33:** add_financing_vendor_carrier,
+  atu_config_set, seed_* (optional bodies), payout_record, put_payout_accrual_config, put_flag_rules,
+  upsert_category_rule, whatif_put_source_config, pay_simulator_simulate, apply_ma_class_wiring_rule_
+  proposals, commission_rule_impact — read each first. **Part 33:** add_financing_vendor_carrier,
   save_financing_target (save_financing_vendor + add_financing_detection_rule thread body into
-  `_finreg.normalize_*` → deferred). After commcalc: hr (~32, many freeform-intake / public-token →
+  `_finreg.normalize_*` → deferred). **Part 34:** mi_save_plan (note: `_actor` internal key needs a
+  Pydantic `Field(alias="_actor")` — leading-underscore names are reserved), mi_compute,
+  mi_payout_decision, mi_resolve. After commcalc: hr (~32, many freeform-intake / public-token →
   treat like body-threading), then `grep -rn 'body: dict' app/modules` for any other module. The
   group (put_expenses/bulk_apply/upsert_expense_system_line/put_expense_apply_config/apply_expenses),
   ftp/email/data-source/proxy config, report-pull/manual-upload maps, live-login, ma-overview,
