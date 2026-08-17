@@ -14,9 +14,11 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, date as _date
+from typing import Any, Optional
 from fastapi import APIRouter, Header, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
 from app.core.database import get_supabase
+from app.core.schemas import LaxModel
 from app.core.config import settings
 from app.core import crypto
 from app.modules.storeops.router import scope_emp_ids, _tenant_pp_settings, _employees_with_pay_fields
@@ -603,12 +605,18 @@ def onboarding_template(include_inactive: bool = False, org_id: str = ORG_ID):
 
 
 @router.post("/onboarding/categories")
-def onboarding_save_category(body: dict, org_id: str = ORG_ID):
-    label = (body.get("label") or "").strip()
+class OnboardingSaveCategoryIn(LaxModel):
+    label: str = ""
+    key: str = ""
+    sort_order: Any = None
+
+
+def onboarding_save_category(body: OnboardingSaveCategoryIn, org_id: str = ORG_ID):
+    label = (body.label or "").strip()
     if not label:
         raise HTTPException(400, "label required")
-    row = {"org_id": org_id, "key": (body.get("key") or _slug(label)).strip(),
-           "label": label, "sort_order": int(body.get("sort_order") or 100)}
+    row = {"org_id": org_id, "key": (body.key or _slug(label)).strip(),
+           "label": label, "sort_order": int(body.sort_order or 100)}
     try:
         r = so_upsert("onboarding_category", row, "org_id,key")
     except Exception as e:
@@ -616,9 +624,15 @@ def onboarding_save_category(body: dict, org_id: str = ORG_ID):
     return (r or [row])[0]
 
 
+class OnboardingUpdateCategoryIn(LaxModel):
+    label: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+
+
 @router.patch("/onboarding/categories/{cat_id}")
-def onboarding_update_category(cat_id: str, body: dict, org_id: str = ORG_ID):
-    upd = {k: body[k] for k in ("label", "sort_order", "is_active") if k in body}
+def onboarding_update_category(cat_id: str, body: OnboardingUpdateCategoryIn, org_id: str = ORG_ID):
+    upd = {k: getattr(body, k) for k in ("label", "sort_order", "is_active") if k in body.model_fields_set}
     r = _so().table("onboarding_category").update(upd).eq("org_id", org_id).eq("id", cat_id).execute()
     return (r.data or [{}])[0]
 
@@ -629,12 +643,31 @@ def onboarding_delete_category(cat_id: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+class OnboardingTaskIn(LaxModel):
+    category_id: Any = None
+    key: Any = None
+    label: Any = None
+    description: Any = None
+    owner_role: Any = None
+    doc_url: Any = None
+    doc_label: Any = None
+    is_fillable: Any = None
+    requires_upload: Any = None
+    applies_state: Any = None
+    sort_order: Any = None
+    is_active: Any = None
+    requires_signature: Any = None
+    form_fields: Any = None
+    is_mandatory: Any = None
+    work_auth: Any = None
+
+
 @router.post("/onboarding/tasks")
-def onboarding_save_task(body: dict, org_id: str = ORG_ID):
-    label = (body.get("label") or "").strip()
+def onboarding_save_task(body: OnboardingTaskIn, org_id: str = ORG_ID):
+    label = (body.label or "").strip()
     if not label:
         raise HTTPException(400, "label required")
-    row = {k: body[k] for k in TASK_FIELDS if k in body}
+    row = {k: getattr(body, k) for k in TASK_FIELDS if k in body.model_fields_set}
     row.update({"org_id": org_id, "label": label})
     row.setdefault("key", _slug(label))
     row.setdefault("owner_role", "employee")
@@ -650,8 +683,8 @@ def onboarding_save_task(body: dict, org_id: str = ORG_ID):
 
 
 @router.patch("/onboarding/tasks/{task_id}")
-def onboarding_update_task(task_id: str, body: dict, org_id: str = ORG_ID):
-    upd = {k: body[k] for k in TASK_FIELDS if k in body}
+def onboarding_update_task(task_id: str, body: OnboardingTaskIn, org_id: str = ORG_ID):
+    upd = {k: getattr(body, k) for k in TASK_FIELDS if k in body.model_fields_set}
     if "applies_state" in upd:
         upd["applies_state"] = (upd["applies_state"] or "").strip().upper() or None
     r = _so().table("onboarding_task").update(upd).eq("org_id", org_id).eq("id", task_id).execute()

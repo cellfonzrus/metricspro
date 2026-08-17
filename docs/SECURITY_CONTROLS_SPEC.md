@@ -377,7 +377,9 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     (body-threaders into module helpers, freeform `else body` category maps, or
     `{**body}` spreads). ~246 `dict` bodies remain across other modules (hr next;
     body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
-    data).
+    data). **Part 38:** hr onboarding config CRUD (category save/update, task
+    save/update — TASK_FIELDS allow-list via model_fields_set) → lax; hr
+    create/update-employee are EMP_FIELDS-driven freeform records (deferred).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt37 — commcalc swept) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt38 — hr started) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–37 = 187 endpoints; ~246 remain). **commcalc swept** — 20 leftover handlers all deferred (threaders/freeform/spread). |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–38 = 191 endpoints; ~242 remain). commcalc swept; hr started. |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -134,19 +134,19 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   save_financing_vendor→normalize_vendor, add_financing_detection_rule→normalize_matcher); freeform
   `else body` maps (put_category_qualification, put_category_payout, put_expected_commission_config,
   save_setup_fee_config, save_pay_gate); `{**body}` spread (save_payout_exclusion).
-  Next: hr (~32, many freeform-intake / public-token →
-  treat like body-threading), then `grep -rn 'body: dict' app/modules` for any other module. The
-  group (put_expenses/bulk_apply/upsert_expense_system_line/put_expense_apply_config/apply_expenses),
-  ftp/email/data-source/proxy config, report-pull/manual-upload maps, live-login, ma-overview,
-  custom-report-defs, and the agency_* group (~9). Read each first, watch for body-threading AND
-  freeform-map fallbacks. hr (~32,
-  many freeform-intake / public-token endpoints — treat like body-threading). **POS skipped** — module
-  incomplete / no data. **Rules:** skip
-  endpoints that
-  thread the raw `body` dict into shared helpers; preserve None-vs-empty + downstream `.get()`; for a
-  field the handler validates itself (e.g. `float(amount)` → 400), type it `Any` so Pydantic doesn't
-  pre-empt with a 422; for PATCH use `model_fields_set` to keep "only-sent-keys". `create_lead`
-  (25 fields) + `bulk-assign/dispose` need a dedicated pass.
+  **Part 38 (hr started):** onboarding_save_category, onboarding_update_category, onboarding_save_task,
+  onboarding_update_task (TASK_FIELDS allow-list via model_fields_set). hr_create_employee /
+  hr_update_employee are EMP_FIELDS-driven freeform employee records → deferred (like storeops's own
+  create_employee). Next hr candidates (read each first — many onboarding endpoints thread body or use
+  freeform intake / public tokens → likely defer): intake_field_save/update,
+  onboarding_set_accounting_settings, put_onboarding_attention_config, onboarding_mint_token,
+  onboarding_advance, onboarding_approve, onboarding_set_profile, etc. After hr:
+  `grep -rn 'body: dict' app/modules` for any module not yet touched. **POS skipped** — module
+  incomplete / no data. **Rules:** skip endpoints that thread the raw `body` dict into shared helpers,
+  use `body` itself as a freeform map (`else body`), or spread `{**body}`; preserve None-vs-empty +
+  downstream `.get()`; type handler-validated fields (`float(amount)` → 400) as `Any` so Pydantic
+  doesn't pre-empt with a 422; for PATCH/presence use `model_fields_set`; a leading-underscore body key
+  needs `Field(alias="_x")`. `create_lead` (25 fields) + crm `bulk-assign/dispose` still need a pass.
 - **Item 16 erasure** — deferred by owner context (no SSN yet, 1st month, WORM-vs-erasure tension).
   When needed: scoped anonymization of `pos.customers`/`crm_lead` leaving WORM audit intact;
   crypto-shred once SSN/bank exists. Owner to confirm scope.
