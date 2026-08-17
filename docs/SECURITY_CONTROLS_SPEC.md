@@ -282,7 +282,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     (save-week/apply-templates), shift-extension request, face-retention
     request-deletion (optional body), google-reviews store-config PUT → lax
     (presence via model_fields_set; place_id/target handler-validated typed Any).
-    ~374 `dict` bodies remain (body-threading endpoints get a
+    **Part 7i:** storeops bulk + timeclock writes (bulk-create employees/stores,
+    employee merge, bulk-payscale, clock-in / override / clock-out,
+    face-retention run, face descriptor save → lax; selfie/gps/descriptor/entry_id
+    handler-validated typed Any). **storeops now fully swept** — the 7 remaining
+    `dict` handlers thread `body` into shared config helpers (deferred by rule).
+    ~365 `dict` bodies remain (body-threading endpoints get a
     dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked

@@ -1893,11 +1893,16 @@ _PAY_GATED_FIELDS = {"pay_rate", "pay_basis", "pay_amount", "termination_date"}
 _PAY_LOGGED_FIELDS = ("pay_rate", "pay_basis", "pay_amount", "termination_date")
 
 
+class BulkCreateEmployeesIn(LaxModel):
+    employees: Any = None
+    rows: Any = None
+
+
 @router.post("/employees/bulk")
-def bulk_create_employees(body: dict, org_id: str = ORG_ID):
+def bulk_create_employees(body: BulkCreateEmployeesIn, org_id: str = ORG_ID):
     """Bulk-create employees from a filled template (new-tenant setup). Body: {employees:[{...}]}.
     Skips blank-name rows and any employee_id that already exists (so re-upload is idempotent)."""
-    rows_in = body.get("employees") or body.get("rows") or []
+    rows_in = body.employees or body.rows or []
     if not isinstance(rows_in, list):
         raise HTTPException(400, "employees must be a list")
     existing = {str(e.get("employee_id")) for e in
@@ -2057,12 +2062,17 @@ def delete_employee(emp_id: str, org_id: str = ORG_ID):
     return {"ok": True, "deleted": emp_id, "name": e.get("name"), "login": login}
 
 
+class MergeEmployeesIn(LaxModel):
+    dup_id: Any = None
+    target_id: Any = None
+
+
 @router.post("/employees/merge")
-def merge_employees(body: dict, org_id: str = ORG_ID):
+def merge_employees(body: MergeEmployeesIn, org_id: str = ORG_ID):
     """Merge a DUPLICATE employee into a TARGET: reassign the duplicate's shifts + time-off to the
     target (by employee_id and by name), then delete the duplicate (deactivate if delete is blocked)."""
-    dup_id = str(body.get("dup_id") or "").strip()
-    target_id = str(body.get("target_id") or "").strip()
+    dup_id = str(body.dup_id or "").strip()
+    target_id = str(body.target_id or "").strip()
     if not dup_id or not target_id or dup_id == target_id:
         raise HTTPException(400, "dup_id and target_id (different) are required")
     dup = sb().table("employees").select("*").eq("org_id", org_id).eq("id", dup_id).execute().data
@@ -2111,8 +2121,13 @@ def merge_employees(body: dict, org_id: str = ORG_ID):
     return {"ok": True, "merged_into": tgt.get("name"), "moved": moved, "deleted_duplicate": deleted, "login": login}
 
 
+class BulkPayscaleIn(LaxModel):
+    rows: Any = None
+    employees: Any = None
+
+
 @router.post("/employees/bulk-payscale")
-def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def bulk_payscale(body: BulkPayscaleIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Bulk set pay rates from a list. Body: {rows:[{employee_id|name, pay_rate}]}.
     Matches by employee_id, else exact name (case-insensitive). Reports unmatched/bad rows.
     MANAGER-GATED (2026-07-27) — same posture as the single-row PATCH's pay-field gate
@@ -2122,7 +2137,7 @@ def bulk_payscale(body: dict, authorization: str = Header(default=""), org_id: s
     Each successfully-updated row now logs the SAME way, entry_point='bulk_payscale', best-effort
     (a log-write failure never blocks the actual rate update, matching every other hook's posture)."""
     _require_manager(authorization, org_id)
-    rows = body.get("rows") or body.get("employees") or []
+    rows = body.rows or body.employees or []
     if not isinstance(rows, list) or not rows:
         raise HTTPException(400, "rows[] required")
     emps = sb().table("employees").select("id,employee_id,name,pay_rate").eq("org_id", org_id).execute().data or []
@@ -2253,11 +2268,16 @@ def _sync_store_mapping(org_id, stores):
         print(f"WARN store_mapping sync failed: {e}")
 
 
+class BulkCreateStoresIn(LaxModel):
+    stores: Any = None
+    rows: Any = None
+
+
 @router.post("/stores/bulk")
-def bulk_create_stores(body: dict, org_id: str = ORG_ID):
+def bulk_create_stores(body: BulkCreateStoresIn, org_id: str = ORG_ID):
     """Bulk-create stores from a filled template (new-tenant setup). Body: {stores:[{...}]}.
     Skips blank store_code rows and store_codes that already exist (idempotent re-upload)."""
-    rows_in = body.get("stores") or body.get("rows") or []
+    rows_in = body.stores or body.rows or []
     if not isinstance(rows_in, list):
         raise HTTPException(400, "stores must be a list")
     existing = {str(s.get("store_code")).strip().upper() for s in
@@ -2871,8 +2891,21 @@ def _scheduled_start_utc(org_id, employee_id, name, store, work_date):
     return min(starts) if starts else None
 
 
+class ClockInIn(LaxModel):
+    store_code: str = ""
+    priority_ack: Any = None
+    priority_ack_count: Any = None
+    selfie: Any = None
+    device: Any = None
+    gps_lat: Any = None
+    gps_lng: Any = None
+    gps_accuracy_m: Any = None
+    face_match_pct: Any = None
+    reason: Any = None
+
+
 @router.post("/timeclock/clock-in")
-def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Record a clock-in (one row). Identity is the SIGNED-IN employee (from the auth token) — a
     body employee_id is ignored, so you can only punch yourself. Selfie (base64) + GPS + face-match%
     are still stored for audit (defense in depth)."""
@@ -2885,7 +2918,7 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
     name, home_store = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
     # Which store is this punch for? The kiosk sends the selected store; fall back to home store.
-    req_store = (body.get("store_code") or "").strip() or home_store
+    req_store = (body.store_code or "").strip() or home_store
     # Business-local date, bucketed in THIS STORE's zone (migration 851) so a late-evening Central-time
     # punch lands on the correct calendar day, not the Eastern one. Falls back to the tenant zone when
     # the store has no own zone set.
@@ -2909,7 +2942,7 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
     # Priority-sell acknowledgment gate (module 095): if the tenant enabled it and this store has
     # devices in the final % of their pay window, the rep must acknowledge before clocking in. Any
     # lookup gap → no block (never trap a rep on a config/migration miss — mirrors the closing gate).
-    if not body.get("priority_ack"):
+    if not body.priority_ack:
         try:
             t = (sb().table("tenants").select("priority_ack_enabled").eq("org_id", org_id).limit(1).execute().data) or []
             if t and t[0].get("priority_ack_enabled"):
@@ -2935,29 +2968,29 @@ def clock_in(body: dict, authorization: str = Header(default=""), org_id: str = 
             is_reclock_pending = bool(prior_auto)
         except Exception:
             is_reclock_pending = False
-    selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
+    selfie_path = _upload_selfie(org_id, employee_id, body.selfie)
     row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name,
            "store_code": req_store,
            "clock_in": now.isoformat(), "work_date": work_date,
-           "device": body.get("device"), "selfie_path": selfie_path,
-           "gps_lat": body.get("gps_lat"), "gps_lng": body.get("gps_lng"),
-           "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct")}
+           "device": body.device, "selfie_path": selfie_path,
+           "gps_lat": body.gps_lat, "gps_lng": body.gps_lng,
+           "gps_accuracy_m": body.gps_accuracy_m, "face_match_pct": body.face_match_pct}
     if is_reclock_pending:
         row["permission_status"] = "pending"
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
-    if body.get("priority_ack"):   # record the "I will prioritize these phones" acknowledgment (module 095)
+    if body.priority_ack:   # record the "I will prioritize these phones" acknowledgment (module 095)
         try:
             get_supabase().schema("commcalc").table("priority_ack_log").insert({
                 "org_id": org_id, "employee_id": employee_id, "store_code": req_store,
-                "ack_date": work_date, "imei_count": int(body.get("priority_ack_count") or 0)}).execute()
+                "ack_date": work_date, "imei_count": int(body.priority_ack_count or 0)}).execute()
         except Exception:
             pass
     resp = {"success": True, "data": {"time": _fmt_time(saved.get("clock_in"), org_id), "entry_id": saved.get("id"),
                                       "store_code": req_store}}
     if is_reclock_pending:
         perm = _create_timeclock_permission(org_id, kind="reclock_in", punch=saved,
-                                             reason=(body.get("reason") or "Re-clock-in after auto clock-out"))
+                                             reason=(body.reason or "Re-clock-in after auto clock-out"))
         resp["needs_dm_permission"] = True
         resp["permission_status"] = "pending"
         resp["pending_permission"] = perm
@@ -2981,16 +3014,27 @@ def timeclock_allowed_stores(authorization: str = Header(default=""), org_id: st
             "stores": allowed or ([_norm_store(home_store)] if home_store else [])}
 
 
+class ClockInOverrideIn(LaxModel):
+    employee_id: str = ""
+    store_code: str = ""
+    selfie: Any = None
+    device: Any = None
+    gps_lat: Any = None
+    gps_lng: Any = None
+    gps_accuracy_m: Any = None
+    face_match_pct: Any = None
+
+
 @router.post("/timeclock/override")
-def clock_in_override(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def clock_in_override(body: ClockInOverrideIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """MANAGER override: a manager (their own token in Authorization) authorizes clocking an employee
     in at a store they're not scheduled for, and ADDS the shift to today's schedule so it's on record
     (exactly what the user asked: 'manager override + update their schedule'). Body: {employee_id,
     store_code, selfie?, gps_lat?, gps_lng?, gps_accuracy_m?, face_match_pct?, device?}."""
     mgr = _require_manager(authorization, org_id)
     org_id = (mgr.get("org_id") or org_id)   # the manager's own tenant is authoritative
-    employee_id = (body.get("employee_id") or "").strip()
-    store_code = (body.get("store_code") or "").strip()
+    employee_id = (body.employee_id or "").strip()
+    store_code = (body.store_code or "").strip()
     if not employee_id or not store_code:
         raise HTTPException(400, "employee_id and store_code are required")
     open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
@@ -3020,11 +3064,11 @@ def clock_in_override(body: dict, authorization: str = Header(default=""), org_i
                 pass
     except Exception:
         pass
-    selfie_path = _upload_selfie(org_id, employee_id, body.get("selfie"))
+    selfie_path = _upload_selfie(org_id, employee_id, body.selfie)
     row = {"org_id": org_id, "employee_id": employee_id, "employee_name": name, "store_code": store_code,
-           "clock_in": now.isoformat(), "work_date": work_date, "device": body.get("device") or "kiosk-override",
-           "selfie_path": selfie_path, "gps_lat": body.get("gps_lat"), "gps_lng": body.get("gps_lng"),
-           "gps_accuracy_m": body.get("gps_accuracy_m"), "face_match_pct": body.get("face_match_pct"),
+           "clock_in": now.isoformat(), "work_date": work_date, "device": body.device or "kiosk-override",
+           "selfie_path": selfie_path, "gps_lat": body.gps_lat, "gps_lng": body.gps_lng,
+           "gps_accuracy_m": body.gps_accuracy_m, "face_match_pct": body.face_match_pct,
            "notes": f"manager override: {mgr.get('email')}"}
     r = sb().table("timelog").insert(row).execute()
     saved = r.data[0] if r.data else row
@@ -3174,12 +3218,18 @@ def _closing_gate_block(org_id, employee_id, store_code, work_date=None):
         return None
 
 
+class ClockOutIn(LaxModel):
+    entry_id: Any = None
+    override: Any = None
+    reason: Any = None
+
+
 @router.post("/timeclock/clock-out")
-def clock_out(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def clock_out(body: ClockOutIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Close the SIGNED-IN employee's open entry (updates the SAME row) and compute hours. Always
     scoped to the caller's own employee_id so one employee can't close another's punch."""
     org_id, employee_id = _caller_identity(authorization)
-    entry_id = body.get("entry_id")
+    entry_id = body.entry_id
     q = (sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")
          .eq("employee_id", employee_id))
     if entry_id:
@@ -3192,7 +3242,7 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
     # closing is submitted. Only the assigned closer is gated (per the product decision); other reps
     # clock out normally. Returns needs_closing (no punch change) rather than closing the entry.
     block = _closing_gate_block(org_id, employee_id, entry.get("store_code"), entry.get("work_date"))
-    if block and not body.get("override"):
+    if block and not body.override:
         return {"success": False, "needs_closing": True, "message": block}
     now = datetime.now(timezone.utc)
     out_at = now
@@ -3258,7 +3308,7 @@ def clock_out(body: dict, authorization: str = Header(default=""), org_id: str =
         extra_permission = _create_timeclock_permission(
             org_id, kind="late_clockout", punch=entry_after,
             anchor_at=out_at, requested_clock_out=now,
-            reason=(body.get("reason") or "Worked past scheduled shift end"))
+            reason=(body.reason or "Worked past scheduled shift end"))
     # Gate-1 N3 (2026-07-27): an auto-stamped branch moves hours away from a raw clock-in/out diff
     # exactly like _do_force_clockout (which IS logged) — log it here too, system-attributed (the
     # employee's own self-service clock-out triggered it, but the HOURS value is a system computation).
@@ -3768,14 +3818,19 @@ def set_face_retention_config(body: dict, authorization: str = Header(default=""
     return {"ok": True, "tenant": after, "purge_result": purge_result}
 
 
+class RunFaceRetentionIn(LaxModel):
+    dry_run: Any = True
+
+
 @router.post("/timeclock/face-retention/run")
-def run_face_retention_now(body: dict = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def run_face_retention_now(body: Optional[RunFaceRetentionIn] = None,
+                           authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Manager-triggered run for the caller's own tenant. `dry_run` defaults TRUE — report only,
     nothing destroyed (matches this codebase's dry-run-before-apply convention, e.g.
     POST /hr/onboarding/reconcile). Pass {"dry_run": false} to actually destroy what's due."""
     mgr = _require_manager(authorization, org_id)
     org_id = mgr.get("org_id") or org_id
-    dry_run = (body or {}).get("dry_run", True) is not False
+    dry_run = (body.dry_run if body else True) is not False
     client = sb()
     computed = _fret.compute_due(org_id, client)
     return _fret.destroy(org_id, client, computed=computed, dry_run=dry_run,
@@ -4000,8 +4055,12 @@ def _face_consent_ok(org_id: str, employee_id: str):
     return (True, "")
 
 
+class SaveFaceIn(LaxModel):
+    descriptor: Any = None
+
+
 @router.post("/timeclock/face")
-def save_face(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def save_face(body: SaveFaceIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Save (or re-register) an averaged 128-float descriptor for the SIGNED-IN employee — identity
     comes from the auth token, so you can only enroll your own face."""
     org_id, employee_id = _caller_identity(authorization)
@@ -4023,7 +4082,7 @@ def save_face(body: dict, authorization: str = Header(default=""), org_id: str =
     _consent_ok, _consent_why = _face_consent_ok(org_id, employee_id)
     if not _consent_ok:
         raise HTTPException(403, _consent_why)
-    descriptor = body.get("descriptor")
+    descriptor = body.descriptor
     if not isinstance(descriptor, list) or len(descriptor) != 128:
         raise HTTPException(400, "a 128-float descriptor is required")
     existing = (sb().table("face_descriptors").select("id,register_count").eq("org_id", org_id)
