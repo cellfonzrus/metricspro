@@ -11284,37 +11284,48 @@ async def put_category_qualification(body: dict, authorization: str = Header(def
             "qualification": qual or dict(icat.DEFAULT_QUALIFICATION)}
 
 
+class SaveCategoryRuleIn(LaxModel):
+    category_key: str = ""
+    match_field: str = ""
+    match_op: str = ""
+    match_value: str = ""
+    priority: Any = None
+    is_active: Any = True
+    note: Any = None
+    id: Any = None
+
+
 @router.post("/plan-installments/category-rules")
-async def save_category_rule(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def save_category_rule(body: SaveCategoryRuleIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Add/replace ONE tenant classification rule (mig 245).
     body: {id?, category_key, match_field, match_op, match_value, priority?, is_active?, note?}.
     Tenant rules are evaluated BEFORE the built-ins; the built-ins remain as the fallback tail."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     from app.modules.commcalc import installment_category as icat
-    ck = str(body.get("category_key") or "").strip().lower()
+    ck = str(body.category_key or "").strip().lower()
     if ck not in icat.CATEGORY_KEYS or ck == "unknown":
         raise HTTPException(400, "category_key must be one of "
                                  f"{[k for k in icat.CATEGORY_KEYS if k != 'unknown']}")
-    mf = str(body.get("match_field") or "product_desc").strip().lower()
-    mo = str(body.get("match_op") or "contains").strip().lower()
+    mf = str(body.match_field or "product_desc").strip().lower()
+    mo = str(body.match_op or "contains").strip().lower()
     if mf not in icat.MATCH_FIELDS:
         raise HTTPException(400, f"match_field must be one of {list(icat.MATCH_FIELDS)}")
     if mo not in icat.MATCH_OPS:
         raise HTTPException(400, f"match_op must be one of {list(icat.MATCH_OPS)}")
-    mv = str(body.get("match_value") or "").strip()
+    mv = str(body.match_value or "").strip()
     if not mv:
         raise HTTPException(400, "match_value is required (pick a real Department / Category / product value).")
     row = {"org_id": org_id, "category_key": ck, "match_field": mf, "match_op": mo, "match_value": mv,
-           "priority": int(body.get("priority") or 50), "is_active": bool(body.get("is_active", True)),
-           "note": body.get("note"), "updated_by": _caller_uid(authorization),
+           "priority": int(body.priority or 50), "is_active": bool(body.is_active),
+           "note": body.note, "updated_by": _caller_uid(authorization),
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     client = sb()
     try:
-        if body.get("id"):
+        if body.id:
             (client.schema('commcalc').table('installment_category_rule').update(row)
-             .eq('id', body["id"]).eq('org_id', org_id).execute())
-            return {"saved": True, "id": body["id"]}
+             .eq('id', body.id).eq('org_id', org_id).execute())
+            return {"saved": True, "id": body.id}
         r = client.schema('commcalc').table('installment_category_rule').insert(row).execute()
         return {"saved": True, "id": (r.data or [{}])[0].get("id")}
     except Exception as e:
@@ -11729,8 +11740,16 @@ async def list_expected_commission_promotes(period: str = "", status: str = "",
             "ready": True, "migration": None}
 
 
+class PromoteExpectedCommissionIn(LaxModel):
+    period: str = ""
+    trans_id: str = ""
+    mdn: str = ""
+    reason: str = ""
+    month_index: Any = None
+
+
 @router.post("/expected-commission/promote")
-async def promote_expected_commission(body: dict, authorization: str = Header(default=""),
+async def promote_expected_commission(body: PromoteExpectedCommissionIn, authorization: str = Header(default=""),
                                       org_id: str = ORG_ID):
     """💰 MONEY WRITE — move ONE chain-month's EXPECTED amount into EARNED.
     body: {period, trans_id, mdn, month_index, reason} (`reason` is REQUIRED — this is an audit row).
@@ -11757,12 +11776,12 @@ async def promote_expected_commission(body: dict, authorization: str = Header(de
             if why == "setting_area" else
             "This action must be performed by an identified, signed-in user — it writes a money "
             "record naming who approved it."))
-    period = str(body.get("period") or "").strip()
-    trans_id = str(body.get("trans_id") or "").strip()
-    mdn = str(body.get("mdn") or "").strip()
-    reason = str(body.get("reason") or "").strip()
+    period = str(body.period or "").strip()
+    trans_id = str(body.trans_id or "").strip()
+    mdn = str(body.mdn or "").strip()
+    reason = str(body.reason or "").strip()
     try:
-        month_index = int(body.get("month_index"))
+        month_index = int(body.month_index)
     except (TypeError, ValueError):
         raise HTTPException(400, "month_index is required")
     if not period or not trans_id:
@@ -11805,8 +11824,13 @@ async def promote_expected_commission(body: dict, authorization: str = Header(de
                      "approved.")}
 
 
+class RevokeExpectedCommissionIn(LaxModel):
+    id: str = ""
+    reason: Any = None
+
+
 @router.post("/expected-commission/revoke")
-async def revoke_expected_commission(body: dict, authorization: str = Header(default=""),
+async def revoke_expected_commission(body: RevokeExpectedCommissionIn, authorization: str = Header(default=""),
                                      org_id: str = ORG_ID):
     """💰 MONEY WRITE — revoke a promote. body: {id, reason?}. The row is KEPT with status='revoked'
     (an audit trail you can delete is not an audit trail); the month reverts to the normal gate on the
@@ -11815,14 +11839,14 @@ async def revoke_expected_commission(body: dict, authorization: str = Header(def
     allowed, why, _caller = _xc_can_promote(authorization, org_id)
     if not allowed:
         raise HTTPException(403, "You do not have permission to change expected-to-earned promotions.")
-    rid = str(body.get("id") or "").strip()
+    rid = str(body.id or "").strip()
     if not rid:
         raise HTTPException(400, "id is required")
     try:
         (sb().schema("commcalc").table(expected_commission.TABLE)
          .update({"status": "revoked", "revoked_by": _xc_who(authorization),
                   "revoked_at": _datetime.now(_timezone.utc).isoformat(),
-                  "revoke_reason": (body.get("reason") or None),
+                  "revoke_reason": (body.reason or None),
                   "updated_at": _datetime.now(_timezone.utc).isoformat()})
          .eq("org_id", org_id).eq("id", rid).execute())
     except Exception as e:

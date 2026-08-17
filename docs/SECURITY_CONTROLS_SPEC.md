@@ -314,9 +314,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     loop via model_fields_set. **Part 16:** commcalc money-settings (commission-
     settings put, activation-matcher put, plan-line-matcher put) → lax; all-Any
     presence fields, handler enum/float validation preserved. save-plan-installment
-    threads `body` into `_write_installment_schedule` (deferred). ~320 `dict` bodies
-    remain (body-threading endpoints get a dedicated pass; POS skipped — incomplete/
-    no data).
+    threads `body` into `_write_installment_schedule` (deferred). **Part 17:**
+    commcalc category-rule + expected-commission money-writes (save-category-rule,
+    promote, revoke) → lax; the qualification/payout/expected-config PUTs use `body`
+    itself as a freeform category map (the `else body` fallback) and are deferred as
+    freeform-map bodies. ~317 `dict` bodies remain (body-threading endpoints get a
+    dedicated pass; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows
