@@ -424,9 +424,14 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     update (status-transition validated) / line-receive (nested lines + units Any);
     asset b2b-inventory upload + investigation → lax. **Part 47 (closing started,
     5/28):** verify_store, approve_expense, upload_envelope_photo, put_tender_config,
-    put_deposit_config → lax. `create_row` deferred (dynamic count/tender config axes +
-    nested expense_lines). ~151 `dict` bodies remain (closing ~23 more, core, storeops
-    helpers, misc; POS skipped — incomplete/no data).
+    put_deposit_config → lax. **Part 48 (closing fully swept, 27/28):** the remaining
+    config setters + action toggles (count/deposit-category/adjustment-type config,
+    deposit-adjustment, bank-deposit + narrow meta-edit with forbidden-field rejection,
+    cash-config, store-closer, alert-recipient, ops-chargeback policy + decision, cash
+    pickup/deposit/undo + config, sweep config, expense category/line + decision,
+    envelope config + withdrawal, release-row) → lax. `create_row` stays deferred
+    (dynamic count/tender config axes + nested expense_lines). ~129 `dict` bodies remain
+    (core, storeops helpers, misc; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

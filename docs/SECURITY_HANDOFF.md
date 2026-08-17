@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt47 — closing started) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt48 — closing fully swept) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–47 = 282 endpoints; ~151 remain). Fully swept: commcalc, hr, crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router); payables all-but-1. **closing STARTED** (5/28 done). |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–48 = 304 endpoints; ~129 remain). Fully swept: commcalc, hr, crm-leads, referral, notify, storevisit, billing, recovery, remediation, asset(PO+router), **closing** (27/28, create_row deferred); payables all-but-1. |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -202,9 +202,17 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   upsert_alert_recipient, put_ops_chargeback_policy, decide_missed_dm_verify, record_deposit,
   confirm_pickup, undo_pickup, put_pickup_config, closing_sweep_put_config, put_expense_categories,
   create_expense_line, decide_expense_line, put_envelope_config, record_envelope_withdrawal,
-  release_closing_row — read each span first (bank_deposit/record_deposit may thread nested payloads).
-  Then core (32, many auth/admin already done early) + misc small files (storeops/payroll_approval 7,
-  hr/letters 5, account 3, core/* helpers). Next: run
+  release_closing_row.
+  **Part 48 (closing FULLY swept — 27/28):** all the above config setters + action toggles converted.
+  Notables: `update_bank_deposit_meta` keeps its forbidden-money-field rejection by declaring those
+  fields on the model so `model_fields_set` still detects them; `bank_deposit` `include_*` toggles
+  fall back to the org config default via `X if "X" in model_fields_set else cfg[...]`, and
+  `will_deposit_more` preserves its 3-state None/absent semantics the same way; `create_expense_line`
+  hands `_validate_expense_line` (shared dict-based helper, also fed nested rows from create_row) an
+  explicit dict built from the model. ONLY `create_row` stays DEFERRED (huge money-handler with
+  dynamic `counts`/`custom_tenders` config-driven axes + nested `expense_lines`). Then core (32, many
+  auth/admin already done early) + misc small files (storeops/payroll_approval 7, hr/letters 5,
+  account 3, core/* helpers). Next: run
   `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data).
   **Rules:** skip endpoints that thread the raw
   `body` dict into shared helpers (unless the callee is also being typed — then share/inherit a model),
