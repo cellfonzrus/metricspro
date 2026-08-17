@@ -1987,14 +1987,20 @@ def pay_simulator_context(period: str = "", rep: str = "",
 
 
 @router.post("/pay-simulator/simulate")
-def pay_simulator_simulate(body: dict = None, authorization: str = Header(default=""),
+class PaySimulatorSimulateIn(LaxModel):
+    period: Any = None
+    inputs: Any = None
+    rep: Any = None
+
+
+def pay_simulator_simulate(body: Optional[PaySimulatorSimulateIn] = None, authorization: str = Header(default=""),
                            org_id: str = ORG_ID):
     """Projected pay for the caller's OWN levers. POST because the input is a lever map, NOT because
     anything is written — this handler performs no insert/update/upsert/delete and triggers no
     recalculation. body = {period, inputs:{<lever_key>:{units, amount}}, rep?}."""
-    b = body or {}
-    return pay_simulator.run(sb(), authorization, b.get("period") or "",
-                             b.get("inputs") or {}, requested_rep=(b.get("rep") or ""),
+    b = body or PaySimulatorSimulateIn()
+    return pay_simulator.run(sb(), authorization, b.period or "",
+                             b.inputs or {}, requested_rep=(b.rep or ""),
                              requested_org=org_id)
 
 
@@ -2064,24 +2070,38 @@ def whatif_get_source_config(carrier_id: str = "", authorization: str = Header(d
 
 
 @router.put("/whatif/source-config")
-def whatif_put_source_config(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+class WhatifPutSourceConfigIn(LaxModel):
+    carrier_id: str = ""
+    carrier_mode: str = ""
+    residual_source: Any = None
+    residual_order_type: Any = None
+    residual_amount_field: Any = None
+    residual_sign: Any = None
+    income_source: Any = None
+    retail_cost_source: Any = None
+    ma_commission_sign: Any = None
+    notes: Any = None
+    is_active: Any = None
+
+
+def whatif_put_source_config(body: WhatifPutSourceConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Upsert a PER-CARRIER What-If source override (or the org's mode-default row when
     carrier_id is the nil UUID). Config, not code (RULE TWO). Degrades with an ok=false hint before mig
     209 runs."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    carrier_id = (body.get("carrier_id") or "").strip() or "00000000-0000-0000-0000-000000000000"
-    carrier_mode = (body.get("carrier_mode") or "boost").strip().lower()
+    carrier_id = (body.carrier_id or "").strip() or "00000000-0000-0000-0000-000000000000"
+    carrier_mode = (body.carrier_mode or "boost").strip().lower()
     if carrier_mode not in ("boost", "plan"):
         carrier_mode = "boost"
     row = {"org_id": org_id, "carrier_id": carrier_id, "carrier_mode": carrier_mode,
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     for k in ("residual_source", "residual_order_type", "residual_amount_field", "residual_sign",
               "income_source", "retail_cost_source", "ma_commission_sign", "notes"):
-        if k in body:
-            row[k] = body.get(k)
-    if "is_active" in body:
-        row["is_active"] = bool(body.get("is_active"))
+        if k in body.model_fields_set:
+            row[k] = getattr(body, k)
+    if "is_active" in body.model_fields_set:
+        row["is_active"] = bool(body.is_active)
     try:
         client = sb()
         client.schema("commcalc").table("whatif_source_config").upsert(
@@ -5550,8 +5570,13 @@ def ma_class_wiring_rule_proposals(source_report: str = "ma_daily_tx", period: s
                      "no CONFIRMED names has no proposal here, by design.")}
 
 
+class ApplyMaClassWiringRuleProposalsIn(LaxModel):
+    source_report: str = ""
+    rules: Any = None
+
+
 @router.post("/ma-class-wiring/rule-proposals/apply")
-def apply_ma_class_wiring_rule_proposals(body: dict, org_id: str = ORG_ID,
+def apply_ma_class_wiring_rule_proposals(body: ApplyMaClassWiringRuleProposalsIn, org_id: str = ORG_ID,
                                          authorization: str = Header(None)):
     """Write the CHOSEN product_class rules into commcalc.commission_category_map.
     body: {source_report?, rules: [{product_class, category, sign_rule?, priority?}]}.
@@ -5560,8 +5585,8 @@ def apply_ma_class_wiring_rule_proposals(body: dict, org_id: str = ORG_ID,
     the map's own unique shape, so re-applying is idempotent."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    sr = (body.get("source_report") or "ma_daily_tx").strip()
-    wanted = body.get("rules") or []
+    sr = (body.source_report or "ma_daily_tx").strip()
+    wanted = body.rules or []
     if not isinstance(wanted, list) or not wanted:
         raise HTTPException(400, "rules[] is required — this endpoint never applies everything")
     client = sb()
@@ -14276,8 +14301,14 @@ def _validate_rule_overrides(overrides):
     return out
 
 
+class CommissionRuleImpactIn(LaxModel):
+    period: Any = None
+    overrides: Any = None
+    rep: Any = None
+
+
 @router.post("/commission-plans/rule-impact")
-async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
+async def commission_rule_impact(body: CommissionRuleImpactIn, org_id: str = ORG_ID):
     """READ-ONLY BLAST RADIUS for a proposed commission-rule matcher change. Writes NOTHING and triggers
     no calculation — it runs the real engine twice (as configured, and with the proposed matchers applied
     to an in-memory copy) and returns the difference.
@@ -14297,17 +14328,17 @@ async def commission_rule_impact(body: dict, org_id: str = ORG_ID):
     on are still withheld until the paid-residual gate is met, and any month pays $0 if no rate-plan MRC
     resolves. So `freed_enrolled_by_multimonth` is a CEILING on what might be re-paid, while
     `freed_no_pay_source` is the hard floor — those lines have no configured source at all."""
-    period = str((body or {}).get("period") or "").strip()
+    period = str(body.period or "").strip()
     if not period:
         raise HTTPException(400, "period required")
     require_org(org_id)
-    overrides = (body or {}).get("overrides") or {}
+    overrides = body.overrides or {}
     if not isinstance(overrides, dict):
         raise HTTPException(400, "overrides must be an object keyed by rule id")
     overrides = _validate_rule_overrides(overrides)
     try:
         return plan_impact.rule_impact(sb(), org_id, period, overrides,
-                                       only_rep=str((body or {}).get("rep") or "").strip() or None)
+                                       only_rep=str(body.rep or "").strip() or None)
     except Exception as e:
         print(f"WARN rule-impact failed for org {org_id} period {period}: {e}")
         raise HTTPException(500, f"rule impact unavailable: {e}")
