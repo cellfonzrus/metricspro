@@ -6757,15 +6757,22 @@ def upload_duty_config(org_id: str = ORG_ID):
     return {'defaults': _duty_defaults(client, org_id), 'duties': _duty_rows(client, org_id)}
 
 
+class UploadDutyConfigIn(LaxModel):
+    default_assignee: str = ""
+    reminder_hour: Any = 9
+    reminder_minute: Any = 0
+    timezone: str = ""
+
+
 @router.put("/upload-duty-config")
-def set_upload_duty_config(body: dict, org_id: str = ORG_ID):
+def set_upload_duty_config(body: UploadDutyConfigIn, org_id: str = ORG_ID):
     """Set the tenant default assignee + reminder time (the owner's "one person" model)."""
     require_org(org_id)
     row = {'org_id': org_id,
-           'default_assignee': (body.get('default_assignee') or '').strip() or None,
-           'reminder_hour': int(body.get('reminder_hour', 9) or 0),
-           'reminder_minute': int(body.get('reminder_minute', 0) or 0),
-           'timezone': (body.get('timezone') or 'America/New_York').strip(),
+           'default_assignee': (body.default_assignee or '').strip() or None,
+           'reminder_hour': int(body.reminder_hour or 0),
+           'reminder_minute': int(body.reminder_minute or 0),
+           'timezone': (body.timezone or 'America/New_York').strip(),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     sb().schema('commcalc').table('report_upload_defaults').upsert(row, on_conflict='org_id').execute()
     return {'ok': True, 'defaults': row}
@@ -7948,22 +7955,30 @@ def get_item_categories(org_id: str = ORG_ID):
             "kpi": _item_category_values(client, org_id, "kpi"), "ready": True}
 
 
+class PutItemCategoryIn(LaxModel):
+    dimension: str = ""
+    value: str = ""
+    label: Any = None
+    is_active: Any = None
+    sort_order: Any = None
+
+
 @router.put("/item-categories")
-def put_item_category(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_item_category(body: PutItemCategoryIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Add/rename/deactivate ONE category value. body: {dimension('sales'|'kpi'), value,
     label?, is_active?, sort_order?}. value is the canonical key stored on item_mapping.*_category."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
-    dim = (body.get("dimension") or "").strip().lower()
-    val = (body.get("value") or "").strip().lower().replace(" ", "_")
+    dim = (body.dimension or "").strip().lower()
+    val = (body.value or "").strip().lower().replace(" ", "_")
     if dim not in ("sales", "kpi") or not val:
         raise HTTPException(400, "dimension ('sales'|'kpi') and value are required.")
     row = {"org_id": org_id, "dimension": dim, "value": val,
-           "label": (body.get("label") or val.replace("_", " ").title()),
-           "is_active": bool(body.get("is_active")) if body.get("is_active") is not None else True,
+           "label": (body.label or val.replace("_", " ").title()),
+           "is_active": bool(body.is_active) if body.is_active is not None else True,
            "source": "manual", "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if body.get("sort_order") is not None:
-        row["sort_order"] = int(body.get("sort_order") or 100)
+    if body.sort_order is not None:
+        row["sort_order"] = int(body.sort_order or 100)
     try:
         sb().schema("commcalc").table("item_category_config").upsert(row, on_conflict="org_id,dimension,value").execute()
     except Exception as e:
@@ -8041,28 +8056,40 @@ def get_item_mapping(search: str = None, item_type: str = None, store: str = Non
     return {"items": rows, "ready": True, "counts": counts, "total": len(rows)}
 
 
+class UpsertItemMappingIn(LaxModel):
+    item_key: Any = None
+    sku: Any = None
+    item_desc: Any = None
+    item_type: str = ""
+    device_model: str = ""
+    department: Any = None
+    category: Any = None
+    sales_category: Any = None
+    kpi_category: Any = None
+
+
 @router.post("/item-mapping")
-def upsert_item_mapping(body: dict, org_id: str = ORG_ID):
+def upsert_item_mapping(body: UpsertItemMappingIn, org_id: str = ORG_ID):
     """Classify / edit one item (type + device_model). Keyed by item_key (sku, else description)."""
     require_org(org_id)
-    key = (body.get("item_key") or _item_key(body.get("sku"), body.get("item_desc")))
+    key = (body.item_key or _item_key(body.sku, body.item_desc))
     if not key:
         raise HTTPException(400, "item_key (or sku/item_desc) required")
-    item_type = (body.get("item_type") or "unclassified").strip()
-    device_model = (body.get("device_model") or "").strip() or None
+    item_type = (body.item_type or "unclassified").strip()
+    device_model = (body.device_model or "").strip() or None
     if item_type == "phone" and not device_model:
         raise HTTPException(400, "Phone model is required when the item type is 'phone'.")
     row = {"org_id": org_id, "item_key": key,
-           "sku": (body.get("sku") or "").strip() or None,
-           "item_desc": (body.get("item_desc") or "").strip() or None,
+           "sku": (body.sku or "").strip() or None,
+           "item_desc": (body.item_desc or "").strip() or None,
            "item_type": item_type, "device_model": device_model,
-           "department": body.get("department"), "category": body.get("category"),
+           "department": body.department, "category": body.category,
            "source": "manual", "updated_at": _cb_now()}
     # DUAL-category (mig 210): only stamp when present so a type-only save never nulls a category.
-    if "sales_category" in body:
-        row["sales_category"] = (str(body.get("sales_category") or "").strip() or None)
-    if "kpi_category" in body:
-        row["kpi_category"] = (str(body.get("kpi_category") or "").strip() or None)
+    if "sales_category" in body.model_fields_set:
+        row["sales_category"] = (str(body.sales_category or "").strip() or None)
+    if "kpi_category" in body.model_fields_set:
+        row["kpi_category"] = (str(body.kpi_category or "").strip() or None)
     try:
         sb().schema("commcalc").table("item_mapping").upsert(row, on_conflict="org_id,item_key").execute()
         if device_model:
@@ -8072,20 +8099,28 @@ def upsert_item_mapping(body: dict, org_id: str = ORG_ID):
     return {"ok": True, "item_key": key}
 
 
+class BulkItemMappingIn(LaxModel):
+    item_keys: Any = None
+    item_type: str = ""
+    device_model: str = ""
+    sales_category: Any = None
+    kpi_category: Any = None
+
+
 @router.post("/item-mapping/bulk")
-def bulk_item_mapping(body: dict, org_id: str = ORG_ID):
+def bulk_item_mapping(body: BulkItemMappingIn, org_id: str = ORG_ID):
     """Apply a type and/or phone model to MANY items at once. Body: {item_keys: [...],
     item_type?, device_model?}. Only the provided fields are changed on each row."""
     require_org(org_id)
-    keys = [k for k in (body.get("item_keys") or []) if k]
+    keys = [k for k in (body.item_keys or []) if k]
     if not keys:
         raise HTTPException(400, "item_keys required")
-    item_type = (body.get("item_type") or "").strip() or None
-    device_model = (body.get("device_model") or "").strip() or None
+    item_type = (body.item_type or "").strip() or None
+    device_model = (body.device_model or "").strip() or None
     if item_type == "phone" and not device_model:
         raise HTTPException(400, "Phone model is required when setting type to 'phone'. Pick a model to apply to the selected items.")
-    sales_category = (body.get("sales_category") or "").strip() if "sales_category" in body else None
-    kpi_category = (body.get("kpi_category") or "").strip() if "kpi_category" in body else None
+    sales_category = (body.sales_category or "").strip() if "sales_category" in body.model_fields_set else None
+    kpi_category = (body.kpi_category or "").strip() if "kpi_category" in body.model_fields_set else None
     if not item_type and not device_model and sales_category is None and kpi_category is None:
         raise HTTPException(400, "Provide item_type, device_model, sales_category and/or kpi_category to apply.")
     patch = {"source": "manual", "updated_at": _cb_now()}
@@ -8157,10 +8192,14 @@ def list_device_models(org_id: str = ORG_ID):
     return {"models": sorted(m for m in models if m), "registry": reg}
 
 
+class AddDeviceModelIn(LaxModel):
+    model: str = ""
+
+
 @router.post("/device-models")
-def add_device_model(body: dict, org_id: str = ORG_ID):
+def add_device_model(body: AddDeviceModelIn, org_id: str = ORG_ID):
     require_org(org_id)
-    model = (body.get("model") or "").strip()
+    model = (body.model or "").strip()
     if not model:
         raise HTTPException(400, "model required")
     try:

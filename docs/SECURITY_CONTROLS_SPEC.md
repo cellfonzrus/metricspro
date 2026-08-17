@@ -306,7 +306,10 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     product-class (upsert one, confirm proposals) → lax; normalize/enum-validated
     fields typed Any. **Part 13:** commcalc accessory-definition (upsert mapping,
     confirm proposals, propose-from-data optional body) → lax; the field-rule PUT
-    threads `body` into `normalize_field_rule` (deferred). ~331 `dict` bodies remain
+    threads `body` into `normalize_field_rule` (deferred). **Part 14:** commcalc
+    item/config (upload-duty config, item-category put, item-mapping upsert + bulk,
+    device-model add) → lax; presence via model_fields_set, int-coerced fields
+    typed Any. ~326 `dict` bodies remain
     (body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
     data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
