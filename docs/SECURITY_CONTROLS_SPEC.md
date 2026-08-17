@@ -391,8 +391,18 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     gate as a typed field and `form_data` as an opaque `Any`) → lax. **hr is now
     fully swept** — 4 `body: dict` handlers remain deferred: create/update-employee
     (EMP_FIELDS freeform records) and me/public onboarding-intake (freeform intake
-    map into `_apply_intake`). ~228 `dict` bodies remain across other modules
-    (crm `create_lead` + bulk-assign/dispose next; POS skipped — incomplete/no data).
+    map into `_apply_intake`). **Part 42 (crm leads/tasks fully swept):** create_lead
+    (26-field), update_lead, move_stage, dispose_lead, assign_lead, bulk_assign,
+    bulk_dispose, convert_lead, intake_lead, add_activity, complete_task, snooze_task
+    → lax. Sibling body-threading solved with shared/inherited models
+    (`BulkDisposeIn(DisposeLeadIn)` / `BulkAssignIn(AssignLeadIn)` pass the same typed
+    body straight to the single-lead handler; `IntakeLeadIn(CreateLeadIn)` forwards
+    to create_lead). **Also fixed a latent bug** — `agency_response` was typed but
+    still called `body.get("reason")` (would AttributeError on every agency decline);
+    added the field + attribute access. crm config CRUD deferred (loud unknown-key
+    rejection — a lax model drops silently, a strict model changes the 400→422
+    contract). ~206 `dict` bodies remain across other modules (core, closing, notify,
+    referral, billing, storeops helpers, storevisit, …; POS skipped — incomplete/no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

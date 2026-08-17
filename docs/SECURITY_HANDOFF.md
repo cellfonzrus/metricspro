@@ -4,7 +4,7 @@ Living handoff for the security hardening effort. Any session can resume from he
 work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control matrix),
 `SECURITY_DAILY_QUESTIONS.md` (operator go-lives), `INCIDENT_RESPONSE_PLAN.md`, `BACKUP_DR_PLAN.md`.
 
-**Last updated:** 2026-08-17 (item 15 pt41 — hr fully swept) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
+**Last updated:** 2026-08-17 (item 15 pt42 — crm leads/tasks + agency-decline bugfix) · **Branch:** `claude/employee-commission-structure-3g5hva` · **PR:** #30 (draft, CI green)
 
 ---
 
@@ -15,7 +15,7 @@ work proceeds. Companion docs: `SECURITY_CONTROLS_SPEC.md` (the plan + control m
 | **Phase 1 (P0)** — sessions, rate-limit, retention, fail-closed, startup posture, login ledger | ✅ complete |
 | **Phase 2 (P1)** — export governance, PII masking, constant-time secrets, 2FA admin, CSP | ✅ complete |
 | **Phase 3 (P1/P2)** — CI gates (12), WORM (13), RPO/RTO+IRP (14), DSAR export (16) | ✅ done; **erasure deferred** |
-| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–41 = 215 endpoints; ~218 remain). commcalc + hr fully swept. |
+| **Item 15 — Pydantic rollout** | 🟡 in progress, incremental (parts 1–42 = 227 endpoints; ~206 remain). commcalc + hr + crm-leads fully swept. |
 | External Threat Defense Plan | ✅ code-tractable parts done (IP blocklist, session purge, IRP) |
 
 **Migrations 857–863: ALL APPLIED.** No SQL pending.
@@ -147,14 +147,28 @@ crm_lookup_audit.pii_revealed, export_event, WORM).
   gate as a `value: Any` field + `form_data: Any` opaque). **✅ hr convertible surface COMPLETE** — 4
   `body: dict` handlers remain deferred: hr_create_employee / hr_update_employee (EMP_FIELDS-driven
   freeform employee records, like storeops's own create_employee); onboarding_me_intake /
-  public_onboarding_intake (freeform intake map threaded/spread into `_apply_intake`). Next: run
-  `grep -rn 'body: dict' app/modules` for any module not yet touched (crm `create_lead` 25-field +
-  `bulk-assign/dispose` still pending; check pos is still skipped). **POS skipped** — module
-  incomplete / no data. **Rules:** skip endpoints that thread the raw `body` dict into shared helpers,
-  use `body` itself as a freeform map (`else body`), or spread `{**body}`; preserve None-vs-empty +
-  downstream `.get()`; type handler-validated fields (`float(amount)` → 400) as `Any` so Pydantic
-  doesn't pre-empt with a 422; for PATCH/presence use `model_fields_set`; a leading-underscore body key
-  needs `Field(alias="_x")`. `create_lead` (25 fields) + crm `bulk-assign/dispose` still need a pass.
+  public_onboarding_intake (freeform intake map threaded/spread into `_apply_intake`).
+  **Part 42 (crm leads/tasks — fully swept):** create_lead (26-field), update_lead (allow-list via
+  model_fields_set), move_stage, dispose_lead, assign_lead, bulk_assign, bulk_dispose, convert_lead,
+  intake_lead, add_activity, complete_task, snooze_task. **New pattern — sibling body-threading solved
+  by shared/inherited models:** dispose_lead/assign_lead take `DisposeLeadIn`/`AssignLeadIn`;
+  `BulkDisposeIn(DisposeLeadIn)` / `BulkAssignIn(AssignLeadIn)` add `lead_ids` and pass the SAME typed
+  body straight through to the single-lead handler (attributes already present); move_stage constructs
+  a `DisposeLeadIn(...)` for its internal dispose call; complete_task types its optional body as
+  `DisposeLeadIn = None` and sets `body.task_id` before threading; intake_lead types body as
+  `IntakeLeadIn(CreateLeadIn)` and forwards the model to create_lead. **Also fixed a latent bug:**
+  `agency_response` was already typed `AgencyResponseIn(accepted)` but still called `body.get("reason")`
+  → would AttributeError on every agency *decline*; added `reason` field + attribute access. crm
+  config CRUD (put_config/create_config/update_config) DEFERRED — they iterate `body.keys()` and
+  LOUDLY reject unknown keys with a custom 400 ("Nothing was saved"); a LaxModel would silently drop
+  them (the exact documented bug) and a StrictModel would change the 400→422 contract. Next: run
+  `grep -rn 'body: dict' app/modules` for remaining modules (pos still skipped — incomplete/no data;
+  core/closing/notify/referral/billing/etc. untouched). **Rules:** skip endpoints that thread the raw
+  `body` dict into shared helpers (unless the callee is also being typed — then share/inherit a model),
+  use `body` itself as a freeform map (`else body`), spread `{**body}`, or loudly reject unknown keys;
+  preserve None-vs-empty + downstream `.get()`; type handler-validated fields (`float(amount)` → 400)
+  as `Any` so Pydantic doesn't pre-empt with a 422; for PATCH/presence use `model_fields_set`; a
+  leading-underscore body key needs `Field(alias="_x")`.
 - **Item 16 erasure** — deferred by owner context (no SSN yet, 1st month, WORM-vs-erasure tension).
   When needed: scoped anonymization of `pos.customers`/`crm_lead` leaving WORM audit intact;
   crypto-shred once SSN/bank exists. Owner to confirm scope.

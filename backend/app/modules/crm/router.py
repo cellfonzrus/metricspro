@@ -18,6 +18,8 @@ Design notes
 """
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 from fastapi import APIRouter, Header, HTTPException
 
 from app.core.database import get_supabase
@@ -552,8 +554,37 @@ def _book_task(org_id: str, lead: dict, spec: dict, caller=None):
         return None       # unique-index collision = already booked; that is success, not an error
 
 
+class CreateLeadIn(LaxModel):
+    phone: Any = None
+    email: Any = None
+    pipeline_id: Any = None
+    stage_id: Any = None
+    first_name: Any = None
+    last_name: Any = None
+    company_name: Any = None
+    address_1: Any = None
+    city: Any = None
+    state: Any = None
+    zip: Any = None
+    store_code: Any = None
+    market: Any = None
+    source_id: Any = None
+    source_key: Any = None
+    interest_id: Any = None
+    interest_key: Any = None
+    campaign: Any = None
+    notes: Any = None
+    value_estimate: Any = None
+    lines_estimate: Any = None
+    expected_close_date: Any = None
+    matched_customer_id: Any = None
+    do_not_call: Any = None
+    sms_opt_in: Any = None
+    owner_employee_id: Any = None
+
+
 @router.post("/leads")
-def create_lead(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def create_lead(body: CreateLeadIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
     """Log a lead. Name is optional; a phone number alone is a valid lead — the whole point is that
     capture must be faster than not capturing."""
@@ -562,15 +593,15 @@ def create_lead(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
     cfg = _cfg(org_id)
     vocab = _vocab(org_id)
 
-    phone = str(body.get("phone") or "").strip()
-    if not phone and not str(body.get("email") or "").strip():
+    phone = str(body.phone or "").strip()
+    if not phone and not str(body.email or "").strip():
         raise HTTPException(400, "A lead needs at least a phone number or an email address.")
 
-    pipeline_id = body.get("pipeline_id") or cfg.get("default_pipeline_id")
+    pipeline_id = body.pipeline_id or cfg.get("default_pipeline_id")
     if not pipeline_id and vocab["pipelines"]:
         default = next((p for p in vocab["pipelines"] if p.get("is_default")), vocab["pipelines"][0])
         pipeline_id = default.get("id")
-    stage_id = body.get("stage_id")
+    stage_id = body.stage_id
     if not stage_id:
         stages = [s for s in vocab["stages"] if s.get("pipeline_id") == pipeline_id
                   and not s.get("is_won") and not s.get("is_lost")]
@@ -579,31 +610,31 @@ def create_lead(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
 
     row = {
         "org_id": org_id,
-        "first_name": body.get("first_name"), "last_name": body.get("last_name"),
-        "company_name": body.get("company_name"),
-        "phone": phone or None, "email": (body.get("email") or "").strip() or None,
-        "address_1": body.get("address_1"), "city": body.get("city"),
-        "state": body.get("state"), "zip": body.get("zip"),
-        "store_code": body.get("store_code") or (caller or {}).get("store_code"),
-        "market": body.get("market") or (caller or {}).get("market"),
-        "source_id": _resolve_ref(vocab["sources"], body.get("source_id") or body.get("source_key"), org_id),
-        "interest_id": _resolve_ref(vocab["interests"], body.get("interest_id") or body.get("interest_key"), org_id),
-        "campaign": body.get("campaign"),
-        "notes": body.get("notes"),
+        "first_name": body.first_name, "last_name": body.last_name,
+        "company_name": body.company_name,
+        "phone": phone or None, "email": (body.email or "").strip() or None,
+        "address_1": body.address_1, "city": body.city,
+        "state": body.state, "zip": body.zip,
+        "store_code": body.store_code or (caller or {}).get("store_code"),
+        "market": body.market or (caller or {}).get("market"),
+        "source_id": _resolve_ref(vocab["sources"], body.source_id or body.source_key, org_id),
+        "interest_id": _resolve_ref(vocab["interests"], body.interest_id or body.interest_key, org_id),
+        "campaign": body.campaign,
+        "notes": body.notes,
         "pipeline_id": pipeline_id, "stage_id": stage_id,
         "stage_entered_at": _iso(_now()),
-        "value_estimate": body.get("value_estimate") or 0,
-        "lines_estimate": body.get("lines_estimate") or 0,
-        "expected_close_date": body.get("expected_close_date"),
-        "matched_customer_id": body.get("matched_customer_id"),
-        "do_not_call": bool(body.get("do_not_call")),
-        "sms_opt_in": bool(body.get("sms_opt_in")),
+        "value_estimate": body.value_estimate or 0,
+        "lines_estimate": body.lines_estimate or 0,
+        "expected_close_date": body.expected_close_date,
+        "matched_customer_id": body.matched_customer_id,
+        "do_not_call": bool(body.do_not_call),
+        "sms_opt_in": bool(body.sms_opt_in),
         "created_by": (caller or {}).get("employee_id"),
         "last_activity_at": _iso(_now()),
     }
 
     # Routing: an explicit owner wins; otherwise the assignment rules decide.
-    owner = body.get("owner_employee_id")
+    owner = body.owner_employee_id
     rule_id = None
     if owner:
         row["owner_employee_id"] = owner
@@ -688,8 +719,34 @@ def dedupe_check(body: DedupeCheckIn, org_id: str = ORG_ID):
     return {"duplicates": dupes, "mode": cfg.get("duplicate_match")}
 
 
+class UpdateLeadIn(LaxModel):
+    first_name: Any = None
+    last_name: Any = None
+    company_name: Any = None
+    phone: Any = None
+    email: Any = None
+    address_1: Any = None
+    city: Any = None
+    state: Any = None
+    zip: Any = None
+    store_code: Any = None
+    market: Any = None
+    source_id: Any = None
+    interest_id: Any = None
+    campaign: Any = None
+    notes: Any = None
+    value_estimate: Any = None
+    lines_estimate: Any = None
+    expected_close_date: Any = None
+    priority: Any = None
+    do_not_call: Any = None
+    sms_opt_in: Any = None
+    next_action_at: Any = None
+    matched_customer_id: Any = None
+
+
 @router.patch("/leads/{lead_id}")
-def update_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
+def update_lead(lead_id: str, body: UpdateLeadIn, org_id: str = ORG_ID,
                 authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     caller = _caller(authorization, x_active_org)
     lead = _get_lead(org_id, lead_id)
@@ -698,7 +755,7 @@ def update_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
                "state", "zip", "store_code", "market", "source_id", "interest_id", "campaign",
                "notes", "value_estimate", "lines_estimate", "expected_close_date", "priority",
                "do_not_call", "sms_opt_in", "next_action_at", "matched_customer_id"}
-    row = {k: v for k, v in body.items() if k in allowed}
+    row = {k: getattr(body, k) for k in allowed if k in body.model_fields_set}
     if not row:
         raise HTTPException(400, "Nothing to update.")
     row["updated_at"] = _iso(_now())
@@ -713,8 +770,30 @@ def update_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
     return _decorate((r.data or [merged])[0], vocab)
 
 
+class DisposeLeadIn(LaxModel):
+    disposition_id: Any = None
+    reason_code_id: Any = None
+    note: Any = None
+    followup_at: Any = None
+    task_id: Any = None
+
+
+class AssignLeadIn(LaxModel):
+    employee_id: Any = None
+    queue_id: Any = None
+    agency_id: Any = None
+    reason: Any = None
+
+
+class MoveStageIn(LaxModel):
+    stage_id: Any = None
+    disposition_id: Any = None
+    reason_code_id: Any = None
+    note: Any = None
+
+
 @router.post("/leads/{lead_id}/stage")
-def move_stage(lead_id: str, body: dict, org_id: str = ORG_ID,
+def move_stage(lead_id: str, body: MoveStageIn, org_id: str = ORG_ID,
                authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Move a lead to another stage. A closing stage the tenant marked `requires_disposition` is
     REFUSED without an outcome — that refusal is the whole reason the pipeline knows why deals die."""
@@ -722,10 +801,10 @@ def move_stage(lead_id: str, body: dict, org_id: str = ORG_ID,
     cfg = _cfg(org_id)
     lead = _get_lead(org_id, lead_id)
     vocab = _vocab(org_id)
-    stage = _by_id(vocab["stages"]).get(body.get("stage_id"))
+    stage = _by_id(vocab["stages"]).get(body.stage_id)
     if not stage:
         raise HTTPException(400, "Unknown stage.")
-    if core.stage_close_requires_disposition(stage, cfg) and not body.get("disposition_id"):
+    if core.stage_close_requires_disposition(stage, cfg) and not body.disposition_id:
         raise HTTPException(400, f"'{stage.get('name')}' needs an outcome — pick a disposition.")
 
     upd = {"stage_id": stage.get("id"), "stage_entered_at": _iso(_now()),
@@ -744,16 +823,16 @@ def move_stage(lead_id: str, body: dict, org_id: str = ORG_ID,
     _log_activity(org_id, lead_id, "stage_change",
                   f"{old.get('name') or '—'} → {stage.get('name')}",
                   {"from": lead.get("stage_id"), "to": stage.get("id")}, caller)
-    if body.get("disposition_id"):
-        return dispose_lead(lead_id, {"disposition_id": body["disposition_id"],
-                                      "reason_code_id": body.get("reason_code_id"),
-                                      "note": body.get("note") or ""},
+    if body.disposition_id:
+        return dispose_lead(lead_id, DisposeLeadIn(disposition_id=body.disposition_id,
+                                                   reason_code_id=body.reason_code_id,
+                                                   note=body.note or ""),
                             org_id, authorization, x_active_org)
     return {"ok": True, "stage": stage.get("name"), "status": upd["status"]}
 
 
 @router.post("/leads/{lead_id}/dispose")
-def dispose_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
+def dispose_lead(lead_id: str, body: DisposeLeadIn, org_id: str = ORG_ID,
                  authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """"Dispose" a lead — record what happened on this touch. This is the single most important write
     in the module: it is what turns activity into a pipeline, and it is what books the next step."""
@@ -761,13 +840,13 @@ def dispose_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
     cfg = _cfg(org_id)
     lead = _get_lead(org_id, lead_id)
     vocab = _vocab(org_id)
-    disp = _by_id(vocab["dispositions"]).get(body.get("disposition_id"))
+    disp = _by_id(vocab["dispositions"]).get(body.disposition_id)
     if not disp:
-        disp = next((d for d in vocab["dispositions"] if d.get("key") == body.get("disposition_id")), None)
+        disp = next((d for d in vocab["dispositions"] if d.get("key") == body.disposition_id), None)
     result = core.apply_disposition(lead, disp, cfg, _now(),
-                                    reason_code_id=body.get("reason_code_id"),
-                                    note=body.get("note") or "",
-                                    followup_at=core._dt(body.get("followup_at")))
+                                    reason_code_id=body.reason_code_id,
+                                    note=body.note or "",
+                                    followup_at=core._dt(body.followup_at))
     if result["errors"]:
         raise HTTPException(400, " ".join(result["errors"]))
     try:
@@ -783,20 +862,20 @@ def dispose_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
         merged = {**lead, **result["lead_updates"]}
         task = _book_task(org_id, merged, result["followup"], caller)
     # Close out whatever open task prompted this touch, so the rep's inbox actually empties.
-    if body.get("task_id"):
-        _complete_task_row(org_id, body["task_id"], caller, disp.get("id") if disp else None)
+    if body.task_id:
+        _complete_task_row(org_id, body.task_id, caller, disp.get("id") if disp else None)
     return {"ok": True, "closed": bool(disp.get("closes_lead")), "followup": task}
 
 
 @router.post("/leads/{lead_id}/assign")
-def assign_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
+def assign_lead(lead_id: str, body: AssignLeadIn, org_id: str = ORG_ID,
                 authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Hand a lead to a teammate, a queue, or an outside agency. Exactly one target."""
     caller = _caller(authorization, x_active_org)
     lead = _get_lead(org_id, lead_id)
     vocab = _vocab(org_id)
-    emp, queue, agency = (body.get("employee_id") or None, body.get("queue_id") or None,
-                          body.get("agency_id") or None)
+    emp, queue, agency = (body.employee_id or None, body.queue_id or None,
+                          body.agency_id or None)
     targets = [t for t in (emp, queue, agency) if t]
     if len(targets) != 1:
         raise HTTPException(400, "Pick exactly one: a teammate, a queue, or an agency.")
@@ -818,7 +897,7 @@ def assign_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
             "to_employee_id": emp, "to_queue_id": queue, "to_agency_id": agency,
             "by_employee_id": (caller or {}).get("employee_id"),
             "by_app_user_id": (caller or {}).get("id"),
-            "reason": body.get("reason") or "",
+            "reason": body.reason or "",
         }).execute()
     except Exception as e:
         raise HTTPException(400, f"Could not reassign: {e}")
@@ -827,7 +906,7 @@ def assign_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
                     else "a queue")
     _log_activity(org_id, lead_id, "assignment", f"Assigned to {label}",
                   {"employee_id": emp, "queue_id": queue, "agency_id": agency,
-                   "reason": body.get("reason") or ""}, caller)
+                   "reason": body.reason or ""}, caller)
     # Open tasks follow the lead — a follow-up left pointing at the previous owner is a follow-up
     # nobody does.
     try:
@@ -841,10 +920,14 @@ def assign_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
     return {"ok": True}
 
 
+class BulkAssignIn(AssignLeadIn):
+    lead_ids: Any = None
+
+
 @router.post("/leads/bulk-assign")
-def bulk_assign(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def bulk_assign(body: BulkAssignIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                 x_active_org: str = Header(default="")):
-    ids = [i for i in (body.get("lead_ids") or []) if i][:500]
+    ids = [i for i in (body.lead_ids or []) if i][:500]
     if not ids:
         raise HTTPException(400, "No leads selected.")
     done, failed = 0, []
@@ -857,10 +940,14 @@ def bulk_assign(body: dict, org_id: str = ORG_ID, authorization: str = Header(de
     return {"assigned": done, "failed": failed}
 
 
+class BulkDisposeIn(DisposeLeadIn):
+    lead_ids: Any = None
+
+
 @router.post("/leads/bulk-dispose")
-def bulk_dispose(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def bulk_dispose(body: BulkDisposeIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                  x_active_org: str = Header(default="")):
-    ids = [i for i in (body.get("lead_ids") or []) if i][:500]
+    ids = [i for i in (body.lead_ids or []) if i][:500]
     if not ids:
         raise HTTPException(400, "No leads selected.")
     done, failed = 0, []
@@ -875,6 +962,7 @@ def bulk_dispose(body: dict, org_id: str = ORG_ID, authorization: str = Header(d
 
 class AgencyResponseIn(LaxModel):
     accepted: bool = False
+    reason: Any = None
 
 
 @router.post("/leads/{lead_id}/agency-response")
@@ -907,19 +995,23 @@ def agency_response(lead_id: str, body: AgencyResponseIn, org_id: str = ORG_ID,
         if latest:
             sb().table("crm_assignment").update(
                 {"accepted_at": now} if accepted
-                else {"declined_at": now, "declined_reason": body.get("reason") or ""}
+                else {"declined_at": now, "declined_reason": body.reason or ""}
             ).eq("org_id", org_id).eq("id", latest[0]["id"]).execute()
     except Exception as e:
         raise HTTPException(400, f"Could not record the response: {e}")
     _log_activity(org_id, lead_id, "assignment",
                   "Agency accepted the lead" if accepted
-                  else f"Agency declined: {body.get('reason') or 'no reason given'}",
+                  else f"Agency declined: {body.reason or 'no reason given'}",
                   {"accepted": accepted}, caller)
     return {"ok": True, "accepted": accepted}
 
 
+class ConvertLeadIn(LaxModel):
+    customer_id: Any = None
+
+
 @router.post("/leads/{lead_id}/convert")
-def convert_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
+def convert_lead(lead_id: str, body: ConvertLeadIn, org_id: str = ORG_ID,
                  authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Turn a won lead into a POS customer. If a customer with this phone already exists we LINK to
     it rather than creating a second one — a duplicate customer master is how a CRM stops being
@@ -927,7 +1019,7 @@ def convert_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
     caller = _caller(authorization, x_active_org)
     lead = _get_lead(org_id, lead_id)
     phone = core.normalize_phone(lead.get("phone"))
-    customer_id = body.get("customer_id") or lead.get("matched_customer_id")
+    customer_id = body.customer_id or lead.get("matched_customer_id")
     if not customer_id and phone:
         try:
             rows = (get_supabase().schema("pos").table("customers")
@@ -966,34 +1058,45 @@ def convert_lead(lead_id: str, body: dict, org_id: str = ORG_ID,
     return {"ok": True, "customer_id": customer_id}
 
 
+class IntakeLeadIn(CreateLeadIn):
+    intake_key: Any = None
+
+
 @router.post("/leads/intake")
-def intake_lead(body: dict, org_id: str = ORG_ID):
+def intake_lead(body: IntakeLeadIn, org_id: str = ORG_ID):
     """Web-to-Lead. Authenticated by the tenant's `crm_config.intake_key` instead of a JWT, so a
     website form or a partner can post here. Disabled (401) until a tenant sets a key — an open
     intake endpoint is a spam funnel."""
     cfg = _cfg(org_id)
     key = (cfg.get("intake_key") or "").strip()
-    if not key or str(body.get("intake_key") or "").strip() != key:
+    if not key or str(body.intake_key or "").strip() != key:
         raise HTTPException(401, "Lead intake is not enabled for this account.")
-    payload = {k: v for k, v in body.items() if k != "intake_key"}
-    payload.setdefault("source_key", "website")
-    return create_lead(payload, org_id, "", "")
+    if not body.source_key:
+        body.source_key = "website"
+    return create_lead(body, org_id, "", "")
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # Activity + tasks
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 
+class AddActivityIn(LaxModel):
+    kind: Any = None
+    body: Any = None
+    meta: Any = None
+    direction: Any = None
+
+
 @router.post("/leads/{lead_id}/activity")
-def add_activity(lead_id: str, body: dict, org_id: str = ORG_ID,
+def add_activity(lead_id: str, body: AddActivityIn, org_id: str = ORG_ID,
                  authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     caller = _caller(authorization, x_active_org)
     _get_lead(org_id, lead_id)
-    kind = (body.get("kind") or "note").lower()
+    kind = (body.kind or "note").lower()
     if kind not in ("note", "call", "sms", "email", "whatsapp", "visit"):
         raise HTTPException(400, f"'{kind}' is not something you can log by hand.")
-    _log_activity(org_id, lead_id, kind, body.get("body") or "", body.get("meta") or {},
-                  caller, body.get("direction"))
+    _log_activity(org_id, lead_id, kind, body.body or "", body.meta or {},
+                  caller, body.direction)
     _touch(org_id, lead_id, {"first_contacted_at": _iso(_now())} if kind != "note" else None)
     return {"ok": True}
 
@@ -1103,17 +1206,18 @@ def _complete_task_row(org_id: str, task_id: str, caller, disposition_id=None):
 
 
 @router.post("/tasks/{task_id}/complete")
-def complete_task(task_id: str, body: dict = None, org_id: str = ORG_ID,
+def complete_task(task_id: str, body: DisposeLeadIn = None, org_id: str = ORG_ID,
                   authorization: str = Header(default=""), x_active_org: str = Header(default="")):
-    body = body or {}
+    body = body or DisposeLeadIn()
     caller = _caller(authorization, x_active_org)
     rows = _fetch("crm_task", org_id, limit=1, id=task_id)
     if not rows:
         raise HTTPException(404, "Follow-up not found.")
     task = rows[0]
-    if body.get("disposition_id"):
+    if body.disposition_id:
         # Completing WITH an outcome is the good path: it books the next step automatically.
-        return dispose_lead(task["lead_id"], {**body, "task_id": task_id},
+        body.task_id = task_id
+        return dispose_lead(task["lead_id"], body,
                             org_id, authorization, x_active_org)
     _complete_task_row(org_id, task_id, caller)
     _log_activity(org_id, task["lead_id"], "task", f"Completed: {task.get('title')}",
@@ -1122,15 +1226,20 @@ def complete_task(task_id: str, body: dict = None, org_id: str = ORG_ID,
     return {"ok": True}
 
 
+class SnoozeTaskIn(LaxModel):
+    until: Any = None
+    hours: Any = None
+
+
 @router.post("/tasks/{task_id}/snooze")
-def snooze_task(task_id: str, body: dict, org_id: str = ORG_ID,
+def snooze_task(task_id: str, body: SnoozeTaskIn, org_id: str = ORG_ID,
                 authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     caller = _caller(authorization, x_active_org)
     cfg = _cfg(org_id)
-    until = core._dt(body.get("until"))
+    until = core._dt(body.until)
     if until is None:
         try:
-            hours = int(body.get("hours") or 24)
+            hours = int(body.hours or 24)
         except (TypeError, ValueError):
             hours = 24
         until = core.shift_to_business_hours(_now() + timedelta(hours=hours), cfg)
