@@ -311,9 +311,12 @@ Sequenced by risk-reduction-per-effort. Each phase is independently shippable.
     device-model add) → lax; presence via model_fields_set, int-coerced fields
     typed Any. **Part 15:** commcalc registry/schedule (custom-import-type create,
     connector-schedule patch, accessory-flags push) → lax; presence-and-not-None
-    loop via model_fields_set. ~323 `dict` bodies remain
-    (body-threading endpoints get a dedicated pass; POS skipped — incomplete/no
-    data).
+    loop via model_fields_set. **Part 16:** commcalc money-settings (commission-
+    settings put, activation-matcher put, plan-line-matcher put) → lax; all-Any
+    presence fields, handler enum/float validation preserved. save-plan-installment
+    threads `body` into `_write_installment_schedule` (deferred). ~320 `dict` bodies
+    remain (body-threading endpoints get a dedicated pass; POS skipped — incomplete/
+    no data).
 16. **DSAR / erasure workflow.** 🟡 **DSAR export built; erasure deferred.**
     `GET /crm/customer-360/dsar` (admin-only, audited) packages the full unmasked
     record for a data-subject request, reusing Customer-360; the lookup page shows

@@ -10743,54 +10743,64 @@ async def get_commission_settings(org_id: str = ORG_ID):
     return _commission_org_config(sb(), org_id)
 
 
+class PutCommissionSettingsIn(LaxModel):
+    pay_disabled: Any = None
+    residual_visibility: Any = None
+    plan_ct_resolution: Any = None
+    installment_mrc_basis: Any = None
+    installment_mrc_hardware_guard: Any = None
+    store_resolution: Any = None
+    calc_stale_minutes: Any = None
+
+
 @router.put("/commission-settings")
-async def put_commission_settings(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_commission_settings(body: PutCommissionSettingsIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Sets pay_disabled and/or residual_visibility for the tenant. pay_disabled=true means
     'this tenant INTENTIONALLY pays no commissions' → silences the R1 unconfigured-tenant refusal."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     row = {"org_id": org_id, "updated_at": _datetime.now(_timezone.utc).isoformat()}
-    if "pay_disabled" in body:
-        row["pay_disabled"] = bool(body.get("pay_disabled"))
-    if "residual_visibility" in body:
-        rv = (body.get("residual_visibility") or "all").strip().lower()
+    if "pay_disabled" in body.model_fields_set:
+        row["pay_disabled"] = bool(body.pay_disabled)
+    if "residual_visibility" in body.model_fields_set:
+        rv = (body.residual_visibility or "all").strip().lower()
         row["residual_visibility"] = rv if rv in ("all", "permissioned") else "all"
     # mig 232 — MONEY-ADJACENT: 'mapped' lets a contract_type-keyed Commission Plan rule ALSO match the
     # line's resolved activation bucket (the tenant's own mig-213 map + mig-224 activation rules), so
     # blank / carrier-specific Contract Type lines can start paying. Strictly a superset => pay can go UP
     # on the NEXT Calculate (this write alone moves nothing). Same admin gate as the rest of this endpoint.
-    if "plan_ct_resolution" in body:
-        cr = (body.get("plan_ct_resolution") or "raw").strip().lower()
+    if "plan_ct_resolution" in body.model_fields_set:
+        cr = (body.plan_ct_resolution or "raw").strip().lower()
         row["plan_ct_resolution"] = cr if cr in ("raw", "mapped") else "raw"
     # mig 233 — MONEY: which sale line a multi-month %-of-MRC installment is paid on. 'plan_line'
     # (default) = the activation's RATE-PLAN line; 'trigger_line' = the pre-2026-07-25 per-line
     # resolution, which let a handset line's PRICE be paid as if it were a monthly charge. Switching to
     # 'trigger_line' can INCREASE pay on the next Calculate. Same admin gate as the rest of this endpoint.
-    if "installment_mrc_basis" in body:
-        mb = (body.get("installment_mrc_basis") or "plan_line").strip().lower()
+    if "installment_mrc_basis" in body.model_fields_set:
+        mb = (body.installment_mrc_basis or "plan_line").strip().lower()
         row["installment_mrc_basis"] = mb if mb in ("plan_line", "trigger_line") else "plan_line"
     # mig 246 — MONEY: with the guard ON (default) a DEVICE line (IMEI / a configured hardware
     # department) can never donate its own price as a multi-month MRC — the 2026-07-27 tablet bug
     # ($14.00 = 5% of a $279.99 promo price). Turning it OFF restores that behaviour and can INCREASE
     # pay on the next Calculate. Same admin gate as the rest of this endpoint.
-    if "installment_mrc_hardware_guard" in body:
-        row["installment_mrc_hardware_guard"] = bool(body.get("installment_mrc_hardware_guard"))
+    if "installment_mrc_hardware_guard" in body.model_fields_set:
+        row["installment_mrc_hardware_guard"] = bool(body.installment_mrc_hardware_guard)
     # mig 249 — MONEY-ADJACENT: 'alias' resolves a rep's raw POS store string through the /store-match
     # alias table (commcalc.store_aliases → store_code → store_mapping / storeops roster) for their
     # MARKET, and lets a store-scope assignment also match the resolved store code / canonical address.
     # It can only ATTACH a plan that today attaches to nobody => pay can go UP on the NEXT Calculate
     # (this write alone moves nothing). Same admin gate as the rest of this endpoint.
-    if "store_resolution" in body:
-        sr = (body.get("store_resolution") or "exact").strip().lower()
+    if "store_resolution" in body.model_fields_set:
+        sr = (body.store_resolution or "exact").strip().lower()
         row["store_resolution"] = sr if sr in ("exact", "alias") else "exact"
     # mig 275 — NOT MONEY: minutes before a recompute still marked 'running' is presumed dead and the next
     # Calculate takes the slot over. Blank/None clears the override back to the 20-minute code default.
     # Clamped 1..1440 here as well as at read time so a bad save can neither wedge recomputes (too high)
     # nor let two of them overlap. Parsed HERE, written BELOW in its own statement.
     _csm_set, _csm_val = False, None
-    if "calc_stale_minutes" in body:
+    if "calc_stale_minutes" in body.model_fields_set:
         _csm_set = True
-        _v = body.get("calc_stale_minutes")
+        _v = body.calc_stale_minutes
         if _v is None or str(_v).strip() == "":
             _csm_val = None
         else:
@@ -11071,24 +11081,33 @@ async def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
             "value_fields": ["ext_price", "gp"], "departments": depts, "categories": cats}
 
 
+class PutActivationMatcherIn(LaxModel):
+    reset: Any = None
+    value_field: str = ""
+    departments: Any = None
+    categories: Any = None
+    product_keywords: Any = None
+    min_amount: Any = None
+
+
 @router.put("/plan-installments/activation-matcher")
-async def put_activation_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_activation_matcher(body: PutActivationMatcherIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Save the tenant's activation-payment matcher (mig 210). body: {departments[], categories[],
     product_keywords[], value_field('ext_price'|'gp'), min_amount} — OR {reset:true} to revert to the engine
     default (stored NULL). 500 with a 'run migration 210' hint if the column is absent."""
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
-    if body.get("reset"):
+    if body.reset:
         matcher = None
     else:
-        vf = str(body.get("value_field") or "ext_price").strip().lower()
+        vf = str(body.value_field or "ext_price").strip().lower()
         matcher = {
-            "departments": [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()],
-            "categories": [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()],
-            "product_keywords": [str(x).strip() for x in (body.get("product_keywords") or []) if str(x).strip()],
+            "departments": [str(x).strip() for x in (body.departments or []) if str(x).strip()],
+            "categories": [str(x).strip() for x in (body.categories or []) if str(x).strip()],
+            "product_keywords": [str(x).strip() for x in (body.product_keywords or []) if str(x).strip()],
             "value_field": vf if vf in ("ext_price", "gp") else "ext_price",
-            "min_amount": safe_float(body.get("min_amount")) if body.get("min_amount") is not None else 0.01,
+            "min_amount": safe_float(body.min_amount) if body.min_amount is not None else 0.01,
         }
     row = {"org_id": org_id, "activation_payment_matcher": matcher,
            "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
@@ -11139,8 +11158,15 @@ async def get_plan_line_matcher(period: str = "", org_id: str = ORG_ID):
             "departments": depts, "categories": cats}
 
 
+class PutPlanLineMatcherIn(LaxModel):
+    reset: Any = None
+    departments: Any = None
+    categories: Any = None
+    product_keywords: Any = None
+
+
 @router.put("/plan-installments/plan-line-matcher")
-async def put_plan_line_matcher(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+async def put_plan_line_matcher(body: PutPlanLineMatcherIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Save the tenant's rate-plan line matcher (mig 233). body: {departments[], categories[],
     product_keywords[]} — OR {reset:true} to revert to the engine default (stored NULL).
 
@@ -11150,12 +11176,12 @@ async def put_plan_line_matcher(body: dict, authorization: str = Header(default=
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
-    if body.get("reset"):
+    if body.reset:
         matcher = None
     else:
-        matcher = {"departments": [str(x).strip() for x in (body.get("departments") or []) if str(x).strip()],
-                   "categories": [str(x).strip() for x in (body.get("categories") or []) if str(x).strip()],
-                   "product_keywords": [str(x).strip() for x in (body.get("product_keywords") or [])
+        matcher = {"departments": [str(x).strip() for x in (body.departments or []) if str(x).strip()],
+                   "categories": [str(x).strip() for x in (body.categories or []) if str(x).strip()],
+                   "product_keywords": [str(x).strip() for x in (body.product_keywords or [])
                                         if str(x).strip()]}
     row = {"org_id": org_id, "plan_line_matcher": matcher,
            "updated_by": _caller_uid(authorization), "updated_at": _datetime.now(_timezone.utc).isoformat()}
