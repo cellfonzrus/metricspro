@@ -5095,19 +5095,31 @@ def _rbac_scope_failclosed() -> bool:
     return os.environ.get("RBAC_SCOPE_FAILCLOSED", "1").lower() not in ("0", "false", "no", "off")
 
 
+# Canonical top-level roles are org-wide by DEFAULT — the same precedent _can_edit_setting already
+# applies (an 'admin' role edits every setting even with no explicit roles-table grant). Without this,
+# RBAC fail-closed collapses an admin/owner/super_admin whose tenant never seeded a roles row to 'self'
+# scope, silently hiding almost all data from a full admin (observed 2026-08-18: a Luxelink admin saw
+# only his own ~2 stores on the Time Clock report). An EXPLICIT roles-table scope still wins over this.
+_ELEVATED_ROLES = {"admin", "owner", "super_admin"}
+
+
 def _role_scope(org_id: str, role: str) -> str:
     # An unresolved role must not silently grant org-wide reach. Fail CLOSED to 'self' (break-glass
-    # RBAC_SCOPE_FAILCLOSED=0 → old 'all'). A role that exists WITH an explicit scope is always honored.
-    fallback = "self" if _rbac_scope_failclosed() else "all"
-    if not role:
+    # RBAC_SCOPE_FAILCLOSED=0 → old 'all') — EXCEPT the canonical top-level roles, which default to
+    # 'all' so a tenant that hasn't seeded its roles table doesn't lock its own admins down to one
+    # store. A role that exists WITH an explicit scope is always honored over this default.
+    r = (role or "").strip()
+    elevated = r.lower() in _ELEVATED_ROLES
+    fallback = "all" if elevated else ("self" if _rbac_scope_failclosed() else "all")
+    if not r:
         return fallback
     try:
         rr = sb().table("roles").select("permissions").eq("org_id", org_id).eq("name", role).limit(1).execute().data or []
         if not rr:
-            return fallback                                    # unknown role → restrictive
+            return fallback                                    # unknown role → restrictive (elevated → 'all')
         return ((rr[0].get("permissions") or {}).get("scope")) or fallback
     except Exception:
-        return fallback                                        # roles read failed → restrictive
+        return fallback                                        # roles read failed → restrictive (elevated → 'all')
 
 
 def _role_permissions(org_id: str, role: str) -> dict:
