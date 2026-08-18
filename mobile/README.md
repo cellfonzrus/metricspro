@@ -44,6 +44,10 @@ mobile/
   updates via EAS.
 - **EAS Build/Submit** to produce and ship `.ipa` / `.aab` artifacts.
 
+> **New here / non-technical?** Follow [`GETTING_STARTED.md`](GETTING_STARTED.md) — a plain,
+> step-by-step guide to running the app on a phone (Expo Go quick test → Android APK → iOS TestFlight →
+> store release). The sections below are the condensed reference.
+
 ## Prerequisites
 
 - Node 20+, and the Expo tooling (`npm i -g eas-cli`)
