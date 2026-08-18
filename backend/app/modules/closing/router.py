@@ -1460,7 +1460,11 @@ def _ensure_envelope_bucket():
     return c
 
 
-def _upload_envelope(org_id, data_url):
+def _upload_envelope(org_id, data_url, raise_on_error=False):
+    """Upload a base64 data-url image to the private closing-envelopes bucket → storage path, or None.
+    `raise_on_error=True` (opt-in, used by the photo endpoint) re-raises the underlying STORAGE error so
+    the caller can tell the rep the real reason instead of a misleading 'no image' — the two deposit-slip
+    callers keep the default swallow-and-return-None contract they already rely on."""
     if not data_url or "," not in str(data_url):
         return None
     try:
@@ -1473,6 +1477,8 @@ def _upload_envelope(org_id, data_url):
         return path
     except Exception as e:
         print(f"WARN envelope upload failed: {e}")
+        if raise_on_error:
+            raise
         return None
 
 
@@ -1495,10 +1501,26 @@ class UploadEnvelopePhotoIn(LaxModel):
 @router.post("/envelope-photo")
 def upload_envelope_photo(body: UploadEnvelopePhotoIn, org_id: str = ORG_ID):
     """Store a captured envelope photo (base64) → return its path + a signed URL. The path goes into
-    daily_closing.envelope_picture on submit."""
-    path = _upload_envelope(org_id, body.image)
+    daily_closing.envelope_picture on submit.
+
+    Owner-reported 2026-08-18: a rep couldn't upload the envelope (so couldn't close, so couldn't clock
+    out) and the error just said "no image provided" even though a photo WAS taken. Root: a storage
+    write failure was swallowed and reported as a missing image. Now we validate the payload up front and
+    surface the ACTUAL storage error, so the real cause is visible instead of hidden."""
+    img = str(body.image or "")
+    if "," not in img:
+        raise HTTPException(400, "No photo received — retake the envelope photo and try again.")
+    try:
+        base64.b64decode(img.split(",", 1)[1])
+    except Exception:
+        raise HTTPException(400, "That photo couldn't be read — retake the envelope photo and try again.")
+    try:
+        path = _upload_envelope(org_id, img, raise_on_error=True)
+    except Exception as e:
+        raise HTTPException(502, "The envelope photo couldn't be saved to storage — please try again. "
+                                 f"If it keeps failing, tell your manager (storage error: {str(e)[:160]}).")
     if not path:
-        raise HTTPException(400, "no image provided")
+        raise HTTPException(400, "No photo received — retake the envelope photo and try again.")
     return {"path": path, "url": _signed_envelope(path)}
 
 
