@@ -3422,17 +3422,12 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
 # default), call the pure engine, then apply the SAME RBAC store-span narrowing every sibling
 # timeclock endpoint already applies.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-@router.get("/timeclock/attendance-exceptions")
-def attendance_exceptions(start: str = "", end: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Attendance Exceptions for [start, end] (inclusive both ends, matching /timeclock/list's own
-    convention — `shift_date`/`work_date` are already business-local, per BUSINESS_TZ at write time).
-
-    RULE FIVE: only the date range triggers this fetch — store/market/rep/exception-type filtering is
-    client-side over this already org+span-scoped response, the SAME established pattern the Time
-    Clock page itself already uses (see that page's own 2026-07-27 race-fix writeup)."""
-    if not (start and end):
-        raise HTTPException(400, "start and end are required")
-    client = sb()
+def _attendance_rows_for_range(org_id, start, end, client=None):
+    """Fetch shifts/punches/approved-time-off for [start, end], canonicalize employee ids, and run the
+    pure attendance engine. Returns (rows, cfg, available, limit_hit) with NO RBAC narrowing — HTTP
+    callers apply scope_keyset themselves; the system lateness-alert job wants the whole org. Shared by
+    GET /timeclock/attendance-exceptions and the accountability alert job so the two never diverge."""
+    client = client or sb()
     FETCH_LIMIT = 20000
     shifts = (client.table("shifts").select(
         "id,employee_id,employee_name,store_code,shift_date,start_time,end_time,is_deleted")
@@ -3444,7 +3439,6 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
     # HONESTY (no-silent-caps doctrine, same convention as lunch_deduction.period_lunch_deduction):
     # hitting the cap is a strong signal (not proof — PostgREST gives no total count without a
     # separate query) that the range/tenant is too big for this window to be a complete picture.
-    # Surfaced to the frontend rather than silently under-reporting exceptions for a huge range.
     limit_hit = len(shifts) >= FETCH_LIMIT or len(punches) >= FETCH_LIMIT
     try:
         timeoff = (client.table("time_off_requests").select(
@@ -3454,10 +3448,8 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
     except Exception:
         timeoff = []
 
-    # Canonicalize employee_id -> the BUSINESS id across all three sources before joining (see banner
-    # comment above). `employees` is fetched once; a lookup failure just means no aliasing happens
-    # (rows pass through with their raw ids) rather than a 500 — the classifier still runs, it just
-    # may under-match a numeric-vs-business mismatch until the employees read succeeds again.
+    # Canonicalize employee_id -> the BUSINESS id across all three sources before joining. A lookup
+    # failure just means no aliasing (rows pass through with raw ids) rather than a 500.
     try:
         employees = (client.table("employees").select("id,employee_id").eq("org_id", org_id).execute().data) or []
     except Exception:
@@ -3476,11 +3468,25 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
         return out
 
     shifts, punches, timeoff = _canon(shifts), _canon(punches), _canon(timeoff)
-
     cfg, available = _attn.get_tenant_attendance_config(org_id, client)
     tz = _biz_tz_for(org_id)
     now = datetime.now(timezone.utc)
     rows = _attn.compute_attendance_exceptions(shifts, punches, timeoff, cfg, now, tz)
+    return rows, cfg, available, limit_hit
+
+
+@router.get("/timeclock/attendance-exceptions")
+def attendance_exceptions(start: str = "", end: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Attendance Exceptions for [start, end] (inclusive both ends, matching /timeclock/list's own
+    convention — `shift_date`/`work_date` are already business-local, per BUSINESS_TZ at write time).
+
+    RULE FIVE: only the date range triggers this fetch — store/market/rep/exception-type filtering is
+    client-side over this already org+span-scoped response, the SAME established pattern the Time
+    Clock page itself already uses (see that page's own 2026-07-27 race-fix writeup)."""
+    if not (start and end):
+        raise HTTPException(400, "start and end are required")
+    client = sb()
+    rows, cfg, available, limit_hit = _attendance_rows_for_range(org_id, start, end, client)
 
     # RBAC store-span narrowing — same posture/keyset as GET /shifts, GET /stores, GET /timeclock/list.
     ks = scope_keyset(authorization, org_id)
@@ -3549,6 +3555,221 @@ def set_attendance_config(body: dict, authorization: str = Header(default=""), o
     except Exception:
         raise HTTPException(400, "Couldn't save the setting — is migration 421 applied?")
     return {"ok": True, "config": cfg}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ACCOUNTABILITY — morning lateness alerts (owner directive 2026-08-18). Every morning at the tenant's
+# configured time (default 10:30 tenant-local), email every manager ABOVE the DM a lateness digest for
+# the CURRENT PAY PERIOD, and email the immediate DM a corrective-action-plan (CAP) email for every
+# employee late THAT DAY (with their pay-period late count). Config lives on storeops.tenants
+# (migration 433), default OFF. The pure planning/HTML lives in accountability_alerts.py.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _lateness_alert_config(org_id, client=None):
+    """(enabled, send_time 'HH:MM') for the tenant — graceful defaults when migration 433 hasn't run."""
+    client = client or sb()
+    try:
+        rows = (client.table("tenants").select("lateness_alerts_enabled,lateness_alert_time")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        r = rows[0] if rows else {}
+        return bool(r.get("lateness_alerts_enabled")), (r.get("lateness_alert_time") or "10:30")
+    except Exception:
+        return False, "10:30"
+
+
+def _current_pay_period_bounds(tenant_row, ref_date):
+    """[start_iso, end_iso] of the pay period containing ref_date, from the SAME core helper the
+    tenant-settings / payroll boards use (core.router.pay_period_for over storeops.tenants config) —
+    never a new pay-period definition."""
+    from app.modules.core.router import pay_period_for, _pp_settings
+    pp = pay_period_for(_pp_settings(tenant_row or {}), ref_date)
+    return pp["start"], pp["end"]
+
+
+def _period_label(start_iso, end_iso):
+    from datetime import date as _d
+    try:
+        s, e = _d.fromisoformat(start_iso), _d.fromisoformat(end_iso)
+        if (s.year, s.month) == (e.year, e.month):
+            return f"{s.strftime('%b')} {s.day}–{e.day}, {e.year}"
+        return f"{s.strftime('%b')} {s.day} – {e.strftime('%b')} {e.day}, {e.year}"
+    except Exception:
+        return f"{start_iso} – {end_iso}"
+
+
+def _lateness_already_sent(client, org_id, scope, ref_key):
+    try:
+        return bool((client.table("alert_log").select("id").eq("org_id", org_id)
+                     .eq("scope", scope).eq("ref_key", ref_key).limit(1).execute().data) or [])
+    except Exception:
+        return False
+
+
+def _lateness_record_sent(client, org_id, scope, ref_key, recipients):
+    try:
+        client.table("alert_log").insert({"org_id": org_id, "scope": scope, "ref_key": ref_key,
+                                          "recipients": recipients, "detail": {"kind": scope}}).execute()
+    except Exception:
+        pass
+
+
+def _lateness_late_records(client, org_id, start, end, today):
+    """Per-store late records for [start, end] (the pay period, capped at today): one per (employee,
+    store) with the employee's pay-period late count, their late incidents, and whether they were late
+    TODAY. Reuses the shared attendance engine + accountability.aggregate — no new lateness logic."""
+    from app.modules.storeops import accountability as _acc
+    rows, _cfg, _av, _lh = _attendance_rows_for_range(org_id, start, end, client)
+    agg = _acc.aggregate(rows, {})
+    out = []
+    for e in agg["employees"]:
+        if (e.get("late") or 0) <= 0:
+            continue
+        by_store = {}
+        for it in (e.get("incidents") or []):
+            if it.get("late"):
+                by_store.setdefault(it.get("store_code"), []).append(it)
+        for store, inc in by_store.items():
+            today_inc = next((x for x in inc if str(x.get("work_date"))[:10] == today), None)
+            out.append({"store_code": store, "employee": e.get("employee"), "employee_id": e.get("employee_id"),
+                        "late_count": e.get("late"), "incidents": inc,
+                        "late_today": today_inc is not None, "today_incident": today_inc})
+    return out
+
+
+async def _run_lateness_alerts(org_id_filter=None, respect_time=True, respect_enabled=True, dry_run=False):
+    """The morning lateness sweep. Iterates tenants; for each enabled tenant at/after its send time,
+    computes current-pay-period lateness, resolves the org hierarchy per store, plans the manager
+    summaries + DM CAP emails, and sends them (deduped via storeops.alert_log). NEVER raises."""
+    from app.modules.storeops import accountability_alerts as _ala
+    from app.modules.notify.channels import email_resend
+    client = sb()
+    try:
+        tenants = (client.table("tenants").select("*").execute().data) or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if respect_enabled and not bool(t.get("lateness_alerts_enabled")):
+            continue
+        send_time = (t.get("lateness_alert_time") or "10:30")
+        now_local = datetime.now(timezone.utc).astimezone(_biz_tz_for(oid))
+        today = now_local.date().isoformat()
+        if respect_time and now_local.strftime("%H:%M") < send_time:
+            continue   # not yet due this tick (HH:MM compare — see migration 433)
+        start, end = _current_pay_period_bounds(t, now_local.date())
+        rng_end = today if today < end else end
+        recs = _lateness_late_records(client, oid, start, rng_end, today)
+        if not recs:
+            if not dry_run:
+                _lateness_mark_run(client, oid, today, "no lateness")
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "late_employees": 0})
+            continue
+        stores = {r["store_code"] for r in recs if r.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        plan = _ala.plan_emails(recs, hierarchy, today, _period_label(start, end))
+        sent = skipped = 0
+        planned = []
+        for spec in plan["summaries"] + plan["caps"]:
+            scope = "lateness_am" if spec["kind"] == "manager_summary" else "lateness_cap"
+            already = _lateness_already_sent(client, oid, scope, spec["dedupe_key"])
+            planned.append({"kind": spec["kind"], "to": spec["to"], "to_name": spec.get("to_name"),
+                            "subject": spec["subject"], "already_sent": already})
+            if already:
+                skipped += 1
+                continue
+            if dry_run:
+                continue
+            if email_ok:
+                try:
+                    await email_resend.send_email(to=spec["to"], subject=spec["subject"], html=spec["html"])
+                    _lateness_record_sent(client, oid, scope, spec["dedupe_key"], spec["to"])
+                    sent += 1
+                except Exception:
+                    pass
+        if not dry_run:
+            _lateness_mark_run(client, oid, today, f"sent {sent}, skipped {skipped}, {len(recs)} late record(s)")
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped, "late_employees": len(recs),
+                        "email_configured": email_ok, "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+def _lateness_mark_run(client, org_id, today, detail):
+    try:
+        client.table("tenants").update({"lateness_alert_last_run": datetime.now(timezone.utc).isoformat(),
+                                        "lateness_alert_last_detail": f"{today}: {detail}"}).eq("org_id", org_id).execute()
+    except Exception:
+        pass
+
+
+@router.get("/accountability/alert-config")
+def get_lateness_alert_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Morning lateness-alert config for the tenant (enabled + send time), plus last-run bookkeeping.
+    Any manager may view; the PUT is manager/admin only."""
+    client = sb()
+    try:
+        rows = (client.table("tenants").select(
+            "lateness_alerts_enabled,lateness_alert_time,lateness_alert_last_run,lateness_alert_last_detail")
+            .eq("org_id", org_id).limit(1).execute().data) or []
+        r = rows[0] if rows else {}
+        return {"enabled": bool(r.get("lateness_alerts_enabled")),
+                "send_time": r.get("lateness_alert_time") or "10:30",
+                "last_run": r.get("lateness_alert_last_run"), "last_detail": r.get("lateness_alert_last_detail"),
+                "available": True}
+    except Exception:
+        return {"enabled": False, "send_time": "10:30", "last_run": None, "last_detail": None, "available": False}
+
+
+class LatenessAlertConfigIn(LaxModel):
+    enabled: Any = None
+    send_time: Any = None
+
+
+@router.put("/accountability/alert-config")
+def put_lateness_alert_config(body: LatenessAlertConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only. Turn the morning lateness alerts on/off and set the send time (HH:MM,
+    tenant-local; default 10:30)."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    upd = {}
+    sent = body.model_fields_set
+    if "enabled" in sent:
+        upd["lateness_alerts_enabled"] = bool(body.enabled)
+    if "send_time" in sent:
+        st = str(body.send_time or "").strip()
+        import re as _re
+        if not _re.match(r"^([01]\d|2[0-3]):[0-5]\d$", st):
+            raise HTTPException(400, "send_time must be HH:MM (24-hour), e.g. 10:30")
+        upd["lateness_alert_time"] = st
+    if not upd:
+        raise HTTPException(400, "Nothing to update — send `enabled` and/or `send_time`.")
+    try:
+        sb().table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save — is migration 433 applied?")
+    return get_lateness_alert_config(authorization=authorization, org_id=org_id)
+
+
+@router.post("/accountability/alerts/run-due")
+async def lateness_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated pg_cron entrypoint (hourly). Fires the morning lateness alerts for every enabled
+    tenant at/after its send time; deduped so it sends once per day. See migration 433 for the cron."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_lateness_alerts(respect_time=True, respect_enabled=True, dry_run=False)
+
+
+@router.post("/accountability/alerts/run-now")
+async def lateness_alerts_run_now(send: bool = False, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the time gate. Defaults to a DRY RUN
+    (returns exactly who WOULD be emailed and what, sending nothing) — pass ?send=true to actually
+    send. Dedupe is always honored, so a real send won't duplicate the morning run."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_lateness_alerts(org_id_filter=org_id, respect_time=False, respect_enabled=False,
+                                      dry_run=(not send))
 
 
 _CHARGEBACK_REASON_LABELS = {
@@ -4331,6 +4552,86 @@ def _dm_for_store(org_id, store_code):
         return (deid, (emp[0].get("email") if emp else None), (emp[0].get("name") if emp else None))
     except Exception:
         return (None, None, None)
+
+
+def _managers_above_dm(org_id, store_code):
+    """For a store, resolve (a) the immediate District Manager(s) at the store's district node and
+    (b) EVERY manager ABOVE the district up the org tree to the root — each as
+    {employee_id, name, email, unit, level}. Mirrors _dm_for_store's district resolution, then climbs
+    org_units.parent_id collecting ALL org_managers at each ancestor (a node may have several).
+    Returns {"dm": [...], "above": [...]}; empty lists when the tree isn't wired (callers skip those
+    emails). Used by the accountability morning lateness alert (managers above the DM) + the DM CAP."""
+    c = sb()
+    unit_id, market = None, None
+    try:
+        st = (c.table("stores").select("org_unit_id,market").eq("org_id", org_id)
+              .eq("store_code", store_code).limit(1).execute().data) or []
+        if st:
+            unit_id, market = st[0].get("org_unit_id"), st[0].get("market")
+    except Exception:
+        pass
+    try:
+        levels = {l["id"]: (l.get("name") or "") for l in
+                  (c.table("org_levels").select("id,name").eq("org_id", org_id).execute().data or [])}
+        units = {u["id"]: u for u in
+                 (c.table("org_units").select("id,name,level_id,parent_id,code").eq("org_id", org_id).execute().data or [])}
+    except Exception:
+        levels, units = {}, {}
+    # locate the district node — identical rule to _dm_for_store (climb to a 'district'-level node,
+    # else match a district unit by the store's market).
+    district = None
+    cur = units.get(unit_id) if unit_id else None
+    guard = 0
+    while cur and guard < 20:
+        if "district" in (levels.get(cur.get("level_id")) or "").lower():
+            district = cur
+            break
+        cur = units.get(cur.get("parent_id"))
+        guard += 1
+    if not district and market:
+        mk = str(market).strip().lower()
+        for u in units.values():
+            if "district" in (levels.get(u.get("level_id")) or "").lower() and (
+                    mk and (mk in (u.get("name") or "").lower() or (u.get("code") or "").lower() == f"district:{mk}")):
+                district = u
+                break
+    if not district:
+        return {"dm": [], "above": []}
+
+    def _mgrs(unit):
+        try:
+            rows = (c.table("org_managers").select("employee_id").eq("org_id", org_id)
+                    .eq("unit_id", unit["id"]).execute().data) or []
+        except Exception:
+            rows = []
+        out = []
+        for r in rows:
+            eid = r.get("employee_id")
+            if not eid:
+                continue
+            try:
+                emp = (c.table("employees").select("name,email").eq("org_id", org_id)
+                       .eq("employee_id", eid).limit(1).execute().data) or []
+            except Exception:
+                emp = []
+            out.append({"employee_id": eid, "name": (emp[0].get("name") if emp else None),
+                        "email": (emp[0].get("email") if emp else None),
+                        "unit": unit.get("name"), "level": levels.get(unit.get("level_id"))})
+        return out
+
+    dm = _mgrs(district)
+    above, seen = [], set()
+    cur = units.get(district.get("parent_id"))
+    guard = 0
+    while cur and guard < 20:                     # climb PARENTS above the district to the root
+        for m in _mgrs(cur):
+            key = str(m.get("employee_id"))
+            if key and key not in seen:
+                seen.add(key)
+                above.append(m)
+        cur = units.get(cur.get("parent_id"))
+        guard += 1
+    return {"dm": dm, "above": above}
 
 
 @router.post("/shift-extensions")
