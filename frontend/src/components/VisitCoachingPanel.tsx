@@ -19,6 +19,10 @@ type Coach = {
   short_kpis?: string[]; need_for_full?: number; coaching_notes?: string[]
   chargeback_deducted?: number; chargeback_count?: number
 }
+// Store-level target-vs-achieved (MTD) per sales category — activations, upgrades, BYOD, accessories.
+// unit: 'count' | 'dollars'. Targets are set at the STORE level (there is no per-rep target), so these
+// are shown as the store's goals for the period the rep is working toward.
+type StoreMetric = { cat?: string; label?: string; unit?: string; target?: number; achieved?: number; need?: number; pace?: number }
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 // "YYYY-MM-DD" -> "Month YYYY" (the period format commissions are stored/looked-up in). String-parsed
@@ -29,19 +33,26 @@ function periodOf(isoDate: string): string {
   return `${MONTHS[Number(m[2]) - 1]} ${m[1]}`
 }
 
+// A store metric value formatted by its unit — accessories are dollars, activations/upgrades/BYOD counts.
+function fmtMetric(v: number | undefined, unit?: string): string {
+  if (v == null) return '—'
+  return unit === 'dollars' ? fmt(Number(v)) : Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
+}
+
 export default function VisitCoachingPanel({ employeeId, employeeName, storeCode, visitDate }:
   { employeeId: string; employeeName: string; storeCode?: string; visitDate: string }) {
   const [loading, setLoading] = useState(false)
   const [coach, setCoach] = useState<Coach | null>(null)
   const [fallbackKpis, setFallbackKpis] = useState<KpiRow[] | null>(null)
+  const [storeMetrics, setStoreMetrics] = useState<StoreMetric[]>([])
   const [period, setPeriod] = useState('')
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    if (!employeeId) { setCoach(null); setFallbackKpis(null); setErr(''); return }
+    if (!employeeId) { setCoach(null); setFallbackKpis(null); setStoreMetrics([]); setErr(''); return }
     let cancelled = false
     const per = periodOf(visitDate)
-    setLoading(true); setErr(''); setCoach(null); setFallbackKpis(null)
+    setLoading(true); setErr(''); setCoach(null); setFallbackKpis(null); setStoreMetrics([])
     api(`/api/v1/core/employee-dashboard?org_id=${ORG_ID}&employee_id=${encodeURIComponent(employeeId)}${per ? `&period=${encodeURIComponent(per)}` : ''}`)
       .then((d: any) => {
         if (cancelled) return
@@ -61,6 +72,13 @@ export default function VisitCoachingPanel({ employeeId, employeeName, storeCode
           .then((c: any) => { if (!cancelled) setCoach((c?.reps || [])[0] || null) })
           .catch(() => { /* coaching is best-effort; the report_card fallback still renders */ })
           .finally(() => { if (!cancelled) setLoading(false) })
+        // Store-level activations/accessories (and upgrades/BYOD) target vs MTD achieved. Needs a
+        // store_code (targets are per-store) and the "Month YYYY" period. today=visitDate for MTD pace.
+        if (store) {
+          api(`/api/v1/commcalc/targets/${encodeURIComponent(usePeriod)}/action-plan?store_code=${encodeURIComponent(store)}&today=${encodeURIComponent(visitDate)}`)
+            .then((r: any) => { if (!cancelled) setStoreMetrics((r?.stores || [])[0]?.metrics || []) })
+            .catch(() => { /* best-effort: no targets set for this store/period yet */ })
+        }
       })
       .catch((e: any) => { if (!cancelled) { setErr(e?.message || String(e)); setLoading(false) } })
     return () => { cancelled = true }
@@ -85,14 +103,42 @@ export default function VisitCoachingPanel({ employeeId, employeeName, storeCode
         <div style={{ fontSize: 13, color: 'var(--amber)' }}>Couldn&apos;t load KPIs: {err}</div>
       )}
 
-      {!loading && !err && kpis.length === 0 && (
+      {!loading && !err && kpis.length === 0 && storeMetrics.length === 0 && (
         <div style={{ fontSize: 13, color: 'var(--text3)' }}>
-          No KPI data for {employeeName} in {period || 'this period'} yet — nothing to coach against from the numbers.
+          No KPI or target data for {employeeName} in {period || 'this period'} yet — nothing to coach against from the numbers.
+        </div>
+      )}
+
+      {/* Store-level sales targets (activations, accessories, …) — actual vs target, MTD. */}
+      {!loading && !err && storeMetrics.length > 0 && (
+        <div style={{ marginBottom: kpis.length ? 16 : 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', marginBottom: 6 }}>
+            Store targets this period (MTD achieved / target)
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+            {storeMetrics.map((m, i) => {
+              const hasTarget = (m.target ?? 0) > 0
+              const met = hasTarget && (m.achieved ?? 0) >= (m.target ?? 0)
+              return (
+                <div key={m.cat || i} style={{ background: met ? '#e6f7ec' : 'var(--surface2)', borderRadius: 8, padding: '8px 10px', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase' }}>{m.label || m.cat}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: met ? '#16794a' : 'var(--text)' }}>
+                    {fmtMetric(m.achieved, m.unit)}
+                    <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text3)' }}> / {fmtMetric(m.target, m.unit)}</span>
+                  </div>
+                  {(m.need ?? 0) > 0
+                    ? <div style={{ fontSize: 11, fontWeight: 600, color: '#b45309' }}>{fmtMetric(m.need, m.unit)} to go</div>
+                    : hasTarget ? <div style={{ fontSize: 11, fontWeight: 600, color: '#16794a' }}>✓ target met</div> : null}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 
       {!loading && !err && kpis.length > 0 && (
         <>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text2)', textTransform: 'uppercase', marginBottom: 6 }}>KPIs (attach rates)</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
             {kpis.map((k, i) => {
               const hasTarget = k.target != null
