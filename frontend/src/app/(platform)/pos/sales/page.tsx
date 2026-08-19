@@ -861,6 +861,11 @@ export default function PosSalesPage() {
               <a href="/pos/activations" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--green)', color: 'white', borderRadius: 7, padding: '12px 20px', fontSize: 13, fontWeight: 700, textDecoration: 'none', minWidth: 160 }}>
                 📋 Manual Activation
               </a>
+              {/* Customer Special Order — sell an item the store doesn't stock (ships to the store).
+                  Neutral by design: the vendor behind the catalog is never named store/customer-side. */}
+              <a href="/pos/special-orders" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--green)', color: 'white', borderRadius: 7, padding: '12px 20px', fontSize: 13, fontWeight: 700, textDecoration: 'none', minWidth: 180 }}>
+                🧾 Customer Special Order
+              </a>
               <button onClick={() => setActiveView('salelog')} className="btn btn-secondary" style={{ minWidth: 120, justifyContent: 'center' }}>
                 🔍 Look Up
               </button>

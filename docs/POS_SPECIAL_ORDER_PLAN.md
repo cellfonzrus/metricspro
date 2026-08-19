@@ -210,7 +210,15 @@ These are **yours** — decisions and console tasks the build can't do. Ordered;
 - **Phase 2.5 (plug-and-play vendors): done (backend)** — migration 866 (`pos.vendor_connector`) +
   `pos/vendor_adapters.py` (outbound) + `pos/vendor_api.py` (inbound, token-authed) + the
   `/pos/vendor-connectors` admin CRUD.
-- Next build steps: Phase 1b (HQ catalog + vendor-connector UI + register the permission), then Phase 2b
-  (the store-facing POS "Customer Special Order" screen), then Phase 4 (ops fulfillment queue UI).
+- **Phase 1b/2b (frontend): done** — two neutral pages under `/pos/special-orders/`:
+  - `/pos/special-orders` — store-facing: neutral catalog search → declared price (margin-floored) →
+    customer + ship-to + payment → `POST /pos/special-orders`, plus an Orders tab with a vendor-free
+    lifecycle status. A `🧾 Customer Special Order` button was added to the register action panel.
+  - `/pos/special-orders/manage` — HQ-only (locks unless the caller holds `pos_special_order_admin`):
+    a **Catalog** tab (items + hidden vendor linkage) and a **Vendors** tab (the connector registry,
+    with the inbound token shown once). Two nav entries added in `rbac.ts` (the manage page is
+    `all`/`market` in nav AND server-gated by the permission).
+- Next build steps: Phase 4 (a dedicated HQ ops fulfillment queue UI — today the `manage` page + the
+  store Orders tab cover the essentials), then Phase 5 (Amazon Business API automation, ToS-gated).
 - Blocked-on-owner: the Phase 0 decisions (TODO #1–3, #6) before this can go live; apply migrations
-  864/865/866 (TODO #4, #8).
+  864/865/866 (TODO #4, #8) and grant `pos_special_order_admin` to HQ roles (TODO #5).

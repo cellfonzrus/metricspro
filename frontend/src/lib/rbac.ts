@@ -240,6 +240,12 @@ export const NAV: NavGroup[] = [
     { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/activations', label: 'Activations', icon: '📱', module: 'pos', scopes: ['all', 'market', 'store'] },
+    // Customer Special Order (owner directive 2026-08-19). The store-facing flow is available to every
+    // POS scope (a cashier rings one). The HQ management surface (catalog vendor linkage + connectors)
+    // is 'all'/'market' in the nav AND gated server-side by pos_special_order_admin — that permission,
+    // which store roles don't hold, is what keeps the back-end vendor hidden from stores.
+    { href: '/pos/special-orders', label: 'Special Orders', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/special-orders/manage', label: 'Special Order Setup', icon: '🗂️', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
