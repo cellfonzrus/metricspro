@@ -27,6 +27,7 @@ from app.modules.recovery.router import router as recovery_router
 from app.modules.pos.router import router as pos_router
 from app.modules.pos.vendor_api import router as pos_vendor_api_router
 from app.modules.approvals.router import router as approvals_router
+from app.modules.chat.router import router as chat_router
 from app.modules.crm.router import router as crm_router
 from app.modules.referral.router import router as referral_router
 
@@ -188,6 +189,7 @@ app.include_router(pos_vendor_api_router, prefix="/api/v1")  # POS special-order
 app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
 app.include_router(referral_router, prefix="/api/v1")     # Referral — QR referrals + gated commission (mig 850)
 app.include_router(approvals_router, prefix="/api/v1")    # Unified Approvals Engine (mig 867)
+app.include_router(chat_router, prefix="/api/v1")         # Internal Chat — Phase 1 (mig 868)
 
 # Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /
 # break-glass states at boot. Best-effort; STARTUP_STRICT=1 makes prod findings fail the boot.

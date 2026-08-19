@@ -149,8 +149,14 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
 
 ## Status
 - **Plan:** written (this doc).
-- **Approvals Phase 1 (engine + inbox + timeclock pilot):** in progress.
-- **Chat Phase 1 (core messaging foundation):** next.
+- **Approvals Phase 1 (engine + inbox + timeclock pilot): DONE** — migration 867, `approvals/` module
+  (engine + registry + `/approvals` API), timeclock adapter (shared effect fn), `/approvals` inbox page +
+  nav. `harness_approvals_engine.py` 18/18.
+- **Chat Phase 1 (core messaging foundation): DONE** — migration 868 (`chat_channels/members/messages`),
+  `chat/` module (channels, DMs/groups, messages, membership, unread/read, directory), `/chat` two-pane
+  page (polling) + nav. `harness_chat.py` 14/14.
+- **Next:** Approvals adapters for the remaining ~19 surfaces (one per commit); Chat Phase 1b (Supabase
+  Realtime broadcast to replace polling) then Phase 2 (reactions/threads/attachments/presence).
 - Everything else: phased per the tables above.
 
 ## Operator / Owner TODO (desktop)

@@ -412,6 +412,12 @@ export const NAV: NavGroup[] = [
   { group: 'Approvals', module: 'storeops', items: [
     { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'] },
   ]},
+  // Internal Chat (owner directive 2026-08-19) — everyone in the org can message; no extra nav scope
+  // (the real gate is chat membership, enforced server-side). Module 'storeops' gates it to the
+  // workforce entitlement so it shows wherever the people directory does.
+  { group: 'Chat', module: 'storeops', items: [
+    { href: '/chat', label: 'Chat', icon: '💬', module: 'storeops', scopes: ['all', 'market', 'store', 'self'] },
+  ]},
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
@@ -969,7 +975,7 @@ function pageOverrideForPath(perms: Permissions, path: string): boolean | undefi
 }
 
 // Pages a self-scoped (rep) user may always reach, on top of their home.
-const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk']
+const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk', '/chat']
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true
