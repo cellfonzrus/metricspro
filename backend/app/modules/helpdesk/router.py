@@ -378,6 +378,77 @@ def list_tickets(org_id: str = ORG_ID, agent: bool = False, requester: str = "",
     return out
 
 
+# ── Read-only operator EXPORT (secret-guarded, no JWT) ───────────────────────────────────────────
+# The door triage tooling uses to READ a tenant's tickets for offline analysis. Authenticated by a
+# shared secret (x-helpdesk-export-secret vs settings.HELPDESK_EXPORT_SECRET, +_NEXT for rotation),
+# the same least-privilege precedent as NOTIFY_RUN_SECRET / FIX_PIPELINE_SECRET. SELECT-ONLY: it reads
+# tickets and (optionally) their comments — it can never create, edit, resolve, or touch config, and no
+# other endpoint reads this header, so it unlocks nothing else. UNSET secret = door CLOSED (fail closed).
+import hmac as _hmac
+
+
+def _verify_export_secret(provided: str) -> bool:
+    provided = provided or ""
+    secrets = []
+    primary = (getattr(settings, "HELPDESK_EXPORT_SECRET", "") or "").strip()
+    if primary:
+        secrets.append(primary)
+    nxt = (os.environ.get("HELPDESK_EXPORT_SECRET_NEXT", "") or "").strip()
+    if nxt:
+        secrets.append(nxt)
+    if not secrets or not provided:
+        return False            # nothing configured, or no header → fail closed
+    ok = False
+    for s in secrets:           # no early break → constant-time across rotation
+        if _hmac.compare_digest(provided, s):
+            ok = True
+    return ok
+
+
+@router.get("/export")
+def export_tickets(org_id: str = ORG_ID, status_key: str = "", stage: str = "", since: str = "",
+                   include_comments: bool = False, limit: int = 200,
+                   x_helpdesk_export_secret: str = Header(default="")):
+    """READ-ONLY export of a tenant's helpdesk tickets for operator triage, gated by the shared
+    x-helpdesk-export-secret (UNSET secret = 403, fail closed). No JWT. SELECT-only — never mutates.
+
+    Filters: status_key (only that status), stage ('open'/'pending'/'closed' bucket), since (ISO —
+    created_at >=), limit (default 200, max 1000). include_comments=true inlines each ticket's comment
+    thread. NOTE: ticket bodies + comments may contain customer PII — this door exists precisely so an
+    operator can triage them; keep the secret secret and rotate via HELPDESK_EXPORT_SECRET_NEXT."""
+    if not _verify_export_secret(x_helpdesk_export_secret):
+        raise HTTPException(403, "invalid or missing export secret")
+    limit = max(1, min(int(limit or 200), 1000))
+    st, pr, ca, te = _maps(org_id)
+    q = db("tickets").select("*").eq("org_id", org_id)
+    if status_key:
+        ids = [s["id"] for s in st.values() if s.get("key") == status_key]
+        q = q.in_("status_id", ids or ["00000000-0000-0000-0000-000000000000"])
+    if stage:
+        ids = [s["id"] for s in st.values() if (s.get("stage") or "") == stage]
+        q = q.in_("status_id", ids or ["00000000-0000-0000-0000-000000000000"])
+    if since:
+        q = q.gte("created_at", since)
+    rows = q.order("created_at", desc=True).limit(limit).execute().data or []
+    esc = _escalated_ticket_ids(org_id, [t.get("id") for t in rows])
+    tickets = []
+    for t in rows:
+        d = _decorate(t, st, pr, ca, te)
+        d["escalated"] = t.get("id") in esc
+        tickets.append(d)
+    if include_comments and tickets:
+        tids = [t["id"] for t in tickets if t.get("id")]
+        cmts = (db("ticket_comments")
+                .select("ticket_id,author,author_name,body,is_internal,created_at")
+                .eq("org_id", org_id).in_("ticket_id", tids).order("created_at").execute().data or [])
+        by_tid: dict = {}
+        for c in cmts:
+            by_tid.setdefault(c.get("ticket_id"), []).append(c)
+        for t in tickets:
+            t["comments"] = by_tid.get(t["id"], [])
+    return {"org_id": org_id, "count": len(tickets), "tickets": tickets}
+
+
 @router.get("/tickets/{tid}")
 def ticket_detail(tid: str, org_id: str = ORG_ID, agent: bool = False):
     _require_module(org_id)
