@@ -250,7 +250,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     // Tenant-configurable hard gate (mig 510, OFF by default — see /closing/envelope-config): require
     // an envelope photo whenever cash > 0 is declared. Mirrors the server-side gate in create_row so
     // the rep gets an immediate, specific message instead of a generic 400.
-    if (envCfg.require_photo_if_cash && enteredCash > 0 && !f.envelope_picture) {
+    // The photo satisfies this gate whether it pre-uploaded (f.envelope_picture is a path) OR is still
+    // held locally (envPreview) — in the latter case it rides the submit and is uploaded server-side.
+    if (envCfg.require_photo_if_cash && enteredCash > 0 && !f.envelope_picture && !envPreview) {
       setMsg('❌ An envelope photo is required because cash was declared. Attach one before submitting.')
       return
     }
@@ -303,7 +305,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           employee_id: l.employee_id || undefined, employee_name: l.employee_name || undefined,
         })),
         ...countFields,
-        envelope_picture: f.envelope_picture, remarks: f.remarks,
+        // Prefer the pre-uploaded path; fall back to the locally-held image (data URL) so the server
+        // uploads it at submit — the photo no longer depends on the fragile pre-upload completing.
+        envelope_picture: f.envelope_picture || envPreview, remarks: f.remarks,
         ocr_cash: ocrCash || undefined,
       }) })
       // Not accepted → recount (direction only, never the amount). Keep the form so they can re-enter.
