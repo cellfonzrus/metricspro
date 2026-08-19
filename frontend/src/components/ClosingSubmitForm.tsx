@@ -52,6 +52,28 @@ const COUNTS: { key: 'upgrade_count' | 'new_line_count' | 'postpaid_count'; labe
   { key: 'postpaid_count', label: 'Postpaid #' },
 ]
 
+// Draft persistence (owner-reported 2026-08-19, "Cellfonz r us": taking the envelope photo bounced the
+// rep back to the main page and lost the closing). On mobile, opening the camera can let the OS reclaim
+// the PWA's memory, so on return the app RELOADS to its start URL and the in-progress closing is gone —
+// it looks like "the photo wasn't accepted". We snapshot the in-progress entry to localStorage so a
+// reload can't lose it. On a shared kiosk we do NOT silently repopulate (that would bleed one rep's
+// numbers into the next); instead we offer a Resume/Discard banner, and expire the draft after 30 min.
+const DRAFT_KEY = 'mp_closing_draft_v1'
+const DRAFT_TTL_MS = 30 * 60 * 1000
+type Draft = { f: State; tv: Record<string, string>; cv: Record<string, string>; expLines: ExpLine[]
+  envPreview: string; savedAt: number }
+function readDraft(): Draft | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const raw = window.localStorage.getItem(DRAFT_KEY)
+    if (!raw) return null
+    const d = JSON.parse(raw) as Draft
+    if (!d || typeof d.savedAt !== 'number' || Date.now() - d.savedAt > DRAFT_TTL_MS) return null
+    return d
+  } catch { return null }
+}
+function clearDraft() { try { window.localStorage.removeItem(DRAFT_KEY) } catch { /* private mode */ } }
+
 export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitted }:
   { defaultEmployeeName?: string; onSubmitted?: () => void }) {
   const [f, setF] = useState<State>(blank())
@@ -82,6 +104,33 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [expLines, setExpLines] = useState<ExpLine[]>([])
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
+
+  // ── Draft persistence (see the note above DRAFT_KEY) ──────────────────────────────────────────
+  const [resumeDraft, setResumeDraft] = useState<Draft | null>(null)
+  // On mount, if a fresh draft with real content exists, OFFER to resume it (never auto-apply).
+  useEffect(() => {
+    const d = readDraft()
+    const hasContent = d && (d.envPreview || d.f?.envelope_picture
+      || MONEY_KEYS.some(k => (d.f as any)?.[k]) || Object.values(d.tv || {}).some(Boolean)
+      || (d.expLines || []).length > 0)
+    if (hasContent) setResumeDraft(d)
+  }, [])
+  // Snapshot the in-progress entry whenever it changes, so a camera-induced reload can restore it.
+  useEffect(() => {
+    const hasContent = envPreview || f.envelope_picture || MONEY_KEYS.some(k => (f as any)[k])
+      || Object.values(tv).some(Boolean) || expLines.length > 0
+    if (!hasContent) return
+    try {
+      window.localStorage.setItem(DRAFT_KEY, JSON.stringify(
+        { f, tv, cv, expLines, envPreview, savedAt: Date.now() }))
+    } catch { /* quota / private mode — best-effort */ }
+  }, [f, tv, cv, expLines, envPreview])
+  function applyResume() {
+    const d = resumeDraft; if (!d) return
+    setF(d.f || blank()); setTv(d.tv || {}); setCv(d.cv || {}); setExpLines(d.expLines || [])
+    setEnvPreview(d.envPreview || ''); setResumeDraft(null)
+  }
+  function discardResume() { clearDraft(); setResumeDraft(null) }
 
   const enteredCash = parseFloat(tdefs ? (tv['cash'] || '') : f.t_cash) || 0
   const ocrNum = parseFloat(ocrCash) || 0
@@ -275,6 +324,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
       setTv({}); setCv({}); setExpLines([])
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([]); setPhotoError('')
+      clearDraft()   // submitted successfully → the saved draft is done
       loadRecent()
       onSubmitted?.()
     } catch (e: any) { setMsg('🚫 ' + (e?.message || e)) }
@@ -308,6 +358,16 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
   return (
     <>
+      {resumeDraft && (
+        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: '#fffbeb', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 20 }}>💾</span>
+          <div style={{ flex: 1, minWidth: 200, fontSize: 13, color: '#92400e' }}>
+            <b>You have an unfinished closing from a few minutes ago.</b> The app may have restarted while opening the camera. Resume where you left off, or start fresh.
+          </div>
+          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={applyResume}>Resume it</button>
+          <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={discardResume}>Start fresh</button>
+        </div>
+      )}
       <div className="card" style={{ padding: 18 }}>
         <Row>
           <Field label="Date"><input type="date" style={inp} value={f.close_date} onChange={e => set({ close_date: e.target.value })} /></Field>
