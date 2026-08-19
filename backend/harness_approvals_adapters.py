@@ -8,7 +8,7 @@ each migrated type that:
   • a decision made on the legacy board (engine.sync_source_decision) reflects into the inbox without
     re-running the effect.
 
-Covered so far: shift_extension. (Extended as more surfaces are migrated.)
+Covered so far: shift_extension, budget_override. (Extended as more surfaces are migrated.)
 
 Run: `python3 harness_approvals_adapters.py` from backend/.
 """
@@ -154,6 +154,31 @@ engine.decide(ORG, req3["id"], decision="deny", actor="dm@x")
 ext3 = fake.store[("storeops", "shift_extension")][0]
 check("shift_extension: on_decide leaves an already-decided source row untouched",
       ext3["status"] == "approved", ext3)
+
+
+# ── budget_override (same clean status-flip shape) ───────────────────────────────────────────────
+def seed_ov(status="pending"):
+    fake.store[("storeops", "budget_override")] = [
+        {"org_id": ORG, "id": "OV1", "store_code": "S1", "week_start": "2026-08-17", "status": status}]
+
+
+fake.store.clear(); seed_ov()
+ov = engine.create_request(ORG, type="budget_override", title="S1: budget override",
+                           source_table="budget_override", source_id="OV1", store_code="S1")
+engine.decide(ORG, ov["id"], decision="approve", actor="dm@x")
+check("budget_override: an inbox APPROVE flips the budget_override row",
+      fake.store[("storeops", "budget_override")][0]["status"] == "approved",
+      fake.store[("storeops", "budget_override")][0])
+check("budget_override: ...and stamps the approval_request", engine.get_request(ORG, ov["id"])["status"] == "approved")
+
+fake.store.clear(); seed_ov()
+ov2 = engine.create_request(ORG, type="budget_override", title="S1 again",
+                            source_table="budget_override", source_id="OV1", store_code="S1")
+fake.store[("storeops", "budget_override")][0].update({"status": "denied"})
+engine.sync_source_decision(ORG, type="budget_override", source_table="budget_override", source_id="OV1",
+                            decision="deny", actor="mgr@x")
+check("budget_override: a legacy-board decision syncs the inbox request",
+      engine.get_request(ORG, ov2["id"])["status"] == "denied")
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

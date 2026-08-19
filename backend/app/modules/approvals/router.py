@@ -135,3 +135,4 @@ def create_approval(body: dict, authorization: str = Header(default=""), org_id:
 # import). Imported here — the module main.py already mounts — so no shared file needs editing per type.
 from app.modules.approvals.adapters import timeclock as _adapter_timeclock  # noqa: E402,F401
 from app.modules.approvals.adapters import shift_extension as _adapter_shift_extension  # noqa: E402,F401
+from app.modules.approvals.adapters import budget_override as _adapter_budget_override  # noqa: E402,F401

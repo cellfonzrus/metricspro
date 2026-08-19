@@ -5293,6 +5293,18 @@ async def request_budget_override(body: BudgetOverrideRequestIn, authorization: 
                 emailed = True
         except Exception:
             pass
+    if oid:
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.create_request(
+                org_id, type="budget_override", source_table="budget_override", source_id=oid,
+                title=f"{store}: hours-budget override for week of {week_start}",
+                summary=(body.reason or None), payload={"week_start": week_start, "approved_hours": body.approved_hours},
+                requested_by=mgr.get("employee_id"), requested_by_name=mgr.get("email"),
+                store_code=store, assignee_employee_id=dm_eid, assignee_email=dm_email,
+                assignee_kind="dm", notify=(not emailed))
+        except Exception:
+            pass
     return {"ok": True, "id": oid, "status": "pending",
             "dm": {"employee_id": dm_eid, "name": dm_name, "email": dm_email, "emailed": emailed},
             "note": None if dm_eid else "No District Manager configured for this store — an admin or DM can still approve."}
@@ -5330,6 +5342,13 @@ def decide_budget_override(ov_id: str, body: DecisionNoteIn, authorization: str 
            "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
            "decided_at": datetime.now(timezone.utc).isoformat(), "decision_note": body.note or None}
     sb().table("budget_override").update(upd).eq("id", ov_id).eq("org_id", org_id).execute()
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="budget_override", source_table="budget_override",
+                                        source_id=ov_id, decision=decision, actor=mgr.get("email"),
+                                        note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
 
