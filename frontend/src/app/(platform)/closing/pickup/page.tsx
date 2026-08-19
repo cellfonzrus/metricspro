@@ -9,6 +9,7 @@ import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { EntityPickerChips } from '../_lib/EntityPickerChips'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { resolveStoreCodes } from '../_lib/market-store-cascade'
+import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -377,7 +378,7 @@ export default function CashPickupPage() {
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{fmt(e.cash)}</td>
-                      <td style={cell}>{(e.envelope_url || e.envelope_picture) ? <a href={e.envelope_url || e.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷 view</a> : '—'}</td>
+                      <td style={cell}><EnvelopeViewLink row={e} label="📷 view" /></td>
                       <td style={cell}>
                         {done
                           ? <span style={{ fontSize: 12, color: 'var(--text3)' }}>by {e.picked_up_by} · {e.picked_up_at ? new Date(e.picked_up_at).toLocaleString() : ''}{e.note ? ` · ${e.note}` : ''}</span>

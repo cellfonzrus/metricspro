@@ -1524,6 +1524,38 @@ def upload_envelope_photo(body: UploadEnvelopePhotoIn, org_id: str = ORG_ID):
     return {"path": path, "url": _signed_envelope(path)}
 
 
+@router.get("/envelope-url")
+def closing_envelope_url(store_code: str = "", close_date: str = "", employee_name: str = "",
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Sign ONE store-day's envelope photo ON DEMAND, for the DM evening verify view and the cash-pickup
+    check. Those list endpoints (/closing/summary, /closing/pickups) return the RAW storage path only —
+    they deliberately avoid a per-row Storage round trip on a list that can be large — but the
+    closing-envelopes bucket is PRIVATE, so a raw path isn't viewable on its own. This signs it lazily
+    (one call when the DM actually clicks 📷), via an ORG-SCOPED DB lookup so a caller can only ever get
+    their own org's envelope (never an arbitrary caller-supplied storage path).
+
+    Owner-reported 2026-08-18: DMs couldn't see the envelope during DM verify + cash-pickup check —
+    the pages rendered the raw private-bucket path as a link, which never loads."""
+    require_org(org_id)
+    if not store_code or not close_date:
+        raise HTTPException(400, "store_code and close_date are required")
+    q = (sb().schema("commcalc").table("daily_closing").select("envelope_picture,employee_name,submitted_at")
+         .eq("org_id", org_id).eq("store_code", store_code).eq("close_date", str(close_date)[:10]))
+    if employee_name:
+        q = q.eq("employee_name", employee_name)
+    rows = q.order("submitted_at", desc=True).limit(30).execute().data or []
+    pic = next((r.get("envelope_picture") for r in rows if r.get("envelope_picture")), None)
+    if not pic and employee_name:
+        # fall back to the store-day (any rep's envelope) if the exact rep row has none
+        rows2 = (sb().schema("commcalc").table("daily_closing").select("envelope_picture,submitted_at")
+                 .eq("org_id", org_id).eq("store_code", store_code).eq("close_date", str(close_date)[:10])
+                 .order("submitted_at", desc=True).limit(30).execute().data) or []
+        pic = next((r.get("envelope_picture") for r in rows2 if r.get("envelope_picture")), None)
+    if not pic:
+        raise HTTPException(404, "No envelope photo on file for this store on this day.")
+    return {"url": _signed_envelope(pic)}
+
+
 async def _notify_envelope_mismatch(client, org_id, summary):
     """Best-effort email + WhatsApp of an envelope OCR mismatch to the designated closing recipient."""
     try:

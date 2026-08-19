@@ -6,6 +6,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 
 // DM evening verification view — per-store totals, missing-rep check, B2B reconciliation, and
 // the DM's confirm/adjust+sign-off. Shared by /closing/verify (Daily Closing module) and the
@@ -679,7 +680,7 @@ export default function DailyClosingVerify() {
                           {r.auto_accepted && <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }} title="3rd-try auto-accept — see Management Review">·3rd try</span>}
                           {r.released_at && <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }} title={`Released for correction by ${r.released_by || 'management'}`}>·released</span>}
                         </td>
-                        <td style={cell}>{(r.envelope_url || r.envelope_picture) ? <a href={r.envelope_url || r.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷</a> : '—'}</td>
+                        <td style={cell}><EnvelopeViewLink row={r} /></td>
                         <td style={cell}>
                           {(Number(r.expense_amount) || 0) > 0
                             ? <span><b>{fmt(r.expense_amount)}</b>{r.expense_description ? <span style={{ color: 'var(--text3)' }}> · {r.expense_description}</span> : null}</span>
