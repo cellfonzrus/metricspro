@@ -1599,6 +1599,19 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+    # Robustness (owner-reported 2026-08-19 — Ali "Cellfonz ru ma" + Rashika "Cellfonz r us": the
+    # envelope photo wasn't accepted and the app bounced to the main page). The envelope image can now
+    # ride the submit as a RAW data-url and be uploaded server-side here — not only as a pre-uploaded
+    # path from the separate /envelope-photo step. That separate step is fragile on mobile: opening the
+    # camera can reload the PWA before the pre-upload finishes, stranding the rep. Accepting the image
+    # inline removes that ordering dependency (the client keeps the photo locally and sends it on submit).
+    _env = body.get("envelope_picture")
+    if _env and str(_env).startswith("data:"):
+        try:
+            body["envelope_picture"] = _upload_envelope(org_id, _env, raise_on_error=True)
+        except Exception as e:
+            raise HTTPException(502, "The envelope photo couldn't be saved — please try submitting again. "
+                                     f"If it keeps failing, tell your manager (storage error: {str(e)[:160]}).")
 
     # ── Duplicate-submission guard (mig 502): ONE ACTIVE row per (org, store_code, employee_name,
     #    close_date). A rep double-submitting used to create a SECOND daily_closing row that

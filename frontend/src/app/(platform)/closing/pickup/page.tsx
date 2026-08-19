@@ -432,8 +432,16 @@ export default function CashPickupPage() {
             </div>
             {dep.disposition === 'deposited' ? (
               <>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Deposit slip photo (OCR reads the amount)<br />
-                  <input type="file" accept="image/*" style={{ marginTop: 4, fontSize: 12 }} onChange={async e => { const f = e.target.files?.[0]; if (f) setDep({ ...dep, slip: await fileToDataUrl(f) }) }} /></label>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Deposit slip photo (OCR reads the amount)
+                  <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {/* Camera (capture) + file picker (no capture) — owner directive 2026-08-19. */}
+                    <label className="btn btn-secondary" style={{ fontSize: 12, cursor: 'pointer' }}>📷 Take photo
+                      <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={async e => { const f = e.target.files?.[0]; if (f) setDep({ ...dep, slip: await fileToDataUrl(f) }); e.currentTarget.value = '' }} /></label>
+                    <label className="btn btn-secondary" style={{ fontSize: 12, cursor: 'pointer' }}>🖼️ Upload from files
+                      <input type="file" accept="image/*" style={{ display: 'none' }} onChange={async e => { const f = e.target.files?.[0]; if (f) setDep({ ...dep, slip: await fileToDataUrl(f) }); e.currentTarget.value = '' }} /></label>
+                    {dep.slip && <span style={{ fontSize: 12, color: 'var(--green)', fontWeight: 600 }}>✓ attached</span>}
+                  </div>
+                </div>
                 <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginTop: 10 }}>Deposit amount {dep.slip ? '(leave blank to auto-read)' : '(enter manually)'}<br />
                   <input type="number" style={{ ...inp, marginTop: 4 }} placeholder={String(dep.e.cash)} value={dep.deposit_amount} onChange={e => setDep({ ...dep, deposit_amount: e.target.value })} /></label>
               </>
