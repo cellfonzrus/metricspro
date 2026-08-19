@@ -159,13 +159,24 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
   Realtime's HTTP broadcast API on every send (channel topic + each member's user topic); the client
   subscribes to its user topic (`GET /chat/me` resolves it) and re-fetches over REST. Polling stays as a
   fallback (4s when the socket is down, 20s safety sweep when it is up). `harness_chat.py` 18/18.
-- **Next:** Approvals adapters for the remaining ~19 surfaces (one per commit); Chat Phase 2
-  (reactions/threads/attachments/edit-delete/presence).
+- **Chat Phase 2 (rich messaging): DONE** — migration 880 (`chat_reactions`; threads/attachments/edit
+  columns already existed on `chat_messages`). Backend: toggle reactions, threaded replies (parent
+  preview surfaced in `list_messages`), file/image attachments (Supabase Storage `chat-attachments`
+  bucket, membership-gated signed URLs), edit (author-only) + soft-delete (author or `chat_admin`),
+  reaction/edit/delete broadcasts. Frontend: hover actions, quick-emoji reactions, reply banner,
+  attach + inline image thumbnails, inline edit, delete tombstones, presence ("N here") + typing
+  indicators over the per-channel topic. `harness_chat.py` 30/30.
+- **Next:** Chat Phase 3 (approvals-in-chat), Phase 4 (search + org management), Phase 5 (voice/video +
+  push); Approvals adapters for the remaining ~19 surfaces (one per commit).
 - Everything else: phased per the tables above.
 
 ## Operator / Owner TODO (desktop)
 - [ ] **Apply the approvals engine migration** (adds `storeops.approval_requests` + `approval_events`).
-- [ ] **Apply the chat migration** (adds `storeops.chat_*`).
+- [ ] **Apply the chat migrations** (868 = `storeops.chat_*`; 880 = `storeops.chat_reactions`).
+- [ ] **Chat attachments bucket:** the backend auto-creates a private `chat-attachments` Supabase
+      Storage bucket on first upload (same pattern as helpdesk `ticket-attachments`); no action needed
+      unless your Storage policy blocks service-role bucket creation, in which case create it manually
+      (private).
 - [ ] **Enable Supabase Realtime** for the chat broadcast topics (Realtime is on by default on Supabase;
       no table exposure needed for backend-driven broadcast).
 - [ ] **Grant permissions:** `approvals_decide` to the roles that approve; `chat_admin` to moderators.

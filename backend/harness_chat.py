@@ -65,6 +65,9 @@ class FakeQuery:
     def update(self, payload):
         self._mode, self._payload = "update", payload; return self
 
+    def delete(self):
+        self._mode = "delete"; return self
+
     def _matches(self, row):
         for kind, k, v in self.filters:
             rv = row.get(k)
@@ -105,6 +108,10 @@ class FakeQuery:
         if self._mode == "update":
             for r in matched:
                 r.update(self._payload)
+            return Result(matched)
+        if self._mode == "delete":
+            for r in list(matched):
+                rows.remove(r)
             return Result(matched)
         if self._order:
             k, desc = self._order
@@ -247,6 +254,70 @@ check("7c the hint reaches the channel topic and each member's user topic",
 who = C.whoami(authorization=AUTH, org_id=ORG)
 check("7d /chat/me returns the caller's employee_id + user topic",
       who["employee_id"] == "E1" and who["user_topic"] == C.realtime.user_topic(ORG, "E1"), who)
+
+
+# ── 8: reactions, edit, delete, threads, attachments (Phase 2) ─────────────────────────────────────
+CHAT_ADMIN = [False]
+C._is_chat_admin = lambda authorization, org_id: CHAT_ADMIN[0]   # stub the platform-role lookup
+
+as_user("E1")
+base = C.send_message(DM, {"body": "react to me"}, authorization=AUTH, org_id=ORG)["message"]
+mid = base["id"]
+as_user("E2")
+r = C.toggle_reaction(DM, mid, {"emoji": "👍"}, authorization=AUTH, org_id=ORG)
+check("8a a member can add a reaction", r["added"] is True and r["reactions"].get("👍") == ["E2"], r)
+r2 = C.toggle_reaction(DM, mid, {"emoji": "👍"}, authorization=AUTH, org_id=ORG)
+check("8b toggling the same reaction removes it", r2["added"] is False and "👍" not in r2["reactions"], r2)
+as_user("E3")   # not a DM member
+try:
+    C.toggle_reaction(DM, mid, {"emoji": "🎉"}, authorization=AUTH, org_id=ORG)
+    check("8c a non-member cannot react", False, "no raise")
+except HTTPException as e:
+    check("8c a non-member cannot react", e.status_code == 403, e.status_code)
+
+as_user("E2")
+try:
+    C.edit_message(DM, mid, {"body": "hijack"}, authorization=AUTH, org_id=ORG)
+    check("8d only the author can edit", False, "no raise")
+except HTTPException as e:
+    check("8d only the author can edit", e.status_code == 403, e.status_code)
+as_user("E1")
+ed = C.edit_message(DM, mid, {"body": "edited text"}, authorization=AUTH, org_id=ORG)["message"]
+check("8e an author edit stamps edited_at + the new body", ed["body"] == "edited text" and bool(ed.get("edited_at")), ed)
+
+reply = C.send_message(DM, {"body": "a reply", "reply_to_id": mid}, authorization=AUTH, org_id=ORG)["message"]
+C.toggle_reaction(DM, mid, {"emoji": "❤️"}, authorization=AUTH, org_id=ORG)   # E1 reacts
+msgs = C.list_messages(DM, authorization=AUTH, org_id=ORG)["messages"]
+rep = next(m for m in msgs if m["id"] == reply["id"])
+check("8f a reply surfaces its parent preview", bool(rep.get("reply_to")) and rep["reply_to"]["preview"] == "edited text", rep.get("reply_to"))
+base_row = next(m for m in msgs if m["id"] == mid)
+check("8g list_messages surfaces per-message reactions", base_row["reactions"].get("❤️") == ["E1"], base_row.get("reactions"))
+
+as_user("E2"); CHAT_ADMIN[0] = False
+try:
+    C.delete_message(DM, mid, authorization=AUTH, org_id=ORG)   # E2 is neither author nor admin
+    check("8h a non-author non-admin cannot delete", False, "no raise")
+except HTTPException as e:
+    check("8h a non-author non-admin cannot delete", e.status_code == 403, e.status_code)
+as_user("E1")
+C.delete_message(DM, mid, authorization=AUTH, org_id=ORG)
+dead = next(m for m in C.list_messages(DM, authorization=AUTH, org_id=ORG)["messages"] if m["id"] == mid)
+check("8i a soft-deleted message masks its body + tombstones", dead["body"] is None and bool(dead.get("deleted_at")), dead)
+victim = C.send_message(DM, {"body": "admin will remove this"}, authorization=AUTH, org_id=ORG)["message"]   # E1 author
+as_user("E2"); CHAT_ADMIN[0] = True
+res = C.delete_message(DM, victim["id"], authorization=AUTH, org_id=ORG)
+check("8j a chat admin can delete another member's message", res.get("ok") is True, res)
+CHAT_ADMIN[0] = False
+
+as_user("E1")
+amsg = C.send_message(DM, {"body": "", "attachments": [{"file_name": "a.png", "storage_path": "p", "mime_type": "image/png"}]},
+                      authorization=AUTH, org_id=ORG)["message"]
+check("8k a message may carry attachments with no text", bool(amsg.get("attachments")) and amsg["attachments"][0]["file_name"] == "a.png", amsg.get("attachments"))
+try:
+    C.send_message(DM, {"body": "   "}, authorization=AUTH, org_id=ORG)
+    check("8l an empty message (no text, no attachment) is rejected", False, "no raise")
+except HTTPException as e:
+    check("8l an empty message (no text, no attachment) is rejected", e.status_code == 400, e.status_code)
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

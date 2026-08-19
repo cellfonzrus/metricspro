@@ -7,14 +7,16 @@ trusted from the body, the same anti-spoof stance as the time clock. Realtime (S
 broadcast) + rich features (reactions, threads, attachments, presence) land in later phases; Phase 1
 clients poll GET /messages.
 """
+import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 
 from app.core.database import get_supabase
 from app.modules.chat import realtime
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+BUCKET = "chat-attachments"   # Supabase Storage bucket, private (signed-url access), same as helpdesk
 
 
 def _require_member(authorization: str = Header(default=""), org_id: str = ORG_ID):
@@ -62,6 +64,22 @@ def _is_member(org_id, channel_id, eid) -> bool:
 def _require_channel_member(org_id, channel_id, eid):
     if not _is_member(org_id, channel_id, eid):
         raise HTTPException(403, "you are not a member of this conversation")
+
+
+def _is_chat_admin(authorization, org_id) -> bool:
+    """A moderator who may act on anyone's message (delete) + drive retention (Phase 4). Chat has no
+    bespoke roles table — reuse the platform role permissions: an explicit `chat_admin` grant, or a
+    company-wide ('all') reporting scope, passes. Best-effort; a resolution failure denies."""
+    try:
+        from app.modules.core.router import _uid_from_token
+        from app.core.tenant_middleware import caller_app_user_http
+        from app.modules.storeops.router import _role_permissions
+        uid = _uid_from_token(authorization)
+        row = (caller_app_user_http(uid, "role") or {}) if uid else {}
+        perms = _role_permissions(org_id, (row.get("role") or "").strip())
+        return perms.get("chat_admin") is True or (perms.get("scope") or "") == "all"
+    except Exception:
+        return False
 
 
 def _dm_key(ids):
@@ -183,7 +201,35 @@ def list_messages(channel_id: str, limit: int = 50, before: str = "",
         q = q.lt("created_at", before)
     rows = q.order("created_at", desc=True).limit(limit).execute().data or []
     rows = list(reversed(rows))   # return chronological
-    return {"messages": rows}
+    return {"messages": _enrich_messages(org_id, channel_id, rows)}
+
+
+def _enrich_messages(org_id, channel_id, rows):
+    """Attach per-message reactions ({emoji: [employee_id,...]}) and a small reply_to preview for
+    threaded messages. A soft-deleted message keeps its row but its body is masked to the tombstone."""
+    for r in rows:
+        if r.get("deleted_at"):
+            r["body"] = None   # never surface the original text of a deleted message
+    ids = [r["id"] for r in rows if r.get("id")]
+    reactions_by_msg: dict = {}
+    if ids:
+        rx = (sb().table("chat_reactions").select("message_id,employee_id,emoji")
+              .eq("org_id", org_id).in_("message_id", ids).execute().data) or []
+        for x in rx:
+            reactions_by_msg.setdefault(x["message_id"], {}).setdefault(x["emoji"], []).append(x["employee_id"])
+    # Parent previews for replies — fetch the referenced parents in one shot.
+    parent_ids = list({r.get("reply_to_id") for r in rows if r.get("reply_to_id")})
+    parents: dict = {}
+    if parent_ids:
+        prows = (sb().table("chat_messages").select("id,sender_name,body,deleted_at")
+                 .eq("org_id", org_id).in_("id", parent_ids).execute().data) or []
+        for p in prows:
+            parents[p["id"]] = {"id": p["id"], "sender_name": p.get("sender_name"),
+                                "preview": (None if p.get("deleted_at") else (p.get("body") or "")[:140])}
+    for r in rows:
+        r["reactions"] = reactions_by_msg.get(r["id"], {})
+        r["reply_to"] = parents.get(r.get("reply_to_id")) if r.get("reply_to_id") else None
+    return rows
 
 
 @router.post("/channels/{channel_id}/messages")
@@ -204,11 +250,15 @@ def send_message(channel_id: str, body: dict, authorization: str = Header(defaul
         else:
             raise HTTPException(403, "you are not a member of this conversation")
     text = (body.get("body") or "").strip()
-    if not text:
-        raise HTTPException(400, "message body is required")
+    atts = body.get("attachments") or []
+    if not isinstance(atts, list):
+        atts = []
+    if not text and not atts:
+        raise HTTPException(400, "a message needs text or an attachment")
     msg = (sb().table("chat_messages").insert({
         "org_id": org_id, "channel_id": channel_id, "sender_employee_id": eid, "sender_name": name,
-        "body": text, "kind": "text", "reply_to_id": (body.get("reply_to_id") or None)}).execute().data or [{}])[0]
+        "body": text, "kind": "text", "reply_to_id": (body.get("reply_to_id") or None),
+        "attachments": atts}).execute().data or [{}])[0]
     _bump(org_id, channel_id)
     # sender is caught up on their own message
     try:
@@ -246,6 +296,155 @@ def add_member(channel_id: str, body: dict, authorization: str = Header(default=
     except Exception:
         pass   # already a member
     return {"ok": True}
+
+
+# ── Reactions / edit / delete (Phase 2) ────────────────────────────────────────────────────────
+def _message_in_channel(org_id, channel_id, message_id):
+    rows = (sb().table("chat_messages").select("*").eq("org_id", org_id)
+            .eq("id", message_id).eq("channel_id", channel_id).limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def _reactions_for(org_id, message_id):
+    rx = (sb().table("chat_reactions").select("employee_id,emoji").eq("org_id", org_id)
+          .eq("message_id", message_id).execute().data) or []
+    out: dict = {}
+    for x in rx:
+        out.setdefault(x["emoji"], []).append(x["employee_id"])
+    return out
+
+
+@router.post("/channels/{channel_id}/messages/{message_id}/reactions")
+def toggle_reaction(channel_id: str, message_id: str, body: dict,
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Toggle the caller's emoji reaction on a message (add if absent, remove if present). Membership
+    required. Body: {emoji}. Returns the message's full reaction map."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    emoji = (body.get("emoji") or "").strip()
+    if not emoji:
+        raise HTTPException(400, "emoji is required")
+    if not _message_in_channel(org_id, channel_id, message_id):
+        raise HTTPException(404, "message not found")
+    existing = (sb().table("chat_reactions").select("id").eq("org_id", org_id)
+                .eq("message_id", message_id).eq("employee_id", eid).eq("emoji", emoji)
+                .limit(1).execute().data) or []
+    if existing:
+        sb().table("chat_reactions").delete().eq("org_id", org_id).eq("message_id", message_id).eq(
+            "employee_id", eid).eq("emoji", emoji).execute()
+        added = False
+    else:
+        try:
+            sb().table("chat_reactions").insert({
+                "org_id": org_id, "channel_id": channel_id, "message_id": message_id,
+                "employee_id": eid, "emoji": emoji}).execute()
+        except Exception:
+            pass   # raced duplicate → treat as present
+        added = True
+    realtime.notify_channel(org_id, channel_id, kind="reaction", message_id=message_id,
+                            member_ids=_member_ids(org_id, channel_id))
+    return {"reactions": _reactions_for(org_id, message_id), "added": added}
+
+
+@router.patch("/channels/{channel_id}/messages/{message_id}")
+def edit_message(channel_id: str, message_id: str, body: dict,
+                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Edit a message's text. Only the ORIGINAL author may edit; a deleted message can't be edited.
+    Stamps edited_at. Body: {body}."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    m = _message_in_channel(org_id, channel_id, message_id)
+    if not m:
+        raise HTTPException(404, "message not found")
+    if m.get("deleted_at"):
+        raise HTTPException(400, "a deleted message can't be edited")
+    if m.get("sender_employee_id") != eid:
+        raise HTTPException(403, "only the author can edit this message")
+    text = (body.get("body") or "").strip()
+    if not text:
+        raise HTTPException(400, "message body is required")
+    upd = {"body": text, "edited_at": _now()}
+    sb().table("chat_messages").update(upd).eq("org_id", org_id).eq("id", message_id).execute()
+    realtime.notify_channel(org_id, channel_id, kind="edit", message_id=message_id,
+                            member_ids=_member_ids(org_id, channel_id))
+    return {"message": {**m, **upd}}
+
+
+@router.delete("/channels/{channel_id}/messages/{message_id}")
+def delete_message(channel_id: str, message_id: str,
+                   authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Soft-delete a message (tombstone: deleted_at set, body cleared). The author OR a chat admin may
+    delete; the row stays so threads/reads don't break."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    m = _message_in_channel(org_id, channel_id, message_id)
+    if not m:
+        raise HTTPException(404, "message not found")
+    if m.get("sender_employee_id") != eid and not _is_chat_admin(authorization, org_id):
+        raise HTTPException(403, "only the author or a chat admin can delete this message")
+    upd = {"deleted_at": _now(), "body": None}
+    sb().table("chat_messages").update(upd).eq("org_id", org_id).eq("id", message_id).execute()
+    realtime.notify_channel(org_id, channel_id, kind="delete", message_id=message_id,
+                            member_ids=_member_ids(org_id, channel_id))
+    return {"ok": True}
+
+
+# ── Attachments (Supabase Storage, tenant + channel scoped path) ────────────────────────────────
+def _ensure_bucket():
+    c = get_supabase()
+    try:
+        c.storage.get_bucket(BUCKET)
+    except Exception:
+        try:
+            c.storage.create_bucket(BUCKET)   # private by default (signed-url access only)
+        except Exception:
+            pass
+    return c
+
+
+def _sign(path, expires=3600):
+    try:
+        res = get_supabase().storage.from_(BUCKET).create_signed_url(path, expires)
+        return (res.get("signedURL") or res.get("signed_url") or res.get("signedUrl")) if isinstance(res, dict) else res
+    except Exception:
+        return None
+
+
+@router.post("/channels/{channel_id}/attachments")
+async def upload_attachment(channel_id: str, file: UploadFile = File(...),
+                            authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Upload a file/image to a conversation. Returns an attachment descriptor (with a 1h signed URL)
+    the client then attaches to a message via POST /messages {attachments:[...]}. Membership required."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    data = await file.read()
+    safe = (file.filename or "file").replace("/", "_")
+    path = f"{org_id}/{channel_id}/{uuid.uuid4().hex}_{safe}"
+    c = _ensure_bucket()
+    try:
+        c.storage.from_(BUCKET).upload(path, data, {"content-type": file.content_type or "application/octet-stream"})
+    except Exception as e:
+        raise HTTPException(500, f"upload failed: {e}")
+    return {"attachment": {"file_name": safe, "storage_path": path,
+                           "mime_type": file.content_type, "file_size": len(data),
+                           "url": _sign(path)}}
+
+
+@router.get("/channels/{channel_id}/attachments/sign")
+def sign_attachment(channel_id: str, path: str = "",
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Re-sign an attachment for display. The path MUST live under this org+channel prefix (anti-
+    traversal), and the caller must be a member — so a signed URL is only ever minted for someone
+    entitled to the conversation."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    prefix = f"{org_id}/{channel_id}/"
+    if not path or not path.startswith(prefix) or ".." in path:
+        raise HTTPException(403, "not an attachment in this conversation")
+    url = _sign(path)
+    if not url:
+        raise HTTPException(500, "could not sign url")
+    return {"url": url}
 
 
 @router.get("/unread")
