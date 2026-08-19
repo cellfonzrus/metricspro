@@ -40,6 +40,7 @@ backbone of the whole feature.
 | Sale → revenue | `pos/commcalc_feed.py` → `commcalc.raw_sales` → P&L |
 | Cost → COGS, profit derived | sale line `cost` → device-cost path; `engine._assemble` derives profit |
 | Vendor order + ship-to-store + receiving | existing purchase-order model `po_*` (`POST /po`, `POST /po/{id}/receive`) |
+| Pluggable vendors | **new** `pos.vendor_connector` registry + `pos/vendor_adapters.py` (outbound) + `pos/vendor_api.py` (inbound) |
 | Source-hiding | split read APIs + a `pos_special_order_admin` permission + neutral UI |
 
 ---
@@ -84,9 +85,11 @@ These are the make-or-break calls; the build is low-risk once settled. **See the
 - Neutral screen (no Amazon): search the special-order catalog → pick item → **declared sale price**
   (default `retail_price`, editable within the margin guardrail) → attach customer + ship-to store → take
   payment via the existing POS tender.
-- **New tables** `pos.special_orders` / `pos.special_order_items` (org-scoped, composite FKs) capturing
-  customer, store, employee, item, declared sale price, captured cost, payment, and **status**
-  (`requested → ordered → shipped → received → delivered`).
+- **New table** `pos.special_orders` (mig 865, org-scoped, composite FK; single-line per order for now —
+  multi-line can be added later) capturing customer, store, employee, item, declared sale price, captured
+  cost, the booked `sale_id`, and **status** (`requested → ordered → shipped → received → delivered`).
+  The sale-item inventory trigger is re-created to **skip special-order products**, so a special-order
+  checkout is inventory-neutral even where `allow_negative_inventory` is off.
 
 ### Phase 3 — Booking (sale + COGS + profit)
 - On order, create a `pos.sales` line via `pos.checkout` with `unit_price = declared sale`,
@@ -102,6 +105,48 @@ These are the make-or-break calls; the build is low-risk once settled. **See the
 
 ### Phase 5 — (Optional, later) Amazon Business API automation
 Only if Phase 0 clears it: auto-place the order from the ops queue via the Amazon Business API.
+
+---
+
+## Pluggable vendor connectors (plug-and-play)
+
+Owner directive 2026-08-19: *"create an option to plug and play if other vendors also have a drop
+shipment platform to use with their API to connect to our system or with our API to connect to them."*
+
+Amazon is just the first dropship vendor. Any vendor becomes usable by registering a
+**`pos.vendor_connector`** row (**migration 866**) — adding a vendor is a **data change, not a code
+change** (except a bespoke outbound API). A connector's `integration_mode` picks one of three ways to
+integrate, covering **both directions** the owner asked for:
+
+| Mode | Direction | How it works | Code needed to add a vendor |
+|---|---|---|---|
+| `manual` | none | HQ/ops places each order from the fulfillment queue. Amazon at launch. | none |
+| `inbound_api` | **their platform → our API** | The vendor **polls our API** (`pos/vendor_api.py`) to pull its queued orders and post back status/tracking, authenticating with a per-vendor token. | none |
+| `outbound_api` | **our system → their API** | **We call the vendor's API** (`pos/vendor_adapters.py`) to place the order, using an `api_base_url` + a `credential_ref` (the **name** of an env/secret — the raw key is never in the DB). | none for a plain REST vendor; a bespoke API registers one adapter subclass |
+
+**The catalog binds a product to a vendor** by `pos.special_order_vendor.vendor == vendor_connector.vendor_key`.
+On `POST /pos/special-orders`, after the sale is booked, `create_special_order` resolves the product's
+connector and calls its adapter — but **placement never blocks the sale**: an outbound-API failure just
+leaves the order `requested` in the manual queue with a breadcrumb note.
+
+**Outbound (our system → their API)** — `pos/vendor_adapters.py`:
+- `VendorAdapter` interface (`place_order` / `refresh`) + a registry (`get_adapter(connector)`).
+- `ManualAdapter`, `InboundApiAdapter` (both just queue), and a **generic** `OutboundApiAdapter` that
+  POSTs a neutral JSON order to `api_base_url`, config-driven (`place_path`, `auth_header`,
+  `auth_scheme`, `order_ref_key`, `tracking_key`, `timeout`) so a plain REST vendor needs **zero code**.
+- A vendor with a non-standard API registers its own subclass: `register_adapter("vendor:<key>", Cls)`,
+  which wins over the generic mode adapter.
+- HQ manages connectors via `GET/POST/PATCH /pos/vendor-connectors` (gated `pos_special_order_admin`).
+
+**Inbound (their platform → our API)** — `pos/vendor_api.py`, mounted at `/api/v1/vendor-api`:
+- A **separate router with NO member-auth gate** — a vendor isn't an org member. Each request carries the
+  vendor's **bearer token**; we SHA-256 it and match `pos.vendor_connector.inbound_token_hash` (only the
+  hash is stored — the raw token is shown **once** at registration). That resolves the (org, vendor_key),
+  and the vendor sees/touches **only its own** vendor_key's orders.
+- `GET /vendor-api/orders` — the vendor pulls its queued orders (ship-to store + address, item SKU, qty,
+  a reference). **Reverse source-hiding:** no customer PII, no sale price, no cost, no margin.
+- `POST /vendor-api/orders/{id}/status` — the vendor posts `ordered|shipped|received|cancelled` + tracking
+  + its order ref (it can't set `requested` or `delivered` — those are ours).
 
 ---
 
@@ -145,11 +190,27 @@ These are **yours** — decisions and console tasks the build can't do. Ordered;
       **cancellation/refund** policy; who owns **returns/warranty** (default: the store).
 - [ ] **7. Seed the initial catalog.** Once the HQ catalog UI ships (Phase 1b) — or via the API now — add
       the first special-order items: customer-facing name/price + the hidden Amazon ASIN/URL/cost.
+- [ ] **8. Apply migrations 865 + 866.** In the Supabase SQL editor run
+      `database/migrations/865_pos_special_orders.sql` (the order record + inventory-neutral trigger) and
+      `database/migrations/866_pos_vendor_connectors.sql` (the plug-and-play vendor registry; seeds a
+      `manual` Amazon connector). Both additive and idempotent.
+- [ ] **9. (Only when adding a non-Amazon vendor) register a connector.** In the HQ vendor-connector
+      admin, add the vendor and pick its mode: **manual** (HQ fulfills), **outbound_api** (we call them —
+      give the API base URL and put the API key in a Railway secret, then set `credential_ref` to that
+      secret's **name**, never the key), or **inbound_api** (they call us — we generate a token, shown
+      **once**, that you hand to the vendor). Then link catalog items to that vendor.
 
 ---
 
 ## Status
-- **Phase 1 (backend hidden catalog): started** — migration 864 + the four catalog endpoints landed.
-- Next build steps: Phase 1b (HQ catalog UI + register the permission), then Phase 2 (the POS flow +
-  special-order tables), then Phase 3 (booking wire-up), then Phase 4 (ops fulfillment queue).
-- Blocked-on-owner: the Phase 0 decisions (TODO #1–3, #6) before this can go live.
+- **Phase 1 (backend hidden catalog): done** — migration 864 + the four catalog endpoints.
+- **Phase 2 (order + booking): done (backend)** — migration 865 (`pos.special_orders` + inventory-neutral
+  trigger) + `POST/GET/PATCH /pos/special-orders`. On order it books the sale (declared price → revenue,
+  vendor cost → COGS; profit derives) and records the order, enforcing the margin floor.
+- **Phase 2.5 (plug-and-play vendors): done (backend)** — migration 866 (`pos.vendor_connector`) +
+  `pos/vendor_adapters.py` (outbound) + `pos/vendor_api.py` (inbound, token-authed) + the
+  `/pos/vendor-connectors` admin CRUD.
+- Next build steps: Phase 1b (HQ catalog + vendor-connector UI + register the permission), then Phase 2b
+  (the store-facing POS "Customer Special Order" screen), then Phase 4 (ops fulfillment queue UI).
+- Blocked-on-owner: the Phase 0 decisions (TODO #1–3, #6) before this can go live; apply migrations
+  864/865/866 (TODO #4, #8).

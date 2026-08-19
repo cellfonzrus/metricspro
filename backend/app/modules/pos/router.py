@@ -397,6 +397,274 @@ def update_special_order_item(product_id: str, body: dict, authorization: str = 
     return {"product": r.data[0]}
 
 
+# ── Customer Special Order — Phase 2: place the order + book the sale (mig 865) ──────────────────────
+SPECIAL_ORDER_MIN_MARGIN_PCT = 15.0   # default price floor; owner-configurable later (plan TODO #6)
+
+
+def _so_num(v, d=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return d
+
+
+# Vendor-internal fields on a special order. Store staff see the order's status/tracking, but NOT the
+# vendor cost or the vendor's identity — same source-hiding line the catalog draws. Only a caller with
+# pos_special_order_admin (HQ) sees these.
+_SO_HQ_ONLY = ("captured_cost", "actual_cost", "vendor", "vendor_order_ref", "po_id")
+
+
+def _has_pos_perm(authorization: str, org_id: str, key: str) -> bool:
+    """Non-raising permission check (for redaction decisions). Fails closed to False."""
+    try:
+        return _pos_grant(_caller_ctx(authorization, org_id), key)
+    except Exception:
+        return False
+
+
+def _redact_so(row: dict, is_admin: bool) -> dict:
+    return row if is_admin else {k: v for k, v in (row or {}).items() if k not in _SO_HQ_ONLY}
+
+
+@router.post("/special-orders")
+def create_special_order(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Place a customer special order: enforce the margin floor, BOOK the sale (declared price →
+    revenue, vendor cost → COGS; profit derives automatically), and record the order for fulfillment.
+    Store-facing — the caller never sees the vendor cost; the server reads it only to book COGS and
+    guard the margin, so the vendor (Amazon) stays hidden."""
+    store_code = (body.get("store_code") or "").strip()
+    product_id = (body.get("product_id") or "").strip()
+    if not store_code or not product_id:
+        raise HTTPException(400, "store_code and product_id are required")
+    qty = _so_num(body.get("qty"), 1) or 1
+    sale_price = _so_num(body.get("declared_sale_price") or body.get("sale_price"))
+    if sale_price <= 0:
+        raise HTTPException(400, "declared_sale_price is required")
+    eid = _caller_employee(authorization, org_id)
+    if not eid:
+        raise HTTPException(403, "your login isn't linked to an employee record — ask an admin to set "
+                                 "your Employee ID in Roles & Access")
+    ks = _caller_store_keyset(authorization, org_id)
+    if ks is not None and store_code.upper() not in {str(k).upper() for k in ks}:
+        raise HTTPException(403, "this store is outside your scope")
+    prows = (sb().schema("pos").table("products").select("*")
+             .eq("org_id", org_id).eq("id", product_id).limit(1).execute().data) or []
+    if not prows or not prows[0].get("is_special_order"):
+        raise HTTPException(404, "not a special-order catalog item")
+    prod = prows[0]
+    vrows = (sb().schema("pos").table("special_order_vendor")
+             .select("vendor_cost,vendor,vendor_sku")
+             .eq("org_id", org_id).eq("product_id", product_id).limit(1).execute().data) or []
+    vrow = vrows[0] if vrows else {}
+    cost = _so_num(vrow.get("vendor_cost") or prod.get("cost"))
+    if cost > 0:
+        floor = cost * (1 + SPECIAL_ORDER_MIN_MARGIN_PCT / 100.0)
+        if sale_price < floor - 0.005:
+            raise HTTPException(400, f"Price too low for this item — the minimum is {floor:.2f} "
+                                     f"(at least a {int(SPECIAL_ORDER_MIN_MARGIN_PCT)}% margin).")
+    tax_total = _so_num(body.get("tax_total"))
+    subtotal = round(sale_price * qty, 2)
+    total = round(subtotal + tax_total, 2)
+    tax_rate = round(tax_total / subtotal, 6) if subtotal else 0.0
+    customer_id = (body.get("customer_id") or "").strip() or None
+    desc = prod.get("full_name") or prod.get("short_name") or "Special order"
+    sale = {"store_code": store_code, "customer_id": customer_id, "receipt_type": "sale",
+            "subtotal": subtotal, "discount_total": 0, "tax_total": tax_total, "total": total,
+            "balance": 0, "is_activation_sale": False, "notes": "Customer special order",
+            "employee_id": eid}
+    items = [{"product_id": product_id, "product_type": prod.get("system_category") or "Regular",
+              "description": desc, "qty": qty, "unit_price": sale_price,
+              "list_price": prod.get("retail_price") or sale_price, "cost": cost, "discount": 0,
+              "tax_rate": tax_rate, "tax_value": tax_total, "extended_price": subtotal}]
+    pay = body.get("payment") or {}
+    payments = ([{"payment_method": pay["payment_method"], "amount": _so_num(pay.get("amount"))}]
+                if pay.get("payment_method") and _so_num(pay.get("amount")) > 0 else [])
+    try:
+        r = sb().schema("pos").rpc("checkout", {"p_org": org_id, "p_sale": sale, "p_items": items,
+                                                "p_payments": payments}).execute()
+    except Exception as e:
+        raise HTTPException(400, f"could not book the sale: {e}")
+    srow = r.data[0] if isinstance(r.data, list) else r.data
+    sale_id = srow.get("id") if isinstance(srow, dict) else None
+    ship_to = (body.get("ship_to_store") or store_code)
+    vendor_key = vrow.get("vendor") or "amazon"
+    so = {"org_id": org_id, "store_code": store_code,
+          "ship_to_store": ship_to, "customer_id": customer_id,
+          "customer_name": body.get("customer_name"), "employee_id": eid, "product_id": product_id,
+          "description": desc, "qty": qty, "sale_price": sale_price, "captured_cost": cost,
+          "sale_id": sale_id, "status": "requested",
+          "vendor": vendor_key, "notes": body.get("notes")}
+    # Plug-and-play placement: resolve the product's vendor connector and let its adapter try to place
+    # the order (outbound API), leave it queued (manual / inbound), etc. The sale is already booked, so
+    # placement NEVER blocks the sale — a failure just leaves the order in the fulfillment queue.
+    conn = _vendor_connector(org_id, vendor_key)
+    try:
+        from app.modules.pos.vendor_adapters import get_adapter
+        placement = get_adapter(conn).place_order({
+            "vendor_sku": vrow.get("vendor_sku"), "qty": qty, "ship_to": ship_to,
+            "reference": (srow.get("receipt_no") if isinstance(srow, dict) else None) or sale_id})
+    except Exception:
+        placement = {}
+    for k in ("status", "vendor_order_ref", "tracking"):
+        if placement.get(k):
+            so[k] = placement[k]
+    if placement.get("notes"):
+        so["notes"] = " ".join(x for x in (so.get("notes"), placement["notes"]) if x)
+    ins = (sb().schema("pos").table("special_orders").insert(so).execute().data or [{}])[0]
+    is_admin = _has_pos_perm(authorization, org_id, "pos_special_order_admin")
+    return {"special_order": _redact_so(ins, is_admin), "sale": srow}
+
+
+_SO_STATUSES = ("requested", "ordered", "shipped", "received", "delivered", "cancelled")
+
+
+@router.get("/special-orders")
+def list_special_orders(status: str = "", store_code: str = "", authorization: str = Header(default=""),
+                        org_id: str = ORG_ID):
+    """The caller's in-scope special orders (store-scoped for a store manager; org-wide for admin/HQ).
+    The vendor linkage is NOT included here — the HQ fulfillment queue reads it separately."""
+    q = sb().schema("pos").table("special_orders").select("*").eq("org_id", org_id)
+    if status in _SO_STATUSES:
+        q = q.eq("status", status)
+    if store_code:
+        q = q.eq("store_code", store_code)
+    rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    ks = _caller_store_keyset(authorization, org_id)
+    rows = _span_filter(rows, ks, field="store_code")
+    is_admin = _has_pos_perm(authorization, org_id, "pos_special_order_admin")
+    return {"special_orders": [_redact_so(r, is_admin) for r in rows]}
+
+
+@router.get("/special-orders/{order_id}")
+def get_special_order(order_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("special_orders").select("*")
+            .eq("org_id", org_id).eq("id", order_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    so = rows[0]
+    ks = _caller_store_keyset(authorization, org_id)
+    if ks is not None and str(so.get("store_code") or "").upper() not in {str(k).upper() for k in ks}:
+        # a store-scoped caller may only see their own store's orders (HQ/admin has ks=None)
+        raise HTTPException(403, "outside your scope")
+    is_admin = _has_pos_perm(authorization, org_id, "pos_special_order_admin")
+    return {"special_order": _redact_so(so, is_admin)}
+
+
+@router.patch("/special-orders/{order_id}")
+def update_special_order(order_id: str, body: dict, authorization: str = Header(default=""),
+                         org_id: str = ORG_ID):
+    """HQ/ops fulfillment update — status, vendor order ref, tracking, and the actual-cost true-up.
+    Gated by pos_special_order_admin (the vendor order ref names the vendor, so it's HQ-only)."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    upd = {}
+    if "status" in body:
+        st = str(body.get("status") or "").strip()
+        if st not in _SO_STATUSES:
+            raise HTTPException(400, f"status must be one of {', '.join(_SO_STATUSES)}")
+        upd["status"] = st
+    for k in ("vendor_order_ref", "tracking", "ship_to_store", "notes", "po_id"):
+        if k in body:
+            upd[k] = body[k]
+    if "actual_cost" in body:
+        upd["actual_cost"] = _so_num(body.get("actual_cost"))
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (sb().schema("pos").table("special_orders").update(upd)
+         .eq("org_id", org_id).eq("id", order_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    return {"special_order": r.data[0]}
+
+
+# ── Plug-and-play vendor connectors (mig 866) — HQ-only registry of dropship vendors ─────────────────
+# A connector row makes a vendor pluggable in one of three modes: 'manual' (HQ fulfills from the queue),
+# 'inbound_api' (the vendor pulls our queue + posts status, via vendor_api.py), or 'outbound_api' (we
+# call the vendor's API, via pos/vendor_adapters.py). See docs/POS_SPECIAL_ORDER_PLAN.md.
+VENDOR_CONNECTOR_FIELDS = ("vendor_key", "display_name", "integration_mode", "api_base_url",
+                           "credential_ref", "config", "is_active")
+_VENDOR_MODES = ("manual", "outbound_api", "inbound_api")
+
+
+def _vendor_connector(org_id: str, vendor_key: str):
+    """The active connector for (org, vendor_key), or None. Used server-side only — the connector
+    (and the vendor it names) is never returned to a store/customer response."""
+    if not vendor_key:
+        return None
+    rows = (sb().schema("pos").table("vendor_connector").select("*")
+            .eq("org_id", org_id).eq("vendor_key", vendor_key).eq("is_active", True)
+            .limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def _redact_connector(row: dict) -> dict:
+    """Never surface the inbound token hash to the admin UI — it's an auth secret, not display data."""
+    return {k: v for k, v in (row or {}).items() if k != "inbound_token_hash"}
+
+
+@router.get("/vendor-connectors")
+def list_vendor_connectors(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ-only: the org's dropship-vendor connectors. Gated pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    rows = (sb().schema("pos").table("vendor_connector").select("*")
+            .eq("org_id", org_id).order("vendor_key").execute().data) or []
+    return {"connectors": [_redact_connector(r) for r in rows]}
+
+
+@router.post("/vendor-connectors")
+def create_vendor_connector(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ-only: register a dropship vendor. For 'inbound_api', pass an `inbound_token` (the vendor's
+    access token) — we store only its SHA-256 hash and RETURN THE TOKEN ONCE so you can hand it to the
+    vendor; it can't be retrieved again. Gated pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    ins = {k: body[k] for k in VENDOR_CONNECTOR_FIELDS if k in body}
+    if not (ins.get("vendor_key") or "").strip():
+        raise HTTPException(400, "vendor_key required")
+    ins["vendor_key"] = ins["vendor_key"].strip()
+    mode = (ins.get("integration_mode") or "manual").strip()
+    if mode not in _VENDOR_MODES:
+        raise HTTPException(400, f"integration_mode must be one of {', '.join(_VENDOR_MODES)}")
+    ins["integration_mode"] = mode
+    ins["org_id"] = org_id
+    token = (body.get("inbound_token") or "").strip()
+    if token:
+        from app.modules.pos.vendor_adapters import token_hash
+        ins["inbound_token_hash"] = token_hash(token)
+    try:
+        row = (sb().schema("pos").table("vendor_connector")
+               .upsert(ins, on_conflict="org_id,vendor_key").execute().data or [{}])[0]
+    except Exception as e:
+        raise HTTPException(400, f"could not save connector: {e}")
+    out = {"connector": _redact_connector(row)}
+    if token:
+        out["inbound_token"] = token   # shown once — hand it to the vendor now
+    return out
+
+
+@router.patch("/vendor-connectors/{connector_id}")
+def update_vendor_connector(connector_id: str, body: dict, authorization: str = Header(default=""),
+                            org_id: str = ORG_ID):
+    """HQ-only: update a connector. Passing a new `inbound_token` rotates it (returned once). Gated
+    pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    upd = {k: body[k] for k in VENDOR_CONNECTOR_FIELDS if k in body}
+    if "integration_mode" in upd and upd["integration_mode"] not in _VENDOR_MODES:
+        raise HTTPException(400, f"integration_mode must be one of {', '.join(_VENDOR_MODES)}")
+    token = (body.get("inbound_token") or "").strip()
+    if token:
+        from app.modules.pos.vendor_adapters import token_hash
+        upd["inbound_token_hash"] = token_hash(token)
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (sb().schema("pos").table("vendor_connector").update(upd)
+         .eq("org_id", org_id).eq("id", connector_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    out = {"connector": _redact_connector(r.data[0])}
+    if token:
+        out["inbound_token"] = token
+    return out
+
+
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # Phase 1 — customers, inventory, sales/checkout, register, settings (mig 725)
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
