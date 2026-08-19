@@ -4897,6 +4897,25 @@ def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, request
         # Push the approval request so the DM actually learns about it — the board is passive, and a DM
         # who never opens it would otherwise leave the rep's held time uncounted with no signal at all.
         _notify_permission_approvers(org_id, saved, dm_email)
+        # Intimation into the UNIFIED approvals inbox (migration 867). Best-effort; notify=False because
+        # the timeclock path already emailed the approvers just above (no double email).
+        if pid:
+            try:
+                from app.modules.approvals import engine as _approvals
+                _kl = {"reclock_in": "second clock-in session",
+                       "late_clockout": "extra time past scheduled end"}.get(kind, "time-clock permission")
+                _who = saved.get("employee_name") or saved.get("employee_id") or "An employee"
+                _approvals.create_request(
+                    org_id, type="timeclock_permission",
+                    source_table="timeclock_permission", source_id=pid,
+                    title=f"{_who}: {_kl} at {saved.get('store_code') or 'store'}",
+                    summary=(saved.get("reason") or None),
+                    payload={"kind": kind, "work_date": saved.get("work_date")},
+                    requested_by=saved.get("employee_id"), requested_by_name=saved.get("employee_name"),
+                    store_code=saved.get("store_code"), assignee_employee_id=dm_eid,
+                    assignee_email=dm_email, assignee_kind="dm", notify=False)
+            except Exception:
+                pass
         return {"id": pid, "kind": kind, "status": "pending",
                 "dm": {"employee_id": dm_eid, "email": dm_email},
                 "note": None if dm_eid else "No District Manager is configured for this store — an admin or DM can still approve it."}
@@ -4922,33 +4941,19 @@ def list_timeclock_permissions(status: str = "", authorization: str = Header(def
     return {"permissions": rows}
 
 
-@router.post("/timeclock/permissions/{perm_id}/decision")
-def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
-    approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
-    held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
-    stamped if it already closed while pending); a late_clockout punch's clock_out is extended to the
-    approved actual departure and its hours recomputed. Denying leaves the held time uncounted."""
-    mgr = _require_manager(authorization, org_id)
-    org_id = mgr.get("org_id") or org_id
-    if not _timeclock_432_present():
-        raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
-    decision = (body.decision or "").strip().lower()
-    if decision not in ("approve", "deny"):
-        raise HTTPException(400, "decision must be 'approve' or 'deny'")
-    rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
-            .limit(1).execute().data) or []
-    if not rows:
-        raise HTTPException(404, "unknown request")
-    perm = rows[0]
-    if perm.get("status") != "pending":
-        raise HTTPException(409, f"already {perm.get('status')}")
+def _apply_timeclock_permission_decision(org_id, perm, new_status, who, note=None):
+    """Apply an approve/deny to a rep-initiated time-clock permission and make the held time COUNT.
+    Stamps the perm row, then: reclock_in → flip the punch permission_status (stamping its held hours if
+    it already closed while pending); late_clockout → extend the capped clock-out to the approved
+    departure and recompute hours. SHARED by the /timeclock/permissions decision endpoint AND the unified
+    approvals engine adapter, so both routes have byte-identical effects. Caller guards perm is pending.
+    `who` is the decider's {email,...} dict (for audit attribution)."""
+    decided_by = (who or {}).get("email")
     now = datetime.now(timezone.utc)
-    new_status = "approved" if decision == "approve" else "denied"
     sb().table("timeclock_permission").update(
-        {"status": new_status, "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
-         "decided_at": now.isoformat(), "decision_note": body.note or None}
-    ).eq("id", perm_id).eq("org_id", org_id).execute()
+        {"status": new_status, "decided_by": decided_by, "decided_by_name": decided_by,
+         "decided_at": now.isoformat(), "decision_note": note}
+    ).eq("id", perm.get("id")).eq("org_id", org_id).execute()
 
     tlid = perm.get("timelog_id")
     punch = None
@@ -4971,7 +4976,7 @@ def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorizatio
                                     employee_id=punch.get("employee_id"), employee_name=punch.get("employee_name"),
                                     store_code=punch.get("store_code"), work_date=str(punch.get("work_date") or "")[:10],
                                     before="pending (second session)", after=f"approved ({p_upd.get('hours')}h counts)",
-                                    source_table="timelog", source_id=tlid, who=mgr)
+                                    source_table="timelog", source_id=tlid, who=who)
             except Exception:
                 pass
         else:
@@ -4989,9 +4994,44 @@ def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorizatio
                                     employee_id=punch.get("employee_id"), employee_name=punch.get("employee_name"),
                                     store_code=punch.get("store_code"), work_date=str(punch.get("work_date") or "")[:10],
                                     before="capped at scheduled end + grace", after=f"{co.isoformat()} ({h}h, DM-approved extra)",
-                                    source_table="timelog", source_id=tlid, who=mgr)
+                                    source_table="timelog", source_id=tlid, who=who)
             except Exception:
                 pass
+
+
+@router.post("/timeclock/permissions/{perm_id}/decision")
+def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
+    approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
+    held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
+    stamped if it already closed while pending); a late_clockout punch's clock_out is extended to the
+    approved actual departure and its hours recomputed. Denying leaves the held time uncounted.
+
+    Also syncs the linked unified approval_request (migration 867) so the central Approvals inbox
+    reflects a decision made on this legacy board."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    if not _timeclock_432_present():
+        raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
+    decision = (body.decision or "").strip().lower()
+    if decision not in ("approve", "deny"):
+        raise HTTPException(400, "decision must be 'approve' or 'deny'")
+    rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
+            .limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown request")
+    perm = rows[0]
+    if perm.get("status") != "pending":
+        raise HTTPException(409, f"already {perm.get('status')}")
+    new_status = "approved" if decision == "approve" else "denied"
+    _apply_timeclock_permission_decision(org_id, perm, new_status, mgr, note=body.note or None)
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="timeclock_permission",
+                                        source_table="timeclock_permission", source_id=perm_id,
+                                        decision=decision, actor=mgr.get("email"), note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": new_status, "decided_by": mgr.get("email")}
 
 

@@ -406,6 +406,12 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'], cap: 'asset_lending' },
     { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
   ]},
+  // Unified Approvals inbox (owner directive 2026-08-19) — cross-cutting, so its own group. Every
+  // module's approval/intimation request surfaces here; approvers are managers (scope all/market/store).
+  // Module 'storeops' gates it to workforce-entitled tenants (the pilot type is time-clock permissions).
+  { group: 'Approvals', module: 'storeops', items: [
+    { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'] },
+  ]},
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
