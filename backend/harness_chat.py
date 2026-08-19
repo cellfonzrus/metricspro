@@ -138,6 +138,11 @@ from fastapi import HTTPException  # noqa: E402
 
 C.get_supabase = lambda: fake
 
+# Realtime broadcast: capture instead of hitting the network, so we can prove send fans out a hint.
+BROADCASTS = []
+C.realtime.publish = lambda topics, event, payload: BROADCASTS.append(
+    (list(topics) if not isinstance(topics, str) else [topics], event, payload))
+
 ORG = "org-c"
 CURRENT = ["E1"]   # the "signed-in" employee; flip to simulate different callers
 S._caller_identity = lambda auth: (ORG, CURRENT[0])
@@ -225,6 +230,23 @@ check("6a my_channels lists the caller's conversations with a last-message previ
       dm["last_message"]["preview"] == "third", dm.get("last_message"))
 check("6b DM membership is surfaced for naming", set(dm["members"]) == {"E1", "E2"}, dm["members"])
 check("6c the general channel Alice created is listed too", any(c["id"] == pub for c in chans), [c.get("name") for c in chans])
+
+
+# ── 7: realtime broadcast (Phase 1b) ──────────────────────────────────────────────────────────────
+BROADCASTS.clear()
+as_user("E1")
+sent = C.send_message(DM, {"body": "ping"}, authorization=AUTH, org_id=ORG)["message"]
+check("7a sending a message fans out exactly one realtime hint", len(BROADCASTS) == 1, BROADCASTS)
+topics, event, payload = BROADCASTS[0]
+check("7b the hint carries kind+channel+message id but NOT the body",
+      payload.get("kind") == "message" and payload.get("channel_id") == DM
+      and payload.get("message_id") == sent["id"] and "body" not in payload, payload)
+check("7c the hint reaches the channel topic and each member's user topic",
+      C.realtime.channel_topic(DM) in topics
+      and C.realtime.user_topic(ORG, "E1") in topics and C.realtime.user_topic(ORG, "E2") in topics, topics)
+who = C.whoami(authorization=AUTH, org_id=ORG)
+check("7d /chat/me returns the caller's employee_id + user topic",
+      who["employee_id"] == "E1" and who["user_topic"] == C.realtime.user_topic(ORG, "E1"), who)
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

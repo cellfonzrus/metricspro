@@ -1,10 +1,11 @@
 'use client'
-// Internal Chat — Phase 1 (core messaging). Owner directive 2026-08-19. A Slack/WhatsApp-style two-pane
-// messenger: conversations on the left, the active thread on the right. Phase 1 polls for new messages
-// (~4s); Supabase Realtime broadcast + rich features (reactions, threads, attachments, presence) arrive
-// in later phases. See docs/APPROVALS_AND_CHAT_PLAN.md.
+// Internal Chat. Owner directive 2026-08-19. A Slack/WhatsApp-style two-pane messenger: conversations on
+// the left, the active thread on the right. Live updates arrive over Supabase Realtime broadcast (Phase
+// 1b) — the backend fans a lightweight HINT out to the caller's user topic on every new message, and the
+// client re-fetches the authoritative rows through the membership-gated REST API. A slow REST poll stays
+// on as a fallback for when the socket is down. See docs/APPROVALS_AND_CHAT_PLAN.md.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api } from '@/lib/client'
+import { api, supabase } from '@/lib/client'
 
 interface Channel {
   id: string; kind: string; name?: string | null; topic?: string | null; members: string[]
@@ -26,7 +27,11 @@ export default function ChatPage() {
   const [showNew, setShowNew] = useState<'' | 'dm' | 'channel'>('')
   const [dirQuery, setDirQuery] = useState('')
   const [msg, setMsg] = useState('')
+  const [userTopic, setUserTopic] = useState('')
+  const [rtUp, setRtUp] = useState(false)
   const paneRef = useRef<HTMLDivElement>(null)
+  const activeIdRef = useRef('')
+  useEffect(() => { activeIdRef.current = activeId }, [activeId])
 
   const nameOf = useMemo(() => {
     const m: Record<string, string> = {}; dir.forEach(p => { m[p.employee_id] = p.name }); return m
@@ -49,11 +54,29 @@ export default function ChatPage() {
 
   useEffect(() => { api('/api/v1/chat/directory').then((r: any) => setDir(r.people || [])).catch(() => {}) }, [])
   useEffect(() => { loadChannels() }, [loadChannels])
-  // Poll: channels for unread/recency, and the open thread for new messages.
+  useEffect(() => { api('/api/v1/chat/me').then((r: any) => setUserTopic(r.user_topic || '')).catch(() => {}) }, [])
+
+  // Realtime: subscribe to the caller's user topic. Every conversation they belong to fans a hint out
+  // here, so one socket keeps the whole sidebar live; when the hint is for the OPEN thread, re-pull it.
+  // The socket's SUBSCRIBED state drives the poll cadence below (fallback when the wire is down).
   useEffect(() => {
-    const t = setInterval(() => { loadChannels(); if (activeId) loadMessages(activeId) }, 4000)
+    if (!userTopic) return
+    const ch = supabase.channel(userTopic, { config: { broadcast: { self: true } } })
+    ch.on('broadcast', { event: 'chat' }, (m: any) => {
+      const cid = m?.payload?.channel_id
+      loadChannels()
+      if (cid && cid === activeIdRef.current) loadMessages(cid)
+    }).subscribe((status: string) => { setRtUp(status === 'SUBSCRIBED') })
+    return () => { setRtUp(false); supabase.removeChannel(ch) }
+  }, [userTopic, loadChannels, loadMessages])
+
+  // Poll fallback: fast (4s) while the socket is down so the app still feels live; a slow 20s safety
+  // sweep once realtime is up, to reconcile any hint that was dropped mid-flight.
+  useEffect(() => {
+    const t = setInterval(() => { loadChannels(); if (activeIdRef.current) loadMessages(activeIdRef.current) },
+                          rtUp ? 20000 : 4000)
     return () => clearInterval(t)
-  }, [activeId, loadChannels, loadMessages])
+  }, [rtUp, loadChannels, loadMessages])
   useEffect(() => { if (activeId) { loadMessages(activeId); api(`/api/v1/chat/channels/${activeId}/read`, { method: 'POST' }).then(loadChannels).catch(() => {}) } }, [activeId, loadMessages, loadChannels])
   useEffect(() => { if (paneRef.current) paneRef.current.scrollTop = paneRef.current.scrollHeight }, [messages])
 
@@ -87,7 +110,8 @@ export default function ChatPage() {
       {/* Sidebar */}
       <div style={{ width: 280, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', background: 'var(--surface2)' }}>
         <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <b style={{ fontSize: 15 }}>💬 Chat</b>
+          <b style={{ fontSize: 15 }}>💬 Chat
+            <span title={rtUp ? 'Live' : 'Reconnecting…'} style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 999, marginLeft: 7, verticalAlign: 'middle', background: rtUp ? '#16a34a' : 'var(--text3)' }} /></b>
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => setShowNew('dm')}>+ DM</button>
             <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} onClick={createChannel}>+ Ch</button>

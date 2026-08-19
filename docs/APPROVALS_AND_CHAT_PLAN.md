@@ -155,8 +155,12 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
 - **Chat Phase 1 (core messaging foundation): DONE** — migration 868 (`chat_channels/members/messages`),
   `chat/` module (channels, DMs/groups, messages, membership, unread/read, directory), `/chat` two-pane
   page (polling) + nav. `harness_chat.py` 14/14.
-- **Next:** Approvals adapters for the remaining ~19 surfaces (one per commit); Chat Phase 1b (Supabase
-  Realtime broadcast to replace polling) then Phase 2 (reactions/threads/attachments/presence).
+- **Chat Phase 1b (realtime): DONE** — `chat/realtime.py` broadcasts a lightweight HINT to Supabase
+  Realtime's HTTP broadcast API on every send (channel topic + each member's user topic); the client
+  subscribes to its user topic (`GET /chat/me` resolves it) and re-fetches over REST. Polling stays as a
+  fallback (4s when the socket is down, 20s safety sweep when it is up). `harness_chat.py` 18/18.
+- **Next:** Approvals adapters for the remaining ~19 surfaces (one per commit); Chat Phase 2
+  (reactions/threads/attachments/edit-delete/presence).
 - Everything else: phased per the tables above.
 
 ## Operator / Owner TODO (desktop)

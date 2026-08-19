@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.core.database import get_supabase
+from app.modules.chat import realtime
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -215,6 +216,9 @@ def send_message(channel_id: str, body: dict, authorization: str = Header(defaul
             "channel_id", channel_id).eq("employee_id", eid).execute()
     except Exception:
         pass
+    # Realtime: nudge the channel thread + every member's sidebar to re-fetch (content stays behind REST).
+    realtime.notify_channel(org_id, channel_id, kind="message", message_id=msg.get("id"),
+                            member_ids=_member_ids(org_id, channel_id))
     return {"message": msg}
 
 
@@ -250,6 +254,15 @@ def unread_count(authorization: str = Header(default=""), org_id: str = ORG_ID):
     data = my_channels(authorization=authorization, org_id=org_id)
     total = sum(int(c.get("unread") or 0) for c in data["channels"] if not c.get("muted"))
     return {"total": total, "by_channel": {c["id"]: c.get("unread", 0) for c in data["channels"]}}
+
+
+@router.get("/me")
+def whoami(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The caller's identity for the chat client — the employee_id it needs to subscribe to its own
+    realtime user topic, plus the topic string itself so the naming lives server-side only."""
+    org_id, eid, name = _me(authorization, org_id)
+    return {"org_id": org_id, "employee_id": eid, "name": name,
+            "user_topic": realtime.user_topic(org_id, eid)}
 
 
 @router.get("/directory")
