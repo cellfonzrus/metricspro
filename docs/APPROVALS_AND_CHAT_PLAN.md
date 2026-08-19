@@ -83,6 +83,34 @@ Reuses the fire-and-forget email path built for timeclock (`_notify_permission_a
 generalized to `notify_approvers(request)`), plus the in-app inbox badge, plus (Part B) a chat card in
 the approver's DM/channel. One notification policy for every type.
 
+### Adapter migration status (2026-08-19)
+Each surface becomes an adapter: its create path calls `engine.create_request` (intimation into the
+inbox) and its decision path calls `engine.sync_source_decision`; a registered `on_decide` lets the
+**unified inbox** perform the effect too. Two tiers by risk:
+
+**Tier A — clean binary approve/deny, no money side-effect → migrated & tested:**
+- ✅ `timeclock_permission` (pilot)
+- ✅ `shift_extension`
+- ✅ `budget_override`
+
+These three share the DM-approval + pure-status-flip shape, so the inbox and the legacy board have
+byte-identical effects (proven by `harness_approvals_adapters.py`).
+
+**Tier B — money-affecting or multi-state → migrate individually WITH REVIEW (not batched autonomously):**
+- `closing_expense` (`/expense/{id}/decide`) — approve/reject, but approving pushes a **P&L recompute**.
+- `payroll_chargeback` (`/payroll-chargebacks/{id}/decision`) — `post`/`waive` a **payroll deduction**,
+  with settlement-overflow rules (not a plain approve/deny).
+- `payroll_hours` (`/payroll/approvals/decide`) — releases a **payroll batch**.
+- `management_incentive` / `ingest_guard` (commcalc) — **commission money**.
+- `remediation` (`/requests/{id}/decision`), `referral` (gated **commission**), `hr_onboarding` +
+  letters, `action_plan` (a multi-state submit→push-back→approve→done workflow, not binary).
+
+Rationale for the split: a wrong approve→effect mapping on a money path (posting a deduction, releasing
+payroll, unlocking commission) causes real financial errors, so those are migrated one at a time behind
+their own reviewed commit — reusing the SAME extract-shared-effect pattern as the Tier-A trio — rather
+than in an autonomous batch. Until migrated, they keep working on their own boards; the engine already
+supports surfacing them read-only (intimation) as a safe interim step when desired.
+
 ### Migration strategy (incremental, low-regression)
 1. **Engine + inbox + one pilot** (this PR): build the tables/engine/endpoints and migrate **timeclock
    permissions** as the reference adapter — its create path also writes an `approval_request`; its decision
