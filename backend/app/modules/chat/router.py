@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 
 from app.core.database import get_supabase
+from app.modules.approvals import engine
 from app.modules.chat import realtime
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -226,9 +227,19 @@ def _enrich_messages(org_id, channel_id, rows):
         for p in prows:
             parents[p["id"]] = {"id": p["id"], "sender_name": p.get("sender_name"),
                                 "preview": (None if p.get("deleted_at") else (p.get("body") or "")[:140])}
+    # Approval cards — surface the LIVE linked request so the card always reflects the current status.
+    appr_ids = list({r.get("approval_request_id") for r in rows if r.get("approval_request_id")})
+    appr: dict = {}
+    if appr_ids:
+        arows = (sb().table("approval_requests")
+                 .select("id,title,summary,status,decision,decided_by_name,type,priority,requested_by_name")
+                 .eq("org_id", org_id).in_("id", appr_ids).execute().data) or []
+        for a in arows:
+            appr[a["id"]] = a
     for r in rows:
         r["reactions"] = reactions_by_msg.get(r["id"], {})
         r["reply_to"] = parents.get(r.get("reply_to_id")) if r.get("reply_to_id") else None
+        r["approval"] = appr.get(r.get("approval_request_id")) if r.get("approval_request_id") else None
     return rows
 
 
@@ -445,6 +456,79 @@ def sign_attachment(channel_id: str, path: str = "",
     if not url:
         raise HTTPException(500, "could not sign url")
     return {"url": url}
+
+
+# ── Approvals-in-chat (Phase 3) ─────────────────────────────────────────────────────────────────
+@router.post("/channels/{channel_id}/approvals")
+def raise_approval(channel_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Raise an approval request INTO a conversation: create it on the unified engine and post a
+    kind='approval' card that links to it (approval_request_id). Anyone in the conversation may raise
+    one; only an eligible approver can decide it. Body: {title, summary?, type?, priority?, store_code?,
+    market?, assignee_email?, assignee_kind?}."""
+    org_id, eid, name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "title is required")
+    # notify=False: the card IS the in-chat notification (the engine's email path stays for module-raised
+    # requests). Requester is stamped from the token, never the body.
+    req = engine.create_request(
+        org_id, type=(body.get("type") or "manual"), title=title,
+        summary=body.get("summary"), payload=body.get("payload") or {},
+        requested_by=eid, requested_by_name=name,
+        store_code=body.get("store_code"), market=body.get("market"),
+        assignee_email=body.get("assignee_email"), assignee_kind=body.get("assignee_kind"),
+        priority=(body.get("priority") or "normal"), notify=False)
+    if not req.get("id"):
+        raise HTTPException(400, f"could not create the request: {req.get('error')}")
+    msg = (sb().table("chat_messages").insert({
+        "org_id": org_id, "channel_id": channel_id, "sender_employee_id": eid, "sender_name": name,
+        "body": title, "kind": "approval", "approval_request_id": req["id"]}).execute().data or [{}])[0]
+    # Link the request back to its card (the mig-867 chat_message_id column) — best-effort.
+    try:
+        sb().table("approval_requests").update({"chat_message_id": msg.get("id")}).eq(
+            "org_id", org_id).eq("id", req["id"]).execute()
+    except Exception:
+        pass
+    _bump(org_id, channel_id)
+    realtime.notify_channel(org_id, channel_id, kind="approval", message_id=msg.get("id"),
+                            member_ids=_member_ids(org_id, channel_id))
+    return {"message": msg, "approval": req}
+
+
+@router.post("/channels/{channel_id}/messages/{message_id}/decision")
+def decide_from_chat(channel_id: str, message_id: str, body: dict,
+                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Approve/deny an approval card inline. Reuses the approvals module's OWN RBAC + engine.decide (no
+    logic is duplicated), then broadcasts so every viewer's card updates. Body: {decision, note?}."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    m = _message_in_channel(org_id, channel_id, message_id)
+    if not m:
+        raise HTTPException(404, "message not found")
+    rid = m.get("approval_request_id")
+    if m.get("kind") != "approval" or not rid:
+        raise HTTPException(400, "not an approval message")
+    from app.modules.approvals import router as approvals_router
+    mgr = approvals_router._caller(authorization, org_id)
+    dorg = mgr.get("org_id") or org_id
+    req = engine.get_request(dorg, rid)
+    if not req:
+        raise HTTPException(404, "unknown request")
+    if not approvals_router._may_decide(authorization, dorg, req):
+        raise HTTPException(403, "you are not an eligible approver for this request")
+    decision = str(body.get("decision") or "").strip().lower()
+    try:
+        out = engine.decide(dorg, rid, decision=decision, actor=mgr.get("email"),
+                            actor_name=mgr.get("email"), note=(body.get("note") or None))
+    except ValueError as e:
+        emsg = str(e)
+        raise HTTPException(409 if "already" in emsg else 400, emsg)
+    except Exception as e:
+        raise HTTPException(400, f"could not apply the decision: {e}")
+    realtime.notify_channel(org_id, channel_id, kind="approval", message_id=message_id,
+                            member_ids=_member_ids(org_id, channel_id))
+    return {"ok": True, "status": out.get("status")}
 
 
 @router.get("/unread")

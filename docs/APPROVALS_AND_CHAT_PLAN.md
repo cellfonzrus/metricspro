@@ -166,8 +166,16 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
   reaction/edit/delete broadcasts. Frontend: hover actions, quick-emoji reactions, reply banner,
   attach + inline image thumbnails, inline edit, delete tombstones, presence ("N here") + typing
   indicators over the per-channel topic. `harness_chat.py` 30/30.
-- **Next:** Chat Phase 3 (approvals-in-chat), Phase 4 (search + org management), Phase 5 (voice/video +
-  push); Approvals adapters for the remaining ~19 surfaces (one per commit).
+- **Chat Phase 3 (approvals-in-chat): DONE** — no new migration (reuses mig-867 `approval_requests`,
+  incl. its `chat_message_id` link column). Backend: `POST /chat/channels/{id}/approvals` raises a
+  request on the unified engine (`engine.create_request`, notify=False) + posts a `kind='approval'`
+  card linked by `approval_request_id`; `list_messages` surfaces the LIVE linked request so the card
+  always reflects current status; `POST .../messages/{mid}/decision` decides inline by REUSING the
+  approvals router's own `_caller`/`_may_decide` RBAC + `engine.decide` (zero logic duplicated, engine
+  internals untouched) then broadcasts. Frontend: an approve/deny card in the thread + a "request
+  approval" composer action. `harness_chat.py` 36/36.
+- **Next:** Chat Phase 4 (search + org management), Phase 5 (voice/video + push); Approvals adapters for
+  the remaining ~19 surfaces (one per commit).
 - Everything else: phased per the tables above.
 
 ## Operator / Owner TODO (desktop)

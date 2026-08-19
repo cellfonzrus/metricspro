@@ -141,6 +141,7 @@ fake = FakeClient()
 
 import app.modules.chat.router as C  # noqa: E402
 import app.modules.storeops.router as S  # noqa: E402
+from app.modules.approvals import engine  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
 C.get_supabase = lambda: fake
@@ -318,6 +319,45 @@ try:
     check("8l an empty message (no text, no attachment) is rejected", False, "no raise")
 except HTTPException as e:
     check("8l an empty message (no text, no attachment) is rejected", e.status_code == 400, e.status_code)
+
+
+# ── 9: approvals-in-chat (Phase 3) ─────────────────────────────────────────────────────────────────
+import app.core.database as DB  # noqa: E402
+DB.get_supabase = lambda: fake   # engine._sb() (fresh import) + approvals reads now use the fake too
+
+as_user("E1")
+ra = C.raise_approval(DM, {"title": "Approve my discount", "summary": "10% off", "priority": "high"},
+                      authorization=AUTH, org_id=ORG)
+check("9a raising an approval posts a kind='approval' card linked to a request",
+      ra["message"]["kind"] == "approval" and ra["message"]["approval_request_id"] == ra["approval"]["id"], ra)
+areq = [r for r in fake.store[("storeops", "approval_requests")] if r["id"] == ra["approval"]["id"]][0]
+check("9b the request links back to its chat card", areq.get("chat_message_id") == ra["message"]["id"], areq)
+amsg = next(m for m in C.list_messages(DM, authorization=AUTH, org_id=ORG)["messages"] if m["id"] == ra["message"]["id"])
+check("9c the card carries the LIVE approval (status pending)",
+      bool(amsg.get("approval")) and amsg["approval"]["status"] == "pending", amsg.get("approval"))
+
+# Decision wiring — stub the approvals module's own RBAC + engine.decide (their internals are proven by
+# harness_approvals_engine.py); here we only prove chat reuses them and broadcasts.
+import app.modules.approvals.router as AR  # noqa: E402
+AR._caller = lambda auth, org: {"org_id": ORG, "email": "boss@x", "employee_id": "E2", "role": "dm"}
+AR._may_decide = lambda auth, org, req: True
+DECIDED = []
+_orig_decide = engine.decide
+engine.decide = lambda org, rid, **kw: (DECIDED.append((rid, kw)) or {"status": "approved"})
+BROADCASTS.clear()
+as_user("E2")
+dec = C.decide_from_chat(DM, ra["message"]["id"], {"decision": "approve"}, authorization=AUTH, org_id=ORG)
+check("9d deciding in chat runs engine.decide + returns the new status",
+      dec["status"] == "approved" and bool(DECIDED) and DECIDED[0][0] == ra["approval"]["id"], (dec, DECIDED))
+check("9e a decision broadcasts an approval hint to the channel",
+      any(p.get("kind") == "approval" for _t, _e, p in BROADCASTS), BROADCASTS)
+plain = C.send_message(DM, {"body": "just a note"}, authorization=AUTH, org_id=ORG)["message"]
+try:
+    C.decide_from_chat(DM, plain["id"], {"decision": "approve"}, authorization=AUTH, org_id=ORG)
+    check("9f a non-approval message can't be decided", False, "no raise")
+except HTTPException as e:
+    check("9f a non-approval message can't be decided", e.status_code == 400, e.status_code)
+engine.decide = _orig_decide
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

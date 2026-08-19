@@ -20,6 +20,8 @@ interface Message {
   kind: string; created_at: string; edited_at?: string | null; deleted_at?: string | null
   reply_to_id?: string | null; reply_to?: { id: string; sender_name?: string | null; preview?: string | null } | null
   reactions?: Record<string, string[]>; attachments?: Attachment[]
+  approval_request_id?: string | null
+  approval?: { id: string; title?: string; summary?: string | null; status: string; decision?: string | null; decided_by_name?: string | null; type?: string; priority?: string } | null
 }
 interface Person { employee_id: string; name: string }
 interface Me { employee_id: string; name: string; user_topic: string }
@@ -203,6 +205,16 @@ export default function ChatPage() {
     try { await api(`/api/v1/chat/channels/${activeId}/messages/${m.id}`, { method: 'DELETE' }); loadMessages(activeId) }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
+  async function decideApproval(m: Message, decision: 'approve' | 'deny') {
+    try { await api(`/api/v1/chat/channels/${activeId}/messages/${m.id}/decision`, { method: 'POST', body: JSON.stringify({ decision }) }); loadMessages(activeId) }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function requestApproval() {
+    const title = prompt('What needs approval?')?.trim(); if (!title || !activeId) return
+    const summary = prompt('Add a note (optional):')?.trim() || undefined
+    try { await api(`/api/v1/chat/channels/${activeId}/approvals`, { method: 'POST', body: JSON.stringify({ title, summary }) }); loadMessages(activeId); loadChannels() }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
   async function startDm(p: Person) {
     try {
       const r = await api('/api/v1/chat/dm', { method: 'POST', body: JSON.stringify({ employee_id: p.employee_id }) })
@@ -291,6 +303,27 @@ export default function ChatPage() {
                         <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={saveEdit}>Save</button>
                         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => setEditing(null)}>Cancel</button>
                       </div>
+                    ) : m.kind === 'approval' && m.approval ? (
+                      <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', background: 'var(--surface2)' }}>
+                        <div style={{ fontSize: 10, letterSpacing: 0.4, color: 'var(--accent)', fontWeight: 700, marginBottom: 3 }}>
+                          ✅ APPROVAL REQUEST{m.approval.priority && m.approval.priority !== 'normal' ? ` · ${m.approval.priority.toUpperCase()}` : ''}
+                        </div>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{m.approval.title}</div>
+                        {m.approval.summary && <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 2 }}>{m.approval.summary}</div>}
+                        <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+                          {m.approval.status === 'pending' ? (
+                            <>
+                              <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => decideApproval(m, 'approve')}>Approve</button>
+                              <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 12px' }} onClick={() => decideApproval(m, 'deny')}>Deny</button>
+                            </>
+                          ) : (
+                            <span style={{ fontSize: 12, fontWeight: 700, color: m.approval.status === 'approved' ? '#16a34a' : m.approval.status === 'denied' ? '#dc2626' : 'var(--text3)' }}>
+                              {m.approval.status === 'approved' ? '✔ Approved' : m.approval.status === 'denied' ? '✕ Denied' : m.approval.status}
+                              {m.approval.decided_by_name ? ` · ${m.approval.decided_by_name}` : ''}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     ) : (
                       <div style={{ background: m.deleted_at ? 'transparent' : 'var(--surface2)', border: m.deleted_at ? '1px dashed var(--border)' : '1px solid var(--border)', borderRadius: 10, padding: '8px 12px', fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: m.deleted_at ? 'var(--text3)' : 'var(--text)', fontStyle: m.deleted_at ? 'italic' : 'normal' }}>
                         {m.deleted_at ? 'This message was deleted' : m.body}
@@ -345,6 +378,7 @@ export default function ChatPage() {
             <div style={{ padding: 12, borderTop: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center' }}>
               <input ref={fileRef} type="file" multiple style={{ display: 'none' }} onChange={onPickFiles} />
               <button className="btn btn-secondary" title="Attach" disabled={uploading} onClick={() => fileRef.current?.click()} style={{ padding: '8px 10px' }}>{uploading ? '…' : '📎'}</button>
+              <button className="btn btn-secondary" title="Request approval" onClick={requestApproval} style={{ padding: '8px 10px' }}>✅</button>
               <input value={draft} onChange={e => { setDraft(e.target.value); emitTyping() }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
                 placeholder="Message…" style={{ flex: 1, padding: '9px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 14, outline: 'none' }} />
               <button className="btn btn-primary" onClick={send} disabled={!draft.trim() && staged.length === 0}>Send</button>
