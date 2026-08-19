@@ -4744,6 +4744,122 @@ def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str
 # Reuses _dm_for_store (the SAME DM resolver the shift-extension workflow uses). Approving is what
 # makes the held time COUNT; until then it stays out of every payroll reader (hours held NULL for a
 # pending/denied second session; the extra simply not yet on the punch for a late_clockout).
+
+
+def _tenant_display_name(org_id) -> str:
+    try:
+        t = (sb().table("tenants").select("name").eq("org_id", org_id).limit(1).execute().data) or []
+        return ((t[0].get("name") if t else None) or "").strip() or "MetricsPro"
+    except Exception:
+        return "MetricsPro"
+
+
+def _admin_fallback_emails(org_id):
+    """Emails of the tenant's org-wide admins (role scope 'all', or the 'admin' role) — the last-resort
+    approver list when a store has NO District Manager configured, so a pending request is never
+    stranded on a board nobody is pointed at. Best-effort; [] on any miss."""
+    try:
+        roles = (sb().table("roles").select("name,permissions").eq("org_id", org_id).execute().data) or []
+        admin_names = {(r.get("name") or "") for r in roles
+                       if ((r.get("permissions") or {}).get("scope") or "") == "all"}
+        admin_names.add("admin")
+        aus = (sb().table("app_users").select("email,role").eq("org_id", org_id).execute().data) or []
+        return sorted({(a.get("email") or "").strip() for a in aus
+                       if (a.get("role") or "") in admin_names and (a.get("email") or "").strip()})
+    except Exception:
+        return []
+
+
+def _send_plain_email(*, emails, subject: str, body: str) -> bool:
+    """Send a plain-text email through the notify module's Resend channel. Async send driven from a
+    context with NO running loop (our notifier runs in its own daemon thread), so asyncio.run is safe —
+    the same rule crm/router._notify documents. Returns True if any address was accepted; never raises."""
+    addrs = [a for a in (emails or []) if a]
+    if not addrs:
+        return False
+    try:
+        import asyncio
+        import html as _h
+        from app.modules.notify.channels import email_resend
+        if not email_resend.is_configured():
+            return False
+        html = ("<pre style='font-family:system-ui,-apple-system,sans-serif;white-space:pre-wrap'>"
+                + _h.escape(body or "") + "</pre>")
+
+        async def _send_all():
+            ok = False
+            for addr in addrs:
+                try:
+                    await email_resend.send_email(addr, subject, html, [])
+                    ok = True
+                except Exception:
+                    pass
+            return ok
+        return bool(asyncio.run(_send_all()))
+    except Exception:
+        return False
+
+
+_PERM_KIND_LABEL = {
+    "reclock_in": "a second clock-in session (after being auto-clocked-out earlier today)",
+    "late_clockout": "extra time worked past their scheduled shift end",
+}
+
+
+def _permission_approver_emails(org_id, perm: dict, dm_email):
+    """Who should be emailed to approve a rep-initiated time-clock permission, as a sorted email list:
+    the store's DM + every manager above them; and ONLY when that store has no DM/managers wired, the
+    tenant admins (so a request is never stranded). PURE-ish (reads only) and NEVER raises."""
+    store_code = perm.get("store_code")
+    recips = set()
+    if dm_email and str(dm_email).strip():
+        recips.add(str(dm_email).strip())
+    try:
+        roster = _managers_above_dm(org_id, store_code)
+        for grp in ("dm", "above"):
+            for m in (roster.get(grp) or []):
+                if m.get("email"):
+                    recips.add(str(m["email"]).strip())
+    except Exception:
+        pass
+    if not recips:   # no DM/managers wired for this store — fall back to tenant admins
+        try:
+            recips.update(_admin_fallback_emails(org_id))
+        except Exception:
+            pass
+    return sorted({e for e in recips if e})
+
+
+def _notify_permission_approvers(org_id, perm: dict, dm_email):
+    """FIRE-AND-FORGET email to whoever can approve a rep-initiated time-clock permission (see
+    _permission_approver_emails). Runs in a daemon thread so it never delays the punch, and NEVER raises."""
+    import threading
+
+    def _run():
+        try:
+            store_code = perm.get("store_code")
+            recips = set(_permission_approver_emails(org_id, perm, dm_email))
+            if not recips:
+                return
+            who = perm.get("employee_name") or perm.get("employee_id") or "An employee"
+            what = _PERM_KIND_LABEL.get(perm.get("kind"), "a time-clock permission")
+            when = str(perm.get("work_date") or "")[:10]
+            biz = _tenant_display_name(org_id)
+            subject = f"Approval needed: {who} at {store_code or 'their store'}"
+            lines = [f"{who} needs your approval for {what} at {store_code or 'their store'}"
+                     + (f" on {when}" if when else "") + ".", ""]
+            if perm.get("reason"):
+                lines += [f"Reason given: {perm['reason']}", ""]
+            lines += ["Until you approve it, this time does NOT count toward their hours.", "",
+                      f"Approve or deny it in {biz}: Store Ops → Time-clock Permissions."]
+            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines))
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="tc-perm-notify").start()
+    except Exception:
+        pass
 def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, requested_clock_out=None,
                                  reason=None, requested_by=None):
     """Insert a pending timeclock_permission linked to `punch`, resolving the store's District Manager.
@@ -4778,6 +4894,9 @@ def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, request
                 sb().table("timelog").update({"permission_id": pid}).eq("id", punch.get("id")).execute()
             except Exception:
                 pass
+        # Push the approval request so the DM actually learns about it — the board is passive, and a DM
+        # who never opens it would otherwise leave the rep's held time uncounted with no signal at all.
+        _notify_permission_approvers(org_id, saved, dm_email)
         return {"id": pid, "kind": kind, "status": "pending",
                 "dm": {"employee_id": dm_eid, "email": dm_email},
                 "note": None if dm_eid else "No District Manager is configured for this store — an admin or DM can still approve it."}
