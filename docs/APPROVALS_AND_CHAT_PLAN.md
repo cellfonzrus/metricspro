@@ -182,8 +182,18 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
   (`POST /chat/admin/retention {days}`). `/chat/me` now reports `is_chat_admin`. Frontend: sidebar
   search, browse-channels modal, and a members/settings panel (add/remove, rename, leave, admin
   retention). `harness_chat.py` 51/51.
-- **Next:** Chat Phase 5 (voice/video signaling + mobile push); Approvals adapters for the remaining
-  ~19 surfaces (one per commit).
+- **Chat Phase 5 (voice/video + mobile push): DONE (in-repo scaffolding).** Migration 882 adds
+  `storeops.chat_push_tokens`. WebRTC 1:1 calling: signaling (offer/answer/ICE/bye) rides a dedicated
+  Realtime broadcast topic (`chat-call:<channel>`) client-side — no server relay — with ICE servers
+  from `GET /chat/call/config` (operator-supplied `CHAT_ICE_SERVERS`, defaulting to public STUN); a
+  minimal call overlay (getUserMedia + RTCPeerConnection, local/remote video, accept/hang-up) lives in
+  the thread header. Push: device token registry (`POST /chat/push/(un)register`) + a server send path
+  (`push.py`, FCM HTTP) wired into new-message delivery — GATED on `CHAT_FCM_SERVER_KEY`, a documented
+  no-op (never a fake success) until the operator supplies credentials. Frontend push registration is
+  likewise env-gated on a VAPID key + a service worker. `harness_chat.py` 57/57. **Operator infra
+  required for production calls/push — see Operator TODO (TURN server, FCM/APNs, VAPID + `/sw.js`).**
+- **Remaining platform work (outside chat):** Approvals adapters for the ~19 non-timeclock surfaces
+  (one per commit) — tracked in Part A's migration strategy, independent of the chat build.
 - Everything else: phased per the tables above.
 
 ## Operator / Owner TODO (desktop)
@@ -198,4 +208,17 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
       no table exposure needed for backend-driven broadcast).
 - [ ] **Grant permissions:** `approvals_decide` to the roles that approve; `chat_admin` to moderators.
 - [ ] Decide **SLA windows + escalation targets** per approval type (tell me and I'll wire them).
-- [ ] Decide **chat retention** policy (how long messages are kept).
+- [ ] Decide **chat retention** policy (how long messages are kept). The sweep is on-demand today
+      (`POST /chat/admin/retention {days}`, chat-admin only / the Members panel's Admin section); wire it
+      to a scheduled job if you want it automatic.
+- [ ] **Voice/video calls (Phase 5) — infra:** calls work on the same network with the built-in public
+      STUN default, but cross-NAT calls need a **TURN server**. Provide one by setting `CHAT_ICE_SERVERS`
+      (backend env) to a JSON array of RTCIceServer objects, e.g.
+      `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`. `GET /chat/call/config`
+      reports `has_turn` so you can confirm.
+- [ ] **Mobile/web push (Phase 5) — credentials:** the token registry + send path ship, but delivery is
+      gated. Set `CHAT_FCM_SERVER_KEY` (backend env) to enable FCM sends (`configured()` gate; no key →
+      documented no-op). For **web push** also set `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (frontend) and ship a
+      `/sw.js` service worker that shows the notification; for **native iOS** add an APNs path alongside
+      the FCM one in `backend/app/modules/chat/push.py` (structured as a follow-up there). Native mobile
+      apps are out of repo scope.

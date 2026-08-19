@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 
 from app.core.database import get_supabase
 from app.modules.approvals import engine
-from app.modules.chat import realtime
+from app.modules.chat import push, realtime
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 BUCKET = "chat-attachments"   # Supabase Storage bucket, private (signed-url access), same as helpdesk
@@ -278,8 +278,11 @@ def send_message(channel_id: str, body: dict, authorization: str = Header(defaul
     except Exception:
         pass
     # Realtime: nudge the channel thread + every member's sidebar to re-fetch (content stays behind REST).
-    realtime.notify_channel(org_id, channel_id, kind="message", message_id=msg.get("id"),
-                            member_ids=_member_ids(org_id, channel_id))
+    members = _member_ids(org_id, channel_id)
+    realtime.notify_channel(org_id, channel_id, kind="message", message_id=msg.get("id"), member_ids=members)
+    # Mobile push to the OTHER members' devices (best-effort; a no-op until the operator sets FCM creds).
+    push.notify(org_id, [m for m in members if m != eid], title=name,
+                body=(text[:140] if text else "sent an attachment"), data={"channel_id": str(channel_id)})
     return {"message": msg}
 
 
@@ -706,6 +709,54 @@ def whoami(authorization: str = Header(default=""), org_id: str = ORG_ID):
     return {"org_id": org_id, "employee_id": eid, "name": name,
             "user_topic": realtime.user_topic(org_id, eid),
             "is_chat_admin": _is_chat_admin(authorization, org_id)}
+
+
+# ── Voice/video signaling + mobile push (Phase 5) ────────────────────────────────────────────────
+@router.get("/call/config")
+def call_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """ICE (STUN/TURN) servers for WebRTC. Operator-supplied via CHAT_ICE_SERVERS (a JSON array of
+    RTCIceServer objects); defaults to a public STUN server (enough for same-network calls — cross-NAT
+    calls need the operator to add a TURN server). Call SIGNALING itself rides the Realtime channel
+    client-side, so no relay lives here."""
+    _me(authorization, org_id)   # members only
+    import json
+    import os
+    raw = os.environ.get("CHAT_ICE_SERVERS", "")
+    ice = None
+    if raw:
+        try:
+            ice = json.loads(raw)
+        except Exception:
+            ice = None
+    if not ice:
+        ice = [{"urls": "stun:stun.l.google.com:19302"}]
+    def _has_turn(servers):
+        for s in servers:
+            u = s.get("urls")
+            urls = u if isinstance(u, list) else [u]
+            if any("turn:" in str(x) for x in urls):
+                return True
+        return False
+    return {"ice_servers": ice, "has_turn": _has_turn(ice), "call_topic_prefix": "chat-call:"}
+
+
+@router.post("/push/register")
+def push_register(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Register this device's push token for the signed-in employee. Body: {token, platform?}."""
+    org_id, eid, _name = _me(authorization, org_id)
+    token = (body.get("token") or "").strip()
+    if not token:
+        raise HTTPException(400, "token is required")
+    ok = push.register(org_id, eid, token, platform=(body.get("platform") or "web"))
+    return {"ok": ok, "delivery_configured": push.configured()}
+
+
+@router.post("/push/unregister")
+def push_unregister(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Drop this device's push token (sign-out / disable notifications). Body: {token}."""
+    org_id, eid, _name = _me(authorization, org_id)
+    push.unregister(org_id, (body.get("token") or ""))
+    return {"ok": True}
 
 
 @router.get("/directory")

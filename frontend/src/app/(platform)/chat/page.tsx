@@ -56,6 +56,118 @@ function AttachmentView({ channelId, att }: { channelId: string; att: Attachment
   )
 }
 
+// 1:1 voice/video over WebRTC. Signaling (offer / answer / ICE / bye) rides a dedicated Realtime
+// broadcast topic (chat-call:<channel>), so no server relay is involved; ICE (STUN/TURN) servers come
+// from GET /chat/call/config. Cross-NAT calls need the operator to configure a TURN server (see the
+// plan's Operator TODO) — with STUN only, calls connect on the same network / permissive NATs.
+function CallPanel({ channelId, me }: { channelId: string; me: Me }) {
+  const [status, setStatus] = useState<'idle' | 'calling' | 'ringing' | 'incall'>('idle')
+  const [video, setVideo] = useState(true)
+  const chRef = useRef<any>(null)
+  const pcRef = useRef<RTCPeerConnection | null>(null)
+  const localRef = useRef<HTMLVideoElement>(null)
+  const remoteRef = useRef<HTMLVideoElement>(null)
+  const localStream = useRef<MediaStream | null>(null)
+  const pendingOffer = useRef<any>(null)
+  const iceServers = useRef<RTCIceServer[]>([{ urls: 'stun:stun.l.google.com:19302' }])
+
+  useEffect(() => { api('/api/v1/chat/call/config').then((r: any) => { if (r?.ice_servers) iceServers.current = r.ice_servers }).catch(() => {}) }, [])
+
+  const cleanup = useCallback(() => {
+    try { pcRef.current?.close() } catch { /* ignore */ }
+    pcRef.current = null
+    localStream.current?.getTracks().forEach(t => t.stop()); localStream.current = null
+    pendingOffer.current = null; setStatus('idle')
+  }, [])
+
+  const signal = useCallback((event: string, payload: any) => {
+    try { chRef.current?.send({ type: 'broadcast', event, payload: { ...payload, from: me.employee_id } }) } catch { /* best effort */ }
+  }, [me.employee_id])
+
+  const newPc = useCallback(() => {
+    const pc = new RTCPeerConnection({ iceServers: iceServers.current })
+    pc.onicecandidate = e => { if (e.candidate) signal('ice', { candidate: e.candidate }) }
+    pc.ontrack = e => { if (remoteRef.current) remoteRef.current.srcObject = e.streams[0] }
+    pc.onconnectionstatechange = () => { if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) { /* leave UI up; user hangs up */ } }
+    pcRef.current = pc
+    return pc
+  }, [signal])
+
+  const getMedia = useCallback(async (withVideo: boolean) => {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo })
+    localStream.current = s
+    if (localRef.current) localRef.current.srcObject = s
+    return s
+  }, [])
+
+  // Signaling subscription for this conversation.
+  useEffect(() => {
+    const ch = supabase.channel(`chat-call:${channelId}`, { config: { broadcast: { self: false } } })
+    ch.on('broadcast', { event: 'offer' }, (m: any) => {
+      if (m.payload?.from === me.employee_id || pcRef.current) return
+      pendingOffer.current = m.payload; setStatus('ringing')
+    })
+    ch.on('broadcast', { event: 'answer' }, async (m: any) => {
+      if (!pcRef.current || m.payload?.from === me.employee_id) return
+      try { await pcRef.current.setRemoteDescription(new RTCSessionDescription(m.payload.answer)); setStatus('incall') } catch { /* ignore */ }
+    })
+    ch.on('broadcast', { event: 'ice' }, async (m: any) => {
+      if (!pcRef.current || m.payload?.from === me.employee_id || !m.payload?.candidate) return
+      try { await pcRef.current.addIceCandidate(new RTCIceCandidate(m.payload.candidate)) } catch { /* ignore */ }
+    })
+    ch.on('broadcast', { event: 'bye' }, (m: any) => { if (m.payload?.from !== me.employee_id) cleanup() })
+    ch.subscribe()
+    chRef.current = ch
+    return () => { chRef.current = null; supabase.removeChannel(ch); cleanup() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId, me.employee_id, cleanup])
+
+  async function startCall(withVideo: boolean) {
+    setVideo(withVideo); setStatus('calling')
+    try {
+      const s = await getMedia(withVideo); const pc = newPc()
+      s.getTracks().forEach(t => pc.addTrack(t, s))
+      const offer = await pc.createOffer(); await pc.setLocalDescription(offer)
+      signal('offer', { offer, video: withVideo })
+    } catch { cleanup() }
+  }
+  async function accept() {
+    const off = pendingOffer.current; if (!off) return
+    setVideo(!!off.video); setStatus('incall')
+    try {
+      const s = await getMedia(!!off.video); const pc = newPc()
+      s.getTracks().forEach(t => pc.addTrack(t, s))
+      await pc.setRemoteDescription(new RTCSessionDescription(off.offer))
+      const answer = await pc.createAnswer(); await pc.setLocalDescription(answer)
+      signal('answer', { answer })
+    } catch { cleanup() }
+  }
+  function hangup() { signal('bye', {}); cleanup() }
+
+  return (
+    <>
+      <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} title="Start a call" disabled={status !== 'idle'} onClick={() => startCall(true)}>📞</button>
+      {status !== 'idle' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', zIndex: 300, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <video ref={remoteRef} autoPlay playsInline style={{ width: 420, maxWidth: '80vw', background: '#000', borderRadius: 12 }} />
+            <video ref={localRef} autoPlay playsInline muted style={{ width: 180, background: '#000', borderRadius: 12 }} />
+          </div>
+          <div style={{ color: 'white', fontSize: 14 }}>
+            {status === 'calling' && 'Calling…'}
+            {status === 'ringing' && 'Incoming call'}
+            {status === 'incall' && (video ? 'In call' : 'In call (audio)')}
+          </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            {status === 'ringing' && <button className="btn btn-primary" onClick={accept}>Accept</button>}
+            <button className="btn" style={{ background: '#dc2626', color: 'white' }} onClick={hangup}>{status === 'ringing' ? 'Decline' : 'Hang up'}</button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 export default function ChatPage() {
   const [channels, setChannels] = useState<Channel[]>([])
   const [activeId, setActiveId] = useState<string>('')
@@ -107,6 +219,22 @@ export default function ChatPage() {
   useEffect(() => { api('/api/v1/chat/directory').then((r: any) => setDir(r.people || [])).catch(() => {}) }, [])
   useEffect(() => { loadChannels() }, [loadChannels])
   useEffect(() => { api('/api/v1/chat/me').then((r: any) => setMe(r)).catch(() => {}) }, [])
+
+  // Mobile/web push registration (Phase 5 scaffold). Acts ONLY when the operator has supplied a VAPID
+  // public key AND shipped a service worker; otherwise it is a silent no-op. The backend send path is
+  // likewise gated on FCM credentials — see the plan's Operator TODO. Never fakes a subscription.
+  useEffect(() => {
+    if (!me) return
+    const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    if (!vapid || typeof navigator === 'undefined' || !('serviceWorker' in navigator) || typeof window === 'undefined' || !('PushManager' in window)) return
+    ;(async () => {
+      try {
+        const reg = await navigator.serviceWorker.register('/sw.js')
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(vapid) as BufferSource })
+        await api('/api/v1/chat/push/register', { method: 'POST', body: JSON.stringify({ token: JSON.stringify(sub), platform: 'web' }) })
+      } catch { /* push unavailable in this environment — skip silently */ }
+    })()
+  }, [me])
 
   // Realtime (sidebar + thread hints): the caller's user topic receives a hint for every conversation
   // they belong to, so one subscription keeps the whole app live. The socket state drives poll cadence.
@@ -342,6 +470,7 @@ export default function ChatPage() {
               <span style={{ fontWeight: 700, fontSize: 14 }}>{title(active)}</span>
               <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
                 <span style={{ fontSize: 11, color: 'var(--text3)' }}>{online.size > 0 ? `🟢 ${online.size} here` : ''}</span>
+                {me && <CallPanel channelId={activeId} me={me} />}
                 <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} title="Members & settings" onClick={openManage}>👥</button>
               </span>
             </div>
@@ -548,3 +677,13 @@ export default function ChatPage() {
 }
 
 const actBtn: React.CSSProperties = { background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }
+
+// Standard VAPID key decode for PushManager.subscribe. Only reached when a key is configured.
+function urlB64ToUint8(base64: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4)
+  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const raw = atob(b64)
+  const arr = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i)
+  return arr
+}

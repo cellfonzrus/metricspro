@@ -439,6 +439,33 @@ check("10o a chat admin retention sweep hard-deletes messages older than the win
 CHAT_ADMIN[0] = False
 
 
+# ── 11: voice/video signaling config + push tokens (Phase 5) ───────────────────────────────────────
+as_user("E1")
+ok = C.push_register({"token": "tok-1", "platform": "web"}, authorization=AUTH, org_id=ORG)
+check("11a registering a device stores its token (delivery no-op without creds)",
+      ok["ok"] is True and ok["delivery_configured"] is False, ok)
+toks = fake.store[("storeops", "chat_push_tokens")]
+check("11b the token is persisted against the employee", any(t["token"] == "tok-1" and t["employee_id"] == "E1" for t in toks), toks)
+C.push_register({"token": "tok-1"}, authorization=AUTH, org_id=ORG)
+check("11c re-registering the same token refreshes, not duplicates",
+      len([t for t in fake.store[("storeops", "chat_push_tokens")] if t["token"] == "tok-1"]) == 1, None)
+C.push_unregister({"token": "tok-1"}, authorization=AUTH, org_id=ORG)
+check("11d unregister removes the token", all(t["token"] != "tok-1" for t in fake.store[("storeops", "chat_push_tokens")]), None)
+
+cc = C.call_config(authorization=AUTH, org_id=ORG)
+check("11e call config returns ICE servers (public STUN default, no TURN)",
+      bool(cc["ice_servers"]) and cc["has_turn"] is False and cc["call_topic_prefix"] == "chat-call:", cc)
+
+PUSHES = []
+_orig_notify = C.push.notify
+C.push.notify = lambda org, ids, **kw: PUSHES.append((list(ids), kw))
+as_user("E1")
+C.send_message(DM, {"body": "push test"}, authorization=AUTH, org_id=ORG)
+check("11f a new message pushes to the OTHER members, not the sender",
+      bool(PUSHES) and PUSHES[0][0] == ["E2"] and "channel_id" in (PUSHES[0][1].get("data") or {}), PUSHES)
+C.push.notify = _orig_notify
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")
