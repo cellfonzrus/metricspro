@@ -485,8 +485,14 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <Field label={envCfg.require_photo_if_cash && enteredCash > 0 ? 'Envelope photo (required — cash declared)' : 'Envelope photo'} wide>
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <label className="btn btn-secondary" style={{ fontSize: 13, cursor: 'pointer' }}>
-                📷 Take / choose photo
-                <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) onPickPhoto(file) }} />
+                📷 Take photo
+                <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) onPickPhoto(file); e.currentTarget.value = '' }} />
+              </label>
+              {/* Upload an existing photo — no `capture`, so mobile opens the gallery/file picker
+                  instead of forcing the camera (owner directive 2026-08-19). */}
+              <label className="btn btn-secondary" style={{ fontSize: 13, cursor: 'pointer' }}>
+                🖼️ Upload from files
+                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) onPickPhoto(file); e.currentTarget.value = '' }} />
               </label>
               {envPreview && (
                 <div style={{ position: 'relative', display: 'inline-block' }}>
