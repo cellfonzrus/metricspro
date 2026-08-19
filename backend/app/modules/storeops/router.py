@@ -4690,6 +4690,22 @@ async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: 
                 emailed = True
         except Exception:
             pass
+    # Intimation into the UNIFIED approvals inbox (migration 867). notify only when THIS endpoint did
+    # not email a DM (no DM configured) — then the engine's admin fallback covers the gap; otherwise
+    # notify=False avoids a second email to the DM the endpoint already messaged.
+    if ext_id:
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.create_request(
+                org_id, type="shift_extension", source_table="shift_extension", source_id=ext_id,
+                title=f"{row['employee_name'] or employee_id}: shift extension to {requested_end} at {store_code or 'store'}",
+                summary=(body.reason or None),
+                payload={"shift_date": shift_date, "requested_end": requested_end},
+                requested_by=mgr.get("employee_id"), requested_by_name=mgr.get("email"),
+                store_code=store_code, assignee_employee_id=dm_eid, assignee_email=dm_email,
+                assignee_kind="dm", notify=(not emailed))
+        except Exception:
+            pass
     return {"ok": True, "id": ext_id, "status": "pending",
             "dm": {"employee_id": dm_eid, "name": dm_name, "email": dm_email, "emailed": emailed},
             "note": None if dm_eid else "No District Manager is configured for this store — an admin or DM can still approve it."}
@@ -4733,6 +4749,13 @@ def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str
            "decided_at": datetime.now(timezone.utc).isoformat(),
            "decision_note": body.note or None}
     sb().table("shift_extension").update(upd).eq("id", ext_id).eq("org_id", org_id).execute()
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="shift_extension", source_table="shift_extension",
+                                        source_id=ext_id, decision=decision, actor=mgr.get("email"),
+                                        note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
 
