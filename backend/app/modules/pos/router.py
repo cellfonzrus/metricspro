@@ -300,6 +300,104 @@ def update_product(product_id: str, body: dict, org_id: str = ORG_ID):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# Customer Special Order — Phase 1: the HIDDEN vendor catalog (mig 864).
+#   • The store/customer-facing catalog (GET /special-orders/catalog) returns ONLY customer-facing
+#     product fields — it never reads pos.special_order_vendor, so the vendor (Amazon) is invisible at
+#     the API boundary, not merely hidden in the UI.
+#   • The HQ admin surface (pos_special_order_admin) manages the item + its vendor linkage. Store staff
+#     don't hold that permission, so they can neither see the vendor nor self-order from it.
+# See docs/POS_SPECIAL_ORDER_PLAN.md.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+SPECIAL_ORDER_VENDOR_FIELDS = ("vendor", "vendor_sku", "vendor_url", "vendor_cost", "lead_time_days",
+                               "notes", "is_active")
+
+
+def _special_order_products(org_id, search="", active_only=True):
+    q = (sb().schema("pos").table("products").select("*")
+         .eq("org_id", org_id).eq("is_special_order", True))
+    if active_only:
+        q = q.eq("is_active", True)
+    if (search or "").strip():
+        s = search.strip().replace("%", "").replace(",", " ")
+        q = q.or_(f"short_name.ilike.%{s}%,full_name.ilike.%{s}%,upc.ilike.%{s}%")
+    return q.order("short_name").limit(500).execute().data or []
+
+
+@router.get("/special-orders/catalog")
+def special_order_catalog(search: str = "", org_id: str = ORG_ID):
+    """NEUTRAL store/customer-facing special-order catalog. Returns ONLY the customer-facing product
+    fields — never the vendor linkage (Amazon ASIN / URL / cost) and never the raw cost. This endpoint
+    does not read pos.special_order_vendor at all, so source-hiding holds even if a UI bug tried to
+    show it. Powers the POS 'Customer special order' picker."""
+    rows = _special_order_products(org_id, search)
+    cat = catalog(org_id)
+    cname = {c["id"]: c["name"] for c in cat["categories"]}
+    items = [{"id": r["id"], "product_code": r.get("product_code"), "short_name": r.get("short_name"),
+              "full_name": r.get("full_name"), "category": cname.get(r.get("category_id")),
+              "retail_price": r.get("retail_price"), "is_taxable": r.get("is_taxable"),
+              "system_category": r.get("system_category")}
+             for r in rows]
+    return {"items": items}
+
+
+@router.get("/special-orders/catalog/admin")
+def special_order_catalog_admin(search: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ-only catalog WITH the vendor linkage (Amazon ASIN / URL / cost). Gated by
+    pos_special_order_admin, which store staff do not hold — so they can neither see the vendor nor
+    self-order from it."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    rows = _special_order_products(org_id, search, active_only=False)
+    ids = [r["id"] for r in rows if r.get("id")]
+    vend = {}
+    if ids:
+        vrows = (sb().schema("pos").table("special_order_vendor").select("*")
+                 .eq("org_id", org_id).in_("product_id", ids).execute().data) or []
+        vend = {v.get("product_id"): v for v in vrows}
+    for r in rows:
+        r["vendor"] = vend.get(r["id"])
+    return {"items": rows}
+
+
+@router.post("/special-orders/catalog")
+def create_special_order_item(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ: create a special-order catalog item — a pos.products row (customer-facing) flagged
+    is_special_order, plus its hidden vendor linkage (optional at create). Gated pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    ins = _clean(body)
+    if not (ins.get("short_name") or "").strip():
+        raise HTTPException(400, "short_name required")
+    _valid_system_category(org_id, ins.get("system_category"))
+    ins["org_id"] = org_id
+    ins["is_special_order"] = True
+    prod = (sb().schema("pos").table("products").insert(ins).execute().data or [{}])[0]
+    v = {k: body[k] for k in SPECIAL_ORDER_VENDOR_FIELDS if k in body}
+    if v and prod.get("id"):
+        v.update({"org_id": org_id, "product_id": prod["id"]})
+        sb().schema("pos").table("special_order_vendor").upsert(v, on_conflict="org_id,product_id").execute()
+    return {"product": prod}
+
+
+@router.patch("/special-orders/catalog/{product_id}")
+def update_special_order_item(product_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ: update a special-order item's product fields and/or its vendor linkage. Gated
+    pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    upd = _clean(body)
+    if "system_category" in upd:
+        _valid_system_category(org_id, upd.get("system_category"))
+    upd["is_special_order"] = True
+    r = (sb().schema("pos").table("products").update(upd)
+         .eq("org_id", org_id).eq("id", product_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    v = {k: body[k] for k in SPECIAL_ORDER_VENDOR_FIELDS if k in body}
+    if v:
+        v.update({"org_id": org_id, "product_id": product_id})
+        sb().schema("pos").table("special_order_vendor").upsert(v, on_conflict="org_id,product_id").execute()
+    return {"product": r.data[0]}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # Phase 1 — customers, inventory, sales/checkout, register, settings (mig 725)
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 
