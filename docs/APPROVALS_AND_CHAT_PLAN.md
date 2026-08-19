@@ -174,13 +174,22 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
   approvals router's own `_caller`/`_may_decide` RBAC + `engine.decide` (zero logic duplicated, engine
   internals untouched) then broadcasts. Frontend: an approve/deny card in the thread + a "request
   approval" composer action. `harness_chat.py` 36/36.
-- **Next:** Chat Phase 4 (search + org management), Phase 5 (voice/video + push); Approvals adapters for
-  the remaining ~19 surfaces (one per commit).
+- **Chat Phase 4 (search + org management): DONE** — migration 881 (message `search_tsv` generated
+  column + GIN, plus a pg_trgm index for the ILIKE path). Backend: membership-scoped message search
+  (`GET /chat/search`), public-channel browser (`GET /chat/channels/browse`) + join/leave, member
+  management (`GET .../members`, `DELETE .../members/{eid}` owner-or-admin), channel rename/topic/
+  archive (`PATCH /chat/channels/{id}`), and a `chat_admin`-gated retention sweep
+  (`POST /chat/admin/retention {days}`). `/chat/me` now reports `is_chat_admin`. Frontend: sidebar
+  search, browse-channels modal, and a members/settings panel (add/remove, rename, leave, admin
+  retention). `harness_chat.py` 51/51.
+- **Next:** Chat Phase 5 (voice/video signaling + mobile push); Approvals adapters for the remaining
+  ~19 surfaces (one per commit).
 - Everything else: phased per the tables above.
 
 ## Operator / Owner TODO (desktop)
 - [ ] **Apply the approvals engine migration** (adds `storeops.approval_requests` + `approval_events`).
-- [ ] **Apply the chat migrations** (868 = `storeops.chat_*`; 880 = `storeops.chat_reactions`).
+- [ ] **Apply the chat migrations** (868 = `storeops.chat_*`; 880 = `storeops.chat_reactions`; 881 =
+      message full-text search column/index).
 - [ ] **Chat attachments bucket:** the backend auto-creates a private `chat-attachments` Supabase
       Storage bucket on first upload (same pattern as helpdesk `ticket-attachments`); no action needed
       unless your Storage policy blocks service-role bucket creation, in which case create it manually

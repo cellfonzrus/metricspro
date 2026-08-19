@@ -539,13 +539,173 @@ def unread_count(authorization: str = Header(default=""), org_id: str = ORG_ID):
     return {"total": total, "by_channel": {c["id"]: c.get("unread", 0) for c in data["channels"]}}
 
 
+# ── Search + org management (Phase 4) ────────────────────────────────────────────────────────────
+@router.get("/search")
+def search_messages(q: str = "", limit: int = 40,
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Full-text-ish search over messages in conversations the caller belongs to. Membership is the
+    gate — you never see a hit from a channel you aren't in. Newest first."""
+    org_id, eid, _name = _me(authorization, org_id)
+    term = (q or "").strip()
+    if len(term) < 2:
+        return {"results": []}
+    my = (sb().table("chat_members").select("channel_id").eq("org_id", org_id)
+          .eq("employee_id", eid).execute().data) or []
+    ids = [m["channel_id"] for m in my]
+    if not ids:
+        return {"results": []}
+    limit = max(1, min(int(limit or 40), 100))
+    rows = (sb().table("chat_messages").select("id,channel_id,sender_name,body,created_at")
+            .eq("org_id", org_id).in_("channel_id", ids).is_("deleted_at", "null")
+            .ilike("body", f"%{term}%").order("created_at", desc=True).limit(limit).execute().data) or []
+    # channel display hints (name for channels; member ids for DMs → client names them)
+    chans = (sb().table("chat_channels").select("id,kind,name").eq("org_id", org_id)
+             .in_("id", list({r["channel_id"] for r in rows})).execute().data) or [] if rows else []
+    cmeta = {c["id"]: c for c in chans}
+    out = [{**r, "channel": cmeta.get(r["channel_id"])} for r in rows]
+    return {"results": out}
+
+
+@router.get("/channels/browse")
+def browse_channels(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Public channels in the org the caller could join — each flagged with whether they're already a
+    member + a member count. Private channels + DMs are never listed (you must be invited)."""
+    org_id, eid, _name = _me(authorization, org_id)
+    chans = (sb().table("chat_channels").select("id,name,topic,created_by,created_at")
+             .eq("org_id", org_id).eq("kind", "channel").eq("is_private", False)
+             .eq("archived", False).execute().data) or []
+    ids = [c["id"] for c in chans]
+    mem = (sb().table("chat_members").select("channel_id,employee_id").eq("org_id", org_id)
+           .in_("channel_id", ids).execute().data) or [] if ids else []
+    count: dict = {}
+    mine = set()
+    for m in mem:
+        count[m["channel_id"]] = count.get(m["channel_id"], 0) + 1
+        if m["employee_id"] == eid:
+            mine.add(m["channel_id"])
+    out = [{**c, "member_count": count.get(c["id"], 0), "joined": c["id"] in mine} for c in chans]
+    out.sort(key=lambda c: (not c["joined"], -(c["member_count"]), (c.get("name") or "").lower()))
+    return {"channels": out}
+
+
+@router.post("/channels/{channel_id}/join")
+def join_channel(channel_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Join a PUBLIC channel. A private channel / DM can only be joined by invitation (add_member)."""
+    org_id, eid, _name = _me(authorization, org_id)
+    chans = (sb().table("chat_channels").select("*").eq("org_id", org_id)
+             .eq("id", channel_id).limit(1).execute().data) or []
+    if not chans:
+        raise HTTPException(404, "conversation not found")
+    ch = chans[0]
+    if ch.get("kind") != "channel" or ch.get("is_private"):
+        raise HTTPException(403, "this conversation is invite-only")
+    if not _is_member(org_id, channel_id, eid):
+        try:
+            sb().table("chat_members").insert({
+                "org_id": org_id, "channel_id": channel_id, "employee_id": eid,
+                "last_read_at": _now()}).execute()
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+@router.post("/channels/{channel_id}/leave")
+def leave_channel(channel_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Leave a conversation (drops the caller's membership; their unread badge clears with it)."""
+    org_id, eid, _name = _me(authorization, org_id)
+    sb().table("chat_members").delete().eq("org_id", org_id).eq(
+        "channel_id", channel_id).eq("employee_id", eid).execute()
+    return {"ok": True}
+
+
+@router.get("/channels/{channel_id}/members")
+def list_members(channel_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The members of a conversation (id + name + role), for the manage-members panel. Membership required."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    mem = (sb().table("chat_members").select("employee_id,role,joined_at").eq("org_id", org_id)
+           .eq("channel_id", channel_id).execute().data) or []
+    ids = [m["employee_id"] for m in mem]
+    emps = (sb().table("employees").select("employee_id,name").eq("org_id", org_id)
+            .in_("employee_id", ids).execute().data) or [] if ids else []
+    nm = {e["employee_id"]: e.get("name") for e in emps}
+    out = [{**m, "name": nm.get(m["employee_id"]) or m["employee_id"]} for m in mem]
+    return {"members": out}
+
+
+@router.delete("/channels/{channel_id}/members/{who}")
+def remove_member(channel_id: str, who: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Remove someone from a channel/group. The caller must be an OWNER of the channel or a chat admin.
+    You can always remove yourself (that's `leave`)."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    if who != eid:
+        my = (sb().table("chat_members").select("role").eq("org_id", org_id)
+              .eq("channel_id", channel_id).eq("employee_id", eid).limit(1).execute().data) or []
+        is_owner = bool(my) and my[0].get("role") == "owner"
+        if not is_owner and not _is_chat_admin(authorization, org_id):
+            raise HTTPException(403, "only a channel owner or a chat admin can remove members")
+    sb().table("chat_members").delete().eq("org_id", org_id).eq(
+        "channel_id", channel_id).eq("employee_id", who).execute()
+    return {"ok": True}
+
+
+@router.patch("/channels/{channel_id}")
+def update_channel(channel_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Rename / re-topic / archive a channel. Owner or chat admin only. Body: {name?, topic?, archived?}."""
+    org_id, eid, _name = _me(authorization, org_id)
+    _require_channel_member(org_id, channel_id, eid)
+    my = (sb().table("chat_members").select("role").eq("org_id", org_id)
+          .eq("channel_id", channel_id).eq("employee_id", eid).limit(1).execute().data) or []
+    is_owner = bool(my) and my[0].get("role") == "owner"
+    if not is_owner and not _is_chat_admin(authorization, org_id):
+        raise HTTPException(403, "only a channel owner or a chat admin can change this conversation")
+    upd: dict = {}
+    if "name" in body and (body.get("name") or "").strip():
+        upd["name"] = body["name"].strip()
+    if "topic" in body:
+        upd["topic"] = body.get("topic")
+    if "archived" in body:
+        upd["archived"] = bool(body.get("archived"))
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    row = (sb().table("chat_channels").update(upd).eq("org_id", org_id)
+           .eq("id", channel_id).execute().data or [{}])[0]
+    return {"channel": row}
+
+
+@router.post("/admin/retention")
+def run_retention(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Chat-admin retention sweep: hard-delete messages older than `days` across the org. Returns how
+    many were removed. Reactions cascade via FK. Chat admin only."""
+    org_id, eid, _name = _me(authorization, org_id)
+    if not _is_chat_admin(authorization, org_id):
+        raise HTTPException(403, "chat admin permission required")
+    try:
+        days = int(body.get("days") or 0)
+    except Exception:
+        days = 0
+    if days < 1:
+        raise HTTPException(400, "days must be a positive integer")
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    doomed = (sb().table("chat_messages").select("id").eq("org_id", org_id)
+              .lt("created_at", cutoff).execute().data) or []
+    n = 0
+    for m in doomed:
+        sb().table("chat_messages").delete().eq("org_id", org_id).eq("id", m["id"]).execute()
+        n += 1
+    return {"ok": True, "deleted": n, "cutoff": cutoff}
+
+
 @router.get("/me")
 def whoami(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """The caller's identity for the chat client — the employee_id it needs to subscribe to its own
     realtime user topic, plus the topic string itself so the naming lives server-side only."""
     org_id, eid, name = _me(authorization, org_id)
     return {"org_id": org_id, "employee_id": eid, "name": name,
-            "user_topic": realtime.user_topic(org_id, eid)}
+            "user_topic": realtime.user_topic(org_id, eid),
+            "is_chat_admin": _is_chat_admin(authorization, org_id)}
 
 
 @router.get("/directory")

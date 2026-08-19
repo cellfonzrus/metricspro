@@ -53,6 +53,12 @@ class FakeQuery:
     def lt(self, k, v):
         self.filters.append(("lt", k, v)); return self
 
+    def ilike(self, k, pattern):
+        self.filters.append(("ilike", k, pattern)); return self
+
+    def is_(self, k, val):
+        self.filters.append(("is", k, val)); return self
+
     def order(self, k, desc=False):
         self._order = (k, desc); return self
 
@@ -77,6 +83,15 @@ class FakeQuery:
                 return False
             if kind == "lt" and not (rv is not None and str(rv) < str(v)):
                 return False
+            if kind == "ilike":
+                pat = str(v).replace("%", "").lower()
+                if pat not in str(rv or "").lower():
+                    return False
+            if kind == "is":
+                if str(v) == "null" and rv is not None:
+                    return False
+                if str(v) != "null" and rv != v:
+                    return False
         return True
 
     def execute(self):
@@ -358,6 +373,70 @@ try:
 except HTTPException as e:
     check("9f a non-approval message can't be decided", e.status_code == 400, e.status_code)
 engine.decide = _orig_decide
+
+
+# ── 10: search + org management (Phase 4) ──────────────────────────────────────────────────────────
+as_user("E1")
+sr = C.search_messages(q="reply", authorization=AUTH, org_id=ORG)["results"]
+check("10a search finds a matching message in the caller's channels",
+      any((r.get("body") or "") == "a reply" for r in sr), [r.get("body") for r in sr])
+as_user("E3")   # not a DM member
+sr3 = C.search_messages(q="a reply", authorization=AUTH, org_id=ORG)["results"]
+check("10b search never returns hits from channels the caller isn't in", all(r["channel_id"] != DM for r in sr3), sr3)
+as_user("E1")
+tmp = C.send_message(DM, {"body": "uniquetoken alpha"}, authorization=AUTH, org_id=ORG)["message"]
+check("10c a message is searchable before deletion",
+      any("uniquetoken" in (r.get("body") or "") for r in C.search_messages(q="uniquetoken", authorization=AUTH, org_id=ORG)["results"]), None)
+C.delete_message(DM, tmp["id"], authorization=AUTH, org_id=ORG)
+check("10d a soft-deleted message drops out of search",
+      all("uniquetoken" not in (r.get("body") or "") for r in C.search_messages(q="uniquetoken", authorization=AUTH, org_id=ORG)["results"]), None)
+
+as_user("E2")
+br = C.browse_channels(authorization=AUTH, org_id=ORG)["channels"]
+gen = next(c for c in br if c["id"] == pub)
+check("10e browse lists public channels with member count + joined flag", gen["joined"] is False and gen["member_count"] >= 1, gen)
+check("10f DMs/private channels are never in browse", all(c["id"] != DM for c in br), [c["id"] for c in br])
+C.join_channel(pub, authorization=AUTH, org_id=ORG)
+check("10g a member can join a public channel", C._is_member(ORG, pub, "E2") is True)
+C.leave_channel(pub, authorization=AUTH, org_id=ORG)
+check("10h leaving drops membership", C._is_member(ORG, pub, "E2") is False)
+
+as_user("E1")
+mem = C.list_members(pub, authorization=AUTH, org_id=ORG)["members"]
+check("10i members list carries names + roles", any(m["employee_id"] == "E1" and m["role"] == "owner" and m["name"] == "Alice" for m in mem), mem)
+C.remove_member(pub, "E3", authorization=AUTH, org_id=ORG)
+check("10j an owner can remove a member", C._is_member(ORG, pub, "E3") is False)
+as_user("E3"); C.join_channel(pub, authorization=AUTH, org_id=ORG); CHAT_ADMIN[0] = False
+try:
+    C.remove_member(pub, "E1", authorization=AUTH, org_id=ORG)
+    check("10k a non-owner non-admin cannot remove others", False, "no raise")
+except HTTPException as e:
+    check("10k a non-owner non-admin cannot remove others", e.status_code == 403, e.status_code)
+
+as_user("E1")
+upd = C.update_channel(pub, {"name": "general-2", "topic": "stuff"}, authorization=AUTH, org_id=ORG)["channel"]
+check("10l an owner can rename / re-topic a channel", upd["name"] == "general-2" and upd["topic"] == "stuff", upd)
+as_user("E3"); CHAT_ADMIN[0] = False
+try:
+    C.update_channel(pub, {"name": "hax"}, authorization=AUTH, org_id=ORG)
+    check("10m a non-owner non-admin cannot rename", False, "no raise")
+except HTTPException as e:
+    check("10m a non-owner non-admin cannot rename", e.status_code == 403, e.status_code)
+
+as_user("E1"); CHAT_ADMIN[0] = False
+try:
+    C.run_retention({"days": 30}, authorization=AUTH, org_id=ORG)
+    check("10n retention requires chat admin", False, "no raise")
+except HTTPException as e:
+    check("10n retention requires chat admin", e.status_code == 403, e.status_code)
+CHAT_ADMIN[0] = True
+fake.store[("storeops", "chat_messages")].append({"id": "old-1", "org_id": ORG, "channel_id": DM, "body": "ancient", "created_at": "2000-01-01T00:00:00Z"})
+fake.store[("storeops", "chat_messages")].append({"id": "future-1", "org_id": ORG, "channel_id": DM, "body": "future", "created_at": "2999-01-01T00:00:00Z"})
+res = C.run_retention({"days": 1}, authorization=AUTH, org_id=ORG)
+ids_after = {m["id"] for m in fake.store[("storeops", "chat_messages")]}
+check("10o a chat admin retention sweep hard-deletes messages older than the window",
+      "old-1" not in ids_after and "future-1" in ids_after and res["deleted"] >= 1, res)
+CHAT_ADMIN[0] = False
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

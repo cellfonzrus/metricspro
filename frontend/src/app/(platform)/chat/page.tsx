@@ -24,7 +24,10 @@ interface Message {
   approval?: { id: string; title?: string; summary?: string | null; status: string; decision?: string | null; decided_by_name?: string | null; type?: string; priority?: string } | null
 }
 interface Person { employee_id: string; name: string }
-interface Me { employee_id: string; name: string; user_topic: string }
+interface Me { employee_id: string; name: string; user_topic: string; is_chat_admin?: boolean }
+interface SearchHit { id: string; channel_id: string; sender_name?: string | null; body?: string; created_at: string; channel?: { id: string; kind: string; name?: string | null } | null }
+interface BrowseChannel { id: string; name?: string | null; topic?: string | null; member_count: number; joined: boolean }
+interface Member { employee_id: string; name: string; role: string }
 
 const QUICK_EMOJI = ['👍', '❤️', '😂', '🎉', '👀', '✅']
 
@@ -59,8 +62,12 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
   const [dir, setDir] = useState<Person[]>([])
-  const [showNew, setShowNew] = useState<'' | 'dm' | 'channel'>('')
+  const [showNew, setShowNew] = useState<'' | 'dm' | 'channel' | 'browse' | 'manage'>('')
   const [dirQuery, setDirQuery] = useState('')
+  const [search, setSearch] = useState('')
+  const [results, setResults] = useState<SearchHit[]>([])
+  const [browse, setBrowse] = useState<BrowseChannel[]>([])
+  const [members, setMembers] = useState<Member[]>([])
   const [msg, setMsg] = useState('')
   const [me, setMe] = useState<Me | null>(null)
   const [rtUp, setRtUp] = useState(false)
@@ -147,6 +154,16 @@ export default function ChatPage() {
     return () => clearInterval(t)
   }, [])
 
+  // Message search (debounced). Membership-scoped server-side, so results never leak a foreign channel.
+  useEffect(() => {
+    const term = search.trim()
+    if (term.length < 2) { setResults([]); return }
+    const t = setTimeout(() => {
+      api(`/api/v1/chat/search?q=${encodeURIComponent(term)}`).then((r: any) => setResults(r.results || [])).catch(() => {})
+    }, 300)
+    return () => clearTimeout(t)
+  }, [search])
+
   // Poll fallback: fast (4s) while the socket is down; a slow 20s safety sweep once realtime is up.
   useEffect(() => {
     const t = setInterval(() => { loadChannels(); if (activeIdRef.current) loadMessages(activeIdRef.current) },
@@ -215,6 +232,41 @@ export default function ChatPage() {
     try { await api(`/api/v1/chat/channels/${activeId}/approvals`, { method: 'POST', body: JSON.stringify({ title, summary }) }); loadMessages(activeId); loadChannels() }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
+  async function openBrowse() {
+    try { const r = await api('/api/v1/chat/channels/browse'); setBrowse(r.channels || []); setShowNew('browse') }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function joinChannel(id: string) {
+    try { await api(`/api/v1/chat/channels/${id}/join`, { method: 'POST' }); setShowNew(''); await loadChannels(); setActiveId(id) }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  const loadMembers = useCallback((cid: string) => {
+    api(`/api/v1/chat/channels/${cid}/members`).then((r: any) => setMembers(r.members || [])).catch(() => {})
+  }, [])
+  async function openManage() { if (!activeId) return; loadMembers(activeId); setShowNew('manage') }
+  async function addMember(p: Person) {
+    try { await api(`/api/v1/chat/channels/${activeId}/members`, { method: 'POST', body: JSON.stringify({ employee_id: p.employee_id }) }); setDirQuery(''); loadMembers(activeId); loadChannels() }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function removeMember(eid: string) {
+    try { await api(`/api/v1/chat/channels/${activeId}/members/${eid}`, { method: 'DELETE' }); loadMembers(activeId); loadChannels() }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function renameChannel() {
+    const name = prompt('New channel name:', active?.name || '')?.trim(); if (!name) return
+    try { await api(`/api/v1/chat/channels/${activeId}`, { method: 'PATCH', body: JSON.stringify({ name }) }); loadChannels() }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function leaveActive() {
+    if (!activeId || !confirm('Leave this conversation?')) return
+    try { await api(`/api/v1/chat/channels/${activeId}/leave`, { method: 'POST' }); setShowNew(''); setActiveId(''); loadChannels() }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
+  async function runRetention() {
+    const days = prompt('Delete messages older than how many days? (whole org)')?.trim(); if (!days) return
+    try { const r = await api('/api/v1/chat/admin/retention', { method: 'POST', body: JSON.stringify({ days: Number(days) }) }); setMsg(`🧹 Removed ${r.deleted} message(s).`); loadMessages(activeId) }
+    catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+  }
   async function startDm(p: Person) {
     try {
       const r = await api('/api/v1/chat/dm', { method: 'POST', body: JSON.stringify({ employee_id: p.employee_id }) })
@@ -230,6 +282,7 @@ export default function ChatPage() {
   }
 
   const active = channels.find(c => c.id === activeId)
+  const canManage = members.some(m => m.employee_id === me?.employee_id && m.role === 'owner') || !!me?.is_chat_admin
   const dirFiltered = dir.filter(p => !dirQuery || p.name.toLowerCase().includes(dirQuery.toLowerCase()))
   const typers = Object.keys(typing).map(eid => typingNames[eid] || nameOf[eid] || eid)
 
@@ -243,9 +296,26 @@ export default function ChatPage() {
           <div style={{ display: 'flex', gap: 6 }}>
             <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => setShowNew('dm')}>+ DM</button>
             <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} onClick={createChannel}>+ Ch</button>
+            <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} title="Browse channels" onClick={openBrowse}>🔎</button>
           </div>
         </div>
+        <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border)' }}>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search messages…"
+            style={{ width: '100%', padding: '6px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13, outline: 'none' }} />
+        </div>
         <div style={{ flex: 1, overflowY: 'auto' }}>
+          {search.trim().length >= 2 ? (
+            <div>
+              {results.length === 0 && <div style={{ padding: 16, fontSize: 13, color: 'var(--text3)' }}>No matches.</div>}
+              {results.map(r => (
+                <div key={r.id} onClick={() => { setActiveId(r.channel_id); setSearch('') }}
+                  style={{ padding: '9px 14px', cursor: 'pointer', borderBottom: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: 11, color: 'var(--text3)' }}>{r.channel?.name ? `# ${r.channel.name}` : 'Direct message'} · {r.sender_name} · {(r.created_at || '').slice(0, 10)}</div>
+                  <div style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.body}</div>
+                </div>
+              ))}
+            </div>
+          ) : (<>
           {channels.length === 0 && <div style={{ padding: 16, fontSize: 13, color: 'var(--text3)' }}>No conversations yet. Start a DM.</div>}
           {channels.map(c => (
             <div key={c.id} onClick={() => setActiveId(c.id)}
@@ -258,6 +328,7 @@ export default function ChatPage() {
               {c.unread > 0 && <span style={{ background: 'var(--accent)', color: 'white', borderRadius: 999, fontSize: 11, fontWeight: 700, padding: '1px 7px', height: 'fit-content' }}>{c.unread}</span>}
             </div>
           ))}
+          </>)}
         </div>
       </div>
 
@@ -267,9 +338,12 @@ export default function ChatPage() {
           <div style={{ margin: 'auto', color: 'var(--text3)', fontSize: 14 }}>Select a conversation, or start a new one.</div>
         ) : (
           <>
-            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
               <span style={{ fontWeight: 700, fontSize: 14 }}>{title(active)}</span>
-              <span style={{ fontSize: 11, color: 'var(--text3)' }}>{online.size > 0 ? `🟢 ${online.size} here` : ''}</span>
+              <span style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--text3)' }}>{online.size > 0 ? `🟢 ${online.size} here` : ''}</span>
+                <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 8px' }} title="Members & settings" onClick={openManage}>👥</button>
+              </span>
             </div>
             <div ref={paneRef} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
               {messages.map(m => {
@@ -401,6 +475,70 @@ export default function ChatPage() {
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>{p.name}</div>
               ))}
               {dirFiltered.length === 0 && <div style={{ padding: 12, color: 'var(--text3)', fontSize: 13 }}>No one found.</div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Browse public channels */}
+      {showNew === 'browse' && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowNew('')}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 420, maxHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: 14, borderBottom: '1px solid var(--border)', fontWeight: 700 }}>Browse channels</div>
+            <div style={{ overflowY: 'auto', padding: 8 }}>
+              {browse.length === 0 && <div style={{ padding: 12, color: 'var(--text3)', fontSize: 13 }}>No public channels yet.</div>}
+              {browse.map(c => (
+                <div key={c.id} style={{ padding: '9px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}># {c.name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text3)' }}>{c.member_count} member{c.member_count === 1 ? '' : 's'}{c.topic ? ` · ${c.topic}` : ''}</div>
+                  </div>
+                  {c.joined
+                    ? <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setShowNew(''); setActiveId(c.id) }}>Open</button>
+                    : <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={() => joinChannel(c.id)}>Join</button>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manage members & settings */}
+      {showNew === 'manage' && active && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowNew('')}>
+          <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, width: 440, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: 14, borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <b>{title(active)}</b>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {active.kind === 'channel' && (canManage) && <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={renameChannel}>Rename</button>}
+                <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={leaveActive}>Leave</button>
+              </div>
+            </div>
+            <div style={{ overflowY: 'auto', padding: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--text3)', padding: '4px 8px', fontWeight: 700 }}>MEMBERS ({members.length})</div>
+              {members.map(m => (
+                <div key={m.employee_id} style={{ padding: '7px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 14 }}>{m.name}{m.role === 'owner' ? ' · owner' : ''}{m.employee_id === me?.employee_id ? ' · you' : ''}</span>
+                  {canManage && m.employee_id !== me?.employee_id && <button onClick={() => removeMember(m.employee_id)} style={actBtn} title="Remove">✕</button>}
+                </div>
+              ))}
+              {active.kind !== 'dm' && (
+                <>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', padding: '8px 8px 4px', fontWeight: 700 }}>ADD PEOPLE</div>
+                  <input value={dirQuery} onChange={e => setDirQuery(e.target.value)} placeholder="Search people…"
+                    style={{ width: '100%', boxSizing: 'border-box', margin: '0 0 6px', padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
+                  {dirQuery && dir.filter(p => p.name.toLowerCase().includes(dirQuery.toLowerCase()) && !members.some(m => m.employee_id === p.employee_id)).slice(0, 8).map(p => (
+                    <div key={p.employee_id} onClick={() => addMember(p)} style={{ padding: '7px 8px', cursor: 'pointer', fontSize: 14 }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>+ {p.name}</div>
+                  ))}
+                </>
+              )}
+              {me?.is_chat_admin && (
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: 8, paddingTop: 8 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', padding: '0 8px 4px', fontWeight: 700 }}>ADMIN</div>
+                  <button className="btn btn-secondary" style={{ fontSize: 12, margin: '0 8px' }} onClick={runRetention}>🧹 Run retention sweep…</button>
+                </div>
+              )}
             </div>
           </div>
         </div>
