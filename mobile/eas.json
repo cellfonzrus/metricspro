@@ -16,13 +16,17 @@
       "ios": { "simulator": false },
       "android": { "buildType": "apk" },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://your-api.railway.app"
+        "EXPO_PUBLIC_API_URL": "https://metricspro-production.up.railway.app",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://etxdalernqqtwjcrtcuj.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV0eGRhbGVybnFxdHdqY3J0Y3VqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1MTc0MDMsImV4cCI6MjA4OTA5MzQwM30.UhklXkrVneev69tEzYf4nEbjktGlY5SUBd2MHOnjn0Q"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://your-api.railway.app"
+        "EXPO_PUBLIC_API_URL": "https://metricspro-production.up.railway.app",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://etxdalernqqtwjcrtcuj.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV0eGRhbGVybnFxdHdqY3J0Y3VqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1MTc0MDMsImV4cCI6MjA4OTA5MzQwM30.UhklXkrVneev69tEzYf4nEbjktGlY5SUBd2MHOnjn0Q"
       }
     }
   },
