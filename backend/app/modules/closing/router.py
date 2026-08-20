@@ -6072,7 +6072,9 @@ def create_expense_line(payload: CreateExpenseLineIn, org_id: str = ORG_ID, auth
         r = client.schema("commcalc").table("closing_expense").insert(row).execute()
     except Exception as e:
         raise HTTPException(500, f"could not save expense line (run migration 506?): {e}")
-    return {"ok": True, "row": (r.data[0] if r.data else row)}
+    saved = (r.data[0] if r.data else row)
+    _intimate_expense_line(org_id, saved)
+    return {"ok": True, "row": saved}
 
 
 def _insert_expense_lines(client, org_id, store_code, close_date, closing_row_id, lines, created_by=None):
@@ -6089,7 +6091,10 @@ def _insert_expense_lines(client, org_id, store_code, close_date, closing_row_id
             for c in cleaned]
     try:
         r = client.schema("commcalc").table("closing_expense").insert(rows).execute()
-        return r.data or rows
+        saved = r.data or rows
+        for sr in saved:
+            _intimate_expense_line(org_id, sr)
+        return saved
     except Exception as e:
         print(f"WARN closing_expense insert failed (run migration 506?): {e}")
         return []
@@ -6136,6 +6141,56 @@ def _push_expense_category_pl(client, org_id, period, category_id, category_name
         return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e})"}
 
 
+def _apply_expense_line_decision(client, org_id, row, status, decided_by):
+    """Apply an approve/reject to ONE categorized closing_expense line and, on an 'expense'-kind
+    APPROVAL, push that category's updated P&L total for the line's period. This is the ONE shared
+    money/P&L effect — the /closing/expense/{id}/decide endpoint AND the unified approvals engine
+    adapter (approvals/adapters/closing_expense.py) both call it, so an inbox decision and a
+    closing-management-board decision are byte-identical (amounts, account routing, and P&L math are
+    never re-implemented). Caller guards the line is still pending. Returns the P&L-push result dict
+    (or None when no push applies)."""
+    expense_id = row.get("id")
+    upd = {"status": status, "approved_by": decided_by, "approved_at": _now(), "updated_at": _now()}
+    (client.schema("commcalc").table("closing_expense").update(upd)
+     .eq("org_id", org_id).eq("id", expense_id).execute())
+    pl = None
+    if status == "approved" and row.get("category_kind") == "expense" and row.get("category_id"):
+        period = str(row.get("close_date") or "")[:7]
+        try:
+            pl = _push_expense_category_pl(client, org_id, period, row["category_id"], row.get("category_name"))
+        except Exception as e:
+            pl = {"pushed": False, "note": str(e)}
+    return pl
+
+
+def _intimate_expense_line(org_id, row):
+    """Raise (idempotently) an intimation approval_request for a freshly-created PENDING expense line so
+    it surfaces in the unified Approvals inbox alongside the legacy closing-management board. Best-effort;
+    never raises (an approvals miss must not fail a closing submit)."""
+    try:
+        if (row.get("status") or "pending") != "pending" or not row.get("id"):
+            return
+        from app.modules.approvals import engine as _approvals
+        amt = _f(row.get("amount"))
+        store = (row.get("store_code") or "").strip() or None
+        who = row.get("employee_name") or row.get("created_by")
+        title = f"Store expense ${amt:.2f}"
+        if row.get("category_name"):
+            title += f" — {row['category_name']}"
+        if store:
+            title += f" at {store}"
+        _approvals.create_request(
+            org_id, type="closing_expense", source_table="closing_expense", source_id=row.get("id"),
+            title=title, summary=(row.get("description") or None),
+            payload={"amount": amt, "category_id": row.get("category_id"),
+                     "category_name": row.get("category_name"),
+                     "close_date": str(row.get("close_date") or "")},
+            requested_by=row.get("created_by"), requested_by_name=who,
+            store_code=store, priority="normal")
+    except Exception:
+        pass
+
+
 class DecideExpenseLineIn(LaxModel):
     status: Any = None
     decided_by: Any = None
@@ -6148,7 +6203,10 @@ def decide_expense_line(expense_id: str, payload: DecideExpenseLineIn, org_id: s
     |'rejected', decided_by?}. Extends the existing single-checkbox approve affordance (POST
     /closing/expense/approve, unchanged, still governs the legacy mig-109 expense_amount field) to the
     new categorized-line model. On an 'expense'-kind approval, best-effort pushes that category's
-    updated P&L total for the line's period immediately (never blocks the response on the push)."""
+    updated P&L total for the line's period immediately (never blocks the response on the push).
+
+    Also syncs the linked unified approval_request (engine type 'closing_expense') so the central
+    Approvals inbox reflects a decision made on this legacy board."""
     client = sb()
     if not _can_mgmt_review(_caller_perms(client, authorization)):
         raise HTTPException(403, "Approving expenses is management-restricted.")
@@ -6164,16 +6222,15 @@ def decide_expense_line(expense_id: str, payload: DecideExpenseLineIn, org_id: s
         raise HTTPException(404, "expense line not found")
     row = rows[0]
     decided_by = (payload.decided_by or _caller_email(client, authorization) or "manager")
-    upd = {"status": status, "approved_by": decided_by, "approved_at": _now(), "updated_at": _now()}
-    (client.schema("commcalc").table("closing_expense").update(upd)
-     .eq("org_id", org_id).eq("id", expense_id).execute())
-    pl = None
-    if status == "approved" and row.get("category_kind") == "expense" and row.get("category_id"):
-        period = str(row.get("close_date") or "")[:7]
-        try:
-            pl = _push_expense_category_pl(client, org_id, period, row["category_id"], row.get("category_name"))
-        except Exception as e:
-            pl = {"pushed": False, "note": str(e)}
+    pl = _apply_expense_line_decision(client, org_id, row, status, decided_by)
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="closing_expense", source_table="closing_expense",
+                                        source_id=expense_id,
+                                        decision=("approve" if status == "approved" else "deny"),
+                                        actor=decided_by)
+    except Exception:
+        pass
     return {"ok": True, "id": expense_id, "status": status, "pl_push": pl}
 
 

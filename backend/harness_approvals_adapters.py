@@ -86,19 +86,20 @@ class FakeQuery:
 
 
 class FakeSchema:
-    def __init__(self, store):
+    def __init__(self, store, schema="storeops"):
         self.store = store
+        self.schema_name = schema
 
     def table(self, t):
-        return FakeQuery(self.store, ("storeops", t))
+        return FakeQuery(self.store, (self.schema_name, t))
 
 
 class FakeClient:
     def __init__(self):
         self.store = {}
 
-    def schema(self, _n):
-        return FakeSchema(self.store)
+    def schema(self, n):
+        return FakeSchema(self.store, n)
 
 
 fake = FakeClient()
@@ -109,10 +110,10 @@ import app.modules.storeops.router as S  # noqa: E402
 assert AR  # keep the import (adapters register on import)
 
 # Point BOTH the engine and storeops at the same fake store, and silence the async notifier.
-engine._sb = lambda: FakeSchema(fake.store)
+engine._sb = lambda: FakeSchema(fake.store, "storeops")
 engine._notify_approvers = lambda *a, **k: None
 S.get_supabase = lambda: fake
-S.sb = lambda: FakeSchema(fake.store)
+S.sb = lambda: FakeSchema(fake.store, "storeops")
 
 ORG = "org-adapters"
 
@@ -179,6 +180,75 @@ engine.sync_source_decision(ORG, type="budget_override", source_table="budget_ov
                             decision="deny", actor="mgr@x")
 check("budget_override: a legacy-board decision syncs the inbox request",
       engine.get_request(ORG, ov2["id"])["status"] == "denied")
+
+
+# ── closing_expense (MONEY-CRITICAL: approve books the line onto the P&L) ─────────────────────────
+import app.modules.closing.router as C  # noqa: E402
+
+C.sb = lambda: fake   # closing reads/writes commcalc.closing_expense on the same fake store
+PL_PUSHES = []
+
+
+def _fake_pl_push(client, org_id, period, cat_id, cat_name, *a, **k):
+    PL_PUSHES.append((org_id, period, cat_id))
+    return {"pushed": True, "stores": 1}
+
+
+C._push_expense_category_pl = _fake_pl_push   # record P&L pushes instead of hitting the internal API
+
+
+def seed_exp(status="pending"):
+    fake.store[("commcalc", "closing_expense")] = [
+        {"org_id": ORG, "id": "E1", "store_code": "S1", "close_date": "2026-08-15", "amount": 42.50,
+         "category_kind": "expense", "category_id": "CAT1", "category_name": "Supplies",
+         "description": "printer ink", "status": status}]
+
+
+# A: decide via the UNIFIED INBOX → the closing_expense row flips to approved AND the P&L is pushed.
+fake.store.clear(); PL_PUSHES.clear(); seed_exp()
+er = engine.create_request(ORG, type="closing_expense", title="Store expense $42.50 — Supplies at S1",
+                           source_table="closing_expense", source_id="E1", store_code="S1")
+check("closing_expense: request registered against the source row", er.get("status") == "pending" and er.get("id"), er)
+engine.decide(ORG, er["id"], decision="approve", actor="dm@x")
+exp = fake.store[("commcalc", "closing_expense")][0]
+check("closing_expense: an inbox APPROVE flips the line to 'approved' (module vocabulary)",
+      exp["status"] == "approved" and exp["approved_by"] == "dm@x", exp)
+check("closing_expense: ...and pushes the category P&L for the line's period exactly once",
+      PL_PUSHES == [(ORG, "2026-08", "CAT1")], PL_PUSHES)
+check("closing_expense: ...and stamps the approval_request approved",
+      engine.get_request(ORG, er["id"])["status"] == "approved")
+
+# A2: an inbox DENY maps to 'rejected' and does NOT touch the P&L.
+fake.store.clear(); PL_PUSHES.clear(); seed_exp()
+er2 = engine.create_request(ORG, type="closing_expense", title="reject me",
+                            source_table="closing_expense", source_id="E1", store_code="S1")
+engine.decide(ORG, er2["id"], decision="deny", actor="dm@x")
+exp2 = fake.store[("commcalc", "closing_expense")][0]
+check("closing_expense: an inbox DENY flips the line to 'rejected' (never 'denied')", exp2["status"] == "rejected", exp2)
+check("closing_expense: a DENY pushes NO P&L", PL_PUSHES == [], PL_PUSHES)
+check("closing_expense: ...and stamps the approval_request denied",
+      engine.get_request(ORG, er2["id"])["status"] == "denied")
+
+# B: decide via the LEGACY board (sync only) → inbox reflects it, effect not re-run by the engine.
+fake.store.clear(); PL_PUSHES.clear(); seed_exp()
+er3 = engine.create_request(ORG, type="closing_expense", title="legacy",
+                            source_table="closing_expense", source_id="E1", store_code="S1")
+# legacy management board already applied the effect itself; the engine just syncs the request:
+fake.store[("commcalc", "closing_expense")][0].update({"status": "approved", "approved_by": "mgr@x"})
+engine.sync_source_decision(ORG, type="closing_expense", source_table="closing_expense", source_id="E1",
+                            decision="approve", actor="mgr@x")
+check("closing_expense: a legacy-board decision syncs the inbox request to approved",
+      engine.get_request(ORG, er3["id"])["status"] == "approved")
+check("closing_expense: sync does NOT re-run the P&L push (module already did the effect)", PL_PUSHES == [], PL_PUSHES)
+
+# C: idempotency — the line already decided → inbox decide is a no-op on the row + no P&L (still stamps request).
+fake.store.clear(); PL_PUSHES.clear(); seed_exp(status="approved")
+er4 = engine.create_request(ORG, type="closing_expense", title="already done",
+                            source_table="closing_expense", source_id="E1", store_code="S1")
+engine.decide(ORG, er4["id"], decision="deny", actor="dm@x")
+exp4 = fake.store[("commcalc", "closing_expense")][0]
+check("closing_expense: on_decide leaves an already-decided line untouched", exp4["status"] == "approved", exp4)
+check("closing_expense: ...and pushes no P&L on the idempotent no-op", PL_PUSHES == [], PL_PUSHES)
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
