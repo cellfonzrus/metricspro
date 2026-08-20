@@ -13,6 +13,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'MetricsPro',
   slug: 'metricspro',
+  owner: 'cellfonzrus',
   scheme: 'metricspro',
   version: '0.1.0',
   orientation: 'portrait',
@@ -76,6 +77,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL ?? '',
     supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
     apiUrl: process.env.EXPO_PUBLIC_API_URL ?? '',
-    eas: { projectId: process.env.EAS_PROJECT_ID ?? '' },
+    eas: { projectId: process.env.EAS_PROJECT_ID || 'a3ab84a6-1706-473b-9046-f66dbf2c8b9a' },
   },
 })
