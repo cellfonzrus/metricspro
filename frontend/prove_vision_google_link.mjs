@@ -5,7 +5,7 @@
 // disabled the button, and the operator — looking at a blank form holding a project id the server
 // had stored minutes earlier — reported that it does not save. Both decisions below now read the
 // SERVER's state, not the form's, and the round trip finishes itself.
-import { linkBlocker, oauthReturn } from './src/lib/vision.ts'
+import { idsBlocker, authorizeBlocker, oauthReturn } from './src/lib/vision.ts'
 
 let pass = 0, fail = 0
 const eq = (name, got, want) => {
@@ -15,31 +15,44 @@ const eq = (name, got, want) => {
 }
 const blank = { project: '', clientId: '', secret: '' }
 
-// ── linkBlocker: what is still missing ─────────────────────────────────────────────────────────
+// ── idsBlocker: the ids save on their own, with no secret involved ─────────────────────────────
 eq('nothing anywhere -> asks for the project id',
-  linkBlocker({}, blank), 'Enter the Device Access project id.')
+  idsBlocker({}, blank), 'Enter the Device Access project id.')
 eq('project typed, nothing else -> asks for the client id',
-  linkBlocker({}, { ...blank, project: 'c25e6a1e-5f03-4b6a-9b72-3a9cf89fcbe3' }), 'Enter the OAuth client id.')
-eq('project + client typed -> asks for the secret',
-  linkBlocker({}, { ...blank, project: 'p', clientId: 'c' }), 'Enter the OAuth client secret.')
-eq('all three typed -> ready',
-  linkBlocker({}, { project: 'p', clientId: 'c', secret: 's' }), '')
+  idsBlocker({}, { ...blank, project: 'c25e6a1e-5f03-4b6a-9b72-3a9cf89fcbe3' }), 'Enter the OAuth client id.')
 
-// THE REGRESSION. Everything saved server-side, form blank after the reload: ready, no retyping.
-eq('saved server-side + blank form -> ready (the reported bug)',
-  linkBlocker({ project_id: 'p', client_id: 'c', has_secret: true }, blank), '')
-eq('saved project+client but secret never stored -> only the secret is asked for',
-  linkBlocker({ project_id: 'p', client_id: 'c', has_secret: false }, blank), 'Enter the OAuth client secret.')
-eq('secret stored, project saved, client id missing -> asks for the client id',
-  linkBlocker({ project_id: 'p', has_secret: true }, blank), 'Enter the OAuth client id.')
+// THE REGRESSION. Both ids typed and NO secret: this must save. The old single gate refused, so the
+// ids never reached the server and vanished with the page — reported as "it is not saving".
+eq('both ids typed, no secret -> saves (the reported bug)',
+  idsBlocker({}, { project: 'c25e6a1e-5f03-4b6a-9b72-3a9cf89fcbe3', clientId: '437700580502-x.apps.googleusercontent.com', secret: '' }), '')
+eq('already saved server-side, blank form -> nothing left to ask',
+  idsBlocker({ project_id: 'p', client_id: 'c' }, blank), '')
 eq('typed value overrides the saved one',
-  linkBlocker({ project_id: 'p', client_id: 'c', has_secret: true }, { ...blank, project: 'other' }), '')
+  idsBlocker({ project_id: 'p', client_id: 'c' }, { ...blank, project: 'other' }), '')
 eq('whitespace is not a value',
-  linkBlocker({}, { project: '   ', clientId: '  ', secret: ' ' }), 'Enter the Device Access project id.')
-eq('a stored secret is never overridden by whitespace typed into the field',
-  linkBlocker({ project_id: 'p', client_id: 'c', has_secret: true }, { ...blank, secret: '   ' }), '')
+  idsBlocker({}, { project: '   ', clientId: '  ', secret: ' ' }), 'Enter the Device Access project id.')
+eq('whitespace typed does not blank out a saved id',
+  idsBlocker({ project_id: 'p', client_id: 'c' }, { ...blank, project: '   ' }), '')
 eq('nulls from the server behave like absent',
-  linkBlocker({ project_id: null, client_id: null }, blank), 'Enter the Device Access project id.')
+  idsBlocker({ project_id: null, client_id: null }, blank), 'Enter the Device Access project id.')
+
+// ── authorizeBlocker: the secret is typed every time, never assumed ────────────────────────────
+eq('no ids at all -> the id gate speaks first',
+  authorizeBlocker({}, blank), 'Enter the Device Access project id.')
+eq('ids saved, no secret typed -> asks for the secret',
+  authorizeBlocker({ project_id: 'p', client_id: 'c' }, blank), 'Enter the OAuth client secret to authorize.')
+// A secret ON FILE is NOT a substitute for typing one. The operator asked for it this way, and it
+// keeps a stale secret from a previous attempt from being silently reused.
+eq('a secret on file does not stand in for typing one',
+  authorizeBlocker({ project_id: 'p', client_id: 'c', has_secret: true }, blank),
+  'Enter the OAuth client secret to authorize.')
+eq('ids saved + secret typed -> ready',
+  authorizeBlocker({ project_id: 'p', client_id: 'c' }, { ...blank, secret: 's' }), '')
+eq('all three typed fresh -> ready',
+  authorizeBlocker({}, { project: 'p', clientId: 'c', secret: 's' }), '')
+eq('whitespace secret is not a secret',
+  authorizeBlocker({ project_id: 'p', client_id: 'c' }, { ...blank, secret: '   ' }),
+  'Enter the OAuth client secret to authorize.')
 
 // ── oauthReturn: what Google put on the url ────────────────────────────────────────────────────
 eq('no query -> nothing to do', oauthReturn(''), { code: '', error: '', none: true })

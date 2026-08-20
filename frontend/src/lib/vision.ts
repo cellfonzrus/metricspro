@@ -173,16 +173,15 @@ export function daysAgo(n: number): string {
   return d.toISOString().slice(0, 10)
 }
 
-// ── Google link: what the operator still has to supply ──────────────────────────────────────────
-// The consent round trip NAVIGATES AWAY from this page and comes back, so every field held in
-// component state is empty on return. The first build treated an empty field as "nothing saved" and
-// disabled the button, which is how a saved project id reads as lost: the operator sees a blank form,
-// retypes it, and reasonably reports that it does not save. The server is the source of truth for
-// what is already stored — the form only has to say what is still MISSING.
+// ── Google link: two independent steps, two independent gates ──────────────────────────────────
+// The ids and the secret are NOT one action, and treating them as one is what lost the project id.
+// A single button saved all three at once and stayed disabled until all three boxes were filled, so
+// an operator who had the project id and client id but not the secret to hand could press nothing —
+// and nothing reached the server. The ids then vanished with the page, which reads exactly like a
+// save that silently failed.
 //
-// The stored client secret is deliberately never readable back, so it can only ever be reported as a
-// boolean. `has_secret` is that boolean, and it is enough: a blank secret field means "keep the one
-// you already have", not "clear it".
+// So: saving the ids asks only for the ids. Authorizing asks for the secret on top. The secret is
+// never echoed back into the form — the operator types it when they authorize, every time.
 export interface GoogleLinkState {
   linked?: boolean
   project_id?: string | null
@@ -192,13 +191,21 @@ export interface GoogleLinkState {
 
 export interface GoogleLinkForm { project: string; clientId: string; secret: string }
 
-/** '' when the consent link can be requested; otherwise the one thing still missing, in plain words. */
-export function linkBlocker(google: GoogleLinkState, form: GoogleLinkForm): string {
-  const project = (form.project || '').trim() || (google.project_id || '')
-  const clientId = (form.clientId || '').trim() || (google.client_id || '')
-  if (!project) return 'Enter the Device Access project id.'
-  if (!clientId) return 'Enter the OAuth client id.'
-  if (!(form.secret || '').trim() && !google.has_secret) return 'Enter the OAuth client secret.'
+const saved = (typed: string, stored: string | null | undefined) =>
+  (typed || '').trim() || (stored || '').trim()
+
+/** '' when the project id and client id can be saved; otherwise the one still missing. */
+export function idsBlocker(google: GoogleLinkState, form: GoogleLinkForm): string {
+  if (!saved(form.project, google.project_id)) return 'Enter the Device Access project id.'
+  if (!saved(form.clientId, google.client_id)) return 'Enter the OAuth client id.'
+  return ''
+}
+
+/** '' when the consent url can be requested. Needs the ids AND a secret typed right now. */
+export function authorizeBlocker(google: GoogleLinkState, form: GoogleLinkForm): string {
+  const ids = idsBlocker(google, form)
+  if (ids) return ids
+  if (!(form.secret || '').trim()) return 'Enter the OAuth client secret to authorize.'
   return ''
 }
 

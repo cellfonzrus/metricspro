@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
-  linkBlocker, oauthReturn, type GoogleLinkState,
+  idsBlocker, authorizeBlocker, oauthReturn, type GoogleLinkState,
 } from '@/lib/vision'
 
 // The redirect URI is part of the OAuth signature: the value sent when building the consent URL and
@@ -175,7 +175,7 @@ export default function VisionSettingsPage() {
             <div style={{ color: '#dc2626', fontSize: 12.5, marginTop: 6 }}>{status.google.last_error}</div>
           )}
         </div>
-        <GoogleLink canEdit={canEdit} google={status.google} />
+        <GoogleLink canEdit={canEdit} google={status.google} onSaved={m => { setMsg(m); void load() }} />
         <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button style={btnPrimary} disabled={!canEdit || !status.google.linked || busy}
             onClick={() => act(async () => {
@@ -386,11 +386,9 @@ export default function VisionSettingsPage() {
   )
 }
 
-function GoogleLink({ canEdit, google }: { canEdit: boolean; google: GoogleLinkState }) {
-  // Seeded from the server, not from memory. What is saved must LOOK saved: a blank form after the
-  // consent round trip is indistinguishable from a form that never saved, and that is exactly how it
-  // was read. The secret is the one field that stays blank — it is stored write-only, and blank here
-  // means "keep the stored one".
+function GoogleLink({ canEdit, google, onSaved }: {
+  canEdit: boolean; google: GoogleLinkState; onSaved: (m: string) => void
+}) {
   // null means "not edited here" — the saved value shows through. That keeps the form honest with the
   // server after every reload without an effect copying state back and forth, and without a later
   // refresh wiping out something half-typed.
@@ -401,15 +399,35 @@ function GoogleLink({ canEdit, google }: { canEdit: boolean; google: GoogleLinkS
   const [err, setErr] = useState('')
   const project = projectEdit ?? (google.project_id || '')
   const clientId = clientIdEdit ?? (google.client_id || '')
+  const form = { project, clientId, secret }
+  const cantSave = idsBlocker(google, form)
+  const cantAuthorize = authorizeBlocker(google, form)
+  const dirty = (projectEdit !== null && projectEdit.trim() !== (google.project_id || '').trim())
+    || (clientIdEdit !== null && clientIdEdit.trim() !== (google.client_id || '').trim())
 
-  const blocker = linkBlocker(google, { project, clientId, secret })
-
-  async function saveAndAuthorize() {
+  /** Save the ids alone. No secret required — this is the step that kept getting lost. */
+  async function saveIds() {
     setBusy(true); setErr('')
     try {
-      const body: Record<string, string> = { project_id: project.trim(), client_id: clientId.trim() }
-      if (secret.trim()) body.client_secret = secret.trim()
-      await api('/api/v1/vision/google/link', { method: 'POST', body: JSON.stringify(body) })
+      await api('/api/v1/vision/google/link', {
+        method: 'POST',
+        body: JSON.stringify({ project_id: project.trim(), client_id: clientId.trim() }),
+      })
+      setProjectEdit(null); setClientIdEdit(null)
+      onSaved('Project id and client id saved. They stay saved — you can close this and come back.')
+    } catch (e) { setErr(visionError(e)) }
+    finally { setBusy(false) }
+  }
+
+  async function authorize() {
+    setBusy(true); setErr('')
+    try {
+      // The secret goes up with this request and is stored encrypted, because Google needs it again
+      // every time the access token is refreshed. It is never sent back down.
+      await api('/api/v1/vision/google/link', {
+        method: 'POST',
+        body: JSON.stringify({ project_id: project.trim(), client_id: clientId.trim(), client_secret: secret.trim() }),
+      })
       const r = await api(`/api/v1/vision/google/auth-url?redirect_uri=${encodeURIComponent(redirectUri())}`)
       // Same tab, on purpose. A new tab means the code comes back somewhere the operator was not
       // looking, and on a phone it means a tab they cannot easily get back to.
@@ -423,24 +441,36 @@ function GoogleLink({ canEdit, google }: { canEdit: boolean; google: GoogleLinkS
 
   return (
     <div style={{ display: 'grid', gap: 8, maxWidth: 520 }}>
-      {google.project_id && (
+      {google.project_id && !dirty && (
         <div style={{ ...panel, fontSize: 12.5, borderLeft: '3px solid #f39c12' }}>
-          Saved — but this Google account has not authorized us yet. Nothing below needs retyping;
-          press the button to finish.
+          Saved. This Google account has not authorized us yet — enter the client secret below and
+          authorize. The ids do not need retyping.
         </div>
       )}
       <Text label="Device Access project id" value={project} onChange={setProjectEdit} disabled={!canEdit} />
       <Text label="OAuth client id" value={clientId} onChange={setClientIdEdit} disabled={!canEdit} />
-      <Text label={google.has_secret ? 'OAuth client secret (saved — leave blank to keep it)' : 'OAuth client secret'}
-        value={secret} onChange={setSecret} disabled={!canEdit} type="password" />
+      <div>
+        <button style={btn} onClick={saveIds} disabled={!canEdit || busy || !!cantSave}>
+          {busy ? 'Working…' : 'Save these two'}
+        </button>
+        {cantSave && canEdit && <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>{cantSave}</span>}
+      </div>
+
+      <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+
+      <Text label="OAuth client secret" value={secret} onChange={setSecret} disabled={!canEdit} type="password" />
+      <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+        Typed here each time you authorize — never filled in for you.
+        {google.has_secret && ' (One is already on file from a previous attempt.)'}
+      </div>
       <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
         Add <code>{redirectUri()}</code> as an authorized redirect URI on the OAuth client, or Google will
         refuse the consent step.
       </div>
-      <div><button style={btnPrimary} onClick={saveAndAuthorize} disabled={!canEdit || busy || !!blocker}>
-        {busy ? 'Working…' : 'Save & authorize with Google'}
+      <div><button style={btnPrimary} onClick={authorize} disabled={!canEdit || busy || !!cantAuthorize}>
+        {busy ? 'Working…' : 'Authorize with Google'}
       </button></div>
-      {blocker && canEdit && <div style={{ fontSize: 12, color: 'var(--text3)' }}>{blocker}</div>}
+      {cantAuthorize && canEdit && <div style={{ fontSize: 12, color: 'var(--text3)' }}>{cantAuthorize}</div>}
       {err && <div style={{ color: '#dc2626', fontSize: 12.5 }}>{err}</div>}
     </div>
   )
