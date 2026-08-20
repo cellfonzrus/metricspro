@@ -23,6 +23,7 @@ from . import ops_chargebacks
 from . import expense_config
 from . import envelope as _envelope
 from . import deposit_recon
+from . import verified_overlay as _verified_overlay
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -750,6 +751,7 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         return d
 
     by_store, by_rep, grand = {}, {}, blank()
+    _sd, _sd_code = {}, {}   # per-(store key, day) rep-sum + its store_code, for the TKT-1030 overlay
     kept_rows = []
     for r in rows:
         raw_code = r.get("store_code")
@@ -800,6 +802,37 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
             agg["rows"] += 1
             if r.get("close_date"):
                 agg["_days"].add(str(r.get("close_date")))
+        # Per-(store key, day) rep-sum, kept alongside so a DM verified correction can be applied to
+        # by_store + grand as a delta after the loop (TKT-1030), without disturbing by_rep (stays raw).
+        _sdk = (key, str(r.get("close_date") or ""))
+        _sd_code[key] = raw_code
+        _sda = _sd.setdefault(_sdk, {k: 0.0 for k in MONEY} | {"epay_on_cash": 0.0, "epay_on_cc": 0.0})
+        for k in MONEY:
+            _sda[k] = round(_sda[k] + _f(r.get(k)), 2)
+        _sda["epay_on_cash"] = round(_sda["epay_on_cash"] + epd["cash"], 2)
+        _sda["epay_on_cc"] = round(_sda["epay_on_cc"] + epd["cc"], 2)
+
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): by_store + grand (store-day / company
+    # aggregates) reflect the DM's verified corrections; by_rep stays RAW (a store-day correction can't be
+    # attributed to one rep). Applied as a per-store-day delta so only corrected store-days move, and it
+    # is a strict no-op when there is no verified correction. Best-effort.
+    try:
+        _ov = _verified_overlay.build_overlay_map(client, org_id, {d for (_k, d) in _sd.keys()})
+        if _ov:
+            for (_k, _dd), _raw in _sd.items():
+                _dm = _ov.get((_verified_overlay._norm(_sd_code.get(_k)), str(_dd)[:10]))
+                if not _dm:
+                    continue
+                _corr = _verified_overlay.apply_overlay(dict(_raw), _dm)
+                for _fld, _rv in _raw.items():
+                    _delta = round(_corr.get(_fld, _rv) - _rv, 2)
+                    if not _delta:
+                        continue
+                    if _k in by_store:
+                        by_store[_k][_fld] = round(by_store[_k].get(_fld, 0.0) + _delta, 2)
+                    grand[_fld] = round(grand.get(_fld, 0.0) + _delta, 2)
+    except Exception:
+        pass
 
     def finalize(d):
         d = {k: v for k, v in d.items() if k != "_days"} | {"days": len(d["_days"])}
@@ -1171,6 +1204,17 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                 "discrepancy": (act_var != 0 or upg_var != 0),
             }
 
+        # DM verified-correction overlay (TKT-1030, owner 2026-08-20): once a store-day is VERIFIED, the
+        # DM's corrected figures are authoritative for the store-day. Overlay them onto BOTH column
+        # families in `totals` HERE — before money_recon and before this store dict is returned — so the
+        # DM Verify view, the money reconciliation, and every downstream consumer of this summary see the
+        # corrected numbers, not the rep's raw sum. Per-rep rows below stay raw (a store-day correction
+        # can't be attributed to one rep) and the store carries a `dm_corrected` badge instead.
+        _ver = ver_by_store.get(code) if code else None
+        _dm_corrected = bool(_ver and _ver.get("verified") and _verified_overlay.has_correction(_ver))
+        if _dm_corrected:
+            _verified_overlay.apply_overlay(totals, _ver)
+
         # MONEY recon: store-declared closing $ vs B2B actuals (accessory gross, cash, credit).
         # Shortage = declared LESS than B2B (money unaccounted). epay-vs-portal is wired but
         # pending the ePay Daily Transactions Report sweep.
@@ -1245,6 +1289,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "cross_login": cross_login, "closing_mode": closing_mode,
             "closer": closer_by_store.get(code) if code else None,
             "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
+            "dm_corrected": _dm_corrected,   # store-day totals reflect the DM's verified correction (TKT-1030)
         })
 
     # Stores where reps WORKED (clocked in / sold) but NOBODY submitted a closing never appear in
@@ -2196,6 +2241,18 @@ def _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, re
         agg = closing.setdefault(code, {t: 0.0 for t in keys})
         for t in keys:
             agg[t] += _closing_amt(r, t)
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): overlay the DM's verified corrections
+    # onto the CLOSING leg, so the 3-way reconciles the DM-corrected declared tenders against the
+    # X-report / sales actuals (never overridden — those are the source of truth). Best-effort.
+    try:
+        _ov = _verified_overlay.build_overlay_map(client, org_id, [d])
+        if _ov:
+            for _code, _cagg in closing.items():
+                _dm = _ov.get((_verified_overlay._norm(_code), str(d)[:10]))
+                if _dm:
+                    _verified_overlay.overlay_tender_legs(_cagg, _dm)
+    except Exception:
+        pass
     # (2) X-report — pos_tender_summary raw tender_type → tenant tender (fallback _canon_tender). A raw
     # label that resolves to NO tender (no tenant-map rule matched AND the hardcoded fallback either
     # doesn't recognize it or isn't on this tenant's axis) is NEVER dropped — its dollars land in
@@ -3433,6 +3490,17 @@ def accessory_recon(date: str, store: str = None, tolerance: float = 1.0,
         v = _f(r.get("acc_sale"))
         s["declared"] += v
         s["reps"].append({"employee_name": r.get("employee_name"), "acc_sale": round(v, 2)})
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): a verified DM accessory correction is
+    # the authoritative store-day declared accessory (the per-rep breakdown stays raw). Best-effort.
+    try:
+        _ov = _verified_overlay.build_overlay_map(client, org_id, [d])
+        if _ov:
+            for _code, _s in declared.items():
+                _dm = _ov.get((_verified_overlay._norm(_code), str(d)[:10]))
+                if _dm and _dm.get("dm_acc_sale") is not None:
+                    _s["declared"] = _verified_overlay._f(_dm["dm_acc_sale"])
+    except Exception:
+        pass
     b2b = _b2b_money_by_store(client, org_id, d)
     codes = [store] if store else sorted(set(declared) | set(b2b))
     if ks is not None:
@@ -4360,6 +4428,22 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
         c = r.get("created_at")
         if c and str(c) > str(last_deposited_at.get(code) or ""):
             last_deposited_at[code] = c
+
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): a VERIFIED store-day's DECLARED cash
+    # becomes the DM's corrected total, so cash-position, store-cash-on-hand, and the pickups by_store
+    # panel (all callers of this core) run off the corrected figure. Physical pickups/deposits and EEP
+    # withdrawals below are real events and are never overridden. Best-effort; a failure leaves raw cash.
+    try:
+        _ov = _verified_overlay.build_overlay_map(
+            client, org_id, {d for days in decl_by_store_day.values() for d in days})
+        if _ov:
+            for _code, _days in decl_by_store_day.items():
+                for _dday in list(_days.keys()):
+                    _dm = _ov.get((_verified_overlay._norm(_code), str(_dday)[:10]))
+                    if _dm and _dm.get("dm_store_cash") is not None:
+                        _days[_dday] = _verified_overlay._f(_dm["dm_store_cash"])
+    except Exception:
+        pass
 
     # EEP (mig 506/507): cash actually taken out of the envelope (approved closing_expense lines +
     # envelope_withdrawal) reduces "cash on hand" exactly like a pickup does — folded straight into
