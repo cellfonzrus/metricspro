@@ -19,7 +19,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   orientation: 'portrait',
   icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
-  newArchEnabled: true,
+  // Disabled for now: the React Native "new architecture" is the most common cause of a first EAS
+  // Android build failing on this stack. Off = a more forgiving build; can be re-enabled later once
+  // the app is validated on devices. (No app behaviour depends on it.)
+  newArchEnabled: false,
   splash: {
     image: './assets/splash.png',
     resizeMode: 'contain',
