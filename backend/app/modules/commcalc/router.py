@@ -15026,6 +15026,16 @@ def decide_ingest_guard_item(item_id: str, body: Optional[DecideIngestGuardItemI
         }).eq("org_id", org_id).eq("id", item_id).execute()
     except Exception as e:
         print(f"WARN guard decision not recorded: {e}")
+    # Intimation-only mirror: reflect the guard decision into the inbox request (allow->approve,
+    # reject->deny). The board owns the effect (alias pick + row release); never affects it.
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="ingest_guard",
+                                        source_table="ingest_store_quarantine", source_id=item_id,
+                                        decision=("approve" if decision == "allow" else "deny"),
+                                        actor=(body.decided_by or None), note=(body.note or None))
+    except Exception:
+        pass
     return {"ok": True, "item_id": item_id, "decision": decision,
             "rows_released": released, "alias_created": alias}
 

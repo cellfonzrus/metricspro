@@ -454,6 +454,40 @@ check("management_incentive: forcing engine.decide raises and leaves the request
       _raised and engine.get_request(ORG, mi2["id"])["status"] == "pending")
 
 
+# ── ingest_guard (INTIMATION-ONLY: guard board owns allow/reject incl. the store-alias pick) ──────
+import app.modules.commcalc.ingest_store_guard as ISG  # noqa: E402
+
+# A recorded flag intimates a pending request in the inbox.
+fake.store.clear()
+ISG._intimate_quarantine(ORG, [{"id": "Q1", "status": "pending", "store_raw": "FOREIGN-STORE",
+                                "target_table": "raw_sales", "rows_withheld": 12, "amount_seen": 3400.0}])
+igs = fake.store.get(("storeops", "approval_requests"), [])
+check("ingest_guard: a recorded flag intimates a pending request",
+      len(igs) == 1 and igs[0]["status"] == "pending" and igs[0]["type"] == "ingest_guard", igs)
+ig_id = igs[0]["id"]
+
+# A board 'allow' syncs the inbox request to approved; 'reject' would sync to denied.
+engine.sync_source_decision(ORG, type="ingest_guard", source_table="ingest_store_quarantine",
+                            source_id="Q1", decision="approve", actor="ops@x")
+check("ingest_guard: a board allow syncs the inbox request to approved",
+      engine.get_request(ORG, ig_id)["status"] == "approved")
+
+# Inbox can never decide it: predicate blocks + a forced decide raises.
+check("ingest_guard: approver_predicate blocks any inbox decision",
+      engine._TYPES["ingest_guard"].approver_predicate({"authorization": "", "org_id": ORG}, igs[0]) is False)
+fake.store.clear()
+ISG._intimate_quarantine(ORG, [{"id": "Q2", "status": "pending", "store_raw": "FOREIGN2",
+                                "target_table": "raw_sales", "rows_withheld": 3, "amount_seen": 100.0}])
+ig2 = fake.store[("storeops", "approval_requests")][0]
+_raised = False
+try:
+    engine.decide(ORG, ig2["id"], decision="approve", actor="ops@x")
+except Exception:
+    _raised = True
+check("ingest_guard: forcing engine.decide raises and leaves the request pending",
+      _raised and engine.get_request(ORG, ig2["id"])["status"] == "pending")
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")
