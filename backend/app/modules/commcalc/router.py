@@ -29838,9 +29838,10 @@ def mi_compute(body: MiComputeIn, org_id: str = ORG_ID):
             "status": "draft", "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            client.schema("commcalc").table("management_incentive_payout").upsert(
+            up = client.schema("commcalc").table("management_incentive_payout").upsert(
                 row, on_conflict="org_id,plan_id,employee_id,period").execute()
             saved = True
+            _intimate_mi_payout(org_id, (up.data or [{}])[0], store_codes)
         except Exception as e:
             saved = f"not saved: {e}"
     return {"ok": True, "plan_id": plan.get("id"), "plan_name": plan.get("name"),
@@ -29873,6 +29874,33 @@ class MiPayoutDecisionIn(LaxModel):
     note: Any = None
 
 
+def _intimate_mi_payout(org_id, payout, store_codes=None):
+    """Intimation-only bridge to the unified approvals inbox for a management-incentive payout.
+
+    The payout ledger is multi-state (draft -> approved -> paid) and its decision has THREE actions
+    (approve / deny / pay), where 'deny' reopens to draft rather than terminally rejecting — it is NOT a
+    single binary approve/deny, and 'pay' moves commission money. So it has NO acting on_decide (the
+    adapter blocks inbox decisions); the decision stays on the incentive board and we only MIRROR the
+    payout into the inbox as an intimation. Best-effort; never raises."""
+    try:
+        pid = payout.get("id")
+        if not pid or (payout.get("status") or "draft") != "draft":
+            return
+        from app.modules.approvals import engine as _approvals
+        total = payout.get("total")
+        store = next((s for s in (store_codes or payout.get("store_codes") or []) if s), None)
+        _approvals.create_request(
+            org_id, type="management_incentive", source_table="management_incentive_payout",
+            source_id=pid,
+            title=f"Management incentive ${float(total or 0):,.2f} — {payout.get('employee_name') or payout.get('employee_id')} ({payout.get('period')})",
+            summary="Computed manager-incentive payout awaiting approval on the incentive board.",
+            payload={"total": total, "period": payout.get("period"),
+                     "employee_id": payout.get("employee_id")},
+            store_code=store, priority="normal", notify=False)
+    except Exception:
+        pass
+
+
 @router.post("/management-incentive/payouts/{payout_id}/decision")
 def mi_payout_decision(payout_id: str, body: MiPayoutDecisionIn, org_id: str = ORG_ID):
     """Approve / deny / mark-paid a computed payout — the ledger transition (draft → approved → paid).
@@ -29897,6 +29925,17 @@ def mi_payout_decision(payout_id: str, body: MiPayoutDecisionIn, org_id: str = O
         raise
     except Exception as e:
         raise HTTPException(500, f"decision failed: {e}")
+    # Intimation-only mirror: reflect approve/deny into the inbox request (pay is a later money step the
+    # board owns). Never affects the ledger decision above.
+    if decision in ("approve", "deny"):
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.sync_source_decision(org_id, type="management_incentive",
+                                            source_table="management_incentive_payout",
+                                            source_id=payout_id, decision=decision,
+                                            actor=body.who, note=body.note)
+        except Exception:
+            pass
     return {"ok": True, "status": status}
 
 

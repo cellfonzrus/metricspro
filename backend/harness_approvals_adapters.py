@@ -419,6 +419,41 @@ check("payroll_hours: forcing engine.decide raises and leaves the request pendin
       _raised and engine.get_request(ORG, pr3["id"])["status"] == "pending")
 
 
+# ── management_incentive (INTIMATION-ONLY: multi-state ledger owns the decision) ──────────────────
+import app.modules.commcalc.router as CC  # noqa: E402
+
+# A draft payout intimates a pending request in the inbox.
+fake.store.clear()
+CC._intimate_mi_payout(ORG, {"id": "MI1", "status": "draft", "employee_name": "Meg",
+                             "employee_id": "E1", "period": "2026-07", "total": 1200.0}, ["S1"])
+mis = fake.store.get(("storeops", "approval_requests"), [])
+check("management_incentive: a saved draft payout intimates a pending request",
+      len(mis) == 1 and mis[0]["status"] == "pending" and mis[0]["type"] == "management_incentive", mis)
+mi_id = mis[0]["id"]
+
+# Approve on the board syncs the inbox request to approved.
+engine.sync_source_decision(ORG, type="management_incentive",
+                            source_table="management_incentive_payout", source_id="MI1",
+                            decision="approve", actor="hr@x")
+check("management_incentive: a board approve syncs the inbox request to approved",
+      engine.get_request(ORG, mi_id)["status"] == "approved")
+
+# The inbox can never decide it: predicate blocks + a forced decide raises.
+check("management_incentive: approver_predicate blocks any inbox decision",
+      engine._TYPES["management_incentive"].approver_predicate({"authorization": "", "org_id": ORG}, mis[0]) is False)
+fake.store.clear()
+CC._intimate_mi_payout(ORG, {"id": "MI2", "status": "draft", "employee_name": "Meg",
+                             "employee_id": "E1", "period": "2026-08", "total": 900.0}, ["S1"])
+mi2 = fake.store[("storeops", "approval_requests")][0]
+_raised = False
+try:
+    engine.decide(ORG, mi2["id"], decision="approve", actor="hr@x")
+except Exception:
+    _raised = True
+check("management_incentive: forcing engine.decide raises and leaves the request pending",
+      _raised and engine.get_request(ORG, mi2["id"])["status"] == "pending")
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")
