@@ -139,3 +139,4 @@ from app.modules.approvals.adapters import budget_override as _adapter_budget_ov
 from app.modules.approvals.adapters import closing_expense as _adapter_closing_expense  # noqa: E402,F401
 from app.modules.approvals.adapters import referral as _adapter_referral  # noqa: E402,F401
 from app.modules.approvals.adapters import remediation as _adapter_remediation  # noqa: E402,F401
+from app.modules.approvals.adapters import payroll_hours as _adapter_payroll_hours  # noqa: E402,F401

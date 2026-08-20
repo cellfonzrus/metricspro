@@ -377,6 +377,48 @@ check("remediation: on_decide leaves an already-executed request untouched (no r
       fake.store[("commcalc", "remediation_request")][0]["status"] == "executed" and RUN_EXECUTE == [])
 
 
+# ── payroll_hours (INTIMATION-ONLY: two-stage board owns the decision; inbox is read-only) ────────
+import app.modules.storeops.payroll_approval as PA  # noqa: E402
+from datetime import date as _date  # noqa: E402
+
+_s, _e = _date(2026, 7, 23), _date(2026, 8, 5)
+
+# DM approval opens the HR-release request (pending) in the unified inbox.
+fake.store.clear()
+PA._intimate_payroll_decision(ORG, _s, _e, "E9", "Zed", "S1", "PA1", "dm", "approve")
+prs = [r for r in fake.store.get(("storeops", "approval_requests"), []) if r.get("type") == "payroll_hours"]
+check("payroll_hours: a DM approval opens a pending HR-release request in the inbox",
+      len(prs) == 1 and prs[0]["status"] == "pending", prs)
+pr_id = prs[0]["id"]
+
+# HR approval syncs the request to approved (the board applied the real effect itself).
+PA._intimate_payroll_decision(ORG, _s, _e, "E9", "Zed", "S1", "PA1", "hr", "approve")
+check("payroll_hours: an HR approval syncs the inbox request to approved",
+      engine.get_request(ORG, pr_id)["status"] == "approved")
+
+# HR send-back syncs a fresh request to denied.
+fake.store.clear()
+PA._intimate_payroll_decision(ORG, _s, _e, "E8", "Yan", "S1", "PA2", "dm", "approve")
+pr2 = [r for r in fake.store[("storeops", "approval_requests")] if r.get("source_id") == "PA2"][0]
+PA._intimate_payroll_decision(ORG, _s, _e, "E8", "Yan", "S1", "PA2", "hr", "send_back")
+check("payroll_hours: an HR send-back syncs the inbox request to denied",
+      engine.get_request(ORG, pr2["id"])["status"] == "denied")
+
+# The inbox can NEVER decide a payroll_hours request: predicate blocks it AND on_decide would raise.
+check("payroll_hours: approver_predicate blocks any inbox decision",
+      engine._TYPES["payroll_hours"].approver_predicate({"authorization": "", "org_id": ORG}, pr2) is False)
+fake.store.clear()
+PA._intimate_payroll_decision(ORG, _s, _e, "E7", "Xio", "S1", "PA3", "dm", "approve")
+pr3 = [r for r in fake.store[("storeops", "approval_requests")] if r.get("source_id") == "PA3"][0]
+_raised = False
+try:
+    engine.decide(ORG, pr3["id"], decision="approve", actor="hr@x")
+except Exception:
+    _raised = True
+check("payroll_hours: forcing engine.decide raises and leaves the request pending (no silent apply)",
+      _raised and engine.get_request(ORG, pr3["id"])["status"] == "pending")
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")
