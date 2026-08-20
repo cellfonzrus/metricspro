@@ -680,6 +680,22 @@ export default function DailyClosingVerify() {
                       </div>
                     )
                   })}
+                  {/* ePay: declared (rep ePay-on-cash + on-credit, DM-corrected) vs the Boost portal
+                      (Daily Transaction Detail ingest). Fee is shown for context; it reconciles on the
+                      fee-recon report, not here. */}
+                  {s.money_recon.epay && (
+                    <div style={{ fontSize: 12 }}>
+                      <span style={{ fontWeight: 600 }}>ePay</span>{': '}
+                      declared {fmt(s.money_recon.epay.declared)}
+                      {s.money_recon.epay.portal_pending
+                        ? <span style={{ color: 'var(--text3)' }}> · portal pending</span>
+                        : <> vs portal {fmt(s.money_recon.epay.portal)}{' '}
+                            <b style={{ color: s.money_recon.epay.flag ? 'var(--amber, #b45309)' : 'var(--green, #16794a)' }}>
+                              {s.money_recon.epay.flag ? `Δ${(s.money_recon.epay.var ?? 0) > 0 ? '+' : ''}${fmt(s.money_recon.epay.var)}` : '✓'}</b>
+                            {typeof s.money_recon.epay.portal_fee === 'number' && s.money_recon.epay.portal_fee > 0
+                              ? <span style={{ color: 'var(--text3)' }}> · fee {fmt(s.money_recon.epay.portal_fee)}</span> : null}</>}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

@@ -1004,6 +1004,14 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     vers = (client.schema("commcalc").table("daily_closing_verification").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
     ver_by_store = {v.get("store_code"): v for v in vers}
+    # Portal ePay (Boost Daily Transaction Detail ingest, migration 903): per-store-day PAYMENT + FEE for
+    # the recon's ePay leg. Best-effort — empty until the DTD is ingested and its terminals are mapped.
+    try:
+        from app.modules.commcalc import epay_ingest as _epay_ing
+        _epay_portal = {(_verified_overlay._norm(sc), d): v
+                        for (sc, d), v in _epay_ing.per_store_day(client, org_id, date, date).items()}
+    except Exception:
+        _epay_portal = {}
 
     # EEP (mig 506): categorized expense lines for the day, grouped by the daily_closing row they're
     # tied to — attached onto each rep row below so DM Verify can render/approve them per line. Degrades
@@ -1223,7 +1231,11 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         if bm is not None:
             closing_cash = round(totals["epay_cash"] + totals["store_cash"], 2)   # cash collected
             closing_credit = round(totals["store_cc"] + totals["epay_cc"], 2)      # credit declared
-            closing_epay = round(totals["epay_cash"] + totals["epay_cc"], 2)       # total epay declared
+            # Declared ePay = the reps' ePay-on-cash + ePay-on-credit split (the DM overlay corrects these
+            # when verified). The legacy epay_cash/epay_cc are hard-zeroed for modern rows, so the old
+            # `epay_cash + epay_cc` reported $0 declared ePay for every mig103+ tenant — using epay_on_*
+            # is the figure the DM Verify view already shows and the portal reconciles against.
+            closing_epay = round(totals["epay_on_cash"] + totals["epay_on_cc"], 2)  # total ePay declared
 
             def _cmp(closing_v, b2b_v, available=True):
                 if not available:
@@ -1250,9 +1262,18 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                 "tax_collected": round(bm.get("tax", 0.0), 2),  # sales tax on the day (ext_price is pre-tax; tenders include this)
                 "cash": _cmp(closing_cash, tender_cash, tenders_ok),
                 "credit": _cmp(closing_credit, tender_card, tenders_ok),
-                "epay": {"declared": closing_epay, "portal": None, "portal_pending": True,
-                         "fee": None, "other": None, "var": None,
-                         "note": "ePay Daily Transactions Report sweep not yet wired"},
+                "epay": (lambda _p: (
+                    {"declared": closing_epay, "portal": round(_p["payment"], 2),
+                     "portal_fee": round(_p["fee"], 2),
+                     "var": round(closing_epay - _p["payment"], 2),
+                     "shortage": (closing_epay - _p["payment"]) < -tolerance,
+                     "overage": (closing_epay - _p["payment"]) > tolerance,
+                     "flag": abs(closing_epay - _p["payment"]) > tolerance, "portal_pending": False}
+                    if _p is not None else
+                    {"declared": closing_epay, "portal": None, "portal_fee": None, "var": None,
+                     "flag": False, "portal_pending": True,
+                     "note": "No ePay portal data ingested for this store-day yet"}
+                ))(_epay_portal.get((_verified_overlay._norm(code), date)) if code else None),
                 "b2b_total": bm["total"], "b2b_tenders": bm["tenders"],
                 "tender_source": tender_src, "tenders_available": tenders_ok, "dept_available": dept_ok,
             }
