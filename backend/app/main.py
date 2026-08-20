@@ -25,6 +25,9 @@ from app.modules.payables.router import router as payables_router
 from app.modules.remediation.router import router as remediation_router
 from app.modules.recovery.router import router as recovery_router
 from app.modules.pos.router import router as pos_router
+from app.modules.pos.vendor_api import router as pos_vendor_api_router
+from app.modules.approvals.router import router as approvals_router
+from app.modules.chat.router import router as chat_router
 from app.modules.crm.router import router as crm_router
 from app.modules.referral.router import router as referral_router
 from app.modules.vision.router import router as vision_router
@@ -183,8 +186,11 @@ app.include_router(payables_router, prefix="/api/v1/payables")  # Device Forecas
 app.include_router(remediation_router, prefix="/api/v1")  # router carries its own /remediation prefix (mig 097)
 app.include_router(recovery_router, prefix="/api/v1")     # Denied-Appeal Commission Recovery (mig 098)
 app.include_router(pos_router, prefix="/api/v1")          # POS module — Phase 0 product catalog (mig 724)
+app.include_router(pos_vendor_api_router, prefix="/api/v1")  # POS special-order vendor-facing API (token-authed, mig 866)
 app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
 app.include_router(referral_router, prefix="/api/v1")     # Referral — QR referrals + gated commission (mig 850)
+app.include_router(approvals_router, prefix="/api/v1")    # Unified Approvals Engine (mig 867)
+app.include_router(chat_router, prefix="/api/v1")         # Internal Chat — Phase 1 (mig 868)
 app.include_router(vision_router, prefix="/api/v1")       # Vision — Nest live view + heat map + behavior (mig 900)
 
 # Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /

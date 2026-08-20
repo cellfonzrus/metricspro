@@ -1,0 +1,150 @@
+"""POS special-order vendor connectors — the plug-and-play adapter layer.
+
+Amazon is only the first dropship vendor. A tenant can register ANY vendor as a `pos.vendor_connector`
+row (migration 866) in one of three integration modes; this module turns a connector row into a
+`VendorAdapter` that `create_special_order` calls to place an order, so adding a vendor is a data
+change, not a code change (except a bespoke outbound API — see below).
+
+Two directions, per the owner directive ("their API to connect to our system, or our API to connect
+to them"):
+
+  • manual        — nothing to call: the order sits in the HQ fulfillment queue for a person to place
+                    with the vendor. The default, and Amazon at launch.
+  • inbound_api   — THE VENDOR pulls (their platform → our API). We expose neutral vendor-facing
+                    endpoints (`vendor_api.py`) that the vendor polls, authenticating with a per-vendor
+                    token whose SHA-256 hash is stored on the connector. `place_order` just leaves the
+                    order queued for that pull.
+  • outbound_api  — WE call the vendor's dropship API (our system → their API). The connector names an
+                    `api_base_url` and a `credential_ref` — the NAME of the env var / secret holding the
+                    API key, NEVER the key itself. A generic JSON adapter covers vendors that take a
+                    simple order payload; a vendor with a bespoke API registers its own adapter via
+                    `register_adapter("vendor:<key>", cls)`.
+
+Source-hiding is preserved: adapters run server-side only (never in a store/customer response), and the
+neutral order record carries no vendor identity beyond the internal `vendor_key`.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+
+
+def token_hash(token: str) -> str:
+    """SHA-256 hex of an inbound vendor token. The raw token is shown to the vendor once, at
+    registration; only this hash is ever stored (pos.vendor_connector.inbound_token_hash)."""
+    return hashlib.sha256((token or "").strip().encode("utf-8")).hexdigest()
+
+
+class VendorAdapter:
+    """Base adapter. `connector` is a pos.vendor_connector row (dict)."""
+
+    mode = "manual"
+
+    def __init__(self, connector: dict | None = None):
+        self.connector = connector or {}
+        self.config = self.connector.get("config") or {}
+
+    def place_order(self, order: dict) -> dict:
+        """Attempt to place `order` with the vendor. Returns a PARTIAL update for the
+        pos.special_orders row — any of {status, vendor_order_ref, tracking, notes}; {} changes
+        nothing. MUST NOT raise for a vendor/transport failure: the POS sale is already booked, so a
+        failure here simply leaves the order in the queue for manual placement."""
+        return {}
+
+    def refresh(self, order: dict) -> dict:
+        """Optional: re-poll the vendor for status/tracking. Same return contract as place_order."""
+        return {}
+
+
+class ManualAdapter(VendorAdapter):
+    """No integration — the order waits in the HQ fulfillment queue (status 'requested')."""
+
+    mode = "manual"
+
+    def place_order(self, order: dict) -> dict:
+        return {"status": "requested"}
+
+
+class InboundApiAdapter(VendorAdapter):
+    """The vendor pulls orders from our API (vendor_api.py). We just leave it queued for that pull."""
+
+    mode = "inbound_api"
+
+    def place_order(self, order: dict) -> dict:
+        return {"status": "requested"}
+
+
+class OutboundApiAdapter(VendorAdapter):
+    """Generic outbound JSON adapter: WE POST the order to the vendor's dropship API.
+
+    Config-driven so a plain REST vendor needs no code (all keys optional, with sane defaults):
+      place_path     path appended to api_base_url            (default "/orders")
+      auth_header    header carrying the credential           (default "Authorization")
+      auth_scheme    scheme prefix, "" for a bare token       (default "Bearer")
+      timeout        request timeout in seconds               (default 20)
+      order_ref_key  response key holding the vendor order id (default "order_id")
+      tracking_key   response key holding tracking            (default "tracking")
+    A vendor whose API doesn't fit this shape registers its own adapter subclass instead."""
+
+    mode = "outbound_api"
+
+    def _credential(self) -> str:
+        ref = (self.connector.get("credential_ref") or "").strip()
+        # credential_ref is the NAME of an env/secret; the raw key never lives in the DB.
+        return (os.environ.get(ref, "") if ref else "").strip()
+
+    def _payload(self, order: dict) -> dict:
+        return {"sku": order.get("vendor_sku"), "quantity": order.get("qty"),
+                "ship_to": order.get("ship_to"), "reference": order.get("reference")}
+
+    def place_order(self, order: dict) -> dict:
+        import requests  # local import: keeps module import cheap and matches google_reviews style
+        base = (self.connector.get("api_base_url") or "").rstrip("/")
+        if not base:
+            return {"status": "requested",
+                    "notes": "outbound connector has no api_base_url — queued for manual placement"}
+        cfg = self.config
+        url = base + (cfg.get("place_path") or "/orders")
+        headers = {"Content-Type": "application/json"}
+        key = self._credential()
+        if key:
+            scheme = cfg.get("auth_scheme", "Bearer")
+            headers[cfg.get("auth_header") or "Authorization"] = f"{scheme} {key}".strip()
+        try:
+            r = requests.post(url, json=self._payload(order), headers=headers,
+                              timeout=cfg.get("timeout", 20))
+            r.raise_for_status()
+            data = r.json() if r.content else {}
+        except Exception as e:
+            # Never blocks the sale; the order falls back to the manual queue with a breadcrumb.
+            return {"status": "requested",
+                    "notes": f"vendor API not reached — queued for manual placement ({e})"}
+        ref = data.get(cfg.get("order_ref_key", "order_id"))
+        return {"status": "ordered",
+                "vendor_order_ref": (str(ref) if ref not in (None, "") else None),
+                "tracking": data.get(cfg.get("tracking_key", "tracking"))}
+
+
+_ADAPTERS: dict[str, type[VendorAdapter]] = {}
+
+
+def register_adapter(key: str, cls: type[VendorAdapter]) -> None:
+    """Register an adapter class under a mode ('outbound_api') or a vendor override ('vendor:acme').
+    A 'vendor:<vendor_key>' registration wins over the generic mode adapter for that vendor."""
+    _ADAPTERS[key] = cls
+
+
+def get_adapter(connector: dict | None) -> VendorAdapter:
+    """Resolve a connector row to its adapter. A vendor-specific override
+    ('vendor:<vendor_key>') takes precedence over the integration_mode default; unknown modes fall
+    back to manual (fail-safe: an order never silently escapes to an unconfigured integration)."""
+    c = connector or {}
+    mode = (c.get("integration_mode") or "manual").strip()
+    vkey = (c.get("vendor_key") or "").strip()
+    cls = _ADAPTERS.get(f"vendor:{vkey}") or _ADAPTERS.get(mode) or ManualAdapter
+    return cls(c)
+
+
+register_adapter("manual", ManualAdapter)
+register_adapter("inbound_api", InboundApiAdapter)
+register_adapter("outbound_api", OutboundApiAdapter)

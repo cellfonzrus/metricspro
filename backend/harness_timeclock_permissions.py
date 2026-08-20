@@ -165,6 +165,18 @@ EMP = "E1"
 R._caller_identity = lambda auth: (ORG, EMP)
 R._require_manager = lambda auth, org_id=ORG: {"org_id": ORG, "email": "dm@x", "role": "district_manager"}
 
+# The clock/decision handlers moved to Pydantic request bodies (item-15 rollout); this harness drives
+# them in-process with plain dicts, so adapt each dict into its model before the real handler runs.
+_clock_in_impl, _clock_out_impl, _decide_impl = R.clock_in, R.clock_out, R.decide_timeclock_permission
+R.clock_in = lambda body=None, **kw: _clock_in_impl(R.ClockInIn(**(body or {})), **kw)
+R.clock_out = lambda body=None, **kw: _clock_out_impl(R.ClockOutIn(**(body or {})), **kw)
+R.decide_timeclock_permission = lambda perm_id, body=None, **kw: _decide_impl(perm_id, R.DecisionNoteIn(**(body or {})), **kw)
+
+# The approval-notification email is fire-and-forget in a daemon thread; keep the lifecycle tests
+# deterministic and network-free by no-oping it here. Its recipient logic is proven separately (§10)
+# against the pure _permission_approver_emails resolver.
+R._notify_permission_approvers = lambda *a, **k: None
+
 
 # ── Controllable fake clock (advance simulated time between punches). ─────────────────────────────
 class _FakeDateTime:
@@ -196,8 +208,14 @@ def biz(h, m=0):
 
 
 SCHED_END = R._biz_dt_utc(TODAY, "17:00", ORG)          # 17:00 business-local -> UTC
-GRACE = timedelta(minutes=R.FORCE_CLOCKOUT_GRACE_MIN)   # owner: 5 minutes
-STAMP = SCHED_END + GRACE                                # 17:05 business-local
+GRACE = timedelta(minutes=R.FORCE_CLOCKOUT_GRACE_MIN)   # owner-set grace (20 min as of 2026-08-16)
+STAMP = SCHED_END + GRACE                                # scheduled end + grace (the auto-clock-out stamp)
+# Grace-RELATIVE reference points, so this harness stays correct if the owner changes the grace again
+# (it was 5 min at the migration-432 build, 20 min from 2026-08-16). Never hardcode the offsets.
+INSIDE = STAMP - timedelta(minutes=1)                    # a moment still INSIDE the grace window
+PAST = STAMP + timedelta(minutes=1)                      # a moment just PAST the grace window
+BASE_H = round((STAMP - datetime(_today.year, _today.month, _today.day, 8, 0, 0, tzinfo=_biz_tz)
+                .astimezone(timezone.utc)).total_seconds() / 3600.0, 2)   # 08:00 → end+grace
 
 
 def reset():
@@ -230,8 +248,11 @@ def perms(kind=None, status=None):
     return out
 
 
-# FORCE_CLOCKOUT_GRACE_MIN must be exactly 5 for the owner-approved behavior.
-check("0 grace constant is 5 minutes (owner directive)", R.FORCE_CLOCKOUT_GRACE_MIN == 5, R.FORCE_CLOCKOUT_GRACE_MIN)
+# The grace is an owner-tuned constant (5 min at the migration-432 build, 20 min from 2026-08-16). The
+# harness derives every offset from it (INSIDE/PAST/STAMP/BASE_H), so it only pins that it is a sane
+# positive integer rather than one brittle number.
+check("0 grace constant is a positive whole number of minutes",
+      isinstance(R.FORCE_CLOCKOUT_GRACE_MIN, int) and R.FORCE_CLOCKOUT_GRACE_MIN >= 1, R.FORCE_CLOCKOUT_GRACE_MIN)
 
 
 # ══ 1 + 2: GRACE BOUNDARY and STAMP = scheduled_end + 5 ═══════════════════════════════════════════
@@ -240,26 +261,26 @@ set_now(biz(8, 0))
 r1 = R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
 check("1a morning clock-in succeeds", r1.get("success") is True, r1)
 
-set_now(SCHED_END + timedelta(minutes=4))      # 17:04 — inside the grace window
+set_now(INSIDE)                                # inside the grace window (end + grace − 1 min)
 sweep_early = R._do_force_clockout(org_id=ORG)
-check("1b sweep does NOT fire before scheduled_end + 5 (still open at +4 min)",
+check("1b sweep does NOT fire before scheduled_end + grace (still open inside the window)",
       sweep_early["closed"] == 0 and tl_rows()[0].get("clock_out") is None, (sweep_early, tl_rows()))
 
-set_now(SCHED_END + timedelta(minutes=6))      # 17:06 — past the grace window
+set_now(PAST)                                  # just past the grace window (end + grace + 1 min)
 sweep_late = R._do_force_clockout(org_id=ORG)
 row = tl_rows()[0]
-check("2a sweep fires once now >= scheduled_end + 5 (one punch auto-closed)",
+check("2a sweep fires once now >= scheduled_end + grace (one punch auto-closed)",
       sweep_late["closed"] == 1 and row.get("clock_out") is not None, (sweep_late, row))
-check("2b clock-out is STAMPED at scheduled_end + 5 min (not the bare scheduled end)",
+check("2b clock-out is STAMPED at scheduled_end + grace (not the bare scheduled end)",
       row.get("clock_out") == STAMP.isoformat(), (row.get("clock_out"), STAMP.isoformat()))
 check("2c row is flagged auto_clocked_out", row.get("auto_clocked_out") is True, row)
-# 08:00 -> 17:05 = 9h05m = 9.08h
-check("2d hours = clock_in .. scheduled_end+5 (9.08h)", row.get("hours") == 9.08, row.get("hours"))
+# 08:00 -> scheduled_end + grace
+check(f"2d hours = clock_in .. scheduled_end+grace ({BASE_H}h)", row.get("hours") == BASE_H, row.get("hours"))
 
 
 # ══ 3 + 5a + 6: RE-CLOCK-IN after auto-clock-out is PENDING, held out of pay, then DM-approved ═════
 # (continues from the auto-closed session above.)
-set_now(SCHED_END + timedelta(minutes=10))     # 17:10 — a genuine second session
+set_now(STAMP + timedelta(minutes=5))          # a genuine second session, after the auto-clock-out
 r2 = R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
 check("3a re-clock-in after an auto-clock-out is ALLOWED", r2.get("success") is True, r2)
 check("3b ...but flagged needs_dm_permission / pending", r2.get("needs_dm_permission") is True
@@ -269,7 +290,7 @@ check("3c a pending reclock_in permission row was raised", len(reclock) == 1, pe
 session2 = tl_rows()[-1]
 check("3d the second punch itself is flagged permission_status=pending", session2.get("permission_status") == "pending", session2)
 
-set_now(SCHED_END + timedelta(minutes=70))     # 18:10 — they clock out of the second session
+set_now(STAMP + timedelta(minutes=65))         # they clock out of the second session (60 min later)
 r3 = R.clock_out({}, authorization=AUTH, org_id=ORG)
 session2 = [r for r in tl_rows() if r["id"] == session2["id"]][0]
 check("3e clocking out of a pending second session records clock_out but HOLDS hours NULL",
@@ -287,41 +308,45 @@ check("5b ...the punch permission_status becomes approved", session2.get("permis
 check("5c ...and the held hours are stamped so it now counts (1.00h)", session2.get("hours") == 1.0, session2.get("hours"))
 
 
-# ══ 4 + 5b: LATE CLOCK-OUT worked past end+5 is capped; the extra is pending; DM approve adds it ═══
+# ══ 4 + 5b: LATE CLOCK-OUT worked past end+grace is capped; the extra is pending; DM approve adds it ═
+EXTRA_MIN = 15                                  # worked this many minutes PAST the end+grace cap
+DEPARTURE = STAMP + timedelta(minutes=EXTRA_MIN)
+EXTRA_H = round((DEPARTURE - datetime(_today.year, _today.month, _today.day, 8, 0, 0, tzinfo=_biz_tz)
+                 .astimezone(timezone.utc)).total_seconds() / 3600.0, 2)   # 08:00 → actual departure
 reset()
 set_now(biz(8, 0))
 R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
-set_now(SCHED_END + timedelta(minutes=20))     # 17:20 — kept working 15 min past the grace cap
+set_now(DEPARTURE)                              # kept working EXTRA_MIN past the grace cap
 r4 = R.clock_out({}, authorization=AUTH, org_id=ORG)
 row = tl_rows()[0]
-check("4a manual clock-out worked past end+5 succeeds", r4.get("success") is True, r4)
-check("4b counted clock-out is CAPPED at scheduled_end + 5 (base scheduled time counts)",
-      row.get("clock_out") == STAMP.isoformat() and row.get("hours") == 9.08, row)
+check("4a manual clock-out worked past end+grace succeeds", r4.get("success") is True, r4)
+check(f"4b counted clock-out is CAPPED at scheduled_end + grace (base scheduled time counts, {BASE_H}h)",
+      row.get("clock_out") == STAMP.isoformat() and row.get("hours") == BASE_H, row)
 check("4c row flagged auto_clocked_out and response signals extra_pending",
       row.get("auto_clocked_out") is True and r4.get("extra_pending") is True, (row, r4))
 late = perms(kind="late_clockout", status="pending")
-check("4d a pending late_clockout permission was raised for the EXTRA time (~15 min)",
-      len(late) == 1 and late[0].get("extra_minutes") == 15, perms())
+check(f"4d a pending late_clockout permission was raised for the EXTRA time (~{EXTRA_MIN} min)",
+      len(late) == 1 and late[0].get("extra_minutes") == EXTRA_MIN, perms())
 
 # DM approves the late_clockout -> the punch clock-out extends to the actual departure, hours recompute.
 d2 = R.decide_timeclock_permission(late[0]["id"], {"decision": "approve"}, authorization=AUTH, org_id=ORG)
 row = tl_rows()[0]
-check("5d DM approve extends the clock-out to the approved departure (17:20)",
-      d2.get("status") == "approved" and row.get("clock_out") == (SCHED_END + timedelta(minutes=20)).isoformat(), (d2, row))
-# 08:00 -> 17:20 = 9h20m = 9.33h
-check("5e ...and hours are recomputed to include the approved extra (9.33h), auto flag cleared",
-      row.get("hours") == 9.33 and row.get("auto_clocked_out") is False, row)
+check("5d DM approve extends the clock-out to the approved actual departure",
+      d2.get("status") == "approved" and row.get("clock_out") == DEPARTURE.isoformat(), (d2, row))
+# 08:00 -> actual departure
+check(f"5e ...and hours are recomputed to include the approved extra ({EXTRA_H}h), auto flag cleared",
+      row.get("hours") == EXTRA_H and row.get("auto_clocked_out") is False, row)
 
 
 # ══ 7: DENY leaves the held second-session time uncounted ═════════════════════════════════════════
 reset()
 set_now(biz(8, 0))
 R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
-set_now(SCHED_END + timedelta(minutes=6))
+set_now(PAST)
 R._do_force_clockout(org_id=ORG)               # auto-close session 1
-set_now(SCHED_END + timedelta(minutes=10))
+set_now(STAMP + timedelta(minutes=5))
 R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)   # pending second session
-set_now(SCHED_END + timedelta(minutes=40))
+set_now(STAMP + timedelta(minutes=35))
 R.clock_out({}, authorization=AUTH, org_id=ORG)
 pend = perms(kind="reclock_in", status="pending")[0]
 R.decide_timeclock_permission(pend["id"], {"decision": "deny"}, authorization=AUTH, org_id=ORG)
@@ -366,13 +391,16 @@ check("9b clock-IN still succeeds as a plain punch (no permission gating) when 4
       r_in.get("success") is True and not r_in.get("needs_dm_permission"), r_in)
 check("9c ...and writes no permission_status on the punch", tl_rows()[-1].get("permission_status") is None, tl_rows()[-1])
 
-set_now(SCHED_END + timedelta(minutes=20))   # worked 15 min past the would-be grace cap
+PRE432_OUT = STAMP + timedelta(minutes=15)   # worked past the would-be grace cap
+PRE432_H = round((PRE432_OUT - datetime(_today.year, _today.month, _today.day, 8, 0, 0, tzinfo=_biz_tz)
+                  .astimezone(timezone.utc)).total_seconds() / 3600.0, 2)
+set_now(PRE432_OUT)
 r_out = R.clock_out({}, authorization=AUTH, org_id=ORG)
 row = tl_rows()[0]
 check("9d clock-OUT past shift+grace STILL SUCCEEDS (the incident) — plain punch stamped at now, no error",
       r_out.get("success") is True and not r_out.get("extra_pending")
-      and row.get("clock_out") == (SCHED_END + timedelta(minutes=20)).isoformat()
-      and row.get("hours") == 9.33, (r_out, row))
+      and row.get("clock_out") == PRE432_OUT.isoformat()
+      and row.get("hours") == PRE432_H, (r_out, row))
 check("9e ...no auto_clocked_out flag and no permission table written pre-432",
       not row.get("auto_clocked_out") and ("storeops", "timeclock_permission") not in fake.store,
       (row, list(fake.store.keys())))
@@ -382,7 +410,7 @@ reset()
 fake.store.pop(("storeops", "timeclock_permission"), None)
 set_now(biz(8, 0))
 R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
-set_now(SCHED_END + timedelta(minutes=6))
+set_now(PAST)
 sweep_pre432 = R._do_force_clockout(org_id=ORG)
 srow = tl_rows()[0]
 check("9f force-clockout sweep still closes the punch pre-432 (stamped at end+grace, no new flag, no error)",
@@ -390,6 +418,55 @@ check("9f force-clockout sweep still closes the punch pre-432 (stamped at end+gr
       and not srow.get("auto_clocked_out"), (sweep_pre432, srow))
 
 _ABSENT_KEYS.discard(("storeops", "timeclock_permission"))   # restore for any later use
+
+
+# ══ 10: APPROVAL NOTIFICATION — a pending permission emails an approver (the "DM has no notification"
+#        gap). The board is passive; without this, a DM who never opens it leaves the rep uncounted. ══
+# 10a — a store WITH a District Manager wired notifies that DM (recipient resolution is the payload).
+reset()
+fake.seed("storeops", "org_levels", [{"org_id": ORG, "id": "L-DIST", "name": "District"}])
+fake.seed("storeops", "org_units", [
+    {"org_id": ORG, "id": "U-DIST", "name": "NY District", "level_id": "L-DIST", "parent_id": None, "code": "district:ny"},
+])
+fake.seed("storeops", "stores", [{"org_id": ORG, "store_code": "S1", "org_unit_id": "U-DIST", "market": "NY"}])
+fake.seed("storeops", "org_managers", [{"org_id": ORG, "unit_id": "U-DIST", "employee_id": "DM1"}])
+fake.store[("storeops", "employees")].append(
+    {"org_id": ORG, "employee_id": "DM1", "id": 301, "name": "Dana DM", "email": "dana@dm.example", "is_active": True})
+perm_row = {"org_id": ORG, "store_code": "S1", "employee_id": EMP, "employee_name": "Alice",
+            "kind": "reclock_in", "work_date": TODAY}
+to_dm = R._permission_approver_emails(ORG, perm_row, "dana@dm.example")
+check("10a a store WITH a DM notifies the DM (and no admin-fallback noise)", to_dm == ["dana@dm.example"], to_dm)
+
+# 10b — a store with NO org tree / NO DM (the "3 Palisades" case) falls back to the tenant admins, so
+#       the request is never stranded on a board nobody is pointed at.
+reset()   # no org_levels/org_units/org_managers seeded → _dm_for_store/_managers_above_dm resolve nothing
+fake.seed("storeops", "roles", [
+    {"org_id": ORG, "name": "admin", "permissions": {"scope": "all"}},
+    {"org_id": ORG, "name": "owner", "permissions": {"scope": "all"}},
+    {"org_id": ORG, "name": "store_manager", "permissions": {"scope": "store"}},
+])
+fake.seed("storeops", "app_users", [
+    {"org_id": ORG, "email": "boss@hq.example", "role": "owner"},
+    {"org_id": ORG, "email": "admin@hq.example", "role": "admin"},
+    {"org_id": ORG, "email": "sm@store.example", "role": "store_manager"},   # NOT an approver
+])
+to_fallback = R._permission_approver_emails(ORG, {"org_id": ORG, "store_code": "PALISADES3",
+                                                  "kind": "reclock_in"}, None)
+check("10b a store with NO DM configured falls back to the tenant admins (never stranded)",
+      to_fallback == ["admin@hq.example", "boss@hq.example"], to_fallback)
+check("10c ...and a store-scoped manager is NOT emailed as an org approver", "sm@store.example" not in to_fallback, to_fallback)
+
+# 10d — the live clock-in path actually invokes the notifier (proven via a capturing stub) with the
+#       just-created pending permission, so the wiring from punch → notification can't silently rot.
+reset()
+_notified = []
+R._notify_permission_approvers = lambda org_id, perm, dm_email: _notified.append((perm.get("kind"), perm.get("store_code")))
+set_now(biz(8, 0)); R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+set_now(PAST); R._do_force_clockout(org_id=ORG)
+set_now(STAMP + timedelta(minutes=5)); R.clock_in({"store_code": "S1"}, authorization=AUTH, org_id=ORG)
+check("10d a pending re-clock-in fires the approver notification exactly once, for that store",
+      _notified == [("reclock_in", "S1")], _notified)
+R._notify_permission_approvers = lambda *a, **k: None   # restore the no-op for any later use
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

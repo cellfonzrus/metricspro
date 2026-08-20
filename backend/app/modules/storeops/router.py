@@ -4690,6 +4690,22 @@ async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: 
                 emailed = True
         except Exception:
             pass
+    # Intimation into the UNIFIED approvals inbox (migration 867). notify only when THIS endpoint did
+    # not email a DM (no DM configured) — then the engine's admin fallback covers the gap; otherwise
+    # notify=False avoids a second email to the DM the endpoint already messaged.
+    if ext_id:
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.create_request(
+                org_id, type="shift_extension", source_table="shift_extension", source_id=ext_id,
+                title=f"{row['employee_name'] or employee_id}: shift extension to {requested_end} at {store_code or 'store'}",
+                summary=(body.reason or None),
+                payload={"shift_date": shift_date, "requested_end": requested_end},
+                requested_by=mgr.get("employee_id"), requested_by_name=mgr.get("email"),
+                store_code=store_code, assignee_employee_id=dm_eid, assignee_email=dm_email,
+                assignee_kind="dm", notify=(not emailed))
+        except Exception:
+            pass
     return {"ok": True, "id": ext_id, "status": "pending",
             "dm": {"employee_id": dm_eid, "name": dm_name, "email": dm_email, "emailed": emailed},
             "note": None if dm_eid else "No District Manager is configured for this store — an admin or DM can still approve it."}
@@ -4733,6 +4749,13 @@ def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str
            "decided_at": datetime.now(timezone.utc).isoformat(),
            "decision_note": body.note or None}
     sb().table("shift_extension").update(upd).eq("id", ext_id).eq("org_id", org_id).execute()
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="shift_extension", source_table="shift_extension",
+                                        source_id=ext_id, decision=decision, actor=mgr.get("email"),
+                                        note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
 
@@ -4744,6 +4767,122 @@ def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str
 # Reuses _dm_for_store (the SAME DM resolver the shift-extension workflow uses). Approving is what
 # makes the held time COUNT; until then it stays out of every payroll reader (hours held NULL for a
 # pending/denied second session; the extra simply not yet on the punch for a late_clockout).
+
+
+def _tenant_display_name(org_id) -> str:
+    try:
+        t = (sb().table("tenants").select("name").eq("org_id", org_id).limit(1).execute().data) or []
+        return ((t[0].get("name") if t else None) or "").strip() or "MetricsPro"
+    except Exception:
+        return "MetricsPro"
+
+
+def _admin_fallback_emails(org_id):
+    """Emails of the tenant's org-wide admins (role scope 'all', or the 'admin' role) — the last-resort
+    approver list when a store has NO District Manager configured, so a pending request is never
+    stranded on a board nobody is pointed at. Best-effort; [] on any miss."""
+    try:
+        roles = (sb().table("roles").select("name,permissions").eq("org_id", org_id).execute().data) or []
+        admin_names = {(r.get("name") or "") for r in roles
+                       if ((r.get("permissions") or {}).get("scope") or "") == "all"}
+        admin_names.add("admin")
+        aus = (sb().table("app_users").select("email,role").eq("org_id", org_id).execute().data) or []
+        return sorted({(a.get("email") or "").strip() for a in aus
+                       if (a.get("role") or "") in admin_names and (a.get("email") or "").strip()})
+    except Exception:
+        return []
+
+
+def _send_plain_email(*, emails, subject: str, body: str) -> bool:
+    """Send a plain-text email through the notify module's Resend channel. Async send driven from a
+    context with NO running loop (our notifier runs in its own daemon thread), so asyncio.run is safe —
+    the same rule crm/router._notify documents. Returns True if any address was accepted; never raises."""
+    addrs = [a for a in (emails or []) if a]
+    if not addrs:
+        return False
+    try:
+        import asyncio
+        import html as _h
+        from app.modules.notify.channels import email_resend
+        if not email_resend.is_configured():
+            return False
+        html = ("<pre style='font-family:system-ui,-apple-system,sans-serif;white-space:pre-wrap'>"
+                + _h.escape(body or "") + "</pre>")
+
+        async def _send_all():
+            ok = False
+            for addr in addrs:
+                try:
+                    await email_resend.send_email(addr, subject, html, [])
+                    ok = True
+                except Exception:
+                    pass
+            return ok
+        return bool(asyncio.run(_send_all()))
+    except Exception:
+        return False
+
+
+_PERM_KIND_LABEL = {
+    "reclock_in": "a second clock-in session (after being auto-clocked-out earlier today)",
+    "late_clockout": "extra time worked past their scheduled shift end",
+}
+
+
+def _permission_approver_emails(org_id, perm: dict, dm_email):
+    """Who should be emailed to approve a rep-initiated time-clock permission, as a sorted email list:
+    the store's DM + every manager above them; and ONLY when that store has no DM/managers wired, the
+    tenant admins (so a request is never stranded). PURE-ish (reads only) and NEVER raises."""
+    store_code = perm.get("store_code")
+    recips = set()
+    if dm_email and str(dm_email).strip():
+        recips.add(str(dm_email).strip())
+    try:
+        roster = _managers_above_dm(org_id, store_code)
+        for grp in ("dm", "above"):
+            for m in (roster.get(grp) or []):
+                if m.get("email"):
+                    recips.add(str(m["email"]).strip())
+    except Exception:
+        pass
+    if not recips:   # no DM/managers wired for this store — fall back to tenant admins
+        try:
+            recips.update(_admin_fallback_emails(org_id))
+        except Exception:
+            pass
+    return sorted({e for e in recips if e})
+
+
+def _notify_permission_approvers(org_id, perm: dict, dm_email):
+    """FIRE-AND-FORGET email to whoever can approve a rep-initiated time-clock permission (see
+    _permission_approver_emails). Runs in a daemon thread so it never delays the punch, and NEVER raises."""
+    import threading
+
+    def _run():
+        try:
+            store_code = perm.get("store_code")
+            recips = set(_permission_approver_emails(org_id, perm, dm_email))
+            if not recips:
+                return
+            who = perm.get("employee_name") or perm.get("employee_id") or "An employee"
+            what = _PERM_KIND_LABEL.get(perm.get("kind"), "a time-clock permission")
+            when = str(perm.get("work_date") or "")[:10]
+            biz = _tenant_display_name(org_id)
+            subject = f"Approval needed: {who} at {store_code or 'their store'}"
+            lines = [f"{who} needs your approval for {what} at {store_code or 'their store'}"
+                     + (f" on {when}" if when else "") + ".", ""]
+            if perm.get("reason"):
+                lines += [f"Reason given: {perm['reason']}", ""]
+            lines += ["Until you approve it, this time does NOT count toward their hours.", "",
+                      f"Approve or deny it in {biz}: Store Ops → Time-clock Permissions."]
+            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines))
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="tc-perm-notify").start()
+    except Exception:
+        pass
 def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, requested_clock_out=None,
                                  reason=None, requested_by=None):
     """Insert a pending timeclock_permission linked to `punch`, resolving the store's District Manager.
@@ -4778,6 +4917,28 @@ def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, request
                 sb().table("timelog").update({"permission_id": pid}).eq("id", punch.get("id")).execute()
             except Exception:
                 pass
+        # Push the approval request so the DM actually learns about it — the board is passive, and a DM
+        # who never opens it would otherwise leave the rep's held time uncounted with no signal at all.
+        _notify_permission_approvers(org_id, saved, dm_email)
+        # Intimation into the UNIFIED approvals inbox (migration 867). Best-effort; notify=False because
+        # the timeclock path already emailed the approvers just above (no double email).
+        if pid:
+            try:
+                from app.modules.approvals import engine as _approvals
+                _kl = {"reclock_in": "second clock-in session",
+                       "late_clockout": "extra time past scheduled end"}.get(kind, "time-clock permission")
+                _who = saved.get("employee_name") or saved.get("employee_id") or "An employee"
+                _approvals.create_request(
+                    org_id, type="timeclock_permission",
+                    source_table="timeclock_permission", source_id=pid,
+                    title=f"{_who}: {_kl} at {saved.get('store_code') or 'store'}",
+                    summary=(saved.get("reason") or None),
+                    payload={"kind": kind, "work_date": saved.get("work_date")},
+                    requested_by=saved.get("employee_id"), requested_by_name=saved.get("employee_name"),
+                    store_code=saved.get("store_code"), assignee_employee_id=dm_eid,
+                    assignee_email=dm_email, assignee_kind="dm", notify=False)
+            except Exception:
+                pass
         return {"id": pid, "kind": kind, "status": "pending",
                 "dm": {"employee_id": dm_eid, "email": dm_email},
                 "note": None if dm_eid else "No District Manager is configured for this store — an admin or DM can still approve it."}
@@ -4803,33 +4964,19 @@ def list_timeclock_permissions(status: str = "", authorization: str = Header(def
     return {"permissions": rows}
 
 
-@router.post("/timeclock/permissions/{perm_id}/decision")
-def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
-    approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
-    held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
-    stamped if it already closed while pending); a late_clockout punch's clock_out is extended to the
-    approved actual departure and its hours recomputed. Denying leaves the held time uncounted."""
-    mgr = _require_manager(authorization, org_id)
-    org_id = mgr.get("org_id") or org_id
-    if not _timeclock_432_present():
-        raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
-    decision = (body.decision or "").strip().lower()
-    if decision not in ("approve", "deny"):
-        raise HTTPException(400, "decision must be 'approve' or 'deny'")
-    rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
-            .limit(1).execute().data) or []
-    if not rows:
-        raise HTTPException(404, "unknown request")
-    perm = rows[0]
-    if perm.get("status") != "pending":
-        raise HTTPException(409, f"already {perm.get('status')}")
+def _apply_timeclock_permission_decision(org_id, perm, new_status, who, note=None):
+    """Apply an approve/deny to a rep-initiated time-clock permission and make the held time COUNT.
+    Stamps the perm row, then: reclock_in → flip the punch permission_status (stamping its held hours if
+    it already closed while pending); late_clockout → extend the capped clock-out to the approved
+    departure and recompute hours. SHARED by the /timeclock/permissions decision endpoint AND the unified
+    approvals engine adapter, so both routes have byte-identical effects. Caller guards perm is pending.
+    `who` is the decider's {email,...} dict (for audit attribution)."""
+    decided_by = (who or {}).get("email")
     now = datetime.now(timezone.utc)
-    new_status = "approved" if decision == "approve" else "denied"
     sb().table("timeclock_permission").update(
-        {"status": new_status, "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
-         "decided_at": now.isoformat(), "decision_note": body.note or None}
-    ).eq("id", perm_id).eq("org_id", org_id).execute()
+        {"status": new_status, "decided_by": decided_by, "decided_by_name": decided_by,
+         "decided_at": now.isoformat(), "decision_note": note}
+    ).eq("id", perm.get("id")).eq("org_id", org_id).execute()
 
     tlid = perm.get("timelog_id")
     punch = None
@@ -4852,7 +4999,7 @@ def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorizatio
                                     employee_id=punch.get("employee_id"), employee_name=punch.get("employee_name"),
                                     store_code=punch.get("store_code"), work_date=str(punch.get("work_date") or "")[:10],
                                     before="pending (second session)", after=f"approved ({p_upd.get('hours')}h counts)",
-                                    source_table="timelog", source_id=tlid, who=mgr)
+                                    source_table="timelog", source_id=tlid, who=who)
             except Exception:
                 pass
         else:
@@ -4870,9 +5017,44 @@ def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorizatio
                                     employee_id=punch.get("employee_id"), employee_name=punch.get("employee_name"),
                                     store_code=punch.get("store_code"), work_date=str(punch.get("work_date") or "")[:10],
                                     before="capped at scheduled end + grace", after=f"{co.isoformat()} ({h}h, DM-approved extra)",
-                                    source_table="timelog", source_id=tlid, who=mgr)
+                                    source_table="timelog", source_id=tlid, who=who)
             except Exception:
                 pass
+
+
+@router.post("/timeclock/permissions/{perm_id}/decision")
+def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
+    approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
+    held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
+    stamped if it already closed while pending); a late_clockout punch's clock_out is extended to the
+    approved actual departure and its hours recomputed. Denying leaves the held time uncounted.
+
+    Also syncs the linked unified approval_request (migration 867) so the central Approvals inbox
+    reflects a decision made on this legacy board."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    if not _timeclock_432_present():
+        raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
+    decision = (body.decision or "").strip().lower()
+    if decision not in ("approve", "deny"):
+        raise HTTPException(400, "decision must be 'approve' or 'deny'")
+    rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
+            .limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown request")
+    perm = rows[0]
+    if perm.get("status") != "pending":
+        raise HTTPException(409, f"already {perm.get('status')}")
+    new_status = "approved" if decision == "approve" else "denied"
+    _apply_timeclock_permission_decision(org_id, perm, new_status, mgr, note=body.note or None)
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="timeclock_permission",
+                                        source_table="timeclock_permission", source_id=perm_id,
+                                        decision=decision, actor=mgr.get("email"), note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": new_status, "decided_by": mgr.get("email")}
 
 
@@ -5111,6 +5293,18 @@ async def request_budget_override(body: BudgetOverrideRequestIn, authorization: 
                 emailed = True
         except Exception:
             pass
+    if oid:
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.create_request(
+                org_id, type="budget_override", source_table="budget_override", source_id=oid,
+                title=f"{store}: hours-budget override for week of {week_start}",
+                summary=(body.reason or None), payload={"week_start": week_start, "approved_hours": body.approved_hours},
+                requested_by=mgr.get("employee_id"), requested_by_name=mgr.get("email"),
+                store_code=store, assignee_employee_id=dm_eid, assignee_email=dm_email,
+                assignee_kind="dm", notify=(not emailed))
+        except Exception:
+            pass
     return {"ok": True, "id": oid, "status": "pending",
             "dm": {"employee_id": dm_eid, "name": dm_name, "email": dm_email, "emailed": emailed},
             "note": None if dm_eid else "No District Manager configured for this store — an admin or DM can still approve."}
@@ -5148,6 +5342,13 @@ def decide_budget_override(ov_id: str, body: DecisionNoteIn, authorization: str 
            "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
            "decided_at": datetime.now(timezone.utc).isoformat(), "decision_note": body.note or None}
     sb().table("budget_override").update(upd).eq("id", ov_id).eq("org_id", org_id).execute()
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="budget_override", source_table="budget_override",
+                                        source_id=ov_id, decision=decision, actor=mgr.get("email"),
+                                        note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
 

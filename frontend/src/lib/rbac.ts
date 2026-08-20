@@ -240,6 +240,12 @@ export const NAV: NavGroup[] = [
     { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/activations', label: 'Activations', icon: '📱', module: 'pos', scopes: ['all', 'market', 'store'] },
+    // Customer Special Order (owner directive 2026-08-19). The store-facing flow is available to every
+    // POS scope (a cashier rings one). The HQ management surface (catalog vendor linkage + connectors)
+    // is 'all'/'market' in the nav AND gated server-side by pos_special_order_admin — that permission,
+    // which store roles don't hold, is what keeps the back-end vendor hidden from stores.
+    { href: '/pos/special-orders', label: 'Special Orders', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/special-orders/manage', label: 'Special Order Setup', icon: '🗂️', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
@@ -412,6 +418,18 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/vip', label: 'Distributor · Invoices', icon: '🧾', module: 'vip' },
     { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'], cap: 'asset_lending' },
     { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
+  ]},
+  // Unified Approvals inbox (owner directive 2026-08-19) — cross-cutting, so its own group. Every
+  // module's approval/intimation request surfaces here; approvers are managers (scope all/market/store).
+  // Module 'storeops' gates it to workforce-entitled tenants (the pilot type is time-clock permissions).
+  { group: 'Approvals', module: 'storeops', items: [
+    { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'] },
+  ]},
+  // Internal Chat (owner directive 2026-08-19) — everyone in the org can message; no extra nav scope
+  // (the real gate is chat membership, enforced server-side). Module 'storeops' gates it to the
+  // workforce entitlement so it shows wherever the people directory does.
+  { group: 'Chat', module: 'storeops', items: [
+    { href: '/chat', label: 'Chat', icon: '💬', module: 'storeops', scopes: ['all', 'market', 'store', 'self'] },
   ]},
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
@@ -970,7 +988,7 @@ function pageOverrideForPath(perms: Permissions, path: string): boolean | undefi
 }
 
 // Pages a self-scoped (rep) user may always reach, on top of their home.
-const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk']
+const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk', '/chat']
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true

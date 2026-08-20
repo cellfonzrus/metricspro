@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     # CLOSED (an empty secret can never match), so the browser/super-admin board is unaffected until
     # the operator sets it on Railway. Never log it, never commit a value.
     FIX_PIPELINE_SECRET: str = ""
+
+    # ── Helpdesk export (read-only operator door) ─────────────────────────────────────────────
+    # Least-privilege service secret presented as `x-helpdesk-export-secret` by triage tooling that
+    # has no JWT, same precedent as NOTIFY_RUN_SECRET / FIX_PIPELINE_SECRET. It unlocks exactly one
+    # endpoint — GET /helpdesk/export — which is SELECT-ONLY (reads tickets + optionally their
+    # comments and nothing else; it can never create, edit, resolve, or touch config). UNSET (the
+    # default) = the door is CLOSED (an empty secret can never match). Rotate with the _NEXT env var.
+    # Never log it, never commit a value.
+    HELPDESK_EXPORT_SECRET: str = ""
     # Resend email — sending domain is metricspro.tech (verify it in Resend; override via env).
     RESEND_API_KEY: str = ""
     NOTIFY_FROM_EMAIL: str = "reports@metricspro.tech"
