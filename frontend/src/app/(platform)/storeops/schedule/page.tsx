@@ -18,7 +18,7 @@ interface Shift {
 }
 
 interface Employee { id: number; employee_id?: string | null; name: string; home_store: string; role: string }
-interface Store { id: number; store_code: string; address: string; market: string; is_active?: boolean }
+interface Store { id: number; store_code: string; address: string; market: string; is_active?: boolean; is_agent?: boolean }
 
 // Trend report (GET /storeops/schedule/hours-trend) — WoW / MoM scheduled hours with drill-down.
 interface TrendBucket {
@@ -132,7 +132,10 @@ export default function SchedulePage() {
       api('/api/v1/storeops/stores?include_inactive=true'),
       api('/api/v1/storeops/time-off').catch(() => []),
       api('/api/v1/storeops/employees?all_company=true').catch(() => []),
-    ]).then(([s, e, st, to, ae]) => { setShifts(s || []); setEmployees(e || []); setStores(st || []); setTimeOff(to || []); setAllEmps((ae && ae.length ? ae : e) || []) })
+      // Agent stores (Boost sub-dealers, migration 904) are reporting-only — exclude them from the
+      // schedule's store pickers/grid entirely (owner directive 2026-08-20). They still appear in
+      // ePay/financial reporting; they are simply never schedulable.
+    ]).then(([s, e, st, to, ae]) => { setShifts(s || []); setEmployees(e || []); setStores((st || []).filter((x: Store) => !x.is_agent)); setTimeOff(to || []); setAllEmps((ae && ae.length ? ae : e) || []) })
       .catch(console.error).finally(() => setLoading(false))
   }, [weekStart])
 
