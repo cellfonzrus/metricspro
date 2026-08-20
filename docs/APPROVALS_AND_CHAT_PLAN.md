@@ -241,6 +241,18 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
   no-op (never a fake success) until the operator supplies credentials. Frontend push registration is
   likewise env-gated on a VAPID key + a service worker. `harness_chat.py` 57/57. **Operator infra
   required for production calls/push — see Operator TODO (TURN server, FCM/APNs, VAPID + `/sw.js`).**
+- **Chat Phase 5 push COMPLETED (native routing + web push).** `chat/push.py` now ROUTES each stored
+  token by its `platform` to the transport that platform actually uses: **web → the standard Web Push
+  protocol + VAPID** (`_send_webpush`, gated on `CHAT_VAPID_PUBLIC_KEY`/`CHAT_VAPID_PRIVATE_KEY`/
+  `CHAT_VAPID_SUBJECT`, delivered via the `pywebpush` dep); **android → FCM** (`CHAT_FCM_SERVER_KEY`);
+  **ios → APNs** (a REAL HTTP/2 send with an ES256 provider JWT signed by the operator's `.p8` key via
+  PyJWT + cryptography, gated on `CHAT_APNS_KEY_ID`/`CHAT_APNS_TEAM_ID`/`CHAT_APNS_AUTH_KEY`/
+  `CHAT_APNS_BUNDLE_ID`, `CHAT_APNS_USE_SANDBOX` optional). Each transport is independently gated; an
+  unconfigured one is a documented no-op, never a fake send. Added `frontend/public/sw.js` (the web-push
+  service worker that renders the notification + focuses/opens `/chat`); the client registration wiring
+  already existed. `harness_chat.py` 65/65 (section 12 proves the platform→transport routing, the
+  unconfigured no-op, and a REAL ES256 APNs JWT). Native iOS/Android app shells stay out of repo scope —
+  the exact token-registration contract they must call is in the Operator TODO.
 - **Approvals Tier-B money surfaces: DONE (this pass)** — one reviewed commit each, extending
   `harness_approvals_adapters.py` (48/48). Inbox-actionable: `closing_expense`, `referral`,
   `remediation` (shared-effect fn + `sync_source_decision`, byte-identical to the legacy board).
@@ -279,9 +291,27 @@ can be given a `chat_admin` permission for moderation/retention. Everything is o
       (backend env) to a JSON array of RTCIceServer objects, e.g.
       `[{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]`. `GET /chat/call/config`
       reports `has_turn` so you can confirm.
-- [ ] **Mobile/web push (Phase 5) — credentials:** the token registry + send path ship, but delivery is
-      gated. Set `CHAT_FCM_SERVER_KEY` (backend env) to enable FCM sends (`configured()` gate; no key →
-      documented no-op). For **web push** also set `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (frontend) and ship a
-      `/sw.js` service worker that shows the notification; for **native iOS** add an APNs path alongside
-      the FCM one in `backend/app/modules/chat/push.py` (structured as a follow-up there). Native mobile
-      apps are out of repo scope.
+- [ ] **Mobile/web push (Phase 5) — credentials + the native token contract.** The token registry and a
+      platform-ROUTED send path ship (web → Web Push/VAPID, android → FCM, ios → APNs); delivery on each
+      transport is independently gated and a no-op until you supply that transport's credentials (never a
+      fake send). The service worker (`frontend/public/sw.js`) ships. Provision the transports you need:
+      - **Web push:** set `NEXT_PUBLIC_VAPID_PUBLIC_KEY` (frontend) and, on the backend,
+        `CHAT_VAPID_PUBLIC_KEY` (same value), `CHAT_VAPID_PRIVATE_KEY`, and `CHAT_VAPID_SUBJECT`
+        (`mailto:you@company.com`). The `pywebpush` dependency is in `requirements.txt` — it must be
+        installed for delivery. Generate a VAPID keypair with `vapid --gen` (from py-vapid) or any
+        web-push tool.
+      - **Android (native app):** set `CHAT_FCM_SERVER_KEY` (an FCM server key). The app registers its
+        FCM device token (see the contract below) with `platform: "android"`.
+      - **iOS (native app):** create an APNs auth key (`.p8`) in the Apple Developer portal and set
+        `CHAT_APNS_KEY_ID` (the key id), `CHAT_APNS_TEAM_ID` (your Apple team id), `CHAT_APNS_AUTH_KEY`
+        (the `.p8` **contents**, PEM — escaped newlines `\n` are handled), and `CHAT_APNS_BUNDLE_ID`
+        (the app bundle id → `apns-topic`). Set `CHAT_APNS_USE_SANDBOX=1` for a development build. The app
+        registers its APNs device token with `platform: "ios"`.
+      - **Token-registration contract a native app calls** (identical to what the web client uses):
+        `POST /api/v1/chat/push/register` with the user's bearer token and body
+        `{ "token": "<device or subscription token>", "platform": "ios" | "android" | "web" }` — the
+        employee is resolved from the token, never the body. `POST /api/v1/chat/push/unregister` with
+        `{ "token": "<same token>" }` on sign-out/disable. For **web**, `token` is the JSON-stringified
+        browser `PushSubscription`; for **android/ios** it is the FCM/APNs device token string. Delivery
+        payload the app receives: `{ title, body, data: { channel_id, ... } }`. Native mobile app shells
+        are out of repo scope; only the contract above is.
