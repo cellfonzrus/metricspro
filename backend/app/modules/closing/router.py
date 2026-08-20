@@ -23,6 +23,7 @@ from . import ops_chargebacks
 from . import expense_config
 from . import envelope as _envelope
 from . import deposit_recon
+from . import verified_overlay as _verified_overlay
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -1171,6 +1172,17 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                 "discrepancy": (act_var != 0 or upg_var != 0),
             }
 
+        # DM verified-correction overlay (TKT-1030, owner 2026-08-20): once a store-day is VERIFIED, the
+        # DM's corrected figures are authoritative for the store-day. Overlay them onto BOTH column
+        # families in `totals` HERE — before money_recon and before this store dict is returned — so the
+        # DM Verify view, the money reconciliation, and every downstream consumer of this summary see the
+        # corrected numbers, not the rep's raw sum. Per-rep rows below stay raw (a store-day correction
+        # can't be attributed to one rep) and the store carries a `dm_corrected` badge instead.
+        _ver = ver_by_store.get(code) if code else None
+        _dm_corrected = bool(_ver and _ver.get("verified") and _verified_overlay.has_correction(_ver))
+        if _dm_corrected:
+            _verified_overlay.apply_overlay(totals, _ver)
+
         # MONEY recon: store-declared closing $ vs B2B actuals (accessory gross, cash, credit).
         # Shortage = declared LESS than B2B (money unaccounted). epay-vs-portal is wired but
         # pending the ePay Daily Transactions Report sweep.
@@ -1245,6 +1257,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "cross_login": cross_login, "closing_mode": closing_mode,
             "closer": closer_by_store.get(code) if code else None,
             "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
+            "dm_corrected": _dm_corrected,   # store-day totals reflect the DM's verified correction (TKT-1030)
         })
 
     # Stores where reps WORKED (clocked in / sold) but NOBODY submitted a closing never appear in
