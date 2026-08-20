@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, localToday, parseLocalDate, addDays, mondayOf } from '@/lib/client'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -20,16 +20,41 @@ interface Shift {
 interface Employee { id: number; employee_id?: string | null; name: string; home_store: string; role: string }
 interface Store { id: number; store_code: string; address: string; market: string; is_active?: boolean }
 
+// Trend report (GET /storeops/schedule/hours-trend) — WoW / MoM scheduled hours with drill-down.
+interface TrendBucket {
+  key: string; label: string; total: number; prev_total: number | null; delta: number | null
+  by_store: Record<string, number>; by_employee: Record<string, number>
+  store_deltas: Record<string, number>; employee_deltas: Record<string, number>
+}
+interface IncRow { employee: string; store: string; current: number; prior: number; delta: number }
+interface Trend {
+  total: number; weeks: TrendBucket[]; months: TrendBucket[]
+  increasing: { week: IncRow[]; month: IncRow[] }
+}
+
 // Local-safe day-of-week + m/d label (never the old DAYS[i] index — that was the
 // off-by-one: an array index can't know the real weekday after a UTC date shift).
 function dayLabel(date: string) {
   const d = parseLocalDate(date)
   return { dow: d.toLocaleDateString('en-US', { weekday: 'short' }), md: `${d.getMonth() + 1}/${d.getDate()}` }
 }
+// Scheduled hours for one shift, OVERNIGHT-aware: an end that wraps past midnight (end < start,
+// e.g. 18:00→00:30) adds a day; an equal start/end is a zero-length row (0h, never a spurious 24h).
+// Mirrors backend schedule_hours.shift_hours + the _scheduled_end_for_punch overnight guard so the
+// footer total, the trend report, and the stored scheduled_hours all agree.
 function hoursBetween(start: string, end: string) {
   const [sh, sm] = start.split(':').map(Number)
   const [eh, em] = end.split(':').map(Number)
-  return Math.max(0, ((eh * 60 + em) - (sh * 60 + sm)) / 60)
+  const s = sh * 60 + sm, e = eh * 60 + em
+  if (!isFinite(s) || !isFinite(e) || e === s) return 0
+  let d = e - s
+  if (d < 0) d += 24 * 60
+  return d / 60
+}
+// Hours for a shift row — recompute from start/end (overnight-safe), falling back to the stored value.
+function shiftHrs(s: { start_time?: string; end_time?: string; scheduled_hours?: number }) {
+  if (s.start_time && s.end_time) return hoursBetween(s.start_time, s.end_time)
+  return s.scheduled_hours || 0
 }
 
 // Tenant-aware work-week start (storeops.tenants.work_week_start_dow, mig 085 — 0=Mon..6=Sun;
@@ -71,6 +96,13 @@ export default function SchedulePage() {
   // backend's default 'warn' policy — see PUT /storeops/timeoff-conflict-mode). Dismissible;
   // never prevents the shift that already saved.
   const [notice, setNotice] = useState<string | null>(null)
+  // Hours-trend report (WoW/MoM + drill-down + "who's increasing"). Reacts to the active market/store
+  // filter and to the viewed week (the anchor), so it always reflects exactly the on-screen scope.
+  const [trend, setTrend] = useState<Trend | null>(null)
+  const [trendErr, setTrendErr] = useState<string | null>(null)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportGran, setReportGran] = useState<'week' | 'month'>('week')
+  const [drillKey, setDrillKey] = useState<string | null>(null)
 
   const weekEnd = addDays(weekStart, 6)
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart])
@@ -103,6 +135,20 @@ export default function SchedulePage() {
     ]).then(([s, e, st, to, ae]) => { setShifts(s || []); setEmployees(e || []); setStores(st || []); setTimeOff(to || []); setAllEmps((ae && ae.length ? ae : e) || []) })
       .catch(console.error).finally(() => setLoading(false))
   }, [weekStart])
+
+  // Fetch the hours trend whenever the scope (market/store filter) or the anchor week changes. The
+  // backend applies the SAME RBAC store keyset as the grid, so a DM never sees hours outside their span.
+  useEffect(() => {
+    const qs = new URLSearchParams({ anchor: weekEnd, weeks: '8', months: '6', week_start_dow: String(wwDow) })
+    if (filterMarkets.length) qs.set('markets', filterMarkets.join(','))
+    if (filterStore) qs.set('store_code', filterStore)
+    let cancelled = false
+    setTrendErr(null)
+    api(`/api/v1/storeops/schedule/hours-trend?${qs.toString()}`)
+      .then((r: Trend) => { if (!cancelled) setTrend(r) })
+      .catch((e: any) => { if (!cancelled) { setTrend(null); setTrendErr(e?.message || 'Could not load the hours trend.') } })
+    return () => { cancelled = true }
+  }, [weekEnd, wwDow, filterMarkets, filterStore])
 
   // market lookup by store_code (employees only carry home_store)
   const mktOf = useMemo(() => {
@@ -346,6 +392,19 @@ export default function SchedulePage() {
   const today = localToday()
   const rows = view === 'store' ? filteredStores : filteredEmps
 
+  // Footer totals for the CURRENTLY DISPLAYED (filtered) rows — per weekday column + a grand total.
+  // Built from exactly the rows the grid shows, so narrowing the market/store filter narrows the total.
+  const footer = useMemo(() => {
+    const keys = new Set(view === 'store'
+      ? filteredStores.map(s => s.store_code)
+      : filteredEmps.map(e => e.name))
+    const disp = shifts.filter(s => keys.has(view === 'store' ? s.store_code : s.employee_name))
+    const perDay: Record<string, number> = {}
+    let grand = 0
+    for (const s of disp) { const h = shiftHrs(s); perDay[s.shift_date] = (perDay[s.shift_date] || 0) + h; grand += h }
+    return { perDay, grand }
+  }, [shifts, filteredStores, filteredEmps, view])
+
   // Render the chips of shifts inside one grid cell.
   const Cell = ({ date, cellShifts, onAdd, off }: { date: string; cellShifts: Shift[]; onAdd: () => void; off?: boolean }) => (
     <td style={{ padding: '4px 6px', textAlign: 'center', borderRight: '1px solid var(--border)', cursor: 'pointer', verticalAlign: 'top', background: off ? 'rgba(245,158,11,0.10)' : date === today ? 'rgba(37,99,235,0.04)' : undefined }}
@@ -419,6 +478,10 @@ export default function SchedulePage() {
           <button className="btn btn-primary" disabled={busy} onClick={copyWeeks} title="Duplicate this week's shifts into one or more following weeks">📋 Copy weeks</button>
           <button className="btn btn-secondary" disabled={busy} onClick={saveTemplate} title="Save this week as the recurring weekly template">⭐ Save template</button>
           <button className="btn btn-secondary" disabled={busy} onClick={applyTemplate} title="Fill this week from the saved templates">📌 Apply template</button>
+          <button className="btn btn-primary" onClick={() => { setReportOpen(true); setDrillKey(null) }}
+            title="Scheduled hours week-over-week & month-over-month, with per-store / per-employee drill-down">
+            📈 Hours Trend
+          </button>
           <ExportButtons payload={buildPayload} compact />
           {/* 2026-08-04 export-privacy fix: was reportKey="storeops_schedule" filters={week_start, store_code} —
               the backend re-query dropped the on-screen MARKET filter (only forwarded store_code), so
@@ -491,7 +554,7 @@ export default function SchedulePage() {
                 const label = isStore ? r.store_code : r.name
                 const sub = isStore ? (r.market || r.address?.substring(0, 22)) : r.role
                 const rowShifts = isStore ? shiftsOf(s => s.store_code === r.store_code) : shiftsOf(s => s.employee_name === r.name)
-                const total = rowShifts.reduce((a, s) => a + (s.scheduled_hours || 0), 0)
+                const total = rowShifts.reduce((a, s) => a + shiftHrs(s), 0)
                 const rowBg = ri % 2 === 1 ? 'var(--surface2)' : 'white'
                 return (
                   <tr key={r.id ?? label} style={{ background: rowBg }}>
@@ -515,7 +578,145 @@ export default function SchedulePage() {
                 </td></tr>
               )}
             </tbody>
+            {/* Total scheduled hours — per-day column totals + a grand total for the current filter. */}
+            {rows.length > 0 && (
+              <tfoot>
+                <tr style={{ background: 'var(--surface2)', borderTop: '2px solid var(--border)' }}>
+                  <td style={{ padding: '10px 14px', fontWeight: 700, fontSize: 12, position: 'sticky', left: 0, zIndex: 1, background: 'var(--surface2)', borderRight: '1px solid var(--border)' }}>
+                    Total scheduled
+                  </td>
+                  {weekDates.map(date => (
+                    <td key={date} style={{ padding: '10px 6px', textAlign: 'center', fontWeight: 600, fontSize: 12, color: 'var(--text2)' }}>
+                      {(footer.perDay[date] || 0) > 0 ? `${(footer.perDay[date] || 0).toFixed(1)}h` : '—'}
+                    </td>
+                  ))}
+                  <td style={{ padding: '10px 14px', textAlign: 'right', fontWeight: 800, fontSize: 14, color: 'var(--accent)' }}>
+                    {footer.grand.toFixed(1)}h
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
+        </div>
+      )}
+
+      {/* Analysis summary — who is increasing scheduled hours, in which store (this week vs last).
+          Factual + coaching-toned: a short ranked list, never punitive. Reflects the active filter. */}
+      {!loading && trend && (
+        <div className="card" style={{ marginTop: 18, padding: '14px 16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>📊 Who’s picking up hours — this week vs last</div>
+            <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+              Total scheduled (8-week span): <strong style={{ color: 'var(--text2)' }}>{trend.total.toFixed(1)}h</strong>
+            </div>
+          </div>
+          {trend.increasing.week.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text3)' }}>No employees are trending up on scheduled hours this week for the current filter.</div>
+          ) : (
+            <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13, lineHeight: 1.7 }}>
+              {trend.increasing.week.slice(0, 8).map((r, i) => (
+                <li key={i}>
+                  <strong>{r.employee}</strong> at <strong>{r.store}</strong> —{' '}
+                  <span style={{ color: '#15803d', fontWeight: 700 }}>+{r.delta.toFixed(1)}h</span>{' '}
+                  <span style={{ color: 'var(--text3)' }}>({r.prior.toFixed(1)}h → {r.current.toFixed(1)}h)</span>
+                </li>
+              ))}
+            </ol>
+          )}
+          <div style={{ marginTop: 8 }}>
+            <button className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: 12 }}
+              onClick={() => { setReportOpen(true); setDrillKey(null) }}>See the full week-over-week / month-over-month trend →</button>
+          </div>
+        </div>
+      )}
+
+      {/* Hours-trend report modal — WoW / MoM with per-store & per-employee drill-down. */}
+      {reportOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 120, padding: '40px 16px', overflowY: 'auto' }}
+          onClick={() => setReportOpen(false)}>
+          <div className="card" style={{ width: 720, maxWidth: '100%' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 18 }}>Scheduled Hours Trend</div>
+                <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
+                  {filterMarkets.length ? filterMarkets.join(', ') : 'All markets'}
+                  {filterStore ? ` · ${filterStore}` : ''} · anchored on week of {parseLocalDate(weekStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </div>
+              </div>
+              <button onClick={() => setReportOpen(false)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--text3)' }}>✕</button>
+            </div>
+            <div className="seg" style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden', margin: '10px 0 14px' }}>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: reportGran === 'week' ? 'var(--accent)' : 'transparent', color: reportGran === 'week' ? 'white' : 'var(--text2)' }} onClick={() => { setReportGran('week'); setDrillKey(null) }}>Week over week</button>
+              <button className="btn" style={{ borderRadius: 0, border: 'none', background: reportGran === 'month' ? 'var(--accent)' : 'transparent', color: reportGran === 'month' ? 'white' : 'var(--text2)' }} onClick={() => { setReportGran('month'); setDrillKey(null) }}>Month over month</button>
+            </div>
+            {trendErr && <div style={{ color: '#b91c1c', fontSize: 13, marginBottom: 10 }}>{trendErr}</div>}
+            {!trend ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}><div className="spinner" /></div>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 8 }}>Click a period to see the per-store &amp; per-employee breakdown and what drove the change.</div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text2)' }}>
+                      <th style={{ textAlign: 'left', padding: '6px 8px' }}>Period</th>
+                      <th style={{ textAlign: 'right', padding: '6px 8px' }}>Scheduled hrs</th>
+                      <th style={{ textAlign: 'right', padding: '6px 8px' }}>vs prior</th>
+                      <th style={{ width: 20 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(reportGran === 'week' ? trend.weeks : trend.months).map(b => {
+                      const open = drillKey === b.key
+                      const deltaColor = b.delta == null ? 'var(--text3)' : b.delta > 0 ? '#15803d' : b.delta < 0 ? '#b91c1c' : 'var(--text3)'
+                      const sd = Object.entries(b.store_deltas).sort((a, c) => Math.abs(c[1]) - Math.abs(a[1]))
+                      const ed = Object.entries(b.employee_deltas).sort((a, c) => Math.abs(c[1]) - Math.abs(a[1]))
+                      return (
+                        <Fragment key={b.key}>
+                          <tr onClick={() => setDrillKey(open ? null : b.key)}
+                            style={{ cursor: 'pointer', borderBottom: '1px solid var(--border)', background: open ? 'var(--surface2)' : undefined }}>
+                            <td style={{ padding: '7px 8px', fontWeight: 600 }}>{b.label}</td>
+                            <td style={{ padding: '7px 8px', textAlign: 'right', fontWeight: 600 }}>{b.total.toFixed(1)}h</td>
+                            <td style={{ padding: '7px 8px', textAlign: 'right', color: deltaColor, fontWeight: 600 }}>
+                              {b.delta == null ? '—' : `${b.delta > 0 ? '+' : ''}${b.delta.toFixed(1)}h`}
+                            </td>
+                            <td style={{ textAlign: 'center', color: 'var(--text3)' }}>{open ? '▾' : '▸'}</td>
+                          </tr>
+                          {open && (
+                            <tr>
+                              <td colSpan={4} style={{ padding: '4px 8px 12px', background: 'var(--surface2)' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                                  <div>
+                                    <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4, color: 'var(--text2)' }}>By store {sd.length > 0 && '(Δ vs prior)'}</div>
+                                    {Object.keys(b.by_store).length === 0 ? <div style={{ color: 'var(--text3)', fontSize: 12 }}>No shifts.</div> :
+                                      Object.entries(b.by_store).sort((a, c) => c[1] - a[1]).map(([k, v]) => (
+                                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0' }}>
+                                          <span>{k}</span>
+                                          <span>{v.toFixed(1)}h {b.store_deltas[k] != null && <em style={{ color: b.store_deltas[k] > 0 ? '#15803d' : '#b91c1c', fontStyle: 'normal' }}>({b.store_deltas[k] > 0 ? '+' : ''}{b.store_deltas[k].toFixed(1)})</em>}</span>
+                                        </div>
+                                      ))}
+                                  </div>
+                                  <div>
+                                    <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4, color: 'var(--text2)' }}>By employee {ed.length > 0 && '(Δ vs prior)'}</div>
+                                    {Object.keys(b.by_employee).length === 0 ? <div style={{ color: 'var(--text3)', fontSize: 12 }}>No shifts.</div> :
+                                      Object.entries(b.by_employee).sort((a, c) => c[1] - a[1]).map(([k, v]) => (
+                                        <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0' }}>
+                                          <span>{k}</span>
+                                          <span>{v.toFixed(1)}h {b.employee_deltas[k] != null && <em style={{ color: b.employee_deltas[k] > 0 ? '#15803d' : '#b91c1c', fontStyle: 'normal' }}>({b.employee_deltas[k] > 0 ? '+' : ''}{b.employee_deltas[k].toFixed(1)})</em>}</span>
+                                        </div>
+                                      ))}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </div>
         </div>
       )}
 
