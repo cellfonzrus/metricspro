@@ -40,17 +40,22 @@ DEPENDENCIES (degrade individually, and say which one is missing at startup)
                       fallback in a real store (occlusion, seated people, oblique angles). The HOG
                       path exists so the module produces numbers on day one on hardware with no
                       accelerator, and its weaker recall is stated rather than hidden.
-  aiortc              optional. Needed only for WEBRTC cameras (every recent Nest camera). Without
-                      it this analyzer handles RTSP cameras and reports the WebRTC ones as skipped.
+  aiortc              required for WEBRTC cameras — which is every Nest camera sold since 2021,
+                      including the Nest Cam (indoor, wired, 2nd gen), plus any older camera that
+                      has been migrated into the Google Home app. Without it those cameras are
+                      reported as unreadable with the install command, rather than skipped silently.
 
-TWO PATHS THIS REFERENCE BUILD DOES NOT IMPLEMENT, STATED PLAINLY
-─────────────────────────────────────────────────────────────────
-* **WebRTC cameras.** Every Nest camera released since 2021 is WebRTC-only. Reading one needs an
-  aiortc peer connection: create the offer here, POST it to /vision/edge/stream, apply the answer,
-  and hand the decoded video track to `CameraWorker.step()` in place of the OpenCV capture. The
-  server side of that handshake is complete and proven (harness_vision_sdm.py §4); only this client
-  half is missing, and a camera it cannot read is logged as skipped rather than silently ignored.
+FIRST RUN ON SITE: USE --probe
+──────────────────────────────
+    python3 vision_edge_analyzer.py --api … --agent-key … --secret … --probe
 
+It connects to one camera, saves a single frame, and exits. That proves the entire chain — agent
+secret, Google authorization, stream negotiation, decoding — in one command instead of a long run
+and a log read. The frame it writes is also exactly the still needed to place the counting line and
+the exclusion zones, so the install visit produces that artifact on the spot.
+
+ONE PATH THIS REFERENCE BUILD DOES NOT IMPLEMENT, STATED PLAINLY
+────────────────────────────────────────────────────────────────
 * **The audio / transcript path.** OpenCV's capture discards the audio track entirely, so producing
   transcripts needs a separate ffmpeg demux of the same RTSP URL, a VAD to cut it into utterances,
   and a local ASR (faster-whisper runs adequately on a small box). That is deliberately not wired up
@@ -72,8 +77,10 @@ import hashlib
 import hmac
 import json
 import logging
+import asyncio
 import signal
 import sys
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -219,6 +226,236 @@ class Tracker:
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+# Frame sources — where pixels come from
+#
+# Two transports, one interface. Everything downstream (tracking, line crossing, heat binning) is
+# identical for both and stays exactly the code the harnesses already prove; only the way a frame is
+# obtained differs. That separation is the point: a new transport must never be able to change what
+# a crossing means.
+#
+#   RtspFrameSource    older wired Nest Cams and Dropcams, and anything still managed in the legacy
+#                      Nest app. OpenCV opens the tokenized URL directly.
+#   WebRtcFrameSource  every Nest camera sold since 2021, and any older camera that has been migrated
+#                      into the Google Home app. Needs a real peer connection — see below.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+class FrameSource:
+    """read() returns (ok, frame_bgr). ok=False means "nothing right now" — the caller decides
+    whether that is a hiccup or a dead stream."""
+
+    def read(self):
+        raise NotImplementedError
+
+    def close(self):
+        pass
+
+
+class RtspFrameSource(FrameSource):
+    def __init__(self, url):
+        import cv2
+        self._cap = cv2.VideoCapture(url)
+        # A live stream must never buffer: a backed-up queue turns a door crossing into an event
+        # timestamped a minute late, which quietly wrecks the hourly curve.
+        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    def read(self):
+        if self._cap is None or not self._cap.isOpened():
+            return False, None
+        return self._cap.read()
+
+    def close(self):
+        try:
+            if self._cap is not None:
+                self._cap.release()
+        except Exception:
+            pass
+        self._cap = None
+
+
+class WebRtcFrameSource(FrameSource):
+    """Holds a WebRTC peer connection to Google and exposes the latest decoded frame.
+
+    THREADING. aiortc is asyncio; the analyzer loop is a plain synchronous while-loop, and that loop
+    is where the proven counting logic lives. Rather than make the whole analyzer async — which would
+    mean re-testing every counting rule against a new execution model — the peer connection runs in a
+    daemon thread with its own event loop and drops each decoded frame into a slot. The sync loop
+    reads the slot. Frames are overwritten rather than queued, deliberately: for a live door count the
+    newest frame is the only one worth having, and a queue would build latency under load until events
+    landed minutes late.
+
+    NEGOTIATION. Same handshake the browser does on the Live Cameras page, which is already proven
+    server-side (harness_vision_sdm.py §4): build a complete offer, hand it to /vision/edge/stream,
+    apply Google's answer. Two details are load-bearing and are the first things to check if a real
+    camera refuses:
+      * both an audio and a video transceiver must be present in the offer, recvonly. Google answers
+        the m-lines it was offered, and an offer with video alone is rejected.
+      * the offer must be fully ICE-gathered before it is sent. Google's API takes one complete SDP,
+        not a trickle, so we wait for gathering to finish (bounded, so a stalled gather cannot hang
+        the analyzer forever).
+
+    UNVERIFIED AGAINST REAL HARDWARE. There is no Nest camera in the build environment, so this path
+    is proven only against a fake peer (harness_vision_webrtc.py) — the offer shape, the frame slot,
+    and the failure handling. Use `--probe` on site to confirm the real handshake in one command
+    before running the analyzer for real.
+    """
+
+    ICE_GATHER_TIMEOUT = 8.0
+    FRAME_STALE_AFTER = 10.0        # no frame for this long ⇒ treat the stream as dead and reopen
+
+    def __init__(self, api, device_name, ice_servers=None):
+        self.api = api
+        self.device_name = device_name
+        self.ice_servers = ice_servers or ["stun:stun.l.google.com:19302"]
+        self.session = None
+        self._frame = None
+        self._frame_at = 0.0
+        self._lock = threading.Lock()
+        self._loop = None
+        self._pc = None
+        self._thread = None
+        self._error = None
+        self._ready = threading.Event()
+
+    # ── lifecycle ────────────────────────────────────────────────────────────────────────────
+    def start(self, timeout=30.0):
+        """Negotiate and begin receiving. Returns the stream session dict, or raises."""
+        self._thread = threading.Thread(target=self._run, name=f"webrtc:{self.device_name[-12:]}",
+                                        daemon=True)
+        self._thread.start()
+        if not self._ready.wait(timeout):
+            self.close()
+            raise RuntimeError("timed out negotiating the WebRTC stream")
+        if self._error:
+            self.close()
+            raise RuntimeError(self._error)
+        return self.session
+
+    def _run(self):
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_until_complete(self._negotiate_and_pump())
+        except Exception as e:                      # noqa: BLE001 — surfaced to start() verbatim
+            self._error = f"{type(e).__name__}: {e}"
+            self._ready.set()
+        finally:
+            # Cancel and DRAIN before closing. aiortc leaves an ICE-transport monitor running; a loop
+            # closed out from under it logs "Task was destroyed but it is pending!" every time. On a
+            # long analyzer run that reopens a stream whenever it goes quiet, that is one spurious
+            # error line per reconnect, per camera, forever — noise that buries the log lines an
+            # installer actually needs.
+            try:
+                pending = [t for t in asyncio.all_tasks(self._loop) if not t.done()]
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    self._loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True))
+            except Exception:
+                pass
+            try:
+                self._loop.close()
+            except Exception:
+                pass
+
+    async def _negotiate_and_pump(self):
+        from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
+
+        config = RTCConfiguration(iceServers=[RTCIceServer(urls=u) for u in self.ice_servers])
+        pc = RTCPeerConnection(configuration=config)
+        self._pc = pc
+
+        # Both m-lines, receive-only. Google answers what it was offered; video alone is refused.
+        pc.addTransceiver("audio", direction="recvonly")
+        pc.addTransceiver("video", direction="recvonly")
+
+        pumping = asyncio.Event()
+
+        @pc.on("track")
+        def on_track(track):
+            if track.kind == "video":
+                asyncio.ensure_future(self._pump(track, pumping))
+
+        await pc.setLocalDescription(await pc.createOffer())
+        await self._await_ice(pc)
+
+        # The backend brokers this to Google and hands back the answer. It also records the session,
+        # so "which machine watched this camera" stays answerable for an analyzer too.
+        res = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: self.api.call("POST", "stream", {
+                "device_name": self.device_name,
+                "offer_sdp": pc.localDescription.sdp,
+            }))
+        answer = res.get("answer_sdp")
+        if not answer:
+            raise RuntimeError("the backend returned no answer SDP for this camera")
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=answer, type="answer"))
+
+        self.session = res
+        self._ready.set()
+        await pumping.wait()          # held open until close() tears the connection down
+
+    async def _await_ice(self, pc):
+        """Block until ICE gathering completes, bounded. An offer sent mid-gather is incomplete and
+        Google rejects it; waiting forever on a stalled gather would wedge the analyzer instead."""
+        if pc.iceGatheringState == "complete":
+            return
+        done = asyncio.Event()
+
+        @pc.on("icegatheringstatechange")
+        def _on_state():
+            if pc.iceGatheringState == "complete":
+                done.set()
+
+        try:
+            await asyncio.wait_for(done.wait(), timeout=self.ICE_GATHER_TIMEOUT)
+        except asyncio.TimeoutError:
+            log.debug("[%s] ICE gathering did not complete in %.0fs — sending what we have",
+                      self.device_name, self.ICE_GATHER_TIMEOUT)
+
+    async def _pump(self, track, pumping):
+        """One decoded frame at a time into the slot. Overwrites, never queues."""
+        try:
+            while True:
+                frame = await track.recv()
+                img = frame.to_ndarray(format="bgr24")     # BGR — what the detector expects
+                with self._lock:
+                    self._frame = img
+                    self._frame_at = time.time()
+        except Exception as e:                              # track ended / connection dropped
+            log.debug("[%s] video track ended: %s", self.device_name, type(e).__name__)
+        finally:
+            pumping.set()
+
+    # ── the synchronous side ─────────────────────────────────────────────────────────────────
+    def read(self):
+        with self._lock:
+            frame, at = self._frame, self._frame_at
+        if frame is None:
+            return False, None
+        if time.time() - at > self.FRAME_STALE_AFTER:
+            return False, None        # connection alive but silent ⇒ let the worker reopen
+        return True, frame
+
+    def close(self):
+        pc, loop = self._pc, self._loop
+        self._pc = None
+        if pc is not None and loop is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(pc.close(), loop).result(timeout=5)
+            except Exception:
+                pass
+        with self._lock:
+            self._frame = None
+
+
+def webrtc_available():
+    """True when aiortc is installed. Checked by spec rather than by importing, so a probe for the
+    capability never drags a heavy dependency into a process that is not going to use it."""
+    import importlib.util
+    return importlib.util.find_spec("aiortc") is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
 # One camera's worker
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 class CameraWorker:
@@ -234,40 +471,40 @@ class CameraWorker:
         self.tracker = Tracker()
         self.session = None
         self.extend_at = 0
-        self.capture = None
+        self.source = None
         self.occupancy = defaultdict(float)
         self.last_flush = time.time()
         self.last_frame_at = None
 
     # ── stream lifecycle ─────────────────────────────────────────────────────────────────────
     def open(self):
+        """Acquire a live stream for this camera, by whichever transport it speaks."""
         proto = (self.cam.get("stream_protocol") or "webrtc").lower()
-        if proto != "rtsp":
-            log.warning("[%s] WebRTC camera — this reference analyzer reads RTSP only. "
-                        "Install aiortc and extend _open_webrtc() to handle it.",
-                        self.cam["device_name"])
-            return False
         try:
-            res = self.api.call("POST", "stream", {"device_name": self.cam["device_name"]})
-        except Exception as e:
-            log.error("[%s] could not obtain a stream: %s", self.cam["device_name"], e)
-            return False
-        self.session = res
-        self.extend_at = time.time() + max(30, int(res.get("extend_after_seconds") or 200))
-        url = res.get("rtsp_url")
-        if not url:
-            log.error("[%s] no RTSP url returned", self.cam["device_name"])
-            return False
-        try:
-            import cv2
-            self.capture = cv2.VideoCapture(url)
-            # A live stream must never buffer: a backed-up queue turns a door crossing into an event
-            # timestamped a minute late, which quietly wrecks the hourly curve.
-            self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if proto == "rtsp":
+                res = self.api.call("POST", "stream", {"device_name": self.cam["device_name"]})
+                url = res.get("rtsp_url")
+                if not url:
+                    log.error("[%s] no RTSP url returned", self.cam["device_name"])
+                    return False
+                self.source = RtspFrameSource(url)
+                self.session = res
+            else:
+                if not webrtc_available():
+                    log.error("[%s] this camera streams over WebRTC but aiortc is not installed. "
+                              "Run: pip install aiortc", self.cam["device_name"])
+                    return False
+                src = WebRtcFrameSource(self.api, self.cam["device_name"])
+                self.session = src.start()      # negotiates; raises with a real reason on failure
+                self.source = src
         except Exception as e:
             log.error("[%s] could not open the stream: %s", self.cam["device_name"], e)
+            self.close()
             return False
-        log.info("[%s] live", self.cam["device_name"])
+
+        self.extend_at = time.time() + max(30, int((self.session or {}).get("extend_after_seconds") or 200))
+        self.last_frame_at = None
+        log.info("[%s] live (%s)", self.cam["device_name"], proto)
         return True
 
     def maybe_extend(self):
@@ -285,21 +522,27 @@ class CameraWorker:
 
     def close(self):
         try:
-            if self.capture is not None:
-                self.capture.release()
+            if self.source is not None:
+                self.source.close()
         except Exception:
             pass
-        self.capture, self.session = None, None
+        self.source, self.session = None, None
 
     # ── the frame loop ───────────────────────────────────────────────────────────────────────
     def step(self):
-        if self.capture is None:
+        if self.source is None:
             return
-        ok, frame = self.capture.read()
+        ok, frame = self.source.read()
         if not ok:
-            log.warning("[%s] stream ended — reopening", self.cam["device_name"])
-            self.close()
+            # WebRTC reports "no frame yet" the same way it reports a dead track, so a miss is only
+            # fatal once the source has gone quiet past its own staleness window — which is exactly
+            # what read() already folds in. One miss is a hiccup; a persistent one reopens.
+            self._misses = getattr(self, "_misses", 0) + 1
+            if self._misses > 90:
+                log.warning("[%s] stream went quiet — reopening", self.cam["device_name"])
+                self.close()
             return
+        self._misses = 0
         now = time.time()
         dt = (now - self.last_frame_at) if self.last_frame_at else 0.0
         self.last_frame_at = now
@@ -428,7 +671,7 @@ class Analyzer:
                     time.sleep(self.args.interval)
                     continue
                 for w in list(self.workers.values()):
-                    if w.capture is None:
+                    if w.source is None:
                         w.open()
                     else:
                         w.maybe_extend()
@@ -453,6 +696,72 @@ class Analyzer:
         self.running = False
 
 
+def probe(args):
+    """Connect to ONE camera, grab a single frame, save it, and exit.
+
+    Two jobs in one command. It is the cheapest possible proof that the whole chain works on site —
+    agent secret, Google authorization, stream negotiation, decoding — without committing to a long
+    analyzer run and reading logs. And the frame it writes is exactly the still needed to place the
+    counting line and the exclusion zones, so the install visit produces that artifact instead of
+    someone screenshotting a phone afterwards.
+    """
+    api = Api(args.api, args.agent_key, args.secret)
+    cfg = api.call("GET", "config")
+    cameras = cfg.get("cameras") or []
+    if not cameras:
+        log.error("No cameras are enabled for this analyzer. Assign a camera to store %s in "
+                  "Vision -> Settings, and turn its Analytics switch on.", cfg.get("store_code"))
+        return 1
+
+    target = args.device or cameras[0]["device_name"]
+    cam = next((c for c in cameras if c["device_name"] == target), None)
+    if cam is None:
+        log.error("Camera %s is not one this analyzer may use. Available:", target)
+        for c in cameras:
+            log.error("  %s", c["device_name"])
+        return 1
+
+    proto = (cam.get("stream_protocol") or "webrtc").lower()
+    log.info("probing %s over %s", cam["device_name"], proto.upper())
+    if proto != "rtsp" and not webrtc_available():
+        log.error("This camera streams over WebRTC and aiortc is not installed. "
+                  "Run: pip install aiortc")
+        return 1
+
+    worker = CameraWorker(api, cam, {"cols": 24, "rows": 16}, args.tz_offset,
+                          PersonDetector(prefer_yolo=False), [])
+    if not worker.open():
+        return 1
+
+    try:
+        deadline = time.time() + args.probe_seconds
+        frame = None
+        while time.time() < deadline:
+            ok, f = worker.source.read()
+            if ok:
+                frame = f
+                break
+            time.sleep(0.2)
+        if frame is None:
+            log.error("Connected, but no video frame arrived within %ds. The stream negotiated and "
+                      "then stayed silent — usually a codec or ICE path problem, not authorization.",
+                      args.probe_seconds)
+            return 1
+
+        out = args.out or f"vision-probe-{cam['device_name'].rsplit('/', 1)[-1]}.png"
+        try:
+            import cv2
+            cv2.imwrite(out, frame)
+            h, w = frame.shape[:2]
+            log.info("OK — %dx%d frame saved to %s", w, h, out)
+            log.info("Send this image back to have the counting line and exclusion zones placed.")
+        except Exception as e:
+            log.warning("Frame received but could not be saved (%s). The stream itself works.", e)
+        return 0
+    finally:
+        worker.close()
+
+
 def main():
     p = argparse.ArgumentParser(description="MetricsPro Vision edge analyzer")
     p.add_argument("--api", required=True, help="Platform base URL, e.g. https://api.example.com")
@@ -466,10 +775,21 @@ def main():
     p.add_argument("--dry-run", action="store_true",
                    help="Authenticate and fetch config, but open no stream. Use this to prove a "
                         "deployment before pointing it at a camera.")
+    p.add_argument("--probe", action="store_true",
+                   help="Connect to one camera, save a single frame, and exit. Run this FIRST on "
+                        "site — it proves the whole chain in one command, and the image it writes "
+                        "is the still needed to place the counting line.")
+    p.add_argument("--device", default="",
+                   help="With --probe: the camera to test. Defaults to the first one available.")
+    p.add_argument("--out", default="", help="With --probe: where to write the frame.")
+    p.add_argument("--probe-seconds", type=int, default=25,
+                   help="With --probe: how long to wait for the first frame.")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(message)s")
+    if args.probe:
+        sys.exit(probe(args))
     Analyzer(args).run()
 
 

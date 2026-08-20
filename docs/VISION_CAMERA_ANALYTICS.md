@@ -34,6 +34,22 @@ Two facts about Nest cameras drive every design decision:
    and an `expiresAt`; RTSP returns a tokenized URL and a `streamExtensionToken` on the same clock.
    Both must be re-extended before they lapse.
 
+### Which transport a camera speaks
+
+**The app managing the camera decides this, not only the model.** Every Nest camera sold since 2021 is
+WebRTC-only — but so is an older Nest Cam that has been *migrated into the Google Home app*. RTSP
+survives only on devices still managed in the legacy Nest app. So the protocol is read from the
+device's `CameraLiveStream.supportedProtocols` trait at sync time and stored per camera, never
+inferred from a model name.
+
+| Transport | Devices | Analyzer frame source |
+|---|---|---|
+| WebRTC | everything since 2021 (incl. Nest Cam indoor wired 2nd gen), and migrated legacy cameras | `WebRtcFrameSource` (aiortc) |
+| RTSP | legacy cameras still in the Nest app, Dropcams | `RtspFrameSource` (OpenCV) |
+
+Downstream of the frame source the two are identical — the same tracking, line-crossing and
+heat-binning code runs for both, so adding a transport can never change what a crossing means.
+
 So nothing holds a camera open by accident, and the pixel work does not run on Railway:
 
 ```
@@ -122,15 +138,23 @@ Register one per store in **Settings → 5 · Edge analyzers**. The signing secr
 there is no read-back, only rotation. Then, on the store box:
 
 ```bash
-pip install requests opencv-python ultralytics      # ultralytics strongly recommended
+pip install requests opencv-python ultralytics aiortc   # aiortc: required for WebRTC cameras
 python3 backend/vision_edge_analyzer.py \
   --api https://api.example.com \
   --agent-key va_xxxxxxxx --secret <the secret> \
   --tz-offset -420                                  # store's UTC offset in MINUTES
 ```
 
-`--dry-run` authenticates and fetches config without opening a stream — use it to prove a deployment
-before pointing it at a camera.
+**Run `--probe` first, on site.** It connects to one camera, saves a single frame and exits —
+proving the whole chain (agent secret → Google authorization → stream negotiation → decode) in one
+command. The frame it writes is also the still needed for zone placement, so the install visit
+produces that artifact instead of someone screenshotting a phone later:
+
+```bash
+python3 backend/vision_edge_analyzer.py --api … --agent-key … --secret … --probe
+```
+
+`--dry-run` is the weaker check: it authenticates and fetches config without opening a stream.
 
 ### 5.5 Voice transcripts (optional, and the one with legal weight)
 1. Set `VISION_AUDIO_ENABLED=1` on the backend. This is deliberately a **deployment** change: most of
@@ -244,16 +268,20 @@ python3 backend/harness_vision_heatmap.py    # 41 checks — visit pairing, traf
 python3 backend/harness_vision_behavior.py   # 42 checks — redaction, rubric matching, scoring
 python3 backend/harness_vision_sdm.py        # 45 checks — every Google request shape
 python3 backend/harness_vision_ingest.py     # 46 checks — HMAC + what the analyzer may send
+python3 backend/harness_vision_webrtc.py     # 18 checks — the WebRTC frame source (needs aiortc)
 ```
 
 ---
 
 ## 10. Known limits, stated rather than discovered
 
-* **The reference analyzer reads RTSP only.** Every Nest camera released since 2021 is WebRTC-only.
-  The server half of that handshake is complete and proven; the aiortc client half is not written, and
-  a camera it cannot read is logged as skipped. See the analyzer's module docstring for the exact
-  extension point.
+* **The WebRTC path is unverified against real hardware.** Both transports are implemented, but there
+  is no Nest camera in the build environment, so `harness_vision_webrtc.py` proves the WebRTC source
+  against a real aiortc peer standing in for Google — offer shape (both m-lines, recvonly), ICE
+  completeness, decode to BGR, the overwrite-don't-queue frame slot, staleness, and failure
+  reporting. What it cannot prove is that Google accepts this exact offer, that Nest's codecs decode
+  in the field, or that ICE traverses a real store network. `--probe` is the on-site confirmation and
+  it is a single command.
 * **The audio path is not wired up in the reference analyzer.** OpenCV's capture discards the audio
   track, so transcripts need a separate ffmpeg demux + VAD + local ASR. The event contract the server
   enforces is documented in the analyzer docstring and in `app/modules/vision/ingest.py`.
