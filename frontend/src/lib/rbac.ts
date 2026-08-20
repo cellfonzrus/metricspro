@@ -281,6 +281,19 @@ export const NAV: NavGroup[] = [
     { href: '/referral/approvals', label: 'Approvals', icon: '✅', module: 'referral', scopes: ['all', 'market'] },
     { href: '/referral/settings', label: 'Referral Settings', icon: '⚙️', module: 'referral', scopes: ['all'] },
   ]},
+  // Vision (mig 900, owner directive 2026-08-19) — live Google Nest camera feeds, customer in/out
+  // counting + floor heat map, and voice-transcript coaching. Placed after Referral: it is the last
+  // top-of-funnel surface and the only one that is OFF for every tenant until an administrator turns
+  // it on, so it sits below the modules a store uses every day.
+  // 'Coaching' carries a manager scope on purpose — it names individual employees. An employee
+  // reaches their OWN numbers through the server-side /vision/behavior/mine route, which needs no
+  // manager role, so narrowing the nav here does not hide anyone's own data from them.
+  { group: 'Vision', module: 'vision', items: [
+    { href: '/vision', label: 'Live Cameras', icon: '📹', module: 'vision', scopes: ['all', 'market', 'store'] },
+    { href: '/vision/heatmap', label: 'Traffic & Heat Map', icon: '🔥', module: 'vision', scopes: ['all', 'market', 'store'] },
+    { href: '/vision/behavior', label: 'Coaching', icon: '🎧', module: 'vision', scopes: ['all', 'market'] },
+    { href: '/vision/settings', label: 'Vision Settings', icon: '⚙️', module: 'vision', scopes: ['all'] },
+  ]},
   { group: 'Incentives', module: 'commissions', items: [
       { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
