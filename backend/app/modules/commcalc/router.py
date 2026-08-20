@@ -30362,3 +30362,25 @@ def epay_recon(date_from: str = "", date_to: str = "", org_id: str = ORG_ID):
             "totals": {"payment": round(sum(r["payment"] for r in rows), 2),
                        "fee": round(sum(r["fee"] for r in rows), 2),
                        "store_days": len(rows)}}
+
+
+@router.get("/epay/fee-recon")
+def epay_fee_recon(date_from: str = "", date_to: str = "", tolerance: float = 1.0,
+                   authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Fee reconciliation: the Boost 'ePay service charge' our system captured (raw_sales) vs the fee the
+    owner's portal shows (Daily Transaction Detail), per store-day. Biggest discrepancies first — these
+    are what the hourly sweep escalates to DM+. Scoped to the caller's store span."""
+    if not date_from:
+        raise HTTPException(400, "date_from (YYYY-MM-DD) is required")
+    from app.modules.commcalc import epay_fee_recon as _fr
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    out = _fr.fee_recon(get_supabase(), org_id, date_from, date_to or date_from, tolerance=tolerance)
+    if ks is not None:
+        out["rows"] = [r for r in out["rows"] if in_keyset(ks, r.get("store_code"))]
+        out["totals"] = {
+            "system_fee": round(sum(r["system_fee"] for r in out["rows"]), 2),
+            "portal_fee": round(sum(r["portal_fee"] for r in out["rows"]), 2),
+            "var": round(sum(r["var"] for r in out["rows"]), 2),
+            "flagged": sum(1 for r in out["rows"] if r["flag"]), "store_days": len(out["rows"])}
+    return out
