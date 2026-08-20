@@ -27,6 +27,7 @@ import logging
 
 from app.modules.commcalc.calculator import safe_float
 from app.modules.commcalc import carrier_map
+from app.modules.commcalc import epay_fee_recon as _epay_fee
 from app.modules.account import _period
 # Canonical finance period parser lives in _period; re-exported here so existing
 # `coa.parse_period` callers (recon, engine, router) keep resolving unchanged.
@@ -85,6 +86,12 @@ PL_SPEC = [
     ("device_rev",    "Device sales revenue",                        "revenue", "auto",  "store"),
     ("vip_reimb",     "Device-financing reimbursements (Distributor)", "revenue", "auto",  "store"),
     ("service_income","Service fee income (bill-pay & other fees)",  "revenue", "auto",  "store"),
+    # P3 (owner directive 2026-08-20). The Boost ePay "service charge" the store collects is fee INCOME
+    # and gets its OWN P&L line — NOT folded into the generic `service_income` bucket. The dollars are the
+    # SAME figure the ePay fee-recon's "system" side reports (raw_sales lines matching
+    # epay_fee_recon.is_fee_desc), so the books and that recon can never drift. `auto_opt` ⇒ the line
+    # materializes only when it carries value, so a tenant with no ePay fees stays byte-identical.
+    ("epay_fee_income","ePay service charge (fee income)",           "revenue", "auto_opt", "store"),
     ("vip_device_pay","Distributor device payments (PayGo, paid)",   "cogs",    "auto",  "store"),
     ("accessory_cost","Accessory cost",                              "cogs",    "auto",  "store"),
     ("device_cost",   "Device cost",                                 "cogs",    "auto",  "store"),
@@ -684,6 +691,14 @@ def build_inputs(client, org_id, period):
             # It is checked BEFORE accessory/device because an explicit owner pick outranks a taxonomy.
             if service_fee_products and str(prod or "").strip().lower() in service_fee_products:
                 add("service_income", st, ext, detail_label=str(prod or "").strip() or None)
+            elif _epay_fee.is_fee_desc(prod):
+                # P3 (owner 2026-08-20): the Boost ePay service charge is fee INCOME on its OWN line, at
+                # full price with NO COGS (a fee costs the store nothing to collect). SAME matcher the
+                # fee-recon's system side uses (epay_fee_recon.is_fee_desc) so books & recon can't drift.
+                # Ordered AFTER the explicit service_fee_products pick (a tenant that already routed this
+                # product into `service_income` keeps that, no double-count) and BEFORE accessory/device
+                # so the fee is never miscounted as an accessory sale carrying a phantom 20% cost.
+                add("epay_fee_income", st, ext, detail_label="ePay service charge")
             elif is_accessory(dept, cat, prod):
                 add("accessory_rev", st, ext)
                 add("accessory_cost", st, ext * accessory_cogs_pct)
