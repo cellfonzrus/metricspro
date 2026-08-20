@@ -323,6 +323,60 @@ check("referral: SoD predicate ALLOWS a different manager",
       predicate({"authorization": "MGR1", "org_id": ORG}, req_for_pred) is True)
 
 
+# ── remediation (approve RUNS the bounded playbook → executed; reject → rejected) ─────────────────
+import app.modules.remediation.router as RM  # noqa: E402
+
+RM.get_supabase = lambda: fake
+RUN_EXECUTE = []
+RM.pb.run_execute = lambda key, client, org_id, params: (RUN_EXECUTE.append(key), {"ok": True})[1]
+
+
+def seed_rem(status="awaiting_approval"):
+    fake.store[("commcalc", "remediation_request")] = [
+        {"org_id": ORG, "id": "RM1", "title": "recompute GP", "playbook_key": "recompute_gp",
+         "params": {}, "status": status}]
+
+
+# A: decide via the UNIFIED INBOX → approve runs the playbook and flips to executed.
+fake.store.clear(); RUN_EXECUTE.clear(); seed_rem()
+mr = engine.create_request(ORG, type="remediation", title="Automated fix: recompute GP",
+                           source_table="remediation_request", source_id="RM1")
+engine.decide(ORG, mr["id"], decision="approve", actor="ops@x")
+rem = fake.store[("commcalc", "remediation_request")][0]
+check("remediation: an inbox APPROVE runs the playbook and flips to executed",
+      rem["status"] == "executed" and RUN_EXECUTE == ["recompute_gp"], (rem, RUN_EXECUTE))
+check("remediation: ...and stamps the approval_request approved",
+      engine.get_request(ORG, mr["id"])["status"] == "approved")
+
+# A2: an inbox DENY maps to reject (no playbook run).
+fake.store.clear(); RUN_EXECUTE.clear(); seed_rem()
+mr2 = engine.create_request(ORG, type="remediation", title="reject",
+                            source_table="remediation_request", source_id="RM1")
+engine.decide(ORG, mr2["id"], decision="deny", actor="ops@x")
+check("remediation: an inbox DENY flips to rejected and runs NO playbook",
+      fake.store[("commcalc", "remediation_request")][0]["status"] == "rejected" and RUN_EXECUTE == [])
+check("remediation: ...and stamps the approval_request denied",
+      engine.get_request(ORG, mr2["id"])["status"] == "denied")
+
+# B: decide via the LEGACY board (sync only) → inbox reflects it.
+fake.store.clear(); RUN_EXECUTE.clear(); seed_rem()
+mr3 = engine.create_request(ORG, type="remediation", title="legacy",
+                            source_table="remediation_request", source_id="RM1")
+fake.store[("commcalc", "remediation_request")][0].update({"status": "executed"})
+engine.sync_source_decision(ORG, type="remediation", source_table="remediation_request", source_id="RM1",
+                            decision="approve", actor="ops@x")
+check("remediation: a legacy-board decision syncs the inbox request to approved",
+      engine.get_request(ORG, mr3["id"])["status"] == "approved")
+
+# C: idempotency — already executed → inbox decide is a no-op on the row + no playbook run.
+fake.store.clear(); RUN_EXECUTE.clear(); seed_rem(status="executed")
+mr4 = engine.create_request(ORG, type="remediation", title="already done",
+                            source_table="remediation_request", source_id="RM1")
+engine.decide(ORG, mr4["id"], decision="approve", actor="ops@x")
+check("remediation: on_decide leaves an already-executed request untouched (no re-run)",
+      fake.store[("commcalc", "remediation_request")][0]["status"] == "executed" and RUN_EXECUTE == [])
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")

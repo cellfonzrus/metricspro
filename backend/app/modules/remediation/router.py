@@ -284,6 +284,21 @@ async def propose(body: ProposeIn, org_id: str = ORG_ID):
     req = (r.data or [row])[0]
     approval_url = _approval_url(req["id"], token)
     delivery = await _send_approval(req, approval_url)
+    # Intimation into the UNIFIED approvals inbox (org-level / ops-admin scope). notify=False — this
+    # module already emailed/WhatsApp'd the assignee above, so the engine must not send a second message.
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.create_request(
+            org_id, type="remediation", source_table="remediation_request", source_id=req["id"],
+            title=f"Automated fix: {req.get('title') or req.get('issue') or 'remediation'}",
+            summary=(req.get("proposed_action") or req.get("issue") or None),
+            payload={"playbook_key": req.get("playbook_key"), "preview": req.get("preview"),
+                     "issue": req.get("issue")},
+            requested_by=req.get("requested_by"),
+            requested_by_name=(req.get("assignee_contact") or {}).get("name"),
+            priority="high", notify=False)
+    except Exception:
+        pass
     req.pop("approval_token", None)
     return {"request": req, "approval_url": approval_url, "notified": delivery.get("channels", []),
             "delivery": delivery, "preview": preview}
@@ -354,6 +369,15 @@ def decide(req_id: str, body: DecideIn, org_id: str = ORG_ID):
     decided_by = body.decided_by or (req.get("assignee_contact") or {}).get("name") or "approver"
     out = _apply_decision(client, org_id, req, decision, decided_by)
     already = out.pop("_already", False)
+    if not already:
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.sync_source_decision(org_id, type="remediation",
+                                            source_table="remediation_request", source_id=req_id,
+                                            decision=("approve" if decision == "approve" else "deny"),
+                                            actor=decided_by)
+        except Exception:
+            pass
     out.pop("approval_token", None)
     return {"request": out, "already": already}
 
