@@ -30283,3 +30283,82 @@ def mi_resolve(body: MiResolveIn, org_id: str = ORG_ID):
     if not plan:
         raise HTTPException(404, "plan not found")
     return {"ok": True, **_mi_resolve_numbers(client, org_id, period, employee_id, plan)}
+
+
+# ── ePay (Boost) Daily Transaction Detail ingest + recon (owner directive 2026-08-20, migration 903) ──
+# Boost's owner-portal report. MA/VidaPay (Total) is the sibling with its own report (raw_ma_daily_tx);
+# same logic per carrier. Each line resolves to OUR store via the merchant-ID registry (processor 'epay').
+from app.modules.commcalc import epay_ingest as _epay  # noqa: E402
+
+
+def _epay_require_manager(authorization, org_id):
+    from app.modules.storeops.router import _require_manager
+    _require_manager(authorization, org_id)
+
+
+@router.post("/epay/upload")
+async def epay_upload(file: UploadFile = File(...), authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Upload a Boost ePay 'Daily Transaction Detail' export (xlsx/csv). Parses, resolves each terminal to
+    a store via the merchant registry, and stores the lines idempotently. Returns rows saved + any
+    terminals that still need a store mapping (with a suggested store from the UserName)."""
+    _epay_require_manager(authorization, org_id)
+    contents = await file.read()
+    fname = (getattr(file, "filename", "") or "").lower()
+    try:
+        if fname.endswith((".csv", ".txt")):
+            df = None
+            for enc in ("utf-8-sig", "cp1252", "latin-1"):
+                try:
+                    df = pd.read_csv(io.BytesIO(contents), dtype=str, encoding=enc); break
+                except UnicodeDecodeError:
+                    continue
+        else:
+            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
+    if df is None:
+        raise HTTPException(400, "Could not read the file — save it as .xlsx or .csv and retry.")
+    df = df.fillna("")
+    cols = set(str(c).strip() for c in df.columns)
+    if "TransactionID" not in cols or "TerminalID" not in cols:
+        raise HTTPException(400, "This doesn't look like the ePay Daily Transaction Detail report "
+                                 "(missing TransactionID / TerminalID columns).")
+    batch = (fname or "epay") + ":" + str(len(contents))
+    res = _epay.ingest(org_id, df.to_dict("records"), source_batch=batch, client=get_supabase())
+    return {"ok": True, **res}
+
+
+@router.get("/epay/unmapped")
+def epay_unmapped(org_id: str = ORG_ID):
+    """Terminals with ingested rows but no resolved store — the confirm queue, each with a UserName-based
+    suggestion so an admin maps it in one click."""
+    return {"unmapped": _epay.unmapped_terminals(get_supabase(), org_id), "processor": "epay"}
+
+
+@router.post("/epay/map-terminal")
+def epay_map_terminal(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Confirm a terminal -> store mapping. Writes the store's ePay merchant id in the registry AND
+    backfills the already-ingested rows so past days reconcile. Body: {terminal_id, store_code}."""
+    _epay_require_manager(authorization, org_id)
+    from app.modules.storeops import merchant_ids as _mids
+    terminal_id = str(body.get("terminal_id") or "").strip()
+    store_code = str(body.get("store_code") or "").strip()
+    if not (terminal_id and store_code):
+        raise HTTPException(400, "terminal_id and store_code are required")
+    _mids.upsert(org_id, store_code, _epay.PROCESSOR, merchant_id=terminal_id)
+    backfilled = _epay.backfill_store_codes(get_supabase(), org_id, terminal_id, store_code)
+    return {"ok": True, "terminal_id": terminal_id, "store_code": store_code, "rows_backfilled": backfilled}
+
+
+@router.get("/epay/recon")
+def epay_recon(date_from: str = "", date_to: str = "", org_id: str = ORG_ID):
+    """Per-store-day portal PAYMENT + FEE from the ingested ePay rows (the portal side of the recon).
+    date_from/date_to = 'YYYY-MM-DD' (date_to defaults to date_from)."""
+    if not date_from:
+        raise HTTPException(400, "date_from (YYYY-MM-DD) is required")
+    m = _epay.per_store_day(get_supabase(), org_id, date_from, date_to or date_from)
+    rows = [{"store_code": sc, "close_date": d, **vals} for (sc, d), vals in sorted(m.items())]
+    return {"rows": rows,
+            "totals": {"payment": round(sum(r["payment"] for r in rows), 2),
+                       "fee": round(sum(r["fee"] for r in rows), 2),
+                       "store_days": len(rows)}}
