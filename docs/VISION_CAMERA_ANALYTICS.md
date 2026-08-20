@@ -161,7 +161,26 @@ python3 backend/vision_edge_analyzer.py \
   --tz-offset -420                                  # store's UTC offset in MINUTES
 ```
 
-**Run `--probe` first, on site.** It connects to one camera, saves a single frame and exits —
+**Before anything else: can the store's existing computer do the job?**
+
+```bash
+pip install ultralytics
+python3 backend/vision_edge_analyzer.py --benchmark        # no camera, network or credentials needed
+```
+
+It times the real detector on this machine and reports how many cameras it can carry at the
+configured `--detect-fps`, **withholding half the measured capacity** — because the usual host is a
+computer that is also running the register, and a synthetic benchmark on an idle machine always
+flatters it. Run it on the candidate PC while that PC is doing its normal work.
+
+The analyzer also runs at **below-normal process priority by default** (`--priority normal` opts
+out), so the till always wins the CPU. A camera feature that makes a cashier wait is worse than no
+camera feature.
+
+If the machine can't carry a camera at 6 fps, the benchmark prints the rate that *would* work.
+Below about 3 fps a fast walker can cross the counting line between samples and go uncounted.
+
+**Then run `--probe`, on site.** It connects to one camera, saves a single frame and exits —
 proving the whole chain (agent secret → Google authorization → stream negotiation → decode) in one
 command. The frame it writes is also the still needed for zone placement, so the install visit
 produces that artifact instead of someone screenshotting a phone later:
@@ -285,7 +304,7 @@ python3 backend/harness_vision_heatmap.py    # 41 checks — visit pairing, traf
 python3 backend/harness_vision_behavior.py   # 42 checks — redaction, rubric matching, scoring
 python3 backend/harness_vision_sdm.py        # 53 checks — Google request shapes + home mapping
 python3 backend/harness_vision_ingest.py     # 46 checks — HMAC + what the analyzer may send
-python3 backend/harness_vision_webrtc.py     # 18 checks — the WebRTC frame source (needs aiortc)
+python3 backend/harness_vision_webrtc.py     # 30 checks — WebRTC source + machine sizing (needs aiortc)
 ```
 
 ---
@@ -306,9 +325,12 @@ python3 backend/harness_vision_webrtc.py     # 18 checks — the WebRTC frame so
   well clear of what the counting rules need — a person is near the doorway line for 0.5–1s — and it
   is the main CPU dial on a small store box. Below about 3 fps a fast walker can cross between
   samples and go uncounted.
-* **The OpenCV HOG fallback detector under-counts.** It misses seated and heavily occluded people.
-  It exists so the module produces numbers on hardware with no accelerator; the analyzer warns loudly
-  at startup when it is in use, and production deployments should install `ultralytics`.
+* **The OpenCV HOG fallback detector under-counts, and does not exist on OpenCV 5.** It misses
+  seated and heavily occluded people, and OpenCV 5 removed `objdetect` from the default wheel
+  entirely. `ultralytics` is the detector production stores should install. With no detector at all
+  the analyzer **refuses to start** rather than running blind — an analyzer that opens every stream
+  and reports zero customers is indistinguishable from a quiet store, which is the most expensive
+  kind of bug to notice.
 * **Redaction catches digit forms, not spelled-out ones.** An ASR transcript of "four one five…" is
   not caught by a regex. The mitigation that actually holds is the short transcript retention window.
 * **FIFO visit pairing is wrong per customer and right in aggregate.** Visits closed that way carry

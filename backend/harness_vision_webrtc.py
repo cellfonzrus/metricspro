@@ -53,7 +53,8 @@ except Exception as e:                                   # pragma: no cover
     print(f"aiortc/av not installed ({type(e).__name__}) — install with: pip install aiortc")
     sys.exit(0)
 
-from vision_edge_analyzer import WebRtcFrameSource, webrtc_available   # noqa: E402
+from vision_edge_analyzer import (PersonDetector, WebRtcFrameSource,   # noqa: E402
+                                  capacity, webrtc_available)
 
 
 # ── a stand-in for Google: a real peer that answers our offer and sends colour bars ──────────────
@@ -134,6 +135,33 @@ class FakeGoogle:
 
 print("\n(0) Capability detection")
 check("webrtc_available() is True with aiortc installed", webrtc_available() is True)
+
+print("\n(0b) Machine sizing — 'can we reuse the PC already in the store?'")
+# The arithmetic behind --benchmark. Sequential detection across cameras, so the machine's budget is
+# 1/per_detection detections per second and each camera claims detect_fps of them; half is withheld
+# because the usual host is also running the register.
+c = capacity(0.040, 6)                      # 40ms/detection, 6 fps per camera
+check("25 detections/sec measured from 40ms", c["fps_ceiling"] == 25.0)
+check("only half is offered — the register keeps the rest", c["usable_fps"] == 12.5)
+check("12.5 usable / 6 fps -> 2 cameras", c["cameras"] == 2)
+check("halving the frame rate doubles the cameras", capacity(0.040, 3)["cameras"] == 4)
+check("a slow machine reports ZERO cameras rather than rounding up to one",
+      capacity(0.200, 6)["cameras"] == 0)
+check("and tells the operator the rate that WOULD work",
+      capacity(0.200, 6)["max_fps_for_one_camera"] == 2.5)
+check("a fast machine scales linearly", capacity(0.010, 6)["cameras"] == 8)
+check("headroom is honoured when overridden", capacity(0.040, 6, headroom=1.0)["cameras"] == 4)
+check("a nonsense measurement cannot divide by zero", capacity(0, 6)["cameras"] > 0)
+check("detect_fps is floored so it can never divide by zero", capacity(0.040, 0)["detect_fps"] == 0.5)
+
+print("\n(0c) A missing detector is refused, not run blind")
+det = PersonDetector(prefer_yolo=False)
+if det.kind is None:
+    check("unavailable_message names the cause", bool(det.reason))
+    check("...and gives the fix", "pip install ultralytics" in det.unavailable_message())
+else:
+    check(f"a detector IS available here ({det.kind}) — nothing to refuse", True)
+    check("...and it reports its kind", det.kind in ("yolov8n", "opencv-hog"))
 
 print("\n(1)/(2)/(3) Negotiation — offer shape, ICE completeness, connection")
 google = FakeGoogle()

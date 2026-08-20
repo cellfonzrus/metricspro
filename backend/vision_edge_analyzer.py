@@ -74,6 +74,7 @@ ONE PATH THIS REFERENCE BUILD DOES NOT IMPLEMENT, STATED PLAINLY
 """
 import argparse
 import hashlib
+import os
 import hmac
 import json
 import logging
@@ -137,13 +138,22 @@ class Api:
 class PersonDetector:
     """Returns [{"x","y","w","h","conf"}] in NORMALIZED coordinates.
 
-    Two backends. YOLO when it is installed (what a real deployment should use); OpenCV's built-in
-    HOG people detector otherwise. The HOG path is genuinely weaker — it misses seated and heavily
-    occluded people — and that is reported at startup rather than discovered later as "the counts
-    look low", because an undercount that nobody was warned about is worse than no count."""
+    Two backends, tried in order.
+
+    YOLO (`ultralytics`) is the real one and what a production store should run: it handles seated
+    people, partial occlusion and oblique ceiling angles, which is most of what a shop floor is.
+
+    OpenCV's HOG people detector is a legacy fallback for a machine with nothing else. Two warnings
+    about it, both learned the hard way: it MISSES seated and heavily occluded people, so counts read
+    low; and it does not exist at all in OpenCV 5, which removed `objdetect` from the default wheel.
+    So the lookup below tries both module locations and then gives up honestly rather than leaving a
+    detector that returns nothing — an analyzer that runs all day and reports zero customers looks
+    exactly like a quiet store, which is the most expensive kind of bug to notice.
+    """
 
     def __init__(self, prefer_yolo=True):
         self.kind = None
+        self.reason = ""
         self._yolo = None
         self._hog = None
         if prefer_yolo:
@@ -151,16 +161,42 @@ class PersonDetector:
                 from ultralytics import YOLO
                 self._yolo = YOLO("yolov8n.pt")
                 self.kind = "yolov8n"
+                return
             except Exception as e:
-                log.info("YOLO unavailable (%s) — falling back to OpenCV HOG", type(e).__name__)
-        if not self._yolo:
+                self.reason = f"ultralytics unavailable ({type(e).__name__})"
+                log.info("YOLO unavailable (%s) — trying the OpenCV fallback", type(e).__name__)
+        self._load_hog()
+
+    def _load_hog(self):
+        """HOG lives in `cv2` on OpenCV 4 and in `cv2.objdetect` where that module is built; it is
+        absent from the default OpenCV 5 wheel. Try each, then say which it was."""
+        try:
+            import cv2
+        except Exception as e:
+            self.reason = f"opencv not installed ({type(e).__name__})"
+            return
+        for holder in (cv2, getattr(cv2, "objdetect", None)):
+            if holder is None or not hasattr(holder, "HOGDescriptor"):
+                continue
             try:
-                import cv2
-                self._hog = cv2.HOGDescriptor()
-                self._hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+                hog = holder.HOGDescriptor()
+                getter = (getattr(holder, "HOGDescriptor_getDefaultPeopleDetector", None)
+                          or getattr(holder.HOGDescriptor, "getDefaultPeopleDetector", None))
+                if getter is None:
+                    continue
+                hog.setSVMDetector(getter())
+                self._hog = hog
                 self.kind = "opencv-hog"
-            except Exception as e:
-                log.warning("No detector available (%s) — detection disabled", type(e).__name__)
+                return
+            except Exception:
+                continue
+        self.reason = (f"opencv {getattr(cv2, '__version__', '?')} has no HOG people detector "
+                       "(removed in OpenCV 5)")
+
+    def unavailable_message(self) -> str:
+        return (f"No person detector is available on this machine — {self.reason or 'unknown reason'}. "
+                "Install one with:  pip install ultralytics   "
+                "(that is also the detector production stores should use).")
 
     def __call__(self, frame):
         if frame is None or self.kind is None:
@@ -449,6 +485,110 @@ class WebRtcFrameSource(FrameSource):
             self._frame = None
 
 
+def lower_priority() -> bool:
+    """Drop this process below normal scheduling priority.
+
+    THE POINT OF THIS ONE LINE: most stores already have a computer, and the cheapest deployment is
+    to reuse it — but that computer is usually running the register. A camera feature that makes a
+    cashier wait is worse than no camera feature, and it is the kind of harm that gets a whole system
+    ripped out. At below-normal priority the OS hands the CPU to the till first and gives the
+    analyzer only what is left over; a few dropped detections cost far less than a slow sale.
+
+    Best-effort by design — an OS that refuses is not a reason to fail to start."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            return bool(ctypes.windll.kernel32.SetPriorityClass(handle,
+                                                                BELOW_NORMAL_PRIORITY_CLASS))
+        os.nice(10)
+        return True
+    except Exception:
+        return False
+
+
+def capacity(per_detection_s: float, detect_fps: float, headroom: float = 0.5) -> dict:
+    """How many cameras a machine of this measured speed can carry. PURE — proven offline.
+
+    The analyzer detects sequentially across cameras in one loop, so the machine's total budget is
+    `1 / per_detection` detections per second, and each camera claims `detect_fps` of them.
+
+    `headroom` is the half of the measured capacity deliberately NOT offered. It exists because the
+    common deployment is a computer that is already running the store's register, and because a
+    synthetic benchmark on an idle machine always flatters it relative to a real shop at 5pm. Give
+    away the whole measured number and the first busy Saturday turns into a slow till.
+    """
+    per = max(1e-9, float(per_detection_s))
+    fps_ceiling = 1.0 / per
+    usable = fps_ceiling * max(0.0, min(1.0, headroom))
+    target = max(0.5, float(detect_fps))
+    return {
+        "ms_per_detection": round(per * 1000, 1),
+        "fps_ceiling": round(fps_ceiling, 1),
+        "usable_fps": round(usable, 1),
+        "detect_fps": target,
+        "cameras": int(usable // target),
+        # If it cannot carry one camera at the requested rate, the honest alternative is a slower
+        # rate — reported so the operator has a number to try rather than "buy a better machine".
+        "max_fps_for_one_camera": round(usable, 1),
+    }
+
+
+def benchmark(args) -> int:
+    """Measure what THIS machine can actually do, and say how many cameras it can carry.
+
+    "Can we reuse the PC we already have?" has no general answer — it depends on the box, the
+    detector, and how many cameras that store has. Rather than guess, this times the real detector on
+    real-sized frames and does the arithmetic. It needs no camera, no network and no credentials, so
+    it can be run on a candidate machine before anything else is set up."""
+    import numpy as np
+
+    det = PersonDetector(prefer_yolo=not args.no_yolo)
+    if det.kind is None:
+        log.error(det.unavailable_message())
+        return 1
+
+    # A 720p frame with some structure in it — a flat grey image is unrepresentatively fast for HOG,
+    # which would produce a benchmark that flatters the machine.
+    rng = np.random.default_rng(7)
+    frame = rng.integers(0, 255, (720, 1280, 3), dtype=np.uint8)
+
+    log.info("detector: %s · warming up…", det.kind)
+    for _ in range(3):
+        det(frame)
+
+    runs = max(5, args.benchmark_runs)
+    started = time.perf_counter()
+    for _ in range(runs):
+        det(frame)
+    per_detection = (time.perf_counter() - started) / runs
+
+    cap = capacity(per_detection, args.detect_fps)
+
+    log.info("")
+    log.info("  %.1f ms per detection  (%.1f detections/sec at full tilt)",
+             cap["ms_per_detection"], cap["fps_ceiling"])
+    log.info("  at --detect-fps %.1f, with 50%% headroom left for the register:", cap["detect_fps"])
+    log.info("")
+    if cap["cameras"] >= 1:
+        log.info("  ==> this machine can carry about %d camera%s", cap["cameras"],
+                 "" if cap["cameras"] == 1 else "s")
+    else:
+        log.warning("  ==> NOT enough for one camera at %.1f fps.", cap["detect_fps"])
+        log.warning("      Try --detect-fps %.1f, or use a faster machine. Below about 3 fps a fast "
+                    "walker can cross the counting line between samples and go uncounted.",
+                    cap["max_fps_for_one_camera"])
+    log.info("")
+    log.info("  Detector in use: %s", det.kind)
+    if det.kind == "opencv-hog":
+        log.info("  This is the FALLBACK detector. It is slower AND less accurate than YOLO — it "
+                 "misses seated and partly hidden people, so counts read low. Install ultralytics "
+                 "and re-run this before deciding the machine is too slow.")
+    log.info("  Run this on the actual store computer, while it is doing its normal work.")
+    return 0
+
+
 def webrtc_available():
     """True when aiortc is installed. Checked by spec rather than by importing, so a probe for the
     capability never drags a heavy dependency into a process that is not going to use it."""
@@ -677,16 +817,20 @@ class Analyzer:
             self.outbox = batch + self.outbox        # put it back; nothing is dropped on a blip
             del self.outbox[:-5000]                   # but the queue is bounded, oldest first
 
-    def run(self):
+    def run(self) -> int:
         signal.signal(signal.SIGINT, self._stop)
         signal.signal(signal.SIGTERM, self._stop)
         hello = self.api.call("POST", "heartbeat", {"version": "1.0.0"})
         log.info("authenticated as %s (store %s); module enabled=%s",
                  hello.get("agent_key"), hello.get("store_code"), hello.get("enabled"))
-        if self.detector.kind is None:
-            log.warning("NO DETECTOR AVAILABLE — install opencv-python (and ideally ultralytics). "
-                        "Running in config-only mode.")
-        elif self.detector.kind == "opencv-hog":
+        if self.detector.kind is None and not self.args.dry_run:
+            # REFUSE rather than run. An analyzer with no detector opens every stream, burns the
+            # bandwidth, posts nothing, and reports zero customers — which is indistinguishable from
+            # a quiet store. Failing at startup, loudly, costs one minute; failing silently costs
+            # however long it takes someone to disbelieve the dashboard.
+            log.error(self.detector.unavailable_message())
+            return 1
+        if self.detector.kind == "opencv-hog":
             log.warning("Using the OpenCV HOG detector. It misses seated and heavily occluded "
                         "people, so counts will read LOW. Install ultralytics for production.")
 
@@ -724,6 +868,7 @@ class Analyzer:
             w.close()
         self.post()
         log.info("stopped")
+        return 0
 
     def _stop(self, *_a):
         self.running = False
@@ -797,9 +942,12 @@ def probe(args):
 
 def main():
     p = argparse.ArgumentParser(description="MetricsPro Vision edge analyzer")
-    p.add_argument("--api", required=True, help="Platform base URL, e.g. https://api.example.com")
-    p.add_argument("--agent-key", required=True, help="The va_… key from Vision → Settings")
-    p.add_argument("--secret", required=True, help="The signing secret shown once at registration")
+    # Not `required` at the parser level: --benchmark deliberately needs NO credentials, so it can
+    # be run on a candidate store PC before anyone has registered an analyzer or linked Google. The
+    # requirement is enforced below, only for the modes that actually talk to the platform.
+    p.add_argument("--api", default="", help="Platform base URL, e.g. https://api.example.com")
+    p.add_argument("--agent-key", default="", help="The va_… key from Vision → Settings")
+    p.add_argument("--secret", default="", help="The signing secret shown once at registration")
     p.add_argument("--tz-offset", type=int, default=0,
                    help="Store local time offset from UTC in MINUTES (e.g. -420 for PDT). This is "
                         "what files the 11pm rush under the right business date.")
@@ -821,13 +969,29 @@ def main():
     p.add_argument("--out", default="", help="With --probe: where to write the frame.")
     p.add_argument("--probe-seconds", type=int, default=25,
                    help="With --probe: how long to wait for the first frame.")
+    p.add_argument("--benchmark", action="store_true",
+                   help="Measure this machine and report how many cameras it can carry. Needs no "
+                        "camera, network or credentials — run it on a candidate store PC first.")
+    p.add_argument("--benchmark-runs", type=int, default=20,
+                   help="With --benchmark: how many detections to time.")
+    p.add_argument("--priority", choices=("low", "normal"), default="low",
+                   help="Scheduling priority (default low). Low keeps the register responsive when "
+                        "the analyzer shares a machine with the point of sale.")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(message)s")
+    if args.benchmark:
+        sys.exit(benchmark(args))
+    missing = [f"--{n.replace('_', '-')}" for n in ("api", "agent_key", "secret")
+               if not getattr(args, n)]
+    if missing:
+        p.error("required for this mode: " + ", ".join(missing))
+    if args.priority == "low" and not lower_priority():
+        log.debug("could not lower process priority; continuing at normal priority")
     if args.probe:
         sys.exit(probe(args))
-    Analyzer(args).run()
+    sys.exit(Analyzer(args).run() or 0)
 
 
 if __name__ == "__main__":
