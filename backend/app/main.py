@@ -206,6 +206,52 @@ def _security_posture_startup():
         pass
 
 
+# ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────
+# The modules list here used to be a hardcoded literal, and it went stale the moment a module was
+# added without someone editing it — by 2026-08 it was missing pos, crm, referral, payables, billing,
+# recovery, remediation, asset, approvals, chat and vision. That is worse than useless: it is a
+# health endpoint that CONFIDENTLY MISREPORTS the deployment.
+#
+# It cost a real support round trip. After the vision module merged, the frontend deployed and the
+# backend had not; every /api/v1/vision/* call 404'd, and there was no cheap way to confirm "does the
+# running API have this module" — /health said nothing about it either way, so the answer had to come
+# from reading the OpenAPI page by eye.
+#
+# Now the list is DERIVED from the routes mounted on this app, so it cannot drift, and the deployed
+# commit is surfaced from the platform's own build env (Railway sets RAILWAY_GIT_COMMIT_SHA). Between
+# them, "is my change live?" is one request with an unambiguous answer.
+_MOUNTED_MODULES = None
+
+
+def _mounted_modules():
+    """Module prefixes under /api/v1 on this running image. Computed once; never raises — a health
+    check that can fail is not a health check."""
+    global _MOUNTED_MODULES
+    if _MOUNTED_MODULES is None:
+        try:
+            mods = set()
+            for path in (app.openapi().get("paths") or {}):
+                parts = path.strip("/").split("/")
+                if len(parts) >= 3 and parts[0] == "api" and parts[1] == "v1":
+                    mods.add(parts[2])
+            _MOUNTED_MODULES = sorted(mods)
+        except Exception:
+            return []
+    return _MOUNTED_MODULES
+
+
+def _deployed_commit():
+    """Short sha of the commit this image was built from, when the platform tells us. Railway sets
+    RAILWAY_GIT_COMMIT_SHA; the generic names cover other hosts and local runs."""
+    for var in ("RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "GIT_COMMIT", "VERCEL_GIT_COMMIT_SHA"):
+        sha = (os.environ.get(var) or "").strip()
+        if sha:
+            return sha[:7]
+    return None
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.0.0", "modules": ["commcalc", "storeops", "notify", "core", "account", "storevisit", "closing", "helpdesk", "hr"]}
+    return {"status": "ok", "version": "1.0.0",
+            "commit": _deployed_commit(),
+            "modules": _mounted_modules()}

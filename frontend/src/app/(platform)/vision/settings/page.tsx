@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig } from '@/lib/vision'
+import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
+} from '@/lib/vision'
 
 export default function VisionSettingsPage() {
   const [status, setStatus] = useState<any>(null)
@@ -28,7 +29,7 @@ export default function VisionSettingsPage() {
       try { setConsent((await api('/api/v1/vision/consent')).consent || []) } catch { setConsent([]) }
       // Only meaningful once Google is linked; a failure here is not a page failure.
       try { setHomes((await api('/api/v1/vision/structures')).structures || []) } catch { setHomes(null) }
-    } catch (e: any) { setErr(e?.message || String(e)) }
+    } catch (e: any) { setErr(visionError(e)) }
   }, [])
 
   useEffect(() => { void load() }, [load])
@@ -36,7 +37,7 @@ export default function VisionSettingsPage() {
   async function act(fn: () => Promise<any>, ok: string) {
     setBusy(true); setMsg(''); setErr('')
     try { await fn(); setMsg(ok); await load() }
-    catch (e: any) { setErr(e?.message || String(e)) }
+    catch (e: any) { setErr(visionError(e)) }
     finally { setBusy(false) }
   }
 
@@ -371,7 +372,7 @@ function GoogleLink({ canEdit, linked, onDone }: { canEdit: boolean; linked: boo
       })
       const r = await api(`/api/v1/vision/google/auth-url?redirect_uri=${encodeURIComponent(redirect)}`)
       setUrl(r.url)
-    } catch (e: any) { setErr(e?.message || String(e)) }
+    } catch (e: any) { setErr(visionError(e)) }
     finally { setBusy(false) }
   }
 
@@ -383,7 +384,7 @@ function GoogleLink({ canEdit, linked, onDone }: { canEdit: boolean; linked: boo
         body: JSON.stringify({ code, redirect_uri: redirect, client_id: clientId, client_secret: secret }),
       })
       setCode(''); setUrl(''); onDone()
-    } catch (e: any) { setErr(e?.message || String(e)) }
+    } catch (e: any) { setErr(visionError(e)) }
     finally { setBusy(false) }
   }
 

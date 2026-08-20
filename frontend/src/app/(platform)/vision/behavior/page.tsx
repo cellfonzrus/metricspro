@@ -14,7 +14,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import {
   panel, btn, btnPrimary, cell, th, fmtDuration, daysAgo, today,
-  type BehaviorEmployee, type Camera, type VisionConfig,
+  type BehaviorEmployee, type Camera, type VisionConfig, visionError,
 } from '@/lib/vision'
 
 export default function VisionBehaviorPage() {
@@ -35,7 +35,7 @@ export default function VisionBehaviorPage() {
         setCameras(r.cameras || []); setConfig(r.config || null)
         const first = (r.cameras || []).map((c: Camera) => c.store_code).filter(Boolean)[0]
         if (first) setStore(first)
-      } catch (e: any) { setMsg(e?.message || String(e)) }
+      } catch (e: any) { setMsg(visionError(e)) }
     })()
   }, [])
 
@@ -44,7 +44,7 @@ export default function VisionBehaviorPage() {
     setBusy(true); setMsg('')
     try {
       setData(await api(`/api/v1/vision/behavior?store_code=${encodeURIComponent(store)}&date_from=${from}&date_to=${to}`))
-    } catch (e: any) { setMsg(e?.message || String(e)); setData(null) }
+    } catch (e: any) { setMsg(visionError(e)); setData(null) }
     finally { setBusy(false) }
   }, [store, from, to])
 
@@ -56,7 +56,7 @@ export default function VisionBehaviorPage() {
       const r = await api(`/api/v1/vision/behavior/recompute?store_code=${encodeURIComponent(store)}&date_from=${from}&date_to=${to}`, { method: 'POST' })
       setMsg(`Re-scored ${r.rows} employee-day row(s).`)
       await load()
-    } catch (e: any) { setMsg(e?.message || String(e)) }
+    } catch (e: any) { setMsg(visionError(e)) }
     finally { setBusy(false) }
   }
 
