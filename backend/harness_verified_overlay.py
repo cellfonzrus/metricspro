@@ -76,6 +76,20 @@ check("has_correction False for a verified-but-uncorrected row", V.has_correctio
 check("has_correction False for None", V.has_correction(None) is False)
 
 
+# ── overlay_cash_reader: deposit/cash-position shape — corrects t_cash + epay subset, NEVER zeroes ──
+cr = {"t_cash": 500.0, "epay_cash": 120.0, "rows": 3}   # epay_cash here = ePay-ON-cash SUBSET
+V.overlay_cash_reader(cr, {"dm_store_cash": 800.0})
+check("cash-reader: dm_store_cash overrides t_cash (total cash)", cr["t_cash"] == 800.0, cr)
+check("cash-reader: the ePay-on-cash subset is NEVER zeroed by a cash-total correction", cr["epay_cash"] == 120.0, cr)
+cr2 = {"t_cash": 500.0, "epay_cash": 120.0}
+V.overlay_cash_reader(cr2, {"dm_epay_cash": 90.0})
+check("cash-reader: dm_epay_cash overrides the ePay-on-cash portion", cr2["epay_cash"] == 90.0, cr2)
+check("cash-reader: an ePay-portion correction leaves t_cash alone", cr2["t_cash"] == 500.0, cr2)
+cr3 = {"t_cash": 500.0}   # no epay_cash key
+V.overlay_cash_reader(cr3, None)
+check("cash-reader: None dm_row is a no-op", cr3["t_cash"] == 500.0, cr3)
+
+
 # ── build_overlay_map: only verified rows, keyed by (NORM store, date) ─────────────────────────────
 class _R:
     def __init__(self, data): self.data = data

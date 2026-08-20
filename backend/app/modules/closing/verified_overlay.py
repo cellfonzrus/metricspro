@@ -120,3 +120,48 @@ def apply_overlay(agg, dm_row):
     if dm_row.get("dm_epay_cc") is not None:
         _set(("epay_on_cc",), _f(dm_row["dm_epay_cc"]))
     return agg
+
+
+def overlay_cash_reader(agg, dm_row):
+    """Overlay for the DEPOSIT / CASH-POSITION reader shape, where the aggregate is
+    `{"t_cash": <total cash>, "epay_cash": <ePay-ON-cash subset>, ...}`.
+
+    ⚠️ Here `epay_cash` is the ePay bill-payment PORTION of the cash (a subset, used downstream as
+    `bill_payment_cash`, with the physical store-cash basis derived as `t_cash − epay_cash`). It is NOT
+    a folded sibling ADDED to the total — so, unlike `apply_overlay`, it must NEVER be zeroed when the
+    cash total is corrected (that would silently move the deposit-cash basis). `dm_store_cash` corrects
+    the TOTAL cash (`t_cash`); `dm_epay_cash` corrects the ePay-on-cash portion (`epay_cash`)."""
+    if not dm_row:
+        return agg
+    if dm_row.get("dm_store_cash") is not None and "t_cash" in agg:
+        agg["t_cash"] = _f(dm_row["dm_store_cash"])
+    if dm_row.get("dm_epay_cash") is not None and "epay_cash" in agg:
+        agg["epay_cash"] = _f(dm_row["dm_epay_cash"])
+    return agg
+
+
+def overlay_tender_legs(agg, dm_row):
+    """Overlay for the 3-way TENDER-recon shape, where the aggregate is keyed by tender KEY
+    ('cash', 'credit', 'ext_cc', 'gift', 'store_acct', 'zelle', 'acima') summed from the t_* columns.
+    Maps the DM's corrected TOTALS onto the matching legs and zeroes the folded siblings so a leg total
+    is never double-counted (credit folds ext_cc; zelle folds store_acct + gift). Accessory and ePay-split
+    corrections have no tender leg in this recon and are ignored."""
+    if not dm_row:
+        return agg
+
+    def _set(k, v):
+        if k in agg:
+            agg[k] = v
+
+    def _zero(*ks):
+        for k in ks:
+            if k in agg:
+                agg[k] = 0.0
+
+    if dm_row.get("dm_store_cash") is not None:
+        _set("cash", _f(dm_row["dm_store_cash"]))
+    if dm_row.get("dm_store_cc") is not None:
+        _set("credit", _f(dm_row["dm_store_cc"])); _zero("ext_cc")
+    if dm_row.get("dm_other") is not None:
+        _set("zelle", _f(dm_row["dm_other"])); _zero("store_acct", "gift")
+    return agg

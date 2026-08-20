@@ -6460,13 +6460,38 @@ def x_tender_recon(date: str = "", period: str = "", tolerance: float = 1.0, org
         cls = (r.get('tender_class') or 'other')
         p[cls if cls in p else 'other'] += safe_float(r.get('amount'))
     clo = {}
+    _xsd = {}   # (address key, store_code, day) -> {cash, card} rep-sum, for the TKT-1030 overlay
     for r in drows:
         s = (r.get('store_address') or r.get('store_name') or r.get('store_code') or '').strip()
         if not s:
             continue
+        _cash = safe_float(r.get('store_cash')) + safe_float(r.get('epay_cash'))
+        _card = safe_float(r.get('store_cc')) + safe_float(r.get('epay_cc'))
         c = clo.setdefault(s, {'cash': 0.0, 'card': 0.0})
-        c['cash'] += safe_float(r.get('store_cash')) + safe_float(r.get('epay_cash'))
-        c['card'] += safe_float(r.get('store_cc')) + safe_float(r.get('epay_cc'))
+        c['cash'] += _cash
+        c['card'] += _card
+        _xk = (s, (r.get('store_code') or '').strip(), str(r.get('close_date') or '')[:10])
+        _xa = _xsd.setdefault(_xk, {'cash': 0.0, 'card': 0.0})
+        _xa['cash'] += _cash
+        _xa['card'] += _card
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): a verified DM cash/credit correction is
+    # the authoritative CLOSING figure this recon compares against the X-report. Applied as a per-store-day
+    # delta on the closing side only (the X-report is the actual — never overridden). No-op without a
+    # correction. store keys here are addresses, so we look the override up by each row's store_code.
+    try:
+        from app.modules.closing import verified_overlay as _vo
+        _xov = _vo.build_overlay_map(client, org_id, {d for (_s, _c, d) in _xsd.keys()})
+        if _xov:
+            for (s, sc, d), _raw in _xsd.items():
+                _dm = _xov.get((_vo._norm(sc), d))
+                if not _dm or s not in clo:
+                    continue
+                if _dm.get('dm_store_cash') is not None:
+                    clo[s]['cash'] = round(clo[s]['cash'] - _raw['cash'] + _vo._f(_dm['dm_store_cash']), 2)
+                if _dm.get('dm_store_cc') is not None:
+                    clo[s]['card'] = round(clo[s]['card'] - _raw['card'] + _vo._f(_dm['dm_store_cc']), 2)
+    except Exception:
+        pass
 
     rows_out, t = [], {'pos_cash': 0.0, 'closing_cash': 0.0, 'pos_card': 0.0, 'closing_card': 0.0}
     for s in sorted(set(pos) | set(clo)):

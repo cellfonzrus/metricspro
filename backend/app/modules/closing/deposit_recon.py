@@ -173,6 +173,21 @@ def closing_cash_raw_by_store_day(client, org_id, date_from, date_to, store_code
     for a in out.values():
         a["t_cash"] = round(a["t_cash"], 2)
         a["epay_cash"] = round(a["epay_cash"], 2)
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): once a store-day is verified, the DM's
+    # corrected cash is authoritative. Every consumer of this reader — the bank-deposit expectation, the
+    # deposit-recon report, and the Management-Incentive cash-deposit bonus gate — then reconciles against
+    # the corrected cash, not the rep's raw sum. Best-effort; a failure leaves the raw figures (today's
+    # behavior). `epay_cash` here is the ePay-on-cash SUBSET, so overlay_cash_reader never zeroes it.
+    try:
+        from . import verified_overlay as _vo
+        _ov = _vo.build_overlay_map(client, org_id, {d for (_s, d) in out.keys()})
+        if _ov:
+            for (sc, d), agg in out.items():
+                dm = _ov.get((_vo._norm(sc), str(d)[:10]))
+                if dm:
+                    _vo.overlay_cash_reader(agg, dm)
+    except Exception:
+        pass
     return out
 
 
