@@ -3471,7 +3471,19 @@ def _attendance_rows_for_range(org_id, start, end, client=None):
     cfg, available = _attn.get_tenant_attendance_config(org_id, client)
     tz = _biz_tz_for(org_id)
     now = datetime.now(timezone.utc)
-    rows = _attn.compute_attendance_exceptions(shifts, punches, timeoff, cfg, now, tz)
+    # Resolve EACH store's own timezone (migration 851) so a multi-timezone tenant's shifts are
+    # evaluated + displayed in the STORE's local time (a Chicago store's 09:45 is Central), not the
+    # tenant default. `tz` remains the per-store fallback. Fixes the Accountability review showing
+    # cross-timezone stores' clock-ins in the wrong zone (owner-reported 2026-08-20).
+    _stores = {s.get("store_code") for s in shifts if s.get("store_code")}
+    _stores |= {p.get("store_code") for p in punches if p.get("store_code")}
+    store_tz = {}
+    for _sc in _stores:
+        try:
+            store_tz[_sc] = _biz_tz_for_store(org_id, _sc)
+        except Exception:
+            pass
+    rows = _attn.compute_attendance_exceptions(shifts, punches, timeoff, cfg, now, tz, store_tz=store_tz)
     return rows, cfg, available, limit_hit
 
 

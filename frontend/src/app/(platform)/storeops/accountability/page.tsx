@@ -83,17 +83,17 @@ export default function AccountabilityPage() {
   // the visible/filtered employees — what you see is what exports.
   const incidentRows = useMemo(() => emps.flatMap(e => (e.incidents || []).map((i: any) => ({
     employee: e.employee, work_date: i.work_date, store_code: i.store_code,
-    clock_in: i.actual_clock_in, minutes_late: i.late ? i.minutes_late : '',
-    clock_out: i.actual_clock_out, minutes_early: i.left_early ? i.minutes_early : '',
+    clock_in: i.actual_clock_in, clock_in_local: i.actual_clock_in_local, minutes_late: i.late ? i.minutes_late : '',
+    clock_out: i.actual_clock_out, clock_out_local: i.actual_clock_out_local, minutes_early: i.left_early ? i.minutes_early : '',
     times_late_period: e.late,
   })).filter((r: any) => r.minutes_late !== '' || r.minutes_early !== '')), [emps])
   const cols: ExportColumn[] = [
     { header: 'Employee', field: 'employee', role: 'rep', get: r => r.employee || '' },
     { header: 'Date', field: 'work_date', role: 'date', type: 'date', get: r => r.work_date || '' },
     { header: 'Store', field: 'store_code', role: 'store', get: r => r.store_code || '' },
-    { header: 'Clock in', field: 'clock_in', get: r => fmtTime(r.clock_in) },
+    { header: 'Clock in', field: 'clock_in', get: r => r.clock_in_local || fmtTime(r.clock_in) },
     { header: 'Min late', field: 'minutes_late', type: 'number', get: r => r.minutes_late === '' ? '' : String(r.minutes_late) },
-    { header: 'Clock out', field: 'clock_out', get: r => r.clock_out ? fmtTime(r.clock_out) : '' },
+    { header: 'Clock out', field: 'clock_out', get: r => r.clock_out_local || (r.clock_out ? fmtTime(r.clock_out) : '') },
     { header: 'Min early', field: 'minutes_early', type: 'number', get: r => r.minutes_early === '' ? '' : String(r.minutes_early) },
     { header: 'Times late (period)', field: 'times_late_period', type: 'number', get: r => String(r.times_late_period ?? '') },
   ]
@@ -157,7 +157,7 @@ export default function AccountabilityPage() {
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                                   {lateInc.map((x: any, j: number) => (
                                     <span key={j} style={{ fontSize: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}>
-                                      <b>{x.work_date}</b> · in {fmtTime(x.actual_clock_in)} <span style={{ color: '#b45309' }}>({x.minutes_late}m late)</span>{x.store_code ? ` · ${x.store_code}` : ''}
+                                      <b>{x.work_date}</b> · in {x.actual_clock_in_local || fmtTime(x.actual_clock_in)} <span style={{ color: '#b45309' }}>({x.minutes_late}m late)</span>{x.store_code ? ` · ${x.store_code}` : ''}
                                     </span>
                                   ))}
                                 </div>
@@ -169,7 +169,7 @@ export default function AccountabilityPage() {
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                                   {earlyInc.map((x: any, j: number) => (
                                     <span key={j} style={{ fontSize: 12, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px' }}>
-                                      <b>{x.work_date}</b> · out {fmtTime(x.actual_clock_out)} <span style={{ color: '#b45309' }}>({x.minutes_early}m early)</span>{x.store_code ? ` · ${x.store_code}` : ''}
+                                      <b>{x.work_date}</b> · out {x.actual_clock_out_local || fmtTime(x.actual_clock_out)} <span style={{ color: '#b45309' }}>({x.minutes_early}m early)</span>{x.store_code ? ` · ${x.store_code}` : ''}
                                     </span>
                                   ))}
                                 </div>

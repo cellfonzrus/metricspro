@@ -105,6 +105,17 @@ def _parse_iso_utc(s):
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
+def _fmt_local(dt, tz):
+    """A UTC datetime → a friendly 'h:MM AM/PM' string in the STORE's zone, for display. The row also
+    keeps the raw UTC ISO; a client that shows this pre-formatted string can't re-introduce a zone bug."""
+    if not dt:
+        return None
+    try:
+        return dt.astimezone(tz).strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return None
+
+
 def _parse_hhmm_local(date_str, hhmm, tz):
     """Combine a 'YYYY-MM-DD' shift_date + 'HH:MM' business-local wall time into an aware UTC datetime,
     or None on any parse failure — mirrors router.py's `_biz_dt_utc`, but takes an already-resolved
@@ -194,9 +205,16 @@ def _excused_reason(time_off_rows_for_emp, work_date):
     return None
 
 
-def compute_attendance_exceptions(shifts, punches, time_off_rows, config, now_utc, tz):
+def compute_attendance_exceptions(shifts, punches, time_off_rows, config, now_utc, tz, store_tz=None):
     """PURE (no DB). shifts/punches/time_off_rows are already-fetched, already-org-scoped,
     already-id-canonicalized (business employee_id) rows for the SAME (org, date-range) window.
+
+    `store_tz` (optional {store_code: tzinfo}) resolves each shift's LOCAL start/end in that STORE's
+    OWN zone — so a Chicago (Central) store's "09:45" is 09:45 Central, not 09:45 in the tenant's
+    default zone. Without it (or for a store not in the map) it falls back to `tz`, the tenant zone —
+    byte-identical to the old single-zone behaviour for a single-timezone tenant. This is the same
+    per-store zone the time clock itself uses (migration 851); the accountability path had never
+    adopted it, so cross-timezone stores were evaluated + displayed in the wrong zone.
 
     shifts row keys used:    id, employee_id, employee_name, store_code, shift_date ('YYYY-MM-DD'),
                               start_time ('HH:MM'), end_time ('HH:MM'), is_deleted
@@ -250,8 +268,9 @@ def compute_attendance_exceptions(shifts, punches, time_off_rows, config, now_ut
         if not eid or not wd:
             continue
         store = s.get("store_code")
-        shift_start = _parse_hhmm_local(wd, s.get("start_time"), tz)
-        shift_end = _parse_hhmm_local(wd, s.get("end_time"), tz)
+        stz = (store_tz or {}).get(store) or tz   # the STORE's own zone; tenant zone is the fallback
+        shift_start = _parse_hhmm_local(wd, s.get("start_time"), stz)
+        shift_end = _parse_hhmm_local(wd, s.get("end_time"), stz)
         if shift_end and shift_start and shift_end <= shift_start:
             shift_end = shift_end + timedelta(days=1)   # overnight shift crosses midnight
         shifts_by_emp_day[(eid, wd)].append((shift_start, shift_end, store))
@@ -282,6 +301,9 @@ def compute_attendance_exceptions(shifts, punches, time_off_rows, config, now_ut
                     "work_date": wd, "shift_start": s.get("start_time"), "shift_end": s.get("end_time"),
                     "actual_clock_in": first_in.isoformat() if first_in else None,
                     "actual_clock_out": last_out.isoformat() if last_out else None,
+                    # Pre-formatted in the STORE's zone so the review/email show the real local time.
+                    "actual_clock_in_local": _fmt_local(first_in, stz),
+                    "actual_clock_out_local": _fmt_local(last_out, stz),
                     "minutes_late": max(0, round((first_in - shift_start).total_seconds() / 60)) if is_late else 0,
                     "minutes_early": max(0, round((shift_end - last_out).total_seconds() / 60)) if is_early else 0,
                     "excused": False, "excused_reason": None,
