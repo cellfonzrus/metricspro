@@ -172,3 +172,44 @@ export function daysAgo(n: number): string {
   d.setDate(d.getDate() - n)
   return d.toISOString().slice(0, 10)
 }
+
+// ── Google link: what the operator still has to supply ──────────────────────────────────────────
+// The consent round trip NAVIGATES AWAY from this page and comes back, so every field held in
+// component state is empty on return. The first build treated an empty field as "nothing saved" and
+// disabled the button, which is how a saved project id reads as lost: the operator sees a blank form,
+// retypes it, and reasonably reports that it does not save. The server is the source of truth for
+// what is already stored — the form only has to say what is still MISSING.
+//
+// The stored client secret is deliberately never readable back, so it can only ever be reported as a
+// boolean. `has_secret` is that boolean, and it is enough: a blank secret field means "keep the one
+// you already have", not "clear it".
+export interface GoogleLinkState {
+  linked?: boolean
+  project_id?: string | null
+  client_id?: string | null
+  has_secret?: boolean
+}
+
+export interface GoogleLinkForm { project: string; clientId: string; secret: string }
+
+/** '' when the consent link can be requested; otherwise the one thing still missing, in plain words. */
+export function linkBlocker(google: GoogleLinkState, form: GoogleLinkForm): string {
+  const project = (form.project || '').trim() || (google.project_id || '')
+  const clientId = (form.clientId || '').trim() || (google.client_id || '')
+  if (!project) return 'Enter the Device Access project id.'
+  if (!clientId) return 'Enter the OAuth client id.'
+  if (!(form.secret || '').trim() && !google.has_secret) return 'Enter the OAuth client secret.'
+  return ''
+}
+
+/** What Google put on the URL when it sent the operator back here. Exactly one of the three is set. */
+export function oauthReturn(search: string): { code: string; error: string; none: boolean } {
+  const q = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  const code = (q.get('code') || '').trim()
+  const error = (q.get('error') || '').trim()
+  // `code` wins: Google never sends both, and preferring it keeps a stale `error` from an earlier
+  // attempt left in the URL from discarding a good authorization.
+  if (code) return { code, error: '', none: false }
+  if (error) return { code: '', error, none: false }
+  return { code: '', error: '', none: true }
+}
