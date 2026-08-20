@@ -6,7 +6,16 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
+  idsBlocker, authorizeBlocker, oauthReturn, type GoogleLinkState,
 } from '@/lib/vision'
+
+// The redirect URI is part of the OAuth signature: the value sent when building the consent URL and
+// the value sent when redeeming the code must match byte for byte, or Google rejects the exchange.
+// One helper, used by both, so they cannot drift.
+const REDIRECT_PATH = '/vision/settings'
+function redirectUri(): string {
+  return typeof window === 'undefined' ? '' : `${window.location.origin}${REDIRECT_PATH}`
+}
 
 export default function VisionSettingsPage() {
   const [status, setStatus] = useState<any>(null)
@@ -32,7 +41,31 @@ export default function VisionSettingsPage() {
     } catch (e: any) { setErr(visionError(e)) }
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  // Google sends the operator back to THIS url with ?code=... — finish the link right here. The
+  // first build instead asked them to copy the code into a box that only existed in the tab they had
+  // just navigated away from, so the round trip could never complete. Nothing to paste now.
+  useEffect(() => {
+    const strip = () => window.history.replaceState({}, '', REDIRECT_PATH)
+    const back = oauthReturn(window.location.search)
+    if (back.none) { void load(); return }
+    if (back.error) {
+      setErr(`Google did not authorize the connection: ${back.error}`)
+      strip(); void load(); return
+    }
+    setBusy(true)
+    void (async () => {
+      try {
+        // No client id or secret here: they are already on the server from the save that built the
+        // consent url, and the secret is write-only by design — it cannot be re-sent from a page.
+        await api('/api/v1/vision/google/link', {
+          method: 'POST',
+          body: JSON.stringify({ code: back.code, redirect_uri: redirectUri() }),
+        })
+        setMsg('Google connected. Sync cameras below to pull in the ones this account can see.')
+      } catch (e: any) { setErr(visionError(e)) }
+      finally { strip(); setBusy(false); await load() }
+    })()
+  }, [load])
 
   async function act(fn: () => Promise<any>, ok: string) {
     setBusy(true); setMsg(''); setErr('')
@@ -142,7 +175,7 @@ export default function VisionSettingsPage() {
             <div style={{ color: '#dc2626', fontSize: 12.5, marginTop: 6 }}>{status.google.last_error}</div>
           )}
         </div>
-        <GoogleLink canEdit={canEdit} linked={status.google.linked} onDone={load} />
+        <GoogleLink canEdit={canEdit} google={status.google} onSaved={m => { setMsg(m); void load() }} />
         <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button style={btnPrimary} disabled={!canEdit || !status.google.linked || busy}
             onClick={() => act(async () => {
@@ -353,73 +386,96 @@ export default function VisionSettingsPage() {
   )
 }
 
-function GoogleLink({ canEdit, linked, onDone }: { canEdit: boolean; linked: boolean; onDone: () => void }) {
-  const [project, setProject] = useState('')
-  const [clientId, setClientId] = useState('')
+function GoogleLink({ canEdit, google, onSaved }: {
+  canEdit: boolean; google: GoogleLinkState; onSaved: (m: string) => void
+}) {
+  // null means "not edited here" — the saved value shows through. That keeps the form honest with the
+  // server after every reload without an effect copying state back and forth, and without a later
+  // refresh wiping out something half-typed.
+  const [projectEdit, setProjectEdit] = useState<string | null>(null)
+  const [clientIdEdit, setClientIdEdit] = useState<string | null>(null)
   const [secret, setSecret] = useState('')
-  const [code, setCode] = useState('')
-  const [url, setUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const redirect = typeof window !== 'undefined' ? `${window.location.origin}/vision/settings` : ''
+  const project = projectEdit ?? (google.project_id || '')
+  const clientId = clientIdEdit ?? (google.client_id || '')
+  const form = { project, clientId, secret }
+  const cantSave = idsBlocker(google, form)
+  const cantAuthorize = authorizeBlocker(google, form)
+  const dirty = (projectEdit !== null && projectEdit.trim() !== (google.project_id || '').trim())
+    || (clientIdEdit !== null && clientIdEdit.trim() !== (google.client_id || '').trim())
 
-  async function saveAndAuthorize() {
+  /** Save the ids alone. No secret required — this is the step that kept getting lost. */
+  async function saveIds() {
     setBusy(true); setErr('')
     try {
       await api('/api/v1/vision/google/link', {
         method: 'POST',
-        body: JSON.stringify({ project_id: project, client_id: clientId, client_secret: secret }),
+        body: JSON.stringify({ project_id: project.trim(), client_id: clientId.trim() }),
       })
-      const r = await api(`/api/v1/vision/google/auth-url?redirect_uri=${encodeURIComponent(redirect)}`)
-      setUrl(r.url)
-    } catch (e: any) { setErr(visionError(e)) }
+      setProjectEdit(null); setClientIdEdit(null)
+      onSaved('Project id and client id saved. They stay saved — you can close this and come back.')
+    } catch (e) { setErr(visionError(e)) }
     finally { setBusy(false) }
   }
 
-  async function complete() {
+  async function authorize() {
     setBusy(true); setErr('')
     try {
+      // The secret goes up with this request and is stored encrypted, because Google needs it again
+      // every time the access token is refreshed. It is never sent back down.
       await api('/api/v1/vision/google/link', {
         method: 'POST',
-        body: JSON.stringify({ code, redirect_uri: redirect, client_id: clientId, client_secret: secret }),
+        body: JSON.stringify({ project_id: project.trim(), client_id: clientId.trim(), client_secret: secret.trim() }),
       })
-      setCode(''); setUrl(''); onDone()
-    } catch (e: any) { setErr(visionError(e)) }
-    finally { setBusy(false) }
+      const r = await api(`/api/v1/vision/google/auth-url?redirect_uri=${encodeURIComponent(redirectUri())}`)
+      // Same tab, on purpose. A new tab means the code comes back somewhere the operator was not
+      // looking, and on a phone it means a tab they cannot easily get back to.
+      window.location.href = r.url
+    } catch (e: any) { setErr(visionError(e)); setBusy(false) }
   }
 
-  if (linked) return <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>
+  if (google.linked) return <div style={{ fontSize: 12.5, color: 'var(--text3)' }}>
     The refresh token is stored encrypted and cannot be read back. To change accounts, disconnect and link again.
   </div>
 
   return (
     <div style={{ display: 'grid', gap: 8, maxWidth: 520 }}>
-      <Text label="Device Access project id" value={project} onChange={setProject} disabled={!canEdit} />
-      <Text label="OAuth client id" value={clientId} onChange={setClientId} disabled={!canEdit} />
-      <Text label="OAuth client secret" value={secret} onChange={setSecret} disabled={!canEdit} type="password" />
-      <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
-        Add <code>{redirect}</code> as an authorized redirect URI on the OAuth client, or Google will
-        refuse the consent step.
-      </div>
-      <div><button style={btnPrimary} onClick={saveAndAuthorize} disabled={!canEdit || busy || !project || !clientId || !secret}>
-        Save & get the Google consent link
-      </button></div>
-      {url && (
-        <div style={{ ...panel }}>
-          <a href={url} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontSize: 13 }}>
-            1 · Open the Google consent screen and pick the cameras to share →
-          </a>
-          <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-            <input placeholder="2 · paste the ?code= value from the redirect" value={code}
-              onChange={e => setCode(e.target.value)} style={{ flex: 1, padding: '6px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
-            <button style={btnPrimary} onClick={complete} disabled={busy || !code}>Finish</button>
-          </div>
+      {google.project_id && !dirty && (
+        <div style={{ ...panel, fontSize: 12.5, borderLeft: '3px solid #f39c12' }}>
+          Saved. This Google account has not authorized us yet — enter the client secret below and
+          authorize. The ids do not need retyping.
         </div>
       )}
+      <Text label="Device Access project id" value={project} onChange={setProjectEdit} disabled={!canEdit} />
+      <Text label="OAuth client id" value={clientId} onChange={setClientIdEdit} disabled={!canEdit} />
+      <div>
+        <button style={btn} onClick={saveIds} disabled={!canEdit || busy || !!cantSave}>
+          {busy ? 'Working…' : 'Save these two'}
+        </button>
+        {cantSave && canEdit && <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>{cantSave}</span>}
+      </div>
+
+      <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+
+      <Text label="OAuth client secret" value={secret} onChange={setSecret} disabled={!canEdit} type="password" />
+      <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+        Typed here each time you authorize — never filled in for you.
+        {google.has_secret && ' (One is already on file from a previous attempt.)'}
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+        Add <code>{redirectUri()}</code> as an authorized redirect URI on the OAuth client, or Google will
+        refuse the consent step.
+      </div>
+      <div><button style={btnPrimary} onClick={authorize} disabled={!canEdit || busy || !!cantAuthorize}>
+        {busy ? 'Working…' : 'Authorize with Google'}
+      </button></div>
+      {cantAuthorize && canEdit && <div style={{ fontSize: 12, color: 'var(--text3)' }}>{cantAuthorize}</div>}
       {err && <div style={{ color: '#dc2626', fontSize: 12.5 }}>{err}</div>}
     </div>
   )
 }
+
 
 function NewAgent({ canEdit, onCreated }: { canEdit: boolean; onCreated: (s: any) => void }) {
   const [label, setLabel] = useState('')

@@ -172,3 +172,51 @@ export function daysAgo(n: number): string {
   d.setDate(d.getDate() - n)
   return d.toISOString().slice(0, 10)
 }
+
+// ── Google link: two independent steps, two independent gates ──────────────────────────────────
+// The ids and the secret are NOT one action, and treating them as one is what lost the project id.
+// A single button saved all three at once and stayed disabled until all three boxes were filled, so
+// an operator who had the project id and client id but not the secret to hand could press nothing —
+// and nothing reached the server. The ids then vanished with the page, which reads exactly like a
+// save that silently failed.
+//
+// So: saving the ids asks only for the ids. Authorizing asks for the secret on top. The secret is
+// never echoed back into the form — the operator types it when they authorize, every time.
+export interface GoogleLinkState {
+  linked?: boolean
+  project_id?: string | null
+  client_id?: string | null
+  has_secret?: boolean
+}
+
+export interface GoogleLinkForm { project: string; clientId: string; secret: string }
+
+const saved = (typed: string, stored: string | null | undefined) =>
+  (typed || '').trim() || (stored || '').trim()
+
+/** '' when the project id and client id can be saved; otherwise the one still missing. */
+export function idsBlocker(google: GoogleLinkState, form: GoogleLinkForm): string {
+  if (!saved(form.project, google.project_id)) return 'Enter the Device Access project id.'
+  if (!saved(form.clientId, google.client_id)) return 'Enter the OAuth client id.'
+  return ''
+}
+
+/** '' when the consent url can be requested. Needs the ids AND a secret typed right now. */
+export function authorizeBlocker(google: GoogleLinkState, form: GoogleLinkForm): string {
+  const ids = idsBlocker(google, form)
+  if (ids) return ids
+  if (!(form.secret || '').trim()) return 'Enter the OAuth client secret to authorize.'
+  return ''
+}
+
+/** What Google put on the URL when it sent the operator back here. Exactly one of the three is set. */
+export function oauthReturn(search: string): { code: string; error: string; none: boolean } {
+  const q = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search)
+  const code = (q.get('code') || '').trim()
+  const error = (q.get('error') || '').trim()
+  // `code` wins: Google never sends both, and preferring it keeps a stale `error` from an earlier
+  // attempt left in the URL from discarding a good authorization.
+  if (code) return { code, error: '', none: false }
+  if (error) return { code: '', error, none: false }
+  return { code: '', error: '', none: true }
+}

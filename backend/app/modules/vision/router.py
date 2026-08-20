@@ -354,6 +354,12 @@ def status(org_id: str = ORG_ID, authorization: str = Header(default=""),
             "linked": bool(cred and cred.get("refresh_token_enc")),
             "status": (cred or {}).get("status") or "needs_setup",
             "project_id": (cred or {}).get("project_id"),
+            # client_id and the FACT of a stored secret, so the settings form can show what is
+            # already saved instead of rendering blank and reading as "it did not save". The client
+            # id is not a secret — it travels in the consent URL in the clear. The secret itself is
+            # never returned, only whether one exists.
+            "client_id": (cred or {}).get("client_id"),
+            "has_secret": bool((cred or {}).get("client_secret_enc")),
             "google_account": (cred or {}).get("google_account"),
             "last_ok_at": (cred or {}).get("last_ok_at"),
             "last_error": (cred or {}).get("last_error"),
