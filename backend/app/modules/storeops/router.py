@@ -319,6 +319,86 @@ def get_shifts(store_code: str = None, week_start: str = None, week_end: str = N
         rows = [s for s in rows if in_keyset(ks, s.get("store_code"))]
     return rows
 
+
+@router.get("/schedule/hours-trend")
+def schedule_hours_trend(
+    anchor: str = None,
+    weeks: int = 8,
+    months: int = 6,
+    week_start_dow: int = 0,
+    markets: str = None,
+    store_code: str = None,
+    employees: str = None,
+    authorization: str = Header(default=""),
+    org_id: str = ORG_ID,
+):
+    """Scheduled-hours WEEK-over-week & MONTH-over-month trend for the selected scope, with the
+    per-store / per-employee breakdown + period-over-period deltas that power the report's drill-down
+    (WHY hours moved, WHO drove it) and the "who's increasing" analysis summary.
+
+    SCOPE / FILTER contract — mirrors GET /shifts:
+      • ALWAYS org-filtered + is_deleted excluded + RBAC store keyset (a DM never sees hours outside
+        their own span — same scope_keyset/in_keyset gate every other storeops read uses).
+      • `markets` (comma list) and `store_code` narrow further, matching the schedule page's own
+        market multi-select + store dropdown. `employees` (comma list of names) narrows to a set of
+        reps. Empty = the caller's whole span (subject to the RBAC keyset).
+    Hours math (overnight wrap, zero-length guard, deleted excluded) lives in the pure
+    schedule_hours module so it is harness-proven offline."""
+    from app.modules.storeops import schedule_hours as _sh
+    from datetime import date as _dd
+
+    anchor = (anchor or _dd.today().isoformat())[:10]
+    try:
+        weeks = max(2, min(int(weeks), 26))
+        months = max(2, min(int(months), 18))
+        week_start_dow = int(week_start_dow) if 0 <= int(week_start_dow) <= 6 else 0
+    except Exception:
+        weeks, months, week_start_dow = 8, 6, 0
+
+    # Full window: from the first week-start we will report on, through the anchor.
+    a = _sh._d(anchor)
+    lo = (_sh.week_start_of(a, week_start_dow) - timedelta(days=7 * (weeks - 1))).isoformat()
+    # Months can reach further back than weeks — take the earliest of the two lower bounds.
+    ym, mm = a.year, a.month
+    for _ in range(months - 1):
+        mm -= 1
+        if mm == 0:
+            mm, ym = 12, ym - 1
+    month_lo = _date(ym, mm, 1).isoformat()
+    lo = min(lo, month_lo)
+
+    q = (sb().table("shifts").select("store_code,employee_id,employee_name,shift_date,start_time,end_time,scheduled_hours,is_deleted")
+         .eq("org_id", org_id).eq("is_deleted", False)
+         .gte("shift_date", lo).lte("shift_date", anchor))
+    if store_code:
+        q = q.eq("store_code", store_code)
+    rows = q.limit(200000).execute().data or []
+
+    # RBAC store keyset — the non-negotiable span gate (identical to GET /shifts).
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [s for s in rows if in_keyset(ks, s.get("store_code"))]
+
+    # Optional market filter — resolve each selected market to its store keys and keep only shifts in
+    # those stores (intersected with the RBAC keyset above, so this can only ever NARROW).
+    mkts = [m.strip() for m in (markets or "").split(",") if m.strip()]
+    if mkts:
+        allowed = set()
+        for m in mkts:
+            allowed |= _cscope.market_store_keys(get_supabase(), org_id, m)
+        rows = [s for s in rows if str(s.get("store_code") or "").strip().upper() in allowed]
+
+    # Optional employee-name filter.
+    emps = {e.strip() for e in (employees or "").split(",") if e.strip()}
+    if emps:
+        rows = [s for s in rows if (s.get("employee_name") or "").strip() in emps]
+
+    out = _sh.hours_trend(rows, anchor=anchor, weeks=weeks, months=months, week_start_dow=week_start_dow)
+    out["scope"] = {"markets": mkts, "store_code": store_code or None,
+                    "employees": sorted(emps) if emps else None,
+                    "rbac_restricted": ks is not None}
+    return out
+
 # ── Scheduling-over-approved-time-off policy (owner directive 2026-07-26, ALL tenants) ─────────
 # Managers reported they could NOT reschedule an employee with approved/requested time off — the
 # old create_shift hard-blocked with a 409 and no override. Default policy is now WARN (schedule
@@ -8376,6 +8456,52 @@ def dm_confirm_action_plan(plan_id: str, body: Optional[ActionPlanReviewIn] = No
     (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
     return {"ok": True, **row, **upd}
 
+
+# ── Store payment-processor merchant IDs (owner directive 2026-08-20, migration 902) ──────────────
+# Per store, per processor (Boost→ePay ID, Total→Vidapay ID, …). Set at store setup, mandatory per
+# active processor unless the operator ticks "not required". The ingest of a processor report resolves
+# each transaction's terminal/merchant id back to OUR store through this registry.
+from app.modules.storeops import merchant_ids as _merchant_ids  # noqa: E402
+
+
+@router.get("/merchant-ids/processors")
+def merchant_id_processors():
+    """The known processors + their id labels — powers the store-setup panel's rows."""
+    return {"processors": _merchant_ids.PROCESSORS}
+
+
+@router.get("/merchant-ids")
+def list_merchant_ids(store_code: str = "", org_id: str = ORG_ID):
+    """Every merchant-id row for the tenant, or just one store's when ?store_code= is given."""
+    rows = (_merchant_ids.list_for_store(org_id, store_code) if store_code
+            else _merchant_ids.list_all(org_id))
+    return {"merchant_ids": rows, "processors": _merchant_ids.PROCESSORS}
+
+
+@router.put("/merchant-ids")
+def upsert_merchant_id(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Set one store's id for one processor. Body: {store_code, processor, merchant_id?, not_required?, note?}.
+    Manager-gated (store setup is a management action)."""
+    _require_manager(authorization, org_id)
+    try:
+        data = _merchant_ids.upsert(
+            org_id, body.get("store_code"), body.get("processor"),
+            merchant_id=body.get("merchant_id"), not_required=bool(body.get("not_required")),
+            note=body.get("note"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "row": (data or [None])[0]}
+
+
+@router.get("/merchant-ids/coverage")
+def merchant_id_coverage(processor: str = "epay", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Store-setup audit: which stores still have no id AND no 'not required' opt-out for a processor —
+    so an admin can see who is unconfigured before an ingest silently drops their rows."""
+    codes = _caller_span_codes(authorization, org_id) or [
+        s.get("store_code") for s in (sb().table("stores").select("store_code").eq("org_id", org_id).execute().data or [])
+        if s.get("store_code")]
+    missing = sorted(_merchant_ids.coverage(org_id, codes, processor))
+    return {"processor": processor, "unconfigured": missing, "unconfigured_count": len(missing)}
 
 
 # ── Admin-attention providers (settings-audit package, 2026-07-26) ────────────────────────────────

@@ -126,6 +126,7 @@ const REPORT_TREES: [string, string][] = [
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
+  ['/commcalc/epay-fee-recon', 'commissions'],
   ['/commcalc/asset', 'asset'], ['/commcalc/vip', 'vip'], ['/accounts', 'accounts'],
   ['/storeops/reports', 'storeops'], ['/storeops/reviews', 'storeops'],
   ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
@@ -337,6 +338,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions' },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/epay-fee-recon', label: 'ePay Fee Recon', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/imei-recon', label: 'IMEI Reconciliation', icon: '📲', module: 'commissions', scopes: ['all', 'market'] },
     // Agency (Master/Sub-Agent) console — config + billing, admin/owner scope only (NEEDS CORE for
     // agency-phase1). Intentionally NOT in REPORT_DIRECTORY: it is a config+invoicing surface, not a report.
@@ -648,6 +650,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/commission-legs', 'comm'],
   ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
   ['/commcalc/discrepancy', 'comm'], ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
+  ['/commcalc/epay-fee-recon', 'comm'],
   ['/commcalc/chargebacks', 'comm'], ['/commcalc/accessory-flags', 'comm'],
   ['/commcalc/accessory-cost-audit', 'comm'], ['/commcalc/accessory-definition', 'comm'],
   ['/commcalc/expected-commission', 'comm'], ['/commcalc/daily-commission', 'comm'],
