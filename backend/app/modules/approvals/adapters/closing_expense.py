@@ -16,7 +16,22 @@ Decision mapping (faithful to the module's own vocabulary):
 from app.modules.approvals import engine
 
 
-@engine.register_type("closing_expense", label="Store expense")
+def _approver_predicate(ctx, request):
+    """Only a manager who may run closing MANAGEMENT REVIEW may decide an expense line from the inbox —
+    the SAME gate the legacy /closing/expense/{id}/decide endpoint applies (`_can_mgmt_review`:
+    super-admin / explicit /closing/management page grant / company-wide 'all' scope; market/store-scoped
+    DMs are EXCLUDED unless granted). Without this, the engine's default store-scope check would let a
+    store/market-scoped manager approve an expense — which books the P&L — that the closing board refuses
+    them: a money privilege gap. Fail closed."""
+    from app.modules.closing import router as C
+    try:
+        perms = C._caller_perms(C.sb(), ctx.get("authorization", ""))
+        return bool(C._can_mgmt_review(perms))
+    except Exception:
+        return False
+
+
+@engine.register_type("closing_expense", label="Store expense", approver_predicate=_approver_predicate)
 def _on_decide(request, decision, actor, note):
     """Apply an approvals-inbox decision to the underlying closing_expense line via the module's shared
     effect. Idempotent: if the line is already decided (e.g. on the legacy closing-management board), do

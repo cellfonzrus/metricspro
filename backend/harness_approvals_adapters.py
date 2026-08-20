@@ -250,6 +250,25 @@ exp4 = fake.store[("commcalc", "closing_expense")][0]
 check("closing_expense: on_decide leaves an already-decided line untouched", exp4["status"] == "approved", exp4)
 check("closing_expense: ...and pushes no P&L on the idempotent no-op", PL_PUSHES == [], PL_PUSHES)
 
+# D: approver_predicate — an inbox expense decision books the P&L, so ONLY a manager who may run closing
+# MANAGEMENT REVIEW may decide it (the SAME _can_mgmt_review gate the legacy board applies). Without this
+# the engine's default store-scope check would let a store/market-scoped DM approve an expense in their
+# span — a money privilege gap. The predicate must fail closed on a non-mgmt-review caller AND on error.
+exp_predicate = engine._TYPES["closing_expense"].approver_predicate
+check("closing_expense: predicate is registered (no silent store-only fallback)", callable(exp_predicate))
+_saved_perms, _saved_gate = C._caller_perms, C._can_mgmt_review
+C._caller_perms = lambda client, authz: {"who": authz}   # carry the caller through to the gate stub
+C._can_mgmt_review = lambda perms: perms.get("who") == "MGMT"
+_exp_req = {"org_id": ORG, "source_id": "E1", "store_code": "S1"}
+check("closing_expense: predicate BLOCKS a store/market-scoped caller who cannot run management review",
+      exp_predicate({"authorization": "DM", "org_id": ORG}, _exp_req) is False)
+check("closing_expense: predicate ALLOWS a caller who may run management review",
+      exp_predicate({"authorization": "MGMT", "org_id": ORG}, _exp_req) is True)
+C._can_mgmt_review = lambda perms: (_ for _ in ()).throw(RuntimeError("perm lookup blew up"))
+check("closing_expense: predicate FAILS CLOSED when the permission check errors",
+      exp_predicate({"authorization": "MGMT", "org_id": ORG}, _exp_req) is False)
+C._caller_perms, C._can_mgmt_review = _saved_perms, _saved_gate
+
 
 # ── referral (MONEY-CRITICAL: gated commission; approve books amount + payout, SoD-gated) ─────────
 import app.modules.referral.router as R  # noqa: E402
