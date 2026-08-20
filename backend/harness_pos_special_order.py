@@ -331,5 +331,92 @@ ok(raises(lambda: VApi.vendor_post_status("O1", {"status": "delivered"}, authori
 ok(raises(lambda: VApi.vendor_post_status("O2", {"status": "shipped"}, authorization="Bearer acme-tok"),
           "not found"), "H8 a vendor cannot touch another vendor's order")
 
+print("\n=== I · Amazon Business adapter (Phase 5) — real when configured, honest no-op otherwise ===")
+# vendor:amazon is selected for any amazon connector, but stays MANUAL until explicitly outbound + creds
+# (this keeps the launch-default manual Amazon connector, and the Phase-0 ToS gate, intact).
+am_manual = VA.get_adapter({"vendor_key": "amazon", "integration_mode": "manual"})
+ok(isinstance(am_manual, VA.AmazonBusinessAdapter), "I1 an amazon connector resolves to AmazonBusinessAdapter")
+ok(am_manual.place_order({"vendor_sku": "B01", "qty": 1, "ship_to": "S1"}) == {"status": "requested"},
+   "I2 a MANUAL amazon connector still just queues (never auto-orders)")
+am_unconf = VA.get_adapter({"vendor_key": "amazon", "integration_mode": "outbound_api",
+                            "api_base_url": "", "credential_ref": "MISSING_ENV"})
+r_unconf = am_unconf.place_order({"vendor_sku": "B01", "qty": 1, "ship_to": "S1"})
+ok(r_unconf.get("status") == "requested" and "not configured" in (r_unconf.get("notes") or ""),
+   "I3 outbound amazon with no url/cred is an HONEST no-op (queued, never a fake success)")
+
+# Fully configured → a REAL POST with an Amazon-shaped payload + the LWA token header.
+sent2 = {}
+
+
+class _AmzResp:
+    content = b"{}"
+    def raise_for_status(self): pass
+    def json(self): return {"orderId": "AMZ-1", "trackingId": "TBA1"}
+
+
+def _amz_post(url, json=None, headers=None, timeout=None):
+    sent2.update(url=url, json=json, headers=headers); return _AmzResp()
+
+
+def _amz_get(url, headers=None, timeout=None):
+    sent2.update(get_url=url, get_headers=headers)
+    return types.SimpleNamespace(content=b"{}", raise_for_status=lambda: None,
+                                 json=lambda: {"status": "shipped", "trackingId": "TBA2"})
+
+
+sys.modules["requests"] = types.SimpleNamespace(post=_amz_post, get=_amz_get)
+os.environ["AMZ_LWA_TOKEN"] = "lwa-xyz"
+am_conf = VA.get_adapter({"vendor_key": "amazon", "integration_mode": "outbound_api",
+                          "api_base_url": "https://na.business-api.amazon.test/orders/v1",
+                          "credential_ref": "AMZ_LWA_TOKEN"})
+r_conf = am_conf.place_order({"vendor_sku": "ASIN123", "qty": 3, "ship_to": "S1", "reference": "R-1"})
+ok(sent2.get("url") == "https://na.business-api.amazon.test/orders/v1/orders", "I4 posts to api_base_url + place_path")
+ok(sent2["headers"].get("x-amz-access-token") == "lwa-xyz",
+   "I5 the LWA/API token is read from the env NAMED by credential_ref (never stored raw)")
+_li = (sent2["json"].get("lineItems") or [{}])[0]
+ok(_li.get("asin") == "ASIN123" and _li.get("quantity") == 3,
+   "I6 the payload is Amazon-shaped (ASIN + quantity in lineItems)")
+ok(r_conf["status"] == "ordered" and r_conf["vendor_order_ref"] == "AMZ-1" and r_conf["tracking"] == "TBA1",
+   "I7 the Amazon order id + tracking are captured")
+ok(am_conf.refresh({}) == {} and VA.OutboundApiAdapter({"integration_mode": "outbound_api"}).refresh({}) == {},
+   "I8 refresh is a no-op without a status_path / vendor ref")
+am_ref = VA.get_adapter({"vendor_key": "amazon", "integration_mode": "outbound_api",
+                         "api_base_url": "https://na.business-api.amazon.test/orders/v1",
+                         "credential_ref": "AMZ_LWA_TOKEN", "config": {"status_path": "/orders/{ref}"}})
+r_ref = am_ref.refresh({"vendor_order_ref": "AMZ-1"})
+ok(r_ref.get("status") == "shipped" and r_ref.get("tracking") == "TBA2", "I9 refresh maps the vendor status + tracking")
+
+print("\n=== J · HQ ops fulfillment queue (Phase 4) — vendor linkage, place, true-up ===")
+store = base_store()
+store["special_orders"] = [{"id": "O1", "org_id": ORG, "vendor": "amazon", "status": "requested",
+                            "store_code": "S1", "ship_to_store": "S1", "product_id": "P1",
+                            "qty": 1, "sale_id": "sale-1", "captured_cost": 50.0, "sale_price": 120.0}]
+store["sale_items"] = [{"id": "SI1", "org_id": ORG, "sale_id": "sale-1", "product_id": "P1", "cost": 50.0}]
+store["sales"] = [{"id": "sale-1", "org_id": ORG, "created_at": "2026-08-10T14:00:00+00:00"}]
+fc = wire(store)
+sys.modules["requests"] = types.SimpleNamespace(post=_amz_post, get=_amz_get)
+q = R.special_orders_fulfillment(org_id=ORG)["special_orders"]
+ok(len(q) == 1 and q[0]["vendor_linkage"]["vendor_sku"] == "ASIN123",
+   "J1 the fulfillment queue exposes the vendor linkage (ASIN/sku) — HQ-only")
+ok(q[0]["connector"]["integration_mode"] == "manual" and q[0]["connector"]["auto_order"] is False,
+   "J2 the queue reports the connector mode + whether auto-order is wired")
+placed = R.place_special_order("O1", org_id=ORG)
+ok(placed["placement"]["status"] == "requested" and store["special_orders"][0]["status"] == "requested",
+   "J3 placing a manual-connector order just (re)confirms the queue state")
+
+# actual-cost true-up onto the sale line (COGS becomes exact; profit derives)
+import app.modules.pos.commcalc_feed as _FEED
+_FEED.get_pos_setup = lambda o: {"builtin_role": "off"}   # skip the (best-effort) period re-feed offline
+tu = R.true_up_special_order("O1", {"actual_cost": 47.5}, org_id=ORG)
+ok(store["sale_items"][0]["cost"] == 47.5, "J4 the true-up writes the ACTUAL cost onto the booked sale line")
+ok(store["special_orders"][0]["actual_cost"] == 47.5, "J5 the order records the actual cost")
+ok(tu["cost_synced"] is True, "J6 the true-up reports the sale-line reconciliation")
+ok(raises(lambda: R.true_up_special_order("O1", {"actual_cost": -1}, org_id=ORG), "actual_cost"),
+   "J7 a negative actual_cost is refused")
+
+# fulfillment endpoints are HQ-gated
+wire(store, perm_ok=False)
+ok(raises(lambda: R.special_orders_fulfillment(org_id=ORG), "allow"), "J8 the fulfillment queue is gated (pos_special_order_admin)")
+
 print(f"\n==== {len(PASS)} passed, {len(FAIL)} failed ====")
 sys.exit(1 if FAIL else 0)

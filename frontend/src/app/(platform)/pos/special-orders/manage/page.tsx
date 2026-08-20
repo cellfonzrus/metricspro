@@ -28,6 +28,15 @@ interface Connector {
   api_base_url: string | null; credential_ref: string | null; is_active: boolean
   config: Record<string, any> | null
 }
+interface FulfillOrder {
+  id: string; order_no?: number | string | null; status: string; store_code: string | null
+  ship_to_store: string | null; description: string | null; qty: number; sale_price: number
+  captured_cost: number | null; actual_cost: number | null; vendor: string | null
+  vendor_order_ref: string | null; tracking: string | null; created_at?: string
+  vendor_linkage: { vendor_sku: string | null; vendor_cost: number | null; vendor_url: string | null } | null
+  connector: { vendor_key: string; display_name: string | null; integration_mode: string; auto_order: boolean } | null
+}
+const SO_STATUSES = ['requested', 'ordered', 'shipped', 'received', 'delivered', 'cancelled']
 
 const MODES = [
   { value: 'manual', label: 'Manual — HQ fulfills from the queue' },
@@ -51,9 +60,17 @@ const emptyConnector = {
 }
 
 export default function SpecialOrderManagePage() {
-  const [tab, setTab] = useState<'catalog' | 'vendors'>('catalog')
+  const [tab, setTab] = useState<'catalog' | 'vendors' | 'fulfillment'>('catalog')
   const [denied, setDenied] = useState(false)
   const [msg, setMsg] = useState('')
+
+  // Fulfillment queue (Phase 4)
+  const [orders, setOrders] = useState<FulfillOrder[]>([])
+  const [foStatus, setFoStatus] = useState('')
+  const [foLoading, setFoLoading] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [trueUpId, setTrueUpId] = useState<string | null>(null)
+  const [trueUpVal, setTrueUpVal] = useState('')
 
   // Catalog
   const [items, setItems] = useState<CatalogRow[]>([])
@@ -90,7 +107,50 @@ export default function SpecialOrderManagePage() {
     try { const r = await api('/api/v1/pos/vendor-connectors'); setConnectors(r.connectors || []) }
     catch (e: any) { if (/403|not allow/i.test(e?.message || '')) setDenied(true) }
   }
+  async function loadFulfillment() {
+    setFoLoading(true); setMsg('')
+    try {
+      const p = new URLSearchParams(); if (foStatus) p.set('status', foStatus)
+      const r = await api(`/api/v1/pos/special-orders/fulfillment?${p}`)
+      setOrders(r.special_orders || []); setDenied(false)
+    } catch (e: any) {
+      if (/403|not allow/i.test(e?.message || '')) setDenied(true)
+      else setMsg('Failed to load the fulfillment queue: ' + (e?.message || e))
+    }
+    setFoLoading(false)
+  }
+  async function foAction(id: string, path: string) {
+    setBusyId(id); setMsg('')
+    try {
+      const r = await api(`/api/v1/pos/special-orders/${id}/${path}`, { method: 'POST', body: '{}' })
+      if (r?.placement?.notes) setMsg(r.placement.notes)
+      await loadFulfillment()
+    } catch (e: any) { alert('Action failed: ' + (e?.message || e)) }
+    setBusyId(null)
+  }
+  async function foSetStatus(id: string, status: string) {
+    setBusyId(id); setMsg('')
+    try {
+      await api(`/api/v1/pos/special-orders/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) })
+      await loadFulfillment()
+    } catch (e: any) { alert('Status change failed: ' + (e?.message || e)) }
+    setBusyId(null)
+  }
+  async function foTrueUp(id: string) {
+    const v = Number(trueUpVal)
+    if (!(v >= 0)) { alert('Enter the actual per-unit cost (a number ≥ 0).'); return }
+    setBusyId(id); setMsg('')
+    try {
+      const r = await api(`/api/v1/pos/special-orders/${id}/true-up`, { method: 'POST', body: JSON.stringify({ actual_cost: v }) })
+      setTrueUpId(null); setTrueUpVal('')
+      setMsg(r?.refeed?.resynced ? `Cost reconciled; P&L re-synced for ${r.refeed.period}.` : 'Actual cost reconciled onto the sale line.')
+      await loadFulfillment()
+    } catch (e: any) { alert('True-up failed: ' + (e?.message || e)) }
+    setBusyId(null)
+  }
+
   useEffect(() => { loadCatalog(); loadConnectors() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (tab === 'fulfillment') loadFulfillment() }, [tab, foStatus])  // eslint-disable-line react-hooks/exhaustive-deps
 
   function openNewItem() { setItemForm({ ...emptyItem }); setEditItemId(null); setShowItemForm(true) }
   function openEditItem(r: CatalogRow) {
@@ -183,6 +243,7 @@ export default function SpecialOrderManagePage() {
           <a href="/pos/special-orders" className="btn btn-secondary" style={{ textDecoration: 'none' }}>Store view →</a>
           <button className={tab === 'catalog' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setTab('catalog')}>Catalog</button>
           <button className={tab === 'vendors' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setTab('vendors')}>Vendors</button>
+          <button className={tab === 'fulfillment' ? 'btn btn-primary' : 'btn btn-secondary'} onClick={() => setTab('fulfillment')}>Fulfillment</button>
         </div>
       </div>
 
@@ -255,6 +316,73 @@ export default function SpecialOrderManagePage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {tab === 'fulfillment' && (
+        <div>
+          <div style={{ ...panel, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, color: 'var(--text2)' }}>Where Amazon lives. Place orders with the vendor (auto for an outbound-API connector, manual otherwise), track them, advance status, and reconcile the actual cost.</span>
+            <div style={{ flex: 1 }} />
+            <select value={foStatus} onChange={e => setFoStatus(e.target.value)} style={{ ...input, width: 'auto' }}>
+              <option value="">All statuses</option>
+              {SO_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <button className="btn btn-secondary" onClick={loadFulfillment}>Refresh</button>
+          </div>
+          {foLoading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
+          ) : (
+            <div className="table-wrapper" style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1040, fontSize: 13 }}>
+                <thead><tr style={{ background: 'var(--surface2)' }}>
+                  {['Order', 'Store → Ship-to', 'Item', 'Qty', 'Vendor / connector', 'Vendor SKU', 'Cost (capt. → actual)', 'Order ref / tracking', 'Status', 'Actions'].map(h =>
+                    <th key={h} style={{ textAlign: 'left', padding: 8, fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {orders.map(o => (
+                    <tr key={o.id}>
+                      <td style={{ ...cell, fontWeight: 600 }}>#{o.order_no ?? '—'}</td>
+                      <td style={{ ...cell, color: 'var(--text2)' }}>{o.store_code || '—'} → {o.ship_to_store || o.store_code || '—'}</td>
+                      <td style={cell}>{o.description || '—'}</td>
+                      <td style={cell}>{o.qty}</td>
+                      <td style={cell}>
+                        {o.connector ? (
+                          <span>{o.connector.display_name || o.connector.vendor_key} <span style={{ color: 'var(--text3)', fontSize: 11 }}>({o.connector.integration_mode}{o.connector.auto_order ? ', auto' : ''})</span></span>
+                        ) : <span style={{ color: 'var(--text3)' }}>{o.vendor || 'no connector'}</span>}
+                      </td>
+                      <td style={{ ...cell, color: 'var(--text2)' }}>{o.vendor_linkage?.vendor_sku || '—'}</td>
+                      <td style={cell}>{money(o.captured_cost)}{o.actual_cost != null ? <span style={{ color: 'var(--green)' }}> → {money(o.actual_cost)}</span> : ''}</td>
+                      <td style={{ ...cell, color: 'var(--text2)' }}>{o.vendor_order_ref || '—'}{o.tracking ? <div style={{ fontSize: 11, color: 'var(--text3)' }}>{o.tracking}</div> : ''}</td>
+                      <td style={cell}>
+                        <select value={o.status} disabled={busyId === o.id} onChange={e => foSetStatus(o.id, e.target.value)} style={{ ...input, width: 'auto', padding: '4px 8px', fontSize: 12 }}>
+                          {SO_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </td>
+                      <td style={{ ...cell }}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {['requested', 'ordered'].includes(o.status) &&
+                            <button className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 12 }} disabled={busyId === o.id} onClick={() => foAction(o.id, 'place')}>Place</button>}
+                          {o.connector?.auto_order &&
+                            <button className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 12 }} disabled={busyId === o.id} onClick={() => foAction(o.id, 'refresh')}>Refresh</button>}
+                          {trueUpId === o.id ? (
+                            <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                              <input value={trueUpVal} onChange={e => setTrueUpVal(e.target.value)} type="number" placeholder="actual/unit" style={{ ...input, width: 90, padding: '3px 6px', fontSize: 12 }} />
+                              <button className="btn btn-primary" style={{ padding: '3px 9px', fontSize: 12 }} disabled={busyId === o.id} onClick={() => foTrueUp(o.id)}>Save</button>
+                              <button className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 12 }} onClick={() => { setTrueUpId(null); setTrueUpVal('') }}>×</button>
+                            </span>
+                          ) : (
+                            <button className="btn btn-secondary" style={{ padding: '3px 9px', fontSize: 12 }} onClick={() => { setTrueUpId(o.id); setTrueUpVal(o.actual_cost != null ? String(o.actual_cost) : (o.captured_cost != null ? String(o.captured_cost) : '')) }}>True-up</button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {orders.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>No special orders in the queue{foStatus ? ` with status “${foStatus}”` : ''}.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

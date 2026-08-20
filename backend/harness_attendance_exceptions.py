@@ -321,6 +321,28 @@ rows = run(shifts18, [])
 check("C18 a soft-deleted shift is ignored entirely (no no-show for a cancelled shift)", rows == [], rows)
 
 
+# ── C-TZ: PER-STORE TIMEZONE (multi-timezone tenant) — owner-reported 2026-08-20 ──────────────────
+# A Chicago (Central) store's shift must be evaluated + displayed in Central, even though the tenant's
+# default zone is Eastern. Without store_tz, an on-time Central punch is WRONGLY flagged late.
+CT = ZoneInfo("America/Chicago")
+chi_shift = [{"id": "s-chi", "employee_id": "E9", "employee_name": "Cara", "store_code": "CHI",
+              "shift_date": WD, "start_time": "09:45", "end_time": "18:00", "is_deleted": False}]
+ontime_ct = [punch("p-chi1", "E9", "Cara", "CHI", "09:45", wd=WD, tz=CT)]   # 09:45 CENTRAL = on time
+buggy = compute_attendance_exceptions(chi_shift, ontime_ct, [], CFG, NOW_LATE, ET)
+check("Ctz1 WITHOUT per-store tz an on-time Central punch is wrongly flagged late (the bug)",
+      any(r.get("is_late") for r in buggy), buggy)
+fixed = compute_attendance_exceptions(chi_shift, ontime_ct, [], CFG, NOW_LATE, ET, store_tz={"CHI": CT})
+check("Ctz2 WITH per-store tz the on-time Central punch is NOT flagged",
+      not any(r.get("is_late") for r in fixed), fixed)
+late_ct = [punch("p-chi2", "E9", "Cara", "CHI", "10:30", wd=WD, tz=CT)]   # 45 min late IN CHICAGO
+fr = compute_attendance_exceptions(chi_shift, late_ct, [], CFG, NOW_LATE, ET, store_tz={"CHI": CT})
+lr = [r for r in fr if r.get("is_late")]
+check("Ctz3 per-store tz: minutes_late is computed in the store's zone (45, not 105)",
+      lr and lr[0]["minutes_late"] == 45, lr and (lr[0].get("minutes_late") if lr else None))
+check("Ctz4 per-store tz: the displayed clock-in is the store's LOCAL time",
+      lr and lr[0].get("actual_clock_in_local") == "10:30 AM", lr and (lr[0].get("actual_clock_in_local") if lr else None))
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("SECTION A-C FAILURES:")

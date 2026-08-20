@@ -199,6 +199,30 @@ These are **yours** — decisions and console tasks the build can't do. Ordered;
       give the API base URL and put the API key in a Railway secret, then set `credential_ref` to that
       secret's **name**, never the key), or **inbound_api** (they call us — we generate a token, shown
       **once**, that you hand to the vendor). Then link catalog items to that vendor.
+- [ ] **10. (Phase 5 — Amazon Business API auto-ordering) provision Amazon credentials, THEN switch the
+      Amazon connector to outbound_api.** This is OFF by default: the seeded Amazon connector is
+      `manual`, so orders wait in the HQ **Fulfillment** tab for a person to place — and **without the
+      credentials below the auto-place is a documented no-op** (the order simply stays queued; the manual
+      queue always works, and the booked sale is never blocked). To enable auto-ordering, once TODO #1
+      (Amazon Business terms) clears:
+      1. **Enroll** in the Amazon Business API / ordering program and obtain a **Login-with-Amazon (LWA)
+         access token** (or your approved ordering credential). The exact ordering endpoint and token are
+         gated by Amazon's approval — this build does not, and cannot, guess them.
+      2. Put that token in a **Railway secret** (e.g. `AMZ_LWA_TOKEN`) — the raw key is **never** stored
+         in the DB.
+      3. In **HQ Management → Vendors**, edit the **amazon** connector: set **mode = outbound_api**, set
+         **API base URL** to the Amazon ordering endpoint you were approved for, and set **Credential ref**
+         to the secret's **name** (`AMZ_LWA_TOKEN`). If Amazon's payload/field names differ from the
+         defaults, override them in the connector **Config** JSON (keys: `place_path`, `auth_header`,
+         `auth_scheme`, `items_key`, `asin_key`, `qty_key`, `ship_to_key`, `ship_to_address_key`,
+         `reference_key`, `order_ref_key`, `tracking_key`, `status_path`, `status_key`, `timeout`).
+      4. The ASIN comes from each catalog item's **Vendor SKU / ASIN** field. Amazon needs a real
+         **ship-to street address**; the adapter sends the ship-to store **code** by default — either map
+         store codes → addresses in your ordering endpoint/proxy, or add a `shipToAddress` to the order
+         payload via a proxy. Confirm this before going live.
+      5. With that set, a new special order for an Amazon item **auto-places** on booking, and the
+         Fulfillment tab's **Place** / **Refresh** buttons call the Amazon API. A failure never blocks the
+         sale — the order falls back to the manual queue with a breadcrumb note.
 
 ---
 
@@ -218,7 +242,21 @@ These are **yours** — decisions and console tasks the build can't do. Ordered;
     a **Catalog** tab (items + hidden vendor linkage) and a **Vendors** tab (the connector registry,
     with the inbound token shown once). Two nav entries added in `rbac.ts` (the manage page is
     `all`/`market` in nav AND server-gated by the permission).
-- Next build steps: Phase 4 (a dedicated HQ ops fulfillment queue UI — today the `manage` page + the
-  store Orders tab cover the essentials), then Phase 5 (Amazon Business API automation, ToS-gated).
+- **Phase 4 (HQ ops fulfillment queue): done** — a **Fulfillment** tab on `/pos/special-orders/manage`
+  (gated `pos_special_order_admin`) backed by `GET /pos/special-orders/fulfillment` (order + vendor
+  linkage + resolved connector). Ops can **Place**/**Refresh** an order via the connector's adapter,
+  advance status (requested→ordered→shipped→received→delivered), and run the **actual-cost true-up**
+  (`POST /pos/special-orders/{id}/true-up`) which writes the real vendor cost onto the booked sale line
+  (COGS becomes exact; profit derives) and best-effort re-runs the built-in POS feed for the period.
+- **Phase 5 (Amazon Business API auto-ordering): built (credential-gated) + honest scaffold** —
+  `AmazonBusinessAdapter` (`pos/vendor_adapters.py`, registered `vendor:amazon`). `create_special_order`
+  already resolves the connector and calls the adapter, so an **outbound_api** Amazon connector
+  auto-places on booking; the seeded **manual** Amazon connector is unaffected (the Amazon adapter stays
+  manual unless the connector is explicitly outbound_api **and** credentialed). Fully config-driven
+  (Amazon-shaped ASIN payload + LWA token header by default, every wire detail overridable via connector
+  `config`). **Without operator credentials it is a documented no-op** — never a fake success; the order
+  stays queued for manual placement and the sale is never blocked. See Operator TODO #10 for the exact
+  Amazon credentials/endpoint the operator must supply. Proven by `harness_pos_special_order.py` (57/57,
+  sections I + J).
 - Blocked-on-owner: the Phase 0 decisions (TODO #1–3, #6) before this can go live; apply migrations
   864/865/866 (TODO #4, #8) and grant `pos_special_order_admin` to HQ roles (TODO #5).

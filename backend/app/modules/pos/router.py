@@ -576,6 +576,169 @@ def update_special_order(order_id: str, body: dict, authorization: str = Header(
     return {"special_order": r.data[0]}
 
 
+# ── Phase 4 — HQ ops fulfillment queue (gated pos_special_order_admin; vendor linkage exposed here) ──
+def _so_admin_row(org_id: str, so: dict) -> dict:
+    """A special-order row enriched for the HQ fulfillment queue: the product's hidden vendor linkage
+    (ASIN/sku/cost) + the resolved vendor connector (mode, whether auto-order is wired). HQ-only — this
+    is the ONE place the vendor is shown, exactly as the plan intends."""
+    out = dict(so or {})
+    vkey = so.get("vendor")
+    try:
+        vrows = (sb().schema("pos").table("special_order_vendor")
+                 .select("vendor,vendor_sku,vendor_cost,vendor_url")
+                 .eq("org_id", org_id).eq("product_id", so.get("product_id")).limit(1)
+                 .execute().data) or []
+        out["vendor_linkage"] = vrows[0] if vrows else None
+        if vrows and not vkey:
+            vkey = vrows[0].get("vendor")
+    except Exception:
+        out["vendor_linkage"] = None
+    conn = _vendor_connector(org_id, vkey) if vkey else None
+    if conn:
+        mode = (conn.get("integration_mode") or "manual").strip()
+        auto = (mode == "outbound_api" and bool((conn.get("api_base_url") or "").strip())
+                and bool((conn.get("credential_ref") or "").strip()))
+        out["connector"] = {"vendor_key": conn.get("vendor_key"),
+                            "display_name": conn.get("display_name"),
+                            "integration_mode": mode, "auto_order": auto}
+    else:
+        out["connector"] = None
+    return out
+
+
+@router.get("/special-orders/fulfillment")
+def special_orders_fulfillment(status: str = "", store_code: str = "",
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The HQ ops fulfillment queue: every special order WITH its vendor linkage + connector, so ops can
+    place/refresh and advance status. HQ-only (pos_special_order_admin) — this is where the vendor lives."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    q = sb().schema("pos").table("special_orders").select("*").eq("org_id", org_id)
+    if status in _SO_STATUSES:
+        q = q.eq("status", status)
+    if store_code:
+        q = q.eq("store_code", store_code)
+    rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    return {"special_orders": [_so_admin_row(org_id, r) for r in rows]}
+
+
+def _apply_placement(org_id: str, so: dict, placement: dict) -> dict:
+    """Persist an adapter placement/refresh result onto a special_orders row. Only the keys the adapter
+    returned are touched; notes are appended, never clobbered. Returns the updated row."""
+    upd = {}
+    for k in ("status", "vendor_order_ref", "tracking"):
+        if placement.get(k):
+            upd[k] = placement[k]
+    if placement.get("notes"):
+        upd["notes"] = " ".join(x for x in (so.get("notes"), placement["notes"]) if x)
+    if not upd:
+        return so
+    r = (sb().schema("pos").table("special_orders").update(upd)
+         .eq("org_id", org_id).eq("id", so.get("id")).execute())
+    return (r.data[0] if r.data else {**so, **upd})
+
+
+@router.post("/special-orders/{order_id}/place")
+def place_special_order(order_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ ops: (re)place a queued special order with its vendor via the connector's adapter. For an
+    outbound-API vendor this calls the vendor API; for manual/inbound it just confirms the queue state.
+    A vendor/transport failure never raises — the order stays queued for manual placement with a note."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    rows = (sb().schema("pos").table("special_orders").select("*")
+            .eq("org_id", org_id).eq("id", order_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    so = rows[0]
+    if so.get("status") not in ("requested", "ordered"):
+        raise HTTPException(409, f"order is '{so.get('status')}' — placement only applies before shipping")
+    vkey = so.get("vendor") or "amazon"
+    conn = _vendor_connector(org_id, vkey)
+    vrows = (sb().schema("pos").table("special_order_vendor").select("vendor_sku")
+             .eq("org_id", org_id).eq("product_id", so.get("product_id")).limit(1).execute().data) or []
+    try:
+        from app.modules.pos.vendor_adapters import get_adapter
+        placement = get_adapter(conn).place_order({
+            "vendor_sku": (vrows[0].get("vendor_sku") if vrows else None), "qty": so.get("qty"),
+            "ship_to": so.get("ship_to_store") or so.get("store_code"),
+            "reference": so.get("sale_id") or order_id})
+    except Exception as e:
+        placement = {"status": "requested", "notes": f"placement error — queued for manual ({e})"}
+    updated = _apply_placement(org_id, so, placement)
+    return {"special_order": _so_admin_row(org_id, updated), "placement": placement}
+
+
+@router.post("/special-orders/{order_id}/refresh")
+def refresh_special_order(order_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ ops: re-poll the vendor for status/tracking via the connector's adapter (outbound-API vendors;
+    a documented no-op for manual/inbound). Never raises on a vendor failure."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    rows = (sb().schema("pos").table("special_orders").select("*")
+            .eq("org_id", org_id).eq("id", order_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    so = rows[0]
+    conn = _vendor_connector(org_id, so.get("vendor") or "amazon")
+    try:
+        from app.modules.pos.vendor_adapters import get_adapter
+        placement = get_adapter(conn).refresh({
+            "vendor_order_ref": so.get("vendor_order_ref"), "qty": so.get("qty")})
+    except Exception as e:
+        placement = {"notes": f"refresh error ({e})"}
+    updated = _apply_placement(org_id, so, placement)
+    return {"special_order": _so_admin_row(org_id, updated), "placement": placement}
+
+
+@router.post("/special-orders/{order_id}/true-up")
+def true_up_special_order(order_id: str, body: dict, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    """HQ ops: reconcile the ACTUAL vendor (Amazon) cost at fulfillment onto the booked sale line so COGS
+    — and the derived profit — is exact. Body: {actual_cost} (per unit, matching captured_cost). Updates
+    the sale item's cost, stamps actual_cost on the order, and best-effort re-runs the built-in POS feed
+    for the sale's period so the P&L reflects the corrected cost. HQ-only."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    actual_cost = _so_num(body.get("actual_cost"), None) if body.get("actual_cost") not in (None, "") else None
+    if actual_cost is None or actual_cost < 0:
+        raise HTTPException(400, "actual_cost (a number >= 0, per unit) is required")
+    rows = (sb().schema("pos").table("special_orders").select("*")
+            .eq("org_id", org_id).eq("id", order_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    so = rows[0]
+    sale_id, product_id = so.get("sale_id"), so.get("product_id")
+    cost_synced = False
+    if sale_id and product_id:
+        try:
+            sb().schema("pos").table("sale_items").update({"cost": actual_cost}) \
+                .eq("org_id", org_id).eq("sale_id", sale_id).eq("product_id", product_id).execute()
+            cost_synced = True
+        except Exception as e:
+            raise HTTPException(400, f"could not reconcile the sale line cost: {e}")
+    note = f"actual vendor cost reconciled to {actual_cost:.2f}/unit"
+    upd = {"actual_cost": actual_cost, "notes": " ".join(x for x in (so.get("notes"), note) if x)}
+    r = (sb().schema("pos").table("special_orders").update(upd)
+         .eq("org_id", org_id).eq("id", order_id).execute())
+    # Propagate the corrected COGS to commcalc (built-in POS feed). Best-effort + idempotent (the feed
+    # replaces the whole period), and only when the built-in POS is on — never fails the true-up.
+    refeed = None
+    try:
+        from app.modules.pos import commcalc_feed as _feed
+        setup = _feed.get_pos_setup(org_id)
+        if (setup.get("builtin_role") or "off") != "off":
+            srows = (sb().schema("pos").table("sales").select("created_at")
+                     .eq("org_id", org_id).eq("id", sale_id).limit(1).execute().data) or []
+            when = str((srows[0].get("created_at") if srows else "") or "")
+            if when:
+                dt = _feed.datetime.fromisoformat(when.replace("Z", "+00:00")).astimezone(_feed.BUSINESS_TZ)
+                period = dt.strftime("%B %Y")
+                # 'monthly' is the raw_sales grain that carries COGS into the P&L / commission basis
+                # (see the plan's "the insight") — the stream the corrected cost must reach.
+                _feed.sync_period(org_id, "monthly", period)
+                refeed = {"period": period, "mode": "monthly", "resynced": True}
+    except Exception as e:
+        refeed = {"resynced": False, "note": f"period not re-synced ({e}) — run the POS feed for the period"}
+    return {"special_order": _so_admin_row(org_id, (r.data[0] if r.data else {**so, **upd})),
+            "cost_synced": cost_synced, "refeed": refeed}
+
+
 # ── Plug-and-play vendor connectors (mig 866) — HQ-only registry of dropship vendors ─────────────────
 # A connector row makes a vendor pluggable in one of three modes: 'manual' (HQ fulfills from the queue),
 # 'inbound_api' (the vendor pulls our queue + posts status, via vendor_api.py), or 'outbound_api' (we

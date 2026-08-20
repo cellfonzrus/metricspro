@@ -52,6 +52,8 @@ def aggregate(exception_rows, shift_counts, thresholds=None):
                 "work_date": r.get("work_date"), "store_code": r.get("store_code"),
                 "late": is_late, "left_early": is_early,
                 "actual_clock_in": r.get("actual_clock_in"), "actual_clock_out": r.get("actual_clock_out"),
+                "actual_clock_in_local": r.get("actual_clock_in_local"),
+                "actual_clock_out_local": r.get("actual_clock_out_local"),
                 "minutes_late": r.get("minutes_late") or 0, "minutes_early": r.get("minutes_early") or 0,
             })
 

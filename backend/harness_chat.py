@@ -466,6 +466,60 @@ check("11f a new message pushes to the OTHER members, not the sender",
 C.push.notify = _orig_notify
 
 
+# ── 12: push routing by platform (Phase 5) — web→WebPush, android→FCM, ios→APNs; no-op unconfigured ─
+P = C.push
+WEB, FCM, APNS = [], [], []
+P._send_webpush = lambda toks, t, b, d: WEB.append(list(toks))
+P._send_fcm = lambda toks, t, b, d: FCM.append(list(toks))
+P._send_apns = lambda toks, t, b, d: APNS.append(list(toks))
+fake.store[("storeops", "chat_push_tokens")] = [
+    {"org_id": ORG, "employee_id": "E1", "token": "tw", "platform": "web"},
+    {"org_id": ORG, "employee_id": "E1", "token": "ta", "platform": "android"},
+    {"org_id": ORG, "employee_id": "E1", "token": "ti", "platform": "ios"},
+]
+
+grouped = P._tokens_by_platform(ORG, ["E1"])
+check("12a tokens group by platform (web/android/ios)",
+      grouped["web"] == ["tw"] and grouped["android"] == ["ta"] and grouped["ios"] == ["ti"], grouped)
+
+
+def _route(web_on, fcm_on, apns_on):
+    WEB.clear(); FCM.clear(); APNS.clear()
+    P.webpush_configured = lambda: web_on
+    P.fcm_configured = lambda: fcm_on
+    P.apns_configured = lambda: apns_on
+    P._fan(ORG, ["E1"], "t", "b", {"channel_id": "c"})
+
+
+_route(False, False, False)
+check("12b unconfigured → no send on any transport (documented no-op)", WEB == [] and FCM == [] and APNS == [])
+_route(False, True, False)
+check("12c FCM configured only → android to FCM; web + ios skipped",
+      FCM == [["ta"]] and WEB == [] and APNS == [], (WEB, FCM, APNS))
+_route(False, False, True)
+check("12d APNs configured only → ios to APNs; web + android skipped",
+      APNS == [["ti"]] and WEB == [] and FCM == [], (WEB, FCM, APNS))
+_route(True, False, False)
+check("12e VAPID configured only → web to Web Push; android + ios skipped",
+      WEB == [["tw"]] and FCM == [] and APNS == [], (WEB, FCM, APNS))
+_route(True, True, True)
+check("12e2 all configured → each platform routed to its own transport",
+      WEB == [["tw"]] and FCM == [["ta"]] and APNS == [["ti"]], (WEB, FCM, APNS))
+
+# The APNs provider JWT is a REAL ES256 token (PyJWT + cryptography), not a stub.
+from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+import jwt as _jwtlib  # noqa: E402
+_pem = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+    serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+P._APNS_JWT.update(token=None, iat=0)
+_tok = P._apns_jwt("KID9", "TEAM9", _pem)
+_hdr = _jwtlib.get_unverified_header(_tok) if _tok else {}
+check("12f the APNs provider token is a real ES256 JWT with the key id in its header",
+      bool(_tok) and _hdr.get("alg") == "ES256" and _hdr.get("kid") == "KID9", _hdr)
+check("12g APNs is unconfigured (None) until all four APNs creds are set", P._apns_conf() is None)
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")

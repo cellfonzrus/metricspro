@@ -43,8 +43,9 @@ def _incident_rows_html(incidents):
     trs = []
     for it in incidents:
         d = _esc(it.get("work_date"))
-        ci = _fmt_time(it.get("actual_clock_in"))
-        co = _fmt_time(it.get("actual_clock_out"))
+        # Prefer the store-zone-formatted time (a multi-timezone tenant); fall back to _fmt_time.
+        ci = it.get("actual_clock_in_local") or _fmt_time(it.get("actual_clock_in"))
+        co = it.get("actual_clock_out_local") or _fmt_time(it.get("actual_clock_out"))
         late = f"{int(it.get('minutes_late') or 0)} min late" if it.get("late") else ""
         early = f"left {int(it.get('minutes_early') or 0)} min early" if it.get("left_early") else ""
         detail = " · ".join([x for x in (late, early) if x])
@@ -98,7 +99,8 @@ def build_cap_email(dm_name, rec, period_label):
     employee, their pay-period late_count, and today's incident. Returns {"subject","html"}."""
     emp = rec.get("employee")
     n = int(rec.get("late_count") or 0)
-    today_ci = _fmt_time((rec.get("today_incident") or {}).get("actual_clock_in"))
+    _ti = rec.get("today_incident") or {}
+    today_ci = _ti.get("actual_clock_in_local") or _fmt_time(_ti.get("actual_clock_in"))
     today_min = int((rec.get("today_incident") or {}).get("minutes_late") or 0)
     today_line = (f"clocked in at <b>{_esc(today_ci)}</b>" + (f" ({today_min} min late)" if today_min else "")) \
         if today_ci else "clocked in late"
