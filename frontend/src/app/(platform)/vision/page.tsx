@@ -12,7 +12,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { panel, btn, btnPrimary, cameraName, fmtDateTime, type Camera, type VisionConfig } from '@/lib/vision'
+import { panel, btn, btnPrimary, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
+} from '@/lib/vision'
 
 export default function VisionLiveWall() {
   const [cameras, setCameras] = useState<Camera[]>([])
@@ -26,7 +27,7 @@ export default function VisionLiveWall() {
         const r = await api('/api/v1/vision/cameras')
         setCameras(r.cameras || [])
         setConfig(r.config || null)
-      } catch (e: any) { setMsg(e?.message || String(e)) }
+      } catch (e: any) { setMsg(visionError(e)) }
       finally { setLoading(false) }
     })()
   }, [])
@@ -137,7 +138,7 @@ function CameraTile({ camera }: { camera: Camera }) {
       } catch (e: any) {
         // The commonest cause is the company's maximum session length, which is a deliberate stop,
         // not a fault — say which happened instead of showing a bare error.
-        setError(e?.message || 'The live view ended.')
+        setError(visionError(e) || 'The live view ended.')
         setState('error')
         void teardown()
       }
@@ -180,7 +181,7 @@ function CameraTile({ camera }: { camera: Camera }) {
       setState('live')
       scheduleExtend(Number(res.extend_after_seconds) || 200)
     } catch (e: any) {
-      setError(e?.message || String(e))
+      setError(visionError(e))
       setState('error')
       void teardown()
     }

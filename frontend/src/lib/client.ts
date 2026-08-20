@@ -439,7 +439,13 @@ export async function api(path: string, opts: RequestInit = {}) {
     if (res.status === 401) markSessionInvalid(path, err, !!authHeader.Authorization)
     if (res.status === 401 || res.status === 403) markImpersonationInvalid(err)
     if (res.status === 409) markTenantChoiceRequired(err)
-    throw new Error(errMsg(err, res.status))
+    // Carry the HTTP status ON the Error. Callers used to get only a message string, so a route the
+    // API does not have ("Not Found") was indistinguishable from a record that does not exist — and
+    // a page could only render the server's word for it. Purely additive: every existing catch that
+    // reads `e.message` is unchanged.
+    const e: any = new Error(errMsg(err, res.status))
+    e.status = res.status
+    throw e
   }
   return res.json()
 }

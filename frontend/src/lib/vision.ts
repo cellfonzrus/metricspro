@@ -100,6 +100,27 @@ export interface BehaviorEmployee {
   series: { local_date: string; score: number; interactions: number }[]
 }
 
+// Turn an api() failure into something an operator can act on.
+//
+// THE CASE THIS EXISTS FOR: when the backend has not been redeployed but the frontend has, every
+// Vision endpoint 404s and FastAPI answers {"detail":"Not Found"} — which the page then displayed
+// verbatim. "Not found" reads like a missing page and sends the reader hunting through navigation,
+// when the real state is "the server does not have this module yet, wait for the deploy". That cost
+// a real support round trip on the day this shipped.
+export function visionError(e: any): string {
+  const status = e?.status
+  const msg = e?.message || String(e || 'Request failed')
+  if (status === 404) {
+    return 'The Vision module is not on the API server yet. The app has been updated but the '
+      + 'backend deploy has not finished — wait for it to complete, then reload this page.'
+  }
+  if (status === 503) {
+    return 'The API is not reachable right now. If a deploy is in progress, wait for it to finish '
+      + 'and reload.'
+  }
+  return msg
+}
+
 export function cameraName(c: Camera): string {
   return c.label || c.display_name || c.device_name.split('/').pop() || 'Camera'
 }
