@@ -290,6 +290,16 @@ def _get_referral(org_id: str, referral_id: str) -> dict:
     return rows[0]
 
 
+def _get_referral_safe(org_id: str, referral_id: str):
+    """Non-raising referral fetch for the approvals engine adapter (which has no HTTP context to map a
+    404 onto). Returns the row or None."""
+    try:
+        rows = _fetch("referral", org_id, limit=1, id=referral_id)
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 def _decorate(r: dict) -> dict:
     cfg = None  # amounts decorated by caller where it holds cfg; keep display-only fields here
     return {
@@ -337,6 +347,47 @@ def _apply_transition(org_id: str, referral: dict, to: str, caller=None, actor_k
         raise HTTPException(400, f"Could not update the referral: {e}")
     _audit(org_id, referral["id"], "transition", frm, to, reason, caller, actor_kind, meta)
     return {**referral, **upd}
+
+
+def _apply_referral_decision(org_id: str, referral: dict, decision: str, *, caller=None, note=None,
+                             commission_amount=None, payout_date=None) -> dict:
+    """The ONE shared effect for a referral commission decision (commission_pending → approved | rejected):
+    the approve/reject state transition, the commission math + payout-date resolution, the audit line, and
+    the referrer notification. Called by BOTH the /referrals/{id}/approve + /reject endpoints AND the
+    unified approvals engine adapter, so an inbox decision and a legacy-board decision book the SAME money
+    (amount + payout date are never recomputed anywhere else). The caller (endpoint or engine adapter) is
+    responsible for the RBAC + segregation-of-duties gate BEFORE calling this. Returns
+    {referral, commission_amount?, payout_date?}.
+
+    `decision`: 'approve' or 'deny'/'reject'. On approve, `commission_amount`/`payout_date` override the
+    referral's stored/tenant defaults when provided (the inbox path passes neither → pure defaults)."""
+    cfg = _cfg(org_id)
+    if (decision or "").lower() == "approve":
+        amount = commission_amount
+        if amount in (None, ""):
+            amount = core.compute_commission(referral, cfg)
+        else:
+            try:
+                amount = round(max(0.0, float(amount)), 2)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "Commission amount must be a number.")
+        ref_for_date = {**referral, "payout_date": payout_date or referral.get("payout_date")}
+        pd = core.resolve_payout_date(ref_for_date, cfg, _now())
+        extra = {"commission_amount": amount, "payout_date": pd,
+                 "approver_employee_id": (caller or {}).get("employee_id"),
+                 "approver_app_user_id": (caller or {}).get("id")}
+        r = _apply_transition(org_id, referral, "approved", caller, "staff",
+                              note or f"Approved ${amount} payable {pd}", extra=extra,
+                              meta={"amount": amount, "payout_date": pd})
+        _audit(org_id, referral["id"], "approve", "commission_pending", "approved",
+               f"Approved ${amount} payable {pd}", caller, "staff",
+               {"amount": amount, "payout_date": pd})
+        _notify_referrer_approved(org_id, r, amount, pd)
+        return {"referral": r, "commission_amount": amount, "payout_date": pd}
+    reason = note or "Referral rejected"
+    r = _apply_transition(org_id, referral, "rejected", caller, "staff", reason)
+    _audit(org_id, referral["id"], "reject", None, "rejected", reason, caller, "staff")
+    return {"referral": r}
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -663,6 +714,22 @@ def submit_for_approval(referral_id: str, body: ReferralNoteIn = None, org_id: s
     r = _get_referral(org_id, referral_id)
     r = _apply_transition(org_id, r, "commission_pending", caller, "staff",
                           body.note or "Submitted for commission approval")
+    # Intimation into the UNIFIED approvals inbox — the gated commission decision now surfaces centrally
+    # (this module sends no approver email of its own, so let the engine notify). Best-effort.
+    try:
+        from app.modules.approvals import engine as _approvals
+        cfg = _cfg(org_id)
+        amt = core.compute_commission(r, cfg)
+        _approvals.create_request(
+            org_id, type="referral", source_table="referral", source_id=referral_id,
+            title=f"Referral commission ${amt:.2f} — {core.referrer_display(r)}",
+            summary=(f"Referred customer: {core.customer_display(r)}"),
+            payload={"commission_amount": amt, "referral_no": r.get("referral_no"),
+                     "referrer": core.referrer_display(r), "customer": core.customer_display(r)},
+            requested_by=r.get("created_by"), requested_by_name=core.referrer_display(r),
+            store_code=r.get("store_code"), market=r.get("market"), priority="normal")
+    except Exception:
+        pass
     return {"referral": _decorate(r)}
 
 
@@ -676,36 +743,25 @@ def approve(referral_id: str, body: ApproveReferralIn = None, org_id: str = ORG_
     body = body or ApproveReferralIn()
     caller = _caller(authorization, x_active_org)
     _require_approver(caller)
-    cfg = _cfg(org_id)
     r = _get_referral(org_id, referral_id)
 
     conflict = core.approval_conflict((caller or {}).get("employee_id"), (caller or {}).get("id"), r)
     if conflict:
         raise HTTPException(403, conflict)
 
-    # User-defined amount + date; fall back to the referral's stored values, then tenant defaults.
-    amount = body.commission_amount
-    if amount in (None, ""):
-        amount = core.compute_commission(r, cfg)
-    else:
-        try:
-            amount = round(max(0.0, float(amount)), 2)
-        except (TypeError, ValueError):
-            raise HTTPException(400, "Commission amount must be a number.")
-    ref_for_date = {**r, "payout_date": body.payout_date or r.get("payout_date")}
-    payout_date = core.resolve_payout_date(ref_for_date, cfg, _now())
-
-    extra = {"commission_amount": amount, "payout_date": payout_date,
-             "approver_employee_id": (caller or {}).get("employee_id"),
-             "approver_app_user_id": (caller or {}).get("id")}
-    r = _apply_transition(org_id, r, "approved", caller, "staff",
-                          body.note or f"Approved ${amount} payable {payout_date}", extra=extra,
-                          meta={"amount": amount, "payout_date": payout_date})
-    _audit(org_id, referral_id, "approve", "commission_pending", "approved",
-           f"Approved ${amount} payable {payout_date}", caller, "staff",
-           {"amount": amount, "payout_date": payout_date})
-    _notify_referrer_approved(org_id, r, amount, payout_date)
-    return {"referral": _decorate(r), "commission_amount": amount, "payout_date": payout_date}
+    # User-defined amount + date fall back to the referral's stored values, then tenant defaults — all
+    # via the ONE shared effect, so the unified Approvals inbox books identical money.
+    out = _apply_referral_decision(org_id, r, "approve", caller=caller, note=body.note,
+                                   commission_amount=body.commission_amount, payout_date=body.payout_date)
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="referral", source_table="referral",
+                                        source_id=referral_id, decision="approve",
+                                        actor=(caller or {}).get("email"))
+    except Exception:
+        pass
+    return {"referral": _decorate(out["referral"]), "commission_amount": out["commission_amount"],
+            "payout_date": out["payout_date"]}
 
 
 @router.post("/referrals/{referral_id}/pay")
@@ -732,9 +788,15 @@ def reject(referral_id: str, body: ReferralReasonIn = None, org_id: str = ORG_ID
     _require_approver(caller)
     r = _get_referral(org_id, referral_id)
     reason = body.reason or body.note or "Referral rejected"
-    r = _apply_transition(org_id, r, "rejected", caller, "staff", reason)
-    _audit(org_id, referral_id, "reject", None, "rejected", reason, caller, "staff")
-    return {"referral": _decorate(r)}
+    out = _apply_referral_decision(org_id, r, "deny", caller=caller, note=reason)
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="referral", source_table="referral",
+                                        source_id=referral_id, decision="deny",
+                                        actor=(caller or {}).get("email"), note=reason)
+    except Exception:
+        pass
+    return {"referral": _decorate(out["referral"])}
 
 
 @router.post("/referrals/{referral_id}/void")

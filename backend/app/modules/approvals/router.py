@@ -137,3 +137,4 @@ from app.modules.approvals.adapters import timeclock as _adapter_timeclock  # no
 from app.modules.approvals.adapters import shift_extension as _adapter_shift_extension  # noqa: E402,F401
 from app.modules.approvals.adapters import budget_override as _adapter_budget_override  # noqa: E402,F401
 from app.modules.approvals.adapters import closing_expense as _adapter_closing_expense  # noqa: E402,F401
+from app.modules.approvals.adapters import referral as _adapter_referral  # noqa: E402,F401

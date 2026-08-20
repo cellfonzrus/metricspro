@@ -251,6 +251,78 @@ check("closing_expense: on_decide leaves an already-decided line untouched", exp
 check("closing_expense: ...and pushes no P&L on the idempotent no-op", PL_PUSHES == [], PL_PUSHES)
 
 
+# ── referral (MONEY-CRITICAL: gated commission; approve books amount + payout, SoD-gated) ─────────
+import app.modules.referral.router as R  # noqa: E402
+import app.modules.referral.referral_core as RC  # noqa: E402
+
+R.get_supabase = lambda: fake          # referral.sb() -> fake.schema("core")
+R._notify_referrer_approved = lambda *a, **k: None   # no email in the harness
+
+
+def seed_ref(status="commission_pending"):
+    fake.store[("core", "referral")] = [
+        {"org_id": ORG, "id": "R1", "referral_no": "REF-1", "status": status, "store_code": "S1",
+         "referrer_name": "Ann", "customer_name": "Bob", "created_by": "REP1"}]
+    fake.store[("core", "referral_config")] = []   # -> resolve_config defaults
+
+
+# A: decide via the UNIFIED INBOX → the referral flips to approved with a booked amount + payout date.
+fake.store.clear(); seed_ref()
+rr = engine.create_request(ORG, type="referral", title="Referral commission — Ann",
+                           source_table="referral", source_id="R1", store_code="S1")
+check("referral: request registered against the source row", rr.get("status") == "pending" and rr.get("id"), rr)
+engine.decide(ORG, rr["id"], decision="approve", actor="mgr@x")
+ref = fake.store[("core", "referral")][0]
+default_amt = RC.compute_commission({"status": "commission_pending"}, RC.resolve_config({}))
+check("referral: an inbox APPROVE moves commission_pending -> approved", ref["status"] == "approved", ref)
+check("referral: ...and books the default commission_amount onto the referral",
+      ref.get("commission_amount") == default_amt and ref.get("payout_date"), ref)
+check("referral: ...and stamps the approval_request approved",
+      engine.get_request(ORG, rr["id"])["status"] == "approved")
+
+# A2: an inbox DENY maps to 'rejected'.
+fake.store.clear(); seed_ref()
+rr2 = engine.create_request(ORG, type="referral", title="reject", source_table="referral",
+                            source_id="R1", store_code="S1")
+engine.decide(ORG, rr2["id"], decision="deny", actor="mgr@x")
+check("referral: an inbox DENY moves commission_pending -> rejected",
+      fake.store[("core", "referral")][0]["status"] == "rejected")
+check("referral: ...and stamps the approval_request denied",
+      engine.get_request(ORG, rr2["id"])["status"] == "denied")
+
+# B: decide via the LEGACY board (sync only) → inbox reflects it, effect not re-run by the engine.
+fake.store.clear(); seed_ref()
+rr3 = engine.create_request(ORG, type="referral", title="legacy", source_table="referral",
+                            source_id="R1", store_code="S1")
+fake.store[("core", "referral")][0].update({"status": "approved"})   # legacy endpoint already applied it
+engine.sync_source_decision(ORG, type="referral", source_table="referral", source_id="R1",
+                            decision="approve", actor="mgr@x")
+check("referral: a legacy-board decision syncs the inbox request to approved",
+      engine.get_request(ORG, rr3["id"])["status"] == "approved")
+
+# C: idempotency — the referral already decided → inbox decide is a no-op on the row (still stamps request).
+fake.store.clear(); seed_ref(status="approved")
+fake.store[("core", "referral")][0]["commission_amount"] = 999.0
+rr4 = engine.create_request(ORG, type="referral", title="already done", source_table="referral",
+                            source_id="R1", store_code="S1")
+engine.decide(ORG, rr4["id"], decision="deny", actor="mgr@x")
+ref4 = fake.store[("core", "referral")][0]
+check("referral: on_decide leaves an already-decided referral untouched",
+      ref4["status"] == "approved" and ref4["commission_amount"] == 999.0, ref4)
+
+# D: segregation-of-duties — the approver_predicate refuses the rep who created the referral, allows others.
+fake.store.clear(); seed_ref()
+_refadp = __import__("app.modules.approvals.adapters.referral", fromlist=["_approver_predicate"])
+R._can_approve = lambda caller: True   # focus this test on the SoD conflict, not the RBAC tier
+R._caller = lambda authz, org=None: {"employee_id": authz}   # 'authorization' carries the emp id here
+predicate = engine._TYPES["referral"].approver_predicate
+req_for_pred = {"org_id": ORG, "source_id": "R1"}
+check("referral: SoD predicate BLOCKS the rep who created the referral",
+      predicate({"authorization": "REP1", "org_id": ORG}, req_for_pred) is False)
+check("referral: SoD predicate ALLOWS a different manager",
+      predicate({"authorization": "MGR1", "org_id": ORG}, req_for_pred) is True)
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")
