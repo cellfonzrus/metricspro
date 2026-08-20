@@ -183,6 +183,50 @@ check("elapsed_s is carried into signals (the greeting window depends on it)",
 r = batch([{**TR, "text": "   "}], consents=SIGNED)
 check("an empty segment is dropped rather than stored blank", r["rejected"] == {"empty_text": 1})
 
+print("\n(8b) ONE analyzer serving SEVERAL stores from a remote location")
+# The central deployment: an agent with NO store_code is not pinned, so it may speak for any camera
+# of any home its company has connected. A store-PINNED agent must still be refused for other stores.
+CENTRAL = {"agent_key": "va_central"}                 # no store_code
+S1 = {"id": "cam-1", "device_name": "enterprises/p/devices/fresno-door", "store_code": "S1",
+      "enabled": True, "analytics_enabled": True, "is_entrance": True,
+      "audio_enabled": False, "supports_audio": True}
+S2 = {"id": "cam-9", "device_name": "enterprises/p/devices/clovis-door", "store_code": "S2",
+      "enabled": True, "analytics_enabled": True, "is_entrance": True,
+      "audio_enabled": False, "supports_audio": True}
+MULTI = {S1["device_name"]: S1, S2["device_name"]: S2}
+
+C.AUDIO_GLOBALLY_DISABLED = False
+evs = [
+    {**T_IN, "device_name": S1["device_name"], "track_key": "t-a"},
+    {**T_IN, "device_name": S2["device_name"], "track_key": "t-b"},
+]
+r = I.normalize_batch({"events": evs}, MULTI, dict(FULL_ON), {}, ORG, CENTRAL)
+check("an UNPINNED agent may write for both stores", r["accepted"] == 2 and not r["rejected"])
+check("each event lands on ITS OWN camera's store",
+      sorted(t["store_code"] for t in r["traffic"]) == ["S1", "S2"])
+
+pinned = {"agent_key": "va_s1", "store_code": "S1"}
+r = I.normalize_batch({"events": evs}, MULTI, dict(FULL_ON), {}, ORG, pinned)
+check("a store-PINNED agent still writes only for its own store", r["accepted"] == 1)
+check("...and the other store's event is refused, not relabelled",
+      r["rejected"] == {"agent_store_mismatch": 1} and r["traffic"][0]["store_code"] == "S1")
+
+# Timezone travels with the EVENT, so a central analyzer spanning zones still files each store's
+# events under that store's business date. Two stores, three hours apart, same UTC instant.
+same_instant = "2026-08-20T02:30:00+00:00"           # 22:30 Eastern (19th) / 19:30 Pacific (19th)
+tz_evs = [
+    {**T_IN, "device_name": S1["device_name"], "occurred_at": same_instant,
+     "local_date": "2026-08-19", "local_hour": 19, "track_key": "pac"},
+    {**T_IN, "device_name": S2["device_name"], "occurred_at": same_instant,
+     "local_date": "2026-08-19", "local_hour": 22, "track_key": "est"},
+]
+r = I.normalize_batch({"events": tz_evs}, MULTI, dict(FULL_ON), {}, ORG, CENTRAL)
+by_store = {t["store_code"]: t for t in r["traffic"]}
+check("one UTC instant becomes two DIFFERENT local hours", 
+      by_store["S1"]["local_hour"] == 19 and by_store["S2"]["local_hour"] == 22)
+check("...and the server stores what the analyzer resolved, not its own clock",
+      by_store["S1"]["local_date"] == by_store["S2"]["local_date"] == "2026-08-19")
+
 print("\n(9) Every rejection is counted and returned")
 r = batch([T_IN,
            {**T_IN, "device_name": "unknown"},

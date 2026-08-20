@@ -1169,6 +1169,13 @@ async def edge_config(request: Request):
             "device_name": c.get("device_name"),
             "camera_id": c.get("id"),
             "store_code": c.get("store_code"),
+            # The STORE's own IANA zone, resolved server-side through the platform's existing ladder
+            # (stores.timezone -> tenant default -> house default). Sent per camera rather than
+            # configured on the analyzer, because one analyzer can legitimately serve stores in
+            # DIFFERENT zones — see _tz_name(). Getting this wrong does not fail loudly; it files the
+            # evening rush under the wrong business date, which nobody notices until a report is
+            # compared against the POS.
+            "timezone": _tz_name(org_id, c.get("store_code")),
             "stream_protocol": c.get("stream_protocol"),
             "analytics": bool(c.get("analytics_enabled")),
             "is_entrance": bool(c.get("is_entrance")),
@@ -1193,6 +1200,17 @@ async def edge_config(request: Request):
         "attribution": "unambiguous" if len(on_duty) == 1 else "ambiguous",
         "poll_seconds": 60,
     }
+
+
+def _tz_name(org_id, store_code) -> str:
+    """IANA zone name for a store, via storeops' canonical resolver. Falls back to UTC only if that
+    whole path is unavailable — and the analyzer then falls back to its own --tz-offset, so a store
+    is never left silently filing events under an arbitrary zone."""
+    try:
+        from app.modules.storeops.router import _biz_tz_for_store
+        return str(getattr(_biz_tz_for_store(org_id, store_code), "key", "") or "UTC")
+    except Exception:
+        return "UTC"
 
 
 def _on_duty(org_id, store_code, consented_ids):

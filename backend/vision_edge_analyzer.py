@@ -5,12 +5,27 @@ posts derived numbers to the platform.
     python3 backend/vision_edge_analyzer.py --api https://api.example.com \
         --agent-key va_xxxxxxxx --secret <the secret shown once at registration>
 
-WHY THIS RUNS HERE AND NOT ON THE SERVER
-────────────────────────────────────────
+WHY THIS IS A SEPARATE PROCESS — AND WHERE IT CAN RUN
+─────────────────────────────────────────────────────
 A Nest live-stream grant expires in about five minutes and must be re-negotiated; decoding video is
-CPU-bound and continuous. A shared FastAPI process on Railway can do neither for a dozen cameras.
-So the platform brokers the grant and stores the numbers, and THIS process — a small box in the
-stockroom, or a container next to one — holds the stream and does the pixel work.
+CPU-bound and continuous. A shared FastAPI process on Railway can do neither for a dozen cameras. So
+the platform brokers the grant and stores the numbers, and THIS process holds the stream and does the
+pixel work.
+
+IT DOES NOT HAVE TO BE IN THE STORE. Nest cameras stream from GOOGLE'S CLOUD, not over the shop LAN
+— this process authenticates to Google over the internet and the media flows Google -> here, wherever
+"here" is. So one machine in a back office, a rack, or a cloud VM can serve every store, and that is
+usually the better deployment: one thing to maintain, under your control, not competing with a
+register, and not dependent on someone remembering to leave a PC on.
+
+Two things make the central shape work, and both are handled:
+  * an agent with NO store_code is not pinned to a store and receives every camera in every home its
+    company has connected (a store-pinned agent still may not write for any other store);
+  * each camera carries its STORE's timezone from the server, so one analyzer spanning several zones
+    still files every event under the right business date.
+The trade is a single point of failure: one box down is every store blind, where one box per store
+degrades to one store blind. For two or three stores that is usually worth it; past that, or across
+very different network paths, split them.
 
 WHAT IT SENDS, AND WHAT IT DESTROYS
 ───────────────────────────────────
@@ -84,7 +99,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -616,6 +631,7 @@ class CameraWorker:
         self.occupancy = defaultdict(float)
         self.last_flush = time.time()
         self.last_detect_at = None
+        self._tz_warned = False
         self.detect_interval = 1.0 / max(0.5, float(detect_fps or DETECT_FPS))
 
     # ── stream lifecycle ─────────────────────────────────────────────────────────────────────
@@ -758,10 +774,27 @@ class CameraWorker:
         self.last_flush = time.time()
 
     def _local_now(self):
-        """The STORE's local date and hour. The server trusts these because only this process knows
-        the store's clock — and getting them from UTC would file the 11pm rush under tomorrow."""
-        from datetime import timedelta
-        local = datetime.now(timezone.utc) + timedelta(minutes=self.tz_offset)
+        """The STORE's local date and hour — resolved from the STORE, not from this machine.
+
+        The server sends each camera its store's IANA zone, which is what makes one analyzer able to
+        serve stores in different timezones from a single location. Falling back to the --tz-offset
+        flag keeps a lone in-store box working when the server has no zone recorded; falling back to
+        UTC would file the 11pm rush under tomorrow for half the country.
+        """
+        now = datetime.now(timezone.utc)
+        tz_name = (self.cam.get("timezone") or "").strip()
+        if tz_name:
+            try:
+                from zoneinfo import ZoneInfo
+                local = now.astimezone(ZoneInfo(tz_name))
+                return local.date().isoformat(), local.hour
+            except Exception:
+                if not self._tz_warned:
+                    log.warning("[%s] unknown timezone %r from the server — falling back to "
+                                "--tz-offset %+d minutes", self.cam["device_name"], tz_name,
+                                self.tz_offset)
+                    self._tz_warned = True
+        local = now + timedelta(minutes=self.tz_offset)
         return local.date().isoformat(), local.hour
 
 
@@ -949,8 +982,10 @@ def main():
     p.add_argument("--agent-key", default="", help="The va_… key from Vision → Settings")
     p.add_argument("--secret", default="", help="The signing secret shown once at registration")
     p.add_argument("--tz-offset", type=int, default=0,
-                   help="Store local time offset from UTC in MINUTES (e.g. -420 for PDT). This is "
-                        "what files the 11pm rush under the right business date.")
+                   help="FALLBACK store offset from UTC in MINUTES (e.g. -420 for PDT), used only "
+                        "when the server has no timezone recorded for a camera's store. Normally "
+                        "the zone comes per-camera from the server, which is what lets ONE analyzer "
+                        "serve stores in different timezones.")
     p.add_argument("--interval", type=float, default=2.0, help="Idle loop sleep, seconds")
     p.add_argument("--detect-fps", type=float, default=DETECT_FPS,
                    help=f"Detections per second per camera (default {DETECT_FPS}). This is the main "

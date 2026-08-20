@@ -149,7 +149,34 @@ counting line). Enable **analytics** on the cameras that should feed the heat ma
 * `exclude` — an area to ignore entirely (a back office in frame, the pavement through the window).
   Exclusions are the difference between counting your customers and counting the street.
 
-### 5.5 Edge analyzer
+### 5.5 Edge analyzer — and where it can run
+
+**It does not have to be in the store.** Nest cameras stream from *Google's cloud*, not over the shop
+LAN, so the analyzer authenticates to Google over the internet and the media flows Google → analyzer
+wherever that is. One machine — a back office, a rack, a cloud VM — can serve every store.
+
+| | One box per store | One central box |
+|---|---|---|
+| Machines to maintain | one per store | one |
+| Depends on store staff leaving a PC on | yes | no |
+| Competes with the register | possibly | no |
+| Failure blast radius | one store blind | **every store blind** |
+| Bandwidth | at the store | concentrated at the central box (~1–4 Mbps per camera, inbound) |
+
+Two things make the central shape correct, and both are enforced:
+
+* An agent registered with **no `store_code`** is unpinned and receives every camera in every home its
+  company has connected. A store-pinned agent may still only write for its own store — an event for
+  another store is refused (`agent_store_mismatch`), never relabelled.
+* Each camera carries **its store's IANA timezone**, resolved server-side through the platform's
+  existing ladder (`stores.timezone` → tenant default → house default). That is what lets one
+  analyzer span timezones and still file every event under the right business date. `--tz-offset` is
+  only a fallback for when the server has no zone recorded.
+
+CPU scales with total cameras, not with location — so a central box needs the capacity of all of
+them. `--benchmark` does that arithmetic.
+
+
 Register one per store in **Settings → 5 · Edge analyzers**. The signing secret is shown **once**;
 there is no read-back, only rotation. Then, on the store box:
 
@@ -303,7 +330,7 @@ python3 backend/harness_vision_geometry.py   # 34 checks — line crossing, zone
 python3 backend/harness_vision_heatmap.py    # 41 checks — visit pairing, traffic, aggregation
 python3 backend/harness_vision_behavior.py   # 42 checks — redaction, rubric matching, scoring
 python3 backend/harness_vision_sdm.py        # 53 checks — Google request shapes + home mapping
-python3 backend/harness_vision_ingest.py     # 46 checks — HMAC + what the analyzer may send
+python3 backend/harness_vision_ingest.py     # 52 checks — HMAC, ingest gates, central multi-store
 python3 backend/harness_vision_webrtc.py     # 30 checks — WebRTC source + machine sizing (needs aiortc)
 ```
 
