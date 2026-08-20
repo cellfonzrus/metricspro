@@ -13,7 +13,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import {
   panel, btn, btnPrimary, cell, th, heatColor, hourLabel, fmtDuration, daysAgo, today,
-  type Camera, type HeatPayload, type TrafficSummary, type VisionConfig,
+  type Camera, type HeatPayload, type TrafficSummary, type VisionConfig, visionError,
 } from '@/lib/vision'
 
 export default function VisionHeatmapPage() {
@@ -36,7 +36,7 @@ export default function VisionHeatmapPage() {
         setConfig(r.config || null)
         const first = (r.cameras || []).map((c: Camera) => c.store_code).filter(Boolean)[0]
         if (first) setStore(first)
-      } catch (e: any) { setMsg(e?.message || String(e)) }
+      } catch (e: any) { setMsg(visionError(e)) }
     })()
   }, [])
 
@@ -47,8 +47,8 @@ export default function VisionHeatmapPage() {
     const hq = hours.length ? `&hours=${hours.join(',')}` : ''
     try {
       const [t, h] = await Promise.all([
-        api(`/api/v1/vision/traffic?${qs}`).catch(e => ({ error: e?.message })),
-        api(`/api/v1/vision/heatmap?${qs}${hq}`).catch(e => ({ error: e?.message })),
+        api(`/api/v1/vision/traffic?${qs}`).catch(e => ({ error: visionError(e) })),
+        api(`/api/v1/vision/heatmap?${qs}${hq}`).catch(e => ({ error: visionError(e) })),
       ])
       if (t.error && h.error) setMsg(t.error)
       setTraffic(t.error ? null : t)
