@@ -8377,6 +8377,52 @@ def dm_confirm_action_plan(plan_id: str, body: Optional[ActionPlanReviewIn] = No
     return {"ok": True, **row, **upd}
 
 
+# ── Store payment-processor merchant IDs (owner directive 2026-08-20, migration 902) ──────────────
+# Per store, per processor (Boost→ePay ID, Total→Vidapay ID, …). Set at store setup, mandatory per
+# active processor unless the operator ticks "not required". The ingest of a processor report resolves
+# each transaction's terminal/merchant id back to OUR store through this registry.
+from app.modules.storeops import merchant_ids as _merchant_ids  # noqa: E402
+
+
+@router.get("/merchant-ids/processors")
+def merchant_id_processors():
+    """The known processors + their id labels — powers the store-setup panel's rows."""
+    return {"processors": _merchant_ids.PROCESSORS}
+
+
+@router.get("/merchant-ids")
+def list_merchant_ids(store_code: str = "", org_id: str = ORG_ID):
+    """Every merchant-id row for the tenant, or just one store's when ?store_code= is given."""
+    rows = (_merchant_ids.list_for_store(org_id, store_code) if store_code
+            else _merchant_ids.list_all(org_id))
+    return {"merchant_ids": rows, "processors": _merchant_ids.PROCESSORS}
+
+
+@router.put("/merchant-ids")
+def upsert_merchant_id(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Set one store's id for one processor. Body: {store_code, processor, merchant_id?, not_required?, note?}.
+    Manager-gated (store setup is a management action)."""
+    _require_manager(authorization, org_id)
+    try:
+        data = _merchant_ids.upsert(
+            org_id, body.get("store_code"), body.get("processor"),
+            merchant_id=body.get("merchant_id"), not_required=bool(body.get("not_required")),
+            note=body.get("note"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "row": (data or [None])[0]}
+
+
+@router.get("/merchant-ids/coverage")
+def merchant_id_coverage(processor: str = "epay", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Store-setup audit: which stores still have no id AND no 'not required' opt-out for a processor —
+    so an admin can see who is unconfigured before an ingest silently drops their rows."""
+    codes = _caller_span_codes(authorization, org_id) or [
+        s.get("store_code") for s in (sb().table("stores").select("store_code").eq("org_id", org_id).execute().data or [])
+        if s.get("store_code")]
+    missing = sorted(_merchant_ids.coverage(org_id, codes, processor))
+    return {"processor": processor, "unconfigured": missing, "unconfigured_count": len(missing)}
+
 
 # ── Admin-attention providers (settings-audit package, 2026-07-26) ────────────────────────────────
 # Contribute StoreOps findings to the cross-module attention feed WITHOUT editing the shared
