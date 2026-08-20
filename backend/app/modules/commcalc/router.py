@@ -30384,3 +30384,238 @@ def epay_fee_recon(date_from: str = "", date_to: str = "", tolerance: float = 1.
             "var": round(sum(r["var"] for r in out["rows"]), 2),
             "flagged": sum(1 for r in out["rows"] if r["flag"]), "store_days": len(out["rows"])}
     return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ePay DISCREPANCY ALERTS (epic P4). An HOURLY sweep that recomputes TODAY's ePay reconciliation per
+# tenant and emails District Managers AND above the same day when a store's fee or payment recon is off
+# beyond the tenant's tolerance. Mirrors the accountability morning lateness plumbing EXACTLY
+# (storeops.router `_run_lateness_alerts` / run-due / alert-config): per-tenant enable + tolerance on
+# storeops.tenants (migration 905, default OFF), dedup via storeops.alert_log (scope 'epay_discrepancy'),
+# recipient hierarchy via storeops.router `_managers_above_dm`, email via notify.channels.email_resend.
+# The pure email PLANNER lives in commcalc.epay_alerts. Config lives in storeops.* (NOT commcalc), so
+# these helpers use a storeops-schema client for tenants + alert_log; the recon recompute passes the
+# default client (epay_fee_recon / closing resolve their own commcalc schema).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _epay_portal_pull(client, org_id):
+    """Config-gated Boost portal AUTO-PULL HOOK (P4). Runs at the TOP of the hourly run-due flow, BEFORE
+    the recompute, so a freshly pulled Daily Transaction Detail reconciles the same tick. Gated by
+    EPAY_PORTAL_SOURCE (env; 'email' / 'api' / 'none', default 'none'):
+
+      • 'none' (the common case today) → a documented NO-OP. The owner hasn't chosen an access path yet.
+      • 'email' → poll the report inbox for the DTD attachment (TODO, not yet wired).
+      • 'api'   → pull via the Boost owner-portal API (TODO, not yet wired).
+
+    NEVER raises and NEVER hardcodes a credential or portal URL. Returns a small status dict for the log."""
+    source = (_os.environ.get("EPAY_PORTAL_SOURCE", "") or "none").strip().lower()
+    if source in ("", "none"):
+        return {"source": "none", "pulled": 0,
+                "note": "auto-pull disabled — owner has not configured a portal source"}
+    try:
+        if source == "email":
+            # TODO(owner): poll the configured report mailbox (mirror commcalc.email_sweep / ftp_sweep) for
+            # the Boost "Daily Transaction Detail" attachment, then hand its rows to
+            # epay_ingest.ingest(org_id, records, ...). Requires the mailbox + a routing rule to be
+            # provisioned first. No-op until then.
+            return {"source": "email", "pulled": 0, "note": "TODO: email-inbox poll not yet wired"}
+        if source == "api":
+            # TODO(owner): authenticate to the Boost owner portal (credentials from a secret store / tenant
+            # config — NEVER hardcoded here), download the DTD for the day, then call
+            # epay_ingest.ingest(org_id, records, ...). No-op until the access path is chosen.
+            return {"source": "api", "pulled": 0, "note": "TODO: portal API pull not yet wired"}
+    except Exception:
+        return {"source": source, "pulled": 0, "error": "auto-pull failed (swallowed)"}
+    return {"source": source, "pulled": 0, "note": "unknown EPAY_PORTAL_SOURCE; treated as no-op"}
+
+
+def _epay_recompute_flags(client, org_id, day, tolerance):
+    """Recompute ONE day's ePay reconciliation for a tenant and return the FLAGGED store-days. Reuses the
+    existing recon math — no duplication:
+      • FEE     → commcalc.epay_fee_recon.fee_recon (system raw_sales 'ePay service charge' vs portal DTD).
+      • PAYMENT → the P2 recon embedded in closing._closing_summary_for_date's money_recon['epay']
+                  (declared ePay at closing vs the portal DTD payment, epay_ingest.per_store_day).
+    Returns [{store_code, close_date, kind ('fee'|'payment'), system, portal, variance}] for
+    |variance| > tolerance. NEVER raises (a missing table / un-run migration degrades to fewer flags)."""
+    flags = []
+    # FEE side — system (raw_sales) vs portal (DTD), per store-day.
+    try:
+        from app.modules.commcalc import epay_fee_recon as _fr
+        fr = _fr.fee_recon(client, org_id, day, day, tolerance=tolerance)
+        for r in (fr.get("rows") or []):
+            if r.get("flag"):
+                flags.append({"store_code": r.get("store_code"), "close_date": r.get("close_date") or day,
+                              "kind": "fee", "system": r.get("system_fee"), "portal": r.get("portal_fee"),
+                              "variance": r.get("var")})
+    except Exception:
+        pass
+    # PAYMENT side — declared ePay vs portal DTD payment (P2 logic, embedded in the DM-Verify summary).
+    try:
+        from app.modules.closing.router import _closing_summary_for_date
+        cards = _closing_summary_for_date(client, org_id, day, None, None, None, tolerance, False)
+        for c in (cards or []):
+            ep = ((c.get("money_recon") or {}) or {}).get("epay") or {}
+            if ep.get("flag") and not ep.get("portal_pending"):
+                flags.append({"store_code": c.get("store_code"), "close_date": c.get("close_date") or day,
+                              "kind": "payment", "system": ep.get("declared"), "portal": ep.get("portal"),
+                              "variance": ep.get("var")})
+    except Exception:
+        pass
+    return flags
+
+
+def _epay_mark_run(so_client, org_id, today, detail):
+    """Bookkeeping on storeops.tenants (epay_alert_last_run / _last_detail). Best-effort, never raises."""
+    try:
+        so_client.table("tenants").update(
+            {"epay_alert_last_run": datetime.now(timezone.utc).isoformat(),
+             "epay_alert_last_detail": f"{today}: {detail}"}).eq("org_id", org_id).execute()
+    except Exception:
+        pass
+
+
+async def _run_epay_discrepancy_alerts(org_id_filter=None, respect_enabled=True, dry_run=False):
+    """The hourly ePay discrepancy sweep. Iterates tenants; skips unless `epay_alerts_enabled`; for TODAY
+    (tenant-local via storeops _biz_tz_for) runs the config-gated portal auto-pull hook, recomputes the
+    ePay reconciliation (fee + payment), flags store-days over `epay_alert_tolerance`, resolves DM+above
+    per flagged store, plans one digest per manager, and sends them deduped via storeops.alert_log
+    (scope 'epay_discrepancy', ref_key incorporating tenant+store+date+kind so a discrepancy escalates
+    once/day). Marks the run on the tenant row. NEVER raises."""
+    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
+                                              _lateness_already_sent, _lateness_record_sent)
+    from app.modules.commcalc import epay_alerts as _ea
+    from app.modules.notify.channels import email_resend
+    root = get_supabase()
+    so = root.schema("storeops")   # storeops.tenants + storeops.alert_log
+    try:
+        tenants = so.table("tenants").select("*").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if respect_enabled and not bool(t.get("epay_alerts_enabled")):
+            continue
+        try:
+            tol = float(t.get("epay_alert_tolerance") or 1.0)
+        except (TypeError, ValueError):
+            tol = 1.0
+        now_local = datetime.now(timezone.utc).astimezone(_biz_tz_for(oid))
+        today = now_local.date().isoformat()
+        # Portal auto-pull HOOK — config-gated; a NO-OP unless EPAY_PORTAL_SOURCE is set. Never raises.
+        _epay_portal_pull(root, oid)
+        flags = _epay_recompute_flags(root, oid, today, tol)
+        if not flags:
+            if not dry_run:
+                _epay_mark_run(so, oid, today, "no discrepancies")
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "flagged": 0})
+            continue
+        stores = {f["store_code"] for f in flags if f.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        plan = _ea.plan_emails(flags, hierarchy, today)
+        sent = skipped = 0
+        planned = []
+        for dg in plan["digests"]:
+            # Dedup per (store, date, kind) for THIS recipient — keep only items not already sent today,
+            # so a discrepancy escalates once/day and a NEW gap found later the same day still sends.
+            new_items = [it for it in dg["items"]
+                         if not _lateness_already_sent(so, oid, "epay_discrepancy", it["ref_key"])]
+            if not new_items:
+                skipped += 1
+                planned.append({"to": dg["to"], "subject": dg["subject"], "already_sent": True})
+                continue
+            built = _ea.build_digest(dg["to_name"], new_items)
+            planned.append({"to": dg["to"], "subject": built["subject"], "already_sent": False,
+                            "items": [f"{i['store_code']} {i['close_date']} {i['kind']}" for i in new_items]})
+            if dry_run:
+                continue
+            if email_ok:
+                try:
+                    await email_resend.send_email(to=dg["to"], subject=built["subject"], html=built["html"])
+                    for it in new_items:
+                        _lateness_record_sent(so, oid, "epay_discrepancy", it["ref_key"], dg["to"])
+                    sent += 1
+                except Exception:
+                    pass
+        if not dry_run:
+            _epay_mark_run(so, oid, today,
+                           f"sent {sent}, skipped {skipped}, {len(flags)} flagged store-day(s)")
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(flags),
+                        "email_configured": email_ok, "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+@router.post("/epay/alerts/run-due")
+async def epay_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated HOURLY pg_cron entrypoint (P4). Recomputes TODAY's ePay reconciliation for every
+    enabled tenant and emails DM+above a digest of any store-day off beyond the tenant's tolerance,
+    deduped via storeops.alert_log so a given discrepancy escalates once per day. Mirrors the
+    accountability lateness run-due. See migration 905 for the cron registration."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_epay_discrepancy_alerts(respect_enabled=True, dry_run=False)
+
+
+@router.post("/epay/alerts/run-now")
+async def epay_alerts_run_now(send: bool = False, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the enable gate. Defaults to a DRY RUN
+    (returns exactly who WOULD be emailed and which store-days, sending nothing) — pass ?send=true to
+    actually send. Dedup is always honored, so a real send won't duplicate the hourly run."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_epay_discrepancy_alerts(org_id_filter=org_id, respect_enabled=False, dry_run=(not send))
+
+
+@router.get("/epay/alert-config")
+def get_epay_alert_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """ePay discrepancy-alert config for the tenant (enabled + dollar tolerance), plus last-run
+    bookkeeping. Any manager may view; the PUT is manager/admin only. Config lives on storeops.tenants
+    (migration 905)."""
+    so = get_supabase().schema("storeops")
+    try:
+        rows = (so.table("tenants").select(
+            "epay_alerts_enabled,epay_alert_tolerance,epay_alert_last_run,epay_alert_last_detail")
+            .eq("org_id", org_id).limit(1).execute().data) or []
+        r = rows[0] if rows else {}
+        return {"enabled": bool(r.get("epay_alerts_enabled")),
+                "tolerance": float(r.get("epay_alert_tolerance") or 1.0),
+                "last_run": r.get("epay_alert_last_run"), "last_detail": r.get("epay_alert_last_detail"),
+                "available": True}
+    except Exception:
+        return {"enabled": False, "tolerance": 1.0, "last_run": None, "last_detail": None, "available": False}
+
+
+class EpayAlertConfigIn(LaxModel):
+    enabled: Any = None
+    tolerance: Any = None
+
+
+@router.put("/epay/alert-config")
+def put_epay_alert_config(body: EpayAlertConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only. Turn the hourly ePay discrepancy alerts on/off and set the dollar tolerance
+    (a store-day is flagged when |fee variance| or |payment variance| exceeds it; default 1.00)."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    upd = {}
+    sent = body.model_fields_set
+    if "enabled" in sent:
+        upd["epay_alerts_enabled"] = bool(body.enabled)
+    if "tolerance" in sent:
+        try:
+            tv = round(float(body.tolerance), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "tolerance must be a number (dollars), e.g. 1.00")
+        if tv < 0:
+            raise HTTPException(400, "tolerance must be >= 0")
+        upd["epay_alert_tolerance"] = tv
+    if not upd:
+        raise HTTPException(400, "Nothing to update — send `enabled` and/or `tolerance`.")
+    try:
+        get_supabase().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save — is migration 905 applied?")
+    return get_epay_alert_config(authorization=authorization, org_id=org_id)
