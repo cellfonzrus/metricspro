@@ -4340,8 +4340,15 @@ def save_face(body: SaveFaceIn, authorization: str = Header(default=""), org_id:
 # BEYOND end+grace needs a rep-initiated DM permission (migration 432) before it counts.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # The grace window (minutes) added to the scheduled end for BOTH the trigger (fire only once now is past
-# end+grace) AND the stamp (clock_out recorded at end+grace). Owner set this to 20 minutes (2026-08-16).
-FORCE_CLOCKOUT_GRACE_MIN = 20
+# end+grace) AND the stamp (clock_out recorded at end+grace).
+# Owner directive 2026-08-20 (helpdesk cluster TKT-1023/1026/1028/1031/1032/1036 — reps who "work until
+# close" were being capped at scheduled_end+20m and having the extra time held DM-pending, read as
+# "CLOCK OUT ISSUE"): widen to 3 hours. Within this window a rep's own clock-out now counts their FULL
+# actual hours (the same-day cap at line ~3275 only fires PAST end+grace), and the unattended sweep
+# becomes a rare last-resort cleanup instead of a daily event. TRADEOFF: when the sweep DOES fire on a
+# genuinely forgotten punch, it still stamps at scheduled_end+grace, so a forgotten punch is credited up
+# to 3h past schedule (was 20m) — accepted per the "widen the grace window" directive.
+FORCE_CLOCKOUT_GRACE_MIN = 180
 
 
 def _emp_id_variants(org_id, employee_id):
@@ -4414,7 +4421,7 @@ def _scheduled_end_for_punch(org_id, punch):
         return None
     ids, _ = _emp_id_variants(org_id, eid)
     try:
-        shifts = (sb().table("shifts").select("store_code,end_time")
+        shifts = (sb().table("shifts").select("store_code,start_time,end_time")
                   .eq("org_id", org_id).eq("shift_date", str(wdate)[:10]).eq("is_deleted", False)
                   .in_("employee_id", list(ids)).execute().data) or []
     except Exception:
@@ -4429,7 +4436,19 @@ def _scheduled_end_for_punch(org_id, punch):
         return None
     # Read the shift end in THIS STORE's zone (migration 851) — the fix for the multi-zone sweep bug.
     # Prefer the shift's own store_code, falling back to the punch's, then the tenant default.
-    return _biz_dt_utc(wdate, end_hhmm, org_id, store_code=(s.get("store_code") or store))
+    st = s.get("store_code") or store
+    end_dt = _biz_dt_utc(wdate, end_hhmm, org_id, store_code=st)
+    # Overnight shift (helpdesk clock-out cluster, 2026-08-20): a scheduled end at/before the shift's own
+    # start crosses midnight (e.g. 18:00→00:30). _biz_dt_utc anchors BOTH to `wdate`, so the end lands ~a
+    # day in the PAST — the sweep then force-closes the punch the instant it opens and clamps hours to 0
+    # (out_at < clock_in). Roll the end forward one day so a wrap shift closes at its real end. A normal
+    # daytime shift (end > start) is never touched.
+    start_hhmm = s.get("start_time")
+    if end_dt is not None and start_hhmm:
+        start_dt = _biz_dt_utc(wdate, start_hhmm, org_id, store_code=st)
+        if start_dt is not None and end_dt <= start_dt:
+            end_dt = end_dt + timedelta(days=1)
+    return end_dt
 
 
 def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=None):

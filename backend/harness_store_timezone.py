@@ -158,8 +158,10 @@ fake.seed("storeops", "timelog", [
     {"id": "P_NY", "org_id": ORG, "employee_id": "E_NY", "store_code": "NY1", "work_date": DAY,
      "clock_in": datetime(2026, 8, 15, 15, 0, tzinfo=timezone.utc).isoformat(), "clock_out": None},
 ])
-# 23:30 UTC: past NY's 7 PM EDT + 5 min (23:05 UTC), before Chicago's 7 PM CDT + 5 min (00:05 UTC next).
-NOW = datetime(2026, 8, 15, 23, 30, tzinfo=timezone.utc)
+# A shared 'now' PAST NY's (7 PM EDT + grace) but BEFORE Chicago's (7 PM CDT + grace, exactly 1h later).
+# Derived from the live grace constant so this timezone regression guard holds at any grace value.
+GRACE = timedelta(minutes=R.FORCE_CLOCKOUT_GRACE_MIN)
+NOW = datetime(2026, 8, 15, 23, 0, tzinfo=timezone.utc) + GRACE + timedelta(minutes=5)
 
 
 class _Clock:
@@ -184,9 +186,28 @@ try:
           "E_CHI" not in swept, str(res))
     tl = {r["id"]: r for r in fake.store[("storeops", "timelog")]}
     check("Chicago punch left open (clock_out still null)", tl["P_CHI"].get("clock_out") is None)
-    check("NY punch closed at 7 PM EDT + 5 min", tl["P_NY"].get("clock_out") == datetime(2026, 8, 15, 23, 5, tzinfo=timezone.utc).isoformat())
+    check("NY punch closed at 7 PM EDT + grace",
+          tl["P_NY"].get("clock_out") == (datetime(2026, 8, 15, 23, 0, tzinfo=timezone.utc) + GRACE).isoformat())
 finally:
     R.datetime = _real_dt
+
+print("\n(6) overnight shift: a scheduled end past midnight rolls to the NEXT day (not ~a day early)")
+reset(STORES)
+R._emp_id_variants = lambda org, eid: ({str(eid)}, None)
+fake.seed("storeops", "shifts", [
+    # wraps: starts 18:00, ends 00:30 the following morning
+    {"org_id": ORG, "employee_id": "E_OVN", "store_code": "NY1", "shift_date": DAY,
+     "start_time": "18:00", "end_time": "00:30", "is_deleted": False},
+    # normal daytime shift — must NEVER be rolled
+    {"org_id": ORG, "employee_id": "E_DAY", "store_code": "NY1", "shift_date": DAY,
+     "start_time": "09:00", "end_time": "17:00", "is_deleted": False},
+])
+ovn_end = R._scheduled_end_for_punch(ORG, {"employee_id": "E_OVN", "store_code": "NY1", "work_date": DAY})
+check("overnight end (00:30 ≤ 18:00 start) rolls to the next day in the store zone",
+      ovn_end == datetime(2026, 8, 16, 0, 30, tzinfo=EASTERN).astimezone(timezone.utc), str(ovn_end))
+day_end = R._scheduled_end_for_punch(ORG, {"employee_id": "E_DAY", "store_code": "NY1", "work_date": DAY})
+check("a normal daytime shift end (17:00 > 09:00) is NOT rolled",
+      day_end == datetime(2026, 8, 15, 17, 0, tzinfo=EASTERN).astimezone(timezone.utc), str(day_end))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

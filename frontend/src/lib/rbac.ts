@@ -992,7 +992,18 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
     // an explicit `false` is deliberately NOT honored here, so this can never remove access a rep has
     // today (that half stays exactly as shipped).
     if (perms.pages?.[path] === true) return true
-    return SELF_ALLOWED.some(p => path.startsWith(p)) || path.startsWith(home)
+    if (SELF_ALLOWED.some(p => path.startsWith(p)) || path.startsWith(home)) return true
+    // ALSO reach any nav item the sidebar actually shows this rep. canSeeItem already hides items
+    // whose scope tier excludes 'self' (e.g. the manager Daily Targets), so this only opens the
+    // module-gated, no-scope-tier items a rep legitimately sees — Time Off, Employee Dashboard,
+    // Training, etc. Without it those render in the sidebar and then dead-end back home (the "the
+    // tab is there but clicking it does nothing" class — TKT-1009 'week off', TKT-1012 'none of the
+    // options work'). WIDENING ONLY: every branch above already returned, so this can never REMOVE
+    // a path a rep can reach today — it only adds the ones the sidebar promised.
+    for (const g of NAV) for (const it of g.items) {
+      if ((path === it.href || path.startsWith(it.href + '/')) && canSeeItem(perms, it)) return true
+    }
+    return false
   }
   // For settings/manager-only sub-pages, honor the matching nav item's scope restriction — unless an
   // EXACT per-function grant lifts it, mirroring canSeeItem's precedence exactly. Without this
