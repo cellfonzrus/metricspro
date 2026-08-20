@@ -27,6 +27,7 @@ from app.modules.recovery.router import router as recovery_router
 from app.modules.pos.router import router as pos_router
 from app.modules.crm.router import router as crm_router
 from app.modules.referral.router import router as referral_router
+from app.modules.vision.router import router as vision_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -184,6 +185,7 @@ app.include_router(recovery_router, prefix="/api/v1")     # Denied-Appeal Commis
 app.include_router(pos_router, prefix="/api/v1")          # POS module — Phase 0 product catalog (mig 724)
 app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
 app.include_router(referral_router, prefix="/api/v1")     # Referral — QR referrals + gated commission (mig 850)
+app.include_router(vision_router, prefix="/api/v1")       # Vision — Nest live view + heat map + behavior (mig 900)
 
 # Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /
 # break-glass states at boot. Best-effort; STARTUP_STRICT=1 makes prod findings fail the boot.

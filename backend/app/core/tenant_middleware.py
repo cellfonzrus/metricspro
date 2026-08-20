@@ -151,6 +151,20 @@ _PUBLIC_PREFIXES = (
                                            # pre-existing /api/v1/core/fix-requests endpoints (mig 716
                                            # support pipeline) do NOT match and keep full middleware
                                            # protection.
+    "/api/v1/vision/edge",                  # Vision edge analyzer (mig 900): DUAL-AUTH, same shape as
+                                           # /core/fix-pipeline above. The analyzer is a machine on a
+                                           # store network with NO login, so the JWT requirement would
+                                           # fire before the handler could check the credential it DOES
+                                           # carry: a per-agent HMAC-SHA256 over `timestamp.body` with a
+                                           # bounded clock skew. EVERY route under this prefix
+                                           # self-gates in vision/router.py::_authenticate_agent
+                                           # (default DENY; unknown agent / disabled agent / bad
+                                           # signature / stale timestamp all return an identical 401 so
+                                           # a probe learns nothing) and resolves its own org FROM THE
+                                           # AGENT RECORD, because allowlisting also skips the org_id
+                                           # rewrite. Boundary-matched, so ONLY /api/v1/vision/edge[/…]
+                                           # is affected — every other /vision/* route keeps full auth
+                                           # + org_id rewrite.
 )
 
 # Self-authenticating background sweeps: EVERY route ending in "/run-due" is invoked by pg_cron with
