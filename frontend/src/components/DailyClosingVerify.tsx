@@ -578,6 +578,12 @@ export default function DailyClosingVerify() {
                 {ver
                   ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green, #16794a)' }}>✅ Verified by {s.verification.verified_by}</span>
                   : <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)' }}>Unverified</span>}
+                {s.dm_corrected && (
+                  <span title="Store-day totals, reconciliation, deposits and the incentive gate all reflect the DM's verified corrections. Per-rep rows below stay as submitted."
+                    style={{ fontSize: 11, fontWeight: 700, color: '#1d4ed8', background: '#e0e7ff', padding: '2px 7px', borderRadius: 6 }}>
+                    ✎ DM-corrected
+                  </span>
+                )}
               </div>
             </div>
 
@@ -645,6 +651,36 @@ export default function DailyClosingVerify() {
                 {' · '}Upgrades closing {recon.closing_upgrades} vs B2B {recon.b2b_upgrades}{' '}
                 {recon.upg_var !== 0 ? <b style={{ color: 'var(--amber, #b45309)' }}>(Δ{recon.upg_var > 0 ? '+' : ''}{recon.upg_var})</b> : '✓'}
                 <span style={{ color: 'var(--text3)' }}>{' · '}Acc GP (B2B) {fmt(recon.b2b_acc_gp)}</span>
+              </div>
+            )}
+
+            {/* Money reconciliation vs the POS X-report (owner 2026-08-20: "make sure the X-report data
+                is also pulling in"). money_recon.cash/credit.b2b is the X-report tender when
+                tender_source==='x_report' (else the sales feed). `closing` already reflects any DM
+                verified correction — the server overlays it before this recon runs (TKT-1030). */}
+            {s.money_recon && (s.money_recon.cash || s.money_recon.credit) && (
+              <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', fontSize: 13 }}>
+                <strong>Money reconciliation</strong>
+                <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 6 }}>
+                  declared{s.dm_corrected ? ' (DM-corrected)' : ''} vs {s.money_recon.tender_source === 'x_report' ? 'POS X-report' : 'sales feed'}
+                  {s.money_recon.tenders_available === false ? ' — no X-report tender data for this day (recon pending)' : ''}
+                </span>
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 6 }}>
+                  {(['cash', 'credit'] as const).map((leg) => {
+                    const m = s.money_recon[leg]; if (!m) return null
+                    return (
+                      <div key={leg} style={{ fontSize: 12 }}>
+                        <span style={{ textTransform: 'capitalize', fontWeight: 600 }}>{leg}</span>{': '}
+                        closing {fmt(m.closing)}
+                        {m.pending
+                          ? <span style={{ color: 'var(--text3)' }}> · X-report pending</span>
+                          : <> vs {s.money_recon.tender_source === 'x_report' ? 'X-report' : 'sales'} {fmt(m.b2b)}{' '}
+                              <b style={{ color: m.flag ? 'var(--amber, #b45309)' : 'var(--green, #16794a)' }}>
+                                {m.flag ? `Δ${(m.var ?? 0) > 0 ? '+' : ''}${fmt(m.var)}` : '✓'}</b></>}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
 
