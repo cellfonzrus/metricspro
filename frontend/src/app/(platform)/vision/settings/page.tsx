@@ -11,6 +11,7 @@ export default function VisionSettingsPage() {
   const [status, setStatus] = useState<any>(null)
   const [cameras, setCameras] = useState<Camera[]>([])
   const [consent, setConsent] = useState<any[]>([])
+  const [homes, setHomes] = useState<any[] | null>(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -25,6 +26,8 @@ export default function VisionSettingsPage() {
       ])
       setStatus(s); setCameras(c.cameras || [])
       try { setConsent((await api('/api/v1/vision/consent')).consent || []) } catch { setConsent([]) }
+      // Only meaningful once Google is linked; a failure here is not a page failure.
+      try { setHomes((await api('/api/v1/vision/structures')).structures || []) } catch { setHomes(null) }
     } catch (e: any) { setErr(e?.message || String(e)) }
   }, [])
 
@@ -141,7 +144,13 @@ export default function VisionSettingsPage() {
         <GoogleLink canEdit={canEdit} linked={status.google.linked} onDone={load} />
         <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button style={btnPrimary} disabled={!canEdit || !status.google.linked || busy}
-            onClick={() => act(() => api('/api/v1/vision/cameras/sync', { method: 'POST' }), 'Cameras synced.')}>
+            onClick={() => act(async () => {
+              const r = await api('/api/v1/vision/cameras/sync', { method: 'POST' })
+              const skipped = Object.entries(r.skipped_homes || {})
+                .map(([home, n]) => `${n} in ${home}`).join(', ')
+              setMsg(`Synced ${r.found - (r.skipped || 0)} camera(s): ${r.added} new, ${r.updated} updated.`
+                + (skipped ? ` Skipped ${skipped} — connect the home above to include them.` : ''))
+            }, '')}>
             Sync cameras from Google
           </button>
           {status.google.linked && (
@@ -152,6 +161,68 @@ export default function VisionSettingsPage() {
           )}
         </div>
       </Section>
+
+      {/* 3b. Homes — which of this Google account's homes belong to THIS company */}
+      {status.google.linked && (
+        <Section title="3b · Which homes belong to this company"
+          note="A Google account can own several homes. Only the ones you connect here contribute cameras — anything unconnected imports nothing, including a new home added in the Google Home app later.">
+          {homes === null ? (
+            <div style={{ fontSize: 13.5, color: 'var(--text2)' }}>
+              Could not read the homes on this Google account. Reconnect Google above, then reload.
+            </div>
+          ) : homes.length === 0 ? (
+            <div style={{ fontSize: 13.5, color: 'var(--text2)' }}>No homes found on this account.</div>
+          ) : (
+            <>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Home</th><th style={th}>Connect to this company</th>
+                    <th style={th}>Default store code</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {homes.map(h => (
+                    <tr key={h.structure_id}>
+                      <td style={{ ...cell, fontWeight: 600 }}>
+                        {h.structure_name}
+                        {h.claimed_by_another_company && (
+                          <div style={{ fontSize: 11, color: '#f39c12', fontWeight: 400 }}>
+                            already connected to another company
+                          </div>
+                        )}
+                      </td>
+                      <td style={cell}>
+                        <Check checked={h.enabled} disabled={!canEdit || h.claimed_by_another_company}
+                          onChange={v => setHomes(homes.map(x => x.structure_id === h.structure_id
+                            ? { ...x, enabled: v, assigned: v } : x))} />
+                      </td>
+                      <td style={cell}>
+                        <input defaultValue={h.default_store_code || ''} placeholder="optional"
+                          disabled={!canEdit || !h.enabled}
+                          onBlur={e => setHomes(homes.map(x => x.structure_id === h.structure_id
+                            ? { ...x, default_store_code: e.target.value } : x))}
+                          style={{ width: 110, padding: '4px 7px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12.5 }} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ fontSize: 11.5, color: 'var(--text3)', margin: '10px 0' }}>
+                A default store code pre-fills the store on cameras newly synced from that home. It
+                never overwrites a store you have already set by hand.
+              </div>
+              <button style={btnPrimary} disabled={!canEdit || busy}
+                onClick={() => act(() => api('/api/v1/vision/structures', {
+                  method: 'PUT',
+                  body: JSON.stringify({ structures: homes.filter(h => h.enabled) }),
+                }), 'Home assignments saved.')}>
+                Save home assignments
+              </button>
+            </>
+          )}
+        </Section>
+      )}
 
       {/* 4. Cameras */}
       <Section title="4 · Cameras"
@@ -173,7 +244,9 @@ export default function VisionSettingsPage() {
                     <td style={{ ...cell, fontWeight: 600 }}>
                       {cameraName(c)}
                       <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>
-                        {c.stream_protocol.toUpperCase()}{c.room ? ` · ${c.room}` : ''}
+                        {c.stream_protocol.toUpperCase()}
+                        {(c as any).structure_name ? ` · ${(c as any).structure_name}` : ''}
+                        {c.room ? ` · ${c.room}` : ''}
                       </div>
                     </td>
                     <td style={cell}>

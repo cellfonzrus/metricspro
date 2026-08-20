@@ -92,6 +92,7 @@ from app.modules.vision import geometry as GEO   # noqa: E402  (the SAME rules t
 
 log = logging.getLogger("vision-edge")
 
+DETECT_FPS = 6               # detections per second per camera — see CameraWorker.step()
 SAMPLE_SECONDS = 60          # how often occupancy is flushed as presence samples
 POST_SECONDS = 15            # how often the outbox is drained
 CONFIG_SECONDS = 60          # how often the server's answer about what is allowed is re-read
@@ -461,7 +462,7 @@ def webrtc_available():
 class CameraWorker:
     """Holds one camera's stream and turns it into events. Owns nothing persistent."""
 
-    def __init__(self, api, cam, grid, tz_offset_minutes, detector, outbox):
+    def __init__(self, api, cam, grid, tz_offset_minutes, detector, outbox, detect_fps=DETECT_FPS):
         self.api = api
         self.cam = cam
         self.grid = grid
@@ -474,7 +475,8 @@ class CameraWorker:
         self.source = None
         self.occupancy = defaultdict(float)
         self.last_flush = time.time()
-        self.last_frame_at = None
+        self.last_detect_at = None
+        self.detect_interval = 1.0 / max(0.5, float(detect_fps or DETECT_FPS))
 
     # ── stream lifecycle ─────────────────────────────────────────────────────────────────────
     def open(self):
@@ -503,7 +505,7 @@ class CameraWorker:
             return False
 
         self.extend_at = time.time() + max(30, int((self.session or {}).get("extend_after_seconds") or 200))
-        self.last_frame_at = None
+        self.last_detect_at = None
         log.info("[%s] live (%s)", self.cam["device_name"], proto)
         return True
 
@@ -530,22 +532,46 @@ class CameraWorker:
 
     # ── the frame loop ───────────────────────────────────────────────────────────────────────
     def step(self):
+        """Advance one camera by one tick. Returns True if a detection actually ran.
+
+        DETECTION IS RATE-LIMITED, and that is what makes this runnable on a small store box.
+
+        The naive loop — detect on every frame the source hands over — is wrong in two different
+        ways depending on transport. On RTSP, `read()` blocks until the next frame, so detection runs
+        at the camera's full 30 fps: five times more inference than the numbers need, on hardware
+        that does not have it to spare. On WebRTC it is worse, because `read()` returns instantly
+        from the frame slot — so the loop would spin at 100% CPU re-running the detector on the SAME
+        frame over and over, producing no new information at all.
+
+        DETECT_FPS caps it. Six per second is well above what the counting rules need: a person
+        crossing a doorway is in the line's neighbourhood for roughly half a second to a second, so
+        6 fps samples them 3–6 times on each side — plenty to establish a side change — and occupancy
+        is accumulated in person-seconds, which is a rate, not a frame count. The frame is still READ
+        every tick even when detection is skipped, because on RTSP that is what keeps the decoder
+        drained and the picture live rather than minutes behind.
+        """
         if self.source is None:
-            return
+            return False
         ok, frame = self.source.read()
         if not ok:
             # WebRTC reports "no frame yet" the same way it reports a dead track, so a miss is only
             # fatal once the source has gone quiet past its own staleness window — which is exactly
             # what read() already folds in. One miss is a hiccup; a persistent one reopens.
             self._misses = getattr(self, "_misses", 0) + 1
-            if self._misses > 90:
+            if self._misses > 300:
                 log.warning("[%s] stream went quiet — reopening", self.cam["device_name"])
                 self.close()
-            return
+            return False
         self._misses = 0
+
         now = time.time()
-        dt = (now - self.last_frame_at) if self.last_frame_at else 0.0
-        self.last_frame_at = now
+        if self.last_detect_at and (now - self.last_detect_at) < self.detect_interval:
+            return False                      # frame drained, inference skipped
+
+        # dt is time since the last DETECTION, not since the last frame — occupancy is measured in
+        # person-seconds, so it must advance by the interval actually observed.
+        dt = (now - self.last_detect_at) if self.last_detect_at else 0.0
+        self.last_detect_at = now
 
         zones = self.cam.get("zones") or []
         lines = [z for z in zones if z.get("kind") == "line" and z.get("is_active", True)]
@@ -567,6 +593,7 @@ class CameraWorker:
 
         if now - self.last_flush >= SAMPLE_SECONDS:
             self._flush_presence()
+        return True
 
     def _emit_traffic(self, direction, track):
         d, h = self._local_now()
@@ -631,7 +658,8 @@ class Analyzer:
                 self.workers[name] = CameraWorker(
                     self.api, cam, {"cols": (cfg.get("grid") or {}).get("cols") or 24,
                                     "rows": (cfg.get("grid") or {}).get("rows") or 16},
-                    self.args.tz_offset, self.detector, self.outbox)
+                    self.args.tz_offset, self.detector, self.outbox,
+                    detect_fps=self.args.detect_fps)
 
     def post(self):
         if not self.outbox:
@@ -670,17 +698,22 @@ class Analyzer:
                     log.info("dry run — %d camera(s) would be analyzed", len(self.workers))
                     time.sleep(self.args.interval)
                     continue
+                worked = False
                 for w in list(self.workers.values()):
                     if w.source is None:
                         w.open()
                     else:
                         w.maybe_extend()
-                        w.step()
+                        worked = w.step() or worked
                 if time.time() >= self.next_post:
                     self.post()
                     self.next_post = time.time() + POST_SECONDS
                 if not self.workers:
                     time.sleep(self.args.interval)
+                elif not worked:
+                    # Every camera was rate-limited or waiting on a frame. Without this the WebRTC
+                    # path busy-waits on its frame slot and pins a core for nothing.
+                    time.sleep(0.02)
             except KeyboardInterrupt:
                 break
             except Exception as e:
@@ -729,7 +762,7 @@ def probe(args):
         return 1
 
     worker = CameraWorker(api, cam, {"cols": 24, "rows": 16}, args.tz_offset,
-                          PersonDetector(prefer_yolo=False), [])
+                          PersonDetector(prefer_yolo=False), [], detect_fps=args.detect_fps)
     if not worker.open():
         return 1
 
@@ -771,6 +804,10 @@ def main():
                    help="Store local time offset from UTC in MINUTES (e.g. -420 for PDT). This is "
                         "what files the 11pm rush under the right business date.")
     p.add_argument("--interval", type=float, default=2.0, help="Idle loop sleep, seconds")
+    p.add_argument("--detect-fps", type=float, default=DETECT_FPS,
+                   help=f"Detections per second per camera (default {DETECT_FPS}). This is the main "
+                        "CPU dial: halving it roughly halves the load. Below ~3 a fast walker can "
+                        "cross the counting line between samples and go uncounted.")
     p.add_argument("--no-yolo", action="store_true", help="Force the OpenCV HOG detector")
     p.add_argument("--dry-run", action="store_true",
                    help="Authenticate and fetch config, but open no stream. Use this to prove a "

@@ -117,6 +117,49 @@ check("the device list is a GET on the enterprise path",
 check("the access token rides in the Authorization header",
       SEEN[1]["headers"]["Authorization"] == "Bearer at")
 
+print("\n(3b) Homes (structures) — one Google account, several homes")
+STRUCTURES = {"structures": [
+    {"name": "enterprises/proj-123/structures/home-a",
+     "traits": {"sdm.structures.traits.Info": {"customName": "Fresno Store"}}},
+    {"name": "enterprises/proj-123/structures/home-b",
+     "traits": {"sdm.structures.traits.Info": {"customName": "Clovis Store"}}},
+    {"name": "enterprises/proj-123/structures/home-c", "traits": {}},
+]}
+SEEN.clear()
+c = G.SdmClient(CRED, transport=transport([("token", (200, {"access_token": "at"})),
+                                           ("/structures", (200, STRUCTURES))]))
+homes = c.list_structures()
+check("every home is listed", len(homes) == 3)
+check("the home's custom name is used", homes[0]["structure_name"] == "Fresno Store")
+check("a home with no custom name falls back to its id", homes[2]["structure_name"] == "home-c")
+check("structures is a GET on the enterprise path",
+      SEEN[1]["method"] == "GET" and SEEN[1]["url"].endswith("enterprises/proj-123/structures"))
+
+# The device list must say WHICH home each camera is in, or the allowlist has nothing to match on.
+DEVICES_MULTI = {"devices": [
+    {"name": "enterprises/proj-123/devices/cam-a", "type": "sdm.devices.types.CAMERA",
+     "traits": {"sdm.devices.traits.CameraLiveStream": {"supportedProtocols": ["WEB_RTC"]}},
+     "parentRelations": [{"parent": "enterprises/proj-123/structures/home-a/rooms/r1",
+                          "displayName": "Sales Floor"}]},
+    {"name": "enterprises/proj-123/devices/cam-b", "type": "sdm.devices.types.CAMERA",
+     "traits": {"sdm.devices.traits.CameraLiveStream": {"supportedProtocols": ["WEB_RTC"]}},
+     "parentRelations": [{"parent": "enterprises/proj-123/structures/home-b/rooms/r2",
+                          "displayName": "Counter"}]},
+    {"name": "enterprises/proj-123/devices/orphan", "type": "sdm.devices.types.CAMERA",
+     "traits": {"sdm.devices.traits.CameraLiveStream": {"supportedProtocols": ["WEB_RTC"]}}},
+]}
+c = G.SdmClient(CRED, transport=transport([("token", (200, {"access_token": "at"})),
+                                           ("/devices", (200, DEVICES_MULTI))]))
+devs = {d["device_name"].rsplit("/", 1)[-1]: d for d in c.list_devices()}
+check("a camera reports the home it sits in", devs["cam-a"]["structure_id"] == "home-a")
+check("cameras in different homes are distinguished",
+      devs["cam-b"]["structure_id"] == "home-b")
+check("the room name still comes through alongside it", devs["cam-a"]["room"] == "Sales Floor")
+# A camera whose home cannot be established must resolve to "" — the allowlist is fail-closed, so
+# an empty structure means it imports nowhere rather than defaulting into whoever synced.
+check("a camera with no parent home resolves to '' (imports nowhere)",
+      devs["orphan"]["structure_id"] == "")
+
 print("\n(4) GenerateWebRtcStream")
 SEEN.clear()
 c = G.SdmClient(CRED, transport=transport([

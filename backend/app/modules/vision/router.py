@@ -91,6 +91,10 @@ class GoogleLinkIn(LaxModel):
     redirect_uri: Any = None
 
 
+class StructuresIn(LaxModel):
+    structures: Any = None      # [{structure_id, structure_name, enabled, default_store_code}]
+
+
 class CameraPatchIn(LaxModel):
     label: Any = None
     store_code: Any = None
@@ -354,6 +358,9 @@ def status(org_id: str = ORG_ID, authorization: str = Header(default=""),
             "last_ok_at": (cred or {}).get("last_ok_at"),
             "last_error": (cred or {}).get("last_error"),
         },
+        "homes": {
+            "claimed": len(_rows("vision_structure", org_id)),
+        },
         "cameras": {
             "total": len(cams),
             "enabled": sum(1 for c in cams if c.get("enabled")),
@@ -500,6 +507,109 @@ def _sdm_fail(org_id, e: G.SdmError):
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # Cameras + zones
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+@router.get("/structures")
+def list_structures(org_id: str = ORG_ID, authorization: str = Header(default=""),
+                    x_active_org: str = Header(default="")):
+    """Every home on the linked Google account, and which of them this company has claimed.
+
+    A Device Access grant is per Google ACCOUNT, and one account routinely owns several homes. This
+    is the screen that answers "which of these four homes is THIS company's" — and until it is
+    answered, camera sync imports nothing, by design."""
+    caller = _require_caller(authorization, x_active_org)
+    _require_settings(caller)
+    cfg = _cfg(org_id)
+    _require_module(cfg)
+
+    assigned = {str(r.get("structure_id")): r for r in _rows("vision_structure", org_id)}
+    try:
+        homes = _sdm_client(org_id).list_structures()
+    except G.SdmError as e:
+        raise _sdm_fail(org_id, e)
+
+    # Homes claimed by ANOTHER company on this platform are reported as taken rather than offered.
+    # Two tenants sharing one Google account is legitimate (a franchisee and their own house); two
+    # tenants claiming the SAME home is not, and finding out at sync time would be far too late.
+    taken = {}
+    try:
+        for r in (sb().table("vision_structure").select("structure_id,org_id")
+                  .neq("org_id", org_id).execute().data) or []:
+            taken[str(r.get("structure_id"))] = True
+    except Exception:
+        pass
+
+    out = []
+    for h in homes:
+        sid = h["structure_id"]
+        row = assigned.get(sid)
+        out.append({
+            "structure_id": sid,
+            "structure_name": h["structure_name"],
+            "assigned": bool(row),
+            "enabled": bool(row.get("enabled")) if row else False,
+            "default_store_code": (row or {}).get("default_store_code"),
+            "claimed_by_another_company": sid in taken and not row,
+        })
+    out.sort(key=lambda h: (not h["assigned"], (h["structure_name"] or "").lower()))
+    return {"structures": out,
+            "unassigned_count": sum(1 for h in out if not h["assigned"])}
+
+
+@router.put("/structures")
+def put_structures(body: StructuresIn, org_id: str = ORG_ID,
+                   authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Claim (or release) homes for this company.
+
+    Whole-set replace: what you send IS this company's home list. A home dropped from the list is
+    released — its cameras stop syncing, but the cameras themselves and their history are KEPT, so
+    releasing a home by accident is recoverable rather than destructive.
+
+    A home already claimed by a DIFFERENT company is refused outright. That check is the whole point
+    of the feature; letting it through would recreate the leak this closes."""
+    caller = _require_caller(authorization, x_active_org)
+    _require_settings(caller)
+    _require_module(_cfg(org_id))
+    items = getattr(body, "structures", None)
+    if not isinstance(items, list):
+        raise HTTPException(400, "structures must be a list.")
+
+    try:
+        taken = {str(r.get("structure_id")) for r in
+                 ((sb().table("vision_structure").select("structure_id,org_id")
+                   .neq("org_id", org_id).execute().data) or [])}
+    except Exception:
+        taken = set()
+
+    rows, actor = [], (caller.get("email") or "unknown")
+    for i, it in enumerate(items):
+        if not isinstance(it, dict) or not str(it.get("structure_id") or "").strip():
+            raise HTTPException(400, f"Home {i + 1} is missing a structure_id.")
+        sid = str(it["structure_id"]).strip()
+        if sid in taken:
+            raise HTTPException(409, f"The home '{it.get('structure_name') or sid}' is already "
+                                     "connected to another company on this platform. Release it "
+                                     "there first.")
+        rows.append({"org_id": org_id, "structure_id": sid,
+                     "structure_name": (it.get("structure_name") or sid)[:160],
+                     "enabled": bool(it.get("enabled", True)),
+                     "default_store_code": (str(it.get("default_store_code") or "").strip() or None),
+                     "assigned_by": actor, "assigned_at": _iso(_now()),
+                     "updated_at": _iso(_now())})
+
+    keep = {r["structure_id"] for r in rows}
+    try:
+        for existing in _rows("vision_structure", org_id):
+            if str(existing.get("structure_id")) not in keep:
+                sb().table("vision_structure").delete().eq("id", existing["id"]).execute()
+        if rows:
+            sb().table("vision_structure").upsert(rows, on_conflict="org_id,structure_id").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save the home assignments: {str(e)[:200]}")
+    _audit(org_id, actor, "structures_assigned", None,
+           {"homes": [{"id": r["structure_id"], "name": r["structure_name"],
+                       "enabled": r["enabled"]} for r in rows]})
+    return {"structures": _rows("vision_structure", org_id)}
+
+
 @router.post("/cameras/sync")
 def sync_cameras(org_id: str = ORG_ID, authorization: str = Header(default=""),
                  x_active_org: str = Header(default="")):
@@ -520,19 +630,40 @@ def sync_cameras(org_id: str = ORG_ID, authorization: str = Header(default=""),
     except G.SdmError as e:
         raise _sdm_fail(org_id, e)
 
+    # FAIL CLOSED ON UNCLAIMED HOMES. One Google account can own several homes; only the ones this
+    # company has explicitly claimed may contribute cameras. A home nobody has assigned — including
+    # a fifth home added in the Google Home app tomorrow — imports nothing and is REPORTED, so the
+    # operator sees "3 cameras skipped: 1 home not connected" instead of silently missing a store.
+    homes = {str(r.get("structure_id")): r for r in _rows("vision_structure", org_id)
+             if r.get("enabled")}
+    try:
+        home_names = {h["structure_id"]: h["structure_name"] for h in client.list_structures()}
+    except G.SdmError:
+        home_names = {}
+
     known = {c["device_name"]: c for c in _rows("vision_camera", org_id)}
     added = updated = 0
+    skipped_homes = {}
     for d in devices:
+        sid = d.get("structure_id") or ""
+        if sid not in homes:
+            label = home_names.get(sid) or (sid or "unknown home")
+            skipped_homes[label] = skipped_homes.get(label, 0) + 1
+            continue
         row = {
             "org_id": org_id, "device_name": d["device_name"], "device_type": d["device_type"],
             "display_name": d["display_name"], "room": d.get("room"),
+            "structure_id": sid, "structure_name": home_names.get(sid) or homes[sid].get("structure_name"),
             "stream_protocol": d["stream_protocol"], "supports_audio": d["supports_audio"],
             "status": "online", "last_seen_at": _iso(_now()), "updated_at": _iso(_now()),
         }
         if d["device_name"] not in known:
-            # A brand-new camera contributes nothing until a human places it.
+            # A brand-new camera contributes nothing until a human places it — except that a home
+            # carrying a default store code pre-fills it, which is the difference between an
+            # operator assigning four cameras and assigning forty.
             row.update({"enabled": True, "analytics_enabled": False, "audio_enabled": False,
-                        "is_entrance": False})
+                        "is_entrance": False,
+                        "store_code": homes[sid].get("default_store_code")})
             added += 1
         else:
             updated += 1
@@ -541,7 +672,7 @@ def sync_cameras(org_id: str = ORG_ID, authorization: str = Header(default=""),
         except Exception:
             pass
 
-    seen = {d["device_name"] for d in devices}
+    seen = {d["device_name"] for d in devices if (d.get("structure_id") or "") in homes}
     for name, cam in known.items():
         if name not in seen and cam.get("status") != "offline":
             try:
@@ -556,9 +687,12 @@ def sync_cameras(org_id: str = ORG_ID, authorization: str = Header(default=""),
     except Exception:
         pass
     _audit(org_id, caller.get("email"), "camera_sync", None,
-           {"found": len(devices), "added": added, "updated": updated})
+           {"found": len(devices), "added": added, "updated": updated,
+            "skipped_unclaimed_homes": skipped_homes})
     return {"found": len(devices), "added": added, "updated": updated,
             "offline": len(known) - len(seen & set(known)),
+            "skipped": sum(skipped_homes.values()),
+            "skipped_homes": skipped_homes,
             "cameras": _visible_cameras(org_id, authorization)}
 
 

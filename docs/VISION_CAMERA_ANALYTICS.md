@@ -1,6 +1,6 @@
 # Vision — Live Camera Feeds, Customer Heat Maps, Employee Coaching
 
-**Module:** `vision` · **Migration band:** 900–949 (`900_vision_camera_analytics.sql`)
+**Module:** `vision` · **Migrations:** `900_vision_camera_analytics.sql`, `901_vision_structures.sql`
 **Backend:** `backend/app/modules/vision/` · **Frontend:** `frontend/src/app/(platform)/vision/`
 **Edge:** `backend/vision_edge_analyzer.py`
 
@@ -122,7 +122,23 @@ there is **no endpoint that reads them back**.
 > If Google returns no refresh token, it reused an existing grant — revoke the app at
 > <https://myaccount.google.com/permissions> and link again.
 
-### 5.3 Cameras
+### 5.3 Homes (which of this Google account's homes belong to this company)
+
+A Device Access grant is per **Google account**, and one account routinely owns several homes — four
+stores, or three stores and the operator's house. Migration 901 makes the mapping explicit and
+**fail-closed**: in **Vision → Settings → 3b**, tick the homes that belong to this company. A home
+nobody has connected contributes **nothing**, so adding a fifth home in the Google Home app tomorrow
+cannot silently add cameras to a tenant.
+
+* A home already connected to a *different* company on this platform is refused with a 409 — two
+  tenants sharing one Google account is legitimate, both claiming the same home is not.
+* An optional **default store code** per home pre-fills the store on newly synced cameras from it.
+  It never overwrites a store an operator set by hand.
+* Camera sync reports what it skipped (`skipped_homes`), so an operator sees *"3 cameras skipped:
+  1 home not connected"* rather than silently missing a store.
+* A camera whose home cannot be determined resolves to no home, and therefore imports nowhere.
+
+### 5.4 Cameras
 Assign each camera a **store code**. Mark exactly one per store as the **entrance** (it carries the
 counting line). Enable **analytics** on the cameras that should feed the heat map. Draw zones with
 `PUT /vision/cameras/{id}/zones`:
@@ -133,7 +149,7 @@ counting line). Enable **analytics** on the cameras that should feed the heat ma
 * `exclude` — an area to ignore entirely (a back office in frame, the pavement through the window).
   Exclusions are the difference between counting your customers and counting the street.
 
-### 5.4 Edge analyzer
+### 5.5 Edge analyzer
 Register one per store in **Settings → 5 · Edge analyzers**. The signing secret is shown **once**;
 there is no read-back, only rotation. Then, on the store box:
 
@@ -156,7 +172,7 @@ python3 backend/vision_edge_analyzer.py --api … --agent-key … --secret … -
 
 `--dry-run` is the weaker check: it authenticates and fetches config without opening a stream.
 
-### 5.5 Voice transcripts (optional, and the one with legal weight)
+### 5.6 Voice transcripts (optional, and the one with legal weight)
 1. Set `VISION_AUDIO_ENABLED=1` on the backend. This is deliberately a **deployment** change: most of
    the states these stores operate in require every party to a recorded conversation to consent.
 2. Collect a **signed consent** per employee (Settings → 6 · Consent register).
@@ -218,7 +234,8 @@ table, and the API returns a disclaimer that the UI prints.
 | `GET/PUT /vision/config` | JWT (+ `vision` settings to write) | tenant switches |
 | `GET /vision/status` | JWT | every gate and what is behind it |
 | `GET /vision/google/auth-url`, `POST/DELETE /vision/google/link` | JWT + settings | one-time OAuth link |
-| `POST /vision/cameras/sync` | JWT + settings | additive; a vanished camera is marked offline, never deleted |
+| `GET/PUT /vision/structures` | JWT + settings | which Google homes belong to this company; 409 if another tenant claims one |
+| `POST /vision/cameras/sync` | JWT + settings | additive; **only claimed homes import**; a vanished camera is marked offline, never deleted |
 | `GET /vision/cameras`, `PATCH /vision/cameras/{id}` | JWT | scoped to the caller's reporting span |
 | `GET/PUT /vision/cameras/{id}/zones` | JWT | whole-set replace; geometry validated on write |
 | `POST /vision/cameras/{id}/stream` | JWT | WebRTC SDP broker; audited |
@@ -266,7 +283,7 @@ python3 backend/harness_vision_gate.py       # 36 checks — the enablement + co
 python3 backend/harness_vision_geometry.py   # 34 checks — line crossing, zones, grid, foot point
 python3 backend/harness_vision_heatmap.py    # 41 checks — visit pairing, traffic, aggregation
 python3 backend/harness_vision_behavior.py   # 42 checks — redaction, rubric matching, scoring
-python3 backend/harness_vision_sdm.py        # 45 checks — every Google request shape
+python3 backend/harness_vision_sdm.py        # 53 checks — Google request shapes + home mapping
 python3 backend/harness_vision_ingest.py     # 46 checks — HMAC + what the analyzer may send
 python3 backend/harness_vision_webrtc.py     # 18 checks — the WebRTC frame source (needs aiortc)
 ```
@@ -285,6 +302,10 @@ python3 backend/harness_vision_webrtc.py     # 18 checks — the WebRTC frame so
 * **The audio path is not wired up in the reference analyzer.** OpenCV's capture discards the audio
   track, so transcripts need a separate ffmpeg demux + VAD + local ASR. The event contract the server
   enforces is documented in the analyzer docstring and in `app/modules/vision/ingest.py`.
+* **Detection is rate-limited to `--detect-fps` (default 6), not run per frame.** Six per second is
+  well clear of what the counting rules need — a person is near the doorway line for 0.5–1s — and it
+  is the main CPU dial on a small store box. Below about 3 fps a fast walker can cross between
+  samples and go uncounted.
 * **The OpenCV HOG fallback detector under-counts.** It misses seated and heavily occluded people.
   It exists so the module produces numbers on hardware with no accelerator; the analyzer warns loudly
   at startup when it is in use, and production deployments should install `ultralytics`.

@@ -36,6 +36,7 @@ Every network call goes through the injected `transport` callable
 `requests`. `backend/harness_vision_sdm.py` drives the whole token-refresh / list / generate / extend
 path against a scripted fake, so the request shapes are proven without a Google account.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 SDM_BASE = "https://smartdevicemanagement.googleapis.com/v1"
@@ -44,6 +45,8 @@ SDM_SCOPE = "https://www.googleapis.com/auth/sdm.service"
 AUTH_URL = "https://nestservices.google.com/partnerconnections/{project_id}/auth"
 
 CAMERA_TYPES = ("sdm.devices.types.CAMERA", "sdm.devices.types.DOORBELL", "sdm.devices.types.DISPLAY")
+STRUCTURE_INFO_TRAIT = "sdm.structures.traits.Info"
+_STRUCTURE_RE = re.compile(r"/structures/([^/]+)")
 LIVE_STREAM_TRAIT = "sdm.devices.traits.CameraLiveStream"
 INFO_TRAIT = "sdm.devices.traits.Info"
 
@@ -122,6 +125,25 @@ class SdmClient:
             raise SdmError(err or f"Google SDM returned HTTP {status}", status=status, payload=payload)
         return payload
 
+    # ── structures (the "homes" in the Google Home app) ──────────────────────────────────────────
+    def list_structures(self) -> list:
+        """Every home on the authorized account.
+
+        A Device Access grant is per GOOGLE ACCOUNT, and one account routinely owns several homes —
+        four stores, or three stores and the operator's house. Listing them is what lets a company
+        say which homes are ITS homes, instead of the platform assuming that everything the account
+        can see belongs to whoever linked it."""
+        payload = self._call("GET", f"enterprises/{self.project_id}/structures")
+        out = []
+        for st in payload.get("structures") or []:
+            name = st.get("name") or ""
+            sid = name.rsplit("/", 1)[-1]
+            info = (st.get("traits") or {}).get(STRUCTURE_INFO_TRAIT) or {}
+            out.append({"structure_id": sid,
+                        "structure_name": info.get("customName") or sid,
+                        "resource": name})
+        return out
+
     # ── devices ──────────────────────────────────────────────────────────────────────────────────
     def list_devices(self) -> list:
         """Every device on the authorized account, normalized to the shape core.vision_camera stores.
@@ -139,6 +161,7 @@ class SdmClient:
             out.append({
                 "device_name": d.get("name") or "",
                 "device_type": dtype,
+                "structure_id": _structure_of(d),
                 "display_name": ((traits.get(INFO_TRAIT) or {}).get("customName")
                                  or _room_of(d) or _short_id(d.get("name"))),
                 "room": _room_of(d),
@@ -226,6 +249,21 @@ class SdmClient:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────────────────────────
+def _structure_of(device: dict) -> str:
+    """The home this device sits in, read out of its parentRelations.
+
+    SDM does not hand back a structure field; it hands back a room resource path shaped
+    `enterprises/<p>/structures/<sid>/rooms/<rid>`, so the home id is parsed from that. A device with
+    no usable parent returns "" and is therefore treated as belonging to NO assigned home — which,
+    given the allowlist is fail-closed, means it does not import. That is the right default: a
+    camera whose home cannot be established is exactly the one not to guess about."""
+    for rel in device.get("parentRelations") or []:
+        m = _STRUCTURE_RE.search(rel.get("parent") or "")
+        if m:
+            return m.group(1)
+    return ""
+
+
 def _room_of(device: dict) -> str:
     for rel in device.get("parentRelations") or []:
         if rel.get("displayName"):

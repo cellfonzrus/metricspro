@@ -51,6 +51,19 @@ export interface Camera {
   enabled: boolean
   status: 'online' | 'offline' | 'unknown'
   last_seen_at: string | null
+  structure_id?: string | null
+  structure_name?: string | null
+}
+
+// A "home" in the Google Home app. One Google account can own several; only the ones a company
+// connects contribute cameras. MIRROR of GET /api/v1/vision/structures.
+export interface VisionHome {
+  structure_id: string
+  structure_name: string
+  assigned: boolean
+  enabled: boolean
+  default_store_code: string | null
+  claimed_by_another_company: boolean
 }
 
 export interface TrafficHour { hour: number; in: number; out: number; net: number }
