@@ -109,6 +109,11 @@ idempotent; re-runnable.
 
 ### 5.2 Google Device Access (once per company)
 1. Create a Device Access project at <https://console.nest.google.com/device-access> (one-time US$5).
+   **Its project id is a UUID** (`32c4c2bc-fe0d-461b-b51c-f3885afff2f0`) and is *not* the Google
+   Cloud project id (`metrics-pro-506103`). Both are called "project id", both are issued during
+   this same setup, and pasting the Cloud one is the commonest mistake here — it saves fine and then
+   404s every device call from a URL the operator never sees. `POST /vision/google/link` rejects it
+   at save time and names which id was pasted (`google_sdm.project_id_problem`).
 2. Create an OAuth client (Web application) in the linked Google Cloud project. Add
    `https://<your-app>/vision/settings` as an authorized redirect URI.
 3. In **Vision → Settings → 3 · Google**, paste the project id, client id and client secret, press
@@ -329,7 +334,7 @@ python3 backend/harness_vision_gate.py       # 36 checks — the enablement + co
 python3 backend/harness_vision_geometry.py   # 34 checks — line crossing, zones, grid, foot point
 python3 backend/harness_vision_heatmap.py    # 41 checks — visit pairing, traffic, aggregation
 python3 backend/harness_vision_behavior.py   # 42 checks — redaction, rubric matching, scoring
-python3 backend/harness_vision_sdm.py        # 53 checks — Google request shapes + home mapping
+python3 backend/harness_vision_sdm.py        # 65 checks — request shapes, homes, project-id guard
 python3 backend/harness_vision_ingest.py     # 52 checks — HMAC, ingest gates, central multi-store
 python3 backend/harness_vision_webrtc.py     # 30 checks — WebRTC source + machine sizing (needs aiortc)
 ```

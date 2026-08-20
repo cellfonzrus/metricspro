@@ -424,6 +424,12 @@ def google_link(body: GoogleLinkIn, org_id: str = ORG_ID, authorization: str = H
         v = getattr(body, k, None)
         if v is not None:
             row[k] = str(v).strip()
+    # Reject a Cloud project id HERE rather than letting it save and 404 every device call later,
+    # from a URL the operator never sees. The message names which of the two ids was pasted.
+    if row.get("project_id"):
+        problem = G.project_id_problem(row["project_id"])
+        if problem:
+            raise HTTPException(400, problem)
     if getattr(body, "client_secret", None):
         row["client_secret_enc"] = encrypt(str(body.client_secret).strip())
 

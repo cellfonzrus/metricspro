@@ -236,6 +236,34 @@ check("needs_extension is True inside the lead window",
 check("and False outside it",
       G.needs_extension("2026-08-19T12:05:00Z", now=now, lead_seconds=60) is False)
 
+print("\n(8b) The two 'project id's — catching the commonest setup mistake")
+# Google Cloud project id and Device Access project id are both called "project id", are issued by
+# two consoles minutes apart, and only the UUID one works. Pasting the Cloud one used to save fine
+# and then 404 every device call from a URL nobody sees.
+check("a real Device Access UUID is accepted",
+      G.project_id_problem("32c4c2bc-fe0d-461b-b51c-f3885afff2f0") is None)
+check("uppercase UUID is accepted too",
+      G.project_id_problem("32C4C2BC-FE0D-461B-B51C-F3885AFFF2F0") is None)
+check("surrounding whitespace from a paste is tolerated",
+      G.project_id_problem("  32c4c2bc-fe0d-461b-b51c-f3885afff2f0  ") is None)
+
+msg = G.project_id_problem("metrics-pro-506103")
+check("a GOOGLE CLOUD project id is REJECTED", msg is not None)
+check("...and the message says WHICH id was pasted", "CLOUD" in msg)
+check("...and points at the right console", "device-access" in msg)
+check("...and echoes the value so it is obvious what was read", "metrics-pro-506103" in msg)
+
+check("an empty value is refused with its own message",
+      (G.project_id_problem("") or "").startswith("A Device Access project id is required"))
+check("arbitrary junk is refused", G.project_id_problem("hello world") is not None)
+check("a near-miss UUID (wrong length) is refused",
+      G.project_id_problem("32c4c2bc-fe0d-461b-b51c-f3885afff2f") is not None)
+check("a non-hex 'UUID' is refused",
+      G.project_id_problem("zzzzzzzz-fe0d-461b-b51c-f3885afff2f0") is not None)
+check("the predicate and the message agree",
+      G.looks_like_device_access_project_id("32c4c2bc-fe0d-461b-b51c-f3885afff2f0") is True
+      and G.looks_like_device_access_project_id("metrics-pro-506103") is False)
+
 print("\n(9) The one-time consent URL")
 url = G.authorization_url("proj-123", "cid", "https://app.example.com/vision/callback")
 check("uses Google's Device Access partner-connections host, not the generic OAuth endpoint",

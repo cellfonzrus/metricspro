@@ -47,6 +47,12 @@ AUTH_URL = "https://nestservices.google.com/partnerconnections/{project_id}/auth
 CAMERA_TYPES = ("sdm.devices.types.CAMERA", "sdm.devices.types.DOORBELL", "sdm.devices.types.DISPLAY")
 STRUCTURE_INFO_TRAIT = "sdm.structures.traits.Info"
 _STRUCTURE_RE = re.compile(r"/structures/([^/]+)")
+
+# A Device Access project id is a UUID issued by console.nest.google.com/device-access. It is NOT
+# the Google Cloud project id, and the two are easy to confuse because both are called "project id"
+# and both appear during the same setup. See looks_like_device_access_project_id().
+_DA_PROJECT_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+_GCP_PROJECT_RE = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 LIVE_STREAM_TRAIT = "sdm.devices.traits.CameraLiveStream"
 INFO_TRAIT = "sdm.devices.traits.Info"
 
@@ -273,6 +279,46 @@ def _room_of(device: dict) -> str:
 
 def _short_id(name: str) -> str:
     return ((name or "").rsplit("/", 1)[-1] or "camera")[:12]
+
+
+def looks_like_device_access_project_id(value) -> bool:
+    """True if this is UUID-shaped, i.e. plausibly a Device Access project id."""
+    return bool(_DA_PROJECT_RE.match(str(value or "").strip()))
+
+
+def looks_like_cloud_project_id(value) -> bool:
+    """True if this looks like a GOOGLE CLOUD project id ('metrics-pro-506103') rather than a
+    Device Access one. Used only to give a specific error message — see project_id_problem()."""
+    v = str(value or "").strip()
+    return bool(_GCP_PROJECT_RE.match(v)) and not looks_like_device_access_project_id(v)
+
+
+def project_id_problem(value):
+    """None if the value is a usable Device Access project id, else a message saying what is wrong.
+
+    WHY THIS EXISTS. Two different things in this setup are called "project id", they are issued by
+    two different consoles minutes apart, and only one of them works here:
+
+      Google Cloud project id     'metrics-pro-506103'                    -> holds the OAuth client
+      Device Access project id    '32c4c2bc-fe0d-461b-b51c-f3885afff2f0'  -> what SDM addresses
+
+    Pasting the Cloud one is the single most common setup mistake, and without this check it fails
+    LATE and opaquely: the credential saves fine, the consent screen may even load, and then every
+    device call 404s from a URL the operator never sees. Catching it at save time — and naming which
+    id was pasted — turns a support call into a corrected copy-paste."""
+    v = str(value or "").strip()
+    if not v:
+        return "A Device Access project id is required."
+    if looks_like_device_access_project_id(v):
+        return None
+    if looks_like_cloud_project_id(v):
+        return (f"'{v}' looks like your GOOGLE CLOUD project id, not your Device Access project id. "
+                "They are different: the Cloud project holds the OAuth client, while Device Access "
+                "issues a separate id that looks like 32c4c2bc-fe0d-461b-b51c-f3885afff2f0. Get it "
+                "from console.nest.google.com/device-access (creating the project there is the "
+                "one-time $5 step).")
+    return ("That is not a Device Access project id. It should be a UUID like "
+            "32c4c2bc-fe0d-461b-b51c-f3885afff2f0, from console.nest.google.com/device-access.")
 
 
 def authorization_url(project_id: str, client_id: str, redirect_uri: str) -> str:
