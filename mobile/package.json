@@ -48,5 +48,8 @@
     "eslint": "^9.0.0",
     "eslint-config-expo": "~8.0.0",
     "typescript": "~5.3.3"
+  },
+  "overrides": {
+    "ajv": "^8.17.1"
   }
 }
