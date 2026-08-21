@@ -867,6 +867,12 @@ def open_stream(camera_id: str, body: StreamIn, org_id: str = ORG_ID,
     if protocol == "webrtc" and not offer:
         raise HTTPException(400, "This camera streams over WebRTC — send the browser's SDP offer as "
                                  "offer_sdp.")
+    if protocol == "webrtc":
+        # Catch an incomplete offer HERE rather than letting Google answer it and leave the viewer
+        # watching a black rectangle with no error anywhere.
+        bad = G.offer_problem(str(offer))
+        if bad:
+            raise HTTPException(400, bad)
     client = _sdm_client(org_id)
     try:
         res = client.generate_stream(cam["device_name"], protocol, str(offer) if offer else None)

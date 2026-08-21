@@ -286,6 +286,27 @@ check("asks for offline access (that is what mints a refresh token)", "access_ty
 check("forces the consent screen so a RE-link still yields a refresh token", "prompt=consent" in url)
 check("requests exactly the SDM scope", "sdm.service" in url)
 
+print("\n(9) The offer Google will actually accept")
+# THE BUG THIS KILLS: we sent audio + video and no data channel. Google answered, the handshake
+# completed, and media never started — which reads as a dead camera, not a malformed offer, and
+# cost a whole debugging session before anyone suspected the SDP.
+GOOD = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF\r\nm=video 9 UDP/TLS/RTP/SAVPF\r\nm=application 9 DTLS/SCTP\r\n"
+check("a complete offer passes", G.offer_problem(GOOD) == "")
+check("a missing data channel is caught",
+      "data channel" in G.offer_problem("v=0\r\nm=audio 9 x\r\nm=video 9 x\r\n"))
+check("a missing video m-line is caught",
+      "video" in G.offer_problem("v=0\r\nm=audio 9 x\r\nm=application 9 x\r\n"))
+check("a missing audio m-line is caught",
+      "audio" in G.offer_problem("v=0\r\nm=video 9 x\r\nm=application 9 x\r\n"))
+check("all three missing are named together",
+      all(w in G.offer_problem("v=0\r\n") for w in ("audio", "video", "data channel")))
+check("an empty offer is refused", G.offer_problem("") != "")
+check("whitespace is refused", G.offer_problem("   ") != "")
+check("None is refused", G.offer_problem(None) != "")
+check("non-SDP junk is refused", G.offer_problem("hello there") != "")
+check("the refusal tells the operator what to do",
+      "Reload the page" in G.offer_problem("v=0\r\nm=audio 9 x\r\n"))
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 for f in FAIL:
     print("  FAILED: " + f)
