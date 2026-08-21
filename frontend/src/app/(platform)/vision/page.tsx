@@ -105,11 +105,17 @@ function CameraTile({ camera }: { camera: Camera }) {
   const pcRef = useRef<RTCPeerConnection | null>(null)
   const sessionRef = useRef<string | null>(null)
   const timerRef = useRef<any>(null)
+  const watchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [state, setState] = useState<TileState>('idle')
   const [error, setError] = useState('')
   const [expires, setExpires] = useState<string | null>(null)
 
+  const clearWatchdog = useCallback(() => {
+    if (watchRef.current) { clearTimeout(watchRef.current); watchRef.current = null }
+  }, [])
+
   const teardown = useCallback(async () => {
+    clearWatchdog()
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
     const sid = sessionRef.current
     sessionRef.current = null
@@ -120,7 +126,19 @@ function CameraTile({ camera }: { camera: Camera }) {
     // session against the store's camera, and the audit row gets its real end time.
     if (sid) { try { await api(`/api/v1/vision/stream/${sid}/stop`, { method: 'POST' }) } catch { /* it expires anyway */ } }
     setState('idle'); setExpires(null)
-  }, [])
+  }, [clearWatchdog])
+
+  // A grant can be issued, an answer returned, and the media still never arrive. Without a deadline
+  // the tile spins indefinitely and the operator has nothing to report but "it doesn't connect".
+  const startWatchdog = useCallback(() => {
+    clearWatchdog()
+    watchRef.current = setTimeout(() => {
+      if (pcRef.current?.connectionState === 'connected') return
+      setError('Google issued the stream but no video arrived within 20 seconds. The camera may be '
+        + 'offline or asleep, or this network may be blocking the UDP traffic WebRTC needs.')
+      setState('error'); void teardown()
+    }, 20000)
+  }, [clearWatchdog, teardown])
 
   // Always release the grant when the tile goes away — navigating off the page must not leave a
   // camera streaming to nobody.
@@ -159,6 +177,21 @@ function CameraTile({ camera }: { camera: Camera }) {
       pc.addTransceiver('video', { direction: 'recvonly' })
       pc.addTransceiver('audio', { direction: 'recvonly' })
       pc.ontrack = ev => { if (videoRef.current) videoRef.current.srcObject = ev.streams[0] }
+      // "Live" must mean MEDIA IS ARRIVING, not "the handshake completed". Those are different
+      // events and the gap between them is where every real failure lives: the SDP exchange
+      // succeeds, ICE then fails to find a path, and nothing notices. The tile sat on "connecting"
+      // forever with no error, which is the least actionable thing it could possibly do.
+      pc.onconnectionstatechange = () => {
+        if (!pcRef.current) return                    // torn down; this is a late event
+        if (pc.connectionState === 'connected') { clearWatchdog(); setState('live') }
+        if (pc.connectionState === 'failed') {
+          clearWatchdog()
+          setError('The connection to the camera could not be established. Google answered, but no '
+            + 'media path could be opened — usually a network that blocks the UDP traffic WebRTC '
+            + 'needs. Try another network to confirm.')
+          setState('error'); void teardown()
+        }
+      }
 
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
@@ -178,8 +211,10 @@ function CameraTile({ camera }: { camera: Camera }) {
       await pc.setRemoteDescription({ type: 'answer', sdp: res.answer_sdp })
       sessionRef.current = res.session_id
       setExpires(res.expires_at || null)
-      setState('live')
+      // NOT setState('live') here — the handshake is done, the media is not. onconnectionstatechange
+      // promotes the tile once a path actually opens; the watchdog gives up if it never does.
       scheduleExtend(Number(res.extend_after_seconds) || 200)
+      startWatchdog()
     } catch (e: any) {
       setError(visionError(e))
       setState('error')
