@@ -115,7 +115,17 @@ class SdmClient:
             # invalid_grant means the operator revoked the app, changed the Google password, or the
             # token aged out unused. That is a re-authorize, not a retry — say so.
             err = payload.get("error_description") or payload.get("error") or f"HTTP {status}"
-            raise SdmError(f"Google token refresh failed: {err}", status=status, payload=payload)
+            msg = f"Google token refresh failed: {err}"
+            if payload.get("error") == "invalid_grant":
+                # By far the most common cause, and the one nobody guesses: while the OAuth consent
+                # screen is still in TESTING, Google expires every refresh token after SEVEN DAYS.
+                # Cameras go dark once a week, on the dot, with a message that otherwise reads like a
+                # random Google outage. Name it here — this is where the operator actually looks.
+                msg += (". Reconnect Google in Vision Settings. If this comes back roughly every 7 "
+                        "days, the cause is the OAuth consent screen still being in Testing: Google "
+                        "expires test-mode refresh tokens weekly. Publish the app to Production in "
+                        "the Google Cloud console to stop it.")
+            raise SdmError(msg, status=status, payload=payload)
         self._access_token = payload["access_token"]
         return self._access_token
 
