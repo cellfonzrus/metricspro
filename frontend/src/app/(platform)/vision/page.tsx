@@ -174,6 +174,11 @@ function CameraTile({ camera }: { camera: Camera }) {
       pcRef.current = pc
       // Nest sends media and expects us to be receive-only; declaring the transceivers up front is
       // what makes the offer contain the m-lines Google's answer replies to.
+      // GOOGLE REQUIRES A DATA CHANNEL IN THE OFFER. Device Access rejects — or answers without
+      // establishing media on — an SDP that carries no m=application line, which is why the
+      // handshake could succeed and no video ever arrive. Google's own WebRTC sample opens this
+      // channel and never sends a byte down it; it exists purely to make the offer acceptable.
+      pc.createDataChannel('dataSendChannel')
       pc.addTransceiver('video', { direction: 'recvonly' })
       pc.addTransceiver('audio', { direction: 'recvonly' })
       pc.ontrack = ev => { if (videoRef.current) videoRef.current.srcObject = ev.streams[0] }

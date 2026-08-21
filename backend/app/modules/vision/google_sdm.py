@@ -387,3 +387,33 @@ def needs_extension(expires_at, now=None, lead_seconds: int = 60) -> bool:
     missed extension is not a retry — it drops the viewer and forces a fresh SDP negotiation."""
     now = now or datetime.now(timezone.utc)
     return parse_expiry(expires_at) - now <= timedelta(seconds=lead_seconds)
+
+
+# ── The offer Google will actually accept ───────────────────────────────────────────────────────
+# Device Access is strict about the SDP it is handed, and its failure mode is the expensive kind: a
+# missing m-line does not produce a useful error, it produces an answer that never establishes media.
+# From the outside that is indistinguishable from a camera being asleep, and it cost a whole
+# debugging session. So the offer is checked HERE, before it leaves us, and a bad one is named.
+_REQUIRED_MLINES = (
+    ("m=audio", "audio"),
+    ("m=video", "video"),
+    # The one everybody misses. Google's own sample opens a data channel and never writes to it; it
+    # exists solely so the offer carries this line.
+    ("m=application", "a data channel"),
+)
+
+
+def offer_problem(offer_sdp: str) -> str:
+    """'' when this SDP is worth sending to Google; otherwise what is missing, in plain words."""
+    sdp = str(offer_sdp or "")
+    if not sdp.strip():
+        return "The browser sent an empty SDP offer."
+    if "v=0" not in sdp:
+        return "That is not an SDP offer."
+    missing = [label for token, label in _REQUIRED_MLINES if token not in sdp]
+    if missing:
+        return ("This stream offer is missing " + ", ".join(missing) + ". Google's Smart Device "
+                "Management API requires all three — audio, video and a data channel — and answers "
+                "an incomplete offer without ever starting the media, which looks like a dead "
+                "camera. Reload the page; if it persists the client is building the offer wrong.")
+    return ""

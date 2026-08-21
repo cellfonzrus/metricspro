@@ -417,6 +417,10 @@ class WebRtcFrameSource(FrameSource):
         self._pc = pc
 
         # Both m-lines, receive-only. Google answers what it was offered; video alone is refused.
+        # Same requirement as the browser path: Device Access wants an m=application line in the
+        # offer. Without it the answer comes back and the media never starts, which looks exactly
+        # like a camera that is offline. Nothing is ever sent on this channel.
+        pc.createDataChannel("dataSendChannel")
         pc.addTransceiver("audio", direction="recvonly")
         pc.addTransceiver("video", direction="recvonly")
 
