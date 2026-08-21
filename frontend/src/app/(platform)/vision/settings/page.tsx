@@ -6,7 +6,8 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
-  idsBlocker, authorizeBlocker, oauthReturn, syncMessage, type GoogleLinkState,
+  idsBlocker, authorizeBlocker, oauthReturn, syncMessage, storeOptions, withCurrent,
+  type GoogleLinkState, type StoreOption,
 } from '@/lib/vision'
 
 // The redirect URI is part of the OAuth signature: the value sent when building the consent URL and
@@ -22,6 +23,9 @@ export default function VisionSettingsPage() {
   const [cameras, setCameras] = useState<Camera[]>([])
   const [consent, setConsent] = useState<any[]>([])
   const [homes, setHomes] = useState<any[] | null>(null)
+  // null = the store list could not be read. StorePick falls back to a free-text box in that case
+  // rather than rendering an empty dropdown nobody can pick from.
+  const [stores, setStores] = useState<StoreOption[] | null>(null)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
@@ -36,6 +40,9 @@ export default function VisionSettingsPage() {
       ])
       setStatus(s); setCameras(c.cameras || [])
       try { setConsent((await api('/api/v1/vision/consent')).consent || []) } catch { setConsent([]) }
+      // The company's real stores, so a camera is ASSIGNED rather than typed at. A mistyped code
+      // does not error — it silently attributes a store's traffic to a store that does not exist.
+      try { setStores(storeOptions(await api('/api/v1/storeops/stores'))) } catch { setStores(null) }
       // Only meaningful once Google is linked; a failure here is not a page failure.
       try { setHomes((await api('/api/v1/vision/structures')).structures || []) } catch { setHomes(null) }
     } catch (e: any) { setErr(visionError(e)) }
@@ -230,11 +237,10 @@ export default function VisionSettingsPage() {
                             ? { ...x, enabled: v, assigned: v } : x))} />
                       </td>
                       <td style={cell}>
-                        <input defaultValue={h.default_store_code || ''} placeholder="optional"
-                          disabled={!canEdit || !h.enabled}
-                          onBlur={e => setHomes(homes.map(x => x.structure_id === h.structure_id
-                            ? { ...x, default_store_code: e.target.value } : x))}
-                          style={{ width: 110, padding: '4px 7px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12.5 }} />
+                        <StorePick stores={stores} value={h.default_store_code}
+                          disabled={!canEdit || !h.enabled} emptyLabel="— optional —"
+                          onPick={v => setHomes(homes.map(x => x.structure_id === h.structure_id
+                            ? { ...x, default_store_code: v } : x))} />
                       </td>
                     </tr>
                   ))}
@@ -274,7 +280,22 @@ export default function VisionSettingsPage() {
                 {cameras.map(c => (
                   <tr key={c.id}>
                     <td style={{ ...cell, fontWeight: 600 }}>
-                      {cameraName(c)}
+                      {/* Google's name stands unless this company decides otherwise. Blank the box
+                          to fall back to it — a rename is a per-company preference, never a rewrite
+                          of what the device is actually called. */}
+                      <input defaultValue={c.label || ''} disabled={!canEdit}
+                        placeholder={c.display_name || c.device_name.split('/').pop() || 'Camera'}
+                        title="Leave blank to keep the name Google gives this camera"
+                        onFocus={e => { e.target.style.borderColor = 'var(--border)'; e.target.style.background = 'var(--surface)' }}
+                        onBlur={e => {
+                          e.target.style.borderColor = 'transparent'; e.target.style.background = 'transparent'
+                          const v = e.target.value.trim()
+                          if (v !== (c.label || '')) act(
+                            () => api(`/api/v1/vision/cameras/${c.id}`, { method: 'PATCH', body: JSON.stringify({ label: v }) }),
+                            v ? 'Camera renamed.' : 'Reverted to the name Google gives this camera.')
+                        }}
+                        style={{ width: 150, padding: '3px 6px', borderRadius: 5, border: '1px solid transparent',
+                          background: 'transparent', color: 'var(--text)', fontSize: 13, fontWeight: 600 }} />
                       <div style={{ fontSize: 11, color: 'var(--text3)', fontWeight: 400 }}>
                         {c.stream_protocol.toUpperCase()}
                         {(c as any).structure_name ? ` · ${(c as any).structure_name}` : ''}
@@ -282,11 +303,10 @@ export default function VisionSettingsPage() {
                       </div>
                     </td>
                     <td style={cell}>
-                      <input defaultValue={c.store_code || ''} placeholder="store code" disabled={!canEdit}
-                        onBlur={e => e.target.value !== (c.store_code || '') && act(
-                          () => api(`/api/v1/vision/cameras/${c.id}`, { method: 'PATCH', body: JSON.stringify({ store_code: e.target.value }) }),
-                          'Camera updated.')}
-                        style={{ width: 100, padding: '4px 7px', borderRadius: 5, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 12.5 }} />
+                      <StorePick stores={stores} value={c.store_code} disabled={!canEdit}
+                        onPick={v => act(
+                          () => api(`/api/v1/vision/cameras/${c.id}`, { method: 'PATCH', body: JSON.stringify({ store_code: v }) }),
+                          'Camera updated.')} />
                     </td>
                     <td style={cell}><Check checked={c.analytics_enabled} disabled={!canEdit}
                       onChange={v => act(() => api(`/api/v1/vision/cameras/${c.id}`, { method: 'PATCH', body: JSON.stringify({ analytics_enabled: v }) }), 'Camera updated.')} /></td>
@@ -311,7 +331,7 @@ export default function VisionSettingsPage() {
             {status.edge_agents.online} online</b>
           {status.edge_agents.last_ingest_at && <span style={{ color: 'var(--text3)' }}> · last data {fmtDateTime(status.edge_agents.last_ingest_at)}</span>}
         </div>
-        <NewAgent canEdit={canEdit} onCreated={s => { setNewSecret(s); void load() }} />
+        <NewAgent canEdit={canEdit} stores={stores} onCreated={s => { setNewSecret(s); void load() }} />
         {newSecret && (
           <div style={{ ...panel, marginTop: 10, borderLeft: '3px solid #f39c12' }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Copy this now — it cannot be shown again</div>
@@ -475,7 +495,37 @@ function GoogleLink({ canEdit, google, onSaved }: {
 }
 
 
-function NewAgent({ canEdit, onCreated }: { canEdit: boolean; onCreated: (s: any) => void }) {
+function StorePick({ stores, value, onPick, disabled, emptyLabel }: {
+  stores: StoreOption[] | null
+  value?: string | null
+  onPick: (v: string) => void
+  disabled?: boolean
+  emptyLabel?: string
+}) {
+  const box: React.CSSProperties = {
+    minWidth: 130, padding: '4px 7px', borderRadius: 5, border: '1px solid var(--border)',
+    background: 'var(--surface)', color: 'var(--text)', fontSize: 12.5,
+  }
+  // No store list (endpoint down, or a login with no store access): fall back to typing rather than
+  // showing a dropdown with nothing in it. A degraded control beats an unusable one.
+  if (stores === null) {
+    return <input defaultValue={value || ''} placeholder="store code" disabled={disabled}
+      onBlur={e => e.target.value !== (value || '') && onPick(e.target.value.trim())} style={box} />
+  }
+  const opts = withCurrent(stores, value)
+  return (
+    <select value={value || ''} disabled={disabled} style={box}
+      onChange={e => e.target.value !== (value || '') && onPick(e.target.value)}>
+      <option value="">{emptyLabel || '— unassigned —'}</option>
+      {opts.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
+    </select>
+  )
+}
+
+
+function NewAgent({ canEdit, onCreated, stores }: {
+  canEdit: boolean; onCreated: (s: any) => void; stores: StoreOption[] | null
+}) {
   const [label, setLabel] = useState('')
   const [store, setStore] = useState('')
   const [busy, setBusy] = useState(false)
@@ -483,8 +533,8 @@ function NewAgent({ canEdit, onCreated }: { canEdit: boolean; onCreated: (s: any
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
       <input placeholder="Label (e.g. Main St analyzer)" value={label} onChange={e => setLabel(e.target.value)}
         style={{ padding: '6px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
-      <input placeholder="Store code" value={store} onChange={e => setStore(e.target.value)}
-        style={{ width: 110, padding: '6px 9px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
+      <StorePick stores={stores} value={store} disabled={!canEdit}
+        emptyLabel="— pick a store —" onPick={setStore} />
       <button style={btn} disabled={!canEdit || busy || !store} onClick={async () => {
         setBusy(true)
         try { onCreated(await api('/api/v1/vision/edge-agents', { method: 'POST', body: JSON.stringify({ label, store_code: store }) })) }
