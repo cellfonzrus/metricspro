@@ -97,6 +97,11 @@ _PUBLIC_EXACT = frozenset({
     "/api/v1/core/auth-config",           # login-enforcement flag read by the login/layout BEFORE sign-in
     "/api/v1/core/signup",                # self-serve tenant signup (env-gated SIGNUPS_OPEN; anonymous)
     "/api/v1/core/signup-status",         # /signup page checks whether signups are open, pre-login
+    "/api/v1/billing/public-pricing",     # PUBLIC price list + trial terms read by the marketing
+                                          # site BEFORE any login exists (mig 907). METHOD-SCOPED to
+                                          # GET below — every price-EDITING sibling under
+                                          # /billing/pricing/* stays super-admin-gated and is not
+                                          # matched here (exact path, no prefix semantics).
     "/api/v1/core/tenants/sync",          # dual-auth: NOTIFY_RUN_SECRET header OR super-admin; cron has no JWT
     "/api/v1/core/password-policy/public",  # PUBLIC: owner DEFAULT policy for pre-login strength hints
     "/api/v1/core/auth/forgot-password",  # PUBLIC self-serve reset request (anti-enumeration; anonymous)
@@ -457,8 +462,12 @@ def _is_public(path: str) -> bool:
 #     global enforce-login flag must never be anonymous (2026-08-05 security hardening).
 #   · /api/v1/remediation/whatsapp-webhook — Meta only ever calls GET (verify handshake) and POST
 #     (inbound + delivery-status callback); nothing else on that path should skip authentication.
+#   · /api/v1/billing/public-pricing — GET is the anonymous price list + trial terms the marketing
+#     site renders pre-login. It is READ-ONLY by construction (the handler has no write path), and
+#     scoping it here means any future method on that same path authenticates normally.
 _PUBLIC_METHODS = {
     "/api/v1/core/auth-config": ("GET",),
+    "/api/v1/billing/public-pricing": ("GET",),
     "/api/v1/remediation/whatsapp-webhook": ("GET", "POST"),
 }
 

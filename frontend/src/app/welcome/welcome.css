@@ -115,6 +115,54 @@
 .mpw-cap h3 { font-size: 15.5px; font-weight: 700; margin-bottom: 4px; }
 .mpw-cap p { font-size: 14px; color: var(--mpw-body); }
 
+/* ── Free-trial line (hero) ─────────────────────────────────────────────── */
+.mpw-trial-line {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 20px; font-size: 14.5px; color: var(--mpw-body);
+}
+.mpw-trial-pill {
+  padding: 4px 11px; border-radius: 999px; background: #ecfdf5; color: #15803d;
+  border: 1px solid #bbf7d0; font-size: 12.5px; font-weight: 700; white-space: nowrap;
+}
+
+/* ── Pricing cards ──────────────────────────────────────────────────────── */
+/* `stretch` (the grid default, stated here so it is not "fixed" back to start) makes every card
+   the height of the tallest, which is what lets .mpw-plan-cta's auto margin line the buttons up. */
+.mpw-plans { display: grid; gap: 20px; margin-top: 40px; align-items: stretch; }
+.mpw-plans-1 { grid-template-columns: minmax(0, 460px); }
+.mpw-plans-2 { grid-template-columns: repeat(2, 1fr); }
+.mpw-plans-3 { grid-template-columns: repeat(3, 1fr); }
+.mpw-plans-4 { grid-template-columns: repeat(4, 1fr); }
+.mpw-plan {
+  position: relative; display: flex; flex-direction: column;
+  background: var(--mpw-surface); border: 1px solid var(--mpw-line); border-radius: 16px; padding: 26px 24px;
+}
+.mpw-plan-featured { border-color: var(--mpw-navy); box-shadow: 0 10px 30px rgba(30, 58, 95, 0.1); }
+.mpw-plan-flag {
+  position: absolute; top: -11px; left: 24px;
+  padding: 3px 11px; border-radius: 999px; background: var(--mpw-navy); color: #fff;
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.03em; white-space: nowrap;
+}
+.mpw-plan h3 { font-size: 19px; font-weight: 800; }
+.mpw-plan-tagline { margin-top: 6px; font-size: 14px; color: var(--mpw-body); }
+.mpw-plan-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px; margin-top: 18px; }
+.mpw-plan-amount { font-size: 36px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
+.mpw-plan-amount-quiet { font-size: 26px; color: var(--mpw-navy); }
+.mpw-plan-unit { font-size: 14px; color: var(--mpw-body); }
+.mpw-plan-note { margin-top: 6px; font-size: 13px; color: var(--mpw-muted); }
+.mpw-plan-features { margin: 18px 0 24px; padding: 0; list-style: none; display: grid; gap: 9px; }
+.mpw-plan-features li {
+  position: relative; padding-left: 24px; font-size: 14px; color: var(--mpw-body);
+}
+.mpw-plan-features li::before {
+  content: '✓'; position: absolute; left: 0; top: -1px;
+  color: var(--mpw-blue); font-weight: 800; font-size: 13px;
+}
+/* `.mpw-plan` is a flex column, so auto top-margin pins the button to the bottom of every card —
+   cards with shorter feature lists still line their buttons up with the tallest one. */
+.mpw-plan-cta { margin-top: auto; width: 100%; }
+.mpw-plans-note { margin-top: 20px; font-size: 13.5px; color: var(--mpw-muted); }
+
 /* ── Closing CTA ────────────────────────────────────────────────────────── */
 .mpw-cta {
   background: linear-gradient(180deg, var(--mpw-navy) 0%, var(--mpw-navy-deep) 100%);
@@ -136,10 +184,12 @@
 }
 @media (max-width: 900px) {
   .mpw-modules, .mpw-pillars, .mpw-caps { grid-template-columns: repeat(2, 1fr); }
+  .mpw-plans-3, .mpw-plans-4 { grid-template-columns: repeat(2, 1fr); }
   .mpw-hero h1 { font-size: 40px; }
 }
 @media (max-width: 620px) {
   .mpw-modules, .mpw-pillars, .mpw-caps { grid-template-columns: 1fr; }
+  .mpw-plans, .mpw-plans-1, .mpw-plans-2, .mpw-plans-3, .mpw-plans-4 { grid-template-columns: 1fr; }
   .mpw-hero { padding: 56px 0 48px; }
   .mpw-hero h1 { font-size: 33px; }
   .mpw-hero-sub, .mpw-lede { font-size: 16px; }

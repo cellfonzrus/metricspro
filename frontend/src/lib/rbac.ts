@@ -554,6 +554,13 @@ export const NAV: NavGroup[] = [
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin' },
     { href: '/admin/tenant-settings', label: 'Pay Period & Work-Week', icon: '📅', module: 'admin' },
     { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin' },
+    // Pricing & Free Trial (mig 907) — where the PUBLIC price list and the trial length are set.
+    // module 'admin' with NO `scopes`, byte-identical in shape to its /admin/billing sibling above:
+    // an existing admin role already carries modules.admin, so this line adds no new permission
+    // surface and needs no SEED_VERSION bump. The page itself is super-admin-only (it renders an
+    // explainer for anyone else) and every endpoint behind it gates independently — the one
+    // exception being the anonymous read-only feed the marketing site uses.
+    { href: '/admin/pricing', label: 'Pricing & Free Trial', icon: '🏷️', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
     { href: '/admin/security', label: 'Security Settings', icon: '🛡️', module: 'admin' },
     { href: '/admin/access-log', label: 'Access Log', icon: '🧭', module: 'admin' },

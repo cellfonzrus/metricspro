@@ -22,6 +22,15 @@ export type AppUser = {
 export type TenantInfo = {
   org_id?: string; name?: string; setup_complete: boolean
   pay_period?: { work_week_start_dow: number; pay_period_type: string; payday_dow: number; payday_weeks_after: number }
+  // Free-trial state (mig 907), computed server-side in billing/trial.py::trial_view. NULL/absent for
+  // any tenant carrying no plan stamp — every tenant that existed before 907, and every one created
+  // while trials were switched off — which the UI reads as "say nothing about a trial".
+  trial?: {
+    status: 'trialing' | 'active' | 'trial_expired' | 'cancelled'
+    days_left: number | null
+    ends_at: string | null
+    expired: boolean
+  } | null
 }
 
 // One membership of a login (mig 706): which tenant + this login's role IN that tenant.

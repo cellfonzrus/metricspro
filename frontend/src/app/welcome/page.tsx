@@ -78,7 +78,71 @@ const STEPS: { title: string; blurb: string }[] = [
     blurb: 'Dashboards, targets, payroll and the P&L all read from the same settled numbers — one version of the month.' },
 ]
 
-export default function WelcomePage() {
+// ── Pricing comes from the BACK OFFICE, never from this file ──────────────────────────────────
+// /admin/pricing writes it, GET /billing/public-pricing serves it (anonymous, GET-only), and this
+// page renders whatever came back. That is the whole point: nobody edits the website to change a
+// price. Nothing is published by default, so `packages` being empty is a NORMAL state — the section
+// then leads with the free trial and invites a conversation instead of inventing a number.
+//
+// Revalidated every 5 minutes rather than fetched per request, so the page stays effectively static
+// and a slow or down API cannot slow the marketing site.
+type Pkg = {
+  key: string; name: string; tagline: string | null; price: number; cycle: string; currency: string
+  unit_label: string | null; price_note: string | null; features: string[] | null
+  cta_label: string | null; is_featured: boolean
+}
+type Pricing = {
+  trial_enabled: boolean; trial_days: number; trial_note: string | null; show_pricing: boolean
+  headline: string | null; subhead: string | null; packages: Pkg[]
+}
+
+// Used when the API is unreachable AND at build time before a backend exists. The trial length here
+// mirrors the backend default (trial.py DEFAULT_TRIAL_DAYS) so the two can't tell different stories.
+const PRICING_FALLBACK: Pricing = {
+  trial_enabled: true, trial_days: 30, trial_note: null, show_pricing: true,
+  headline: null, subhead: null, packages: [],
+}
+
+async function loadPricing(): Promise<Pricing> {
+  const base = process.env.NEXT_PUBLIC_API_URL
+  if (!base) return PRICING_FALLBACK
+  try {
+    const res = await fetch(`${base}/api/v1/billing/public-pricing`, { next: { revalidate: 300 } })
+    if (!res.ok) return PRICING_FALLBACK
+    const d = await res.json()
+    return {
+      trial_enabled: d.trial_enabled !== false,
+      trial_days: Number(d.trial_days) > 0 ? Number(d.trial_days) : PRICING_FALLBACK.trial_days,
+      trial_note: d.trial_note ?? null,
+      show_pricing: d.show_pricing !== false,
+      headline: d.headline ?? null,
+      subhead: d.subhead ?? null,
+      packages: Array.isArray(d.packages) ? d.packages : [],
+    }
+  } catch {
+    // A marketing page must render even with the API down — it falls back to the trial-led copy.
+    return PRICING_FALLBACK
+  }
+}
+
+function money(amount: number, currency: string) {
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency', currency: currency || 'USD',
+      minimumFractionDigits: 0, maximumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+    }).format(amount)
+  } catch {
+    return `$${amount}`   // an unknown currency code must not blank the price card
+  }
+}
+
+export default async function WelcomePage() {
+  const pricing = await loadPricing()
+  const trialDays = pricing.trial_days
+  const trialOn = pricing.trial_enabled
+  const trialLabel = `${trialDays}-day free trial`
+  const startCta = trialOn ? `Start your ${trialDays}-day free trial` : 'Get started'
+
   return (
     <div className="mpw">
       <header className="mpw-header">
@@ -90,7 +154,7 @@ export default function WelcomePage() {
           <nav className="mpw-header-nav">
             <a href="#modules">Modules</a>
             <a href="#platform">Platform</a>
-            <a href="#how">How it works</a>
+            <a href="#pricing">Pricing</a>
             <Link href="/login" className="mpw-btn mpw-btn-primary mpw-btn-sm">Sign in</Link>
           </nav>
         </div>
@@ -107,9 +171,16 @@ export default function WelcomePage() {
               it. One platform, one set of numbers, every store.
             </p>
             <div className="mpw-hero-cta">
-              <Link href="/signup" className="mpw-btn mpw-btn-primary">Get started</Link>
+              <Link href="/signup" className="mpw-btn mpw-btn-primary">{startCta}</Link>
               <a href="#modules" className="mpw-btn mpw-btn-ghost">See what’s inside</a>
             </div>
+            {trialOn && (
+              <p className="mpw-trial-line">
+                <span className="mpw-trial-pill">{trialLabel}</span>
+                <span>Every module, every store, for the length of the trial.
+                  {pricing.trial_note ? ` ${pricing.trial_note}` : ''}</span>
+              </p>
+            )}
             <div className="mpw-carriers">
               <span>Built for dealers on</span>
               <span>Boost</span><span>Cricket</span><span>Metro</span><span>Total Wireless</span>
@@ -178,15 +249,85 @@ export default function WelcomePage() {
           </div>
         </section>
 
+        {pricing.show_pricing && (
+          <section className="mpw-section mpw-section-tint" id="pricing">
+            <div className="mpw-wrap">
+              <span className="mpw-kicker">Pricing</span>
+              <h2>{pricing.headline || (trialOn ? `Start free for ${trialDays} days.` : 'Straightforward pricing.')}</h2>
+              <p className="mpw-lede">
+                {pricing.subhead
+                  || (trialOn
+                    ? `Every module, every store, for the whole ${trialDays} days. Choose how you continue after that.`
+                    : 'Pick the package that matches how many stores you run.')}
+              </p>
+
+              {pricing.packages.length > 0 ? (
+                <div className={`mpw-plans mpw-plans-${Math.min(pricing.packages.length, 4)}`}>
+                  {pricing.packages.map(pkg => (
+                    <article key={pkg.key}
+                      className={`mpw-plan${pkg.is_featured ? ' mpw-plan-featured' : ''}`}>
+                      {pkg.is_featured && <span className="mpw-plan-flag">Most popular</span>}
+                      <h3>{pkg.name}</h3>
+                      {pkg.tagline && <p className="mpw-plan-tagline">{pkg.tagline}</p>}
+                      <div className="mpw-plan-price">
+                        {pkg.price > 0
+                          ? <><span className="mpw-plan-amount">{money(pkg.price, pkg.currency)}</span>
+                              <span className="mpw-plan-unit">
+                                {pkg.unit_label || `per ${pkg.cycle === 'annual' ? 'year' : 'month'}`}
+                              </span></>
+                          : <span className="mpw-plan-amount mpw-plan-amount-quiet">Talk to us</span>}
+                      </div>
+                      {pkg.price_note && <p className="mpw-plan-note">{pkg.price_note}</p>}
+                      {pkg.features && pkg.features.length > 0 && (
+                        <ul className="mpw-plan-features">
+                          {pkg.features.map((f, i) => <li key={i}>{f}</li>)}
+                        </ul>
+                      )}
+                      <Link href="/signup"
+                        className={`mpw-btn ${pkg.is_featured ? 'mpw-btn-primary' : 'mpw-btn-ghost'} mpw-plan-cta`}>
+                        {pkg.cta_label || (trialOn ? 'Start free trial' : 'Get started')}
+                      </Link>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                /* Nothing published yet — the honest state. Lead with the trial and a conversation
+                   rather than showing a price nobody chose. */
+                <div className="mpw-plans mpw-plans-1">
+                  <article className="mpw-plan mpw-plan-featured">
+                    {trialOn && <span className="mpw-plan-flag">{trialLabel}</span>}
+                    <h3>{trialOn ? 'Try it on your own numbers' : 'Pricing on request'}</h3>
+                    <p className="mpw-plan-tagline">
+                      Pricing depends on how many stores and companies you run, so we quote it against
+                      your operation rather than guessing at a sticker price.
+                    </p>
+                    <ul className="mpw-plan-features">
+                      {trialOn && <li>{trialDays} days free, with every module switched on</li>}
+                      <li>Priced on your store and company count</li>
+                      <li>Add modules as you need them</li>
+                    </ul>
+                    <Link href="/signup" className="mpw-btn mpw-btn-primary mpw-plan-cta">{startCta}</Link>
+                  </article>
+                </div>
+              )}
+
+              {trialOn && pricing.trial_note && (
+                <p className="mpw-plans-note">{pricing.trial_note}</p>
+              )}
+            </div>
+          </section>
+        )}
+
         <section className="mpw-cta">
           <div className="mpw-wrap">
             <h2>See your own month, settled.</h2>
             <p>
-              Bring one period of your carrier and store data, and see what the engine makes of it before
-              you change a thing about how you operate.
+              {trialOn
+                ? `Bring one period of your carrier and store data and see what the engine makes of it — free for ${trialDays} days, every module switched on.`
+                : 'Bring one period of your carrier and store data, and see what the engine makes of it before you change a thing about how you operate.'}
             </p>
             <div className="mpw-cta-row">
-              <Link href="/signup" className="mpw-btn mpw-btn-light">Create your company</Link>
+              <Link href="/signup" className="mpw-btn mpw-btn-light">{startCta}</Link>
               <Link href="/login" className="mpw-btn mpw-btn-light">Sign in</Link>
             </div>
           </div>
