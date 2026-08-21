@@ -75,6 +75,20 @@ except G.SdmError as e:
     check("raises SdmError", True)
     check("the status is carried so the router can map it to a re-auth prompt", e.status == 400)
     check("Google's own explanation is preserved", "revoked" in str(e))
+    # The 7-day test-mode expiry is the cause nobody guesses, so the message must name it. Without
+    # this line the operator sees a bare "expired or revoked" once a week and has nothing to act on.
+    check("the weekly test-mode expiry is named", "7 days" in str(e) and "Testing" in str(e))
+    check("and it says what to actually do", "Publish the app to Production" in str(e))
+
+# A refresh failure that is NOT invalid_grant must not be blamed on the consent screen.
+c = G.SdmClient(CRED, transport=transport([("token", (503, {"error": "backendError",
+                                                            "error_description": "Backend Error"}))]))
+try:
+    c.access_token()
+    check("a 503 still raises", False)
+except G.SdmError as e:
+    check("a 503 still raises", True)
+    check("an outage is not misreported as a consent-screen problem", "Testing" not in str(e))
 
 c = G.SdmClient({}, transport=transport([]))
 check("an unconfigured tenant is refused locally with 428, no network call", not c.configured())
