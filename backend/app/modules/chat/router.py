@@ -20,16 +20,21 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 BUCKET = "chat-attachments"   # Supabase Storage bucket, private (signed-url access), same as helpdesk
 
 
-def _require_member(authorization: str = Header(default="")):
-    """Router-wide gate: every chat endpoint is for a signed-in member of the org. The check is
-    storeops' own `_caller_identity` — 401 unsigned, 403 when the login isn't linked to an employee —
-    which is the SAME resolution `_me` does inside each handler, so the two can never drift.
+def _require_member(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Router-wide gate: every chat endpoint is for a signed-in member of the tenant.
 
-    It used to import a `_require_member` that has never existed in storeops.router. A router-level
-    dependency that raises ImportError 500s EVERY /api/v1/chat/* request before its handler runs, so
-    the whole module — /directory included — answered nothing but 500s."""
-    from app.modules.storeops.router import _caller_identity
-    _caller_identity(authorization)
+    This import used to name a `_require_member` that had never been defined in storeops.router. A
+    router-level dependency runs before EVERY handler, and the import sits inside the function body,
+    so nothing failed at boot — each request instead raised ImportError, which is not an
+    HTTPException, and came back from main.HardeningMiddleware as a masked 500. Every /api/v1/chat/*
+    call answered that way from the day the module shipped, /directory included, which is why user
+    search found nobody and nobody could be added.
+
+    The call is unchanged: storeops now DEFINES the shared gate the approvals router imports the same
+    way, so both modules resolve membership through one implementation instead of a private copy
+    each."""
+    from app.modules.storeops.router import _require_member as sm
+    sm(authorization, org_id)
 
 
 router = APIRouter(prefix="/chat", tags=["Chat"], dependencies=[Depends(_require_member)])

@@ -169,6 +169,12 @@ C.realtime.publish = lambda topics, event, payload: BROADCASTS.append(
 ORG = "org-c"
 CURRENT = ["E1"]   # the "signed-in" employee; flip to simulate different callers
 S._caller_identity = lambda auth: (ORG, CURRENT[0])
+# The router-wide gate resolves membership through storeops._require_member, which reaches the real
+# token layer. Stub it: section 13 exists to prove the chat routes answer THROUGH the dependency, not
+# to re-test the shared gate's own decision table — harness_approvals_gate.py covers that in 26
+# checks against the same function. The chat gate imports it inside the call, so this is picked up.
+S._require_member = lambda auth, org_id=None: {
+    "org_id": ORG, "email": "e1@example.com", "role": "manager", "employee_id": CURRENT[0]}
 
 
 def as_user(eid):
