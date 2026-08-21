@@ -15,7 +15,7 @@ Nothing below is something I can find in the code — each one is a business fac
 
 | # | What | Where it goes | Notes |
 |---|---|---|---|
-| 1 | **Which legal entity publishes this** | Everywhere | The app's existing privacy policy names **IT Solutions of LI Inc**, so I used that throughout. Your email is on the Cellfonz R Us domain and the internal biometric policy is issued by **Cellfonz R Us**. If the customer-facing contracting party is actually Cellfonz R Us, tell me and I'll change every page — but the two documents must not disagree. |
+| 1 | ~~Which legal entity publishes this~~ | Everywhere | **ANSWERED — no action needed.** The company is **IT Solutions of LI Inc**; **Cellfonz R Us** is the first tenant, i.e. a customer of the platform like any other. That is what every legal page already says. The internal biometric policy, which had named Cellfonz R Us as the platform operator, has been corrected to match. |
 | 2 | **State of incorporation** | Terms §1 | |
 | 3 | **Registered business address** | Terms §1, §23; Privacy §12; EULA §12 | A real address is required for contract notices, and Apple requires contact info in the EULA. A PO box is generally not sufficient. |
 | 4 | **Governing-law state, and county for venue** | Terms §22 | Usually where you are based. If that is Long Island, this is New York and the county is Nassau or Suffolk. |

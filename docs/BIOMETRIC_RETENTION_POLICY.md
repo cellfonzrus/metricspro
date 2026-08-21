@@ -1,12 +1,21 @@
 # Biometric Data (Face Descriptor) Collection, Retention & Destruction Policy
 
-**Issued by:** **Cellfonz R Us** ("the Company"), operator of the MetricsPro platform.
+**Issued by:** **IT Solutions of LI Inc**, which develops and operates the MetricsPro platform and
+is the party in possession of any biometric data held through it.
 **Applies to:** the StoreOps time-clock face-recognition feature, and to each company that uses it
-through MetricsPro. As of the effective date those are **Cellfonz R Us**, **Luxelink Wireless LLC**, and
-**Vzone**. Each of these is a separate employer and adopts this schedule as its own written policy for
-its own employees; where this document says "the Company," a reader should understand it to mean the
-employing company whose employee's data is in question. A company added to the platform later adopts
-this policy on the date it enables the feature.
+through MetricsPro. As of the effective date those tenants are **Cellfonz R Us** (the first tenant),
+**Luxelink Wireless LLC**, and **Vzone**. Each is a separate employer, is a CUSTOMER of the platform
+rather than its operator, and adopts this schedule as its own written policy for its own employees;
+where this document says "the Company," a reader should understand it to mean the employing company
+whose employee's data is in question. A company added to the platform later adopts this policy on the
+date it enables the feature.
+
+> **On the two roles.** Biometric law reaches both the party that POSSESSES the data (IT Solutions of
+> LI Inc, as operator) and the EMPLOYER that collects it from its own staff (the tenant). This
+> document is the operator's written schedule and the template each employing tenant adopts as its
+> own — it is not a claim that the operator employs anyone's staff. The public version is published
+> at the MetricsPro website's Biometric Data Policy page, which is what satisfies the
+> "make available to the public" requirement.
 **Effective:** 2026-08-09. **Next review:** on any change to the retention schedule, the collection
 method, or applicable law — and in any event within 12 months.
 **Status of face recognition today:** OFF for every company on the platform (migration 420,

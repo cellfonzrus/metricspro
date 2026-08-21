@@ -118,10 +118,17 @@ class actions.
 
 ## 3. Corporate hygiene
 
-- [ ] **Decide which entity is the contracting party** and use it consistently. Right now the app's
-      privacy policy says IT Solutions of LI Inc and the internal biometric policy says Cellfonz R Us.
-      Two customer-facing documents naming different companies for the same product is the kind of
+- [x] **Which entity is the contracting party** — settled. **IT Solutions of LI Inc** is the company;
+      **Cellfonz R Us** is the first tenant, a customer of the platform like any other. Every legal
+      page already reads that way, and the internal biometric policy — which had named Cellfonz R Us
+      as the platform operator — has been corrected to match. Keep it consistent from here: two
+      customer-facing documents naming different companies for the same product is the kind of
       inconsistency opposing counsel enjoys finding.
+- [ ] Worth knowing, because it affects who gets sued: as operator, IT Solutions of LI Inc is in
+      **possession** of tenant data, while each tenant is the **employer** that collects it. Biometric
+      and employment claims can reach both roles. Cellfonz R Us being both your own business and a
+      tenant does not merge the two — keep the platform's contracts with it on the same footing as
+      with any other tenant, or the separation is easy for a plaintiff to argue away.
 - [ ] Confirm the entity is in good standing and registered where it needs to be.
 - [ ] Keep corporate formalities — separate bank accounts, real records. The liability cap in the
       Terms protects the company; corporate formalities are what protect **you personally**.
