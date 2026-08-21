@@ -20,9 +20,16 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 BUCKET = "chat-attachments"   # Supabase Storage bucket, private (signed-url access), same as helpdesk
 
 
-def _require_member(authorization: str = Header(default=""), org_id: str = ORG_ID):
-    from app.modules.storeops.router import _require_member as sm
-    sm(authorization, org_id)
+def _require_member(authorization: str = Header(default="")):
+    """Router-wide gate: every chat endpoint is for a signed-in member of the org. The check is
+    storeops' own `_caller_identity` — 401 unsigned, 403 when the login isn't linked to an employee —
+    which is the SAME resolution `_me` does inside each handler, so the two can never drift.
+
+    It used to import a `_require_member` that has never existed in storeops.router. A router-level
+    dependency that raises ImportError 500s EVERY /api/v1/chat/* request before its handler runs, so
+    the whole module — /directory included — answered nothing but 500s."""
+    from app.modules.storeops.router import _caller_identity
+    _caller_identity(authorization)
 
 
 router = APIRouter(prefix="/chat", tags=["Chat"], dependencies=[Depends(_require_member)])
@@ -81,6 +88,18 @@ def _is_chat_admin(authorization, org_id) -> bool:
         return perms.get("chat_admin") is True or (perms.get("scope") or "") == "all"
     except Exception:
         return False
+
+
+def _person_is_active(person: dict) -> bool:
+    """NULL-SAFE "is this person active". `storeops.employees.is_active` is NULLABLE (`DEFAULT true`,
+    no NOT NULL), so any roster row that predates the column — or any import that never set it — reads
+    NULL, and a PostgREST `.eq("is_active", True)` DROPS it. Only an EXPLICIT false is inactive: the
+    same rule storeops._store_is_active / _inactive_ids_from were hard-won on and every frontend
+    picker's `is_active !== false` already follows. Python-side, post-fetch, for the reason that
+    doctrine spells out. Keeps the chat directory listing the same people HR does.
+
+    Shared with add_member so the API can never refuse someone the picker just offered."""
+    return person.get("is_active") is not False
 
 
 def _dm_key(ids):
@@ -304,12 +323,19 @@ def add_member(channel_id: str, body: dict, authorization: str = Header(default=
     who = (body.get("employee_id") or "").strip()
     if not who:
         raise HTTPException(400, "employee_id is required")
-    try:
-        sb().table("chat_members").insert({
-            "org_id": org_id, "channel_id": channel_id, "employee_id": who}).execute()
-    except Exception:
-        pass   # already a member
-    return {"ok": True}
+    if _is_member(org_id, channel_id, who):
+        return {"ok": True, "added": False}
+    # The body names WHO to add, so it is checked against the caller's OWN org roster (never trusted
+    # as given, same stance as the sender identity) and against the same active rule the directory
+    # offers. The insert used to sit under a blanket `except Exception: pass` that answered
+    # {"ok": true} to EVERY failure, so a refused add read to the client as a member who was added.
+    rows = (sb().table("employees").select("employee_id,is_active").eq("org_id", org_id)
+            .eq("employee_id", who).limit(1).execute().data) or []
+    if not rows or not _person_is_active(rows[0]):
+        raise HTTPException(404, "no active employee with that id in this company")
+    sb().table("chat_members").insert({
+        "org_id": org_id, "channel_id": channel_id, "employee_id": who}).execute()
+    return {"ok": True, "added": True}
 
 
 # ── Reactions / edit / delete (Phase 2) ────────────────────────────────────────────────────────
@@ -763,10 +789,10 @@ def push_unregister(body: dict, authorization: str = Header(default=""), org_id:
 def directory(q: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Active employees the caller can start a DM with (id + name). Optional ?q= name filter."""
     org_id, eid, _name = _me(authorization, org_id)
-    query = sb().table("employees").select("employee_id,name").eq("org_id", org_id).eq("is_active", True)
-    rows = query.order("name").limit(1000).execute().data or []
+    rows = (sb().table("employees").select("employee_id,name,is_active").eq("org_id", org_id)
+            .order("name").limit(1000).execute().data) or []
     s = (q or "").strip().lower()
     people = [{"employee_id": r.get("employee_id"), "name": r.get("name")}
               for r in rows if r.get("employee_id") and r.get("employee_id") != eid
-              and (not s or s in (r.get("name") or "").lower())]
+              and _person_is_active(r) and (not s or s in (r.get("name") or "").lower())]
     return {"people": people}

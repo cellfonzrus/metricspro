@@ -520,6 +520,79 @@ check("12f the APNs provider token is a real ES256 JWT with the key id in its he
 check("12g APNs is unconfigured (None) until all four APNs creds are set", P._apns_conf() is None)
 
 
+# ── 13: people directory + add-to-conversation (owner report 2026-08-21: "search finds no one, and
+#        there is no way to add a user to a conversation") ──────────────────────────────────────────
+# Both symptoms were ONE outage: the router-wide Depends imported a `_require_member` that does not
+# exist in storeops.router, so every /api/v1/chat/* request raised ImportError → 500 before its
+# handler ran, and the client swallows a failed /directory into an empty picker. Sections 1-12 all
+# call the handlers DIRECTLY, which is exactly why they stayed green through it — so this section
+# drives the real FastAPI app, dependency included, and not just the functions.
+seed(); as_user("E1")
+fake.store[("storeops", "employees")] = [
+    {"org_id": ORG, "employee_id": "E1", "name": "Alice", "is_active": True},
+    {"org_id": ORG, "employee_id": "E2", "name": "Bob", "is_active": True},
+    {"org_id": ORG, "employee_id": "E3", "name": "Cara"},                        # is_active NULL
+    {"org_id": ORG, "employee_id": "E4", "name": "Dan", "is_active": False},     # deactivated
+    {"org_id": "org-other", "employee_id": "X9", "name": "Mallory", "is_active": True},
+]
+
+try:
+    C._require_member(authorization=AUTH)   # the gate itself, not the handler it protects
+    _gate = ""
+except Exception as e:                      # an ImportError here is a 500 on EVERY chat route
+    _gate = f"{type(e).__name__}: {e}"
+check("13a the router-wide gate resolves (it imported a helper storeops has never had)", _gate == "", _gate)
+
+import warnings  # noqa: E402
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from fastapi import FastAPI  # noqa: E402
+    from fastapi.testclient import TestClient  # noqa: E402
+_app = FastAPI()
+_app.include_router(C.router, prefix="/api/v1")
+_client = TestClient(_app, raise_server_exceptions=False)
+
+_r = _client.get("/api/v1/chat/directory")
+check("13b GET /api/v1/chat/directory answers 200 through the REAL router wiring (was 500)",
+      _r.status_code == 200, _r.status_code)
+_dir = _r.json() if _r.status_code == 200 else {}
+check("13c the payload is {people:[...]} — the shape the chat page reads",
+      isinstance(_dir.get("people"), list), _dir)
+_names = [p["name"] for p in _dir.get("people", [])]
+check("13d a roster row with is_active NULL is listed — the column is nullable, NULL means active",
+      "Cara" in _names, _names)
+check("13e an explicitly deactivated person is not listed", "Dan" not in _names, _names)
+check("13f the caller is never offered themselves", "Alice" not in _names, _names)
+check("13g another tenant's employee is never listed", "Mallory" not in _names, _names)
+check("13h ?q= filters by name, case-insensitively",
+      [p["name"] for p in C.directory(q="bO", authorization=AUTH, org_id=ORG)["people"]] == ["Bob"],
+      C.directory(q="bO", authorization=AUTH, org_id=ORG))
+
+_ch = C.create_channel({"name": "ops"}, authorization=AUTH, org_id=ORG)["channel"]["id"]
+_add = C.add_member(_ch, {"employee_id": "E3"}, authorization=AUTH, org_id=ORG)
+check("13i a member can add someone the directory offered", _add.get("added") is True
+      and C._is_member(ORG, _ch, "E3") is True, _add)
+check("13j re-adding an existing member is a no-op, not an error",
+      C.add_member(_ch, {"employee_id": "E3"}, authorization=AUTH, org_id=ORG).get("added") is False)
+try:
+    C.add_member(_ch, {"employee_id": "E4"}, authorization=AUTH, org_id=ORG)
+    check("13k adding a deactivated person is REFUSED, not silently answered ok", False, "no raise")
+except HTTPException as e:
+    check("13k adding a deactivated person is REFUSED, not silently answered ok", e.status_code == 404, e.detail)
+try:
+    C.add_member(_ch, {"employee_id": "X9"}, authorization=AUTH, org_id=ORG)
+    check("13l another tenant's employee can never be added into this org's channel", False, "no raise")
+except HTTPException as e:
+    check("13l another tenant's employee can never be added into this org's channel",
+          e.status_code == 404, e.detail)
+as_user("E2")
+try:
+    C.add_member(_ch, {"employee_id": "E3"}, authorization=AUTH, org_id=ORG)
+    check("13m a non-member cannot add anyone to a conversation", False, "no raise")
+except HTTPException as e:
+    check("13m a non-member cannot add anyone to a conversation", e.status_code == 403, e.detail)
+
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     print("FAILURES:")

@@ -174,6 +174,7 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [draft, setDraft] = useState('')
   const [dir, setDir] = useState<Person[]>([])
+  const [dirErr, setDirErr] = useState('')
   const [showNew, setShowNew] = useState<'' | 'dm' | 'channel' | 'browse' | 'manage'>('')
   const [dirQuery, setDirQuery] = useState('')
   const [search, setSearch] = useState('')
@@ -216,7 +217,14 @@ export default function ChatPage() {
     api(`/api/v1/chat/channels/${cid}/messages?limit=100`).then((r: any) => setMessages(r.messages || [])).catch(() => {})
   }, [])
 
-  useEffect(() => { api('/api/v1/chat/directory').then((r: any) => setDir(r.people || [])).catch(() => {}) }, [])
+  // The people picker (New DM + Add people) is fed ONLY from here, so a swallowed failure was
+  // indistinguishable from a company with nobody in it — which is how a 500 on this route read to
+  // the owner as "search finds no one" instead of "chat is down". Say which it is.
+  useEffect(() => {
+    api('/api/v1/chat/directory')
+      .then((r: any) => { setDir(r.people || []); setDirErr('') })
+      .catch(e => setDirErr(e?.message || String(e)))
+  }, [])
   useEffect(() => { loadChannels() }, [loadChannels])
   useEffect(() => { api('/api/v1/chat/me').then((r: any) => setMe(r)).catch(() => {}) }, [])
 
@@ -603,7 +611,7 @@ export default function ChatPage() {
                 <div key={p.employee_id} onClick={() => startDm(p)} style={{ padding: '9px 10px', cursor: 'pointer', borderRadius: 7, fontSize: 14 }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>{p.name}</div>
               ))}
-              {dirFiltered.length === 0 && <div style={{ padding: 12, color: 'var(--text3)', fontSize: 13 }}>No one found.</div>}
+              {dirFiltered.length === 0 && <div style={{ padding: 12, color: dirErr ? '#dc2626' : 'var(--text3)', fontSize: 13 }}>{dirErr ? `❌ ${dirErr}` : 'No one found.'}</div>}
             </div>
           </div>
         </div>
@@ -656,6 +664,7 @@ export default function ChatPage() {
                   <div style={{ fontSize: 11, color: 'var(--text3)', padding: '8px 8px 4px', fontWeight: 700 }}>ADD PEOPLE</div>
                   <input value={dirQuery} onChange={e => setDirQuery(e.target.value)} placeholder="Search people…"
                     style={{ width: '100%', boxSizing: 'border-box', margin: '0 0 6px', padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 13 }} />
+                  {dirErr && <div style={{ padding: '4px 8px', fontSize: 12, color: '#dc2626' }}>❌ {dirErr}</div>}
                   {dirQuery && dir.filter(p => p.name.toLowerCase().includes(dirQuery.toLowerCase()) && !members.some(m => m.employee_id === p.employee_id)).slice(0, 8).map(p => (
                     <div key={p.employee_id} onClick={() => addMember(p)} style={{ padding: '7px 8px', cursor: 'pointer', fontSize: 14 }}
                       onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')} onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>+ {p.name}</div>
