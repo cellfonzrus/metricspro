@@ -307,6 +307,22 @@ check("non-SDP junk is refused", G.offer_problem("hello there") != "")
 check("the refusal tells the operator what to do",
       "Reload the page" in G.offer_problem("v=0\r\nm=audio 9 x\r\n"))
 
+# ORDER, not just presence. Google: "Offer must contain each of audio, video and application m
+# lines in that order." This deployment shipped application/video/audio — every m-line present, so
+# a presence-only check waved it through to Google, which refused the whole offer. That is the
+# exact SDP below.
+SHIPPED = "v=0\r\nm=application 9 DTLS/SCTP\r\nm=video 9 x\r\nm=audio 9 x\r\n"
+check("the order we actually shipped is caught", G.offer_problem(SHIPPED) != "")
+check("and it is reported as an ORDER problem, not a missing m-line",
+      "out of order" in G.offer_problem(SHIPPED))
+check("video before audio is caught",
+      "out of order" in G.offer_problem("v=0\r\nm=video 9 x\r\nm=audio 9 x\r\nm=application 9 x\r\n"))
+check("the data channel in the middle is caught",
+      "out of order" in G.offer_problem("v=0\r\nm=audio 9 x\r\nm=application 9 x\r\nm=video 9 x\r\n"))
+check("the correct order still passes", G.offer_problem(GOOD) == "")
+check("the order message names the required sequence",
+      all(w in G.offer_problem(SHIPPED) for w in ("audio", "video", "data channel")))
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 for f in FAIL:
     print("  FAILED: " + f)
