@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID, localToday } from '@/lib/client'
+import { apiCached } from '@/lib/cache'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -58,7 +59,7 @@ export default function TeamSnapshot({ period, token, unitId, today }:
       .then(setData).catch((e: any) => setErr(e?.message || 'Failed to load team')).finally(() => setLoading(false))
     authed(`/api/v1/storeops/org/my-team${unitId ? `?unit_id=${encodeURIComponent(unitId)}` : ''}`)
       .then(setTree).catch(() => setTree(null))
-    api('/api/v1/storeops/employees').then((es: any[]) => {
+    apiCached('/api/v1/storeops/employees').then((es: any[]) => {
       const m: Record<string, string> = {}
       ;(es || []).forEach(e => { if (e.employee_id && e.name) m[String(e.name).trim().toUpperCase()] = e.employee_id })
       setEmpMap(m)

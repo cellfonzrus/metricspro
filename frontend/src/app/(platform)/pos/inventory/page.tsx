@@ -7,6 +7,7 @@
 // form was a mock (alert-only) and is intentionally not ported.
 import { useEffect, useState } from 'react'
 import { api, localToday } from '@/lib/client'
+import { apiCached } from '@/lib/cache'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { useAuth } from '@/lib/auth-context'
 
@@ -184,7 +185,7 @@ export default function PosInventoryPage() {
   }
 
   useEffect(() => {
-    api('/api/v1/storeops/stores').then(rows => setStores(rows || [])).catch(() => {})
+    apiCached('/api/v1/storeops/stores').then(rows => setStores(rows || [])).catch(() => {})
     api('/api/v1/pos/products?active_only=true').then(r => setProducts(r.products || [])).catch(() => {})
   }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -15,6 +15,7 @@
 
 import { useEffect, useState } from 'react'
 import { api, addDays, localToday } from '@/lib/client'
+import { apiCached } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { getActiveStore, setActiveStore } from '@/lib/pos-store'
 import { PosConfigValues, loadEffectivePosConfig, resolvePosConfig } from '@/lib/pos-config'
@@ -149,7 +150,7 @@ export default function PosActivationsPage() {
     setDateFrom(from); setDateTo(to)
     load(from, to)
     setActiveStoreState(getActiveStore())
-    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    apiCached('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     loadDealerCodes()
     loadServicePlans()
     // Deep links: /pos/activations?sale=<id> (from POS) and ?customer=<id> (from Customers).

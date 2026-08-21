@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { apiCached } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 
 // Productivity lens: rank reps by output/hour and show how well their hours fit the store's busy hours,
@@ -21,7 +22,7 @@ export default function ProductivityInsightsPage() {
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
-    api('/api/v1/storeops/stores').then((r: any) => {
+    apiCached('/api/v1/storeops/stores').then((r: any) => {
       const list = Array.isArray(r) ? r : []
       setStores(list)
       if (!storeCode && list[0]?.store_code) setStoreCode(list[0].store_code)

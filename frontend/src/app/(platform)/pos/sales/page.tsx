@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, addDays, localToday } from '@/lib/client'
+import { apiCached } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import RegisterDrawer, { RegisterSession } from '@/components/pos/RegisterDrawer'
 import RegisterLock from '@/components/pos/RegisterLock'
@@ -198,7 +199,7 @@ export default function PosSalesPage() {
   useEffect(() => {
     setActiveStoreState(getActiveStore())
     loadProducts()
-    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    apiCached('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/pos/tax-codes').then(r => setTaxCodes(r.tax_codes || [])).catch(() => setTaxCodes([]))
     api('/api/v1/pos/receipt-template').then(r => setReceiptTemplate(r.template || null)).catch(() => {})
   }, [])
