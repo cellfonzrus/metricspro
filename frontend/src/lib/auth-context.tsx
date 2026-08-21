@@ -115,6 +115,28 @@ const Ctx = createContext<AuthState>({
 
 export const useAuth = () => useContext(Ctx)
 
+/**
+ * Whether a Supabase `onAuthStateChange` event should re-arm the loading splash and re-bootstrap the
+ * profile. Extracted as a PURE function so the real decision is unit-testable (frontend/prove_nav_no_reload.mjs)
+ * rather than re-implemented.
+ *
+ * Returns FALSE — no reload, no splash — for an event that carries the SAME already-loaded identity:
+ *   • TOKEN_REFRESHED — the ~hourly background token auto-refresh.
+ *   • SIGNED_IN / INITIAL_SESSION re-fire — supabase-js (auth-js GoTrueClient `_recoverAndRefresh`)
+ *     emits a fresh SIGNED_IN on EVERY `visibilitychange`, i.e. every time the browser tab regains
+ *     focus. This is the event that made the whole app flash "Loading…" on every tab switch.
+ * Returns TRUE for a genuine transition — first load (`settledUid === undefined`), a real login or
+ * tenant switch (identity changes), a sign-out (identity → null), or USER_UPDATED / PASSWORD_RECOVERY.
+ */
+export function authEventNeedsReload(
+  event: string, uid: string | null, settledUid: string | null | undefined,
+): boolean {
+  if (event === 'TOKEN_REFRESHED') return false
+  const sameIdentity = settledUid !== undefined && uid === settledUid
+  if (sameIdentity && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) return false
+  return true
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<any | null>(null)
@@ -426,6 +448,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== 'undefined') window.location.href = '/'
   }), [])
 
+  // The identity (auth user id) we last ran a full profile `settle` for. `undefined` until the first
+  // load; then the current uid or null (signed out). Used to tell a genuine sign-in/-out transition
+  // from a same-user event re-fire (the visibilitychange SIGNED_IN / background TOKEN_REFRESHED), so
+  // the latter never re-arms `loading` and never re-bootstraps the profile.
+  const settledUidRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     let mounted = true
     // HARD GUARANTEE that the loading splash is ALWAYS released — whatever loadProfile does: resolve,
@@ -450,16 +477,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return
       setSession(data.session)
+      settledUidRef.current = data.session?.user?.id ?? null
       settle(data.session)
     })
     const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
       if (!mounted) return
+      // Always mirror the live session (keeps the token/session state fresh for every listener).
       setSession(sess)
-      // RE-ARM `loading` while the new session's profile resolves — closes the "no access on login
-      // until refresh" race (a fresh SIGNED_IN otherwise left loading=false with provisioned not yet
-      // populated, flashing a denied screen). EXCEPT a background TOKEN_REFRESHED (same already-loaded
-      // user), which would flash the whole app into a spinner on every ~hourly auto-refresh.
-      if (event !== 'TOKEN_REFRESHED') setLoading(true)
+      const uid = sess?.user?.id ?? null
+      // DO NOT flash the whole app into the loading splash — or re-run the heavy profile bootstrap —
+      // for an event that carries the SAME already-loaded identity (see authEventNeedsReload): the
+      // visibilitychange SIGNED_IN/INITIAL_SESSION re-fire supabase-js emits on EVERY tab focus, and
+      // the ~hourly background TOKEN_REFRESHED. Re-arming `loading` on those is what made the entire
+      // app "reload" (full-screen "Loading…" splash + a full /core/bootstrap round trip) on every tab
+      // switch. The profile is already loaded, so there is nothing to reload; `refresh()` remains for
+      // an explicit, deliberate re-read.
+      if (!authEventNeedsReload(event, uid, settledUidRef.current)) return
+      // A genuine transition (real login, tenant switch to a new session, sign-out → null identity,
+      // USER_UPDATED / PASSWORD_RECOVERY). RE-ARM `loading` while the new session's profile resolves —
+      // closes the "no access on login until refresh" race (a fresh SIGNED_IN otherwise left
+      // loading=false with provisioned not yet populated, flashing a denied screen).
+      settledUidRef.current = uid
+      setLoading(true)
       settle(sess)
     })
     return () => { mounted = false; sub.subscription.unsubscribe() }

@@ -18352,8 +18352,26 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
             print(f"WARN _sales_rows_union read of {table} failed: {e}")
             return []
 
-    prows = _q(primary)
-    orows = _q(other)
+    # The two source reads are INDEPENDENT and are each the heaviest cost of this call (a full period of
+    # raw_sales / daily_sales_feed lines, up to the 200k cap). They were issued back-to-back, so the page
+    # paid their latency SERIALLY. Run them CONCURRENTLY on the process-wide singleton client — the exact
+    # concurrency FastAPI already serves across simultaneous requests against this one connection pool
+    # (get_supabase() singleton + db_resilience pool; httpx.Client is documented thread-safe for
+    # concurrent requests, and harness_db_singleton proves concurrent .schema() usage keeps headers
+    # isolated). `_q` swallows its own errors and returns [], so a worker thread can never raise; any
+    # unexpected executor failure falls back to the original sequential reads. Byte-identical output —
+    # the SAME rows for each source, only fetched in parallel (prows/orows are assigned by source, not by
+    # completion order). DISPLAY path only (see the docstring: the money calc never calls this).
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as _ex:
+            _fp = _ex.submit(_q, primary)
+            _fo = _ex.submit(_q, other)
+            prows, orows = _fp.result(), _fo.result()
+    except Exception as _pe:
+        print(f"WARN _sales_rows_union parallel read fell back to sequential: {_pe}")
+        prows = _q(primary)
+        orows = _q(other)
 
     def _day(r):
         return str(r.get('trans_date') or '')[:10]

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { apiCached } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 
 // IMEI/serial reconciliation: B2B inventory (inventory_aging_device) vs B2B sales (raw_sales.serial_1).
@@ -14,7 +15,7 @@ export default function ImeiReconPage() {
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
-    api('/api/v1/storeops/stores').then((r: any) => {
+    apiCached('/api/v1/storeops/stores').then((r: any) => {
       const list = Array.isArray(r) ? r : []
       setStores(list)
       if (!storeCode && list[0]?.store_code) setStoreCode(list[0].store_code)
