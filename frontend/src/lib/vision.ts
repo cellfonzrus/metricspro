@@ -220,3 +220,39 @@ export function oauthReturn(search: string): { code: string; error: string; none
   if (error) return { code: '', error, none: false }
   return { code: '', error: '', none: true }
 }
+
+// ── Camera sync: say what happened, including when nothing did ──────────────────────────────────
+// Sync has three genuinely different "no cameras appeared" outcomes and they need different actions
+// from the operator. Collapsing them into one line — or into no line, which is what happened —
+// leaves someone staring at a button that looks broken while the request succeeded.
+export interface SyncResult {
+  found?: number
+  added?: number
+  updated?: number
+  skipped?: number
+  skipped_homes?: Record<string, number>
+}
+
+export function syncMessage(r: SyncResult): string {
+  const found = r.found || 0
+  const skipped = r.skipped || 0
+  const kept = found - skipped
+  const where = Object.entries(r.skipped_homes || {})
+    .map(([home, n]) => `${n} in ${home}`).join(', ')
+
+  // Google had nothing to give us. Almost always the wrong Google account, or devices not ticked on
+  // the consent screen — neither of which we can see from here, so name both.
+  if (!found) {
+    return 'Google returned no cameras for this account. Check that you authorized the Google '
+      + 'account that owns the store cameras, and that you ticked the cameras themselves on the '
+      + 'consent screen — an account can link successfully while sharing nothing.'
+  }
+  // Cameras exist but every one sits in a home this company has not claimed. This is the fail-closed
+  // path from migration 901 doing its job, not a failure.
+  if (!kept) {
+    return `Google returned ${found} camera(s), and all of them are in homes this company has not `
+      + `connected yet (${where}). Connect the right home in section 3b below, then sync again.`
+  }
+  return `Synced ${kept} camera(s): ${r.added || 0} new, ${r.updated || 0} updated.`
+    + (skipped ? ` Skipped ${where} — connect the home in section 3b to include them.` : '')
+}
