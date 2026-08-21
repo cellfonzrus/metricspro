@@ -311,4 +311,6 @@ export interface EdgeAgent {
   last_seen_at?: string | null
   last_ingest_at?: string | null
   online?: boolean
+  // Registered, but the machine has not yet traded its enrollment code for a secret.
+  awaiting_enrollment?: boolean
 }

@@ -973,14 +973,97 @@ def probe(args):
         worker.close()
 
 
+AGENT_VERSION = "1.0.0"
+DEFAULT_CRED_FILE = os.path.expanduser("~/.metricspro/vision-agent.json")
+
+
+def load_credentials(path):
+    """What this machine was given when it enrolled. Absent or unreadable is not an error here —
+    the caller reports it, with the enrollment command to run."""
+    try:
+        with open(path or DEFAULT_CRED_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_credentials(path, data):
+    """Write the secret 0600, owner-only, and create the directory the same way.
+
+    This file is the ONLY place the signing secret exists outside the database. It is deliberately
+    not printed, not logged and not echoed: the entire point of enrollment is that no human ever
+    holds this value, so writing it to a terminal would put us back where we started."""
+    path = path or DEFAULT_CRED_FILE
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, mode=0o700, exist_ok=True)
+    # Create with the right mode from the start rather than chmod-ing after: a world-readable
+    # instant is still an instant in which the secret was world-readable.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+    return path
+
+
+def enroll(args):
+    """Trade the one-time code from the app for this machine's signing secret."""
+    if not args.api:
+        log.error("--api is required to enroll")
+        return 2
+    import requests
+    url = args.api.rstrip("/") + "/api/v1/vision/edge/enroll"
+    try:
+        # Unsigned, and it has to be: the whole purpose of this call is to obtain the key that would
+        # sign it. The code is the proof, which is why it is short-lived and single-use.
+        res = requests.post(url, json={"code": args.enroll, "version": AGENT_VERSION}, timeout=30)
+    except Exception as e:
+        log.error("Could not reach %s: %s", url, e)
+        return 1
+    if res.status_code != 200:
+        detail = ""
+        try:
+            detail = (res.json() or {}).get("detail") or ""
+        except ValueError:
+            pass
+        log.error("Enrollment refused: %s", detail or f"HTTP {res.status_code}")
+        return 1
+    try:
+        got = res.json() or {}
+    except ValueError:
+        log.error("The server returned something that is not JSON.")
+        return 1
+    if not got.get("secret") or not got.get("agent_key"):
+        log.error("The server did not return credentials. Register the analyzer again.")
+        return 1
+    where = save_credentials(args.cred_file, {"api": args.api, "agent_key": got["agent_key"],
+                                              "secret": got["secret"],
+                                              "store_code": got.get("store_code")})
+    # The agent key is a public identifier and is safe to show. The secret is not, and is not shown.
+    log.info("Enrolled as %s%s. Credentials written to %s (owner-only).",
+             got["agent_key"],
+             f" for store {got['store_code']}" if got.get("store_code") else "", where)
+    log.info("The code you used is now spent. Start the analyzer with:")
+    log.info("  %s --api %s", sys.argv[0], args.api)
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(description="MetricsPro Vision edge analyzer")
     # Not `required` at the parser level: --benchmark deliberately needs NO credentials, so it can
     # be run on a candidate store PC before anyone has registered an analyzer or linked Google. The
     # requirement is enforced below, only for the modes that actually talk to the platform.
     p.add_argument("--api", default="", help="Platform base URL, e.g. https://api.example.com")
-    p.add_argument("--agent-key", default="", help="The va_… key from Vision → Settings")
-    p.add_argument("--secret", default="", help="The signing secret shown once at registration")
+    p.add_argument("--enroll", default="",
+                   help="One-time enrollment code from Vision → Settings. Trades the code for this "
+                        "machine's signing secret, writes it owner-only, and exits. Run once.")
+    p.add_argument("--cred-file", default="",
+                   help=f"Where the enrolled credentials live (default {DEFAULT_CRED_FILE})")
+    p.add_argument("--agent-key", default="",
+                   help="Legacy: the va_… key. Normally read from the enrolled credentials file.")
+    p.add_argument("--secret", default="",
+                   help="Legacy: the signing secret. Prefer --enroll; a secret typed on a command "
+                        "line lands in shell history.")
     p.add_argument("--tz-offset", type=int, default=0,
                    help="FALLBACK store offset from UTC in MINUTES (e.g. -420 for PDT), used only "
                         "when the server has no timezone recorded for a camera's store. Normally "
@@ -1018,10 +1101,20 @@ def main():
                         format="%(asctime)s %(levelname)-7s %(message)s")
     if args.benchmark:
         sys.exit(benchmark(args))
+    if args.enroll:
+        sys.exit(enroll(args))
+    # Credentials come from the file this machine wrote when it enrolled. Flags still work for a
+    # migration from the old copy-the-secret flow, but nobody should be typing a secret any more.
+    if not (args.agent_key and args.secret):
+        saved = load_credentials(args.cred_file)
+        args.agent_key = args.agent_key or saved.get("agent_key", "")
+        args.secret = args.secret or saved.get("secret", "")
     missing = [f"--{n.replace('_', '-')}" for n in ("api", "agent_key", "secret")
                if not getattr(args, n)]
     if missing:
-        p.error("required for this mode: " + ", ".join(missing))
+        p.error("not enrolled on this machine, and " + ", ".join(missing) + " not given.\n"
+                "Register the analyzer in Vision → Settings, then run:\n"
+                f"  {sys.argv[0]} --api {args.api or '<api url>'} --enroll <code-from-the-app>")
     if args.priority == "low" and not lower_priority():
         log.debug("could not lower process priority; continuing at normal priority")
     if args.probe:
