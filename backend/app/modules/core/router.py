@@ -2247,7 +2247,7 @@ def _ensure_employee(client, org_id, email, full_name=None, store_code=None, emp
 
 
 @router.get("/employees")
-async def list_employees(org_id: str = ORG_ID):
+def list_employees(org_id: str = ORG_ID):
     """The storeops.employees roster + whether each already has an app login + assigned role.
     Drives the assignment grid (assign a role, then create logins)."""
     client = sb()
@@ -2585,7 +2585,7 @@ def _normalize_grant_write(client, org_id: str, body: dict, *, strict: bool = Tr
 
 
 @router.post("/users/assign")
-async def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Upsert a core.users row (assign role + scope). Keyed on (org_id, email). Does NOT create
     the auth login — call /users/create-login (or bulk-provision) for that.
@@ -3128,7 +3128,7 @@ async def connect_tenant(body: ConnectTenantIn, authorization: str = Header(defa
 
 
 @router.post("/disable-and-switch")
-async def disable_and_switch(body: ConnectTenantIn, authorization: str = Header(default="")):
+def disable_and_switch(body: ConnectTenantIn, authorization: str = Header(default="")):
     """The authenticated user chooses to DISABLE their existing/old login and take a FRESH, isolated
     login for the inviting tenant instead (the stale-old-account case). Requires the access code.
     Mints the new tenant-aliased login FIRST, then bans the old auth account (Supabase ban → its token
@@ -3181,7 +3181,7 @@ class ReinstateLoginIn(LaxModel):
 
 
 @router.post("/reinstate-login")
-async def reinstate_login(body: ReinstateLoginIn, authorization: str = Header(default="")):
+def reinstate_login(body: ReinstateLoginIn, authorization: str = Header(default="")):
     """Super-admin ONLY: reinstate a login disabled via disable-and-switch (un-ban the auth account +
     re-activate its app_users rows). This is the sole reinstatement path — no tenant-admin or
     self-service (policy). Identify the login by {email} (its real email) or {auth_id}."""
@@ -3401,7 +3401,7 @@ class ResetPasswordIn(LaxModel):
 
 
 @router.post("/auth/forgot-password")
-async def forgot_password(body: ForgotPasswordIn, request: Request, background: BackgroundTasks):
+def forgot_password(body: ForgotPasswordIn, request: Request, background: BackgroundTasks):
     """PUBLIC: request a reset code. ANTI-ENUMERATION — the response is ALWAYS the same generic message
     (and same code path/timing) whether or not the account exists; existence, tenant membership and
     disabled status are NEVER revealed. Sends over email (+ verified WhatsApp phone if on file). The
