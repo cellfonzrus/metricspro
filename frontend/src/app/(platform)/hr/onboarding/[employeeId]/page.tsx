@@ -101,10 +101,10 @@ export default function EmployeeOnboardingPage() {
 
   async function sendInvite(method: 'link' | 'login') {
     setInviteRes(null)
-    if (method === 'link' && !gen.value.trim()) { flash('Enter the date of birth (or last-4 SSN) above first — a link invite needs an identity gate.'); return }
+    if (method === 'link' && !gen.value.trim()) { flash('Enter the date of birth above first — a link invite needs an identity gate.'); return }
     try {
       const body: any = { method, send_email: true }
-      if (method === 'link') { if (gen.kind === 'dob') body.dob = gen.value; else body.ssn4 = gen.value; if (gen.expires_days) body.expires_days = Number(gen.expires_days) }
+      if (method === 'link') { body.dob = gen.value; if (gen.expires_days) body.expires_days = Number(gen.expires_days) }
       const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/invite`, { method: 'POST', body: JSON.stringify(body) })
       setInviteRes(r); if (r.token) setQr({ url: r.portal_url, expires: r.token_expires_at })
       flash(r.emailed ? 'Invite emailed ✓' : (r.email_note || 'Invite prepared')); load()
@@ -201,7 +201,7 @@ export default function EmployeeOnboardingPage() {
     } catch (e: any) { flash(e?.message || 'Could not remove that file') }
   }
   async function mintToken() {
-    if (!gen.value.trim()) { flash(gen.kind === 'dob' ? 'Enter the date of birth' : 'Enter the last 4 of SSN'); return }
+    if (!gen.value.trim()) { flash('Enter the date of birth'); return }
     try {
       const r = await api(`/api/v1/hr/onboarding/employee/${employeeId}/token`, { method: 'POST',
         body: JSON.stringify({ verify_kind: gen.kind, verify_value: gen.value, expires_days: gen.expires_days || undefined }) })
@@ -379,7 +379,7 @@ export default function EmployeeOnboardingPage() {
               <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                 <div style={{ background: '#fff', padding: 8, borderRadius: 8 }}><QRCodeSVG value={qr.url} size={104} /></div>
                 <div style={{ fontSize: 12 }}>
-                  <div style={{ color: 'var(--text2)', marginBottom: 4 }}>Employee scans this — no login needed. They&apos;ll confirm their {gen.kind === 'dob' ? 'date of birth' : 'last-4 SSN'} to continue.</div>
+                  <div style={{ color: 'var(--text2)', marginBottom: 4 }}>Employee scans this — no login needed. They&apos;ll confirm their date of birth to continue.</div>
                   <button style={{ ...btn, marginRight: 6 }} onClick={() => navigator.clipboard?.writeText(qr.url).then(() => flash('Link copied'))}>Copy link</button>
                   <button style={{ ...btn, color: '#b91c1c' }} onClick={revokeToken}>Revoke</button>
                   {qr.expires && <div style={{ color: 'var(--text3)', marginTop: 4 }}>Expires {String(qr.expires).slice(0, 10)}</div>}
@@ -388,9 +388,11 @@ export default function EmployeeOnboardingPage() {
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* Date of birth is the only identity gate — the last-4-SSN option went with the
+                      rest of the SSN data (mig 908). Kept as a select so adding a future gate is a
+                      one-line change rather than a re-layout. */}
                   <select style={inp} value={gen.kind} onChange={e => setGen(g => ({ ...g, kind: e.target.value, value: '' }))}>
                     <option value="dob">Verify by date of birth</option>
-                    <option value="ssn4">Verify by last-4 SSN</option>
                   </select>
                   {gen.kind === 'dob'
                     ? <input style={inp} type="date" value={gen.value} onChange={e => setGen(g => ({ ...g, value: e.target.value }))} />

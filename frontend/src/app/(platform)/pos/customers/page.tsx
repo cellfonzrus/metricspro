@@ -3,7 +3,6 @@
 // data access rewired from direct Supabase to the FastAPI /pos router).
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
-import { useAuth } from '@/lib/auth-context'
 
 interface Customer {
   id: string
@@ -14,7 +13,6 @@ interface Customer {
   last_name: string | null
   middle_initial: string | null
   dob: string | null
-  driver_license_state: string | null
   primary_account_no: string | null
   password: string | null
   email: string | null
@@ -61,7 +59,6 @@ const emptyForm = {
   last_name: '',
   middle_initial: '',
   dob: '',
-  driver_license_state: '',
   primary_account_no: '',
   password: '',
   email: '',
@@ -84,7 +81,6 @@ const cell: React.CSSProperties = { padding: '7px 12px', borderBottom: '1px soli
 const panel: React.CSSProperties = { background: 'var(--surface2)', borderRadius: 8, padding: 14, border: '1px solid var(--border)' }
 
 export default function PosCustomersPage() {
-  const { permissions } = useAuth()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -103,18 +99,9 @@ export default function PosCustomersPage() {
   const [notesError, setNotesError] = useState('')
   const [savingNote, setSavingNote] = useState(false)
   const [listError, setListError] = useState('')
-  // PII (SSN / driver license) lives outside the customers table — dedicated endpoints only
-  const [piiForm, setPiiForm] = useState({ ssn: '', driver_license_num: '' })
-  const [piiDirty, setPiiDirty] = useState({ ssn: false, dl: false })
-  const [piiLast4, setPiiLast4] = useState<{ ssn_last4: string | null, dl_last4: string | null } | null>(null)
-  const [revealedPii, setRevealedPii] = useState<{ ssn: string | null, driver_license_num: string | null } | null>(null)
-  const [piiError, setPiiError] = useState('')
-  const [revealing, setRevealing] = useState(false)
-
-  // Mirrors the backend gate (_require_pos_perm): explicit pos_view_pii grant, or org-wide scope
-  // (which is also the default when scope is unset). The server re-checks — this only hides the button.
-  const p = permissions as Record<string, unknown>
-  const canViewPii = p?.pos_view_pii === true || String(p?.scope ?? 'all') === 'all'
+  // SSN and driver's licence are no longer part of this product (mig 908, owner directive). There
+  // is no capture field, no reveal, no masked last-4 and no stored value — the columns, the access
+  // functions and the encryption key are all gone. Do not add them back without an owner decision.
 
   async function loadCustomers(q = { search, activeOnly }) {
     setLoading(true)
@@ -137,14 +124,7 @@ export default function PosCustomersPage() {
   async function selectCustomer(c: Customer) {
     setSelected(c)
     setDetailTab('Activations History')
-    setRevealedPii(null)
-    setPiiError('')
-    setPiiLast4(null)
     await loadNotes(c.id)
-    try {
-      const pd = await api(`/api/v1/pos/customers/${c.id}/pii-last4`)
-      setPiiLast4(pd || null)
-    } catch { setPiiLast4(null) }
   }
 
   async function loadNotes(customerId: string) {
@@ -156,20 +136,6 @@ export default function PosCustomersPage() {
       setNotesError(`Failed to load notes: ${err?.message || err}`)
       setNotes([])
     }
-  }
-
-  async function revealPii() {
-    if (!selected) return
-    setRevealing(true)
-    setPiiError('')
-    try {
-      const data = await api(`/api/v1/pos/customers/${selected.id}/pii`)
-      setRevealedPii({ ssn: data?.ssn ?? null, driver_license_num: data?.driver_license_num ?? null })
-    } catch (err: any) {
-      const msg = String(err?.message || err)
-      setPiiError(/403|permission|denied|not.?authorized|not allow/i.test(msg) ? 'Not authorized to view full PII' : 'Failed to load PII')
-    }
-    setRevealing(false)
   }
 
   async function saveCustomer() {
@@ -188,46 +154,10 @@ export default function PosCustomersPage() {
         if (!customerId) throw new Error('Create succeeded but no customer id was returned')
       }
 
-      // Only touch stored PII if the user actually typed in the SSN / DL inputs.
-      if (piiDirty.ssn || piiDirty.dl) {
-        const values = {
-          ssn: piiForm.ssn.trim() || null,
-          dl: piiForm.driver_license_num.trim() || null,
-        }
-        let okToSet = true
-        if (editMode) {
-          // The PII endpoint sets both fields at once; an untouched field with stored data
-          // must be backfilled with its current value or it would be cleared.
-          const needsBackfill = (!piiDirty.ssn && !!piiLast4?.ssn_last4) || (!piiDirty.dl && !!piiLast4?.dl_last4)
-          if (needsBackfill) {
-            try {
-              const cur = await api(`/api/v1/pos/customers/${customerId}/pii`)
-              if (!piiDirty.ssn) values.ssn = cur?.ssn ?? null
-              if (!piiDirty.dl) values.dl = cur?.driver_license_num ?? null
-            } catch {
-              okToSet = false
-              alert('SSN and Driver License are stored together. To change one without clearing the other, please enter both values. Your other changes were saved.')
-            }
-          }
-        }
-        if (okToSet) {
-          await api(`/api/v1/pos/customers/${customerId}/pii`, {
-            method: 'POST',
-            body: JSON.stringify({ ssn: values.ssn, driver_license: values.dl }),
-          })
-        }
-      }
 
       setShowForm(false)
       setEditMode(false)
       loadCustomers()
-      if (editMode && selected) {
-        setRevealedPii(null)
-        try {
-          const pd = await api(`/api/v1/pos/customers/${selected.id}/pii-last4`)
-          setPiiLast4(pd || null)
-        } catch { setPiiLast4(null) }
-      }
     } catch (e) {
       console.error(e)
       const msg = e && typeof e === 'object' && 'message' in e ? (e as { message: string }).message : 'Unknown error'
@@ -257,8 +187,6 @@ export default function PosCustomersPage() {
 
   function openNew() {
     setFormData({ ...emptyForm })
-    setPiiForm({ ssn: '', driver_license_num: '' })
-    setPiiDirty({ ssn: false, dl: false })
     setFormTab('General')
     setEditMode(false)
     setShowForm(true)
@@ -288,7 +216,6 @@ export default function PosCustomersPage() {
       last_name: full.last_name || '',
       middle_initial: full.middle_initial || '',
       dob: full.dob || '',
-      driver_license_state: full.driver_license_state || '',
       primary_account_no: full.primary_account_no || '',
       password: full.password || '',
       email: full.email || '',
@@ -304,9 +231,6 @@ export default function PosCustomersPage() {
       accept_checks: full.accept_checks,
       is_active: full.is_active,
     })
-    // Never prefill real PII — inputs stay blank with masked last-4 placeholders
-    setPiiForm({ ssn: '', driver_license_num: '' })
-    setPiiDirty({ ssn: false, dl: false })
     setFormTab('General')
     setEditMode(true)
     setShowForm(true)
@@ -357,7 +281,7 @@ export default function PosCustomersPage() {
         <div className="table-wrapper" style={{ overflowX: 'auto', marginBottom: 14 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1000, fontSize: 13 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
-              {['Cust #','Account Type','Company Name','Last Name','MI','First Name','Primary Account No','DOB','DL State','Phone','Email'].map(h =>
+              {['Cust #','Account Type','Company Name','Last Name','MI','First Name','Primary Account No','DOB','Phone','Email'].map(h =>
                 <th key={h} style={{ textAlign: 'left', padding: 8, fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>)}
             </tr></thead>
             <tbody>
@@ -372,7 +296,6 @@ export default function PosCustomersPage() {
                   <td style={cell}>{c.first_name || ''}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{c.primary_account_no || ''}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{c.dob ? new Date(c.dob).toLocaleDateString() : ''}</td>
-                  <td style={{ ...cell, color: 'var(--text2)' }}>{c.driver_license_state || ''}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{c.phone_primary || ''}</td>
                   <td style={{ ...cell, color: 'var(--text2)' }}>{c.email || ''}</td>
                 </tr>
@@ -382,22 +305,6 @@ export default function PosCustomersPage() {
               )}
             </tbody>
           </table>
-        </div>
-      )}
-
-      {/* PII panel — masked identity info for the selected customer */}
-      {selected && (
-        <div style={{ ...panel, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 20, fontSize: 12, flexWrap: 'wrap' }}>
-          <span style={{ fontWeight: 700 }}>Identity (PII)</span>
-          <span style={{ color: 'var(--text2)' }}>SSN: <strong style={{ color: 'var(--text)', fontWeight: 600 }}>{revealedPii ? (revealedPii.ssn || '—') : piiLast4?.ssn_last4 ? `•••-••-${piiLast4.ssn_last4}` : '—'}</strong></span>
-          <span style={{ color: 'var(--text2)' }}>Driver License: <strong style={{ color: 'var(--text)', fontWeight: 600 }}>{revealedPii ? (revealedPii.driver_license_num || '—') : piiLast4?.dl_last4 ? `•••• ${piiLast4.dl_last4}` : '—'}</strong>{selected.driver_license_state ? ` (${selected.driver_license_state})` : ''}</span>
-          {revealedPii ? (
-            <button className="btn btn-secondary" style={{ fontSize: 11, padding: '3px 12px' }} onClick={() => setRevealedPii(null)}>Hide</button>
-          ) : canViewPii ? (
-            // Hidden entirely without pos_view_pii — the endpoint would deny anyway
-            <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 12px', cursor: revealing ? 'wait' : 'pointer', opacity: revealing ? 0.7 : 1 }} disabled={revealing} onClick={revealPii}>{revealing ? 'Revealing…' : 'Reveal'}</button>
-          ) : null}
-          {piiError && <span style={{ color: '#dc2626' }}>{piiError}</span>}
         </div>
       )}
 
@@ -523,9 +430,8 @@ export default function PosCustomersPage() {
                     <div><label style={label}>Last Name</label><input value={formData.last_name} onChange={e => setFormData(f => ({ ...f, last_name: e.target.value }))} style={input} /></div>
                   </div>
 
-                  {/* SSN / DOB */}
+                  {/* Date of birth */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div><label style={label}>SSN</label><input value={piiForm.ssn} placeholder={editMode && piiLast4?.ssn_last4 ? `•••-••-${piiLast4.ssn_last4}` : '___-__-____'} onChange={e => { const v = e.target.value; setPiiForm(f => ({ ...f, ssn: v })); setPiiDirty(d => ({ ...d, ssn: true })) }} style={input} /></div>
                     <div><label style={label}>Date of Birth</label><input type="date" value={formData.dob} onChange={e => setFormData(f => ({ ...f, dob: e.target.value }))} style={input} /></div>
                   </div>
 
@@ -535,15 +441,8 @@ export default function PosCustomersPage() {
                     <div><label style={label}>Account Password</label><input value={formData.password} onChange={e => setFormData(f => ({ ...f, password: e.target.value }))} style={input} /></div>
                   </div>
 
-                  {/* Driver License */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 1fr', gap: 10 }}>
-                    <div><label style={label}>Driver License No.</label><input value={piiForm.driver_license_num} placeholder={editMode && piiLast4?.dl_last4 ? `•••• ${piiLast4.dl_last4}` : ''} onChange={e => { const v = e.target.value; setPiiForm(f => ({ ...f, driver_license_num: v })); setPiiDirty(d => ({ ...d, dl: true })) }} style={input} /></div>
-                    <div><label style={label}>DL State</label>
-                      <select value={formData.driver_license_state} onChange={e => setFormData(f => ({ ...f, driver_license_state: e.target.value }))} style={input}>
-                        <option value="">--</option>
-                        {US_STATES.map(s => <option key={s}>{s}</option>)}
-                      </select>
-                    </div>
+                  {/* Referral source */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
                     <div><label style={label}>Referral Source</label>
                       <select value={formData.referral_source} onChange={e => setFormData(f => ({ ...f, referral_source: e.target.value }))} style={input}>
                         {REFERRAL_SOURCES.map(s => <option key={s}>{s}</option>)}

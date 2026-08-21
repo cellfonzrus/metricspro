@@ -32,7 +32,6 @@ function extLooksAllowed(name: string, formats?: string[]): boolean {
 
 export default function PublicOnboardPage() {
   const { token } = useParams<{ token: string }>()
-  const [kind, setKind] = useState<string>('dob')
   const [value, setValue] = useState('')
   const [verified, setVerified] = useState(false)
   const [first, setFirst] = useState('')
@@ -66,7 +65,10 @@ export default function PublicOnboardPage() {
   useEffect(() => {
     fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}`)
       .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j)))
-      .then(d => setKind(d.verify_kind || 'dob'))
+      // The response is not read: date of birth is the only identity gate (mig 908 removed the
+      // last-4-SSN alternative). The call still runs because its REJECTION is what tells the
+      // employee the link is invalid or expired — see the catch below.
+      .then(() => {})
       .catch(j => setErr(j?.detail || 'This onboarding link is invalid or has expired. Ask HR for a new QR code.'))
   }, [token])
 
@@ -203,10 +205,8 @@ export default function PublicOnboardPage() {
       {!verified ? (
         <div style={card}>
           <h2 style={{ fontSize: 16, fontWeight: 700, marginTop: 0 }}>Confirm it&apos;s you</h2>
-          <p style={{ color: '#475569', fontSize: 14 }}>For your security, enter your {kind === 'ssn4' ? 'last 4 digits of SSN' : 'date of birth'} to continue.</p>
-          {kind === 'ssn4'
-            ? <input style={inp} inputMode="numeric" maxLength={4} placeholder="1234" value={value} onChange={e => setValue(e.target.value.replace(/\D/g, ''))} />
-            : <input style={inp} type="date" value={value} onChange={e => setValue(e.target.value)} />}
+          <p style={{ color: '#475569', fontSize: 14 }}>For your security, enter your date of birth to continue.</p>
+          <input style={inp} type="date" value={value} onChange={e => setValue(e.target.value)} />
           <button style={{ ...btnP, marginTop: 14, width: '100%', opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={loadChecklist}>{busy ? 'Checking…' : 'Continue'}</button>
         </div>
       ) : (

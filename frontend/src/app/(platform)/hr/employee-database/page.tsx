@@ -11,9 +11,10 @@ import type { EntityOption } from '@/components/EntityPicker'
 // HR · Employee Database (owner directive 2026-07-29) — one exportable row per employee across the
 // StoreOps roster + HR onboarding intake + the Documents board. See the backend docstring
 // (backend/app/modules/hr/router.py, "EMPLOYEE DATABASE report") for the full field-by-field
-// investigation of what's actually collected vs. designed-but-absent (SSN).
+// investigation of what's actually collected. SSN is not among it: the platform holds none, and
+// the placeholder column that used to render "(not collected)" was removed with mig 908.
 //
-// PII SAFETY (server-side, never client-only): SSN + direct-deposit routing/account numbers come
+// PII SAFETY (server-side, never client-only): direct-deposit routing/account numbers come
 // back from `/hr/employee-database` ALREADY masked (last 4 real, rest 'x') unless this page asks
 // for `reveal=true` — and the backend re-checks admin/super-admin status on EVERY such call,
 // regardless of what this page's local `isAdmin` guess says. Hiding the toggle for a non-admin here
@@ -39,7 +40,7 @@ type EmpRow = { employee_id: string; [k: string]: any }
 
 const SECTION_LABELS: Record<string, string> = {
   identity: 'Identity', contact: 'Contact', address: 'Address', personal: 'Personal',
-  sensitive: 'Sensitive (SSN)', direct_deposit: 'Direct Deposit', onboarding: 'Onboarding / Documents',
+  sensitive: 'Sensitive', direct_deposit: 'Direct Deposit', onboarding: 'Onboarding / Documents',
 }
 const SECTION_ORDER = ['identity', 'contact', 'address', 'personal', 'sensitive', 'direct_deposit', 'onboarding']
 
@@ -182,7 +183,7 @@ export default function EmployeeDatabasePage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗄️ Employee Database</h1>
       <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 14 }}>
         Every employee record collected across the roster + HR onboarding intake, in one exportable table.
-        SSN and direct-deposit numbers are masked to the last 4 digits by default — see the notice below.
+        Direct-deposit numbers are masked to the last 4 digits by default — see the notice below.
       </p>
       {msg && <div style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#9a3412', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 14 }}>{msg}</div>}
 
@@ -199,7 +200,7 @@ export default function EmployeeDatabasePage() {
 
         {anySensitiveSelected && (
           <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span>🔒 SSN and direct-deposit routing/account numbers are masked to the last 4 digits by default.</span>
+            <span>🔒 Direct-deposit routing/account numbers are masked to the last 4 digits by default.</span>
             {isAdminUI ? (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
                 <input type="checkbox" checked={revealOn} disabled={revealBusy} onChange={e => onToggleReveal(e.target.checked)} />

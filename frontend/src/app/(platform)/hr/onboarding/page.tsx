@@ -322,7 +322,7 @@ export default function OnboardingAdminPage() {
                 </select></label>
               <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!fedit.required} onChange={e => fupd({ required: e.target.checked })} /> Required</label>
-                <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!fedit.sensitive} onChange={e => fupd({ sensitive: e.target.checked })} /> Private (bank/SSN — never shown back)</label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!fedit.sensitive} onChange={e => fupd({ sensitive: e.target.checked })} /> Private (bank details — never shown back)</label>
               </div>
               {fedit.id && <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={fedit.is_active !== false} onChange={e => fupd({ is_active: e.target.checked })} /> Active</label>}
             </div>

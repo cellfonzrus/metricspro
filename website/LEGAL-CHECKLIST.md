@@ -84,16 +84,27 @@ plaintiff will argue your calculation caused the shortfall.
       provider — in marketing copy, in a demo, or in an email. **A sales promise can override a
       contract disclaimer.**
 
-### 4. Data breach involving identifiers
+### 4. Data breach involving identifiers — **resolved**
 
-The POS stores the **last four digits** of Social Security numbers and driver's licences. Partial
-identifiers are lower-risk than full ones, but SSN and DL are exactly the categories that trigger
-state breach-notification statutes, and all fifty states have one.
+**This exposure has been removed.** Migration 908 erased and dropped every SSN and driver's licence
+field, and the code that captured, stored, decrypted and displayed them is gone.
 
-- [ ] Confirm you actually need last-4 SSN at the counter. If not, stop collecting it — this is the
-      single cleanest way to shrink this exposure.
+A correction to what I first told you: the POS held **full** SSNs and **full** driver's licence
+numbers, encrypted, not merely the last four digits. The last-4 was only what the screen displayed.
+So the exposure being closed here was larger than my first note described — these are precisely the
+categories that trigger the breach-notification statutes all fifty states have, and holding them in
+volume is what turns one incident into fifty notification obligations.
+
+The strongest possible position on a category of data is not to hold it, and that is now the
+position. Keep it:
+
+- [ ] Do not reintroduce SSN or licence capture without a specific, advised business reason. If a
+      carrier ever demands proof of an identity check, ask exactly what they need retained before
+      building storage for it — a signature or a checkbox is often sufficient, and neither triggers
+      a notification statute.
 - [ ] Keep the incident-response plan in `docs/INCIDENT_RESPONSE_PLAN.md` current and know who calls
-      the lawyer.
+      the lawyer. Employee and customer data still lives in the platform; this removes one category,
+      not the duty.
 - [ ] Consider **cyber liability insurance**. For a platform holding employee and customer data, this
       is ordinary cost of business, and it pays for the lawyer you would otherwise pay for yourself.
 
