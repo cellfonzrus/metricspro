@@ -5,7 +5,7 @@
 // disabled the button, and the operator — looking at a blank form holding a project id the server
 // had stored minutes earlier — reported that it does not save. Both decisions below now read the
 // SERVER's state, not the form's, and the round trip finishes itself.
-import { idsBlocker, authorizeBlocker, oauthReturn, syncMessage } from './src/lib/vision.ts'
+import { idsBlocker, authorizeBlocker, oauthReturn, syncMessage, storeOptions, withCurrent } from './src/lib/vision.ts'
 
 let pass = 0, fail = 0
 const eq = (name, got, want) => {
@@ -106,6 +106,47 @@ eq('url-encoded code is decoded once', oauthReturn('?code=4%2F0Ab'), { code: '4/
   // Missing counters must not surface as "undefined" in front of an operator.
   const sparse = syncMessage({ found: 1 })
   check('absent added/updated render as 0, never undefined', !sparse.includes('undefined'))
+}
+
+// ── storeOptions / withCurrent: assign a store, never type one ─────────────────────────────────
+// A typed store code does not fail loudly — it saves, and that camera's customers are counted
+// against a store that does not exist. The traffic never shows up and nothing says why.
+{
+  const rows = [
+    { store_code: 'BOOST-02', address: 'Elm St', is_active: true },
+    { store_code: 'BOOST-01', address: 'Main St' },
+    { store_code: 'CLOSED-9', address: 'Old Rd', is_active: false },
+    { store_code: '  ', address: 'blank' },
+    { store_code: 'BOOST-01', address: 'duplicate row' },
+    { address: 'no code at all' },
+  ]
+  const o = storeOptions(rows)
+  eq('closed, blank and duplicate stores are dropped', o.map(x => x.code), ['BOOST-01', 'BOOST-02'])
+  eq('the label carries the address so two codes are tellable apart',
+    o[0].label, 'BOOST-01 — Main St')
+  eq('a missing is_active is treated as active', o.some(x => x.code === 'BOOST-02'), true)
+
+  eq('an object response is unwrapped too',
+    storeOptions({ stores: [{ store_code: 'A' }] }).map(x => x.code), ['A'])
+  eq('null is not a crash', storeOptions(null), [])
+  eq('undefined is not a crash', storeOptions(undefined), [])
+  eq('a junk response is not a crash', storeOptions({}), [])
+  eq('a code with no address labels as just the code', storeOptions([{ store_code: 'X' }])[0].label, 'X')
+  eq('an address equal to the code is not doubled up',
+    storeOptions([{ store_code: 'X', address: 'X' }])[0].label, 'X')
+
+  // THE ONE THAT MATTERS. A camera set to a store that has since closed must still show what it is
+  // set to. Dropping it would re-label the camera as unassigned the moment anyone opened the page,
+  // and the first symptom would be traffic quietly going missing.
+  const opts = withCurrent(o, 'CLOSED-9')
+  eq('a value outside the list is kept, not silently dropped',
+    opts.map(x => x.code), ['BOOST-01', 'BOOST-02', 'CLOSED-9'])
+  eq('and it is labelled so the operator knows why it looks odd',
+    opts[2].label, 'CLOSED-9 — not in the store list')
+  eq('a value already in the list is not duplicated',
+    withCurrent(o, 'BOOST-01').map(x => x.code), ['BOOST-01', 'BOOST-02'])
+  eq('no value leaves the list alone', withCurrent(o, null), o)
+  eq('a blank value leaves the list alone', withCurrent(o, '   '), o)
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

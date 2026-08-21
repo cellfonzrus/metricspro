@@ -256,3 +256,45 @@ export function syncMessage(r: SyncResult): string {
   return `Synced ${kept} camera(s): ${r.added || 0} new, ${r.updated || 0} updated.`
     + (skipped ? ` Skipped ${where} — connect the home in section 3b to include them.` : '')
 }
+
+// ── Stores: pick one, never type one ────────────────────────────────────────────────────────────
+// A store code typed by hand does not fail loudly. It saves, and then that camera's customers are
+// counted against a store that does not exist — the traffic simply never appears in a report and
+// nothing anywhere says why. Assigning from the company's real store list removes the whole class.
+export interface StoreOption { code: string; label: string }
+
+interface StoreRow {
+  store_code?: string | null
+  address?: string | null
+  name?: string | null
+  is_active?: boolean
+}
+
+/** The active, usable stores out of whatever /storeops/stores returned, in a stable order. */
+export function storeOptions(rows: StoreRow[] | { stores?: StoreRow[] } | null | undefined): StoreOption[] {
+  const list: StoreRow[] = Array.isArray(rows) ? rows : (rows?.stores || [])
+  const seen = new Set<string>()
+  const out: StoreOption[] = []
+  for (const r of list) {
+    const code = String(r?.store_code || '').trim()
+    // A closed store must not gain new cameras, the same rule the HR pages apply to new hires.
+    if (!code || r?.is_active === false || seen.has(code)) continue
+    seen.add(code)
+    const name = String(r?.address || r?.name || '').trim()
+    out.push({ code, label: name && name !== code ? `${code} — ${name}` : code })
+  }
+  return out.sort((a, b) => a.code.localeCompare(b.code))
+}
+
+/**
+ * The options to show for a field currently holding `value`.
+ *
+ * A camera assigned to a store that has since closed — or to a code typed before this dropdown
+ * existed — must still show what it is set to. Dropping it would silently re-label the camera as
+ * unassigned the next time anyone opened the page, and the first sign would be missing traffic.
+ */
+export function withCurrent(stores: StoreOption[], value?: string | null): StoreOption[] {
+  const cur = String(value || '').trim()
+  if (!cur || stores.some(s => s.code === cur)) return stores
+  return [...stores, { code: cur, label: `${cur} — not in the store list` }]
+}
