@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -29,7 +30,7 @@ export default function ShiftSwapsPage() {
     setLoading(true)
     Promise.all([
       api('/api/v1/storeops/shift-swaps').catch(() => []),
-      api('/api/v1/storeops/employees').catch(() => []),
+      apiCached('/api/v1/storeops/employees', LOOKUP).catch(() => []),
       api(`/api/v1/storeops/shifts?week_start=${win.start}&week_end=${win.end}`).catch(() => []),
     ]).then(([sw, e, sh]) => { setSwaps(sw || []); setEmps(e || []); setShifts(sh || []) })
       .catch(console.error).finally(() => setLoading(false))

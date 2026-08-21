@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { api, apiUpload } from '@/lib/client'
+import { apiCached, LOOKUP, invalidateApiCache } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import EntityPicker from '@/components/EntityPicker'
@@ -37,7 +38,7 @@ export default function OnboardingWizard() {
   const [repAdd, setRepAdd] = useState({ report_key: '', label: '', target_table: '', source_name: '', upload_endpoint: '', source_url: '', period_mode: 'data' })
 
   const loadCompanies = useCallback(() => api('/api/v1/account/companies').then((d: any) => setCompanies(d?.companies || d || [])).catch(() => {}), [])
-  const loadCarriers = useCallback(() => api('/api/v1/commcalc/carriers').then((c: any) => setCarriers(c || [])).catch(() => {}), [])
+  const loadCarriers = useCallback(() => apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => setCarriers(c || [])).catch(() => {}), [])
   const loadConnectors = useCallback(() => api('/api/v1/commcalc/connectors').then((c: any) => setConnectors(c || [])).catch(() => {}), [])
   useEffect(() => { loadCompanies(); loadCarriers(); loadConnectors() }, [loadCompanies, loadCarriers, loadConnectors])
 
@@ -50,7 +51,7 @@ export default function OnboardingWizard() {
   }
   async function addCarrier() {
     if (!carAdd.name.trim()) { setMsg('Carrier name required.'); return }
-    try { const r: any = await api('/api/v1/commcalc/carriers', { method: 'POST', body: JSON.stringify(carAdd) }); setCarAdd({ name: '', code: '' }); await loadCarriers(); if (r?.id) setCarrierId(r.id); setMsg('✅ Carrier added.') } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    try { const r: any = await api('/api/v1/commcalc/carriers', { method: 'POST', body: JSON.stringify(carAdd) }); invalidateApiCache('/api/v1/commcalc/carriers'); setCarAdd({ name: '', code: '' }); await loadCarriers(); if (r?.id) setCarrierId(r.id); setMsg('✅ Carrier added.') } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   async function addConnector() {
     if (!connAdd.vendor_name.trim()) { setMsg('Vendor name required.'); return }

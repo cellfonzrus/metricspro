@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useRef } from 'react'
 import { api, apiUpload, fmt, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
@@ -108,7 +109,7 @@ export default function AssetPage() {
   }
 
   useEffect(() => {
-    api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
+    apiCached(`/api/v1/asset/filter-options?org_id=${ORG_ID}`, LOOKUP)
       .then((d:any) => { setMarkets(d.markets||[]); setStores(d.stores||[]); setNoMarketCount(d.no_market_count||0) }).catch(console.error)
   }, [])
   // Reload summary (and reset any open drill-down) whenever a filter changes.

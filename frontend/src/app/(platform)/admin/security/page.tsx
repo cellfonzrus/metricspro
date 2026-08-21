@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { apiCached, CONFIG } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
 import PhoneInput from '@/components/PhoneInput'
 
@@ -81,7 +82,7 @@ export default function SecuritySettingsPage() {
       setHardMax(s.hard_max || 128); setChannels(s.channels_status || {})
     } catch (e: any) { setMsg('Could not load security settings: ' + (e?.message || e)) }
     try {
-      const r = await api('/api/v1/core/roles')
+      const r = await apiCached('/api/v1/core/roles', CONFIG)
       setRoles((r.roles || []).map((x: any) => ({ name: x.name, display_name: x.display_name })))
     } catch { /* roles optional */ }
     try {

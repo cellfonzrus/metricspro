@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, ORG_ID, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
 import PortalReports from '@/components/PortalReports'
@@ -32,7 +33,7 @@ export default function EmployeeDashboardPage() {
   // Scope the picker to the caller's role (self→just them, store→their store, market/DM→their stores,
   // admin→everyone) and DEFAULT to the logged-in employee's own dashboard, not a stranger.
   useEffect(() => {
-    api('/api/v1/storeops/employees/visible').then((d: any) => {
+    apiCached('/api/v1/storeops/employees/visible', LOOKUP).then((d: any) => {
       const list = (d?.employees || []).filter((e: any) => e.employee_id)
       setEmps(list)
       const mine = d?.employee_id || user?.employee_id || ''

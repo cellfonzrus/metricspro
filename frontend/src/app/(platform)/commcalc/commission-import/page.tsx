@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api, apiUpload } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 
 // Commission Import Wizard (SAP-style, self-extending). Upload ANY carrier's commission file, then tell the
@@ -42,7 +43,7 @@ export default function CommissionImportWizard() {
   const [nfOpen, setNfOpen] = useState(false)
   const [nf, setNf] = useState<NewField>({ tempId: '', label: '', kind: 'spiff', data_type: 'number', is_amount: true, month_index: null })
 
-  useEffect(() => { api('/api/v1/commcalc/carriers').then((r: any) => setCarriers(r || [])).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/commcalc/carriers', LOOKUP).then((r: any) => setCarriers(r || [])).catch(() => {}) }, [])
 
   async function analyze(f: File) {
     setBusy(true); setMsg(''); setFile(f)

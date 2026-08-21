@@ -21,6 +21,7 @@
 // over the tenant's own commcalc.carrier list.
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { friendlyError, storeLabel } from '@/components/pos/PosConfigSection'
 import type { PosStore } from '@/components/pos/PosConfigSection'
 
@@ -84,7 +85,7 @@ export default function DealerCodesSection({ stores }: Props) {
 
   useEffect(() => {
     loadDealerCodes().then(() => setLoading(false))
-    api('/api/v1/commcalc/carriers')
+    apiCached('/api/v1/commcalc/carriers', LOOKUP)
       .then((d: any) => setCarriers(Array.isArray(d) ? d : []))
       .catch(() => setCarriers([]))
   }, [loadDealerCodes])

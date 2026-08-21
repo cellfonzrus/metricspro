@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MultiSelect } from '@/lib/multiselect'
@@ -53,7 +54,7 @@ export default function OwedWeeklyPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
+    apiCached(`/api/v1/asset/filter-options?org_id=${ORG_ID}`, LOOKUP)
       .then((d:any) => { setMarkets(d.markets || []); setStores(d.stores || []) })
       .catch(console.error)
   }, [])

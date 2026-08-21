@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
@@ -42,7 +43,7 @@ export default function StoreCashOnHandPage() {
   const [err, setErr] = useState('')
   const [pStores, setPStores] = useState<any[]>([])
 
-  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
   const storesForCascade: StoreOpt[] = useMemo(
     () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, market: s.market || null })),
     [pStores])

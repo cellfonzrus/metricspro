@@ -5,6 +5,7 @@
 // disambiguation via EntityPicker), never free text.
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
 
 type Template = { template_key: string; category: string; escalation_tier: number | null; label: string; active: boolean; delivery_mode: string }
@@ -36,7 +37,7 @@ export default function SendLetterPage() {
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    api('/api/v1/storeops/employees?all_company=true').then(setEmps).catch(() => setEmps([]))
+    apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then(setEmps).catch(() => setEmps([]))
     api('/api/v1/hr/letters/templates').then(d => { setTemplates(d.templates || []); setCategories(d.categories || {}) }).catch(() => {})
     // RULE THREE (§3b): Period is pick-don't-type over the org's REAL rep_commissions periods —
     // there's nothing to communicate about a period that hasn't been calculated yet anyway.

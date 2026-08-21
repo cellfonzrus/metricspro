@@ -4,6 +4,7 @@
 // 8 implemented reports; everything else in the catalog shows a "not built yet" notice.
 import { useEffect, useState } from 'react'
 import { api, fmt } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { serializeCsv, type CsvCell } from '@/lib/pos-csv'
 
 interface Kpis {
@@ -187,8 +188,8 @@ export default function PosReportsPage() {
   async function loadFilterOptions() {
     const problems: string[] = []
     const [storesRes, empRes] = await Promise.all([
-      api('/api/v1/storeops/stores').catch((e: any) => { problems.push(`stores: ${e?.message || e}`); return null }),
-      api('/api/v1/storeops/employees').catch((e: any) => { problems.push(`employees: ${e?.message || e}`); return null }),
+      apiCached('/api/v1/storeops/stores', LOOKUP).catch((e: any) => { problems.push(`stores: ${e?.message || e}`); return null }),
+      apiCached('/api/v1/storeops/employees', LOOKUP).catch((e: any) => { problems.push(`employees: ${e?.message || e}`); return null }),
     ])
     if (Array.isArray(storesRes)) {
       setStoresList(storesRes.filter((s: any) => s.store_code).map((s: any) => ({

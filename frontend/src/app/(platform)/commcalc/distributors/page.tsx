@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 
 // Distributors — who a tenant sources devices/inventory from. "VIP" is just one. Each distributor has
 // an ARRANGEMENT: terms (net credit 14/21/30/45/60), consignment (lent devices billed on a cycle =
@@ -32,7 +33,7 @@ export default function DistributorsPage() {
 
   async function load() {
     try {
-      setCarriers(await api('/api/v1/commcalc/carriers').catch(() => []))
+      setCarriers(await apiCached('/api/v1/commcalc/carriers', LOOKUP).catch(() => []))
       const r = await api('/api/v1/commcalc/distributors')
       setDists(r.distributors || []); setReady(r.ready !== false)
       if (r.ready === false) setMsg(r.note || 'Run migration 058 to enable.')

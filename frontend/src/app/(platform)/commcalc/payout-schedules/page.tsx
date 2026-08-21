@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, apiUpload, fmt } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
 import RunCommissionButton from '../_lib/RunCommissionButton'
 
@@ -46,8 +47,12 @@ export default function PayoutSchedulesPage() {
 
   async function load() {
     try {
-      setCarriers(await api('/api/v1/commcalc/carriers').catch(() => []))
-      const r = await api('/api/v1/commcalc/payout-schedule')
+      // Independent reads → one round trip. carriers is a cache-served reference list (LOOKUP).
+      const [carr, r] = await Promise.all([
+        apiCached('/api/v1/commcalc/carriers', LOOKUP).catch(() => []),
+        api('/api/v1/commcalc/payout-schedule'),
+      ])
+      setCarriers(carr)
       setScheds(r.schedules || []); setReady(r.ready !== false)
       if (r.ready === false) setMsg(r.note || 'Run migration 057 to enable.')
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }

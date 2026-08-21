@@ -1,5 +1,5 @@
 'use client'
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken,
          onSessionInvalid, clearSessionInvalid,
@@ -482,8 +482,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
     const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
       if (!mounted) return
-      // Always mirror the live session (keeps the token/session state fresh for every listener).
-      setSession(sess)
+      // Mirror the live session, but keep the SAME object reference when the token is unchanged so a
+      // same-identity re-fire (visibilitychange SIGNED_IN, hourly TOKEN_REFRESHED — supabase hands a
+      // brand-new session object each time) does not bump `session`'s reference and re-render every
+      // useAuth() consumer. A real token change (login, refresh to a new token) still updates it.
+      setSession((prev: any) => (prev?.access_token === sess?.access_token ? prev : sess))
       const uid = sess?.user?.id ?? null
       // DO NOT flash the whole app into the loading splash — or re-run the heavy profile bootstrap —
       // for an event that carries the SAME already-loaded identity (see authEventNeedsReload): the
@@ -573,16 +576,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const visiblePending = pendingConnections.filter(p => !dismissed.includes(p.org_id))
   const needs2fa = !!twofa.required && !twofa.verified
 
+  // Memoize the context value so a same-identity auth re-fire (which no longer changes `session`'s
+  // reference) does not hand every useAuth() consumer a brand-new value object and force a re-render.
+  // Keyed on every state field it exposes plus the stable callbacks; visiblePending/needs2fa are
+  // derived from listed deps, so recomputing them here is correct.
+  const value = useMemo<AuthState>(() => ({
+    loading, session, user, permissions, carriers, provisioned, active, tenant,
+    token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
+    switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
+    dismissPending, twofa, needs2fa, rbacEnabled, sessionInvalid,
+    passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
+    impersonation, impersonationInfo, startImpersonation, stopImpersonation, unlockClockPunch,
+    signOut, refresh,
+  }), [
+    loading, session, user, permissions, carriers, provisioned, active, tenant,
+    tenants, activeOrg, needsTenantChoice, visiblePending, twofa, needs2fa, rbacEnabled,
+    sessionInvalid, passwordPolicy, defaultCc, impersonation, impersonationInfo,
+    switchTenant, connectTenant, disableAndSwitch, dismissPending, startTwoFactor, verifyTwoFactor,
+    startImpersonation, stopImpersonation, unlockClockPunch, signOut, refresh,
+  ])
+
   return (
-    <Ctx.Provider value={{
-      loading, session, user, permissions, carriers, provisioned, active, tenant,
-      token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
-      switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
-      dismissPending, twofa, needs2fa, rbacEnabled, sessionInvalid,
-      passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
-      impersonation, impersonationInfo, startImpersonation, stopImpersonation, unlockClockPunch,
-      signOut, refresh,
-    }}>
+    <Ctx.Provider value={value}>
       {children}
     </Ctx.Provider>
   )

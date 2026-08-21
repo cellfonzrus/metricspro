@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { api, apiUpload, apiDownload, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import EntityPicker from '@/components/EntityPicker'
 
@@ -23,7 +24,7 @@ export default function ImplementationWizard() {
   const [readiness, setReadiness] = useState<any>(null)
   const [msg, setMsg] = useState('')
 
-  useEffect(() => { api('/api/v1/commcalc/carriers').then((c: any) => setCarriers(c || [])).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => setCarriers(c || [])).catch(() => {}) }, [])
   const loadReadiness = useCallback(() => {
     api(`/api/v1/commcalc/column-mapping/readiness?org_id=${ORG_ID}${carrierId ? `&carrier_id=${carrierId}` : ''}`)
       .then(setReadiness).catch(() => setReadiness(null))

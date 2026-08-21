@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -33,7 +34,7 @@ export default function ExpensesReportPage() {
   // `store_code`, no market column at all — joined here from the same org-scoped `/closing/stores`
   // roster this module already calls elsewhere, not a new kind of read.
   const [pStores, setPStores] = useState<any[]>([])
-  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
   const marketByCode = useMemo(() => {
     const m: Record<string, string> = {}
     for (const s of pStores) if (s.store_code && s.market) m[s.store_code] = s.market

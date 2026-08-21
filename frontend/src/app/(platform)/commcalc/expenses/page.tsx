@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 import { TrendChart } from '@/components/TrendChart'
 import { useColumnResize, ResizeHandle } from '@/lib/col-resize'
@@ -251,7 +252,7 @@ export default function ExpensesPage() {
     setLoading(true)
     const mo = periodToMonth(period)
     Promise.all([
-      api('/api/v1/storeops/stores').catch(() => []),
+      apiCached('/api/v1/storeops/stores', LOOKUP).catch(() => []),
       api(`/api/v1/commcalc/expenses/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({ expenses: [] })),
       mo ? api(`/api/v1/storeops/payroll-by-store?month=${mo}&org_id=${ORG_ID}`).catch(() => ({ stores: [] })) : Promise.resolve({ stores: [] }),
       api(`/api/v1/commcalc/commission-by-store/${encodeURIComponent(period)}?org_id=${ORG_ID}`).catch(() => ({ commission_by_store: {} })),

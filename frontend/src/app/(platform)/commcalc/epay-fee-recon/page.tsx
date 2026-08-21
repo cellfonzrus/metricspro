@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { MarketStorePicker, type StoreOpt } from '@/components/MarketStorePicker'
@@ -57,7 +58,7 @@ export default function EpayFeeReconPage() {
   }
   useEffect(() => { load() }, [dateFrom, dateTo, tolerance])
   useEffect(() => {
-    api('/api/v1/closing/stores')
+    apiCached('/api/v1/closing/stores', LOOKUP)
       .then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || [])))
       .catch(() => {})
   }, [])

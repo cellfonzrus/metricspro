@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 
 // Cash-management configuration (mig 089): the daily-closing deadline + gate, the assigned closer
 // per store (only they are blocked from clocking out until the store closing is in), the cash-aging
@@ -45,8 +46,8 @@ export default function CashConfigPage() {
     load()
     loadDepCfg()
     loadCbPolicy()
-    api('/api/v1/storeops/employees').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
-    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : (r?.stores || []))).catch(() => {})
+    apiCached('/api/v1/storeops/employees', LOOKUP).then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
+    apiCached('/api/v1/storeops/stores', LOOKUP).then((r: any) => setStores(Array.isArray(r) ? r : (r?.stores || []))).catch(() => {})
   }, [load, loadDepCfg, loadCbPolicy])
 
   async function saveDepCfg(match_target: string) {

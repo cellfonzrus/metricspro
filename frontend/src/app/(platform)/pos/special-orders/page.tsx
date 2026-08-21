@@ -11,6 +11,7 @@
 // (→ revenue) and the vendor cost the line's cost (→ COGS); profit derives automatically.
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { getActiveStore } from '@/lib/pos-store'
 import { useAuth } from '@/lib/auth-context'
 
@@ -78,7 +79,7 @@ export default function SpecialOrdersPage() {
   const [statusFilter, setStatusFilter] = useState('')
 
   useEffect(() => {
-    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    apiCached('/api/v1/storeops/stores', LOOKUP).then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])
   useEffect(() => {
     const s = getActiveStore() || user?.store_code || ''

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -41,7 +42,7 @@ export default function XTenderReconPage() {
   // Canonical, org-scoped store→market lookup (pick-don't-type §3b) — the same endpoint this module
   // already calls elsewhere (closing/page.tsx), not a new backend read.
   const [pStores, setPStores] = useState<any[]>([])
-  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {}) }, [])
   const marketByKey = useMemo(() => {
     const m: Record<string, string> = {}
     for (const s of pStores) {

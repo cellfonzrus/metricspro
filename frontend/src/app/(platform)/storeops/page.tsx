@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import Link from 'next/link'
 
 function weekRange() {
@@ -33,8 +34,8 @@ export default function StoreOpsDashboard() {
 
   useEffect(() => {
     Promise.all([
-      api('/api/v1/storeops/employees').catch(() => []),
-      api('/api/v1/storeops/stores').catch(() => []),
+      apiCached('/api/v1/storeops/employees', LOOKUP).catch(() => []),
+      apiCached('/api/v1/storeops/stores', LOOKUP).catch(() => []),
       api('/api/v1/storeops/time-off').catch(() => []),
       api(`/api/v1/storeops/shifts?week_start=${wk.start}&week_end=${wk.end}`).catch(() => []),
     ]).then(([e, s, t, sh]) => { setEmps(e || []); setStores(s || []); setTimeoff(t || []); setShifts(sh || []) })

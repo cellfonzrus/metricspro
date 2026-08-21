@@ -11,6 +11,7 @@
 // the Sales Tax rule (the `tax_applied_on` key) always read the same data.
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import type { PosSettingRow } from '@/lib/pos-config'
 import PosConfigSection, { type PosStore } from '@/components/pos/PosConfigSection'
 import TaxCodesSection from '@/components/pos/TaxCodesSection'
@@ -35,7 +36,7 @@ export default function PosSettingsPage() {
     (async () => {
       const problems: string[] = []
       try {
-        const s = await api('/api/v1/storeops/stores')
+        const s = await apiCached('/api/v1/storeops/stores', LOOKUP)
         setStores(Array.isArray(s) ? (s as PosStore[]) : [])
       } catch (err: any) { problems.push(`stores: ${err?.message || err}`) }
       try {

@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
   idsBlocker, authorizeBlocker, oauthReturn, syncMessage, storeOptions, withCurrent, type EdgeAgent,
   type GoogleLinkState, type StoreOption,
@@ -51,7 +52,7 @@ export default function VisionSettingsPage() {
       try { setAgents((await api('/api/v1/vision/edge-agents')).agents || []) } catch { setAgents([]) }
       // The company's real stores, so a camera is ASSIGNED rather than typed at. A mistyped code
       // does not error — it silently attributes a store's traffic to a store that does not exist.
-      try { setStores(storeOptions(await api('/api/v1/storeops/stores'))) } catch { setStores(null) }
+      try { setStores(storeOptions(await apiCached('/api/v1/storeops/stores', LOOKUP))) } catch { setStores(null) }
       // Only meaningful once Google is linked; a failure here is not a page failure.
       try { setHomes((await api('/api/v1/vision/structures')).structures || []) } catch { setHomes(null) }
     } catch (e: any) { setErr(visionError(e)) }
