@@ -14,3 +14,4 @@ _PENDING_MIGRATIONS_*.sql
 *.pem
 *.key
 .worktrees/
+.claude/worktrees/
