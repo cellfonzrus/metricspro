@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
-  idsBlocker, authorizeBlocker, oauthReturn, type GoogleLinkState,
+  idsBlocker, authorizeBlocker, oauthReturn, syncMessage, type GoogleLinkState,
 } from '@/lib/vision'
 
 // The redirect URI is part of the OAuth signature: the value sent when building the consent URL and
@@ -69,7 +69,9 @@ export default function VisionSettingsPage() {
 
   async function act(fn: () => Promise<any>, ok: string) {
     setBusy(true); setMsg(''); setErr('')
-    try { await fn(); setMsg(ok); await load() }
+    // Only stamp the caller's message when there IS one. Passing '' means "fn writes its own",
+    // and the unguarded setMsg(ok) wiped it — which is how a working Sync button came to look dead.
+    try { await fn(); if (ok) setMsg(ok); await load() }
     catch (e: any) { setErr(visionError(e)) }
     finally { setBusy(false) }
   }
@@ -179,11 +181,7 @@ export default function VisionSettingsPage() {
         <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button style={btnPrimary} disabled={!canEdit || !status.google.linked || busy}
             onClick={() => act(async () => {
-              const r = await api('/api/v1/vision/cameras/sync', { method: 'POST' })
-              const skipped = Object.entries(r.skipped_homes || {})
-                .map(([home, n]) => `${n} in ${home}`).join(', ')
-              setMsg(`Synced ${r.found - (r.skipped || 0)} camera(s): ${r.added} new, ${r.updated} updated.`
-                + (skipped ? ` Skipped ${skipped} — connect the home above to include them.` : ''))
+              setMsg(syncMessage(await api('/api/v1/vision/cameras/sync', { method: 'POST' })))
             }, '')}>
             Sync cameras from Google
           </button>
