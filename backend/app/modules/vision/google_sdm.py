@@ -416,4 +416,15 @@ def offer_problem(offer_sdp: str) -> str:
                 "Management API requires all three — audio, video and a data channel — and answers "
                 "an incomplete offer without ever starting the media, which looks like a dead "
                 "camera. Reload the page; if it persists the client is building the offer wrong.")
+    # ORDER, not just presence. Google rejects a complete offer whose m-lines are in the wrong
+    # sequence — "Offer must contain each of audio, video and application m lines in that order" —
+    # and that is a real error this deployment hit: the data channel was created first, so the offer
+    # went out as application/video/audio and was refused outright. Presence alone would have passed
+    # it straight through to Google, which is exactly what happened.
+    order = [label for token, label in _REQUIRED_MLINES if token in sdp]
+    seen = sorted(((sdp.index(token), label) for token, label in _REQUIRED_MLINES if token in sdp))
+    if [label for _, label in seen] != order:
+        return ("This stream offer has its m-lines out of order. Google requires audio, then video, "
+                "then the data channel, and refuses any other order. The client is creating them in "
+                "the wrong sequence — m-lines follow creation order.")
     return ""

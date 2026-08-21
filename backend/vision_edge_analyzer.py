@@ -420,9 +420,11 @@ class WebRtcFrameSource(FrameSource):
         # Same requirement as the browser path: Device Access wants an m=application line in the
         # offer. Without it the answer comes back and the media never starts, which looks exactly
         # like a camera that is offline. Nothing is ever sent on this channel.
-        pc.createDataChannel("dataSendChannel")
+        # audio, then video, then the data channel — Google requires the m-lines in exactly that
+        # order and refuses the offer outright otherwise. Creation order is SDP order.
         pc.addTransceiver("audio", direction="recvonly")
         pc.addTransceiver("video", direction="recvonly")
+        pc.createDataChannel("dataSendChannel")
 
         pumping = asyncio.Event()
 

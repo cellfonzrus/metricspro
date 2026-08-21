@@ -190,9 +190,14 @@ function CameraTile({ camera }: { camera: Camera }) {
       // establishing media on — an SDP that carries no m=application line, which is why the
       // handshake could succeed and no video ever arrive. Google's own WebRTC sample opens this
       // channel and never sends a byte down it; it exists purely to make the offer acceptable.
-      pc.createDataChannel('dataSendChannel')
-      pc.addTransceiver('video', { direction: 'recvonly' })
+      // ORDER IS PART OF THE CONTRACT. Google: "Offer must contain each of audio, video and
+      // application m lines in that order." M-lines appear in the SDP in the order they are
+      // created, so these three calls ARE the order — audio, then video, then the data channel
+      // last. Creating the channel first (as this did) produced application/video/audio and Google
+      // refused the whole offer.
       pc.addTransceiver('audio', { direction: 'recvonly' })
+      pc.addTransceiver('video', { direction: 'recvonly' })
+      pc.createDataChannel('dataSendChannel')
       pc.ontrack = ev => { if (videoRef.current) videoRef.current.srcObject = ev.streams[0] }
       // "Live" must mean MEDIA IS ARRIVING, not "the handshake completed". Those are different
       // events and the gap between them is where every real failure lives: the SDP exchange
