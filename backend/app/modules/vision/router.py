@@ -37,6 +37,7 @@ from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from app.modules.vision import behavior as B
 from app.modules.vision import config as C
+from app.modules.vision import enrollment as EN
 from app.modules.vision import google_sdm as G
 from app.modules.vision import heatmap as H
 from app.modules.vision import ingest as I
@@ -1016,36 +1017,48 @@ def list_agents(org_id: str = ORG_ID, authorization: str = Header(default=""),
     _require_settings(_require_caller(authorization, x_active_org))
     rows = _rows("vision_edge_agent", org_id,
                  cols="id,agent_key,label,store_code,enabled,version,last_seen_at,last_ingest_at,"
-                      "events_received,rotated_at,created_at")
-    return {"agents": [{**a, "online": _fresh(a.get("last_seen_at"), minutes=10)} for a in rows]}
+                      "events_received,rotated_at,created_at,enrolled_at,enroll_expires_at")
+    # NOTE: enroll_code_hash is deliberately not selected. The list endpoint has no business
+    # carrying it, and a column that is never fetched cannot be leaked by a careless caller.
+    return {"agents": [{**a, "online": _fresh(a.get("last_seen_at"), minutes=10),
+                        "awaiting_enrollment": not a.get("enrolled_at")} for a in rows]}
 
 
 @router.post("/edge-agents")
 def create_agent(body: AgentIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                  x_active_org: str = Header(default="")):
-    """Register an analyzer node and mint its signing secret.
+    """Register an analyzer node and issue a single-use ENROLLMENT CODE.
 
-    The secret is returned EXACTLY ONCE, here. It is stored encrypted and there is no read-back
-    endpoint anywhere — a lost secret is rotated, not recovered. That is the same posture the rest of
-    the platform takes with credentials, and it is the one that makes an accidental screenshot of an
-    admin page a non-event."""
+    This used to mint the HMAC signing secret and show it on screen — "copy this now, it cannot be
+    shown again". That handed a permanent credential to a person, and therefore to their clipboard
+    and to whatever they pasted into next. It reached a chat window in the first week.
+
+    The operator never needed the secret; they needed to authorise ONE MACHINE, once. So that is what
+    they carry now. The code is useless after one use, dies in 30 minutes, and authorises nothing by
+    itself — it can only be traded for a secret, at POST /edge/enroll, by the machine that will use
+    it. The secret is generated there and is never returned to a browser or rendered in any UI."""
     caller = _require_caller(authorization, x_active_org)
     _require_settings(caller)
     _require_module(_cfg(org_id))
     agent_key = "va_" + secrets.token_hex(8)
-    secret = secrets.token_urlsafe(32)
+    code = EN.new_code()
+    expires = _now() + timedelta(minutes=EN.TTL_MINUTES)
     row = {"org_id": org_id, "agent_key": agent_key,
            "label": (getattr(body, "label", None) or "Store analyzer")[:120],
            "store_code": (str(getattr(body, "store_code", "") or "").strip() or None),
-           "secret_enc": encrypt(secret), "enabled": True}
+           # No secret yet. It does not exist until the machine asks for it.
+           "enroll_code_hash": EN.code_hash(code), "enroll_expires_at": _iso(expires),
+           "enabled": True}
     try:
         sb().table("vision_edge_agent").insert(row).execute()
     except Exception as e:
         raise HTTPException(400, f"Could not register the analyzer: {str(e)[:200]}")
     _audit(org_id, caller.get("email"), "agent_registered", agent_key,
            {"store_code": row["store_code"]})
-    return {"agent_key": agent_key, "secret": secret, "store_code": row["store_code"],
-            "note": "Copy this secret now — it is stored encrypted and cannot be shown again."}
+    return {"agent_key": agent_key, "enroll_code": code, "store_code": row["store_code"],
+            "expires_at": _iso(expires), "ttl_minutes": EN.TTL_MINUTES,
+            "note": "Run the analyzer with this code within "
+                    f"{EN.TTL_MINUTES} minutes. It works once, and it is not a credential."}
 
 
 @router.post("/edge-agents/{agent_id}/rotate")
@@ -1059,15 +1072,23 @@ def rotate_agent(agent_id: str, org_id: str = ORG_ID, authorization: str = Heade
     rows = _rows("vision_edge_agent", org_id, id=agent_id)
     if not rows:
         raise HTTPException(404, "Analyzer not found.")
-    secret = secrets.token_urlsafe(32)
+    code = EN.new_code()
+    expires = _now() + timedelta(minutes=EN.TTL_MINUTES)
     try:
+        # The old secret dies HERE, not when the replacement is claimed. A rotation is what an
+        # operator reaches for after a suspected compromise, and leaving the old key alive until
+        # someone finds time to re-run the analyzer would defeat the entire point of pressing it.
         sb().table("vision_edge_agent").update(
-            {"secret_enc": encrypt(secret), "rotated_at": _iso(_now())}).eq("id", agent_id).execute()
+            {"secret_enc": None, "enrolled_at": None, "rotated_at": _iso(_now()),
+             "enroll_code_hash": EN.code_hash(code), "enroll_expires_at": _iso(expires)}
+        ).eq("id", agent_id).execute()
     except Exception as e:
         raise HTTPException(400, f"Could not rotate: {str(e)[:200]}")
     _audit(org_id, caller.get("email"), "agent_rotated", rows[0].get("agent_key"))
-    return {"agent_key": rows[0].get("agent_key"), "secret": secret,
-            "note": "The previous secret stopped working. Update the analyzer now."}
+    return {"agent_key": rows[0].get("agent_key"), "enroll_code": code,
+            "expires_at": _iso(expires), "ttl_minutes": EN.TTL_MINUTES,
+            "note": "The previous secret stopped working immediately. Re-run the analyzer with this "
+                    "code to give it a new one."}
 
 
 @router.delete("/edge-agents/{agent_id}")
@@ -1113,10 +1134,65 @@ async def _authenticate_agent(request: Request):
     if not rows or not rows[0].get("enabled"):
         raise deny
     agent = rows[0]
-    ok, _reason = I.verify(decrypt(agent.get("secret_enc") or ""), timestamp, raw, signature)
+    # Registered but never enrolled: there is no secret, so there is nothing to verify against.
+    # Explicit, because "" would otherwise flow into verify() and rely on it to refuse an empty key.
+    if not agent.get("secret_enc"):
+        raise deny
+    ok, _reason = I.verify(decrypt(agent["secret_enc"]), timestamp, raw, signature)
     if not ok:
         raise deny
     return agent, agent.get("org_id"), raw
+
+
+class EnrollIn(LaxModel):
+    code: Any = None
+    version: Any = None
+
+
+@router.post("/edge/enroll")
+def edge_enroll(body: EnrollIn):
+    """Trade a single-use enrollment code for this analyzer's signing secret.
+
+    PUBLIC by necessity — the machine calling this has no credential yet; the code IS the proof. That
+    is safe because a code carries ~78 bits of entropy, dies in 30 minutes, and works exactly once.
+
+    Every failure returns the SAME message. An unauthenticated caller must not learn whether a code
+    was real but expired, real but spent, or never existed — the difference confirms a valid code
+    existed, which is the one fact worth harvesting here. The real reason goes to the audit row."""
+    deny = HTTPException(401, "That enrollment code is not valid. Register the analyzer again in "
+                              "Vision → Settings to get a fresh one.")
+    code = str(getattr(body, "code", "") or "")
+    # Cheap local rejection first: a public endpoint should not turn arbitrary junk into a query.
+    if not EN.code_wellformed(code):
+        raise deny
+    try:
+        rows = (sb().table("vision_edge_agent").select("*")
+                .eq("enroll_code_hash", EN.code_hash(code)).limit(1).execute().data) or []
+    except Exception:
+        raise HTTPException(503, "Analyzer registry unavailable.")
+    agent = rows[0] if rows else {}
+    why = EN.redeemable(agent, _iso(_now()))
+    if why:
+        if agent:
+            _audit(agent.get("org_id"), agent.get("agent_key"), "agent_enroll_refused", None,
+                   {"reason": why})
+        raise deny
+
+    secret = secrets.token_urlsafe(32)
+    try:
+        # Clearing the hash in the same write is what makes this single-use: a replay finds no row.
+        sb().table("vision_edge_agent").update(
+            {"secret_enc": encrypt(secret), "enrolled_at": _iso(_now()),
+             "enroll_code_hash": None, "enroll_expires_at": None,
+             "version": str(getattr(body, "version", "") or "")[:40],
+             "last_seen_at": _iso(_now())}
+        ).eq("id", agent["id"]).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not complete enrollment: {str(e)[:200]}")
+    _audit(agent.get("org_id"), agent.get("agent_key"), "agent_enrolled", agent.get("agent_key"),
+           {"store_code": agent.get("store_code")})
+    return {"agent_key": agent.get("agent_key"), "secret": secret,
+            "store_code": agent.get("store_code"), "label": agent.get("label")}
 
 
 @router.post("/edge/heartbeat")

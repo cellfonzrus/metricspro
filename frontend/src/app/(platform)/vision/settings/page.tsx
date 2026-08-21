@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
 import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
-  idsBlocker, authorizeBlocker, oauthReturn, syncMessage, storeOptions, withCurrent,
+  idsBlocker, authorizeBlocker, oauthReturn, syncMessage, storeOptions, withCurrent, type EdgeAgent,
   type GoogleLinkState, type StoreOption,
 } from '@/lib/vision'
 
@@ -14,6 +14,10 @@ import { panel, btn, btnPrimary, cell, th, cameraName, fmtDateTime, type Camera,
 // the value sent when redeeming the code must match byte for byte, or Google rejects the exchange.
 // One helper, used by both, so they cannot drift.
 const REDIRECT_PATH = '/vision/settings'
+// The analyzer needs the API base, and an operator should not have to work out what to paste.
+function apiBase(): string {
+  return process.env.NEXT_PUBLIC_API_URL || '<api url>'
+}
 function redirectUri(): string {
   return typeof window === 'undefined' ? '' : `${window.location.origin}${REDIRECT_PATH}`
 }
@@ -22,6 +26,7 @@ export default function VisionSettingsPage() {
   const [status, setStatus] = useState<any>(null)
   const [cameras, setCameras] = useState<Camera[]>([])
   const [consent, setConsent] = useState<any[]>([])
+  const [agents, setAgents] = useState<EdgeAgent[]>([])
   const [homes, setHomes] = useState<any[] | null>(null)
   // null = the store list could not be read. StorePick falls back to a free-text box in that case
   // rather than rendering an empty dropdown nobody can pick from.
@@ -29,7 +34,10 @@ export default function VisionSettingsPage() {
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  const [newSecret, setNewSecret] = useState<{ agent_key: string; secret: string } | null>(null)
+  // What registration and rotation now hand back: a short-lived code, never a secret.
+  const [newSecret, setNewSecret] = useState<{
+    agent_key: string; enroll_code: string; expires_at?: string; ttl_minutes?: number
+  } | null>(null)
 
   const load = useCallback(async () => {
     setErr('')
@@ -40,6 +48,7 @@ export default function VisionSettingsPage() {
       ])
       setStatus(s); setCameras(c.cameras || [])
       try { setConsent((await api('/api/v1/vision/consent')).consent || []) } catch { setConsent([]) }
+      try { setAgents((await api('/api/v1/vision/edge-agents')).agents || []) } catch { setAgents([]) }
       // The company's real stores, so a camera is ASSIGNED rather than typed at. A mistyped code
       // does not error — it silently attributes a store's traffic to a store that does not exist.
       try { setStores(storeOptions(await api('/api/v1/storeops/stores'))) } catch { setStores(null) }
@@ -332,14 +341,65 @@ export default function VisionSettingsPage() {
           {status.edge_agents.last_ingest_at && <span style={{ color: 'var(--text3)' }}> · last data {fmtDateTime(status.edge_agents.last_ingest_at)}</span>}
         </div>
         <NewAgent canEdit={canEdit} stores={stores} onCreated={s => { setNewSecret(s); void load() }} />
+        {agents.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 12 }}>
+            <thead><tr><th style={th}>Analyzer</th><th style={th}>Store</th><th style={th}>Last seen</th><th style={th}></th></tr></thead>
+            <tbody>
+              {agents.map(a => (
+                <tr key={a.id}>
+                  <td style={cell}>{a.label || a.agent_key}</td>
+                  <td style={cell}>{a.store_code || '—'}</td>
+                  <td style={cell}>
+                    {a.awaiting_enrollment
+                      ? <span style={{ color: '#f39c12' }}>waiting to enroll</span>
+                      : a.last_seen_at ? fmtDateTime(a.last_seen_at) : 'never'}
+                  </td>
+                  <td style={cell}>
+                    {/* A secret that has been pasted anywhere it should not be is only fixed by
+                        replacing it. Rotating issues a new one and the old stops working at once. */}
+                    <button style={btn} disabled={!canEdit || busy}
+                      onClick={() => act(async () => setNewSecret(
+                        await api(`/api/v1/vision/edge-agents/${a.id}/rotate`, { method: 'POST' })), '')}>
+                      {a.awaiting_enrollment ? 'New code' : 'Rotate secret'}
+                    </button>
+                    <button style={{ ...btn, marginLeft: 6 }} disabled={!canEdit || busy}
+                      onClick={() => act(() => api(`/api/v1/vision/edge-agents/${a.id}`, { method: 'DELETE' }), 'Analyzer removed.')}>
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
         {newSecret && (
-          <div style={{ ...panel, marginTop: 10, borderLeft: '3px solid #f39c12' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>Copy this now — it cannot be shown again</div>
-            <code style={{ display: 'block', fontSize: 12, wordBreak: 'break-all', marginBottom: 8 }}>
-              --agent-key {newSecret.agent_key} --secret {newSecret.secret}
+          <div style={{ ...panel, marginTop: 10, borderLeft: '3px solid #16a34a' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+              Enrollment code for {newSecret.agent_key}
+            </div>
+            {/* A CODE, not a credential. It works once, expires in half an hour, and authorises
+                nothing on its own — so it can be read aloud, typed at a store, or left on a screen
+                without any of the consequences a signing secret would carry. */}
+            <code style={{ display: 'block', fontSize: 20, letterSpacing: 2, fontWeight: 700, marginBottom: 8 }}>
+              {newSecret.enroll_code}
             </code>
+            <div style={{ fontSize: 12, marginBottom: 8 }}>
+              On the analyzer machine, run this once:
+              <code style={{ display: 'block', marginTop: 4, fontSize: 11.5, wordBreak: 'break-all' }}>
+                python3 backend/vision_edge_analyzer.py --api {apiBase()} --enroll {newSecret.enroll_code}
+              </code>
+            </div>
             <div style={{ fontSize: 11.5, color: 'var(--text3)' }}>
-              Run the analyzer with: <code>python3 backend/vision_edge_analyzer.py --api &lt;api url&gt; --agent-key … --secret … --tz-offset &lt;store offset in minutes&gt;</code>
+              Works once, and expires
+              {newSecret.expires_at ? ` at ${fmtDateTime(newSecret.expires_at)}` : ` in ${newSecret.ttl_minutes || 30} minutes`}.
+              The machine mints its own signing secret and stores it owner-only — nobody has to
+              handle it, and it is never shown here. If the code lapses, press Rotate secret for a
+              new one.
+              <div style={{ marginTop: 5 }}>
+                No timezone argument: each camera&apos;s zone comes from its store, which is what lets one
+                analyzer serve stores in different timezones. Check the machine first with{' '}
+                <code>--benchmark</code>.
+              </div>
             </div>
           </div>
         )}

@@ -298,3 +298,19 @@ export function withCurrent(stores: StoreOption[], value?: string | null): Store
   if (!cur || stores.some(s => s.code === cur)) return stores
   return [...stores, { code: cur, label: `${cur} — not in the store list` }]
 }
+
+// One registered edge analyzer, as /vision/edge-agents lists it. The secret is never in here — it
+// exists in plaintext exactly once, in the response to registering or rotating.
+export interface EdgeAgent {
+  id: string
+  agent_key: string
+  label?: string | null
+  store_code?: string | null
+  enabled?: boolean
+  version?: string | null
+  last_seen_at?: string | null
+  last_ingest_at?: string | null
+  online?: boolean
+  // Registered, but the machine has not yet traded its enrollment code for a secret.
+  awaiting_enrollment?: boolean
+}
