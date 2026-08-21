@@ -108,6 +108,14 @@ function CameraTile({ camera }: { camera: Camera }) {
   const watchRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [state, setState] = useState<TileState>('idle')
   const [error, setError] = useState('')
+  // HOW FAR IT GOT, and WHAT WENT WRONG — both kept OUTSIDE the state machine on purpose.
+  //
+  // Twice now a real diagnosis has been computed and then lost: the message only rendered while
+  // `state === 'error'`, so anything that moved the tile to another state threw the answer away and
+  // the operator saw a bare play button. A failure report must not depend on winning a race with a
+  // state transition. These two are cleared when a NEW attempt starts, and at no other time.
+  const [phase, setPhase] = useState('')
+  const [note, setNote] = useState('')
   const [expires, setExpires] = useState<string | null>(null)
 
   const clearWatchdog = useCallback(() => {
@@ -139,7 +147,7 @@ function CameraTile({ camera }: { camera: Camera }) {
     clearWatchdog()
     watchRef.current = setTimeout(() => {
       if (pcRef.current?.connectionState === 'connected') return
-      setError('Google issued the stream but no video arrived within 20 seconds. The camera may be '
+      setNote('Google issued the stream but no video arrived within 20 seconds. The camera may be '
         + 'offline or asleep, or this network may be blocking the UDP traffic WebRTC needs.')
       void teardown('error')
     }, 20000)
@@ -161,14 +169,14 @@ function CameraTile({ camera }: { camera: Camera }) {
       } catch (e: any) {
         // The commonest cause is the company's maximum session length, which is a deliberate stop,
         // not a fault — say which happened instead of showing a bare error.
-        setError(visionError(e) || 'The live view ended.')
+        setNote(visionError(e) || 'The live view ended.')
         void teardown('error')
       }
     }, Math.max(15, afterSeconds) * 1000)
   }, [teardown])
 
   async function start() {
-    setError(''); setState('connecting')
+    setError(''); setNote(''); setPhase('starting'); setState('connecting')
     try {
       if (camera.stream_protocol !== 'webrtc') {
         throw new Error('This camera streams over RTSP. RTSP cameras are read by the edge analyzer, '
@@ -192,18 +200,20 @@ function CameraTile({ camera }: { camera: Camera }) {
       // forever with no error, which is the least actionable thing it could possibly do.
       pc.onconnectionstatechange = () => {
         if (!pcRef.current) return                    // torn down; this is a late event
-        if (pc.connectionState === 'connected') { clearWatchdog(); setState('live') }
+        if (pc.connectionState === 'connected') { clearWatchdog(); setPhase(''); setState('live') }
         if (pc.connectionState === 'failed') {
           clearWatchdog()
-          setError('The connection to the camera could not be established. Google answered, but no '
+          setNote('The connection to the camera could not be established. Google answered, but no '
             + 'media path could be opened — usually a network that blocks the UDP traffic WebRTC '
             + 'needs. Try another network to confirm.')
           void teardown('error')
         }
       }
 
+      setPhase('building the offer')
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
+      setPhase('gathering network candidates')
       // Wait for ICE gathering: Google's SDM expects a complete offer, not a trickled one.
       await new Promise<void>(resolve => {
         if (pc.iceGatheringState === 'complete') return resolve()
@@ -212,20 +222,23 @@ function CameraTile({ camera }: { camera: Camera }) {
         setTimeout(resolve, 3000)   // never hang the tile on a stalled gather
       })
 
+      setPhase('asking Google for the stream')
       const res = await api(`/api/v1/vision/cameras/${camera.id}/stream`, {
         method: 'POST',
         body: JSON.stringify({ offer_sdp: pc.localDescription?.sdp, purpose: 'live_view' }),
       })
       if (!res.answer_sdp) throw new Error('Google did not return a stream answer for this camera.')
+      setPhase("applying Google's answer")
       await pc.setRemoteDescription({ type: 'answer', sdp: res.answer_sdp })
       sessionRef.current = res.session_id
       setExpires(res.expires_at || null)
       // NOT setState('live') here — the handshake is done, the media is not. onconnectionstatechange
       // promotes the tile once a path actually opens; the watchdog gives up if it never does.
+      setPhase('waiting for video to arrive')
       scheduleExtend(Number(res.extend_after_seconds) || 200)
       startWatchdog()
     } catch (e: any) {
-      setError(visionError(e))
+      setNote(visionError(e) || String(e))
       void teardown('error')
     }
   }
@@ -243,7 +256,12 @@ function CameraTile({ camera }: { camera: Camera }) {
             {state === 'connecting'
               ? <div style={{ fontSize: 13 }}>Connecting…</div>
               : <button style={btnPrimary} onClick={start}>▶ Watch live</button>}
-            {state === 'error' && <div style={{ fontSize: 12, color: '#f87171', maxWidth: 300 }}>{error}</div>}
+            {(note || error) && (
+              <div style={{ fontSize: 12, color: '#f87171', maxWidth: 320 }}>{note || error}</div>
+            )}
+            {/* Where it stopped. Shown even when nothing threw — a run that ends with no error at
+                all still tells us which step it died on, which is the thing we could never see. */}
+            {phase && <div style={{ fontSize: 11, color: '#9ca3af' }}>stopped at: {phase}</div>}
           </div>
         )}
         {state === 'live' && (
