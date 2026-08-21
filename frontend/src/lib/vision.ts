@@ -314,3 +314,22 @@ export interface EdgeAgent {
   // Registered, but the machine has not yet traded its enrollment code for a secret.
   awaiting_enrollment?: boolean
 }
+
+/**
+ * The commit this bundle was BUILT from, or '' when the platform did not say.
+ *
+ * "Is the page I am looking at the code we just shipped?" was unanswerable three separate times
+ * while debugging live video, and each time we guessed. The backend answers it at /health; this is
+ * the same answer for the bundle. Inlined at build time on purpose — a cached page reports the
+ * commit it was BUILT from, not the one currently deployed, which is exactly what makes a stale
+ * bundle visible. When this and /health disagree, one side has not finished deploying or the
+ * browser is holding an old page.
+ *
+ * Vercel injects this automatically; the `env` key in next.config would also work but is marked
+ * legacy in this Next version, and no config is needed for a variable the platform already exports.
+ * Blank means the platform did not provide it (system environment variables switched off in the
+ * project settings) — blank is not a failure, it just means no stamp.
+ */
+export function buildSha(): string {
+  return (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || '').slice(0, 7)
+}

@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
-import { panel, btn, btnPrimary, cameraName, fmtDateTime, type Camera, type VisionConfig, visionError,
+import { panel, btn, btnPrimary, cameraName, fmtDateTime, buildSha, type Camera, type VisionConfig, visionError,
 } from '@/lib/vision'
 
 export default function VisionLiveWall() {
@@ -51,7 +51,14 @@ export default function VisionLiveWall() {
   return (
     <div style={{ padding: 20, maxWidth: 1400 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700 }}>📹 Live Cameras</h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700 }}>
+          📹 Live Cameras
+          {buildSha() && (
+            <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text3)', marginLeft: 8 }}>
+              build {buildSha()}
+            </span>
+          )}
+        </h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <Link href="/vision/heatmap" style={{ ...btn, textDecoration: 'none' }}>🔥 Heat Map</Link>
           <Link href="/vision/behavior" style={{ ...btn, textDecoration: 'none' }}>🎧 Coaching</Link>
