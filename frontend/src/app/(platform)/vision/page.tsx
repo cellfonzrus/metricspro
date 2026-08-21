@@ -114,7 +114,12 @@ function CameraTile({ camera }: { camera: Camera }) {
     if (watchRef.current) { clearTimeout(watchRef.current); watchRef.current = null }
   }, [])
 
-  const teardown = useCallback(async () => {
+  // Takes the state to LAND IN, because releasing the connection and deciding what the viewer sees
+  // are different jobs and merging them cost us a whole round of debugging: every failure path set
+  // 'error', then called teardown(), which unconditionally set 'idle' — so the error state was gone
+  // before React rendered it, the message was discarded, and the tile just showed the play button
+  // again as though nothing had happened.
+  const teardown = useCallback(async (next: TileState = 'idle') => {
     clearWatchdog()
     if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
     const sid = sessionRef.current
@@ -125,7 +130,7 @@ function CameraTile({ camera }: { camera: Camera }) {
     // Hand the grant back rather than letting it expire — a released stream is one fewer concurrent
     // session against the store's camera, and the audit row gets its real end time.
     if (sid) { try { await api(`/api/v1/vision/stream/${sid}/stop`, { method: 'POST' }) } catch { /* it expires anyway */ } }
-    setState('idle'); setExpires(null)
+    setState(next); setExpires(null)
   }, [clearWatchdog])
 
   // A grant can be issued, an answer returned, and the media still never arrive. Without a deadline
@@ -136,7 +141,7 @@ function CameraTile({ camera }: { camera: Camera }) {
       if (pcRef.current?.connectionState === 'connected') return
       setError('Google issued the stream but no video arrived within 20 seconds. The camera may be '
         + 'offline or asleep, or this network may be blocking the UDP traffic WebRTC needs.')
-      setState('error'); void teardown()
+      void teardown('error')
     }, 20000)
   }, [clearWatchdog, teardown])
 
@@ -157,8 +162,7 @@ function CameraTile({ camera }: { camera: Camera }) {
         // The commonest cause is the company's maximum session length, which is a deliberate stop,
         // not a fault — say which happened instead of showing a bare error.
         setError(visionError(e) || 'The live view ended.')
-        setState('error')
-        void teardown()
+        void teardown('error')
       }
     }, Math.max(15, afterSeconds) * 1000)
   }, [teardown])
@@ -194,7 +198,7 @@ function CameraTile({ camera }: { camera: Camera }) {
           setError('The connection to the camera could not be established. Google answered, but no '
             + 'media path could be opened — usually a network that blocks the UDP traffic WebRTC '
             + 'needs. Try another network to confirm.')
-          setState('error'); void teardown()
+          void teardown('error')
         }
       }
 
@@ -222,8 +226,7 @@ function CameraTile({ camera }: { camera: Camera }) {
       startWatchdog()
     } catch (e: any) {
       setError(visionError(e))
-      setState('error')
-      void teardown()
+      void teardown('error')
     }
   }
 
