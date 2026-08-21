@@ -2942,7 +2942,20 @@ def _registry_report_cfg(client, org_id):
                     .select('report_key,auto,refresh_months').eq('org_id', org_id).execute().data) or []
         except Exception:
             return {}
-    return {r['report_key']: r for r in rows if r.get('report_key')}
+    out = {r['report_key']: r for r in rows if r.get('report_key')}
+    # Optional operator override: a pinned portal report id (e.g. the Daily Transaction Detail menu id)
+    # so the sweep need not resolve it by label. Read in isolation so a database without the column
+    # never disturbs the main select above.
+    try:
+        pin = (client.schema('commcalc').table('report_definitions')
+               .select('report_key,portal_report_id').eq('org_id', org_id).execute().data) or []
+        for p in pin:
+            rk = p.get('report_key')
+            if rk in out and p.get('portal_report_id'):
+                out[rk]['portal_report_id'] = p['portal_report_id']
+    except Exception:
+        pass
+    return out
 
 
 def _epay_sub_schedule(client, org_id, now_iso):
@@ -2976,6 +2989,14 @@ def _epay_sub_schedule(client, org_id, now_iso):
     due, shared = [], []
     for key, rkey in _EPAY_REGISTRY_KEYS.items():
         d = by_report.get(rkey)
+        # Daily Transaction Detail: idempotent upsert makes an hourly re-pull safe and cheap, and the
+        # recon wants the freshest portal data EVERY tick — so it is due on every run-due (not just on
+        # the connector's daily slot), unless the registry explicitly disables it (auto=False).
+        if key == 'epay_daily_tx':
+            if d is not None and d.get('auto') is False:
+                continue
+            due.append(key)
+            continue
         if not d or d.get('sweep_hour') is None:
             shared.append(key)          # no slot of its own -> rides the connector
             continue
@@ -8969,12 +8990,13 @@ async def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: 
 # (see epay_sweep.py). Creds live in the backend-only table commcalc.epay_sweep_config.
 # epay_sweep report key -> commcalc.report_definitions.report_key
 _EPAY_REGISTRY_KEYS = {'mi': 'mi_report', 'comp_report': 'comp_report',
-                       'payment_detail': 'payment_detail'}
+                       'payment_detail': 'payment_detail', 'epay_daily_tx': 'epay_daily_tx'}
 
 _EPAY_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
                       'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
                       'portal_url': epay_sweep.DEFAULT_URL,
-                      'sweep_mi': True, 'sweep_comp': False, 'sweep_payment': False}
+                      'sweep_mi': True, 'sweep_comp': False, 'sweep_payment': False,
+                      'sweep_daily_tx': True}
 
 
 def _epay_cfg(client, org_id):
@@ -9032,6 +9054,10 @@ def _do_epay_sweep(org_id, only=None):
         reports.append('comp_report')
     if _en('payment_detail', bool(cfg.get('sweep_payment'))):
         reports.append('payment_detail')
+    # Daily Transaction Detail (P1) — on by default; its idempotent upsert makes an hourly re-pull
+    # safe, so it rides every tick (see _epay_sub_schedule) unless the registry disables it.
+    if _en('epay_daily_tx', cfg.get('sweep_daily_tx') is not False):
+        reports.append('epay_daily_tx')
     if only:
         reports = [r for r in reports if r in set(only)]
         if not reports:
@@ -30419,10 +30445,33 @@ def _epay_portal_pull(client, org_id):
             # provisioned first. No-op until then.
             return {"source": "email", "pulled": 0, "note": "TODO: email-inbox poll not yet wired"}
         if source == "api":
-            # TODO(owner): authenticate to the Boost owner portal (credentials from a secret store / tenant
-            # config — NEVER hardcoded here), download the DTD for the day, then call
-            # epay_ingest.ingest(org_id, records, ...). No-op until the access path is chosen.
-            return {"source": "api", "pulled": 0, "note": "TODO: portal API pull not yet wired"}
+            # Portal case: drive the headless-Chromium ePay Owner Portal sweep for the Daily
+            # Transaction Detail ONLY, reusing the backend-only epay_sweep_config credentials (never
+            # hardcoded). The sweep downloads the DTD and routes it through epay_ingest (parse +
+            # payment/fee split + terminal→store resolution + idempotent upsert), so the same tick's
+            # recompute reconciles the freshest portal data. No-op (never raises) when credentials are
+            # missing.
+            cfg = _epay_cfg(client, org_id)
+            if not cfg or not cfg.get("portal_user") or not cfg.get("portal_pass"):
+                return {"source": "api", "pulled": 0,
+                        "note": "no epay_sweep_config credentials — auto-pull skipped"}
+            rcfg = _registry_report_cfg(client, org_id)
+            # sync Playwright cannot run inside this coroutine's event loop — run the sweep in a
+            # worker thread (which has no running loop), exactly like /epay/sweep/discover-reports.
+            import concurrent.futures as _cf
+
+            def _run_dtd_sweep():
+                return epay_sweep.run_epay_sweep(
+                    client, org_id, cfg.get("portal_url"), cfg["portal_user"], cfg["portal_pass"],
+                    reports=["epay_daily_tx"], report_cfg=rcfg)
+
+            with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                res = _ex.submit(_run_dtd_sweep).result() or {}
+            pulled = sum(int((r or {}).get("rows") or 0) for r in (res.get("reports") or []))
+            out = {"source": "api", "pulled": pulled}
+            if res.get("errors"):
+                out["errors"] = res["errors"]
+            return out
     except Exception:
         return {"source": source, "pulled": 0, "error": "auto-pull failed (swallowed)"}
     return {"source": source, "pulled": 0, "note": "unknown EPAY_PORTAL_SOURCE; treated as no-op"}
