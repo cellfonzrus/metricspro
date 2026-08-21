@@ -2797,6 +2797,40 @@ def _allowed_clock_stores(org_id, employee_id, home_store, work_date_local):
     return codes
 
 
+def _require_member(authorization, org_id=ORG_ID):
+    """Resolve the signed-in caller and confirm they are a MEMBER of the tenant this request acts on.
+    Returns their app_users row ({org_id, email, role, employee_id}); 401 if not signed in, 403 if the
+    login has no membership here, 409 if the login belongs to several tenants and named none.
+
+    WHY THIS EXISTS (2026-08-21). The Unified Approvals router (mig 867) and the Chat router (mig 868)
+    both mount a router-wide `Depends(_require_member)` whose body does
+    `from app.modules.storeops.router import _require_member` — and this name had never been defined
+    here. A router dependency runs on EVERY request before the endpoint body, and the import lives
+    INSIDE the function, so nothing failed at boot: each request instead raised ImportError, which is
+    not an HTTPException, so it fell through to main.HardeningMiddleware and came back as the masked
+    "A system error occurred. Reference: <id>" 500. Every Approvals and Chat call answered that way,
+    for every caller including the owner. Defining the shared gate HERE (rather than a private copy in
+    each module) is what both call sites already assumed, and keeps the two from drifting.
+
+    Membership is read through `caller_app_user_http`, the platform's canonical resolver, so this gate
+    inherits its posture exactly: the row is looked up for the tenant the middleware VALIDATED (never
+    whichever membership happened to come back first), a platform SUPER-ADMIN passes on any org they
+    are administering, and an ambiguous multi-tenant login is asked to choose instead of being guessed
+    at. `_require_manager` below is this same shape plus a role test — deliberately identical, since a
+    manager is a member first.
+
+    FAILS CLOSED: no token or no membership row is a refusal, never a pass-through."""
+    from app.modules.core.router import _uid_from_token  # local import avoids a circular import
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "Sign in to continue.")
+    from app.core.tenant_middleware import caller_app_user_http
+    u = caller_app_user_http(uid, "org_id,email,role,employee_id")
+    if not u:
+        raise HTTPException(403, "That login isn't recognized for the company you are working in.")
+    return u
+
+
 def _require_manager(authorization, org_id=ORG_ID):
     """Resolve the signed-in caller and confirm they're a manager (not a plain rep) so they can
     authorize a clock-in override. Resolves the manager's OWN tenant from their token (auth_id is

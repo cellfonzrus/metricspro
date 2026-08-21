@@ -1,6 +1,7 @@
 """MetricsPro Platform API — FastAPI main entry point"""
 import os
 import secrets
+import sys
 import traceback
 
 from fastapi import FastAPI
@@ -49,6 +50,18 @@ app = FastAPI(
 # untouched (directive item 5c). Best-effort logging never itself raises.
 def _log_system_error(request, exc) -> str:
     ref = secrets.token_hex(4)
+    # STDERR FIRST (2026-08-21). The failure_log insert below is best-effort and its `except` is silent,
+    # so until now a ref handed to a user was only recoverable IF that insert had succeeded — when the DB
+    # was the thing that was broken (the most likely cause of a 500) the reference led nowhere, forever,
+    # and the incident could not be diagnosed at all. The ref is minted here and printed nowhere else, so
+    # this line is the only thing that makes it recoverable unconditionally. Written to stderr, which the
+    # container platform captures, BEFORE the DB is touched; costs one write on a path that only runs
+    # when the request has already failed. Never raises (a logging fault must not replace the real error).
+    try:
+        print(f"[system-error {ref}] {request.method} {request.url.path} "
+              f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
     try:
         from app.core.database import get_supabase
         org_id = request.query_params.get("org_id") or "00000000-0000-0000-0000-000000000001"

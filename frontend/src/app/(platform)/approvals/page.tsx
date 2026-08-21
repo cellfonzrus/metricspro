@@ -4,6 +4,7 @@
 // time-clock permissions (the pilot); more request types light up here as each module is adapted.
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { errText, loadErrorText, panelState, type Tab } from '@/lib/approvals'
 
 interface Approval {
   id: string; request_no?: number; type: string; title: string; summary?: string | null
@@ -23,21 +24,29 @@ const prioColor: Record<string, string> = { urgent: '#dc2626', high: '#d97706', 
 export default function ApprovalsPage() {
   const [rows, setRows] = useState<Approval[]>([])
   const [types, setTypes] = useState<Record<string, string>>({})
-  const [tab, setTab] = useState<'pending' | 'decided'>('pending')
+  const [tab, setTab] = useState<Tab>('pending')
   const [typeFilter, setTypeFilter] = useState('')
   const [msg, setMsg] = useState('')
+  // The load failure is its OWN state, not folded into `msg`. `msg` is decision feedback ("Approved.")
+  // and is replaced by the next action; whether this list is trustworthy is a different fact with a
+  // different lifetime, and the panel below has to be able to ask about it.
+  const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string>('')
 
   const load = useCallback(() => {
-    setLoading(true)
+    setLoading(true); setLoadError('')   // a retry starts clean, so the spinner (not a stale error) shows
     const status = tab === 'pending' ? 'pending' : 'all'
     const p = new URLSearchParams({ status }); if (typeFilter) p.set('type', typeFilter)
-    api(`/api/v1/approvals?${p}`).then((r: any) => {
+    api(`/api/v1/approvals?${p}`).then((r: { approvals?: Approval[]; types?: Record<string, string> }) => {
       let list: Approval[] = r.approvals || []
       if (tab === 'decided') list = list.filter(x => x.status !== 'pending')
       setRows(list); setTypes(r.types || {})
-    }).catch((e: any) => setMsg('❌ ' + (e?.message || e))).finally(() => setLoading(false))
+    }).catch((e: unknown) => {
+      // DISCARD what we were showing. Rows from the previous tab/filter (or the initial []) are not an
+      // answer to the question just asked, and leaving them up presents stale or absent data as current.
+      setRows([]); setLoadError(loadErrorText(e))
+    }).finally(() => setLoading(false))
   }, [tab, typeFilter])
   useEffect(() => { load() }, [load])
 
@@ -47,11 +56,12 @@ export default function ApprovalsPage() {
     try {
       await api(`/api/v1/approvals/${x.id}/decision`, { method: 'POST', body: JSON.stringify({ decision, note }) })
       setMsg(decision === 'approve' ? '✅ Approved.' : 'Denied.'); load()
-    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    } catch (e: unknown) { setMsg('❌ ' + errText(e)) }
     setBusy('')
   }
 
   const typeLabel = (t: string) => types[t] || t
+  const panel = panelState({ loading, error: loadError, count: rows.length, tab })
 
   return (
     <div style={{ maxWidth: 1040 }}>
@@ -74,14 +84,26 @@ export default function ApprovalsPage() {
       </div>
       {msg && <div style={{ fontSize: 13, margin: '8px 0' }}>{msg}</div>}
 
+      {/* A load that FAILED gets a banner of its own, above the panel and styled as an error — not the
+          same neutral line decision feedback uses. It carries the server's words verbatim, so the
+          reference id in a masked 500 ("Reference: 881ae411") survives into a screenshot. */}
+      {panel.kind === 'error' && (
+        <div role="alert" style={{ margin: '8px 0 0', border: '1px solid #dc2626', color: '#dc2626', borderRadius: 8, padding: '10px 14px', fontSize: 13, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ flex: 1, minWidth: 220 }}>⚠️ {loadError}</span>
+          <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 10px' }} onClick={load}>Retry</button>
+        </div>
+      )}
+
       <div className="card" style={{ padding: 18, marginTop: 12 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>
-          {tab === 'pending' ? 'Waiting on you' : 'Recent decisions'} {rows.length > 0 && <span style={{ color: 'var(--text3)' }}>· {rows.length}</span>}
+          {tab === 'pending' ? 'Waiting on you' : 'Recent decisions'} {panel.showCount && rows.length > 0 && <span style={{ color: 'var(--text3)' }}>· {rows.length}</span>}
         </div>
-        {loading ? (
+        {panel.kind === 'error' ? (
+          <div style={{ fontSize: 13, color: '#dc2626' }}>{panel.message}</div>
+        ) : panel.kind === 'loading' ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>
-        ) : rows.length === 0 ? (
-          <div style={{ fontSize: 13, color: 'var(--text3)' }}>{tab === 'pending' ? 'Nothing waiting. 🎉' : 'No decisions yet.'}</div>
+        ) : panel.kind === 'empty' ? (
+          <div style={{ fontSize: 13, color: 'var(--text3)' }}>{panel.message}</div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>
