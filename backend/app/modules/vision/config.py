@@ -52,6 +52,9 @@ DEFAULT_CONFIG = {
     "enabled": False,
     "live_view_enabled": True,
     "traffic_enabled": True,
+    # Google's own person events (mig 907). Free, every camera, no analyzer — but PRESENCE only, so
+    # it is a separate switch from traffic, which means directional counting and comes from the edge.
+    "google_events_enabled": True,
     "heatmap_enabled": True,
     "audio_analytics_enabled": False,
     "behavior_scoring_enabled": False,
@@ -116,7 +119,7 @@ def resolve_config(client, org_id: str) -> dict:
 
 
 def feature_enabled(cfg: dict, feature: str) -> bool:
-    """True if `feature` ('live_view' | 'traffic' | 'heatmap' | 'audio_analytics' |
+    """True if `feature` ('live_view' | 'traffic' | 'heatmap' | 'google_events' | 'audio_analytics' |
     'behavior_scoring') is usable for this tenant right now. Master switch is already folded into the
     sub-switches by resolve_config, but it is re-checked here so this is correct on a hand-built dict."""
     if not cfg or not cfg.get("enabled"):

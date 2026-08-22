@@ -103,6 +103,13 @@ _PUBLIC_EXACT = frozenset({
     "/api/v1/core/auth/reset-password",   # PUBLIC self-serve reset completion (code-gated; anonymous)
     "/api/v1/core/auth/login-precheck",   # PUBLIC pre-login soft-lockout check (mig 859; anonymous)
     "/api/v1/core/auth/login-record",     # PUBLIC pre-login attempt ledger write (mig 859; anonymous)
+    "/api/v1/vision/google/events",        # Google Cloud Pub/Sub PUSH of SDM camera events (mig 907).
+                                          # EXACT path, METHOD-SCOPED to POST below. Google carries no
+                                          # JWT of ours, so the tenant gate must not fire before the
+                                          # handler — the handler self-verifies the OIDC token Pub/Sub
+                                          # attaches and fails closed when VISION_PUBSUB_AUDIENCE or
+                                          # VISION_PUBSUB_SA_EMAIL is unset. Tenancy is resolved from
+                                          # OUR vision_camera table by device name, never from the body.
     "/api/v1/remediation/whatsapp-webhook",  # Meta webhook. EXACT path + METHOD-SCOPED below to
                                           # {GET, POST} only (2026-08-05: it was a PREFIX, so any future
                                           # sibling path under it would have been public too, and every
@@ -459,6 +466,9 @@ def _is_public(path: str) -> bool:
 #     (inbound + delivery-status callback); nothing else on that path should skip authentication.
 _PUBLIC_METHODS = {
     "/api/v1/core/auth-config": ("GET",),
+    # Pub/Sub only ever POSTs. Scoping it stops a future GET on the same path being public by
+    # inheritance — the exact mistake the whatsapp entry below was widened by until 2026-08-05.
+    "/api/v1/vision/google/events": ("POST",),
     "/api/v1/remediation/whatsapp-webhook": ("GET", "POST"),
 }
 
