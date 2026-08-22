@@ -94,7 +94,16 @@ public site even if someone forgets to run the script by hand.
 You can also run it on demand from **Actions → deploy-website → Run workflow**, which offers a
 **dry run** (shows what would be uploaded, uploads nothing) and a **delete extras** option (removes
 remote files no longer in `website/`). Leave delete off unless the FTP account is rooted at a
-document root holding nothing but this site.
+document root holding nothing but this site. If those two tick-boxes do not appear, the workflow
+file has not reached `main` yet — GitHub only reads a workflow's inputs from the default branch.
+
+**`FTP_REMOTE_DIR` must be the document root itself, never a subfolder of it.** The upload copies
+the *contents* of `website/`, so `index.html` lands directly in whatever path you name. Ending it
+with `/website` — the easy mistake, since that is the folder's name in the repo — puts the whole
+site at `yourdomain.com/website/`, where every internal link and every `.htaccess` rule, all of
+which assume the root, will 404. The failure is quiet: the upload succeeds and the site simply
+answers on a path nobody visits. cPanel → **Domains** lists the real document root for each domain,
+and the workflow now warns in its job summary when the path looks like a subfolder.
 
 ## 3. Domain and SSL
 
