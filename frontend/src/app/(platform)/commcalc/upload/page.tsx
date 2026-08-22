@@ -5,6 +5,7 @@ import { usePeriod } from '@/lib/period-context'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // ── WHAT AN UPLOAD ACTUALLY DOES, per file type (owner 2026-07-29) ──────────────────────────────
 // The tiles used to say "Replace File" on EVERY report, which is wrong for more than half of them: the
@@ -31,13 +32,16 @@ const MODE_UI: Record<UploadMode, { verb: string; explain: string }> = {
 }
 const modeVerb = (mode: UploadMode, prior: boolean) => (prior ? MODE_UI[mode].verb : '📂 Choose File')
 
-const FILE_TYPES: { id: string; label: string; icon: string; required: boolean; desc: string; mode: UploadMode }[] = [
+// `carrier` (optional) tags a carrier-specific feed for the active-carrier lens: a dual-carrier tenant
+// sees only the active carrier's tiles (Boost/ePay vs MA/Total). Untagged feeds are carrier-neutral and
+// always show. Single-carrier tenants see every tile (unchanged).
+const FILE_TYPES: { id: string; label: string; icon: string; required: boolean; desc: string; mode: UploadMode; carrier?: 'boost' | 'total' }[] = [
   { id: 'sales',          label: 'Sales Transactions',    icon: '🛍️', required: true,  mode: 'replace_period', desc: 'POS Sales Transaction Details (78-col, all columns)' },
   { id: 'daily_sales',    label: 'Daily Sales Upload',      icon: '📅', required: false, mode: 'additive_daily', desc: 'Append daily transactions — no period wipe, deduped by Trans ID' },
-  { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  mode: 'replace_period', desc: 'Payment Processor Commission Payment Detail' },
+  { id: 'payment_detail', label: 'Payment Detail',        icon: '💳', required: true,  mode: 'replace_period', desc: 'Payment Processor Commission Payment Detail', carrier: 'boost' },
   { id: 'dlar_rep',       label: 'Metrics — Rep Report',  icon: '📊', required: true,  mode: 'replace_period', desc: 'Rep KPI report (per-carrier portal)' },
   { id: 'dlar_store',     label: 'Metrics — Store Report', icon: '🏪', required: false, mode: 'replace_period', desc: 'Store-level KPI data (per-carrier portal)' },
-  { id: 'mi_report',      label: 'MI & ATU Report',       icon: '💰', required: false, mode: 'replace_period', desc: 'Monthly Incentive + ATU Payout' },
+  { id: 'mi_report',      label: 'MI & ATU Report',       icon: '💰', required: false, mode: 'replace_period', desc: 'Monthly Incentive + ATU Payout', carrier: 'boost' },
   { id: 'catalog',        label: 'Product Catalog',       icon: '📱', required: false, mode: 'replace_all',    desc: 'Product catalog + cost/category — the B2B "Product Update" (Product-ID) OR the TOTAL/UPC "Product Catalog Update" variant' },
   { id: 'master_cats',    label: 'Payment Categories',    icon: '🗂️', required: false, mode: 'replace_all',    desc: 'Payment type → category mapping' },
   { id: 'comp_report',    label: 'Comprehensive Comp Report', icon: '🏦', required: false, mode: 'replace_period', desc: 'Carrier store-level rebates & MDF' },
@@ -45,9 +49,9 @@ const FILE_TYPES: { id: string; label: string; icon: string; required: boolean; 
   { id: 'x_report',       label: 'X Report (POS tenders)', icon: '🧾', required: false, mode: 'additive_keyed', desc: 'POS daily tenders by type — reconciles vs the daily closing sheet' },
   // Total / VidaPay Master-Agent portal exports (mig 083) — the Total-side MI/ATU equivalents.
   // Date-grain: the period derives per ROW, so no period selection; re-uploads are day-idempotent.
-  { id: 'ma_commission',  label: 'MA Commission Details (Total)', icon: '🧾', required: false, mode: 'additive_daily', desc: 'Total/VidaPay per-activation commission detail — spiffs M1–M6, rebates, MRC Net Discount' },
-  { id: 'ma_daily_tx',    label: 'MA Daily Tx (Total airtime)', icon: '📆', required: false, mode: 'additive_daily', desc: 'Total/VidaPay daily airtime/top-up transactions — merchant discount = your margin' },
-  { id: 'ma_fulfillment', label: 'MA Handset Fulfillment (Total)', icon: '🚚', required: false, mode: 'additive_daily', desc: 'Total/VidaPay marketplace handset fulfillment orders' },
+  { id: 'ma_commission',  label: 'MA Commission Details (Total)', icon: '🧾', required: false, mode: 'additive_daily', desc: 'Total/VidaPay per-activation commission detail — spiffs M1–M6, rebates, MRC Net Discount', carrier: 'total' },
+  { id: 'ma_daily_tx',    label: 'MA Daily Tx (Total airtime)', icon: '📆', required: false, mode: 'additive_daily', desc: 'Total/VidaPay daily airtime/top-up transactions — merchant discount = your margin', carrier: 'total' },
+  { id: 'ma_fulfillment', label: 'MA Handset Fulfillment (Total)', icon: '🚚', required: false, mode: 'additive_daily', desc: 'Total/VidaPay marketplace handset fulfillment orders', carrier: 'total' },
 ]
 const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment'])
 const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
@@ -112,6 +116,8 @@ function fmtWhen(iso: string) {
 
 export default function UploadPage() {
   const { period, setPeriod } = usePeriod()
+  // Active-carrier lens: a dual-carrier tenant sees only the active carrier's upload tiles.
+  const { activeCarrier, multi } = useActiveCarrier()
   const [uploading, setUploading] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, 'idle'|'uploading'|'done'|'error'|'warn'>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
@@ -323,7 +329,7 @@ export default function UploadPage() {
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
-        {FILE_TYPES.map(({ id, label, icon, required, desc, mode }) => {
+        {FILE_TYPES.filter(t => !multi || !t.carrier || t.carrier === activeCarrier).map(({ id, label, icon, required, desc, mode }) => {
           const status = statuses[id] || 'idle'; const msg = messages[id] || ''; const prior = lastUpload(id)
           // "has data already" for the BUTTON wording = anything this report ever ingested (not just the
           // selected period) — a day-grain feed has no period badge at all.

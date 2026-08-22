@@ -8,6 +8,7 @@ import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-fi
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
 // so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
@@ -32,6 +33,9 @@ const int = (n: number) => String(Math.round(n || 0))
 
 export default function ExecMtdPage() {
   const { period } = usePeriod()
+  // Active-carrier lens: the dealer-share tooltip's example names only the active carrier for a
+  // dual-carrier tenant (single-carrier tenants keep the original "Boost 100%, Total 50%" example).
+  const { activeCarrier, multi } = useActiveCarrier()
   const [data, setData] = useState<any>(null)
   const [tab, setTab] = useState<'location' | 'employee'>('location')
   const [loading, setLoading] = useState(true)
@@ -162,7 +166,9 @@ export default function ExecMtdPage() {
     'Acc. Sales': 'Accessory sales revenue ONLY — the device set-up fee is excluded (it is a separate pay item). Same number as the Sales Report.',
     'Set-up Fee': 'Device set-up fee sold. A separate pay item, so it is NOT in Acc. Sales — but it DOES count toward the accessory target.',
     'Acc.+Set-up': 'Accessory sales + device set-up fee = the basis the Accessory Targets page measures achieved vs target on. THIS is the number to compare with that page.',
-    'Dealer share': 'What the CARRIER pays the dealer of the set-up / activation fee collected (e.g. Boost 100%, Total 50%). Informational — no employee payout reads it. “—” means nobody has entered the percentage yet.',
+    'Dealer share': 'What the CARRIER pays the dealer of the set-up / activation fee collected'
+      + (multi ? (activeCarrier === 'total' ? ' (e.g. 50%)' : ' (e.g. 100%)') : ' (e.g. Boost 100%, Total 50%)')
+      + '. Informational — no employee payout reads it. “—” means nobody has entered the percentage yet.',
     'Employee pay': 'The employee’s share of the set-up / activation fee collected, at the percentage configured for this tenant. “—” means the fee is not part of employee commission here, or no percentage has been entered.',
   }
 

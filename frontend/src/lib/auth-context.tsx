@@ -8,6 +8,7 @@ import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get
          onImpersonationInvalid, clearImpersonationInvalid, type ImpersonationState } from './client'
 import { setCacheIdentity } from './cache'
 import type { Permissions, CarrierRef } from './rbac'
+import { carrierCode, defaultActiveCarrier } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -60,6 +61,12 @@ type AuthState = {
   user: AppUser | null
   permissions: Permissions
   carriers: CarrierRef[]
+  // Active-carrier lens (carrier-scoping compliance). activeCarrier is a lowercased carrier CODE
+  // ('boost'/'total'/…); the whole tenant carrier list is carrierList. A single-carrier tenant's
+  // activeCarrier is fixed to its only carrier and the header switcher is hidden.
+  activeCarrier: string
+  setActiveCarrier: (code: string) => void
+  carrierList: CarrierRef[]
   provisioned: boolean
   active: boolean
   tenant: TenantInfo | null
@@ -101,6 +108,7 @@ type AuthState = {
 
 const Ctx = createContext<AuthState>({
   loading: true, session: null, user: null, permissions: {}, carriers: [], provisioned: false,
+  activeCarrier: 'boost', setActiveCarrier: () => {}, carrierList: [],
   active: false, tenant: null, token: null, tenants: [], activeOrg: null, needsTenantChoice: false,
   switchTenant: async () => {}, pendingConnections: [], connectTenant: async () => {},
   disableAndSwitch: async () => ({}), dismissPending: () => {},
@@ -114,6 +122,17 @@ const Ctx = createContext<AuthState>({
 })
 
 export const useAuth = () => useContext(Ctx)
+
+// Convenience hook for the active-carrier lens. Returns the active carrier code + setter, boolean
+// shortcuts, whether the tenant has more than one carrier (multi ⇒ the switcher shows), and the list.
+export const useActiveCarrier = () => {
+  const { activeCarrier, setActiveCarrier, carrierList } = useAuth()
+  const multi = (carrierList?.length || 0) > 1
+  return {
+    activeCarrier, setActiveCarrier, carrierList: carrierList || [], multi,
+    isBoost: activeCarrier === 'boost', isTotal: activeCarrier === 'total',
+  }
+}
 
 /**
  * Whether a Supabase `onAuthStateChange` event should re-arm the loading splash and re-bootstrap the
@@ -146,6 +165,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [active, setActive] = useState(false)
   const [tenant, setTenant] = useState<TenantInfo | null>(null)
   const [carriers, setCarriers] = useState<CarrierRef[]>([])
+  const [activeCarrier, setActiveCarrierState] = useState<string>('boost')
   const [tenants, setTenants] = useState<TenantMembership[]>([])
   const [activeOrg, setActiveOrgState] = useState<string | null>(null)
   const [needsTenantChoice, setNeedsTenantChoice] = useState(false)
@@ -519,6 +539,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                      user ? (activeOrg || user.org_id || null) : null)
   }, [user, activeOrg])
 
+  // ── Active-carrier lens (carrier-scoping compliance) ────────────────────────────────────────────
+  // Resolve which carrier is "in view" whenever the tenant's carrier list, the user or the active org
+  // changes. Order: a persisted per-(user,org) choice that is still a carrier the tenant has, else the
+  // default (is_default carrier → sole carrier → 'boost'). localStorage is guarded — a missing/blocked
+  // store falls back to the default. A single-carrier tenant is pinned to its only carrier.
+  const carrierUserKey = user ? (user.auth_id || user.id || null) : null
+  const carrierOrgKey = activeOrg || user?.org_id || null
+  const carrierStoreKey = carrierUserKey && carrierOrgKey ? `mp-active-carrier:${carrierUserKey}:${carrierOrgKey}` : null
+  useEffect(() => {
+    const def = defaultActiveCarrier(carriers)
+    const valid = new Set((carriers || []).map(c => carrierCode(c)).filter(Boolean))
+    let chosen = def
+    if ((carriers || []).length > 1 && carrierStoreKey) {
+      try {
+        const raw = localStorage.getItem(carrierStoreKey)
+        if (raw && valid.has(raw)) chosen = raw
+      } catch { /* missing / blocked → default */ }
+    }
+    setActiveCarrierState(chosen)
+  }, [carriers, carrierStoreKey])
+
+  const setActiveCarrier = useCallback((code: string) => {
+    const c = (code || '').toLowerCase().trim()
+    if (!c) return
+    setActiveCarrierState(c)
+    try { if (carrierStoreKey) localStorage.setItem(carrierStoreKey, c) } catch { /* blocked → session-only */ }
+  }, [carrierStoreKey])
+
   // ── Dead client session (auth-ux hardening 2026-08-03) ──────────────────────────────────────────
   // client.ts latches this the first time a module call 401s with the middleware's "authentication
   // required" WHILE a bearer token was attached. React to it ONCE: drop the dead Supabase session
@@ -582,6 +630,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // derived from listed deps, so recomputing them here is correct.
   const value = useMemo<AuthState>(() => ({
     loading, session, user, permissions, carriers, provisioned, active, tenant,
+    activeCarrier, setActiveCarrier, carrierList: carriers,
     token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
     switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
     dismissPending, twofa, needs2fa, rbacEnabled, sessionInvalid,
@@ -590,6 +639,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signOut, refresh,
   }), [
     loading, session, user, permissions, carriers, provisioned, active, tenant,
+    activeCarrier, setActiveCarrier,
     tenants, activeOrg, needsTenantChoice, visiblePending, twofa, needs2fa, rbacEnabled,
     sessionInvalid, passwordPolicy, defaultCc, impersonation, impersonationInfo,
     switchTenant, connectTenant, disableAndSwitch, dismissPending, startTwoFactor, verifyTwoFactor,
