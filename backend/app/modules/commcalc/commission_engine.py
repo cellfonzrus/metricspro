@@ -168,7 +168,8 @@ def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_va
     return f"scope '{scope}' did not match"
 
 
-def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=False, store_keys=None):
+def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=False, store_keys=None,
+                      identity_map=None):
     """Most-specific assignment wins: employee > role > store > market > default. Returns the plan or None.
 
     EMPLOYEE scope_value is matched to the rep's name name-order-insensitively via `_canon_person`
@@ -195,9 +196,28 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=Fal
     assignment may also match — the alias-resolved store_code and canonical store_address for the rep's
     raw POS store string. It is passed ONLY when the tenant set store_resolution='alias'. The default
     None makes `skeys` empty, so `val in skeys` is always False and the predicate — and therefore every
-    payout — is BYTE-IDENTICAL to before."""
+    payout — is BYTE-IDENTICAL to before.
+
+    `identity_map` (luxelink money-path name-bridge) is an OPTIONAL deterministic POS->roster identity map
+    {POS salesperson name (UPPER) -> roster name} — the SAME map the calc already loads from
+    commcalc.name_map / rep_aliases. EMPLOYEE-scope assignments store the ROSTER name, but `rep_name` here
+    is the rep's POS salesperson string; when they differ the exact-canon compare silently misses and the
+    rep is skipped ($0). With a map supplied, an assignment pinned under the rep's roster name ALSO matches
+    their POS sales via a 1:1, explicit bridge — never fuzzy. The default None/empty makes the bridge inert
+    so the employee compare — and every payout — is BYTE-IDENTICAL to before. SAFETY: the bridge only ever
+    matches the roster name the map EXPLICITLY connects this POS name to; it can never attach a plan to a
+    rep the map does not connect, and a no-bridge case falls straight back to today's exact compare."""
     SCOPE_RANK = {"employee": 4, "role": 3, "store": 2, "market": 1, "default": 0}
     rn_canon = _canon_person(rep_name)
+    # Deterministic POS->roster bridge (see `identity_map` above). None when no map is supplied or the map
+    # has no entry for this POS name (or it maps back to the same canon) → the employee compare is unchanged.
+    rn_bridged_canon = None
+    if identity_map:
+        _bridged = identity_map.get(str(rep_name or "").strip().upper())
+        if _bridged:
+            _bc = _canon_person(_bridged)
+            if _bc and _bc != rn_canon:
+                rn_bridged_canon = _bc
     rr = (rep_role or "").strip().lower()
     sv_store, sv_mkt = (store or "").strip().lower(), (market or "").strip().lower()
     skeys = {str(k).strip().lower() for k in (store_keys or ()) if str(k or "").strip()}
@@ -216,7 +236,9 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=Fal
             scope = (a.get("scope") or "default").strip().lower()
             val = (a.get("scope_value") or "").strip().lower()
             if scope == "employee":
-                ok = bool(val) and _canon_person(a.get("scope_value")) == rn_canon
+                _a_canon = _canon_person(a.get("scope_value"))
+                ok = bool(val) and (_a_canon == rn_canon
+                                    or (rn_bridged_canon is not None and _a_canon == rn_bridged_canon))
             elif scope == "role":
                 ok = bool(val) and bool(rr) and val == rr
             else:
@@ -1122,7 +1144,7 @@ def _unmatched_record(row, why, rep, store, market, plan_name=None):
 def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
             rule_overrides=None, unmatched_detail=False, gate_override=None,
             setup_fee_override=None, sales_override=None, mrc_override=None,
-            definition_pay_override=None):
+            definition_pay_override=None, identity_map=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -1153,6 +1175,12 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     match_field" switch instead of reading `accessory_config.definition_drives_pay`. It is how the impact
     endpoint quotes an honest before/after — by driving the REAL engine twice rather than arithmetically
     guessing. None (every other caller, always) reads the tenant's stored switch, which defaults FALSE.
+
+    identity_map (luxelink money-path name-bridge) is a deterministic POS->roster identity map
+    {POS salesperson (UPPER) -> roster name} threaded straight into `_resolve_plan_for` so an
+    employee-scope plan pinned under a rep's ROSTER name still attaches to their POS sales. It is the
+    SAME map the calc loads from commcalc.name_map / rep_aliases; the default None makes the bridge inert,
+    so the money output is BYTE-IDENTICAL for every caller that does not pass it. Never fuzzy.
 
     coverage=True (diagnostics only; mig 232) additionally returns a top-level "coverage" block: every
     seller with sales but NO plan attached (today they are silently skipped → a legit-looking $0), the
@@ -1467,14 +1495,14 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         resolution = None
         if detail:
             resolution = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
-                                           explain=True, store_keys=_skeys)
+                                           explain=True, store_keys=_skeys, identity_map=identity_map)
             plan = forced_plan or resolution.get("plan")
         else:
             # money path: EXACTLY the original lazy short-circuit — when plan_id forces a plan,
             # _resolve_plan_for is never called (so the delta vs the pre-drill engine is exactly zero,
             # incl. the case where a non-numeric assignment field would make the resolver raise).
             plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
-                                                    store_keys=_skeys)
+                                                    store_keys=_skeys, identity_map=identity_map)
         if not plan:
             # COVERAGE (mig 232): a seller with real sales and NO plan attached is skipped here — which is
             # exactly how a carrier_mode='plan' tenant ends up with a legitimate-looking $0 for that rep.

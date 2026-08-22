@@ -1714,7 +1714,6 @@ def failure_types(authorization: str = Header(default="")):
                        "remediation": v["remediation"]} for k, v in FAILURE_TYPES.items()]}
 
 
-@router.post("/failures")
 class RecordFailureIn(LaxModel):
     org_id: Any = None
     category: Any = None
@@ -1728,6 +1727,7 @@ class RecordFailureIn(LaxModel):
     remediation: Any = None
 
 
+@router.post("/failures")
 def record_failure(body: RecordFailureIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Record a failure (best-effort — never raises). Any authed surface may call it; org comes from the
     caller (falls back to body/house org for system callers). Remediation is auto-filled by category, and a
@@ -1788,12 +1788,12 @@ def list_failures(authorization: str = Header(default=""), x_active_org: str = H
             "can_configure": _can_edit_setting(caller, "failures")}
 
 
-@router.patch("/failures/{fid}")
 class UpdateFailureIn(LaxModel):
     status: Any = None
     resolved_note: Any = None
 
 
+@router.patch("/failures/{fid}")
 def update_failure(fid: str, body: UpdateFailureIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
@@ -1834,12 +1834,12 @@ def get_failures_config(authorization: str = Header(default=""), x_active_org: s
     }
 
 
-@router.put("/failures/config")
 class PutFailuresConfigIn(LaxModel):
     face_match_threshold: Any = None
     disabled_categories: Any = None
 
 
+@router.put("/failures/config")
 def put_failures_config(body: PutFailuresConfigIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
@@ -1876,7 +1876,6 @@ def failure_kind_docs(authorization: str = Header(default=""), x_active_org: str
     return {"kinds": list(merged.values()), "can_edit": _support_gate(authorization, x_active_org)}
 
 
-@router.post("/failure-kind-docs")
 class UpsertFailureKindDocIn(LaxModel):
     kind: Any = None
     updated_by: Any = None
@@ -1890,6 +1889,7 @@ class UpsertFailureKindDocIn(LaxModel):
     is_active: Any = None
 
 
+@router.post("/failure-kind-docs")
 def upsert_failure_kind_doc(body: UpsertFailureKindDocIn, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Create/update one plain-English kind doc in the HOUSE global registry. Support-gated (the SAME gate
@@ -1936,12 +1936,12 @@ def failures_grouped(authorization: str = Header(default=""), x_active_org: str 
             "can_configure": _can_edit_setting(caller, "failures")}
 
 
-@router.post("/failures/bulk-review")
 class FailuresBulkReviewIn(LaxModel):
     ids: Any = None
     reviewed: Any = True
 
 
+@router.post("/failures/bulk-review")
 def failures_bulk_review(body: FailuresBulkReviewIn, authorization: str = Header(default=""),
                                x_active_org: str = Header(default="")):
     """The CLEAR action: mark selected failure rows reviewed (or un-reviewed) — keeps the rows for the audit
@@ -3104,13 +3104,13 @@ def _pending_connections_payload(client, uid, email=None):
     return {"pending": out}
 
 
-@router.post("/connect-tenant")
 class ConnectTenantIn(LaxModel):
     org_id: Any = None
     code: Any = None
     connect_token: Any = None
 
 
+@router.post("/connect-tenant")
 async def connect_tenant(body: ConnectTenantIn, authorization: str = Header(default="")):
     """The authenticated user ACCEPTS a pending invite: attach the inviting tenant as a membership on
     their EXISTING login (mig 706 shared model → the top-bar tenant switcher then applies). Requires
@@ -4042,11 +4042,11 @@ def reset_tenant_admin_password(org_id: str, body: ResetTenantAdminPasswordIn = 
             "email": target_email, "temp_password": temp_pw, "auth_id": existing}
 
 
-@router.post("/users/bulk-provision")
 class BulkProvisionIn(LaxModel):
     emails: Any = None
 
 
+@router.post("/users/bulk-provision")
 def bulk_provision(body: BulkProvisionIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                    x_active_org: str = Header(default="")):
     """Create logins for every assigned core.users row that has an email and no auth_id yet
@@ -4489,13 +4489,13 @@ def employee_dashboard(employee_id: str = "", period: str = "",
     return out
 
 
-@router.put("/employee-widgets")
 class SetEmployeeWidgetOverridesIn(LaxModel):
     employee_id: Any = None
     email: Any = None
     widget_overrides: Any = None
 
 
+@router.put("/employee-widgets")
 def set_employee_widget_overrides(body: SetEmployeeWidgetOverridesIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Per-employee Employee-Dashboard widget overrides (#1b). Body:
