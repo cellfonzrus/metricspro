@@ -3,17 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MetricsPro — The operating system for prepaid retail</title>
-<meta name="description" content="One platform for prepaid dealers: commissions, point of sale, inventory, workforce, daily closing, finance and store intelligence — across every carrier you sell. Start free for 30 days.">
+<title>MetricsPro — One settled version of the month</title>
+<meta name="description" content="MetricsPro reconciles carrier statements, the register, inventory and cash into one settled set of numbers for prepaid retailers. See the demos, then start free for 30 days.">
 <link rel="canonical" href="https://www.metricspro.tech/">
 <meta property="og:type" content="website">
-<meta property="og:title" content="MetricsPro — The operating system for prepaid retail">
-<meta property="og:description" content="Commissions, point of sale, inventory, workforce, daily closing and finance in one platform. Start free for 30 days.">
+<meta property="og:title" content="MetricsPro — One settled version of the month">
+<meta property="og:description" content="Commissions, point of sale, inventory, workforce and cash, reconciled against each other. Built for prepaid dealers.">
 <meta property="og:url" content="https://www.metricspro.tech/">
-<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
@@ -21,135 +20,283 @@
 
 <header class="mpw-header">
   <div class="mpw-wrap mpw-header-in">
-    <a href="/" class="mpw-logo"><span class="mpw-logo-mark" aria-hidden="true">M</span><span>MetricsPro</span></a>
+    <a href="/" class="mpw-logo">Metrics<em>Pro</em></a>
     <nav class="mpw-header-nav">
+      <a href="#demos">Demos</a>
       <a href="#modules">Modules</a>
       <a href="#platform">Platform</a>
       <a href="#pricing">Pricing</a>
-      <a class="mpw-btn mpw-btn-primary mpw-btn-sm" data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
+      <a class="mpw-btn mpw-btn-ghost mpw-btn-sm" data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
     </nav>
   </div>
 </header>
 
 <main>
+  <!-- ── Hero. The thesis is stated in figures, because the product is about figures. ────────── -->
   <section class="mpw-hero">
     <div class="mpw-wrap">
-      <span class="mpw-eyebrow">Commission intelligence &amp; business operations</span>
-      <h1>The operating system for prepaid retail.</h1>
+      <span class="mpw-label">Commission intelligence &amp; store operations &middot; prepaid retail</span>
+      <h1>One <em>settled</em> version of the month.</h1>
       <p class="mpw-hero-sub">
-        MetricsPro pulls your carrier, processor and store data into one engine — then runs the
-        commissions, the counter, the inventory, the schedule, the closing and the P&amp;L on top of it.
-        One platform, one set of numbers, every store.
+        Carrier statements, the register, inventory, the schedule and the cash drawer all describe the
+        same month — and rarely agree. MetricsPro reconciles them against each other, flags what
+        doesn&rsquo;t line up, and runs your pay, your P&amp;L and your stores off the result.
       </p>
       <div class="mpw-hero-cta">
         <a class="mpw-btn mpw-btn-primary" data-app-path="/signup" href="https://metricspro-five.vercel.app/signup"
-           data-trial-days="Start your {d}-day free trial">Start your 30-day free trial</a>
-        <a href="#modules" class="mpw-btn mpw-btn-ghost">See what&rsquo;s inside</a>
+           data-trial-days="Start free for {d} days">Start free for 30 days</a>
+        <a href="#demos" class="mpw-btn mpw-btn-ghost">See it working</a>
       </div>
       <p class="mpw-trial-line">
-        <span class="mpw-trial-pill" data-trial-days="{d}-day free trial">30-day free trial</span>
+        <span class="mpw-trial-pill" data-trial-days="{d} days free">30 days free</span>
         <span data-trial-days="Every module, every store, for the length of the trial.">Every module, every store, for the length of the trial.</span>
       </p>
-      <div class="mpw-carriers">
-        <span>Built for dealers on</span>
-        <span>Boost</span><span>Cricket</span><span>Metro</span><span>Total Wireless</span>
+
+      <div class="mpw-strip">
+        <div class="mpw-strip-cell">
+          <div class="mpw-label">Carrier statement</div>
+          <div class="mpw-strip-val">$184,207</div>
+          <div class="mpw-strip-note">what they say they paid</div>
+        </div>
+        <div class="mpw-strip-cell">
+          <div class="mpw-label">Computed from sales</div>
+          <div class="mpw-strip-val">$191,660</div>
+          <div class="mpw-strip-note">what the activations earned</div>
+        </div>
+        <div class="mpw-strip-cell" data-tone="flag">
+          <div class="mpw-label">Unexplained</div>
+          <div class="mpw-strip-val">$7,453</div>
+          <div class="mpw-strip-note">across 61 lines, itemised</div>
+        </div>
+        <div class="mpw-strip-cell" data-tone="signal">
+          <div class="mpw-label">Recovered to date</div>
+          <div class="mpw-strip-val">$5,120</div>
+          <div class="mpw-strip-note">appealed and paid</div>
+        </div>
       </div>
+      <p class="mpw-strip-caption">Illustrative figures from sample data — not a customer&rsquo;s numbers.</p>
     </div>
   </section>
 
-  <section class="mpw-section" id="how">
+  <!-- ── Method. Numbered because the order is real: nothing downstream works until the sources
+       land and settle. ────────────────────────────────────────────────────────────────────── -->
+  <section class="mpw-section">
     <div class="mpw-wrap">
-      <span class="mpw-kicker">How it works</span>
+      <span class="mpw-label">How it works</span>
       <h2>Three moves, every month.</h2>
-      <p class="mpw-lede">The work that usually spans a dozen spreadsheets and half a dozen portals collapses into a single pass.</p>
-      <div class="mpw-pillars">
-        <div class="mpw-pillar">
-          <div class="mpw-pillar-step" aria-hidden="true">1</div>
-          <h3>Connect your sources</h3>
-          <p>Carrier portals, payment processors, distributors and your own uploads land in one place on a schedule.</p>
+      <p class="mpw-lede">What normally spans a dozen spreadsheets and half a dozen portals collapses into a single pass.</p>
+      <div class="mpw-steps">
+        <div class="mpw-step">
+          <span class="mpw-step-n">01</span>
+          <h3>Sources land on a schedule</h3>
+          <p>Carrier portals, payment processors, distributors and your own uploads arrive without anyone downloading a file.</p>
         </div>
-        <div class="mpw-pillar">
-          <div class="mpw-pillar-step" aria-hidden="true">2</div>
-          <h3>Let the engine settle it</h3>
-          <p>Sales, pay, inventory and cash are reconciled against each other, and the gaps are flagged instead of buried.</p>
+        <div class="mpw-step">
+          <span class="mpw-step-n">02</span>
+          <h3>The engine settles them</h3>
+          <p>Sales, pay, inventory and cash are reconciled against each other. What doesn&rsquo;t agree is itemised, not averaged away.</p>
         </div>
-        <div class="mpw-pillar">
-          <div class="mpw-pillar-step" aria-hidden="true">3</div>
-          <h3>Run the business on it</h3>
-          <p>Dashboards, targets, payroll and the P&amp;L all read from the same settled numbers — one version of the month.</p>
+        <div class="mpw-step">
+          <span class="mpw-step-n">03</span>
+          <h3>Everything reads from the result</h3>
+          <p>Dashboards, targets, payroll and the P&amp;L all draw on the same settled figures — one version of the month.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <section class="mpw-section mpw-section-tint" id="modules">
+  <!-- ── Demos ───────────────────────────────────────────────────────────────────────────────── -->
+  <section class="mpw-section mpw-section-dark" id="demos">
     <div class="mpw-wrap">
-      <span class="mpw-kicker">Modules</span>
-      <h2>Everything the business runs on.</h2>
-      <p class="mpw-lede">Each module stands on its own and shares the same data. Turn on what you need now, add the rest when you are ready.</p>
-      <div class="mpw-modules">
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">📊</div><h3>Commission Intelligence</h3><p>Every residual, commission, SPIFF and reimbursement recalculated from carrier data — down to the rep, store and line.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">💳</div><h3>Payout Plans</h3><p>Build the pay plans you actually run — tiered, management, multi-month — and pay from what the engine computed.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">🛒</div><h3>Point of Sale</h3><p>Register, customers, products, activations and special orders for the counter.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">📦</div><h3>Inventory &amp; Assets</h3><p>Device ledger from purchase to sale, with aging, reconciliation and what you owe your distributor.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">🎯</div><h3>CRM</h3><p>Leads, pipeline and follow-ups so the traffic that walked in gets worked.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">📈</div><h3>Targets &amp; Coaching</h3><p>Daily targets by store and rep, tracked against pace, with coaching built on the same numbers.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">📅</div><h3>Workforce</h3><p>Scheduling, time clock, time off, shift swaps and staffing coverage across the fleet.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">💵</div><h3>Payroll &amp; HR</h3><p>People records, onboarding, compliance and payroll fed by hours and earned incentives.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">🧾</div><h3>Daily Closing</h3><p>End-of-day cash, tender and deposit reconciliation, verified up the chain.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">💼</div><h3>Finance</h3><p>Gross profit, expenses, P&amp;L and balance sheet built from live operating data — not a re-keyed export.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">📹</div><h3>Store Vision</h3><p>Live cameras, traffic and heat mapping that put foot traffic next to what was sold.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">🎁</div><h3>Referrals</h3><p>Referral capture, approval and payout, tied back to the sale it produced.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">✅</div><h3>Approvals &amp; Chat</h3><p>Requests route to the right manager, and the conversation about them stays with the record.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">🎫</div><h3>Helpdesk</h3><p>Ticketing for the field, with routine issues resolved automatically where they can be.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">🔌</div><h3>Integrations &amp; Imports</h3><p>Carrier portals, processors and vendor feeds pulled in on a schedule instead of by hand.</p></article>
-        <article class="mpw-module"><div class="mpw-module-icon" aria-hidden="true">📤</div><h3>Reporting &amp; Notify</h3><p>One report center, plus scheduled delivery of the numbers each person is supposed to see.</p></article>
+      <span class="mpw-label">Demos</span>
+      <h2>Four screens, before you sign up for anything.</h2>
+      <p class="mpw-lede">
+        Real screens from the platform, running on sample data. Nothing here is a customer&rsquo;s numbers,
+        and nothing asks for your email.
+      </p>
+
+      <div class="mpw-demo-tabs" role="tablist" aria-label="Product demos">
+        <button class="mpw-demo-tab" role="tab" aria-selected="true" aria-controls="d-recon" id="t-recon">Commission recon</button>
+        <button class="mpw-demo-tab" role="tab" aria-selected="false" aria-controls="d-closing" id="t-closing">Daily closing</button>
+        <button class="mpw-demo-tab" role="tab" aria-selected="false" aria-controls="d-earnings" id="t-earnings">Rep earnings</button>
+        <button class="mpw-demo-tab" role="tab" aria-selected="false" aria-controls="d-staffing" id="t-staffing">Schedule &amp; hours</button>
+      </div>
+
+      <!-- Commission reconciliation -->
+      <div class="mpw-screen is-on" id="d-recon" role="tabpanel" aria-labelledby="t-recon">
+        <div class="mpw-screen-bar">
+          <span class="mpw-label">Incentives → Sales feed recon</span>
+          <span class="mpw-screen-period">Period 2026-07 · Boost · 9 stores</span>
+        </div>
+        <div class="mpw-screen-body">
+          <h4>Statement lines that don&rsquo;t match the activation</h4>
+          <table class="mpw-t">
+            <thead><tr>
+              <th>Line</th><th>Store</th><th>Rep</th><th>Category</th>
+              <th class="n">Expected</th><th class="n">Paid</th><th class="n">Variance</th><th>Status</th>
+            </tr></thead>
+            <tbody>
+              <tr><td class="mpw-num">A-4471</td><td>Great Neck</td><td>R. Patel</td><td>Promo · port-in</td><td class="n">$120.00</td><td class="n">$60.00</td><td class="n mpw-bad">−$60.00</td><td><span class="mpw-tag mpw-bad">Rate tier</span></td></tr>
+              <tr><td class="mpw-num">A-4488</td><td>Yonkers</td><td>M. Cruz</td><td>Bounty · month 2</td><td class="n">$45.00</td><td class="n">$0.00</td><td class="n mpw-bad">−$45.00</td><td><span class="mpw-tag mpw-bad">Not paid</span></td></tr>
+              <tr><td class="mpw-num">A-4502</td><td>Great Neck</td><td>R. Patel</td><td>Reimbursement</td><td class="n">$189.00</td><td class="n">$189.00</td><td class="n mpw-ok">$0.00</td><td><span class="mpw-tag mpw-ok">Settled</span></td></tr>
+              <tr><td class="mpw-num">A-4519</td><td>Hempstead</td><td>J. Alvarez</td><td>Promo · upgrade</td><td class="n">$80.00</td><td class="n">$80.00</td><td class="n mpw-ok">$0.00</td><td><span class="mpw-tag mpw-ok">Settled</span></td></tr>
+              <tr><td class="mpw-num">A-4536</td><td>Yonkers</td><td>M. Cruz</td><td>Residual · ATU</td><td class="n">$12.40</td><td class="n">$9.10</td><td class="n mpw-bad">−$3.30</td><td><span class="mpw-tag mpw-bad">Short</span></td></tr>
+            </tbody>
+            <tfoot><tr>
+              <td colspan="4">61 unmatched lines this period</td>
+              <td class="n">$191,660</td><td class="n">$184,207</td><td class="n mpw-bad">−$7,453</td><td></td>
+            </tr></tfoot>
+          </table>
+          <p class="mpw-screen-note">Every variance keeps the activation, the rep and the rate rule behind it, so an appeal is a filter rather than an investigation.</p>
+        </div>
+      </div>
+
+      <!-- Daily closing -->
+      <div class="mpw-screen" id="d-closing" role="tabpanel" aria-labelledby="t-closing" hidden>
+        <div class="mpw-screen-bar">
+          <span class="mpw-label">Daily closing → Tender reconciliation</span>
+          <span class="mpw-screen-period">Thu 2026-07-16 · Great Neck</span>
+        </div>
+        <div class="mpw-screen-body">
+          <h4>Counted against expected, by tender</h4>
+          <table class="mpw-t">
+            <thead><tr>
+              <th>Tender</th><th class="n">Register</th><th class="n">Counted</th><th class="n">Difference</th><th>Note</th>
+            </tr></thead>
+            <tbody>
+              <tr><td>Cash</td><td class="n">$2,418.00</td><td class="n">$2,398.00</td><td class="n mpw-bad">−$20.00</td><td>Short — pending manager review</td></tr>
+              <tr><td>Card</td><td class="n">$5,207.44</td><td class="n">$5,207.44</td><td class="n mpw-ok">$0.00</td><td>Matches processor batch</td></tr>
+              <tr><td>ePay</td><td class="n">$1,940.00</td><td class="n">$1,940.00</td><td class="n mpw-ok">$0.00</td><td>Matches daily detail</td></tr>
+              <tr><td>Store credit</td><td class="n">$85.00</td><td class="n">$85.00</td><td class="n mpw-ok">$0.00</td><td></td>
+            </tr>
+            </tbody>
+            <tfoot><tr><td>Day total</td><td class="n">$9,650.44</td><td class="n">$9,630.44</td><td class="n mpw-bad">−$20.00</td><td></td></tr></tfoot>
+          </table>
+          <p class="mpw-screen-note">A short drawer is raised the same evening, against the person who closed — not found six weeks later in a bank reconciliation.</p>
+        </div>
+      </div>
+
+      <!-- Rep earnings -->
+      <div class="mpw-screen" id="d-earnings" role="tabpanel" aria-labelledby="t-earnings" hidden>
+        <div class="mpw-screen-bar">
+          <span class="mpw-label">Incentives → Rep incentive report</span>
+          <span class="mpw-screen-period">Period 2026-07 · R. Patel · Great Neck</span>
+        </div>
+        <div class="mpw-screen-body">
+          <h4>What this rep earned, and from what</h4>
+          <table class="mpw-t">
+            <thead><tr><th>Component</th><th class="n">Units</th><th class="n">Rate</th><th class="n">Earned</th></tr></thead>
+            <tbody>
+              <tr><td>Activations — port-in</td><td class="n">31</td><td class="n">$18.00</td><td class="n">$558.00</td></tr>
+              <tr><td>Activations — new line</td><td class="n">44</td><td class="n">$12.00</td><td class="n">$528.00</td></tr>
+              <tr><td>Upgrades</td><td class="n">19</td><td class="n">$8.00</td><td class="n">$152.00</td></tr>
+              <tr><td>Accessories (attach 61%)</td><td class="n">—</td><td class="n">6.0%</td><td class="n">$214.80</td></tr>
+              <tr><td>KPI tier bonus — tier 3 of 4</td><td class="n">—</td><td class="n">—</td><td class="n">$300.00</td></tr>
+              <tr><td>Chargebacks — 2 deactivations</td><td class="n">2</td><td class="n">−$18.00</td><td class="n mpw-bad">−$36.00</td></tr>
+            </tbody>
+            <tfoot><tr><td colspan="3">Incentive earned this period</td><td class="n">$1,716.80</td></tr></tfoot>
+          </table>
+          <p class="mpw-screen-note">The rep sees the same breakdown you do, before payday — which is where most commission disputes stop starting.</p>
+        </div>
+      </div>
+
+      <!-- Schedule & hours -->
+      <div class="mpw-screen" id="d-staffing" role="tabpanel" aria-labelledby="t-staffing" hidden>
+        <div class="mpw-screen-bar">
+          <span class="mpw-label">Workforce → Hours budget</span>
+          <span class="mpw-screen-period">Week of 2026-07-13 · 4 stores</span>
+        </div>
+        <div class="mpw-screen-body">
+          <h4>Scheduled hours against budget, and what they cost</h4>
+          <table class="mpw-t">
+            <thead><tr>
+              <th>Store</th><th class="n">Budget</th><th class="n">Scheduled</th><th class="n">Actual</th><th class="n">Labour cost</th><th>Status</th>
+            </tr></thead>
+            <tbody>
+              <tr><td>Great Neck</td><td class="n">168</td><td class="n">166</td><td class="n">164.5</td><td class="n">$2,879</td><td><span class="mpw-tag mpw-ok">Within</span></td></tr>
+              <tr><td>Yonkers</td><td class="n">140</td><td class="n">151</td><td class="n">153.0</td><td class="n">$2,677</td><td><span class="mpw-tag mpw-bad">Over by 13</span></td></tr>
+              <tr><td>Hempstead</td><td class="n">126</td><td class="n">124</td><td class="n">121.0</td><td class="n">$2,117</td><td><span class="mpw-tag mpw-ok">Within</span></td></tr>
+              <tr><td>Jamaica</td><td class="n">140</td><td class="n">138</td><td class="n">139.5</td><td class="n">$2,441</td><td><span class="mpw-tag mpw-ok">Within</span></td></tr>
+            </tbody>
+            <tfoot><tr><td>Week</td><td class="n">574</td><td class="n">579</td><td class="n">578.0</td><td class="n">$10,114</td><td></td></tr></tfoot>
+          </table>
+          <p class="mpw-screen-note">Overtime is visible while the week can still be changed, not after payroll has run.</p>
+        </div>
       </div>
     </div>
   </section>
 
+  <!-- ── Modules ─────────────────────────────────────────────────────────────────────────────── -->
+  <section class="mpw-section" id="modules">
+    <div class="mpw-wrap">
+      <span class="mpw-label">Modules</span>
+      <h2>Everything the business runs on.</h2>
+      <p class="mpw-lede">Each stands on its own and shares the same data. Turn on what you need now; add the rest when you are ready.</p>
+      <div class="mpw-mods">
+        <div class="mpw-mod"><span class="mpw-mod-n">01</span><div><h3>Commission intelligence</h3><p>Every residual, commission, SPIFF and reimbursement recomputed from carrier data — down to the rep, store and line.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">02</span><div><h3>Payout plans</h3><p>Build the plans you actually run — tiered, management, multi-month — and pay from what the engine computed.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">03</span><div><h3>Point of sale</h3><p>Register, customers, products, activations and special orders for the counter.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">04</span><div><h3>Inventory &amp; assets</h3><p>Device ledger from purchase to sale, with aging, reconciliation and what you owe your distributor.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">05</span><div><h3>CRM</h3><p>Leads, pipeline and follow-ups, so the traffic that walked in gets worked.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">06</span><div><h3>Targets &amp; coaching</h3><p>Daily targets by store and rep, tracked against pace, with coaching built on the same numbers.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">07</span><div><h3>Workforce</h3><p>Scheduling, time clock, time off, shift swaps and staffing coverage across the fleet.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">08</span><div><h3>Payroll &amp; HR</h3><p>People records, onboarding, compliance and payroll fed by hours and earned incentives.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">09</span><div><h3>Daily closing</h3><p>End-of-day cash, tender and deposit reconciliation, verified up the chain.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">10</span><div><h3>Finance</h3><p>Gross profit, expenses, P&amp;L and balance sheet built from live operating data — not a re-keyed export.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">11</span><div><h3>Store vision</h3><p>Live cameras, traffic and heat mapping that put foot traffic next to what was sold.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">12</span><div><h3>Referrals</h3><p>Referral capture, approval and payout, tied back to the sale it produced.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">13</span><div><h3>Approvals &amp; chat</h3><p>Requests route to the right manager, and the conversation about them stays with the record.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">14</span><div><h3>Helpdesk</h3><p>Ticketing for the field, with routine issues resolved automatically where they can be.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">15</span><div><h3>Integrations &amp; imports</h3><p>Carrier portals, processors and vendor feeds pulled in on a schedule instead of by hand.</p></div></div>
+        <div class="mpw-mod"><span class="mpw-mod-n">16</span><div><h3>Reporting &amp; notify</h3><p>One report centre, plus scheduled delivery of the numbers each person is meant to see.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Platform ────────────────────────────────────────────────────────────────────────────── -->
   <section class="mpw-section" id="platform">
     <div class="mpw-wrap">
-      <span class="mpw-kicker">The platform</span>
+      <span class="mpw-label">The platform</span>
       <h2>One spine under all of it.</h2>
-      <p class="mpw-lede">The modules are the surface. What makes them work together is everything underneath.</p>
+      <p class="mpw-lede">The modules are the surface. What makes them agree with each other is everything underneath.</p>
       <div class="mpw-caps">
-        <div class="mpw-cap"><span class="mpw-cap-dot" aria-hidden="true"></span><div><h3>Carrier-neutral by design</h3><p>Carriers, categories and pay rules are configured and mapped — never hardcoded — so a new carrier is a setup task, not a rebuild.</p></div></div>
-        <div class="mpw-cap"><span class="mpw-cap-dot" aria-hidden="true"></span><div><h3>Multi-company, multi-market</h3><p>Run several companies, markets and stores side by side, with the data kept apart and rolled up when you want it.</p></div></div>
-        <div class="mpw-cap"><span class="mpw-cap-dot" aria-hidden="true"></span><div><h3>Roles and access you control</h3><p>Owners, market managers, store managers and reps each see their own slice, down to the report and the column.</p></div></div>
-        <div class="mpw-cap"><span class="mpw-cap-dot" aria-hidden="true"></span><div><h3>Native mobile app</h3><p>iOS and Android for the frontline — time clock, POS, CRM and earnings — on the same backend as the web.</p></div></div>
-        <div class="mpw-cap"><span class="mpw-cap-dot" aria-hidden="true"></span><div><h3>Built for audit</h3><p>Access logs, approval trails and reconciliation reports, so any number can be traced back to its source.</p></div></div>
-        <div class="mpw-cap"><span class="mpw-cap-dot" aria-hidden="true"></span><div><h3>Fits your operation</h3><p>Rename modules, reorder the menu and switch off what you do not use — the platform speaks your company&rsquo;s language.</p></div></div>
+        <div class="mpw-cap"><h3>Carrier-neutral by design</h3><p>Carriers, categories and pay rules are configured and mapped, never hardcoded — so a new carrier is a setup task, not a rebuild.</p></div>
+        <div class="mpw-cap"><h3>Multi-company, multi-market</h3><p>Run several companies, markets and stores side by side, kept apart in the data and rolled up when you want them.</p></div>
+        <div class="mpw-cap"><h3>Access you control</h3><p>Owners, market managers, store managers and reps each see their own slice — down to the report and the column.</p></div>
+        <div class="mpw-cap"><h3>Native mobile app</h3><p>iOS and Android for the frontline — time clock, POS, CRM and earnings — on the same backend as the web.</p></div>
+        <div class="mpw-cap"><h3>Built for audit</h3><p>Access logs, approval trails and reconciliation reports, so any number can be traced back to its source.</p></div>
+        <div class="mpw-cap"><h3>Fits your operation</h3><p>Rename modules, reorder the menu and switch off what you do not use. The platform speaks your company&rsquo;s language.</p></div>
       </div>
     </div>
   </section>
 
-  <section class="mpw-section mpw-section-tint" id="pricing">
+  <!-- ── Pricing ─────────────────────────────────────────────────────────────────────────────── -->
+  <section class="mpw-section" id="pricing">
     <div class="mpw-wrap">
-      <span class="mpw-kicker">Pricing</span>
+      <span class="mpw-label">Pricing</span>
       <h2 id="pricing-headline" data-trial-days="Start free for {d} days.">Start free for 30 days.</h2>
       <p class="mpw-lede" id="pricing-subhead" data-trial-days="Every module, every store, for the whole {d} days. Choose how you continue after that.">
         Every module, every store, for the whole 30 days. Choose how you continue after that.
       </p>
 
-      <!-- Replaced by assets/site.js once a published price list comes back from the platform.
-           What is written here is the page WITHOUT that call: no invented number, trial first. -->
+      <!-- Replaced by assets/site.js once a published price list comes back from the platform. What
+           is written here is the page WITHOUT that call: no invented number, trial first. -->
       <div class="mpw-plans mpw-plans-1" id="pricing-cards">
         <article class="mpw-plan mpw-plan-featured">
           <span class="mpw-plan-flag" data-trial-days="{d}-day free trial">30-day free trial</span>
-          <h3>Try it on your own numbers</h3>
+          <h3>Priced against your operation</h3>
           <p class="mpw-plan-tagline">
-            Pricing depends on how many stores and companies you run, so we quote it against your
-            operation rather than guessing at a sticker price.
+            What you pay depends on how many stores and companies you run, so we quote it rather than
+            guess at a sticker price.
           </p>
           <ul class="mpw-plan-features">
-            <li data-trial-days="{d} days free, with every module switched on">30 days free, with every module switched on</li>
+            <li data-trial-days="{d} days free, every module switched on">30 days free, every module switched on</li>
             <li>Priced on your store and company count</li>
             <li>Add modules as you need them</li>
           </ul>
           <a class="mpw-btn mpw-btn-primary mpw-plan-cta" data-app-path="/signup"
              href="https://metricspro-five.vercel.app/signup"
-             data-trial-days="Start your {d}-day free trial">Start your 30-day free trial</a>
+             data-trial-days="Start free for {d} days">Start free for 30 days</a>
         </article>
       </div>
       <p class="mpw-plans-note" id="pricing-note"></p>
@@ -158,15 +305,15 @@
 
   <section class="mpw-cta">
     <div class="mpw-wrap">
-      <h2>See your own month, settled.</h2>
-      <p data-trial-days="Bring one period of your carrier and store data and see what the engine makes of it — free for {d} days, every module switched on.">
-        Bring one period of your carrier and store data and see what the engine makes of it — free for
-        30 days, every module switched on.
+      <h2>Bring one month. See what settles.</h2>
+      <p data-trial-days="Load a single period of your carrier and store data and see what the engine makes of it — free for {d} days, before you change anything about how you operate.">
+        Load a single period of your carrier and store data and see what the engine makes of it — free
+        for 30 days, before you change anything about how you operate.
       </p>
       <div class="mpw-cta-row">
         <a class="mpw-btn mpw-btn-light" data-app-path="/signup" href="https://metricspro-five.vercel.app/signup"
-           data-trial-days="Start your {d}-day free trial">Start your 30-day free trial</a>
-        <a class="mpw-btn mpw-btn-light" data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
+           data-trial-days="Start free for {d} days">Start free for 30 days</a>
+        <a class="mpw-btn mpw-btn-outline-light" data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
       </div>
     </div>
   </section>
@@ -174,7 +321,7 @@
 
 <footer class="mpw-footer">
   <div class="mpw-wrap mpw-footer-in">
-    <span>&copy; <span id="year">2026</span> IT Solutions of LI Inc. MetricsPro is a product of IT Solutions of LI Inc.</span>
+    <span>&copy; <span id="year">2026</span> IT Solutions of LI Inc</span>
     <div class="mpw-footer-links">
       <a data-app-path="/signup" href="https://metricspro-five.vercel.app/signup">Get started</a>
       <a data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
@@ -188,6 +335,23 @@
 </div>
 <script src="/assets/config.js"></script>
 <script src="/assets/site.js"></script>
-<script>document.getElementById('year').textContent = new Date().getFullYear()</script>
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear()
+  // Demo tabs. Plain buttons + hidden panels, so the content is all in the HTML and a failed script
+  // leaves the first demo on screen rather than an empty section.
+  ;(function () {
+    var tabs = document.querySelectorAll('.mpw-demo-tab')
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        tabs.forEach(function (t) {
+          var on = t === tab
+          t.setAttribute('aria-selected', String(on))
+          var panel = document.getElementById(t.getAttribute('aria-controls'))
+          if (panel) { panel.classList.toggle('is-on', on); panel.hidden = !on }
+        })
+      })
+    })
+  })()
+</script>
 </body>
 </html>
