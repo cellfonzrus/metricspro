@@ -14152,7 +14152,12 @@ def commission_plan_coverage(period: str, org_id: str = ORG_ID):
         raise HTTPException(400, "period required")
     require_org(org_id)
     client = sb()
-    prev = commission_engine.preview(client, org_id, period, coverage=True)
+    # Thread the SAME POS->roster identity map the money path uses (recompute-rep / _apply_new_engines
+    # both pass it) so a name_map / rep_aliases-bridged rep is reported COVERED here instead of wrongly
+    # landing in the "no plan attached" list — closing the coverage/money divergence. Deterministic,
+    # never fuzzy; None kept the diagnostic blind to bridges the pay path already honours.
+    prev = commission_engine.preview(client, org_id, period, coverage=True,
+                                     identity_map=_rep_canon_map(client, org_id))
     cov = prev.get("coverage") or {}
     try:
         carriers = (client.schema('commcalc').table('carrier').select('*')
@@ -17548,7 +17553,12 @@ def commission_explain(period: str, rep: str = "", org_id: str = ORG_ID):
     mode = _resolve_carrier_mode(carriers)
     from app.modules.commcalc import commission_drilldown
     try:
-        return commission_drilldown.explain_rep(client, org_id, period, rep, carrier_mode=mode)
+        # SAME deterministic POS->roster identity map the money path threads (recompute-rep /
+        # _apply_new_engines) so this drill-down resolves the rep's plan — and its no-plan diagnosis —
+        # exactly as pay does. Deterministic; None would leave the explain view blind to a name bridge
+        # the payout already honours.
+        return commission_drilldown.explain_rep(client, org_id, period, rep, carrier_mode=mode,
+                                                identity_map=_rep_canon_map(client, org_id))
     except Exception as e:
         raise HTTPException(500, f"commission-explain failed: {e}")
 

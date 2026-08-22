@@ -79,6 +79,7 @@ export default function CommissionExplainPage() {
   // an attach + single-rep recompute.
   const [plans, setPlans] = useState<any[]>([])
   const [assigning, setAssigning] = useState(false)
+  const [linking, setLinking] = useState(false)
   const [reload, setReload] = useState(0)
 
   // roster (pick-don't-type) from the org-scoped rep_commissions rows
@@ -145,6 +146,35 @@ export default function CommissionExplainPage() {
       alert(`Could not attach plan: ${e?.message || e}`)
     } finally {
       setAssigning(false)
+    }
+  }
+
+  // ONE-CLICK IDENTITY LINK (owner directive 2026-08-22): the rep's POS/ePay spelling and their roster
+  // name are the same person, but the engine compares them exactly, so an employee-scope plan pinned
+  // under the roster name never attaches to their POS sales. Write alias = POS spelling → canonical =
+  // the roster name the plan is assigned under, through the STANDARD /rep-aliases endpoint
+  // (body: {canonical, aliases:[...]}). That row feeds the money path's name-bridge (name_map +
+  // rep_aliases), so the single-rep recompute below makes the plan attach and the commission compute
+  // immediately — the same mechanism the owner would use manually on the Rep-merge page. No payout
+  // math is touched; this only maps a POS name to an identity the calc already consumes.
+  async function linkAlias(posName: string, canonical: string) {
+    posName = (posName || '').trim(); canonical = (canonical || '').trim()
+    if (!posName || !canonical || !rep) return
+    setLinking(true)
+    try {
+      await api(`/api/v1/commcalc/rep-aliases?org_id=${ORG_ID}`, {
+        method: 'POST',
+        body: JSON.stringify({ canonical, aliases: [posName] }),
+      })
+      await api(`/api/v1/commcalc/recompute-rep?org_id=${ORG_ID}`, {
+        method: 'POST',
+        body: JSON.stringify({ period, rep }),
+      })
+      setReload(k => k + 1)
+    } catch (e: any) {
+      alert(`Could not link names: ${e?.message || e}`)
+    } finally {
+      setLinking(false)
     }
   }
 
@@ -298,27 +328,9 @@ export default function CommissionExplainPage() {
                   <b style={{ color: 'var(--accent)' }}>{fmt(pc.total_payout)}</b>.
                 </div>
               ) : (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 13, color: 'var(--red)', marginBottom: 8 }}>
-                    No incentive plan attached to this rep → $0 on the plan component.
-                  </div>
-                  {plans.length > 0 ? (
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <label style={{ fontSize: 13, color: 'var(--text2)' }}>Attach an incentive plan:&nbsp;
-                        <select className="select" defaultValue="" disabled={assigning || !rep}
-                          onChange={e => { const v = e.target.value; if (v) { attachPlan(v); e.target.value = '' } }}>
-                          <option value="">Select a plan…</option>
-                          {plans.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                      </label>
-                      {assigning && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Attaching &amp; recomputing this rep…</span>}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>
-                      No incentive plans configured yet — create one on the Incentive Plans page, then attach it here.
-                    </div>
-                  )}
-                </div>
+                <NoPlanDiagnosis diagnosis={pc?.diagnosis} plans={plans}
+                  assigning={assigning} linking={linking}
+                  onAttach={attachPlan} onLink={linkAlias} />
               )}
               <AssignmentTrace considered={pc?.considered} />
               <DataQualityBanner dq={pc?.data_quality} />
@@ -490,6 +502,87 @@ function EngineWarnings({ warnings }: { warnings: any[] }) {
           ))}
         </ul>
       )}
+    </div>
+  )
+}
+
+// SELF-DIAGNOSING "no plan attached" panel. Driven by the explain response's `diagnosis` (the SAME
+// `_unassigned_diagnosis` the coverage endpoint builds). Three cases, in priority order:
+//   1. assignment_near_miss — a plan IS assigned, just under a different spelling → one-click link.
+//   2. name_bridge no_match with candidates — closest roster people, each with a % + one-click link.
+//   3. otherwise (roster name matches but no assignment, or no diagnosis at all) — the attach-plan
+//      dropdown from PR #61 as the primary action.
+// Any link/attach goes through the standard endpoints; no payout math is touched here.
+function NoPlanDiagnosis({ diagnosis, plans, assigning, linking, onAttach, onLink }: {
+  diagnosis: any; plans: any[]; assigning: boolean; linking: boolean;
+  onAttach: (planId: string) => void; onLink: (posName: string, canonical: string) => void
+}) {
+  const nb = diagnosis?.name_bridge
+  const posName: string = nb?.sales_name || ''
+  const near = (diagnosis?.assignment_near_miss || [])[0]
+  const cands: any[] = (nb?.candidates || [])
+  const isNoMatch = nb?.status === 'no_match'
+  const linkLabel = linking ? 'Linking…' : 'These are the same person — link them'
+  const hint = (t: string, k?: string) => t
+    ? <div key={k} style={{ fontSize: 12, color: 'var(--text3)', marginTop: 6, lineHeight: 1.6 }}>{t}</div> : null
+
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 13, color: 'var(--red)', marginBottom: 8 }}>
+        No incentive plan attached to this rep → $0 on the plan component.
+      </div>
+
+      {near ? (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 10, background: 'var(--surface2)' }}>
+          <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8, lineHeight: 1.6 }}>
+            A plan <b style={{ color: 'var(--text)' }}>IS</b> assigned to{' '}
+            <b style={{ color: 'var(--text)' }}>“{near.scope_value}”</b>
+            {near.plan_name ? <> (<b>{near.plan_name}</b>)</> : null} — but this rep’s sales ring under{' '}
+            <b style={{ color: 'var(--text)' }}>“{posName}”</b>. The engine compares them exactly, so they don’t match.
+          </div>
+          <button className="btn btn-primary" disabled={linking || !posName || !near.scope_value}
+            onClick={() => onLink(posName, near.scope_value)}>{linkLabel}</button>
+        </div>
+      ) : (isNoMatch && cands.length > 0) ? (
+        <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: 10, background: 'var(--surface2)' }}>
+          <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 8, lineHeight: 1.6 }}>
+            No roster name matches this POS seller <b style={{ color: 'var(--text)' }}>“{posName}”</b>.
+            {' '}Closest roster {cands.length > 1 ? 'people' : 'person'}:
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {cands.slice(0, 3).map((c: any, i: number) => (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, color: 'var(--text2)' }}>
+                  <b style={{ color: 'var(--text)' }}>{c.name}</b>{c.role ? ` (${c.role})` : ''}
+                  {' '}— {Math.round((c.score || 0) * 100)}% match
+                </span>
+                <button className="btn btn-primary" style={{ padding: '2px 10px', fontSize: 12 }}
+                  disabled={linking || !posName || !c.name}
+                  onClick={() => onLink(posName, c.name)}>{linkLabel}</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : plans.length > 0 ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 13, color: 'var(--text2)' }}>Attach an incentive plan:&nbsp;
+            <select className="select" defaultValue="" disabled={assigning}
+              onChange={e => { const v = e.target.value; if (v) { onAttach(v); e.target.value = '' } }}>
+              <option value="">Select a plan…</option>
+              {plans.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          {assigning && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Attaching &amp; recomputing this rep…</span>}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+          No incentive plans configured yet — create one on the Incentive Plans page, then attach it here.
+        </div>
+      )}
+
+      {/* engine-authored remediation + conclusion — always shown when present */}
+      {hint(nb?.remediation, 'rem')}
+      {diagnosis?.conclusion && diagnosis.conclusion !== nb?.remediation ? hint(diagnosis.conclusion, 'concl') : null}
     </div>
   )
 }
