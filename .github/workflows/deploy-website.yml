@@ -158,6 +158,13 @@ jobs:
               echo "WARNING: upload target ends in /website — see the job summary." ;;
           esac
 
+          # The `cd` before the mirror is load-bearing, not tidiness. `mirror` CREATES a target that is
+          # not there, so a mistyped FTP_REMOTE_DIR uploads the whole site into a brand-new folder and
+          # reports success — the failure this repo has already had once. `cd` into a path that does
+          # not exist is an error, and with cmd:fail-exit set that aborts the job. A wrong path now
+          # fails loudly instead of publishing to somewhere nobody visits. `pwd` records the resolved
+          # directory in the log so the destination is always evidenced.
+          #
           # ssl-force refuses to fall back to cleartext — an FTP password must never cross the wire in
           # the open. ssl-protect-data encrypts the file transfer too, not just the login. Bluehost's
           # FTP certificate is usually issued for the shared server rather than your domain, hence
@@ -171,7 +178,9 @@ jobs:
             set net:timeout 20;
             set cmd:fail-exit true;
             open -u '$FTP_USERNAME','$FTP_PASSWORD' '$FTP_SERVER';
-            mirror $flags website/ '$remote';
+            cd '$remote';
+            pwd;
+            mirror $flags website/ .;
             bye
           "
 

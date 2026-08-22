@@ -2,6 +2,13 @@
 # Upload this file alongside index.html. If your host ignores it, ask support to enable
 # AllowOverride for the account; everything here is standard and safe to run on cPanel hosting.
 
+# ── No directory listings ──────────────────────────────────────────────────────────────────────
+# Without this, a folder holding no index file is served as a browsable listing of its contents.
+# That is how this document root looked before the site landed in it, and it would still apply to
+# /assets/ and /legal/, handing any visitor a complete file inventory. There is no case where a
+# listing is wanted here.
+Options -Indexes
+
 # ── Force HTTPS ────────────────────────────────────────────────────────────────────────────────
 # Turn this on only AFTER the SSL certificate is issued and https:// loads correctly, otherwise
 # visitors are redirected to a page that cannot yet be served.
