@@ -148,6 +148,38 @@ export function hourLabel(h: number): string {
   return h < 12 ? `${h}a` : `${h - 12}p`
 }
 
+// ── Busy hours (Google's own person events, mig 907) ─────────────────────────────────────────────
+export interface BusyHourRow { hour: number; events: number; per_day: number }
+
+// THE BUSIEST HOUR, and what happens on a tie. Equally-busy hours resolve to the EARLIER one:
+// a manager told "3p and 7p tie" still has to pick one, and the earlier is where the day's
+// staffing decision actually gets made.
+//
+// The tie-break is on the HOUR, deliberately, and not left to array order. A bare `b.events >
+// a.events` reduce gives "whichever tied row came first in the array", which is the same answer
+// only for as long as the caller hands rows over in hour order — true of /vision/busy-hours today,
+// and silently untrue the day anything sorts or filters them on the way in. Then the headline
+// would flip between two equal hours with no visible cause.
+//
+// Returns hour -1 when nothing was seen at all, which is how the caller knows to print a dash
+// rather than announce that midnight was the busiest hour of a store that saw nobody.
+export function peakHour(rows: BusyHourRow[]): BusyHourRow {
+  return (rows || []).reduce((a, b) => {
+    if (b.events !== a.events) return b.events > a.events ? b : a
+    return b.hour < a.hour ? b : a
+  }, { hour: -1, events: 0, per_day: 0 })
+}
+
+// A rate the backend rounded to one decimal can land on 0.0 while the hour genuinely saw somebody:
+// 1 sighting across 27 days is 0.037. Printing a flat "0" beside a non-zero count reads as a
+// contradiction — the table would say 1 sighting and 0 per day on the same row — so say "<0.1"
+// instead. Rare is not absent, and the distinction matters on exactly the hours an operator is
+// deciding whether to open for.
+export function perDayLabel(r: BusyHourRow): string {
+  if (!r || r.events <= 0) return '0'
+  return r.per_day < 0.1 ? '<0.1' : String(r.per_day)
+}
+
 // The heat ramp. Normalising by the MAX alone makes every store look identical — one scorching cell
 // at the register and everything else black — so the ramp is clipped at the 95th percentile that the
 // backend returns alongside the max. The register still reads hottest; the difference between the

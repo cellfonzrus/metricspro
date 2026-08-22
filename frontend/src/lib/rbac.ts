@@ -292,6 +292,10 @@ export const NAV: NavGroup[] = [
   { group: 'Vision', module: 'vision', items: [
     { href: '/vision', label: 'Live Cameras', icon: '📹', module: 'vision', scopes: ['all', 'market', 'store'] },
     { href: '/vision/heatmap', label: 'Traffic & Heat Map', icon: '🔥', module: 'vision', scopes: ['all', 'market', 'store'] },
+    // Busy Hours reads Google's own person events (mig 907) — no analyzer, no video, every camera.
+    // Same scope tiers as Live Cameras / Heat Map: it is store-level activity, names nobody, and a
+    // store manager staffing their own floor is exactly who it is for.
+    { href: '/vision/busy-hours', label: 'Busy Hours', icon: '🕐', module: 'vision', scopes: ['all', 'market', 'store'] },
     { href: '/vision/behavior', label: 'Coaching', icon: '🎧', module: 'vision', scopes: ['all', 'market'] },
     { href: '/vision/settings', label: 'Vision Settings', icon: '⚙️', module: 'vision', scopes: ['all'] },
   ]},
