@@ -324,8 +324,12 @@ def _sale_line_index(client, org_id, periods, ce):
 
 
 # ── main: per-rep explanation ─────────────────────────────────────────────────────────────────────
-def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
-    """Full 'how was this commission calculated' for ONE rep + period. READ-ONLY."""
+def explain_rep(client, org_id, period, rep, carrier_mode="plan", identity_map=None):
+    """Full 'how was this commission calculated' for ONE rep + period. READ-ONLY.
+
+    identity_map (optional) is the deterministic POS->roster name bridge the money path threads
+    (name_map + rep_aliases). Passing it makes the plan resolution AND the no-plan diagnosis match what
+    pay does; None keeps this drill-down bridge-blind (byte-identical to before)."""
     from app.modules.commcalc import commission_engine as ce, sale_installment_engine as sie
     from app.modules.commcalc.installment_engine import _read_mi
 
@@ -339,7 +343,7 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
     #    narration + per-rule matched lines).
     plan_row = None
     try:
-        pv = ce.preview(client, org_id, period, detail=True, only_rep=rep)
+        pv = ce.preview(client, org_id, period, detail=True, only_rep=rep, identity_map=identity_map)
         rows = pv.get("by_rep") or []
         # prefer the exact canon match if only_rep's token-subset matched more than one rep
         plan_row = (next((r for r in rows if _canon_person(r.get("rep")) == _canon_person(rep)), None)
@@ -361,7 +365,18 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
         }
         out["plan_component"] = _annotate_plan_component(out["plan_component"], _dq_cfg)
     else:
-        out["plan_component"] = _no_plan_narration(client, org_id, period, rep, ce)
+        out["plan_component"] = _no_plan_narration(client, org_id, period, rep, ce,
+                                                   identity_map=identity_map)
+        # SELF-DIAGNOSIS: when no plan attached, attach the SAME per-rep `_unassigned_diagnosis` the
+        # coverage endpoint builds (name_bridge / assignment_near_miss / store_bridge / conclusion),
+        # threaded with identity_map so it matches the money path. Isolated + graceful: any failure
+        # leaves today's shape (no `diagnosis` key) untouched.
+        try:
+            diag = _rep_no_plan_diagnosis(client, org_id, period, rep, ce, identity_map)
+            if diag:
+                out["plan_component"]["diagnosis"] = diag
+        except Exception as _de:
+            out["note"] = (out.get("note") or "") + f" (diagnosis unavailable: {_de})"
 
     # 2. MULTI-MONTH COMPONENT — authoritative ledger from the sale-installment engine, per device.
     try:
@@ -465,9 +480,10 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan"):
     return out
 
 
-def _no_plan_narration(client, org_id, period, rep, ce):
+def _no_plan_narration(client, org_id, period, rep, ce, identity_map=None):
     """Rep produced no plan row → explain: no sale lines, or lines present but no assignment matched
-    (with the nearest-miss list straight from _resolve_plan_for(explain=True))."""
+    (with the nearest-miss list straight from _resolve_plan_for(explain=True)). identity_map (optional)
+    is threaded into the resolver so a name-bridged rep's plan is resolved exactly as the money path."""
     plans, ready = ce._load_plans(client, org_id)
     store_market = ce._read_store_market(client, org_id)
     role_by_rep = ce._read_employee_roles(client, org_id)
@@ -482,7 +498,8 @@ def _no_plan_narration(client, org_id, period, rep, ce):
         pass
     market = store_market.get(store.lower()) or store_market.get(store.split(" ")[0].lower(), "")
     rep_role = role_by_rep.get(_canon_person(rep))
-    res = ce._resolve_plan_for(rep, store, market, plans, rep_role=rep_role, explain=True)
+    res = ce._resolve_plan_for(rep, store, market, plans, rep_role=rep_role, explain=True,
+                              identity_map=identity_map)
     return {"plan_name": (res.get("winner") or {}).get("plan_name"), "plan_id": None,
             "assignment": res.get("winner"), "considered": res.get("considered"), "rules": [],
             # explicit zeros/1.0 so the UI's "Subtotal … × tier … =" clause never renders blank
@@ -490,6 +507,20 @@ def _no_plan_narration(client, org_id, period, rep, ce):
             "base_tier_metric": "none", "tiers": [], "total_payout": 0.0,
             "store": store, "market": market, "rep_role": rep_role,
             "has_sale_lines": has_lines, "plans_configured": len(plans), "ready": ready}
+
+
+def _rep_no_plan_diagnosis(client, org_id, period, rep, ce, identity_map=None):
+    """The operator-actionable 'why no plan attached' object for ONE rep — the SAME
+    `_unassigned_diagnosis` (name_bridge / assignment_near_miss / store_bridge / conclusion) the
+    coverage endpoint surfaces, sourced by running the money engine's own coverage pass restricted to
+    this rep and threaded with identity_map so it matches the money path. READ-ONLY; returns None when
+    the rep is not in the unassigned list (e.g. a bridge now attaches a plan) or coverage isn't ready."""
+    pv = ce.preview(client, org_id, period, coverage=True, only_rep=rep, identity_map=identity_map)
+    cov = pv.get("coverage") or {}
+    for r in (cov.get("unassigned_reps") or []):
+        if _name_match(r.get("rep"), rep):
+            return r.get("diagnosis")
+    return None
 
 
 def _zero_reasons(period, rep, carrier_mode, out):
