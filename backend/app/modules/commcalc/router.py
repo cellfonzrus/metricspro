@@ -53,6 +53,7 @@ from app.modules.commcalc import ma_class_wiring
 from app.modules.commcalc import accessory_definition
 from app.modules.commcalc import expected_commission
 from app.modules.commcalc import device_history
+from app.modules.commcalc import carrier_recon   # carrier reconciliation (upload & reconcile) parser
 from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
 from app.modules.commcalc import atu_opportunity as _atu
@@ -28050,6 +28051,196 @@ def _mhc_undated(client, org_id, cap=5000):
     except Exception as e:
         print(f"WARN ma-handset-cogs undated read failed: {e}")
         return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# CARRIER RECONCILIATION (upload & reconcile) — v1 Boost/ePay, carrier-generic shape.
+# The owner uploads the back-office "Rebate Reconciliation" workbook; we show, per store, the BOOST /
+# back-office figure beside OUR computed figure and the diff, so the back office can be retired.
+#
+# DISPLAY / ANALYSIS ONLY. Nothing here writes a money table or recomputes pay. OUR side REUSES the
+# existing engines verbatim — the GP engine (`_compute_gp`), the IMEI-rebate engine
+# (`imei_rebate_report.build_report`) and the ePay payment classifier chain the commission-received
+# breakout + imei report already share (`discrepancy_engine.parse_payment_type` →
+# `device_history.categorize_comp`, plus the org's `payment_categories`). No math is reimplemented.
+# Every engine call is wrapped so a missing table / empty period degrades to zeros, never a 500.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _recon_norm(v):
+    return " ".join(str(v or "").strip().split()).lower()
+
+
+def _recon_ours_gp(client, org_id, period, into, notes):
+    """OUR Estimated GP per store — the GP engine's net_profit, REUSING `_compute_gp` unchanged."""
+    try:
+        gp = _compute_gp(client, org_id, period, market="")
+    except Exception as e:
+        notes.append(f"GP engine unavailable for {period}: {e}")
+        return
+    for r in (gp.get("store_rows") or []):
+        label = r.get("store") or r.get("address") or r.get("store_code")
+        if not label:
+            continue
+        into.setdefault(_recon_norm(label), {})["gp"] = round(safe_float(r.get("net_profit")), 2)
+
+
+def _recon_ours_rebate(client, org_id, period, store_of, into, notes):
+    """OUR Rebate Paid per store — built by REUSING `imei_rebate_report.build_report` (the same engine
+    the /imei-rebates page runs), then summing the merged rows' `rebate` per resolved store. The ePay
+    activation + payment-detail rebate legs and the master-agent leg are loaded exactly as that endpoint
+    loads them; nothing about the rebate classification or merge is reimplemented here."""
+    from app.modules.commcalc import imei_rebate_report as _irr
+    from app.modules.commcalc.discrepancy_engine import parse_payment_type as _ppt
+    per = (period or "").strip()
+    window = _irr.period_window(per, 6)
+    activations, events = [], []
+    try:
+        # ePay activations: B2B sales + residual (raw_mi), same selects as /imei-rebates.
+        sale_rows = (client.schema("commcalc").table("raw_sales")
+                     .select("serial_1,trans_date,period,store,salesperson,user_login,product_desc,"
+                             "sku,contract_type,voided,ext_price")
+                     .eq("org_id", org_id).in_("period", _pvariants(per))
+                     .neq("serial_1", "").limit(60000).execute().data) or []
+        for r in sale_rows:
+            if _gp_is_voided(r.get("voided")):
+                continue
+            if _irr.is_device_identifier(_irr.imei_key(r.get("serial_1"))):
+                activations.append(_irr.epay_activation_from_sale(r, store_of=store_of))
+    except Exception as e:
+        notes.append(f"raw_sales read failed for rebate-paid: {e}")
+    try:
+        mi_rows = (client.schema("commcalc").table("raw_mi")
+                   .select("device_serial,period,mi_activation_date,customer_plan,subscriber_status,"
+                           "rep_username,salesforce_id")
+                   .eq("org_id", org_id).in_("period", _pvariants(per))
+                   .neq("device_serial", "").limit(60000).execute().data) or []
+        for r in mi_rows:
+            if not _irr.is_device_identifier(_irr.imei_key(r.get("device_serial"))):
+                continue
+            if _irr.parse_loose_date(r.get("mi_activation_date")) and \
+                    _irr.date_in_period(r.get("mi_activation_date"), per):
+                activations.append(_irr.epay_activation_from_mi(r, store_of=store_of))
+    except Exception as e:
+        notes.append(f"raw_mi read failed for rebate-paid: {e}")
+    try:
+        pay_rows = (client.schema("commcalc").table("raw_payment_detail")
+                    .select("imei,mdn,payment_type,amount,period,period_month,period_year,"
+                            "payment_date,business_address,rep_username")
+                    .eq("org_id", org_id).in_("period", [_p for lab in window for _p in _pvariants(lab)])
+                    .neq("imei", "").limit(120000).execute().data) or []
+        _comp_of = lambda pt: _ppt(pt)[0]                                             # noqa: E731
+        for r in pay_rows:
+            if _irr.is_device_identifier(_irr.imei_key(r.get("imei"))):
+                events.append(_irr.epay_event(r, _comp_of, store_of=store_of))
+    except Exception as e:
+        notes.append(f"raw_payment_detail read failed for rebate-paid: {e}")
+    try:
+        built = _irr.build_report(activations, events)
+    except Exception as e:
+        notes.append(f"imei_rebate build_report failed: {e}")
+        return
+    for row in built.get("rows") or []:
+        label = row.get("store_label") or row.get("store")
+        if not label:
+            continue
+        b = into.setdefault(_recon_norm(label), {})
+        b["rebate_paid"] = round(b.get("rebate_paid", 0.0) + safe_float(row.get("rebate")), 2)
+
+
+def _recon_ours_comm_epay(client, org_id, period, store_of, into, notes):
+    """OUR Comm Paid + ePay Paid per store from `raw_payment_detail`, REUSING the SAME classifier the
+    commission-received breakout uses: a row is Commission when the org's `payment_categories` maps its
+    payment_type to the Commission category. ePay Paid is the full payment-detail deposit per store."""
+    try:
+        cats = (client.schema("commcalc").table("payment_categories")
+                .select("description,category").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        cats = []
+    cat_of = {str(c.get("description") or "").strip(): str(c.get("category") or "").strip()
+              for c in cats if c.get("description")}
+    try:
+        rows = (client.schema("commcalc").table("raw_payment_detail")
+                .select("business_address,payment_type,amount")
+                .eq("org_id", org_id).in_("period", _pvariants(period))
+                .limit(120000).execute().data) or []
+    except Exception as e:
+        notes.append(f"raw_payment_detail read failed for comm/ePay: {e}")
+        return
+    for r in rows:
+        addr = str(r.get("business_address") or "").strip()
+        label, _mkt = (store_of(addr) if store_of else (None, None))
+        label = label or addr
+        if not label:
+            continue
+        amt = safe_float(r.get("amount"))
+        b = into.setdefault(_recon_norm(label), {})
+        b["epay_paid"] = round(b.get("epay_paid", 0.0) + amt, 2)
+        if cat_of.get(str(r.get("payment_type") or "").strip(), "").lower() == "commission":
+            b["comm_paid"] = round(b.get("comm_paid", 0.0) + amt, 2)
+
+
+@router.post("/carrier-recon/upload")
+async def carrier_recon_upload(file: UploadFile = File(...), period: str = Form(""),
+                               carrier: str = Form("boost"), org_id: str = ORG_ID):
+    """Upload a Carrier Reconciliation workbook and reconcile it against OUR computed figures.
+
+    Multipart: `file` (the .xlsx), `period` (any spelling; blank = current month), `carrier`
+    (default boost — v1 wires Boost/ePay; the shape is carrier-generic for Total/VidaPay later).
+
+    Parses the workbook with the PURE `carrier_recon.parse_workbook`, computes OUR per-store rebate paid
+    (imei-rebate engine), comm/ePay paid (ePay payment classifier) and Estimated GP (GP engine) for the
+    period, resolves the workbook's street-address store names through the org's existing store-match
+    chain (`_ir_store_resolver`), then diffs Boost − Ours per store with the PURE
+    `carrier_recon.build_comparison`. Workbook stores we cannot resolve/match are LISTED, never dropped.
+
+    DISPLAY / ANALYSIS ONLY — no write, no recompute. Every OUR-side engine read degrades to zeros on a
+    missing table / empty period, so an org mid-onboarding still gets the Boost-side view + escalation /
+    unpaid / missing sheets rather than a 500."""
+    require_org(org_id)
+    contents = await file.read()
+    try:
+        parsed = carrier_recon.parse_workbook(contents, period=(period or "").strip() or None)
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse the reconciliation workbook: {e}")
+
+    per = (period or "").strip() or _date.today().strftime("%B %Y")
+    client = sb()
+    notes: list[str] = []
+    try:
+        store_of = _ir_store_resolver(client, org_id)   # raw store string -> (canonical label, market)
+    except Exception:
+        store_of = None
+
+    ours_by_store: dict[str, dict] = {}
+    _recon_ours_gp(client, org_id, per, ours_by_store, notes)
+    _recon_ours_rebate(client, org_id, per, store_of, ours_by_store, notes)
+    _recon_ours_comm_epay(client, org_id, per, store_of, ours_by_store, notes)
+
+    # `resolve` maps a workbook store NAME to our canonical label so it keys into `ours_by_store`
+    # (which is keyed on the resolved label). Returns None when nothing resolves — build_comparison then
+    # falls back to the raw name and, failing that, lists the store as unmatched.
+    def _resolve(name):
+        if not store_of:
+            return None
+        try:
+            lbl, _m = store_of(name)
+            return lbl
+        except Exception:
+            return None
+
+    cmp = carrier_recon.build_comparison(parsed, ours_by_store, resolve=_resolve)
+
+    return {
+        "period": per,
+        "carrier": (carrier or "boost").strip().lower(),
+        "per_store": cmp["per_store"],
+        "unmatched_stores": cmp["unmatched_stores"],
+        "escalations": parsed["escalations"],
+        "unpaid_devices": parsed["unpaid_devices"],
+        "missing": parsed["missing"],
+        "totals": {**cmp["totals"], "boost_workbook": parsed["totals"]},
+        "raw_txn_count": parsed["raw_txn_count"],
+        "notes": notes,
+    }
 
 
 @router.get("/ma-handset-cogs")
