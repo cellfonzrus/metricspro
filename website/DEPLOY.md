@@ -13,19 +13,19 @@ Nothing below is something I can find in the code — each one is a business fac
 
 ### To finish the pages (blocking — the launch script fails until these are filled)
 
-Most of this table is now **answered**. Two blanks remain, and both are facts only you hold.
+**Every blank is now filled.** `check-before-launch.sh` passes. What remains is in §4 — the checks a script cannot make.
 
 | # | What | Where it goes | Status |
 |---|---|---|---|
 | 1 | Which legal entity publishes this | Everywhere | **DONE.** **IT Solutions of LI Inc** is the platform operator; **Cellfonz R Us** is the first tenant, a customer like any other. |
 | 2 | State of incorporation | Terms §1 | **DONE** — New York. |
-| 3 | **Registered business address** | Terms §1, §23; Privacy §12; EULA §12 | **STILL NEEDED.** This is the address contract notices are served to, so a guess is worse than a blank. A PO box is generally not sufficient. |
+| 3 | Registered business address | Terms §1, §23; Privacy §12; EULA §12 | **DONE** — 13 Herzog Place, Hicksville, NY 11801. Hicksville is in Nassau County, which matches the venue in item 4. |
 | 4 | Governing-law state and venue county | Terms §22 | **DONE** — New York law, exclusive venue in Nassau County, New York. |
 | 5 | Arbitration provider and venue | Terms §20 | **DONE** — American Arbitration Association, seated in Mineola, New York. Venue near you rather than near a customer is the point. |
 | 6 | Effective date | Top of every legal page | **DONE** — stamped August 22, 2026. `check-before-launch.sh` warns if you publish on a later date and prints the one-line command to re-stamp. |
 | 7 | Payment terms, price-change and non-renewal notice | Terms §5, §6 | **DONE** — invoices due in 15 days; 30 days' notice for a price change, for non-renewal, and for a change to the Terms. |
 | 8 | Data retention windows | Terms §4, §8; Privacy §7 | **DONE** — 30 days post-trial, 30 days post-termination export, 12 months for security logs. |
-| 9 | **DMCA agent name, address and email** | Terms §21 | **STILL NEEDED.** And see §4 below — naming an agent on the page gets you no safe harbour unless the agent is registered with the U.S. Copyright Office (about $6). |
+| 9 | DMCA agent name, address and email | Terms §21 | **DONE on the page** — "Copyright Agent, IT Solutions of LI Inc" at the address above, sales@itsolutionsli.com. **The registration is still outstanding**: naming an agent earns no safe harbour until that agent is filed with the U.S. Copyright Office (about $6), and the filing must match this page exactly. |
 | 10 | Your web host's legal name | — | **Not needed.** The Service Providers page lists provider *categories*, not company names. |
 
 ### To point the site at the right places
