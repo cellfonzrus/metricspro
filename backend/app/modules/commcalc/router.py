@@ -28069,87 +28069,47 @@ def _recon_norm(v):
     return " ".join(str(v or "").strip().split()).lower()
 
 
-def _recon_ours_gp(client, org_id, period, into, notes):
-    """OUR Estimated GP per store — the GP engine's net_profit, REUSING `_compute_gp` unchanged."""
-    try:
-        gp = _compute_gp(client, org_id, period, market="")
-    except Exception as e:
-        notes.append(f"GP engine unavailable for {period}: {e}")
-        return
-    for r in (gp.get("store_rows") or []):
-        label = r.get("store") or r.get("address") or r.get("store_code")
-        if not label:
-            continue
-        into.setdefault(_recon_norm(label), {})["gp"] = round(safe_float(r.get("net_profit")), 2)
+# ── ONE payment-type classifier for the recon's ours-side ────────────────────────────────────────────
+# Every raw_payment_detail row is bucketed into exactly ONE of three buckets, mirroring how the Boost back
+# office splits ePay money across its workbook columns (proven against the sample workbook's Sheet1 —
+# `harness_carrier_recon.py` section (c)):
+#   • 'reimbursement' → Boost "Rebate Paid": promo/offer/PIC/new-act/upgrade/AAL device reimbursements
+#     AND the large Device-Upgrade payments (comp types DEVICE_REIMB, SIMCR, DUPGB). Note Boost books the
+#     "Device Upgrade Bounty" ePay line to Rebate despite the word "Bounty" — Sheet1 confirms 27/27 of its
+#     money rows land in Rebate Paid, so DUPGB is a reimbursement here.
+#   • 'bounty'        → Boost "Comm Paid": one-time activation / SIM-loading / ready bounties Boost books
+#     as commission (~$10.5k/mo) — comp types NAB, SSLB(SSB), BRB, DFB, ISDFB, BYOD_SPIFF, DUB.
+#   • 'other'         → EXCLUDED from BOTH ePay legs: recurring residual / airtime replenishment (Boost
+#     RTR — its own $0 column in this recon) and anything unmapped — comp types MI, ATUMI, UNMAPPED:*.
+# ePay Paid = reimbursement + bounty; RTR/airtime/fee is never counted. The org's `payment_categories`
+# config (description → category — the SAME table the commission-received breakout reads) takes precedence
+# when it explicitly categorizes a payment_type; otherwise the discrepancy-engine comp_type decides. No
+# second classifier is invented — `discrepancy_engine.parse_payment_type` is the one source of comp types.
+_RECON_BOUNTY_COMPS = {"NAB", "SSLB", "BRB", "DFB", "ISDFB", "BYOD_SPIFF", "DUB"}
+_RECON_REIMB_COMPS = {"DEVICE_REIMB", "SIMCR", "DUPGB"}
 
 
-def _recon_ours_rebate(client, org_id, period, store_of, into, notes):
-    """OUR Rebate Paid per store — built by REUSING `imei_rebate_report.build_report` (the same engine
-    the /imei-rebates page runs), then summing the merged rows' `rebate` per resolved store. The ePay
-    activation + payment-detail rebate legs and the master-agent leg are loaded exactly as that endpoint
-    loads them; nothing about the rebate classification or merge is reimplemented here."""
-    from app.modules.commcalc import imei_rebate_report as _irr
+def _recon_cat_bucket(cat):
+    """Map an org `payment_categories.category` label to a recon bucket, or None to defer to comp_type."""
+    c = " ".join(str(cat or "").strip().split()).lower()
+    if not c or c in ("unknown", "other", "uncategorized", "n/a"):
+        return None
+    if any(x in c for x in ("commission", "bounty", "spiff")):
+        return "bounty"
+    if any(x in c for x in ("rebate", "reimburs", "promo", "offer", "discount")):
+        return "reimbursement"
+    if any(x in c for x in ("rtr", "airtime", "replenish", "top up", "top-up", "topup",
+                            "bill", "fee", "residual", "minute")):
+        return "other"
+    return None
+
+
+def _recon_payment_bucketer(client, org_id, notes):
+    """Build `bucket(payment_type) -> 'reimbursement'|'bounty'|'other'` for this org: the org's
+    `payment_categories` config wins when it explicitly categorizes the payment_type; otherwise
+    `discrepancy_engine.parse_payment_type`'s comp_type decides. Never raises (missing config table →
+    comp_type-only classification)."""
     from app.modules.commcalc.discrepancy_engine import parse_payment_type as _ppt
-    per = (period or "").strip()
-    window = _irr.period_window(per, 6)
-    activations, events = [], []
-    try:
-        # ePay activations: B2B sales + residual (raw_mi), same selects as /imei-rebates.
-        sale_rows = (client.schema("commcalc").table("raw_sales")
-                     .select("serial_1,trans_date,period,store,salesperson,user_login,product_desc,"
-                             "sku,contract_type,voided,ext_price")
-                     .eq("org_id", org_id).in_("period", _pvariants(per))
-                     .neq("serial_1", "").limit(60000).execute().data) or []
-        for r in sale_rows:
-            if _gp_is_voided(r.get("voided")):
-                continue
-            if _irr.is_device_identifier(_irr.imei_key(r.get("serial_1"))):
-                activations.append(_irr.epay_activation_from_sale(r, store_of=store_of))
-    except Exception as e:
-        notes.append(f"raw_sales read failed for rebate-paid: {e}")
-    try:
-        mi_rows = (client.schema("commcalc").table("raw_mi")
-                   .select("device_serial,period,mi_activation_date,customer_plan,subscriber_status,"
-                           "rep_username,salesforce_id")
-                   .eq("org_id", org_id).in_("period", _pvariants(per))
-                   .neq("device_serial", "").limit(60000).execute().data) or []
-        for r in mi_rows:
-            if not _irr.is_device_identifier(_irr.imei_key(r.get("device_serial"))):
-                continue
-            if _irr.parse_loose_date(r.get("mi_activation_date")) and \
-                    _irr.date_in_period(r.get("mi_activation_date"), per):
-                activations.append(_irr.epay_activation_from_mi(r, store_of=store_of))
-    except Exception as e:
-        notes.append(f"raw_mi read failed for rebate-paid: {e}")
-    try:
-        pay_rows = (client.schema("commcalc").table("raw_payment_detail")
-                    .select("imei,mdn,payment_type,amount,period,period_month,period_year,"
-                            "payment_date,business_address,rep_username")
-                    .eq("org_id", org_id).in_("period", [_p for lab in window for _p in _pvariants(lab)])
-                    .neq("imei", "").limit(120000).execute().data) or []
-        _comp_of = lambda pt: _ppt(pt)[0]                                             # noqa: E731
-        for r in pay_rows:
-            if _irr.is_device_identifier(_irr.imei_key(r.get("imei"))):
-                events.append(_irr.epay_event(r, _comp_of, store_of=store_of))
-    except Exception as e:
-        notes.append(f"raw_payment_detail read failed for rebate-paid: {e}")
-    try:
-        built = _irr.build_report(activations, events)
-    except Exception as e:
-        notes.append(f"imei_rebate build_report failed: {e}")
-        return
-    for row in built.get("rows") or []:
-        label = row.get("store_label") or row.get("store")
-        if not label:
-            continue
-        b = into.setdefault(_recon_norm(label), {})
-        b["rebate_paid"] = round(b.get("rebate_paid", 0.0) + safe_float(row.get("rebate")), 2)
-
-
-def _recon_ours_comm_epay(client, org_id, period, store_of, into, notes):
-    """OUR Comm Paid + ePay Paid per store from `raw_payment_detail`, REUSING the SAME classifier the
-    commission-received breakout uses: a row is Commission when the org's `payment_categories` maps its
-    payment_type to the Commission category. ePay Paid is the full payment-detail deposit per store."""
     try:
         cats = (client.schema("commcalc").table("payment_categories")
                 .select("description,category").eq("org_id", org_id).execute().data) or []
@@ -28157,13 +28117,53 @@ def _recon_ours_comm_epay(client, org_id, period, store_of, into, notes):
         cats = []
     cat_of = {str(c.get("description") or "").strip(): str(c.get("category") or "").strip()
               for c in cats if c.get("description")}
+
+    def bucket(payment_type):
+        pt = str(payment_type or "").strip()
+        b = _recon_cat_bucket(cat_of.get(pt))
+        if b:
+            return b
+        try:
+            comp = _ppt(pt)[0]
+        except Exception:
+            comp = ""
+        if comp in _RECON_REIMB_COMPS:
+            return "reimbursement"
+        if comp in _RECON_BOUNTY_COMPS:
+            return "bounty"
+        return "other"
+
+    return bucket
+
+
+def _recon_ours_gp(client, org_id, period, into, notes):
+    """GP comparison is SKIPPED for the carrier recon (owner decision). No-op so the ours side never
+    carries an Estimated-GP figure; the endpoint also drops GP from the built comparison entirely."""
+    notes.append("GP comparison skipped (owner decision) — no ours-side GP is computed or compared.")
+
+
+def _recon_ours_paid(client, org_id, period, store_of, into, notes):
+    """OUR Rebate Paid / Comm Paid / ePay Paid per store, computed CONSISTENTLY from `raw_payment_detail`
+    via the single `_recon_payment_bucketer` classifier so the three figures match Boost's column
+    definitions and can never disagree with each other:
+        rebate_paid = Σ amount where bucket == reimbursement
+        comm_paid   = Σ amount where bucket == bounty
+        epay_paid   = rebate_paid + comm_paid           (RTR / airtime / fee / other EXCLUDED)
+    The per-store `epay_paid == rebate_paid + comm_paid` identity holds BY CONSTRUCTION: each counted row
+    adds its amount to ePay and to exactly one of the two legs; excluded (other/RTR) rows touch neither.
+    Store is resolved through the org's existing /store-match chain (`store_of`). Degrades to leaving the
+    ours side at zero (a note, never a 500) on a missing table / empty period."""
+    bucket = _recon_payment_bucketer(client, org_id, notes)
     try:
         rows = (client.schema("commcalc").table("raw_payment_detail")
                 .select("business_address,payment_type,amount")
                 .eq("org_id", org_id).in_("period", _pvariants(period))
                 .limit(120000).execute().data) or []
     except Exception as e:
-        notes.append(f"raw_payment_detail read failed for comm/ePay: {e}")
+        notes.append(f"raw_payment_detail read failed for ePay split: {e}")
+        return
+    if not rows:
+        notes.append(f"No raw_payment_detail rows for {period} — ours ePay side left at zero.")
         return
     for r in rows:
         addr = str(r.get("business_address") or "").strip()
@@ -28171,11 +28171,16 @@ def _recon_ours_comm_epay(client, org_id, period, store_of, into, notes):
         label = label or addr
         if not label:
             continue
+        b = bucket(r.get("payment_type"))
+        if b == "other":                                      # RTR / airtime / fee / unmapped — excluded
+            continue
         amt = safe_float(r.get("amount"))
-        b = into.setdefault(_recon_norm(label), {})
-        b["epay_paid"] = round(b.get("epay_paid", 0.0) + amt, 2)
-        if cat_of.get(str(r.get("payment_type") or "").strip(), "").lower() == "commission":
-            b["comm_paid"] = round(b.get("comm_paid", 0.0) + amt, 2)
+        acc = into.setdefault(_recon_norm(label), {})
+        if b == "reimbursement":
+            acc["rebate_paid"] = round(acc.get("rebate_paid", 0.0) + amt, 2)
+        else:                                                 # bounty
+            acc["comm_paid"] = round(acc.get("comm_paid", 0.0) + amt, 2)
+        acc["epay_paid"] = round(acc.get("epay_paid", 0.0) + amt, 2)
 
 
 @router.post("/carrier-recon/upload")
@@ -28186,10 +28191,12 @@ async def carrier_recon_upload(file: UploadFile = File(...), period: str = Form(
     Multipart: `file` (the .xlsx), `period` (any spelling; blank = current month), `carrier`
     (default boost — v1 wires Boost/ePay; the shape is carrier-generic for Total/VidaPay later).
 
-    Parses the workbook with the PURE `carrier_recon.parse_workbook`, computes OUR per-store rebate paid
-    (imei-rebate engine), comm/ePay paid (ePay payment classifier) and Estimated GP (GP engine) for the
-    period, resolves the workbook's street-address store names through the org's existing store-match
-    chain (`_ir_store_resolver`), then diffs Boost − Ours per store with the PURE
+    Parses the workbook with the PURE `carrier_recon.parse_workbook`, computes OUR per-store Rebate Paid /
+    Comm Paid / ePay Paid for the period from `raw_payment_detail` via ONE payment-type classifier
+    (`_recon_ours_paid` → `_recon_payment_bucketer`) so the three figures match Boost's column definitions
+    (Rebate = reimbursements, Comm = bounties, ePay = the two summed; RTR/airtime excluded). GP is SKIPPED
+    (owner decision). Resolves the workbook's street-address store names through the org's existing
+    store-match chain (`_ir_store_resolver`), then diffs Boost − Ours per store with the PURE
     `carrier_recon.build_comparison`. Workbook stores we cannot resolve/match are LISTED, never dropped.
 
     DISPLAY / ANALYSIS ONLY — no write, no recompute. Every OUR-side engine read degrades to zeros on a
@@ -28211,9 +28218,8 @@ async def carrier_recon_upload(file: UploadFile = File(...), period: str = Form(
         store_of = None
 
     ours_by_store: dict[str, dict] = {}
-    _recon_ours_gp(client, org_id, per, ours_by_store, notes)
-    _recon_ours_rebate(client, org_id, per, store_of, ours_by_store, notes)
-    _recon_ours_comm_epay(client, org_id, per, store_of, ours_by_store, notes)
+    _recon_ours_gp(client, org_id, per, ours_by_store, notes)          # no-op: GP skipped (owner decision)
+    _recon_ours_paid(client, org_id, per, store_of, ours_by_store, notes)
 
     # `resolve` maps a workbook store NAME to our canonical label so it keys into `ours_by_store`
     # (which is keyed on the resolved label). Returns None when nothing resolves — build_comparison then
@@ -28228,6 +28234,14 @@ async def carrier_recon_upload(file: UploadFile = File(...), period: str = Form(
             return None
 
     cmp = carrier_recon.build_comparison(parsed, ours_by_store, resolve=_resolve)
+    # GP is skipped (owner decision): drop it from the per-store + totals comparison so it is neither
+    # computed nor shown as a bogus Boost-minus-zero gap. carrier_recon (the pure parser/merge) is left
+    # untouched — GP is stripped here, on the ours side, only.
+    for _r in cmp["per_store"]:
+        for _side in ("boost", "ours", "diff", "match_ok"):
+            (_r.get(_side) or {}).pop("gp", None)
+    for _side in ("boost", "ours", "diff"):
+        (cmp["totals"].get(_side) or {}).pop("gp", None)
 
     return {
         "period": per,
