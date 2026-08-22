@@ -1,0 +1,158 @@
+name: deploy-website
+
+# Publishes website/ to the Bluehost document root over FTPS.
+#
+# WHY THIS EXISTS: the site is static, so "deploying" is a file copy. Doing that copy by hand through
+# cPanel means the live site and the repo drift apart, and nobody can answer "which version of the
+# terms was in force in March?" from git alone. This makes the repo the source of truth: merge a
+# change under website/, and the live site matches it a couple of minutes later.
+#
+# IT CANNOT GO RED BY ACCIDENT. With no FTP secrets configured, the job reports what is missing and
+# exits successfully — so merging this file does not start failing every push to main. Nothing here
+# connects to anything, and nothing is enforced, until you add the three secrets below.
+#
+# SETUP (one time, about five minutes):
+#   1. Bluehost cPanel -> FTP Accounts -> create an account whose HOME DIRECTORY is the document root
+#      for this site (public_html, or public_html/<addon-domain>). Give it that folder and nothing
+#      above it: a leaked deploy credential should not be able to reach your other sites.
+#   2. GitHub -> Settings -> Secrets and variables -> Actions -> New repository secret, three times:
+#        FTP_SERVER    the host from cPanel's FTP account details, e.g. ftp.metricspro.tech
+#        FTP_USERNAME  the full username, usually user@metricspro.tech
+#        FTP_PASSWORD  that account's password
+#      Avoid a single quote, double quote or backslash in that password — it is handed to lftp's own
+#      command parser, which treats those as quoting characters. Letters, digits and the usual
+#      punctuation are fine.
+#   3. Optional repository VARIABLE (not a secret) named FTP_REMOTE_DIR, if the FTP account lands
+#      above the document root and needs to descend into it, e.g. public_html. Leave it unset when
+#      the account is already rooted at the document root, which is the arrangement in step 1.
+#
+# ONCE CONFIGURED, THE PLACEHOLDER GATE IS NOT SKIPPABLE. If any [[CONFIRM: ...]] marker is still in
+# the pages the job fails before it connects to anything. Publishing half-finished legal documents is
+# the one outcome this pipeline exists to prevent.
+
+on:
+  push:
+    branches: [main]
+    paths: ['website/**', '.github/workflows/deploy-website.yml']
+  workflow_dispatch:
+    inputs:
+      delete_remote_extras:
+        description: "Also delete remote files that no longer exist in website/ (dangerous unless the FTP account is rooted at a document root holding only this site)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "List what would be uploaded, upload nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-website
+  cancel-in-progress: false   # never interrupt a half-finished upload
+
+jobs:
+  deploy:
+    name: Publish website to Bluehost
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Are we configured to deploy at all? ─────────────────────────────────────────────────
+      # This runs FIRST so that an unconfigured repository is simply not deploying, rather than
+      # failing. Secrets cannot be read in a job-level `if:`, hence the output that later steps gate
+      # on. Missing secrets is a normal state, not an error.
+      - name: Check for FTP credentials
+        id: cfg
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          missing=""
+          if [ -z "$FTP_SERVER" ];   then missing="$missing FTP_SERVER"; fi
+          if [ -z "$FTP_USERNAME" ]; then missing="$missing FTP_USERNAME"; fi
+          if [ -z "$FTP_PASSWORD" ]; then missing="$missing FTP_PASSWORD"; fi
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Not published — FTP is not configured yet"
+              echo ""
+              echo "These repository secrets are missing:"
+              echo ""
+              for s in $missing; do echo "- \`$s\`"; done
+              echo ""
+              echo "Setup instructions are in the comment at the top of"
+              echo "\`.github/workflows/deploy-website.yml\`. Until then, upload \`website/\` by hand"
+              echo "through cPanel as \`website/DEPLOY.md\` §2 describes."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Gate: no unfinished legal placeholders ──────────────────────────────────────────────
+      - name: Pre-launch gate
+        if: steps.cfg.outputs.ready == 'true'
+        working-directory: website
+        run: sh check-before-launch.sh
+
+      - name: Install lftp
+        if: steps.cfg.outputs.ready == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lftp
+
+      # ── Publish ────────────────────────────────────────────────────────────────────────────
+      # lftp rather than a marketplace action: this step holds a credential that can overwrite the
+      # live site, and lftp is a distro package rather than a third party trusted afresh on every
+      # run. `mirror --reverse` uploads only what changed and includes dotfiles, so .htaccess goes up.
+      #
+      # Excluded from the upload — repository documentation that has no business being served:
+      #   DEPLOY.md              describes your hosting arrangement
+      #   LEGAL-CHECKLIST.md     an inventory of what is not finished yet
+      #   check-before-launch.sh
+      - name: Upload to Bluehost
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          FTP_SERVER: ${{ secrets.FTP_SERVER }}
+          FTP_USERNAME: ${{ secrets.FTP_USERNAME }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          REMOTE_DIR: ${{ vars.FTP_REMOTE_DIR }}
+          DO_DELETE: ${{ inputs.delete_remote_extras }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          remote="${REMOTE_DIR:-.}"
+          flags="--reverse --verbose --parallel=4"
+          flags="$flags --exclude-glob DEPLOY.md --exclude-glob LEGAL-CHECKLIST.md"
+          flags="$flags --exclude-glob check-before-launch.sh"
+          if [ "${DO_DELETE:-false}" = "true" ]; then flags="$flags --delete"; fi
+          if [ "${DRY_RUN:-false}"   = "true" ]; then flags="$flags --dry-run"; fi
+
+          # ssl-force refuses to fall back to cleartext — an FTP password must never cross the wire in
+          # the open. ssl-protect-data encrypts the file transfer too, not just the login. Bluehost's
+          # FTP certificate is usually issued for the shared server rather than your domain, hence
+          # verify-certificate no: the transport is still encrypted, but unauthenticated. If you have
+          # a certificate matching FTP_SERVER, turn verification back on.
+          lftp -c "
+            set ftp:ssl-force true;
+            set ftp:ssl-protect-data true;
+            set ssl:verify-certificate no;
+            set net:max-retries 3;
+            set net:timeout 20;
+            set cmd:fail-exit true;
+            open -u '$FTP_USERNAME','$FTP_PASSWORD' '$FTP_SERVER';
+            mirror $flags website/ '$remote';
+            bye
+          "
+
+      - name: Summary
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          {
+            echo "### Website published"
+            echo ""
+            echo "Commit \`${GITHUB_SHA:0:7}\` is live."
+            echo ""
+            echo "Prices are **not** part of this deploy — the page reads them from"
+            echo "Admin → Pricing & Free Trial at load time."
+          } >> "$GITHUB_STEP_SUMMARY"

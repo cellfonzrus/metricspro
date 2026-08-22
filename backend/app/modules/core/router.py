@@ -45,6 +45,10 @@ from app.core import scope as _scope
 # `_uid_from_token` and the "am I impersonating?" checks. app/core/impersonation.py imports nothing
 # from this module (only app.core.database, lazily), so there is no cycle.
 from app.core import impersonation as _impersonation
+# Free-trial primitives (mig 908). trial.py deliberately imports NOTHING from this module, so
+# this is not a cycle — billing/pricing.py imports _require_super_admin from here, and both it
+# and this file share trial.py as the single source of how a trial is stamped and read.
+from app.modules.billing import trial as _trial
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -406,7 +410,11 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
         if t:
             tenant = {"org_id": t.get("org_id"), "name": t.get("name"),
                       "setup_complete": bool(t.get("setup_complete")),
-                      "pay_period": _pp_settings(t)}
+                      "pay_period": _pp_settings(t),
+                      # Free-trial state (mig 908) — powers the in-app countdown banner. None for a
+                      # tenant carrying no plan stamp (every pre-908 row), which the client reads as
+                      # "say nothing", so this is invisible until a trial actually exists.
+                      "trial": _trial.trial_view(t)}
     except Exception:
         pass
     # Tenant carriers (mig 038) — drive carrier-scoped nav gating (a Boost tenant shouldn't see Total
@@ -820,7 +828,23 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
     when one was auto-generated (super-admin flow), not when the caller chose it (signup)."""
     new_org = str(uuid.uuid4())
     slug = (slug or re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-"))[:60]
-    client.schema("storeops").table("tenants").insert({"org_id": new_org, "name": name, "slug": slug}).execute()
+    tenant_row = {"org_id": new_org, "name": name, "slug": slug}
+    # Free trial (mig 908): a BRAND-NEW company starts on the trial the operator configured (default
+    # 30 days). Best-effort by design — start_trial_fields() returns {} when trials are switched off
+    # OR when mig 908 has not been applied, and the insert then carries exactly the columns it did
+    # before, so provisioning can never fail because of the trial. Existing tenants are untouched:
+    # this only ever runs on an org_id being created right now.
+    try:
+        tenant_row.update(_trial.start_trial_fields(client))
+    except Exception:
+        pass
+    try:
+        client.schema("storeops").table("tenants").insert(tenant_row).execute()
+    except Exception:
+        # A pre-908 database rejects the trial columns — retry with the original three so an un-run
+        # migration degrades to "no trial" instead of blocking signup entirely.
+        client.schema("storeops").table("tenants").insert(
+            {"org_id": new_org, "name": name, "slug": slug}).execute()
     client.schema("storeops").table("roles").insert(
         [{"org_id": new_org, "name": n, "display_name": d, "permissions": p} for (n, d, p) in _BASE_ROLES]).execute()
     # Entitlement + tenant-safe default content in one shot: enables modules per the (all-access

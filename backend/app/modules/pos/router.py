@@ -8,7 +8,7 @@ storeops.stores.store_code, RBAC is the roles JSONB `modules.pos` key. This rout
 pos.* schema. Later phases add activations, vendors/POs, transfers, reports, import.
 
 Gated actions (PII reveal, void, settings/tax writes) use fine-grained keys in the caller role's
-permissions JSONB — `pos_view_pii`, `pos_void`, `pos_settings` — with role scope 'all' (org-wide
+permissions JSONB — `pos_void`, `pos_settings` — with role scope 'all' (org-wide
 admin) implying all three, so existing admin roles work before the roles UI grows checkboxes.
 
 NOT YET ENFORCED: a `modules.pos` entitlement gate. Earlier revisions of this docstring claimed
@@ -833,7 +833,7 @@ def update_vendor_connector(connector_id: str, body: dict, authorization: str = 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 
 CUSTOMER_FIELDS = ("account_type", "company_name", "first_name", "last_name", "middle_initial",
-                   "dob", "driver_license_state", "primary_account_no", "password", "email",
+                   "dob", "primary_account_no", "password", "email",
                    "phone_primary", "phone_secondary", "address_1", "address_2", "city", "state",
                    "zip", "referral_source", "credit_limit", "accept_checks", "is_active")
 SERIAL_FIELDS = ("product_id", "store_code", "serial_number", "imei", "sim_card", "color",
@@ -851,7 +851,7 @@ RECEIPT_TEMPLATE_FIELDS = ("name", "header_text", "footer_text", "show_store_nam
 
 def _clean_customer(body: dict) -> dict:
     out = {k: body[k] for k in CUSTOMER_FIELDS if k in body}
-    for k in ("dob", "company_name", "middle_initial", "driver_license_state",
+    for k in ("dob", "company_name", "middle_initial",
               "primary_account_no", "password", "email", "phone_secondary",
               "address_2", "referral_source"):
         if k in out and out[k] == "":
@@ -1027,17 +1027,17 @@ def _span_filter(rows, keyset, field="store_code", allow_null=False):
 
 
 # ── Customers ──────────────────────────────────────────────────────────────────────────────────────
-# Explicit column lists, never select('*'). pos.customers carries two things that must not ride
-# along on a bulk read: `password` — the carrier ACCOUNT PIN, i.e. the credential used for
-# SIM-swap and account takeover — and the ssn/driver-licence CIPHERTEXT. select('*') handed all
-# three back for up to 300 customers at a time, which contradicted this module's own threat model
-# ("a compromised cashier session cannot exfiltrate the customer book"). The ciphertext columns are
-# read by nothing — plaintext access goes through pos.customer_pii_get, which is separately gated
-# on pos_view_pii — so they are dropped from both reads. `password` survives only on the
-# single-record fetch, where the edit form genuinely needs it.
+# Explicit column lists, never select('*'). `password` — the carrier ACCOUNT PIN, i.e. the
+# credential used for SIM-swap and account takeover — must not ride along on a bulk read, which
+# would contradict this module's own threat model ("a compromised cashier session cannot exfiltrate
+# the customer book"). It survives only on the single-record fetch, where the edit form needs it.
+#
+# SSN and driver's licence are GONE from this table entirely (mig 909, owner directive): the
+# platform no longer collects, stores or displays them. Do not add them back — the cheapest defence
+# against a breach-notification obligation is not holding the data that triggers one.
 CUSTOMER_READ_COLS = (
     "id,org_id,cust_number,account_type,company_name,first_name,last_name,middle_initial,dob,"
-    "driver_license_state,primary_account_no,email,phone_primary,phone_secondary,address_1,"
+    "primary_account_no,email,phone_primary,phone_secondary,address_1,"
     "address_2,city,state,zip,referral_source,credit_limit,accept_checks,is_active,"
     "created_at,updated_at"
 )
@@ -1122,47 +1122,6 @@ def add_customer_note(customer_id: str, body: dict,
         "employee_id": _caller_employee(authorization, org_id) or None,
     }).execute()
     return {"note": (r.data or [{}])[0]}
-
-
-# PII: ciphertext lives in pos.customers; all access via the mig-725 definer functions. Any
-# signed-in employee may WRITE (front-desk data entry) and see last-4; full readback needs the
-# pos_view_pii permission — same asymmetry as the standalone app (a compromised cashier session
-# can overwrite one customer's SSN but cannot exfiltrate the customer book).
-@router.get("/customers/{customer_id}/pii-last4")
-def customer_pii_last4(customer_id: str, authorization: str = Header(default=""),
-                       org_id: str = ORG_ID):
-    _require_member(authorization, org_id)
-    rows = sb().schema("pos").rpc("customer_pii_last4",
-                                  {"p_org": org_id, "p_customer": customer_id}).execute().data or []
-    return rows[0] if rows else {"ssn_last4": None, "dl_last4": None}
-
-
-@router.get("/customers/{customer_id}/pii")
-def customer_pii_get(customer_id: str, authorization: str = Header(default=""),
-                     org_id: str = ORG_ID):
-    _require_pos_perm(authorization, org_id, "pos_view_pii")
-    rows = sb().schema("pos").rpc("customer_pii_get",
-                                  {"p_org": org_id, "p_customer": customer_id}).execute().data or []
-    return rows[0] if rows else {"ssn": None, "driver_license_num": None}
-
-
-@router.post("/customers/{customer_id}/pii")
-def customer_pii_set(customer_id: str, body: dict, authorization: str = Header(default=""),
-                     org_id: str = ORG_ID):
-    _require_member(authorization, org_id)
-    # An ABSENT key must not erase a stored value: it maps to SQL NULL, which the RPC reads as
-    # "leave this column alone". Only an explicitly supplied empty string clears a field. The
-    # old `body.get(k) or None` collapsed omitted and cleared into the same NULL, so saving one
-    # field destroyed the other's ciphertext irreversibly.
-    def _pii_arg(key: str):
-        v = body.get(key)
-        return None if v is None else str(v)
-    sb().schema("pos").rpc("customer_pii_set", {
-        "p_org": org_id, "p_customer": customer_id,
-        "p_ssn": _pii_arg("ssn"),
-        "p_driver_license": _pii_arg("driver_license"),
-    }).execute()
-    return {"ok": True}
 
 
 # ── Inventory ──────────────────────────────────────────────────────────────────────────────────────

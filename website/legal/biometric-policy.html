@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Biometric Data Policy — MetricsPro</title>
+<meta name="description" content="The written retention and destruction schedule for biometric data, published as required by law.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+<div class="mpw">
+
+<header class="mpw-header">
+  <div class="mpw-wrap mpw-header-in">
+    <a href="/" class="mpw-logo">Metrics<em>Pro</em></a>
+    <nav class="mpw-header-nav">
+      <a href="/legal/terms.html">Terms</a>
+      <a href="/legal/privacy.html">Privacy</a>
+      <a class="mpw-btn mpw-btn-ghost mpw-btn-sm" data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
+    </nav>
+  </div>
+</header>
+
+<main class="mpw-doc">
+  <h1>Biometric Data Policy</h1>
+  <p class="mpw-doc-meta">Effective: <span class="mpw-todo">[[CONFIRM: effective date]]</span> &middot; Last updated: August 21, 2026</p>
+
+  <div class="mpw-doc-note">
+    <p>This is the publicly available written retention and destruction schedule required by biometric
+    privacy law, most notably the Illinois Biometric Information Privacy Act (740 ILCS 14/1
+    <em>et seq.</em>). It is published so that an employee, an auditor or a regulator can read it
+    without asking anyone for it.</p>
+  </div>
+
+  <h2 id="b1">1. What this covers</h2>
+  <p>This policy is issued by <strong>IT Solutions of LI Inc</strong>, which develops and operates the
+  MetricsPro platform and is the party in possession of any biometric data held through it. Each
+  business using the platform is a separate employer, and adopts this schedule as its own written
+  policy for its own staff.</p>
+  <p>MetricsPro can support <strong>face verification at clock-in</strong>: comparing a live capture
+  against a stored mathematical representation of a face (a &ldquo;face descriptor&rdquo; or template)
+  to confirm that the person clocking in is the person the punch is recorded against.</p>
+  <p>That is the only biometric identification feature in the platform. It is
+  <strong>off by default</strong>, and each employing business decides whether to enable it. A
+  non-biometric alternative — a photo at clock-in with no face matching — is always available.</p>
+  <p>Separately, the mobile app can lock itself behind your phone's own Face ID or fingerprint. That is
+  handled entirely by your device's operating system; that biometric data never leaves your device and
+  never reaches us. It is not covered by this policy because we never receive it.</p>
+
+  <h2 id="b2">2. Why a template is collected</h2>
+  <p>The sole purpose is verifying an employee's identity at clock-in, to prevent one employee clocking
+  in for another. A template is <strong>not</strong> used for surveillance, marketing, analytics,
+  performance evaluation, or any other purpose.</p>
+
+  <h2 id="b3">3. Consent</h2>
+  <p>No face descriptor is captured without the employee's prior <strong>written consent</strong>,
+  which discloses that biometric data is being collected, the specific purpose, and this retention
+  schedule. Consent is recorded per employee with a status and a timestamp.</p>
+  <p>A declined or withdrawn consent takes precedence over every other setting: an employee who has
+  declined is never face-matched, whatever the business has configured. Where a business turns the
+  feature on after a period with it off, any employee without a consent record on file must be given
+  the disclosure again and make a fresh decision before their template is used.</p>
+  <p>The employing business is responsible for delivering the notice and obtaining the release. We
+  provide the mechanism; we are not the employer.</p>
+
+  <h2 id="b4">4. Retention and destruction schedule</h2>
+  <p>A face descriptor is destroyed at the <strong>earliest</strong> of the following — &ldquo;whichever
+  occurs first&rdquo;, as the statute requires:</p>
+  <div class="mpw-doc-scroll">
+  <table>
+    <tr><th>#</th><th>Trigger</th><th>Timing</th></tr>
+    <tr><td>1</td><td><strong>Purpose satisfied</strong> — the person's employment ends</td><td><strong>90 calendar days</strong> after their last day of employment. A business may configure a different figure for its own HR process, from a minimum of 1 day up to the ceiling in row 4. It is never silently widened by us.</td></tr>
+    <tr><td>2</td><td><strong>The employee asks</strong></td><td><strong>Immediately</strong> on request.</td></tr>
+    <tr><td>3</td><td><strong>The business turns the feature off</strong>, having opted into purge-on-disable</td><td><strong>Immediately</strong>, for every enrolled template at that business.</td></tr>
+    <tr><td>4</td><td><strong>Statutory backstop</strong></td><td><strong>1,095 days (3 years)</strong> after the person's last interaction with their own template — enrollment, re-enrollment, or a clock-in actually verified by face match. This applies whether or not a termination date is ever recorded.</td></tr>
+  </table>
+  </div>
+  <p><strong>Row 4 is an absolute ceiling and cannot be extended by any business using the
+  platform.</strong> It is what the law requires when the end of an employment relationship is never
+  formally recorded.</p>
+  <h3>Why 90 days rather than a year</h3>
+  <p>The purpose the template was collected for — verifying a <em>currently employed</em> person at
+  clock-in — is satisfied on that person's last working day. Under a &ldquo;whichever occurs
+  first&rdquo; standard that trigger controls as soon as it is reached, regardless of any longer period
+  a business might prefer. Ninety days is short enough to remain clearly purpose-bound while covering
+  the practical realities of a rehire in the same quarter or a late-finalized final punch.</p>
+  <h3>Turning the feature off does not by itself destroy templates</h3>
+  <p>By default, disabling face recognition <em>keeps</em> existing templates so the business can turn
+  it back on without asking everyone to re-enroll. A business that prefers the stronger posture can opt
+  into destroying every template the moment the feature goes off (row 3 above).</p>
+
+  <h2 id="b5">5. The right to demand destruction</h2>
+  <p>An employee may ask for their template to be destroyed at any time, through their employer or by
+  writing to us at <a href="mailto:sales@itsolutionsli.com">sales@itsolutionsli.com</a>. It is
+  destroyed immediately on that request, and they revert to the non-biometric clock-in method. Making
+  the request has no effect on their pay or their employment, and the request itself is not a
+  performance record.</p>
+
+  <h2 id="b6">6. Never sold, never shared</h2>
+  <p>We do not and will not sell, lease, trade or otherwise profit from a biometric identifier or
+  biometric information. Templates are not shared with any third party, are not used to train any
+  external system, and are not disclosed except with the individual's consent, to complete a
+  transaction they requested, or as expressly required by law or a valid warrant or subpoena.</p>
+
+  <h2 id="b7">7. Storage and safeguards</h2>
+  <p>Templates are stored with the same or greater protection than we apply to other confidential
+  information: encrypted transport, restricted access, tenant separation, and audit logging of
+  privileged access. A template is a mathematical representation — it is not a photograph and cannot be
+  used to reconstruct one.</p>
+
+  <h2 id="b8">8. Current status</h2>
+  <p>Face recognition is <strong>currently disabled across the platform</strong>. This policy governs
+  any templates still on file from before that change, and any future re-enablement by a business.</p>
+
+  <h2 id="b9">9. Review and contact</h2>
+  <p>This policy is reviewed on any change to the retention schedule, the collection method, or
+  applicable law, and in any event within twelve months. Questions:
+  <a href="mailto:sales@itsolutionsli.com">sales@itsolutionsli.com</a>.</p>
+  <nav class="mpw-doc-nav">
+    <a href="/">&larr; Home</a>
+    <a href="/legal/terms.html">Terms of Service</a>
+    <a href="/legal/privacy.html">Privacy Policy</a>
+    <a href="/legal/eula.html">EULA</a>
+    <a href="/legal/acceptable-use.html">Acceptable Use</a>
+    <a href="/legal/biometric-policy.html">Biometric Data Policy</a>
+    <a href="/legal/subprocessors.html">Service Providers</a>
+    <a href="/legal/cookies.html">Cookies</a>
+  </nav>
+</main>
+
+</div>
+<script src="/assets/config.js"></script>
+<script src="/assets/site.js"></script>
+</body>
+</html>
