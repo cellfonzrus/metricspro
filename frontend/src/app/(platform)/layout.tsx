@@ -64,6 +64,40 @@ function SetupBanner() {
   )
 }
 
+// Free-trial countdown (mig 908). Banner-only, exactly like SetupBanner above: NOTHING is blocked
+// when a trial lapses. Whether a lapsed customer keeps working stays the operator's explicit call
+// through the existing tenant on/off switch — an automatic lockout is not something this banner, or
+// anything else in this change, decides on their behalf.
+//
+// Shown to admins only: a sales rep can do nothing about the subscription, so the countdown would be
+// noise on their screen. Silent for a tenant with no trial (every pre-907 tenant) because
+// `tenant.trial` is null there.
+function TrialBanner() {
+  const { tenant, user } = useAuth()
+  const trial = tenant?.trial
+  if (!trial) return null
+  if (trial.status !== 'trialing' && trial.status !== 'trial_expired') return null
+  if ((user?.role || '').toLowerCase() !== 'admin') return null
+  const expired = trial.status === 'trial_expired'
+  const days = trial.days_left ?? 0
+  // Quiet for most of the trial — it only earns a bar in the last week, or once it has lapsed.
+  if (!expired && days > 7) return null
+  const tone = expired
+    ? { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' }
+    : { bg: '#eff6ff', border: '#bfdbfe', text: '#1d4ed8' }
+  return (
+    <div style={{ background: tone.bg, borderBottom: `1px solid ${tone.border}`, padding: '10px 24px',
+      display: 'flex', alignItems: 'center', gap: 12, fontSize: 13, color: tone.text, flexWrap: 'wrap' }}>
+      <span style={{ fontWeight: 700 }}>{expired ? '⏳ Your free trial has ended.' : '⏳ Free trial:'}</span>
+      <span>
+        {expired
+          ? 'Everything still works — talk to us to keep it that way.'
+          : `${days} day${days === 1 ? '' : 's'} left on ${tenant?.name || 'your company'}'s trial.`}
+      </span>
+    </div>
+  )
+}
+
 // ── Admin "view as employee" banner (owner directive 2026-08-06) ─────────────────────────────────
 // Requirement: it must be IMPOSSIBLE to forget you are inside someone else's session. So this bar is
 // high-contrast, sticky above everything, names the employee, counts down to the hard server-side
@@ -512,6 +546,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
           </div>
           )}
         </header>
+        <TrialBanner />
         <SetupBanner />
         <div style={{ flex: 1, padding: 24, minWidth: 0 }}>{children}</div>
       </main>

@@ -1,0 +1,277 @@
+/* MetricsPro public website — standalone stylesheet.
+ *
+ * DESIGN NOTE. The subject is money that has to balance: carrier statements against what actually
+ * sold. So the page is built like a LEDGER, not a brochure — hairline rules instead of floating
+ * cards, strict left alignment, and every figure set in a monospaced face with tabular numerals so
+ * columns of numbers line up the way they would on a statement.
+ *
+ *   ink     #10151b   near-black with a blue bias — a deepened form of the product's navy
+ *   paper   #fbfaf8   barely-warm off-white; NOT cream
+ *   rule    #dcd8d2   hairlines, which carry the structure that cards would otherwise
+ *   signal  #1c5f4a   reconciled / settled — semantic, not decorative
+ *   flag    #b4531f   variance / exception — the other half of that pair
+ *
+ * Type is IBM Plex Sans + IBM Plex Mono: one superfamily, so the voice stays coherent, and the mono
+ * carries the ledger personality in labels and figures.
+ *
+ * Sections: reset · tokens · type · header · hero · rules & sections · steps · demo · modules ·
+ * platform · pricing · CTA · footer · legal documents · responsive.
+ */
+
+/* ── Reset ──────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; }
+img, svg { max-width: 100%; height: auto; display: block; }
+button, input, select, textarea { font: inherit; color: inherit; }
+
+/* ── Tokens ─────────────────────────────────────────────────────────────── */
+.mpw {
+  --ink: #10151b;
+  --ink-soft: #2b333d;
+  --slate: #5b6470;
+  --mute: #8b939d;
+  --paper: #fbfaf8;
+  --paper-2: #f3f1ed;
+  --rule: #dcd8d2;
+  --rule-strong: #b9b3ab;
+  --signal: #1c5f4a;
+  --signal-tint: #e6efea;
+  --flag: #b4531f;
+  --flag-tint: #f8ede5;
+
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+.mpw p { margin: 0; }
+.mpw h1, .mpw h2, .mpw h3, .mpw h4 { margin: 0; line-height: 1.1; font-weight: 600; text-wrap: balance; }
+.mpw a { color: inherit; text-decoration: none; }
+.mpw :focus-visible { outline: 2px solid var(--signal); outline-offset: 3px; }
+
+.mpw-wrap { max-width: 1140px; margin: 0 auto; padding: 0 32px; }
+
+/* Uppercase micro-label. Mono, tracked out — the ledger voice, used for every eyebrow and column
+   head so the same device always means "this labels something". */
+.mpw-label {
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.14em; color: var(--slate);
+}
+.mpw-num { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+/* NOTE ON SPECIFICITY: `.mpw a` sets `color: inherit` at 0,1,1, which outranks a bare
+   `.mpw-btn-primary` at 0,1,0 — an anchor-as-button then inherited the section's ink colour and
+   rendered black on black. Scoping each rule under `.mpw` lifts them to 0,2,0 so the button's own
+   colour wins. Keep the `.mpw ` prefix on anything that colours a link-shaped element. */
+.mpw .mpw-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px 22px; font-size: 15px; font-weight: 500; border: 1px solid transparent;
+  cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.mpw .mpw-btn-primary { background: var(--ink); color: var(--paper); }
+.mpw .mpw-btn-primary:hover { background: var(--signal); color: var(--paper); }
+.mpw .mpw-btn-ghost { border-color: var(--rule-strong); color: var(--ink); background: transparent; }
+.mpw .mpw-btn-ghost:hover { border-color: var(--ink); color: var(--ink); }
+.mpw .mpw-btn-light { background: var(--paper); color: var(--ink); }
+.mpw .mpw-btn-light:hover { background: var(--signal-tint); color: var(--ink); }
+.mpw .mpw-btn-outline-light { border-color: rgba(251,250,248,0.42); color: var(--paper); background: transparent; }
+.mpw .mpw-btn-outline-light:hover { border-color: var(--paper); background: rgba(251,250,248,0.08); color: var(--paper); }
+.mpw .mpw-btn-sm { padding: 8px 16px; font-size: 14px; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.mpw-header {
+  position: sticky; top: 0; z-index: 40;
+  background: rgba(251,250,248,0.93); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--rule);
+}
+.mpw-header-in { display: flex; align-items: center; gap: 28px; height: 68px; }
+.mpw-logo { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; display: flex; align-items: baseline; gap: 2px; }
+.mpw-logo em { font-style: normal; color: var(--signal); }
+.mpw-header-nav { display: flex; align-items: center; gap: 26px; margin-left: auto; font-size: 14.5px; color: var(--slate); }
+.mpw-header-nav a:hover { color: var(--ink); }
+
+/* ── Hero ───────────────────────────────────────────────────────────────── */
+.mpw-hero { padding: 92px 0 0; border-bottom: 1px solid var(--rule); }
+.mpw-hero h1 {
+  font-size: clamp(38px, 5.4vw, 64px); font-weight: 600; letter-spacing: -0.032em;
+  max-width: 16ch; margin: 22px 0 0;
+}
+.mpw-hero h1 em { font-style: normal; color: var(--signal); }
+.mpw-hero-sub { margin-top: 22px; font-size: 18.5px; color: var(--ink-soft); max-width: 58ch; }
+.mpw-hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
+.mpw-trial-line { margin-top: 22px; font-size: 14px; color: var(--slate); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
+.mpw-trial-pill { font-family: var(--mono); font-size: 12px; color: var(--signal); border: 1px solid var(--signal); padding: 2px 9px; white-space: nowrap; }
+
+/* The settlement strip: the product's thesis stated in figures rather than adjectives. */
+.mpw-strip { margin-top: 64px; border-top: 1px solid var(--rule); display: grid; grid-template-columns: repeat(4, 1fr); }
+.mpw-strip-cell { padding: 22px 24px 26px; border-right: 1px solid var(--rule); }
+.mpw-strip-cell:last-child { border-right: 0; }
+.mpw-strip-val { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 26px; letter-spacing: -0.02em; margin-top: 10px; }
+.mpw-strip-cell[data-tone="signal"] .mpw-strip-val { color: var(--signal); }
+.mpw-strip-cell[data-tone="flag"] .mpw-strip-val { color: var(--flag); }
+.mpw-strip-note { margin-top: 4px; font-size: 12.5px; color: var(--mute); }
+.mpw-strip-caption { padding: 12px 0 26px; font-size: 12.5px; color: var(--mute); border-top: 1px solid var(--rule); }
+
+/* ── Sections ───────────────────────────────────────────────────────────── */
+.mpw-section { padding: 84px 0; border-bottom: 1px solid var(--rule); }
+.mpw-section-dark { background: var(--ink); color: var(--paper); border-bottom: 0; }
+.mpw-section-dark .mpw-label { color: rgba(251,250,248,0.55); }
+.mpw-section h2 { font-size: clamp(26px, 3vw, 34px); letter-spacing: -0.025em; margin: 14px 0 0; max-width: 22ch; }
+.mpw-lede { margin-top: 16px; font-size: 17px; color: var(--ink-soft); max-width: 62ch; }
+.mpw-section-dark .mpw-lede { color: rgba(251,250,248,0.72); }
+
+/* ── Method: a numbered sequence, because the order is real ──────────────── */
+.mpw-steps { margin-top: 48px; border-top: 1px solid var(--rule); }
+.mpw-step { display: grid; grid-template-columns: 56px 1fr 1.3fr; gap: 24px; padding: 26px 0; border-bottom: 1px solid var(--rule); align-items: baseline; }
+.mpw-step-n { font-family: var(--mono); font-size: 13px; color: var(--mute); }
+.mpw-step h3 { font-size: 18px; letter-spacing: -0.015em; }
+.mpw-step p { font-size: 15px; color: var(--slate); }
+
+/* ── Demo ───────────────────────────────────────────────────────────────── */
+.mpw-demo-tabs { display: flex; flex-wrap: wrap; gap: 0; margin-top: 40px; border-bottom: 1px solid rgba(251,250,248,0.18); }
+.mpw-demo-tab {
+  background: none; border: 0; border-bottom: 2px solid transparent; color: rgba(251,250,248,0.6);
+  font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 12px 18px 11px; cursor: pointer; transition: color 0.15s, border-color 0.15s;
+}
+.mpw-demo-tab:hover { color: var(--paper); }
+.mpw-demo-tab[aria-selected="true"] { color: var(--paper); border-bottom-color: var(--signal); }
+.mpw-screen { display: none; background: var(--paper); color: var(--ink); margin-top: 28px; border: 1px solid var(--rule); }
+.mpw-screen.is-on { display: block; }
+.mpw-screen-bar { display: flex; align-items: center; gap: 12px; padding: 11px 18px; border-bottom: 1px solid var(--rule); background: var(--paper-2); }
+.mpw-screen-bar .mpw-label { font-size: 10.5px; }
+.mpw-screen-period { margin-left: auto; font-family: var(--mono); font-size: 11.5px; color: var(--slate); }
+.mpw-screen-body { padding: 22px 24px 26px; overflow-x: auto; }
+.mpw-screen h4 { font-size: 16px; letter-spacing: -0.015em; margin-bottom: 20px; }
+.mpw-screen-note { margin-top: 16px; font-size: 12.5px; color: var(--mute); }
+/* The demo screen is a LIGHT island inside the dark section, so the dark-section label colour
+   (0,2,0) would otherwise paint its labels near-white on a near-white bar. Same specificity trap as
+   the buttons — restated here at 0,3,0 rather than relying on source order. */
+.mpw-section-dark .mpw-screen .mpw-label { color: var(--slate); }
+.mpw-section-dark .mpw-screen { color: var(--ink); }
+
+.mpw-t { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 560px; }
+.mpw-t th {
+  font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--slate); font-weight: 500; text-align: left; padding: 0 12px 9px 0; border-bottom: 1px solid var(--rule-strong);
+}
+.mpw-t td { padding: 11px 12px 11px 0; border-bottom: 1px solid var(--rule); }
+.mpw-t .n { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; padding-left: 28px; }
+.mpw-t th.n, .mpw-t td.n { padding-right: 20px; }
+.mpw-t th.n:last-child, .mpw-t td.n:last-child { padding-right: 0; }
+.mpw-t tr:last-child td { border-bottom: 0; }
+.mpw-t tfoot td { border-top: 1px solid var(--rule-strong); border-bottom: 0; font-weight: 600; padding-top: 12px; }
+.mpw-ok { color: var(--signal); }
+.mpw-bad { color: var(--flag); }
+.mpw-tag { font-family: var(--mono); font-size: 10.5px; padding: 2px 7px; border: 1px solid currentColor; white-space: nowrap; }
+
+/* ── Modules: a list with rules, not a grid of cards ─────────────────────── */
+.mpw-mods { margin-top: 44px; display: grid; grid-template-columns: 1fr 1fr; gap: 0 56px; }
+.mpw-mod { padding: 18px 0; border-bottom: 1px solid var(--rule); display: grid; grid-template-columns: 30px 1fr; gap: 16px; align-items: baseline; }
+.mpw-mod-n { font-family: var(--mono); font-size: 11px; color: var(--mute); }
+.mpw-mod h3 { font-size: 15.5px; letter-spacing: -0.01em; }
+.mpw-mod p { margin-top: 4px; font-size: 14px; color: var(--slate); }
+
+/* ── Platform ───────────────────────────────────────────────────────────── */
+.mpw-caps { margin-top: 44px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px 44px; }
+.mpw-cap { border-top: 2px solid var(--ink); padding-top: 16px; }
+.mpw-cap h3 { font-size: 15.5px; }
+.mpw-cap p { margin-top: 7px; font-size: 14px; color: var(--slate); }
+
+/* ── Pricing ────────────────────────────────────────────────────────────── */
+.mpw-plans { margin-top: 44px; display: grid; gap: 0; border-top: 1px solid var(--rule-strong); }
+.mpw-plans-2 { grid-template-columns: repeat(2, 1fr); }
+.mpw-plans-3 { grid-template-columns: repeat(3, 1fr); }
+.mpw-plans-4 { grid-template-columns: repeat(4, 1fr); }
+.mpw-plan { padding: 26px 28px 30px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); display: flex; flex-direction: column; }
+.mpw-plan:last-child { border-right: 0; }
+.mpw-plans-1 { grid-template-columns: minmax(0, 520px); }
+.mpw-plans-1 .mpw-plan { border-right: 0; }
+.mpw-plan-featured { background: var(--paper-2); }
+.mpw-plan-flag { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--signal); margin-bottom: 12px; }
+.mpw-plan h3 { font-size: 19px; letter-spacing: -0.015em; }
+.mpw-plan-tagline { margin-top: 8px; font-size: 14px; color: var(--slate); }
+.mpw-plan-price { margin-top: 22px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.mpw-plan-amount { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 32px; letter-spacing: -0.03em; }
+.mpw-plan-amount-quiet { font-size: 22px; }
+.mpw-plan-unit { font-size: 13.5px; color: var(--slate); }
+.mpw-plan-note { margin-top: 5px; font-size: 12.5px; color: var(--mute); }
+.mpw-plan-features { margin: 20px 0 26px; padding: 0; list-style: none; display: grid; gap: 9px; }
+.mpw-plan-features li { position: relative; padding-left: 20px; font-size: 14px; color: var(--slate); }
+.mpw-plan-features li::before { content: '—'; position: absolute; left: 0; color: var(--rule-strong); font-family: var(--mono); }
+.mpw-plan-cta { margin-top: auto; width: 100%; }
+.mpw-plans-note { margin-top: 18px; font-size: 13px; color: var(--mute); }
+
+/* ── Closing CTA ────────────────────────────────────────────────────────── */
+.mpw-cta { background: var(--ink); color: var(--paper); padding: 84px 0; }
+.mpw-cta h2 { font-size: clamp(26px, 3.2vw, 38px); letter-spacing: -0.028em; max-width: 20ch; }
+.mpw-cta p { margin-top: 18px; font-size: 17px; color: rgba(251,250,248,0.72); max-width: 56ch; }
+.mpw-cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+.mpw-footer { background: var(--ink); color: rgba(251,250,248,0.5); padding: 30px 0 40px; font-size: 13.5px; border-top: 1px solid rgba(251,250,248,0.14); }
+.mpw-footer-in { display: flex; flex-wrap: wrap; gap: 12px 26px; align-items: center; }
+.mpw-footer-links { display: flex; flex-wrap: wrap; gap: 22px; margin-left: auto; }
+.mpw-footer a:hover { color: var(--paper); }
+
+/* ── Legal documents ────────────────────────────────────────────────────── */
+.mpw-doc { max-width: 760px; margin: 0 auto; padding: 60px 32px 100px; }
+.mpw-doc h1 { font-size: clamp(30px, 4vw, 40px); letter-spacing: -0.03em; }
+.mpw-doc .mpw-doc-meta { font-family: var(--mono); font-size: 12.5px; color: var(--mute); margin: 10px 0 32px; }
+.mpw-doc h2 { font-size: 19px; letter-spacing: -0.018em; margin: 40px 0 12px; padding-top: 20px; border-top: 1px solid var(--rule); }
+.mpw-doc h3 { font-size: 16px; margin: 26px 0 8px; }
+.mpw-doc p, .mpw-doc li { font-size: 16px; color: var(--ink-soft); }
+.mpw-doc p { margin: 0 0 15px; }
+.mpw-doc ul, .mpw-doc ol { margin: 0 0 17px; padding-left: 22px; }
+.mpw-doc li { margin-bottom: 8px; }
+.mpw-doc strong { color: var(--ink); font-weight: 600; }
+.mpw-doc a { color: var(--signal); text-decoration: underline; text-underline-offset: 2px; }
+.mpw-doc table { width: 100%; border-collapse: collapse; margin: 0 0 20px; font-size: 14.5px; }
+.mpw-doc th, .mpw-doc td { border-bottom: 1px solid var(--rule); padding: 10px 14px 10px 0; text-align: left; vertical-align: top; }
+.mpw-doc th { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--slate); font-weight: 500; border-bottom-color: var(--rule-strong); }
+.mpw-doc-scroll { overflow-x: auto; }
+/* Conspicuousness is a legal requirement for warranty and liability clauses in many US states, so
+   these are set apart rather than blended in. */
+.mpw-doc .mpw-caps-clause { background: var(--paper-2); border-left: 2px solid var(--ink); padding: 18px 20px; font-size: 14.5px; margin-bottom: 16px; }
+.mpw-doc-toc { border-top: 1px solid var(--rule-strong); border-bottom: 1px solid var(--rule); padding: 20px 0; margin-bottom: 32px; }
+.mpw-doc-toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 34px; }
+.mpw-doc-toc li { margin-bottom: 5px; font-size: 14px; }
+.mpw-doc-note { border-left: 2px solid var(--flag); background: var(--flag-tint); padding: 16px 20px; margin-bottom: 28px; font-size: 15px; }
+.mpw-doc-note p:last-child { margin-bottom: 0; }
+/* An unfilled blank. Deliberately loud: check-before-launch.sh fails while any remain. */
+.mpw-todo { background: #fbe3d8; color: var(--flag); border: 1px solid #e9b79c; padding: 1px 6px; font-family: var(--mono); font-size: 0.86em; }
+.mpw-doc-nav { display: flex; flex-wrap: wrap; gap: 10px 22px; padding-top: 22px; border-top: 1px solid var(--rule); margin-top: 48px; font-size: 14px; }
+.mpw-doc-nav a { color: var(--slate); text-decoration: none; }
+.mpw-doc-nav a:hover { color: var(--ink); }
+
+/* ── Responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 940px) {
+  .mpw-strip { grid-template-columns: 1fr 1fr; }
+  .mpw-strip-cell:nth-child(2) { border-right: 0; }
+  .mpw-strip-cell:nth-child(-n+2) { border-bottom: 1px solid var(--rule); }
+  .mpw-mods, .mpw-caps { grid-template-columns: 1fr; }
+  .mpw-plans-3, .mpw-plans-4 { grid-template-columns: 1fr 1fr; }
+  .mpw-step { grid-template-columns: 40px 1fr; }
+  .mpw-step p { grid-column: 2; }
+}
+@media (max-width: 620px) {
+  .mpw-wrap { padding: 0 20px; }
+  .mpw-hero { padding-top: 56px; }
+  .mpw-section { padding: 56px 0; }
+  .mpw-strip { grid-template-columns: 1fr; }
+  .mpw-strip-cell { border-right: 0; border-bottom: 1px solid var(--rule); }
+  .mpw-plans-1, .mpw-plans-2, .mpw-plans-3, .mpw-plans-4 { grid-template-columns: 1fr; }
+  .mpw-plan { border-right: 0; }
+  .mpw-header-nav a { display: none; }
+  .mpw-header-nav .mpw-btn { display: inline-flex; }
+  .mpw-doc-toc ol { columns: 1; }
+  .mpw-footer-links { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

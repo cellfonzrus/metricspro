@@ -1,4 +1,5 @@
-"""Application-level field encryption for sensitive employee PII (SSN / bank / A-Number, …).
+"""Application-level field encryption for sensitive employee PII (bank details / A-Number, and any
+intake field a tenant defines and marks private).
 
 Defense in depth. The database is ALREADY encrypted at rest (Supabase Postgres = AES-256 on the
 underlying volume) and every hop is TLS, so data is protected at the infrastructure layer. This

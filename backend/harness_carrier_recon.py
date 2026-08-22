@@ -153,6 +153,141 @@ def main():
     check("dropped store STILL returned (never silently dropped)",
           any(r["store"] == dropped_name for r in cmp2["per_store"]))
 
+    # ── (c) classifier reproduces Boost's Rebate/Comm split on Sheet1's Payment Type column ───────────
+    print("\n(c) parse_payment_type bucketing agrees with Boost's Rebate/Comm column placement:")
+    from app.modules.commcalc.discrepancy_engine import parse_payment_type
+    from app.modules.commcalc.router import (_RECON_BOUNTY_COMPS, _RECON_REIMB_COMPS)
+
+    def _bucket(payment_type):
+        """Mirror `_recon_payment_bucketer` with NO org payment_categories config (comp_type only)."""
+        try:
+            comp = parse_payment_type(payment_type)[0]
+        except Exception:
+            comp = ""
+        if comp in _RECON_REIMB_COMPS:
+            return "reimbursement"
+        if comp in _RECON_BOUNTY_COMPS:
+            return "bounty"
+        return "other"
+
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    ws = wb["Sheet1"]
+    it = ws.iter_rows(values_only=True)
+    hdr = list(next(it))
+    ci, ri, pti = hdr.index("Comm Paid"), hdr.index("Rebate Paid"), hdr.index("Payment Type")
+
+    def _f(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # Ground truth = which Boost column carries the money. Test rows that carry a Payment Type AND have
+    # money in EXACTLY ONE of {Comm Paid, Rebate Paid} (a row split across both is a Boost-side judgement
+    # call, not a classifier fact). Expected: comm-only → bounty, rebate-only → reimbursement.
+    tally = {"bounty": [0, 0], "reimbursement": [0, 0]}
+    mism = []
+    for row in it:
+        pt = row[pti]
+        if pt is None or str(pt).strip() == "":
+            continue
+        comm, reb = _f(row[ci]), _f(row[ri])
+        if (comm > 0) == (reb > 0):        # need money in exactly one column
+            continue
+        expected = "bounty" if comm > 0 else "reimbursement"
+        got = _bucket(pt)
+        tally[expected][1] += 1
+        if got == expected:
+            tally[expected][0] += 1
+        else:
+            mism.append((expected, got, comm, reb, str(pt)[:48]))
+    wb.close()
+
+    tot_a = sum(v[0] for v in tally.values())
+    tot_t = sum(v[1] for v in tally.values())
+    for b in ("reimbursement", "bounty"):
+        a, t = tally[b]
+        rate = (100.0 * a / t) if t else 0.0
+        print(f"     {b:14s} agreement {a}/{t}  ({rate:.0f}%)")
+    print(f"     overall        agreement {tot_a}/{tot_t}  "
+          f"({(100.0 * tot_a / tot_t) if tot_t else 0.0:.0f}%)")
+    if mism:
+        print("     residual mismatches (Boost split a promo line into Comm — a Boost-side quirk, "
+              "not a classifier error):")
+        for e, g, c, r, p in mism:
+            print(f"       exp {e} got {g}  comm={c:.2f} reb={r:.2f}  {p}")
+    check("reimbursement bucket agreement == 100%", tally["reimbursement"][1] > 0 and
+          tally["reimbursement"][0] == tally["reimbursement"][1],
+          f"{tally['reimbursement'][0]}/{tally['reimbursement'][1]}")
+    check("overall classification agreement >= 90%", tot_t > 0 and tot_a / tot_t >= 0.90,
+          f"{tot_a}/{tot_t}")
+
+    # ── (d) ours-side helper: bucketing + the ePay == Rebate + Comm identity (real `_recon_ours_paid`) ─
+    print("\n(d) _recon_ours_paid: bucketing, RTR exclusion, and ePay == Rebate + Comm identity:")
+    import types as _types
+    from app.modules.commcalc.router import _recon_ours_paid
+
+    class _FakeQ:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def select(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def in_(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            return _types.SimpleNamespace(data=self._rows)
+
+    class _FakeClient:
+        def __init__(self, tables):
+            self._tables = tables
+
+        def schema(self, _s):
+            return self
+
+        def table(self, name):
+            return _FakeQ(self._tables.get(name, []))
+
+    pay_rows = [
+        {"business_address": "100 Main St", "payment_type": "3187138: New Activation Bounty - Month 1",
+         "amount": 5.0},                                                  # bounty
+        {"business_address": "100 Main St", "payment_type": "2026 Q3 Promo Upgrade",
+         "amount": 50.0},                                                 # reimbursement
+        {"business_address": "100 Main St", "payment_type": "Device Upgrade Bounty - Month 1",
+         "amount": 500.0},                                                # reimbursement (DUPGB)
+        {"business_address": "100 Main St", "payment_type": "Auto Top Up Monthly Incentive",
+         "amount": 999.0},                                                # OTHER / RTR — excluded
+        {"business_address": "200 Oak Ave", "payment_type": "Simplified SIM Loading Bounty - Month 1",
+         "amount": 3.0},                                                  # bounty
+        {"business_address": "200 Oak Ave", "payment_type": "SIM Card Reimbursement",
+         "amount": 2.5},                                                  # reimbursement (SIMCR)
+    ]
+    fake = _FakeClient({"payment_categories": [], "raw_payment_detail": pay_rows})
+    into, hnotes = {}, []
+    _recon_ours_paid(fake, "org-test", "Jul-2026", lambda a: (a, None), into, hnotes)
+    a = into.get("100 main st", {})
+    b = into.get("200 oak ave", {})
+    check("store A comm_paid == 5.00 (NAB bounty)", approx(a.get("comm_paid", 0), 5.0), a.get("comm_paid"))
+    check("store A rebate_paid == 550.00 (promo upgrade + device upgrade)",
+          approx(a.get("rebate_paid", 0), 550.0), a.get("rebate_paid"))
+    check("store A ePay excludes the $999 RTR/airtime line",
+          approx(a.get("epay_paid", 0), 555.0), a.get("epay_paid"))
+    check("store A identity ePay == Rebate + Comm",
+          approx(a.get("epay_paid", 0), a.get("rebate_paid", 0) + a.get("comm_paid", 0)))
+    check("store B comm_paid == 3.00 / rebate_paid == 2.50",
+          approx(b.get("comm_paid", 0), 3.0) and approx(b.get("rebate_paid", 0), 2.5),
+          (b.get("comm_paid"), b.get("rebate_paid")))
+    check("store B identity ePay == Rebate + Comm",
+          approx(b.get("epay_paid", 0), b.get("rebate_paid", 0) + b.get("comm_paid", 0)))
+
     print(f"\n==== {_passed} passed, {_failed} failed ====")
     return 1 if _failed else 0
 

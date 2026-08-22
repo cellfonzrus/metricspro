@@ -66,9 +66,13 @@ export default function PrivacyPolicyPage() {
       <p style={p}>
         We do not sell personal information. We share information only as needed to operate the Service, with
         infrastructure and service providers that process data on our behalf under appropriate confidentiality and
-        security obligations, including: hosting and database services (Supabase, Vercel, Railway), email delivery
-        (Resend), messaging delivery (Meta / WhatsApp Business Platform), and, where enabled, AI-assisted summarization
-        of a customer&rsquo;s own figures (Anthropic). We may also disclose information if required by law or to protect
+        security obligations. By category, those are: cloud database, authentication and file storage; application
+        hosting; web hosting and content delivery; transactional email delivery; business messaging, for opt-in
+        WhatsApp notifications; AI summarization, where a customer enables it, limited to the figures in the requested
+        summary; and reviews and authorized integrations a customer chooses to connect. All process data in the United
+        States, save for messaging and content delivery, which are global. We give the specific provider names to
+        customers and their advisors on request; we do not publish a confirmed vendor list, because its main use to a
+        stranger is impersonating one of them. We may also disclose information if required by law or to protect
         the rights, safety, and security of our customers, users, or the Service.
       </p>
 
