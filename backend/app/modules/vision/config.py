@@ -59,6 +59,20 @@ DEFAULT_CONFIG = {
     "audio_analytics_enabled": False,
     "behavior_scoring_enabled": False,
     "audio_consent_mode": "required",
+    # Employee activity from pose (mig 910). Both default FALSE for the same reason the audio pair
+    # does: the safe state and the default state must be the same one. Coverage defaults TRUE — it
+    # names nobody, needs no consent, and carries no per-person content at all.
+    "activity_enabled": False,
+    "face_state_enabled": False,
+    "coverage_enabled": True,
+    "video_consent_mode": "required",
+    "activity_retention_days": 30,
+    "coverage_retention_days": 400,
+    "activity_bucket_seconds": 900,
+    "activity_sample_seconds": 2.0,
+    "walk_speed": 0.05,
+    "engage_distance": 0.12,
+    "idle_after_seconds": 120,
     "presence_retention_days": 7,
     "visit_retention_days": 90,
     "transcript_retention_days": 30,
@@ -120,7 +134,7 @@ def resolve_config(client, org_id: str) -> dict:
 
 def feature_enabled(cfg: dict, feature: str) -> bool:
     """True if `feature` ('live_view' | 'traffic' | 'heatmap' | 'google_events' | 'audio_analytics' |
-    'behavior_scoring') is usable for this tenant right now. Master switch is already folded into the
+    'behavior_scoring' | 'activity' | 'face_state' | 'coverage') is usable for this tenant right now. Master switch is already folded into the
     sub-switches by resolve_config, but it is re-checked here so this is correct on a hand-built dict."""
     if not cfg or not cfg.get("enabled"):
         return False
@@ -137,7 +151,12 @@ def camera_allows(cfg: dict, camera: dict, feature: str) -> bool:
         return False
     if not camera or not camera.get("enabled", True):
         return False
-    if feature in ("traffic", "heatmap") and not camera.get("analytics_enabled", True):
+    if feature in ("traffic", "heatmap", "activity", "coverage", "face_state") \
+            and not camera.get("analytics_enabled", True):
+        return False
+    # Face state rides on activity: a tenant cannot end up measuring mouths on a camera whose
+    # activity analysis is off, whichever order the two switches were flipped in.
+    if feature == "face_state" and not feature_enabled(cfg, "activity"):
         return False
     if feature == "traffic" and not camera.get("is_entrance", False):
         return False
@@ -183,7 +202,13 @@ def retention_cutoffs(cfg: dict, now=None) -> dict:
     out = {}
     for key, col in (("presence", "presence_retention_days"), ("visit", "visit_retention_days"),
                      ("transcript", "transcript_retention_days"), ("heat", "heat_retention_days"),
-                     ("score", "score_retention_days")):
+                     ("score", "score_retention_days"),
+                     # mig 910. Activity buckets are the most sensitive rows in the module, so they
+                     # expire fastest of anything but raw presence: long enough for a monthly
+                     # coaching conversation, too short to accumulate a dossier. Coverage names
+                     # nobody and keeps the heat map's reporting horizon.
+                     ("activity", "activity_retention_days"),
+                     ("coverage", "coverage_retention_days")):
         days = cfg.get(col)
         try:
             days = int(days)

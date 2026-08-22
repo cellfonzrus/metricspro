@@ -104,6 +104,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from app.modules.vision import activity as ACT  # noqa: E402  (the SAME rules the server proves)
 from app.modules.vision import geometry as GEO   # noqa: E402  (the SAME rules the server proves)
 
 log = logging.getLogger("vision-edge")
@@ -166,16 +167,29 @@ class PersonDetector:
     exactly like a quiet store, which is the most expensive kind of bug to notice.
     """
 
-    def __init__(self, prefer_yolo=True):
+    def __init__(self, prefer_yolo=True, pose=False):
+        """`pose=True` loads the POSE weights instead of the plain detector.
+
+        This is a model SWAP, not a second pass, and that is the whole reason posture is affordable:
+        yolov8n-pose returns boxes AND 17 keypoints from one inference, so a store already paying for
+        detection gets posture for roughly 20% more time rather than double. Running a separate pose
+        model over the same frames would have been the obvious wiring and would have halved the
+        cameras a box could carry.
+
+        The HOG fallback has no keypoints at all, so a machine that ends up on it produces detection
+        and no posture — reported honestly by `supports_pose` rather than by silently empty columns.
+        """
         self.kind = None
         self.reason = ""
         self._yolo = None
         self._hog = None
+        self.supports_pose = False
         if prefer_yolo:
             try:
                 from ultralytics import YOLO
-                self._yolo = YOLO("yolov8n.pt")
-                self.kind = "yolov8n"
+                self._yolo = YOLO("yolov8n-pose.pt" if pose else "yolov8n.pt")
+                self.kind = "yolov8n-pose" if pose else "yolov8n"
+                self.supports_pose = bool(pose)
                 return
             except Exception as e:
                 self.reason = f"ultralytics unavailable ({type(e).__name__})"
@@ -220,10 +234,24 @@ class PersonDetector:
         if self._yolo is not None:
             out = []
             for r in self._yolo(frame, verbose=False, classes=[0]):     # class 0 = person
-                for b in r.boxes:
+                # Keypoints come back parallel to boxes, in the same order, when the pose weights are
+                # loaded. Normalized here so everything downstream is resolution-independent — the
+                # posture rule compares a thigh to a torso and would otherwise drift with the frame.
+                kps = None
+                if self.supports_pose and getattr(r, "keypoints", None) is not None:
+                    try:
+                        kps = r.keypoints.data.tolist()
+                    except Exception:
+                        kps = None
+                for i, b in enumerate(r.boxes):
                     x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
-                    out.append({"x": x1 / w, "y": y1 / h, "w": (x2 - x1) / w, "h": (y2 - y1) / h,
-                                "conf": float(b.conf[0])})
+                    det = {"x": x1 / w, "y": y1 / h, "w": (x2 - x1) / w, "h": (y2 - y1) / h,
+                           "conf": float(b.conf[0])}
+                    if kps is not None and i < len(kps):
+                        det["keypoints"] = [[float(k[0]) / w, float(k[1]) / h,
+                                             float(k[2]) if len(k) > 2 else 1.0]
+                                            for k in kps[i]]
+                    out.append(det)
             return out
         rects, weights = self._hog.detectMultiScale(frame, winStride=(8, 8), scale=1.05)
         return [{"x": x / w, "y": y / h, "w": bw / w, "h": bh / h,
@@ -275,6 +303,154 @@ class Tracker:
         for key in [k for k, t in self._tracks.items() if now - t.get("last_seen", now) > TRACK_TTL_SECONDS]:
             self._tracks.pop(key, None)
         return [t for t in self._tracks.values() if t.get("matched")]
+
+
+class FaceState:
+    """Mouth-openness on one frame, and NOTHING that could identify the face it came from.
+
+    WHY THIS IS A SEPARATE CLASS FROM EVERYTHING ELSE. The person detector's 17 keypoints include a
+    nose and eyes but no mouth, so measuring a mouth needs a face-landmark model. That is the most
+    invasive thing this analyzer does, so it is isolated here, loaded only when the server says the
+    tenant has face_state switched on, and reduced to a single float per frame before it returns.
+
+    WHAT LEAVES THIS CLASS: one number, the ratio of mouth height to mouth width. What does NOT
+    leave it, and is never written to disk anywhere: the landmarks, the face crop, the frame, and
+    any embedding or descriptor. A ratio cannot be matched against another face; a geometry template
+    can, and we compute none. That distinction is what keeps this on the right side of the module's
+    no-biometrics commitment (migration 900) rather than adding to the platform's BIPA exposure.
+
+    Optional dependency, on purpose. Without mediapipe installed there is no face state at all and
+    the analyzer says so at startup — a tenant does not get silent zeros in a column they enabled.
+    """
+
+    LIPS_TOP, LIPS_BOTTOM = 13, 14          # inner lip centre, MediaPipe FaceMesh topology
+    MOUTH_LEFT, MOUTH_RIGHT = 78, 308
+
+    def __init__(self):
+        self.available = False
+        self.reason = ""
+        self._mesh = None
+        try:
+            import mediapipe as mp
+            self._mesh = mp.solutions.face_mesh.FaceMesh(
+                static_image_mode=False, max_num_faces=4, refine_landmarks=False,
+                min_detection_confidence=0.5, min_tracking_confidence=0.5)
+            self.available = True
+        except Exception as e:
+            self.reason = f"mediapipe unavailable ({type(e).__name__})"
+
+    def unavailable_message(self) -> str:
+        return ("Face state is switched on for this company but no face-landmark model is installed "
+                f"on this machine — {self.reason or 'unknown reason'}. Install it with:  "
+                "pip install mediapipe   (nothing else here needs it; posture, movement and "
+                "coverage all run without it.)")
+
+    def mouth_ratios(self, frame):
+        """[(centre_x, centre_y, ratio)] per visible face, normalized. Never raises."""
+        if not self.available or frame is None:
+            return []
+        try:
+            import cv2
+            res = self._mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        except Exception:
+            return []
+        out = []
+        for face in (getattr(res, "multi_face_landmarks", None) or []):
+            try:
+                lm = face.landmark
+                top, bot = lm[self.LIPS_TOP], lm[self.LIPS_BOTTOM]
+                left, right = lm[self.MOUTH_LEFT], lm[self.MOUTH_RIGHT]
+                width = ((right.x - left.x) ** 2 + (right.y - left.y) ** 2) ** 0.5
+                if width <= 1e-6:
+                    continue
+                height = ((bot.x - top.x) ** 2 + (bot.y - top.y) ** 2) ** 0.5
+                # Ratio, then the landmarks go out of scope with this frame. Nothing is kept.
+                out.append(((left.x + right.x) / 2.0, (top.y + bot.y) / 2.0, height / width))
+            except Exception:
+                continue
+        return out
+
+
+class ActivityAccumulator:
+    """Per-track observations for one camera, rolled into buckets and handed to the outbox.
+
+    Keeps ONLY counters. A track's history here is "how many samples looked like sitting", never a
+    frame, a crop or a position trail — so even the in-memory state of a running analyzer holds
+    nothing that could reconstruct what somebody did.
+
+    NO NAMES ANYWHERE IN THIS CLASS, and none in what it emits. The analyzer cannot know which
+    employee a track is and must not appear to: the server attributes a bucket from the time clock,
+    and a name in this payload would be ignored there anyway. See ingest.normalize_batch.
+    """
+
+    def __init__(self, bucket_seconds=900, sample_seconds=2.0):
+        self.bucket_seconds = max(60, int(bucket_seconds or 900))
+        self.sample_seconds = float(sample_seconds or 2.0)
+        self.bucket_key = None
+        self.tracks = {}                    # track_key -> {"obs": [...], "mar": [...]}
+        self.window_started = None
+        self.staff_seconds = 0.0
+        self.customer_seconds = 0.0
+        self.peak_people = 0
+
+    def _bucket_of(self, now_utc):
+        """The wall-clock bucket this instant falls in, floored to the bucket size.
+
+        Floored to the HOUR boundary rather than to process start, so two analyzers covering the same
+        store agree on where a bucket begins and the server's unique index actually dedupes them."""
+        epoch = int(now_utc.timestamp())
+        start = epoch - (epoch % self.bucket_seconds)
+        return datetime.fromtimestamp(start, tz=timezone.utc)
+
+    def observe(self, track_key, posture, motion, with_person, mar=None):
+        t = self.tracks.setdefault(track_key, {"obs": [], "mar": []})
+        t["obs"].append({"posture": posture, "motion": motion, "with_person": with_person})
+        if mar is not None:
+            t["mar"].append(mar)
+
+    def note_floor(self, people, dt):
+        """People on the floor over dt seconds. Staff-vs-customer is NOT knowable from the picture —
+        the detector has one class — so the convention the server documents is used: any person on
+        the floor makes it staffed for coverage purposes, and the caveat travels with the number."""
+        if dt <= 0:
+            return
+        self.peak_people = max(self.peak_people, people)
+        if people > 0:
+            self.staff_seconds += dt
+            if people > 1:
+                self.customer_seconds += dt
+
+    def maybe_flush(self, now_utc, device_name, outbox, face_on):
+        """Emit the finished bucket, if the clock has moved past it. Returns True when it did."""
+        key = self._bucket_of(now_utc)
+        if self.bucket_key is None:
+            self.bucket_key, self.window_started = key, now_utc
+            return False
+        if key == self.bucket_key:
+            return False
+        started, ended = self.bucket_key, key
+        window = max(0.0, (ended - started).total_seconds())
+        for track_key, t in self.tracks.items():
+            if not t["obs"]:
+                continue
+            ev = {"kind": "activity", "device_name": device_name,
+                  "bucket_start": started.isoformat(),
+                  "track_key": track_key, "sample_seconds": self.sample_seconds,
+                  "observations": t["obs"]}
+            if face_on and t["mar"]:
+                ev["wide_mouth_episodes"] = ACT.yawn_events(t["mar"], self.sample_seconds)
+            outbox.append(ev)
+        outbox.append({"kind": "coverage", "device_name": device_name,
+                       "bucket_start": started.isoformat(),
+                       "window_seconds": round(window, 1),
+                       "staff_seconds": round(self.staff_seconds, 1),
+                       "customer_seconds": round(self.customer_seconds, 1),
+                       "peak_people": self.peak_people})
+        self.tracks.clear()
+        self.staff_seconds = self.customer_seconds = 0.0
+        self.peak_people = 0
+        self.bucket_key, self.window_started = key, now_utc
+        return True
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -575,16 +751,18 @@ def benchmark(args) -> int:
     rng = np.random.default_rng(7)
     frame = rng.integers(0, 255, (720, 1280, 3), dtype=np.uint8)
 
-    log.info("detector: %s · warming up…", det.kind)
-    for _ in range(3):
-        det(frame)
-
     runs = max(5, args.benchmark_runs)
-    started = time.perf_counter()
-    for _ in range(runs):
-        det(frame)
-    per_detection = (time.perf_counter() - started) / runs
 
+    def time_it(d):
+        for _ in range(3):                # warm up: the first call pays for lazy CUDA/graph setup
+            d(frame)
+        started = time.perf_counter()
+        for _ in range(runs):
+            d(frame)
+        return (time.perf_counter() - started) / runs
+
+    log.info("detector: %s · warming up…", det.kind)
+    per_detection = time_it(det)
     cap = capacity(per_detection, args.detect_fps)
 
     log.info("")
@@ -600,6 +778,27 @@ def benchmark(args) -> int:
         log.warning("      Try --detect-fps %.1f, or use a faster machine. Below about 3 fps a fast "
                     "walker can cross the counting line between samples and go uncounted.",
                     cap["max_fps_for_one_camera"])
+
+    # WHAT EMPLOYEE ACTIVITY COSTS, measured rather than asserted. Posture needs the pose weights,
+    # which are a different model on the same frames — so the honest way to answer "can we afford to
+    # turn this on" is to time both on this machine and print the two camera counts together. An
+    # operator deciding on the feature should see the price next to it, not discover it afterwards
+    # as a store box that fell behind.
+    pose = PersonDetector(prefer_yolo=not args.no_yolo, pose=True)
+    if pose.supports_pose:
+        pcap = capacity(time_it(pose), args.detect_fps)
+        log.info("")
+        log.info("  WITH EMPLOYEE ACTIVITY (posture) switched on:")
+        log.info("    %.1f ms per detection  ==> about %d camera%s  (%.0f%% of the above)",
+                 pcap["ms_per_detection"], pcap["cameras"],
+                 "" if pcap["cameras"] == 1 else "s",
+                 100.0 * pcap["ms_per_detection"] / max(cap["ms_per_detection"], 0.001))
+        log.info("    Movement, company and floor coverage cost nothing extra — they are computed "
+                 "from tracks this machine already produces. Only POSTURE needs these weights.")
+    elif not args.no_yolo:
+        log.info("")
+        log.info("  Employee activity (posture) could not be timed — the pose weights did not load.")
+
     log.info("")
     log.info("  Detector in use: %s", det.kind)
     if det.kind == "opencv-hog":
@@ -623,13 +822,18 @@ def webrtc_available():
 class CameraWorker:
     """Holds one camera's stream and turns it into events. Owns nothing persistent."""
 
-    def __init__(self, api, cam, grid, tz_offset_minutes, detector, outbox, detect_fps=DETECT_FPS):
+    def __init__(self, api, cam, grid, tz_offset_minutes, detector, outbox, detect_fps=DETECT_FPS,
+                 activity=None, face=None):
         self.api = api
         self.cam = cam
         self.grid = grid
         self.tz_offset = tz_offset_minutes
         self.detector = detector
         self.outbox = outbox
+        self.face = face
+        # Activity is per-camera because the switches are: a store can have one eye-level camera
+        # marked posture_capable and three ceiling ones that are not.
+        self.activity = (ActivityAccumulator(**activity) if activity else None)
         self.tracker = Tracker()
         self.session = None
         self.extend_at = 0
@@ -738,24 +942,81 @@ class CameraWorker:
         zones = self.cam.get("zones") or []
         lines = [z for z in zones if z.get("kind") == "line" and z.get("is_active", True)]
 
-        for track in self.tracker.update(self.detector(frame), now):
-            foot = GEO.foot_point(track["box"])
+        tracks = self.tracker.update(self.detector(frame), now)
+
+        # Mouth ratios for the whole frame, once, then matched to tracks by position. Computed only
+        # when the tenant has face state on AND the model is present — see FaceState.
+        ratios = self.face.mouth_ratios(frame) if (self.face and self.activity) else []
+
+        # Every foot point in the frame, so "was this person near anybody" can be answered without
+        # an O(n²) re-walk per track. Positions live for this tick only.
+        feet = {}
+        for track in tracks:
+            feet[track["key"]] = GEO.foot_point(track["box"])
+
+        on_floor = 0
+        for track in tracks:
+            foot = feet[track["key"]]
             if GEO.excluded(zones, foot):
                 continue                            # the pavement / the back office is not the store
+            on_floor += 1
             prev = track.get("prev_foot")
             if prev and self.cam.get("is_entrance"):
                 for line in lines:
                     direction = GEO.crossing_direction(line, prev, foot)
                     if direction:
                         self._emit_traffic(direction, track)
+
+            if self.activity is not None and dt > 0:
+                self._observe_activity(track, foot, prev, feet, dt, ratios)
+
             track["prev_foot"] = foot
             if self.cam.get("analytics") and dt > 0:
                 cx, cy = GEO.grid_cell(foot, self.grid["cols"], self.grid["rows"])
                 self.occupancy[(cx, cy)] += min(dt, 2.0)   # cap a stall so one hiccup is not an hour
 
+        if self.activity is not None and dt > 0:
+            self.activity.note_floor(on_floor, min(dt, 2.0))
+            self.activity.maybe_flush(datetime.now(timezone.utc), self.cam["device_name"],
+                                      self.outbox, bool(self.face and self.face.available))
+
         if now - self.last_flush >= SAMPLE_SECONDS:
             self._flush_presence()
         return True
+
+    def _observe_activity(self, track, foot, prev, feet, dt, ratios):
+        """One sample of what this track was doing. Every rule comes from app/modules/vision/
+        activity.py — the same functions the server proves offline, imported rather than
+        re-implemented, so the edge and the server can never drift on what "sitting" means."""
+        # POSTURE only from a camera the operator marked eye-level. The rule reads standing vs
+        # sitting out of image geometry, and an overhead camera foreshortens a standing thigh
+        # exactly as sitting does. The server enforces this again on the way in — belt and braces,
+        # because a stale analyzer is exactly the case this protects against.
+        posture = "unknown"
+        if self.cam.get("posture_capable") and track["box"].get("keypoints"):
+            posture = ACT.classify_posture(track["box"]["keypoints"])
+
+        motion = "unknown"
+        if prev:
+            moved = ((foot[0] - prev[0]) ** 2 + (foot[1] - prev[1]) ** 2) ** 0.5
+            motion = ACT.classify_motion(moved, dt, self.cam.get("walk_speed") or 0.05)
+
+        others = [p for k, p in feet.items() if k != track["key"]]
+        with_person = ACT.near_another_person(foot, others,
+                                              self.cam.get("engage_distance") or 0.12)
+
+        # Match a mouth ratio to this track by containment in its box. A face that falls in no box,
+        # or in two, is dropped rather than assigned to a guess — an episode counted against the
+        # wrong track is worse than one not counted at all.
+        mar = None
+        if ratios:
+            b = track["box"]
+            inside = [r for r in ratios
+                      if b["x"] <= r[0] <= b["x"] + b["w"] and b["y"] <= r[1] <= b["y"] + b["h"]]
+            if len(inside) == 1:
+                mar = inside[0][2]
+
+        self.activity.observe(track["key"], posture, motion, with_person, mar)
 
     def _emit_traffic(self, direction, track):
         d, h = self._local_now()
@@ -811,13 +1072,50 @@ class Analyzer:
     def __init__(self, args):
         self.args = args
         self.api = Api(args.api, args.agent_key, args.secret)
-        self.detector = PersonDetector(prefer_yolo=not args.no_yolo)
+        # The detector is built AFTER the first config poll, because whether activity is on decides
+        # which weights to load. Until then there is nothing to detect on anyway — no camera has a
+        # stream open before the first refresh_config().
+        self.detector = None
+        self.face = None
+        self.pose_loaded = None
         self.outbox = []
         self.workers = {}
         self.config = None
         self.next_config = 0
         self.next_post = 0
         self.running = True
+
+    def _ensure_models(self, want_pose, want_face):
+        """Load (or reload) the models the tenant's current switches call for.
+
+        Reloading on a switch change is deliberate. An operator who turns activity on expects posture
+        within the poll interval, not at the next restart of a box nobody is standing next to; and
+        one who turns it off expects the pose model to STOP, because the cheaper weights are why
+        their camera count fits on that hardware.
+        """
+        if self.detector is None or self.pose_loaded != want_pose:
+            self.detector = PersonDetector(prefer_yolo=not self.args.no_yolo, pose=want_pose)
+            self.pose_loaded = want_pose
+            if self.detector.kind is None:
+                log.error(self.detector.unavailable_message())
+            else:
+                log.info("detector: %s", self.detector.kind)
+            if want_pose and not self.detector.supports_pose:
+                log.warning("Activity is switched on for this company but this machine fell back to "
+                            "%s, which has no keypoints — movement, company and coverage will be "
+                            "reported, posture will not.", self.detector.kind)
+            # Existing workers hold a reference to the old detector; hand them the new one rather
+            # than tearing their streams down, which would cost a full WebRTC re-negotiation each.
+            for w in self.workers.values():
+                w.detector = self.detector
+        if want_face and self.face is None:
+            self.face = FaceState()
+            if not self.face.available:
+                log.error(self.face.unavailable_message())
+        elif not want_face and self.face is not None:
+            self.face = None
+            for w in self.workers.values():
+                w.face = None
 
     def refresh_config(self):
         cfg = self.api.call("GET", "config")
@@ -826,6 +1124,16 @@ class Analyzer:
         self.next_config = time.time() + int(cfg.get("poll_seconds") or CONFIG_SECONDS)
         if changed:
             log.info("features now: %s", cfg.get("features"))
+        feats = cfg.get("features") or {}
+        want_activity = bool(feats.get("activity"))
+        # Posture needs the pose weights, and it is the ONLY thing that does — a tenant running
+        # activity with no eye-level camera keeps the cheaper detector and still gets movement,
+        # company and coverage.
+        want_pose = want_activity and any(c.get("posture_capable")
+                                          for c in cfg.get("cameras") or [])
+        self._ensure_models(want_pose, want_activity and bool(feats.get("face_state")))
+
+        act_cfg = cfg.get("activity") or {}
         allowed = {c["device_name"]: c for c in cfg.get("cameras") or [] if c.get("analytics")}
         for name in list(self.workers):
             if name not in allowed:
@@ -838,7 +1146,22 @@ class Analyzer:
                     self.api, cam, {"cols": (cfg.get("grid") or {}).get("cols") or 24,
                                     "rows": (cfg.get("grid") or {}).get("rows") or 16},
                     self.args.tz_offset, self.detector, self.outbox,
-                    detect_fps=self.args.detect_fps)
+                    detect_fps=self.args.detect_fps,
+                    activity=({"bucket_seconds": act_cfg.get("bucket_seconds") or 900,
+                               "sample_seconds": act_cfg.get("sample_seconds") or 2.0}
+                              if want_activity else None),
+                    face=self.face)
+            else:
+                # A live worker follows the switches without dropping its stream.
+                w = self.workers[name]
+                w.cam = cam
+                w.face = self.face
+                if want_activity and w.activity is None:
+                    w.activity = ActivityAccumulator(
+                        bucket_seconds=act_cfg.get("bucket_seconds") or 900,
+                        sample_seconds=act_cfg.get("sample_seconds") or 2.0)
+                elif not want_activity:
+                    w.activity = None
 
     def post(self):
         if not self.outbox:

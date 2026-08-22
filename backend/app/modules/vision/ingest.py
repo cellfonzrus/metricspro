@@ -31,6 +31,7 @@ import hmac
 import time
 from datetime import datetime, timezone
 
+from app.modules.vision import activity as A
 from app.modules.vision import behavior as B
 from app.modules.vision import config as C
 
@@ -82,12 +83,21 @@ def _local_parts(value, fallback_iso=None):
 
 
 def normalize_batch(payload: dict, cameras_by_name: dict, cfg: dict, consent_by_employee: dict,
-                    org_id: str, agent: dict) -> dict:
+                    org_id: str, agent: dict, on_shift_by_bucket: dict = None,
+                    video_consents: dict = None) -> dict:
     """Turn one analyzer POST into the rows to insert, plus a reject tally.
 
     `cameras_by_name` maps SDM device_name -> the tenant's camera row (this is also the ownership
     check — a device this tenant has not registered simply is not in the map).
     `consent_by_employee` maps employee_id -> the consent row.
+    `on_shift_by_bucket` maps "store_code|bucket_start_iso" -> [employee_id, ...] from the time
+    clock. It is the ONLY source of a name on an activity row: the analyzer never sends one and a
+    name in the payload is ignored, because a box in a stockroom must not be able to assert which
+    employee was sitting down. Absent/empty means every activity row lands unattributed, which is
+    the correct answer when we cannot prove who was there.
+    `video_consents` is the SEPARATE 'video_analytics' consent scope. It deliberately does not fall
+    back to the audio map: an employee who signed for a transcript has not thereby signed for
+    posture analysis, and defaulting one to the other would be consent laundering.
     """
     rejects = {}
 
@@ -95,7 +105,7 @@ def normalize_batch(payload: dict, cameras_by_name: dict, cfg: dict, consent_by_
         rejects[reason] = rejects.get(reason, 0) + 1
 
     agent_store = (agent or {}).get("store_code")
-    traffic, presence, transcripts = [], [], []
+    traffic, presence, transcripts, activity, coverage = [], [], [], [], []
     events = (payload or {}).get("events") or []
     if len(events) > MAX_EVENTS_PER_BATCH:
         events = events[:MAX_EVENTS_PER_BATCH]
@@ -190,12 +200,91 @@ def normalize_batch(payload: dict, cameras_by_name: dict, cfg: dict, consent_by_
                 "signals": {"elapsed_s": _f(ev.get("elapsed_s"))},
             })
 
+        elif kind == "activity":
+            # Per-track posture / movement / company over one bucket (mig 910).
+            if not C.camera_allows(cfg, cam, "activity"):
+                reject("activity_not_enabled")
+                continue
+            track = str(ev.get("track_key") or "").strip()
+            if not track:
+                reject("no_track")            # without it the unique index cannot dedupe a retry
+                continue
+            start = ev.get("bucket_start")
+            d, h = _local_parts(ev, start)
+            if not start or not d:
+                reject("bad_bucket")
+                continue
+
+            row = A.roll_up(ev.get("observations") or [], _f(ev.get("sample_seconds"))
+                            or cfg.get("activity_sample_seconds") or 2.0)
+
+            # POSTURE IS ENFORCED HERE, not trusted from the edge. classify_posture reads standing
+            # vs sitting out of image geometry and assumes an eye-level camera; an overhead one
+            # foreshortens a standing thigh exactly as sitting does and would report a whole store
+            # as seated. A camera the operator has not marked posture_capable therefore has its
+            # posture folded into unknown even if the analyzer sent an opinion — an out-of-date or
+            # misconfigured box must not be able to put "sat down all afternoon" against a name.
+            if not cam.get("posture_capable", False):
+                row["seconds_posture_unknown"] = row["seconds_observed"]
+                row["seconds_standing"] = 0.0
+                row["seconds_sitting"] = 0.0
+                rejects["posture_dropped_camera_not_eye_level"] = \
+                    rejects.get("posture_dropped_camera_not_eye_level", 0) + 1
+
+            # Face state is its own switch AND its own consent scope. NULL, not 0, when off: "we did
+            # not look" has to stay distinguishable from "we looked and saw none", or a manager acts
+            # on a zero that nobody ever measured.
+            episodes = None
+            if C.camera_allows(cfg, cam, "face_state"):
+                try:
+                    episodes = max(0, int(ev.get("wide_mouth_episodes") or 0))
+                except (TypeError, ValueError):
+                    episodes = None
+            elif ev.get("wide_mouth_episodes"):
+                reject("face_state_not_enabled")
+
+            # THE NAME, if there is to be one, comes from the time clock — never from the payload.
+            on_shift = (on_shift_by_bucket or {}).get(f"{store}|{start}") or []
+            emp, why = A.attribute_bucket(on_shift, video_consents or {},
+                                          cfg.get("video_consent_mode") or "required")
+            activity.append({
+                "org_id": org_id, "store_code": store, "camera_id": cam.get("id"),
+                "track_key": track[:120], "bucket_start": start, "local_date": d, "local_hour": h,
+                "employee_id": str(emp) if emp else None, "attribution_reason": why,
+                "wide_mouth_episodes": episodes,
+                **row,
+            })
+
+        elif kind == "coverage":
+            # Store-level: was anybody on the floor to serve. Names nobody, so no consent gate.
+            if not C.camera_allows(cfg, cam, "coverage"):
+                reject("coverage_not_enabled")
+                continue
+            start = ev.get("bucket_start")
+            d, h = _local_parts(ev, start)
+            if not start or not d:
+                reject("bad_bucket")
+                continue
+            window = _f(ev.get("window_seconds")) or 0.0
+            c = A.coverage(_f(ev.get("staff_seconds")), _f(ev.get("customer_seconds")), window)
+            try:
+                peak = max(0, int(ev.get("peak_people") or 0))
+            except (TypeError, ValueError):
+                peak = 0
+            coverage.append({
+                "org_id": org_id, "store_code": store, "camera_id": cam.get("id"),
+                "bucket_start": start, "local_date": d, "local_hour": h,
+                "peak_people": peak, **c,
+            })
+
         else:
             reject("unknown_kind")
 
     return {"traffic": traffic, "presence": presence, "transcripts": transcripts,
+            "activity": activity, "coverage": coverage,
             "rejected": rejects,
-            "accepted": len(traffic) + len(presence) + len(transcripts)}
+            "accepted": len(traffic) + len(presence) + len(transcripts)
+                        + len(activity) + len(coverage)}
 
 
 def _f(v):
