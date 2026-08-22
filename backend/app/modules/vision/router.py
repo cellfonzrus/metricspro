@@ -38,6 +38,7 @@ from app.core.config import settings
 from app.core.crypto import encrypt, decrypt
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
+from app.modules.vision import activity as A
 from app.modules.vision import behavior as B
 from app.modules.vision import config as C
 from app.modules.vision import enrollment as EN
@@ -1422,8 +1423,20 @@ async def edge_config(request: Request):
             "traffic": C.feature_enabled(cfg, "traffic"),
             "heatmap": C.feature_enabled(cfg, "heatmap"),
             "audio_analytics": C.feature_enabled(cfg, "audio_analytics"),
+            # mig 908. The analyzer swaps to the POSE weights when activity is on, so this answer
+            # changes which model it loads — hence it is polled like the rest rather than being a
+            # start-up flag: an operator switching activity off stops the pose model at the edge on
+            # the next poll instead of merely stopping the storage here.
+            "activity": C.feature_enabled(cfg, "activity"),
+            "face_state": C.feature_enabled(cfg, "face_state"),
+            "coverage": C.feature_enabled(cfg, "coverage"),
         },
         "grid": {"cols": cfg.get("grid_cols"), "rows": cfg.get("grid_rows")},
+        # Thresholds live on the server so an operator tunes them without touching the store box.
+        "activity": {
+            "bucket_seconds": cfg.get("activity_bucket_seconds") or 900,
+            "sample_seconds": cfg.get("activity_sample_seconds") or 2.0,
+        },
         "cameras": [{
             "device_name": c.get("device_name"),
             "camera_id": c.get("id"),
@@ -1438,6 +1451,13 @@ async def edge_config(request: Request):
             "stream_protocol": c.get("stream_protocol"),
             "analytics": bool(c.get("analytics_enabled")),
             "is_entrance": bool(c.get("is_entrance")),
+            # Posture is refused unless the operator has looked at this camera's picture and marked
+            # it eye-level — an overhead camera would report a whole store as seated. Sent as an
+            # AND with the tenant switch so a camera cannot be posture-capable while activity is off.
+            "posture_capable": bool(c.get("posture_capable")
+                                    and C.feature_enabled(cfg, "activity")),
+            "walk_speed": cfg.get("walk_speed") or 0.05,
+            "engage_distance": cfg.get("engage_distance") or 0.12,
             "audio": bool(c.get("audio_enabled") and c.get("supports_audio")
                           and C.feature_enabled(cfg, "audio_analytics")),
             "zones": [{"kind": z.get("kind"), "zone_key": z.get("zone_key"), "name": z.get("name"),
@@ -1499,6 +1519,72 @@ def _on_duty(org_id, store_code, consented_ids):
         return []
     return [{"employee_id": str(e["id"]), "name": e.get("full_name")}
             for e in emps if str(e.get("id")) in consented_ids]
+
+
+def _on_shift_map(org_id, events, bucket_seconds):
+    """{"store|bucket_start": [employee_uuid, ...]} for every activity bucket in one batch.
+
+    THE ONLY SOURCE OF A NAME on an activity row. The analyzer never sends one and any name in its
+    payload is ignored: a box sitting in a stockroom must not be able to assert which employee was
+    sitting down.
+
+    Two id vocabularies meet here, the same pair _on_duty() reconciles: storeops.timelog.employee_id
+    is the human-readable TEXT staff code, while vision_consent.employee_id (and everything this
+    module stores) is the employees table's UUID. Joining them through storeops.employees is the
+    whole reason this is a function — getting it wrong would attribute every bucket to nobody, and
+    do it silently, because "nobody on shift" is a perfectly ordinary answer.
+
+    A failure anywhere here returns an EMPTY map, which means every bucket lands unattributed. That
+    is the fail-closed direction: an unreadable time clock must never end with a name on a row.
+    """
+    wanted, dates, stores = set(), set(), set()
+    for ev in events or []:
+        if not isinstance(ev, dict) or (ev.get("kind") or "").strip().lower() != "activity":
+            continue
+        start = ev.get("bucket_start")
+        d = A._dt(start)
+        if not start or d is None:
+            continue
+        wanted.add(start)
+        dates.add(d.date())
+        # The store is resolved from the CAMERA by normalize_batch, not from the payload; here we
+        # only need a date window, so an over-wide punch query is harmless.
+    if not wanted or not dates:
+        return {}
+    try:
+        # One day either side: a shift that began before midnight covers the small hours, and
+        # work_date is stamped from clock_in.
+        lo = (min(dates) - timedelta(days=1)).isoformat()
+        hi = (max(dates) + timedelta(days=1)).isoformat()
+        punches = (get_supabase().schema("storeops").table("timelog")
+                   .select("employee_id,store_code,clock_in,clock_out").eq("org_id", org_id)
+                   .gte("work_date", lo).lte("work_date", hi).limit(20000).execute().data) or []
+    except Exception:
+        return {}
+    codes = {p.get("employee_id") for p in punches if p.get("employee_id")}
+    if not codes:
+        return {}
+    try:
+        emps = (get_supabase().schema("storeops").table("employees")
+                .select("id,employee_id").eq("org_id", org_id)
+                .in_("employee_id", list(codes)[:1000]).limit(2000).execute().data) or []
+    except Exception:
+        return {}
+    uuid_of = {e.get("employee_id"): str(e.get("id")) for e in emps if e.get("id")}
+    by_store = {}
+    for p in punches:
+        by_store.setdefault(p.get("store_code") or "", []).append(p)
+
+    out = {}
+    for store, rows in by_store.items():
+        if not store:
+            continue
+        for start in wanted:
+            on = A.on_shift_for_bucket(rows, start, bucket_seconds)
+            ids = [uuid_of[c] for c in on if c in uuid_of]
+            if ids:
+                out[f"{store}|{start}"] = ids
+    return out
 
 
 @router.post("/edge/stream")
@@ -1626,7 +1712,14 @@ async def edge_ingest(request: Request):
 
     cams = {c["device_name"]: c for c in _rows("vision_camera", org_id)}
     consents = {str(r.get("employee_id")): r for r in _rows("vision_consent", org_id, scope="audio")}
-    norm = I.normalize_batch(payload, cams, cfg, consents, org_id, agent)
+    # Video consent is a SEPARATE scope from audio (mig 908) — an employee can agree to one and not
+    # the other, and bundling them would mean signing for a transcript also signed for posture.
+    video_consents = {str(r.get("employee_id")): r
+                      for r in _rows("vision_consent", org_id, scope="video_analytics")}
+    on_shift = _on_shift_map(org_id, (payload or {}).get("events") or [],
+                             cfg.get("activity_bucket_seconds") or 900)
+    norm = I.normalize_batch(payload, cams, cfg, consents, org_id, agent,
+                             on_shift_by_bucket=on_shift, video_consents=video_consents)
 
     # Traffic is UPSERTED against the dedupe index, everything else is a plain insert. The asymmetry
     # is deliberate: the analyzer re-queues a batch whose POST failed, so the same door crossing can
@@ -1635,9 +1728,16 @@ async def edge_ingest(request: Request):
     # duplicating one nudges an aggregate imperceptibly, and inventing a key to dedupe on would cost
     # more than it saves.
     TRAFFIC_KEY = "org_id,store_code,camera_id,track_key,direction,occurred_at"
+    # Activity and coverage carry a natural key and a UNIQUE index on it (mig 908), so a retried
+    # batch is upserted rather than doubled. Unlike traffic these OVERWRITE: the analyzer can post a
+    # partial bucket and then the finished one, and the finished one is the truth.
+    ACTIVITY_KEY = "org_id,camera_id,bucket_start,track_key"
+    COVERAGE_KEY = "org_id,camera_id,bucket_start"
     written = {}
     for key, table in (("traffic", "vision_traffic_event"), ("presence", "vision_presence_sample"),
-                       ("transcripts", "vision_transcript")):
+                       ("transcripts", "vision_transcript"),
+                       ("activity", "vision_activity_bucket"),
+                       ("coverage", "vision_coverage_bucket")):
         rows = norm.get(key) or []
         if not rows:
             written[key] = 0
@@ -1646,6 +1746,10 @@ async def edge_ingest(request: Request):
             if key == "traffic":
                 sb().table(table).upsert(rows, on_conflict=TRAFFIC_KEY,
                                          ignore_duplicates=True).execute()
+            elif key == "activity":
+                sb().table(table).upsert(rows, on_conflict=ACTIVITY_KEY).execute()
+            elif key == "coverage":
+                sb().table(table).upsert(rows, on_conflict=COVERAGE_KEY).execute()
             else:
                 sb().table(table).insert(rows).execute()
             written[key] = len(rows)
@@ -1921,6 +2025,181 @@ def behavior(store_code: str = "", date_from: str = "", date_to: str = "", org_i
             "disclaimer": ("These numbers describe what was said during recorded interactions. They "
                            "are a coaching aid, not a performance rating, and they are never used in "
                            "any pay calculation.")}
+
+
+@router.get("/activity")
+def activity_report(store_code: str = "", date_from: str = "", date_to: str = "",
+                    org_id: str = ORG_ID, authorization: str = Header(default=""),
+                    x_active_org: str = Header(default="")):
+    """Posture / movement / company over a window — the camera-derived half of employee behaviour.
+
+    Manager-gated, like /behavior, and for the same reason: these rows are about a named person when
+    they are about anybody at all.
+
+    THE RESPONSE CARRIES ITS OWN CAVEATS, in `caveats`, and the UI prints them. That is deliberate
+    rather than decorative — every one of these numbers has a failure mode that is invisible in the
+    number itself, and a caller that renders the figures without the caveats is showing a manager
+    something they will act on wrongly:
+
+      * `attributed` vs `unattributed` — we do no face recognition, so a bucket is named only when
+        exactly ONE consenting employee was clocked in. In a two-person store, NOTHING is named,
+        and the split below is how an operator sees that before building a process on it.
+      * `observed` vs the confident categories — unknown seconds are the honest majority in most
+        installs (behind a counter, far from the lens, half-turned). Percentages are computed
+        against observed seconds INCLUDING unknowns, so a barely-seen hour reads as barely seen.
+      * `wide_mouth_episodes` is not a yawn count and not a tiredness score. See the migration.
+    """
+    caller = _require_caller(authorization, x_active_org)
+    cfg = _cfg(org_id)
+    _require_module(cfg, "activity")
+    _require_manager(caller, "employee activity")
+    store = _scoped_store(caller, authorization, org_id, store_code)
+    a, b = _date_range(date_from, date_to)
+    try:
+        rows = (sb().table("vision_activity_bucket").select("*")
+                .eq("org_id", org_id).eq("store_code", store)
+                .gte("local_date", a).lte("local_date", b).limit(20000).execute().data) or []
+    except Exception:
+        raise HTTPException(503, "Activity history unavailable.")
+    return {"store_code": store, "date_from": a, "date_to": b,
+            **_roll_up_activity(rows, org_id, cfg),
+            "caveats": ACTIVITY_CAVEATS}
+
+
+@router.get("/activity/mine")
+def my_activity(date_from: str = "", date_to: str = "", org_id: str = ORG_ID,
+                authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """An employee's OWN activity rows. No manager role required, and deliberately so — the person
+    being watched is entitled to see everything derived from that watching, without asking."""
+    caller = _require_caller(authorization, x_active_org)
+    emp = caller.get("employee_id")
+    if not emp:
+        raise HTTPException(404, "Your login is not linked to an employee record.")
+    cfg = _cfg(org_id)
+    _require_module(cfg, "activity")
+    a, b = _date_range(date_from, date_to)
+    try:
+        rows = (sb().table("vision_activity_bucket").select("*")
+                .eq("org_id", org_id).eq("employee_id", str(emp))
+                .gte("local_date", a).lte("local_date", b).limit(5000).execute().data) or []
+    except Exception:
+        rows = []
+    consent = (_rows("vision_consent", org_id, employee_id=str(emp),
+                     scope="video_analytics") or [None])[0]
+    return {"date_from": a, "date_to": b, **_roll_up_activity(rows, org_id, cfg),
+            "consent": {"status": (consent or {}).get("status") or "pending",
+                        "signed_at": (consent or {}).get("signed_at")},
+            "caveats": ACTIVITY_CAVEATS}
+
+
+@router.get("/coverage")
+def coverage_report(store_code: str = "", date_from: str = "", date_to: str = "",
+                    org_id: str = ORG_ID, authorization: str = Header(default=""),
+                    x_active_org: str = Header(default="")):
+    """Was anybody on the floor to serve, by hour. Names nobody, so it needs no manager role and no
+    consent — it is the one signal here an operator can act on with none of the caveats above."""
+    caller = _require_caller(authorization, x_active_org)
+    cfg = _cfg(org_id)
+    _require_module(cfg, "coverage")
+    store = _scoped_store(caller, authorization, org_id, store_code)
+    a, b = _date_range(date_from, date_to)
+    try:
+        rows = (sb().table("vision_coverage_bucket").select("*")
+                .eq("org_id", org_id).eq("store_code", store)
+                .gte("local_date", a).lte("local_date", b).limit(20000).execute().data) or []
+    except Exception:
+        raise HTTPException(503, "Coverage history unavailable.")
+    by_hour = {}
+    for r in rows:
+        h = by_hour.setdefault(int(r.get("local_hour") or 0),
+                               {"hour": int(r.get("local_hour") or 0), "window": 0.0,
+                                "staffed": 0.0, "unstaffed": 0.0, "waiting": 0.0, "peak": 0})
+        h["window"] += float(r.get("window_seconds") or 0)
+        h["staffed"] += float(r.get("staffed_seconds") or 0)
+        h["unstaffed"] += float(r.get("unstaffed_seconds") or 0)
+        h["waiting"] += float(r.get("unstaffed_with_customers") or 0)
+        h["peak"] = max(h["peak"], int(r.get("peak_people") or 0))
+    hours = []
+    for h in sorted(by_hour.values(), key=lambda x: x["hour"]):
+        hours.append({**{k: round(v, 1) if isinstance(v, float) else v for k, v in h.items()},
+                      "staffed_pct": round(100.0 * h["staffed"] / h["window"], 1)
+                      if h["window"] > 0 else None})
+    return {"store_code": store, "date_from": a, "date_to": b, "by_hour": hours,
+            "waiting_seconds": round(sum(h["waiting"] for h in by_hour.values()), 1),
+            "note": "Floor coverage counts people the cameras can see. A member of staff in the "
+                    "stockroom or off-camera reads as an unstaffed floor."}
+
+
+ACTIVITY_CAVEATS = [
+    "We do no face recognition, so a row is tied to a named person only when exactly one consenting "
+    "employee was clocked in. In a store with two people on shift, nothing is attributed.",
+    "Unknown time is real time. Someone behind a counter, far from the lens, or half-turned cannot "
+    "be read, and every percentage here is out of observed seconds INCLUDING those unknowns.",
+    "\u201cAlone and stationary\u201d is not idleness. Counting stock, reading a planogram, or being on "
+    "the phone to a carrier all look like this.",
+    "\u201cWith another person\u201d is two people standing close together \u2014 a rep with a customer, two "
+    "reps talking, or a browsing couple. The detector has one class, person, and cannot tell them "
+    "apart. For real customer engagement use the transcript coaching page.",
+    "\u201cWide-mouth episodes\u201d counts a sustained open mouth. A yawn makes one; so does a laugh, a "
+    "shout across the floor, or a deep breath. It is a prompt to go and look, never a finding.",
+]
+
+
+def _roll_up_activity(rows, org_id, cfg):
+    """Per-employee and per-store aggregate over the window.
+
+    Attributed and unattributed rows are kept APART rather than summed together. Folding them would
+    produce a store total that reads like a person's day, which is precisely the confusion the
+    attribution rule exists to prevent."""
+    idle_after = cfg.get("idle_after_seconds") or 0
+    by_emp, unattributed, reasons = {}, {"buckets": 0, "seconds_observed": 0.0}, {}
+    face_measured = False
+    for r in rows:
+        why = r.get("attribution_reason") or "nobody_on_shift"
+        reasons[why] = reasons.get(why, 0) + 1
+        if r.get("wide_mouth_episodes") is not None:
+            face_measured = True
+        emp = r.get("employee_id")
+        if not emp:
+            unattributed["buckets"] += 1
+            unattributed["seconds_observed"] += float(r.get("seconds_observed") or 0)
+            continue
+        e = by_emp.setdefault(str(emp), {
+            "employee_id": str(emp), "buckets": 0, "seconds_observed": 0.0,
+            "seconds_standing": 0.0, "seconds_sitting": 0.0, "seconds_posture_unknown": 0.0,
+            "seconds_walking": 0.0, "seconds_stationary": 0.0, "seconds_motion_unknown": 0.0,
+            "seconds_with_another_person": 0.0, "seconds_alone_stationary": 0.0,
+            "wide_mouth_episodes": None,
+        })
+        e["buckets"] += 1
+        for k in ("seconds_observed", "seconds_standing", "seconds_sitting",
+                  "seconds_posture_unknown", "seconds_walking", "seconds_stationary",
+                  "seconds_motion_unknown", "seconds_with_another_person"):
+            e[k] += float(r.get(k) or 0)
+        e["seconds_alone_stationary"] += A.idle_seconds(r, idle_after)
+        if r.get("wide_mouth_episodes") is not None:
+            e["wide_mouth_episodes"] = (e["wide_mouth_episodes"] or 0) + int(r["wide_mouth_episodes"])
+
+    names = _employee_names(org_id, list(by_emp))
+    out = []
+    for e in by_emp.values():
+        obs = e["seconds_observed"]
+        e["name"] = names.get(e["employee_id"]) or "—"
+        # Percentages are OUT OF OBSERVED SECONDS INCLUDING UNKNOWNS. Dividing by the confident
+        # categories alone would show a rep readable for four minutes of an hour as "62% standing".
+        e["observed_pct"] = None
+        for k in ("standing", "sitting", "posture_unknown", "walking", "stationary"):
+            e[f"pct_{k}"] = round(100.0 * e[f"seconds_{k}"] / obs, 1) if obs > 0 else None
+        e["pct_alone_stationary"] = (round(100.0 * e["seconds_alone_stationary"] / obs, 1)
+                                     if obs > 0 else None)
+        out.append({k: (round(v, 1) if isinstance(v, float) else v) for k, v in e.items()})
+    out.sort(key=lambda x: -(x.get("seconds_observed") or 0))
+    unattributed["seconds_observed"] = round(unattributed["seconds_observed"], 1)
+    return {"employees": out, "unattributed": unattributed,
+            "attribution_reasons": reasons,
+            "face_state_measured": face_measured,
+            "attributed_buckets": sum(e["buckets"] for e in by_emp.values()),
+            "buckets": len(rows)}
 
 
 @router.get("/behavior/mine")
