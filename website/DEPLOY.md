@@ -76,6 +76,24 @@ Nothing below is something I can find in the code — each one is a business fac
 Create an FTP account in cPanel, connect with FileZilla, and put the *contents* of this folder (not
 the folder itself) into the document root. Upload `.htaccess` explicitly — many clients skip dotfiles.
 
+**Option C — automatic, from the repository (recommended once the pages are finished)**
+
+`.github/workflows/deploy-website.yml` uploads `website/` to Bluehost over FTPS whenever a change to
+that folder lands on `main`. It needs three repository secrets — an FTP account, its username and its
+password — and the setup is written out in the comment at the top of that file. Until those secrets
+exist the workflow does nothing and reports that it did nothing, so it cannot start failing your
+builds before you are ready.
+
+Two things make this worth the five minutes it costs. The repository becomes the record of what is
+published, so "which version of the terms was in force in March?" is a `git log` rather than a guess.
+And the placeholder gate runs on every deploy, so an unfinished legal document cannot reach the
+public site even if someone forgets to run the script by hand.
+
+You can also run it on demand from **Actions → deploy-website → Run workflow**, which offers a
+**dry run** (shows what would be uploaded, uploads nothing) and a **delete extras** option (removes
+remote files no longer in `website/`). Leave delete off unless the FTP account is rooted at a
+document root holding nothing but this site.
+
 ## 3. Domain and SSL
 
 1. **DNS.** If the domain is registered at Bluehost, point it at the hosting account there. If it is
@@ -126,12 +144,28 @@ no package has been published.
 
 ## 6. Changing the site later
 
+**Who can change what.** Prices, packages and the trial length are *not* in these files — they live in
+the app and the page reads them at load time, so changing a price never involves a deploy. Everything
+else is a file edit.
+
 | You want to change | Do this |
 |---|---|
 | A price, a package, the trial length, the pricing headline | **Nothing here.** Change it in the app under Admin → Pricing & Free Trial; the site picks it up on the next page load. |
-| Words on the homepage | Edit `index.html`, re-upload that one file. |
-| A legal document | Edit the page, **update its "Last updated" date**, re-upload. Keep a dated copy of the version it replaced — being able to show which terms were in force on a given date is what makes them enforceable. |
-| Where the app lives | Edit `assets/config.js`. |
+| Words on the homepage | Edit `index.html`. With Option C, commit and merge; otherwise re-upload that one file. |
+| A legal document | Edit the page, **update its "Last updated" date**, and keep a dated copy of the version it replaces — being able to show which terms were in force on a given date is what makes them enforceable. Option C keeps those copies for you in git history. |
+| Where the app or API lives | Edit `assets/config.js`. |
+
+**Can this be updated for you, without you touching cPanel?** Yes, but only through the repository.
+An assistant session cannot reach your Bluehost account: it has no FTP credentials and its network
+access is restricted to a small set of allowed hosts, so it cannot open a connection to your host at
+all — by design, and worth keeping that way. What it *can* do is edit these files and push them. With
+Option C configured, that push is the deploy: the change reaches the live site through GitHub, using a
+credential that lives in your GitHub secrets and is never handed to anyone. Every change is reviewable
+in a pull request before it goes out, and revertable afterwards.
+
+If you would rather nothing reach the public site without your hand on it, keep Option A or B — or
+configure Option C and simply not merge until you have read the diff. The pull request is the approval
+step in either case.
 
 ## 7. What this site does not do
 
