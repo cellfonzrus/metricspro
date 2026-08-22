@@ -17,6 +17,21 @@ if [ -n "$hits" ]; then
   echo "Fill each one in, then run this again. See DEPLOY.md section 2 for what each answer means."
   exit 1
 fi
+# ── Effective date ────────────────────────────────────────────────────────────────────────────
+# The documents carry an effective date. It should be the day you actually publish — a date in the
+# past reads as "these terms were in force before anyone could read them", which is exactly the
+# argument you do not want to have. This is a WARNING, not a failure: publishing a day or two after
+# the stamp is normal, publishing months later is not.
+stamped=$(sed -n 's/.*Effective: \([A-Z][a-z]* [0-9]*, [0-9]*\).*/\1/p' legal/terms.html | head -1)
+today=$(date "+%B %-d, %Y" 2>/dev/null || date "+%B %d, %Y")
+if [ -n "$stamped" ] && [ "$stamped" != "$today" ]; then
+  echo "WARNING — the documents are stamped \"$stamped\" but today is \"$today\"."
+  echo "If you are publishing today, re-stamp them first:"
+  echo ""
+  echo "    cd website/legal && sed -i 's/$stamped/$today/g' *.html"
+  echo ""
+fi
+
 echo "No placeholders left."
 echo ""
 echo "Reminder — the checks a script cannot do for you:"
