@@ -38,7 +38,9 @@ function diffColor(d: number): string {
   return '#b91c1c'
 }
 
-type Cmp = { rebate_paid: number; comm_paid: number; epay_paid: number; gp: number }
+// GP is intentionally omitted from the comparison (owner decision — the backend neither computes nor
+// returns an ours-side GP for this recon, and strips GP from the diff). Kept optional for forward-compat.
+type Cmp = { rebate_paid: number; comm_paid: number; epay_paid: number; gp?: number }
 type PerStore = {
   store: string; resolved_store: string | null; matched: boolean
   boost: Cmp & { rebate_expected?: number; device_cost?: number; rebate_diff?: number }
@@ -52,11 +54,12 @@ type ReconResp = {
   raw_txn_count: number; notes: string[]
 }
 
-const FIELDS: { key: keyof Cmp; label: string }[] = [
+type MoneyKey = 'rebate_paid' | 'comm_paid' | 'epay_paid'
+const FIELDS: { key: MoneyKey; label: string }[] = [
   { key: 'rebate_paid', label: 'Rebate Paid' },
   { key: 'comm_paid', label: 'Comm Paid' },
   { key: 'epay_paid', label: 'ePay Paid' },
-  { key: 'gp', label: 'GP' },
+  // GP intentionally skipped (owner decision) — not computed/compared on the ours side.
 ]
 
 function thisMonthLabel() {
