@@ -36,6 +36,9 @@ Every network call goes through the injected `transport` callable
 `requests`. `backend/harness_vision_sdm.py` drives the whole token-refresh / list / generate / extend
 path against a scripted fake, so the request shapes are proven without a Google account.
 """
+import base64
+import binascii
+import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -428,3 +431,82 @@ def offer_problem(offer_sdp: str) -> str:
                 "then the data channel, and refuses any other order. The client is creating them in "
                 "the wrong sequence — m-lines follow creation order.")
     return ""
+
+
+# ── Google's own person events ──────────────────────────────────────────────────────────────────
+# Nest cameras detect people themselves and SDM pushes a Cloud Pub/Sub message when they do. We
+# consume the push, not a pull subscription: a push needs no long-lived credential, no polling
+# process and no extra dependency, and Railway already terminates HTTPS for us.
+#
+# Everything below is a PURE FUNCTION over the envelope, because the endpoint that calls it is
+# PUBLIC — Pub/Sub carries no session — and the parsing is therefore attacker-reachable. It is
+# proven offline in harness_vision_events.py rather than trusted.
+
+# Google's event names, mapped to the short kind we store. Anything not listed is ignored rather
+# than stored under a guessed name: an unrecognised event is data we cannot interpret, and a table
+# of rows labelled "unknown" is worse than no rows.
+EVENT_KINDS = {
+    "sdm.devices.events.CameraPerson.Person": "person",
+    "sdm.devices.events.CameraMotion.Motion": "motion",
+    "sdm.devices.events.CameraSound.Sound": "sound",
+    "sdm.devices.events.DoorbellChime.Chime": "chime",
+}
+
+_DEVICE_RE = re.compile(r"^enterprises/[^/]+/devices/[^/]+$")
+
+
+def decode_push(envelope: dict) -> dict:
+    """The SDM event out of a Pub/Sub PUSH envelope, or {} if this is not one.
+
+    Shape: {"message": {"data": <base64 of the SDM event JSON>, ...}, "subscription": "..."}.
+    Every failure returns {} rather than raising — a malformed body on a public endpoint is a
+    routine event, not an exception, and the caller answers 204 to stop Pub/Sub redelivering
+    something that will never parse.
+    """
+    if not isinstance(envelope, dict):
+        return {}
+    msg = envelope.get("message")
+    if not isinstance(msg, dict):
+        return {}
+    raw = msg.get("data")
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        payload = json.loads(base64.b64decode(raw).decode("utf-8"))
+    except (ValueError, TypeError, binascii.Error, UnicodeDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def parse_event(payload: dict) -> dict:
+    """{device_name, event_id, occurred_at, kinds[]} from an SDM event, or {} if unusable.
+
+    An SDM event carries a resourceUpdate naming the device and a dict of the events that fired.
+    One message can carry several (a person event and a motion event together), so `kinds` is a
+    list — the caller stores one row per kind, sharing the event id with a suffix so the dedup
+    index still holds.
+
+    The device name is REGEX-VALIDATED here and looked up in our own vision_camera table by the
+    caller. Tenancy is never taken from the payload: a public endpoint that trusted a body-supplied
+    org would be a cross-tenant write primitive.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    update = payload.get("resourceUpdate")
+    if not isinstance(update, dict):
+        return {}
+    device = str(update.get("name") or "").strip()
+    if not _DEVICE_RE.match(device):
+        return {}
+    events = update.get("events")
+    if not isinstance(events, dict):
+        return {}
+    kinds = sorted({EVENT_KINDS[k] for k in events if k in EVENT_KINDS})
+    if not kinds:
+        return {}                        # a trait update, not a camera event — nothing to store
+    event_id = str(payload.get("eventId") or "").strip()
+    occurred = str(payload.get("timestamp") or "").strip()
+    if not event_id or not occurred:
+        return {}                        # without both, it can be neither deduped nor placed in time
+    return {"device_name": device, "event_id": event_id[:200],
+            "occurred_at": occurred, "kinds": kinds}
