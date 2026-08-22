@@ -2474,11 +2474,11 @@ def get_shift_templates(authorization: str = Header(default=""), org_id: str = O
     return rows
 
 
-@router.post("/shift-templates/save-week")
 class WeekStartIn(LaxModel):
     week_start: str = ""
 
 
+@router.post("/shift-templates/save-week")
 def save_week_as_template(body: WeekStartIn, org_id: str = ORG_ID):
     """Save a week's shifts as the recurring template (replaces existing templates for those employees)."""
     week_start = (body.week_start or "").strip()
@@ -4779,7 +4779,6 @@ def _managers_above_dm(org_id, store_code):
     return {"dm": dm, "above": above}
 
 
-@router.post("/shift-extensions")
 class ShiftExtensionRequestIn(LaxModel):
     employee_id: str = ""
     employee_name: str = ""
@@ -4791,6 +4790,7 @@ class ShiftExtensionRequestIn(LaxModel):
     original_end: Any = None
 
 
+@router.post("/shift-extensions")
 async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """A manager files a request to extend an employee's shift past its scheduled end. Resolves the
     District Manager, saves it 'pending', and emails the DM an FYI (the approval itself is the DM's
@@ -8349,7 +8349,6 @@ def list_action_plans(status: str = "", store_code: str = "", authorization: str
     return {"items": rows}
 
 
-@router.post("/action-plans/{plan_id}/submit")
 class ActionPlanSubmitIn(LaxModel):
     plan_text: str = ""
 
@@ -8359,6 +8358,7 @@ class ActionPlanReviewIn(LaxModel):
     dm_comments: str = ""
 
 
+@router.post("/action-plans/{plan_id}/submit")
 def submit_action_plan(plan_id: str, body: ActionPlanSubmitIn, authorization: str = Header(default="")):
     """Self-service: an employee submits their OWN required action plan. identity from token."""
     org_id, employee_id = _caller_identity(authorization)

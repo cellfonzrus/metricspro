@@ -74,6 +74,12 @@ export default function CommissionExplainPage() {
   const [imei, setImei] = useState('')
   const [dev, setDev] = useState<any>(null)
   const [devBusy, setDevBusy] = useState(false)
+  // attach-plan dropdown (owner directive 2026-08-22): incentive plans available to pin to a rep whose
+  // plan component is $0, plus the in-flight flag and a reload trigger to refresh the explain view after
+  // an attach + single-rep recompute.
+  const [plans, setPlans] = useState<any[]>([])
+  const [assigning, setAssigning] = useState(false)
+  const [reload, setReload] = useState(0)
 
   // roster (pick-don't-type) from the org-scoped rep_commissions rows
   useEffect(() => {
@@ -84,6 +90,13 @@ export default function CommissionExplainPage() {
     if (q.get('rep')) setRep(q.get('rep') || '')
     if (q.get('imei')) { setImei(q.get('imei') || ''); }
   }, [period])
+
+  // Incentive plans available to attach (pick-don't-type). Fetched once; drives the dropdown shown when
+  // a rep has no plan attached. Degrades to an empty list (no dropdown) if the endpoint isn't ready.
+  useEffect(() => {
+    api(`/api/v1/commcalc/commission-plans?org_id=${ORG_ID}`)
+      .then(d => setPlans((d?.plans || []) as any[])).catch(() => setPlans([]))
+  }, [])
 
   const acc = { store: (r: RepRow) => r.store, market: (r: RepRow) => r.market, rep: (r: RepRow) => r.epay_salesperson }
   const opts = useMemo(() => optionsFromRows(reps, acc), [reps])   // eslint-disable-line react-hooks/exhaustive-deps
@@ -107,7 +120,33 @@ export default function CommissionExplainPage() {
     setBusy(true); setData(null)
     api(`/api/v1/commcalc/commission-explain?org_id=${ORG_ID}&period=${encodeURIComponent(period)}&rep=${encodeURIComponent(rep)}`)
       .then(setData).catch(e => setData({ error: String(e?.message || e) })).finally(() => setBusy(false))
-  }, [rep, period])
+  }, [rep, period, reload])
+
+  // Attach an incentive plan to THIS rep, then recompute only this rep's row and refresh the view.
+  // Writes the employee-scope assignment under the rep's roster value (`rep` = storeops_name ||
+  // epay_salesperson) so it round-trips; the durable engine name-bridge then matches it to their POS
+  // sales. `replace_existing:true` swaps any prior direct plan (the block only shows when there's none,
+  // but the flag keeps re-attach idempotent). The single-rep recompute (POST /recompute-rep) writes the
+  // same values a full Run Calculation would for this rep, so the number updates without a company run.
+  async function attachPlan(planId: string) {
+    if (!planId || !rep) return
+    setAssigning(true)
+    try {
+      await api(`/api/v1/commcalc/commission-plans/bulk-assign?org_id=${ORG_ID}`, {
+        method: 'POST',
+        body: JSON.stringify({ plan_id: planId, people: [rep], replace_existing: true }),
+      })
+      await api(`/api/v1/commcalc/recompute-rep?org_id=${ORG_ID}`, {
+        method: 'POST',
+        body: JSON.stringify({ period, rep }),
+      })
+      setReload(k => k + 1)
+    } catch (e: any) {
+      alert(`Could not attach plan: ${e?.message || e}`)
+    } finally {
+      setAssigning(false)
+    }
+  }
 
   function searchImei() {
     const v = imei.trim()
@@ -259,8 +298,26 @@ export default function CommissionExplainPage() {
                   <b style={{ color: 'var(--accent)' }}>{fmt(pc.total_payout)}</b>.
                 </div>
               ) : (
-                <div style={{ fontSize: 13, color: 'var(--red)', marginBottom: 10 }}>
-                  No incentive plan attached to this rep → $0 on the plan component.
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, color: 'var(--red)', marginBottom: 8 }}>
+                    No incentive plan attached to this rep → $0 on the plan component.
+                  </div>
+                  {plans.length > 0 ? (
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <label style={{ fontSize: 13, color: 'var(--text2)' }}>Attach an incentive plan:&nbsp;
+                        <select className="select" defaultValue="" disabled={assigning || !rep}
+                          onChange={e => { const v = e.target.value; if (v) { attachPlan(v); e.target.value = '' } }}>
+                          <option value="">Select a plan…</option>
+                          {plans.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      </label>
+                      {assigning && <span style={{ fontSize: 12, color: 'var(--text3)' }}>Attaching &amp; recomputing this rep…</span>}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                      No incentive plans configured yet — create one on the Incentive Plans page, then attach it here.
+                    </div>
+                  )}
                 </div>
               )}
               <AssignmentTrace considered={pc?.considered} />

@@ -604,13 +604,13 @@ def onboarding_template(include_inactive: bool = False, org_id: str = ORG_ID):
             "owner_labels": OWNER_ROLE_LABELS, "states": SEED_STATES}
 
 
-@router.post("/onboarding/categories")
 class OnboardingSaveCategoryIn(LaxModel):
     label: str = ""
     key: str = ""
     sort_order: Any = None
 
 
+@router.post("/onboarding/categories")
 def onboarding_save_category(body: OnboardingSaveCategoryIn, org_id: str = ORG_ID):
     label = (body.label or "").strip()
     if not label:
@@ -1848,7 +1848,6 @@ def intake_fields_list(include_inactive: bool = False, org_id: str = ORG_ID):
             "propagatable": sorted(_PROPAGATABLE)}
 
 
-@router.post("/onboarding/intake-fields")
 class IntakeFieldIn(LaxModel):
     key: Any = None
     label: Any = None
@@ -1863,6 +1862,7 @@ class IntakeFieldIn(LaxModel):
     is_active: Any = None
 
 
+@router.post("/onboarding/intake-fields")
 def intake_field_save(body: IntakeFieldIn, org_id: str = ORG_ID):
     label = (body.label or "").strip()
     if not label:
@@ -3192,7 +3192,6 @@ def onboarding_get_accounting_settings(org_id: str = ORG_ID):
             "include_portal_link": s.get("include_portal_link", True)}
 
 
-@router.put("/onboarding/accounting-settings")
 class OnboardingSetAccountingSettingsIn(LaxModel):
     emails: Any = None
     whatsapps: Any = None
@@ -3201,6 +3200,7 @@ class OnboardingSetAccountingSettingsIn(LaxModel):
     include_portal_link: Any = True
 
 
+@router.put("/onboarding/accounting-settings")
 def onboarding_set_accounting_settings(body: OnboardingSetAccountingSettingsIn, org_id: str = ORG_ID):
     """Save the accounting-forward destination. emails/whatsapps accept a list or a comma-separated string."""
     row = {"org_id": org_id,
@@ -3676,11 +3676,11 @@ def onboarding_attention_config(org_id: str = ORG_ID):
     return {"stuck_invite_days": _hr_attention.onboarding_stuck_days(get_supabase(), org_id)}
 
 
-@router.put("/onboarding/attention-config")
 class PutOnboardingAttentionConfigIn(LaxModel):
     stuck_invite_days: Any = None
 
 
+@router.put("/onboarding/attention-config")
 def put_onboarding_attention_config(body: PutOnboardingAttentionConfigIn, org_id: str = ORG_ID,
                                     authorization: str = Header(default="")):
     """Set the tenant's 'stuck onboarding invite' alert threshold (days, clamped 1-90). HR/admin-only

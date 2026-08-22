@@ -1987,13 +1987,13 @@ def pay_simulator_context(period: str = "", rep: str = "",
                                 requested_org=org_id)
 
 
-@router.post("/pay-simulator/simulate")
 class PaySimulatorSimulateIn(LaxModel):
     period: Any = None
     inputs: Any = None
     rep: Any = None
 
 
+@router.post("/pay-simulator/simulate")
 def pay_simulator_simulate(body: Optional[PaySimulatorSimulateIn] = None, authorization: str = Header(default=""),
                            org_id: str = ORG_ID):
     """Projected pay for the caller's OWN levers. POST because the input is a lever map, NOT because
@@ -2070,7 +2070,6 @@ def whatif_get_source_config(carrier_id: str = "", authorization: str = Header(d
     }
 
 
-@router.put("/whatif/source-config")
 class WhatifPutSourceConfigIn(LaxModel):
     carrier_id: str = ""
     carrier_mode: str = ""
@@ -2085,6 +2084,7 @@ class WhatifPutSourceConfigIn(LaxModel):
     is_active: Any = None
 
 
+@router.put("/whatif/source-config")
 def whatif_put_source_config(body: WhatifPutSourceConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Upsert a PER-CARRIER What-If source override (or the org's mode-default row when
     carrier_id is the nil UUID). Config, not code (RULE TWO). Degrades with an ok=false hint before mig
@@ -3101,7 +3101,6 @@ def vip_sweep_get_config(org_id: str = ORG_ID):
     return _vip_public_cfg(_vip_cfg(sb(), org_id))
 
 
-@router.put("/vip/sweep/config")
 class VipSweepPutConfigIn(LaxModel):
     frequency: Any = None
     day_of_week: Any = None
@@ -3119,6 +3118,7 @@ class VipSweepPutConfigIn(LaxModel):
     portal_pass: Any = None
 
 
+@router.put("/vip/sweep/config")
 async def vip_sweep_put_config(body: VipSweepPutConfigIn, org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
@@ -6548,7 +6548,6 @@ def list_category_map(carrier_id: str = "", org_id: str = ORG_ID):
     return q.order("priority").execute().data or []
 
 
-@router.post("/carrier-category-map")
 class UpsertCategoryRuleIn(LaxModel):
     component: str = ""
     raw_category: str = ""
@@ -6560,6 +6559,7 @@ class UpsertCategoryRuleIn(LaxModel):
     id: Any = None
 
 
+@router.post("/carrier-category-map")
 def upsert_category_rule(body: UpsertCategoryRuleIn, org_id: str = ORG_ID):
     require_org(org_id)
     comp = (body.component or "").strip().upper()
@@ -7998,13 +7998,13 @@ def get_flag_rules(org_id: str = ORG_ID):
     return _flag_rules(sb(), org_id)
 
 
-@router.put("/flag-rules")
 class PutFlagRulesIn(LaxModel):
     accessory_threshold: Any = None
     accessory_chargeback_amount: Any = None
     accessory_min_threshold: Any = None
 
 
+@router.put("/flag-rules")
 def put_flag_rules(body: PutFlagRulesIn, org_id: str = ORG_ID):
     require_org(org_id)
     row = {"id": 1, "org_id": org_id, "updated_at": _cb_now()}
@@ -8790,7 +8790,6 @@ def dlar_sweep_get_config(org_id: str = ORG_ID):
     return _dlar_public_cfg(_dlar_cfg(sb(), org_id))
 
 
-@router.put("/dlar/sweep/config")
 class DlarSweepPutConfigIn(LaxModel):
     frequency: Any = None
     day_of_week: Any = None
@@ -8802,6 +8801,7 @@ class DlarSweepPutConfigIn(LaxModel):
     portal_pass: Any = None
 
 
+@router.put("/dlar/sweep/config")
 async def dlar_sweep_put_config(body: DlarSweepPutConfigIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
@@ -9089,7 +9089,6 @@ def epay_sweep_get_config(org_id: str = ORG_ID):
     return _epay_public_cfg(_epay_cfg(sb(), org_id))
 
 
-@router.put("/epay/sweep/config")
 class EpaySweepPutConfigIn(LaxModel):
     frequency: Any = None
     day_of_week: Any = None
@@ -9105,6 +9104,7 @@ class EpaySweepPutConfigIn(LaxModel):
     portal_pass: Any = None
 
 
+@router.put("/epay/sweep/config")
 async def epay_sweep_put_config(body: EpaySweepPutConfigIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
@@ -9551,6 +9551,68 @@ def _has_any_pay_source(client, org_id, period):
     return False
 
 
+def _rep_comm_row_keys(row):
+    """The rep-identity keys a rep_commissions row is matched on (UPPER, blanks dropped) — its
+    storeops_name and epay_salesperson. SHARED by the full run and the single-rep recompute so both
+    resolve a row's engine components against the exact same key set."""
+    return {str(row.get("storeops_name") or "").strip().upper(),
+            str(row.get("epay_salesperson") or "").strip().upper()} - {""}
+
+
+def _probe_rep_comm_engine_cols(client, org_id):
+    """Which OPTIONAL engine columns actually exist on rep_commissions (probed, so an un-applied
+    migration can never break the insert). SHARED by the full run and the single-rep recompute so both
+    write exactly the same column set. Returns {col_name: bool}."""
+    cols = {}
+    for c in ("residual_installment_comm", "installment_comm_sale", "plan_comm", "plan_name",
+              "carrier_statement_comm", "setup_fee_comm"):
+        try:
+            client.schema('commcalc').table('rep_commissions').select(c).limit(1).execute()
+            cols[c] = True
+        except Exception:
+            cols[c] = False
+    return cols
+
+
+def _apply_engine_components_to_row(row, ks, inst_by_rep, sale_inst_by_rep, stmt_by_rep,
+                                    plan_by_rep, cols):
+    """Enrich ONE rep_commissions row IN PLACE with the installment / plan / carrier-statement components
+    and recompute total_payout, using the EXACT per-row column logic the full run has always used. This
+    is the single source of truth for that arithmetic (extracted verbatim from _apply_new_engines' loop),
+    so a single-rep recompute is byte-identical to what the full run writes for that rep — the math is
+    never forked. Returns the set of plan_by_rep keys this row matched (for the caller's plan_matched
+    bookkeeping)."""
+    inst = next((inst_by_rep[k] for k in ks if k in inst_by_rep), 0.0)
+    sale_inst = next((sale_inst_by_rep[k] for k in ks if k in sale_inst_by_rep), 0.0)
+    stmt = next((stmt_by_rep[k] for k in ks if k in stmt_by_rep), 0.0)
+    pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
+    matched = set()
+    if cols["residual_installment_comm"]:
+        row["residual_installment_comm"] = inst
+    if cols["installment_comm_sale"]:
+        row["installment_comm_sale"] = sale_inst
+    # carrier_statement_comm = what the CARRIER paid the dealer for this rep (dealer revenue).
+    # Recorded for VISIBILITY / recon — NOT auto-added to rep pay. The rep's commission comes from
+    # the configured plan / multi-month %MRC schedule, not the dealer-level statement totals.
+    if cols["carrier_statement_comm"]:
+        row["carrier_statement_comm"] = stmt
+    if pv is not None:
+        matched = ks & set(plan_by_rep)
+        if cols["plan_comm"]:
+            row["plan_comm"] = pv["amount"]
+        if cols["plan_name"]:
+            row["plan_name"] = pv.get("plan_name")
+        if cols["setup_fee_comm"] and pv.get("setup_fee_comm"):
+            # only written when the plan engine actually produced one, so a Boost row (pv is
+            # None) and an unconfigured plan tenant are both untouched.
+            row["setup_fee_comm"] = pv["setup_fee_comm"]
+        base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
+    else:
+        base = safe_float(row.get("total_payout"))            # keep the standard calc
+    row["total_payout"] = round(base + inst + sale_inst, 2)   # plan + raw_mi + sale installments
+    return matched
+
+
 def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', notices=None):
     """ADDITIVE layer of the new configurable payout engines on top of the standard (Boost) calc.
 
@@ -9627,7 +9689,12 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
             sale_inst_by_rep = {}
         plan_by_rep = {}
         try:
-            pr = commission_engine.preview(client, org_id, period)
+            # DURABLE NAME-BRIDGE (luxelink money-path): thread the SAME deterministic POS->roster identity
+            # map the calc already loads (commcalc.name_map / rep_aliases) into the plan resolver so an
+            # employee-scope plan pinned under a rep's ROSTER name still attaches to their POS sales. Empty
+            # map (no name_map rows) => byte-identical to before.
+            _id_map = _rep_canon_map(client, org_id)
+            pr = commission_engine.preview(client, org_id, period, identity_map=_id_map)
             for r in (pr.get("by_rep") or []):
                 rn = str(r.get("rep") or "").strip().upper()
                 if rn:
@@ -9670,49 +9737,16 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
         if not inst_by_rep and not plan_by_rep and not stmt_by_rep and not sale_inst_by_rep:
             return comms
 
-        cols = {}
-        for c in ("residual_installment_comm", "installment_comm_sale", "plan_comm", "plan_name",
-                  "carrier_statement_comm", "setup_fee_comm"):
-            try:
-                client.schema('commcalc').table('rep_commissions').select(c).limit(1).execute()
-                cols[c] = True
-            except Exception:
-                cols[c] = False
-
-        def _keys(row):
-            return {str(row.get("storeops_name") or "").strip().upper(),
-                    str(row.get("epay_salesperson") or "").strip().upper()} - {""}
+        cols = _probe_rep_comm_engine_cols(client, org_id)
+        _keys = _rep_comm_row_keys
 
         plan_matched = set()
         for row in comms:
             ks = _keys(row)
-            inst = next((inst_by_rep[k] for k in ks if k in inst_by_rep), 0.0)
-            sale_inst = next((sale_inst_by_rep[k] for k in ks if k in sale_inst_by_rep), 0.0)
-            stmt = next((stmt_by_rep[k] for k in ks if k in stmt_by_rep), 0.0)
-            pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
-            if cols["residual_installment_comm"]:
-                row["residual_installment_comm"] = inst
-            if cols["installment_comm_sale"]:
-                row["installment_comm_sale"] = sale_inst
-            # carrier_statement_comm = what the CARRIER paid the dealer for this rep (dealer revenue).
-            # Recorded for VISIBILITY / recon — NOT auto-added to rep pay. The rep's commission comes from
-            # the configured plan / multi-month %MRC schedule, not the dealer-level statement totals.
-            if cols["carrier_statement_comm"]:
-                row["carrier_statement_comm"] = stmt
-            if pv is not None:
-                plan_matched |= (ks & set(plan_by_rep))
-                if cols["plan_comm"]:
-                    row["plan_comm"] = pv["amount"]
-                if cols["plan_name"]:
-                    row["plan_name"] = pv.get("plan_name")
-                if cols["setup_fee_comm"] and pv.get("setup_fee_comm"):
-                    # only written when the plan engine actually produced one, so a Boost row (pv is
-                    # None) and an unconfigured plan tenant are both untouched.
-                    row["setup_fee_comm"] = pv["setup_fee_comm"]
-                base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
-            else:
-                base = safe_float(row.get("total_payout"))            # keep the standard calc
-            row["total_payout"] = round(base + inst + sale_inst, 2)   # plan + raw_mi + sale installments
+            # SHARED per-row arithmetic (see _apply_engine_components_to_row) — the single source of truth
+            # the single-rep /recompute-rep endpoint also drives, so both paths write identical values.
+            plan_matched |= _apply_engine_components_to_row(
+                row, ks, inst_by_rep, sale_inst_by_rep, stmt_by_rep, plan_by_rep, cols)
 
         # reps with a PLAN but no standard row → add them (statement-only reps are captured in
         # commcalc.carrier_commission for recon, not paid here)
@@ -14215,12 +14249,12 @@ def get_coverage_excluded_sellers(org_id: str = ORG_ID):
             "Run migration 248_commission_coverage_excluded_sellers.sql to persist this list."}
 
 
-@router.put("/commission-plans/coverage-excluded")
 class PutCoverageExcludedSellersIn(LaxModel):
     sellers: Any = None
     artifact_hints: Any = None
 
 
+@router.put("/commission-plans/coverage-excluded")
 async def put_coverage_excluded_sellers(body: PutCoverageExcludedSellersIn, authorization: str = Header(default=""),
                                         org_id: str = ORG_ID):
     """Admin-only. Sets the tenant's excluded-seller list (and optionally the artifact word list).
@@ -14631,13 +14665,13 @@ def commission_plan_assignment_audit(org_id: str = ORG_ID, include_inactive: boo
             "markets": known_markets}
 
 
-@router.post("/commission-plans/bulk-assign")
 class BulkAssignCommissionPlanIn(LaxModel):
     plan_id: str = ""
     people: Any = None
     replace_existing: Any = None
 
 
+@router.post("/commission-plans/bulk-assign")
 async def bulk_assign_commission_plan(body: BulkAssignCommissionPlanIn, org_id: str = ORG_ID):
     """Assign ONE commission plan to MANY employees in a single action (owner directive 2026-07-23).
 
@@ -14727,6 +14761,141 @@ async def bulk_assign_commission_plan(body: BulkAssignCommissionPlanIn, org_id: 
             "replace_existing": replace_existing, "results": results, "summary": summary}
 
 
+# ── SINGLE-REP RECOMPUTE (owner directive 2026-08-22, luxelink) ────────────────────────────────────
+# After an incentive plan is attached to ONE rep (Incentive Explain page), recompute JUST that rep's
+# rep_commissions row so the page can show the new number immediately — WITHOUT a full-company Run
+# Calculation. It drives the SAME engines and the SAME per-row write helper (_apply_engine_components_
+# to_row) the full run uses, so this rep's row is byte-identical to what the next full run would write
+# for them. It NEVER touches any other rep's row (no period-wide delete; a single scoped update/insert).
+class RecomputeRepIn(LaxModel):
+    period: Any = None
+    rep: Any = None
+
+
+@router.post("/recompute-rep")
+def recompute_rep(body: RecomputeRepIn, org_id: str = ORG_ID):
+    """Recompute + UPSERT ONE rep's rep_commissions row (plan_comm / plan_name / total_payout) after a
+    plan attach, using commission_engine.preview(only_rep=rep) + that rep's installment amounts and the
+    SHARED write helper the full run uses. Org/period scoped; never rewrites other reps."""
+    require_org(org_id)
+    period = str(body.period or "").strip()
+    rep = str(body.rep or "").strip()
+    if not period or not rep:
+        raise HTTPException(400, "period and rep are required")
+    client = sb()
+
+    # SAME deterministic POS->roster identity map + plan resolver the full run (_apply_new_engines) uses,
+    # restricted to this ONE rep. only_rep filters the rep grouping AFTER the (org-wide) sales read and
+    # store/financing context are built, so this rep's plan amount is identical to the full-run slice.
+    _id_map = _rep_canon_map(client, org_id)
+    plan_by_rep = {}
+    try:
+        pr = commission_engine.preview(client, org_id, period, only_rep=rep, identity_map=_id_map)
+        for r in (pr.get("by_rep") or []):
+            rn = str(r.get("rep") or "").strip().upper()
+            if rn:
+                plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")),
+                                   "plan_name": r.get("plan_name"),
+                                   "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
+    except Exception as e:
+        raise HTTPException(500, f"recompute-rep preview failed: {e}")
+
+    # this rep's installment / statement components — computed exactly as _apply_new_engines does (the
+    # engines are org-wide; we only WRITE this rep's row, so we just index by this rep's keys below).
+    inst_by_rep, sale_inst_by_rep, stmt_by_rep = {}, {}, {}
+    try:
+        ir = installment_engine.compute_installments(client, org_id, period, persist=True)
+        for r, amt in (ir.get("by_rep") or {}).items():
+            if r:
+                inst_by_rep[str(r).strip().upper()] = safe_float(amt)
+    except Exception:
+        inst_by_rep = {}
+    try:
+        sr = sale_installment_engine.compute_sale_installments(client, org_id, period, persist=True)
+        for r, amt in (sr.get("by_rep") or {}).items():
+            if r:
+                sale_inst_by_rep[str(r).strip().upper()] = safe_float(amt)
+    except Exception:
+        sale_inst_by_rep = {}
+    try:
+        srows, _s, _pg = [], 0, 1000
+        while True:
+            chunk = (client.schema('commcalc').table('carrier_commission')
+                     .select('rep_name,total_commission').eq('org_id', org_id)
+                     .in_('period', _pvariants(period)).range(_s, _s + _pg - 1).execute().data) or []
+            srows.extend(chunk)
+            if len(chunk) < _pg:
+                break
+            _s += _pg
+        for r in srows:
+            rn = str(r.get('rep_name') or '').strip().upper()
+            if rn:
+                stmt_by_rep[rn] = round(stmt_by_rep.get(rn, 0.0) + safe_float(r.get('total_commission')), 2)
+    except Exception:
+        stmt_by_rep = {}
+
+    cols = _probe_rep_comm_engine_cols(client, org_id)
+
+    # find this rep's existing stored row (org+period scoped). Match on either name key AND the roster
+    # bridge, so a POS/roster spelling difference still finds the row to update in place.
+    rep_up = rep.upper()
+    keyset = {rep_up}
+    _bridged = _id_map.get(rep_up)
+    if _bridged:
+        keyset.add(_bridged.strip().upper())
+    try:
+        stored = (client.schema('commcalc').table('rep_commissions').select('*')
+                  .eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+    except Exception:
+        stored = []
+    row, existing_id = None, None
+    for s in stored:
+        if _rep_comm_row_keys(s) & keyset:
+            row, existing_id = dict(s), s.get('id')
+            break
+
+    pm = parse_period(period)
+    if row is None:
+        # no standard row yet → build one exactly as the full run's plan-only branch does.
+        row = {"org_id": org_id, "period": period,
+               "period_month": pm.get("month"), "period_year": pm.get("year"),
+               "storeops_name": rep, "epay_salesperson": rep,
+               "subtotal": 0.0, "tier": 1, "total_payout": 0.0}
+    else:
+        # recover the standard-calc base (strip the previously-folded installment components) so the
+        # shared helper recomputes total_payout the same way the full run does from a FRESH calc row.
+        # For a plan-covered rep the helper overwrites `base` with the plan amount, so this only affects
+        # the (non-plan) fallback branch — keeping it consistent with the full run's non-plan formula.
+        row["total_payout"] = round(
+            safe_float(row.get("total_payout"))
+            - safe_float(row.get("residual_installment_comm"))
+            - safe_float(row.get("installment_comm_sale")), 2)
+
+    ks = _rep_comm_row_keys(row) or keyset
+    _apply_engine_components_to_row(
+        row, ks, inst_by_rep, sale_inst_by_rep, stmt_by_rep, plan_by_rep, cols)
+
+    # UPSERT ONLY this rep's row: update in place when it existed, else insert. No period-wide delete,
+    # so no other rep's row is ever touched.
+    row["org_id"] = org_id
+    try:
+        if existing_id is not None:
+            payload = {k: v for k, v in row.items() if k != "id"}
+            (client.schema('commcalc').table('rep_commissions').update(payload)
+             .eq('org_id', org_id).eq('id', existing_id).execute())
+        else:
+            client.schema('commcalc').table('rep_commissions').insert(row).execute()
+    except Exception as e:
+        raise HTTPException(500, f"recompute-rep write failed: {e}")
+
+    pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
+    return {"ok": True, "rep": rep, "period": period,
+            "matched_plan": pv is not None,
+            "plan_name": (pv or {}).get("plan_name"),
+            "plan_comm": safe_float((pv or {}).get("amount")) if pv else 0.0,
+            "total_payout": safe_float(row.get("total_payout"))}
+
+
 # ── MARKETS (pick-don't-type options for the Store Markets editor — AGENT_CONTRACT §3b/RULE THREE) ──
 # A market is a free-form label the org invents once and then reuses; typing it per store is how "LI",
 # "li" and "L I" become three different markets and a store silently drops out of its market filter.
@@ -14795,7 +14964,6 @@ def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     r = client.schema('commcalc').table('store_mapping').select('*').eq('org_id', org_id).order('store_address').execute()
     return r.data or []
 
-@router.put("/stores/{store_id}")
 class UpdateStoreIn(LaxModel):
     market: Any = None
     store_code: Any = None
@@ -14804,6 +14972,7 @@ class UpdateStoreIn(LaxModel):
     salesforce_id: Any = None
 
 
+@router.put("/stores/{store_id}")
 async def update_store(store_id: str, body: UpdateStoreIn, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     allowed = {k: getattr(body, k) for k in ('market', 'store_code', 'store_address', 'is_active', 'salesforce_id')
@@ -14950,7 +15119,6 @@ def get_ingest_guard_config(org_id: str = ORG_ID):
     return cfg
 
 
-@router.put("/ingest-guard/config")
 class PutIngestGuardConfigIn(LaxModel):
     mode: str = ""
     block_min_rows: Any = None
@@ -14959,6 +15127,7 @@ class PutIngestGuardConfigIn(LaxModel):
     updated_by: Any = None
 
 
+@router.put("/ingest-guard/config")
 def put_ingest_guard_config(body: PutIngestGuardConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Set the enforcement mode / thresholds. Permission-gated; org-scoped (org_id is the query
     param the tenant middleware rewrites from the caller's JWT — never a body field)."""
@@ -16302,12 +16471,12 @@ def get_chargebacks(period: str, authorization: str = Header(default=""), org_id
     # super-admins (ks is None) saw all of it. Match `store`, which holds the POS store string.
     return [c for c in rows if in_keyset(ks, c.get('store'))]
 
-@router.put("/chargebacks/{item_id}")
 class UpdateChargebackIn(LaxModel):
     deduct: Any = False
     decided_by: Any = None
 
 
+@router.put("/chargebacks/{item_id}")
 async def update_chargeback(item_id: str, body: UpdateChargebackIn, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     update = {'deduct': bool(body.deduct), 'decided_at': 'now()'}
@@ -16951,7 +17120,6 @@ def get_accessory_config(org_id: str = ORG_ID):
             "definition_drives_pay": c.get("definition_drives_pay", False)}
 
 
-@router.put("/accessory-config")
 class PutAccessoryConfigIn(LaxModel):
     departments: Any = None
     categories: Any = None
@@ -16969,6 +17137,7 @@ class PutAccessoryConfigIn(LaxModel):
     definition_drives_pay: Any = None
 
 
+@router.put("/accessory-config")
 def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set what counts as accessory sales + which Tender Type = an ACIMA lease. Body: {departments:[...],
     categories:[...], product_keywords:[...], acima_tenders:[...]}. A line is an accessory if its
@@ -19731,7 +19900,6 @@ def get_targets(period: str, include_inactive: bool = False,
     return {'period': period, 'byod_pct_default': byod_def, 'targets': out}
 
 
-@router.put("/targets/{period}")
 class SaveTargetIn(LaxModel):
     store_code: Any = None
     activations_monthly: Any = None
@@ -19742,6 +19910,7 @@ class SaveTargetIn(LaxModel):
     updated_by: Any = None
 
 
+@router.put("/targets/{period}")
 async def save_target(period: str, body: SaveTargetIn, authorization: str = Header(default=""),
                       org_id: str = ORG_ID):
     """Upsert one store's monthly target config (Target Settings save, and the DM per-store
@@ -21510,13 +21679,13 @@ def get_exec_metric_config(org_id: str = ORG_ID):
     return {"buckets": list(_EXEC_BUCKETS), "config": cfg}
 
 
-@router.put("/exec-metric-config")
 class PutExecMetricConfigIn(LaxModel):
     bucket: str = ""
     rules: Any = None
     basis: Any = None
 
 
+@router.put("/exec-metric-config")
 def put_exec_metric_config(body: PutExecMetricConfigIn, org_id: str = ORG_ID):
     """Upsert one bucket's metric definition (org-scoped). body = {bucket, rules:{...}, basis}. Only the
     six known buckets are accepted. Degrades gracefully if mig 204 hasn't run (returns ok=false hint)."""
@@ -21960,7 +22129,6 @@ def _require_perf_review_edit(authorization, org_id):
         raise HTTPException(403, "You don't have permission to edit performance-review configuration.")
 
 
-@router.put("/productivity/config")
 class PutProductivityConfigIn(LaxModel):
     item_key: str = ""
     label: Any = None
@@ -21975,6 +22143,7 @@ class PutProductivityConfigIn(LaxModel):
     sort: Any = None
 
 
+@router.put("/productivity/config")
 def put_productivity_config(body: PutProductivityConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert ONE registry item (add a custom item or edit/enable/disable a default). item_key required;
     source_key must be in the SOURCE CATALOG (pick-don't-type — no free-form formula). Degrades with a hint
@@ -22555,12 +22724,12 @@ def get_rep_aliases(org_id: str = ORG_ID):
     return {"configured": configured, "aliases": aliases, "names": sorted(names)}
 
 
-@router.post("/rep-aliases")
 class PostRepAliasesIn(LaxModel):
     canonical: str = ""
     aliases: Any = None
 
 
+@router.post("/rep-aliases")
 async def post_rep_aliases(body: PostRepAliasesIn, org_id: str = ORG_ID):
     """Merge rep name-variants into one canonical. Body: {canonical, aliases:[...]}."""
     canonical = (body.canonical or '').strip()
@@ -22695,11 +22864,11 @@ def _system_line_keys(client, org_id, pv):
         return set()
 
 
-@router.put("/expenses/{period}")
 class PutExpensesIn(LaxModel):
     rows: Any = None
 
 
+@router.put("/expenses/{period}")
 async def put_expenses(period: str, body: PutExpensesIn, org_id: str = ORG_ID):
     """Replace all MANUAL expenses for the period (matrix save + bulk upload). Body:
     {rows:[{store_code, expense_name, expense_type, amount}]}. Zero/blank rows are dropped.
@@ -23211,7 +23380,6 @@ def get_ftp_config(org_id: str = ORG_ID):
     return cfg
 
 
-@router.put("/ftp-sweep/config")
 class PutFtpConfigIn(LaxModel):
     host: str = ""
     port: Any = None
@@ -23226,6 +23394,7 @@ class PutFtpConfigIn(LaxModel):
     password: Any = None
 
 
+@router.put("/ftp-sweep/config")
 def put_ftp_config(body: PutFtpConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save config. Password only updated when a non-empty value is supplied (so it isn't wiped)."""
     require_org(org_id)
@@ -23847,13 +24016,13 @@ def get_sales_derive_config(org_id: str = ORG_ID):
     }
 
 
-@router.put("/sales/derive-config")
 class PutSalesDeriveConfigIn(LaxModel):
     enabled: Any = None
     days: Any = None
     retain: Any = None
 
 
+@router.put("/sales/derive-config")
 def put_sales_derive_config(body: PutSalesDeriveConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's month-boundary grace window (migration 266). Import-channel setting, so it is
     gated on the SAME 'import_health' settings area as the mailbox/portal editors — not the commission
@@ -24189,7 +24358,6 @@ def list_pos_profiles(org_id: str = ORG_ID, pos_key: str = "b2bsoft"):
     return {"profile": _pos_profile(sb(), org_id, pos_key)}
 
 
-@router.put("/pos-profiles")
 class PutPosProfileIn(LaxModel):
     pos_key: str = ""
     label: str = ""
@@ -24200,6 +24368,7 @@ class PutPosProfileIn(LaxModel):
     is_active: Any = True
 
 
+@router.put("/pos-profiles")
 def put_pos_profile(body: PutPosProfileIn, org_id: str = ORG_ID):
     """Edit this tenant's POS standard profile (SAP-configurable — the standard is a config row, not code).
     Degrades gracefully: if mig 200 isn't applied yet, returns ok=False with a hint instead of 500."""
@@ -24871,7 +25040,6 @@ def list_data_sources(org_id: str = ORG_ID):
             "scrapers_wired": sorted(_SOURCE_SCRAPERS.keys())}
 
 
-@router.put("/data-sources")
 class SaveDataSourceIn(LaxModel):
     id: Any = None
     distributor_id: Any = None
@@ -24891,6 +25059,7 @@ class SaveDataSourceIn(LaxModel):
     auto_pull_after_login: Any = None
 
 
+@router.put("/data-sources")
 def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Create/update one login. Omitting password on an update KEEPS the stored one."""
     require_org(org_id)
@@ -25105,7 +25274,6 @@ def list_report_pull_map(processor: str = "", org_id: str = ORG_ID):
             "targets_note": "raw_ma_marketplace_orders is a view over raw_ma_fulfillment (mod-asset)"}
 
 
-@router.put("/report-pull-map")
 class SaveReportPullMapIn(LaxModel):
     report_key: Any = None
     display_name: Any = None
@@ -25118,6 +25286,7 @@ class SaveReportPullMapIn(LaxModel):
     processor: Any = None
 
 
+@router.put("/report-pull-map")
 def save_report_pull_map(body: SaveReportPullMapIn, org_id: str = ORG_ID):
     """Create/update THIS org's override for one report_key (never mutates the house default row — a
     tenant edit becomes a tenant-scoped override). Upserts on (org_id, report_key)."""
@@ -25304,7 +25473,6 @@ async def manual_upload_detect(report_key: str = Form(...), carrier_id: str = Fo
     }
 
 
-@router.post("/manual-upload/mapping")
 class ManualUploadSaveMappingIn(LaxModel):
     report_key: str = ""
     carrier_id: str = ""
@@ -25314,6 +25482,7 @@ class ManualUploadSaveMappingIn(LaxModel):
     saved_by: Any = None
 
 
+@router.post("/manual-upload/mapping")
 def manual_upload_save_mapping(body: ManualUploadSaveMappingIn, org_id: str = ORG_ID):
     """Persist the per-(org,carrier,report_key) manual column mapping. Accepts either a ready column_map
     or a {dest_col: source_header} selection (field_sources) — the latter inherits value TYPES from the
@@ -26065,12 +26234,12 @@ def live_login_resend(sid: str, org_id: str = ORG_ID):
     return {"ok": True, "phase": sess.snapshot_phase()}
 
 
-@router.post("/data-sources/{sid}/live-login/click")
 class LiveLoginClickIn(LaxModel):
     x: Any = None
     y: Any = None
 
 
+@router.post("/data-sources/{sid}/live-login/click")
 def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     """'Take control': forward an operator click (NORMALIZED x/y in 0..1 of the streamed image) to the
     live page, so they can press a control the auto-clicker missed (e.g. the portal's Next button)."""
@@ -26087,7 +26256,6 @@ def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     return {"ok": True, "phase": sess.snapshot_phase()}
 
 
-@router.post("/data-sources/{sid}/live-login/input")
 class LiveLoginInputIn(LaxModel):
     type: Any = None
     x: Any = None
@@ -26097,6 +26265,7 @@ class LiveLoginInputIn(LaxModel):
     deltaY: Any = None
 
 
+@router.post("/data-sources/{sid}/live-login/input")
 def live_login_input(sid: str, body: LiveLoginInputIn, org_id: str = ORG_ID):
     """Forward a raw human input event to the LIVE page with HIGH priority (drained before SUBMIT_CODE /
     RESEND / PULL). type ∈ click|dblclick|type|key|scroll. Click coords are NORMALIZED (0..1 of the
@@ -26473,7 +26642,6 @@ def ma_overview_tiles(org_id: str = ORG_ID):
                      "filter_field/op/value triplet is the simple one-condition form.")}
 
 
-@router.put("/ma-overview-recon/tiles/{tile_key}")
 class MaOverviewPutTileIn(LaxModel):
     label: Any = None
     sort_order: Any = None
@@ -26494,6 +26662,7 @@ class MaOverviewPutTileIn(LaxModel):
     is_active: Any = None
 
 
+@router.put("/ma-overview-recon/tiles/{tile_key}")
 def ma_overview_put_tile(tile_key: str, body: MaOverviewPutTileIn, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """Save ONE tile's mapping for this tenant (upsert on org+tile_key). Validated against the source
@@ -26566,7 +26735,6 @@ def ma_overview_rate_plan(period: str = "", org_id: str = ORG_ID):
                      "the cross-check and nothing else.")}
 
 
-@router.put("/ma-overview-recon/rate-plan/{month_index}")
 class MaOverviewPutRateIn(LaxModel):
     rate_pct: Any = None
     spiff_flat: Any = None
@@ -26574,6 +26742,7 @@ class MaOverviewPutRateIn(LaxModel):
     note: Any = None
 
 
+@router.put("/ma-overview-recon/rate-plan/{month_index}")
 def ma_overview_put_rate(month_index: int, body: MaOverviewPutRateIn, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """Set the carrier's rate for one month leg. body: {rate_pct, spiff_flat?, effective_from?, note?}.
@@ -29683,7 +29852,6 @@ def get_financing_targets(period: str, include_inactive: bool = False,
                      'Migration 272 has not been run — financing targets cannot be saved yet.')}
 
 
-@router.put("/financing/targets/{period}")
 class SaveFinancingTargetIn(LaxModel):
     store_code: Any = None
     vendor_key: Any = None
@@ -29693,6 +29861,7 @@ class SaveFinancingTargetIn(LaxModel):
     updated_by: Any = None
 
 
+@router.put("/financing/targets/{period}")
 async def save_financing_target(period: str, body: SaveFinancingTargetIn, authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """Set ONE store's monthly financing target (optionally per vendor). Gated on the SAME 'targets'
@@ -29810,7 +29979,6 @@ def atu_config_get(org_id: str = ORG_ID):
     return {"org_id": org_id, "config": cfg, "table_present": present, "defaults": _ATU_DEFAULTS}
 
 
-@router.post("/atu-config")
 class AtuConfigSetIn(LaxModel):
     saving_per_month: Any = None
     boost_rate_pct: Any = None
@@ -29818,6 +29986,7 @@ class AtuConfigSetIn(LaxModel):
     total_recharge_base: Any = None
 
 
+@router.post("/atu-config")
 def atu_config_set(body: AtuConfigSetIn, org_id: str = ORG_ID):
     """Save the assumptions. org_id is STAMPED (RULE ONE). Values are clamped to >= 0 — a negative rate
     would silently flip the sign of the whole report."""
