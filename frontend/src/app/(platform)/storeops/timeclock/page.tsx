@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -87,11 +88,11 @@ export default function TimeClockAdminPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api('/api/v1/storeops/employees?include_inactive=true').then((e: any) => setEmployees(e || [])).catch(() => {})
+    apiCached('/api/v1/storeops/employees?include_inactive=true', LOOKUP).then((e: any) => setEmployees(e || [])).catch(() => {})
     // include_inactive=true: this report is a HISTORICAL surface (RULE FIVE filter bar) — a store
     // closed today may still own past rows in this range, and the market lookup below must still
     // resolve it. GET /stores now defaults to active-only (2026-08-06 disabled-T-store fix).
-    api('/api/v1/storeops/stores?include_inactive=true').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP).then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/storeops/timeclock/lunch-config').then(setLunchCfg).catch(() => setLunchCfg(null))
     api('/api/v1/storeops/timeclock/face-config').then(setFaceCfg).catch(() => setFaceCfg(null))
     api('/api/v1/storeops/timeclock/face-retention/config').then(setRetCfg).catch(() => setRetCfg(null))

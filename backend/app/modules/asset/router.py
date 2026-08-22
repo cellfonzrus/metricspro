@@ -663,7 +663,7 @@ async def get_asset_summary(org_id: str = ORG_ID, store: str = "", market: str =
 
 
 @router.get("/category-detail")
-async def get_category_detail(
+def get_category_detail(
     category: str,
     org_id: str = ORG_ID,
     limit: int = 500,
@@ -946,7 +946,7 @@ def _borrowings_with_outstanding(client, org_id):
 
 
 @router.get("/borrowings")
-async def list_borrowings(org_id: str = ORG_ID, store: str = "", market: str = "", status: str = ""):
+def list_borrowings(org_id: str = ORG_ID, store: str = "", market: str = "", status: str = ""):
     """Borrowing ledger. Filters: store (matches borrower OR lender), market (borrower),
     status open|settled. Each row carries repaid + outstanding + its payments."""
     rows = _borrowings_with_outstanding(sb(), org_id)
@@ -974,7 +974,7 @@ class BorrowingCreateIn(LaxModel):
 
 
 @router.post("/borrowings")
-async def create_borrowing(body: BorrowingCreateIn, org_id: str = ORG_ID):
+def create_borrowing(body: BorrowingCreateIn, org_id: str = ORG_ID):
     """Log a borrowing. Body: {borrower_store, lender_store, amount, borrowed_date?, note?,
     market?}. Market defaults to the borrower store's market."""
     borrower = (body.borrower_store or "").strip()
@@ -1011,7 +1011,7 @@ class BorrowingUpdateIn(LaxModel):
 
 
 @router.patch("/borrowings/{borrowing_id}")
-async def update_borrowing(borrowing_id: str, body: BorrowingUpdateIn, org_id: str = ORG_ID):
+def update_borrowing(borrowing_id: str, body: BorrowingUpdateIn, org_id: str = ORG_ID):
     """Edit a borrowing (borrower/lender/amount/date/note/market)."""
     fields = ("borrower_store", "lender_store", "market", "amount", "borrowed_date", "note")
     # PATCH: update only the keys actually sent (model_fields_set preserves the old "in body" check).
@@ -1032,7 +1032,7 @@ async def update_borrowing(borrowing_id: str, body: BorrowingUpdateIn, org_id: s
 
 
 @router.delete("/borrowings/{borrowing_id}")
-async def delete_borrowing(borrowing_id: str, org_id: str = ORG_ID):
+def delete_borrowing(borrowing_id: str, org_id: str = ORG_ID):
     """Delete a borrowing (its payments cascade)."""
     sb().schema("commcalc").table("store_borrowings").delete() \
         .eq("id", borrowing_id).eq("org_id", org_id).execute()
@@ -1046,7 +1046,7 @@ class BorrowingPaymentIn(LaxModel):
 
 
 @router.post("/borrowings/{borrowing_id}/payment")
-async def add_borrowing_payment(borrowing_id: str, body: BorrowingPaymentIn, org_id: str = ORG_ID):
+def add_borrowing_payment(borrowing_id: str, body: BorrowingPaymentIn, org_id: str = ORG_ID):
     """Record a payback against a borrowing. Body: {amount, paid_date?, note?}."""
     try:
         amount = float(body.amount)
@@ -1068,7 +1068,7 @@ async def add_borrowing_payment(borrowing_id: str, body: BorrowingPaymentIn, org
 
 
 @router.delete("/borrowing-payment/{payment_id}")
-async def delete_borrowing_payment(payment_id: str, org_id: str = ORG_ID):
+def delete_borrowing_payment(payment_id: str, org_id: str = ORG_ID):
     """Undo a payback."""
     sb().schema("commcalc").table("store_borrowing_payments").delete() \
         .eq("id", payment_id).eq("org_id", org_id).execute()
@@ -1076,7 +1076,7 @@ async def delete_borrowing_payment(payment_id: str, org_id: str = ORG_ID):
 
 
 @router.get("/borrowings/summary")
-async def borrowings_summary(org_id: str = ORG_ID, store: str = "", market: str = ""):
+def borrowings_summary(org_id: str = ORG_ID, store: str = "", market: str = ""):
     """Reconciliation: who owes whom, and net position per store. Filters store/market."""
     rows = _borrowings_with_outstanding(sb(), org_id)
     rows = [r for r in rows if _market_matches(r.get("market"), market)]
@@ -1205,7 +1205,7 @@ class UploadB2bInventoryIn(LaxModel):
 
 
 @router.post("/b2b-inventory/upload")
-async def upload_b2b_inventory(body: UploadB2bInventoryIn, org_id: str = ORG_ID):
+def upload_b2b_inventory(body: UploadB2bInventoryIn, org_id: str = ORG_ID):
     """Manual b2bsoft inventory load (until the portal sweep is wired). Body:
     {as_of_date, rows:[{store, category, qty, value?}]}. Category is normalized to a bucket;
     unmappable categories are skipped + reported (for the qty/category recon below). Replaces
@@ -1723,7 +1723,7 @@ class SetInvestigationIn(LaxModel):
 
 
 @router.post("/investigation")
-async def set_investigation(body: SetInvestigationIn, org_id: str = ORG_ID):
+def set_investigation(body: SetInvestigationIn, org_id: str = ORG_ID):
     """Record an aging investigation for a device (physically-missing flag + remark). Upsert by ESN/IMEI
     so it survives asset_ledger re-uploads."""
     client = sb()
@@ -1740,7 +1740,7 @@ async def set_investigation(body: SetInvestigationIn, org_id: str = ORG_ID):
 
 
 @router.get("/missing-phones")
-async def get_missing_phones(org_id: str = ORG_ID, store: str = "", market: str = ""):
+def get_missing_phones(org_id: str = ORG_ID, store: str = "", market: str = ""):
     """Devices a user flagged as physically MISSING during aging investigation, joined to asset_ledger
     for device detail + the owed-to-distributor exposure. The list to investigate."""
     client = sb()
@@ -1783,7 +1783,7 @@ async def get_missing_phones(org_id: str = ORG_ID, store: str = "", market: str 
 
 
 @router.get("/aging-rebate")
-async def get_aging_rebate(org_id: str = ORG_ID, store: str = "", market: str = ""):
+def get_aging_rebate(org_id: str = ORG_ID, store: str = "", market: str = ""):
     """Devices STILL in Inventory Aging (unsold On-Inventory) but for which a REBATE was received — i.e.
     they were effectively sold/activated, so they can be taken OUT of inventory. Each is matched to its
     ePay rebate (raw_payment_detail by IMEI, with the rebate date) and to a sale (raw_sales serial). A
@@ -2326,7 +2326,7 @@ def _compute_hotsheet_recon(client, org_id, store="", market="", month=None, yea
 
 
 @router.get("/hotsheet-recon")
-async def hotsheet_recon(org_id: str = ORG_ID, store: str = "", market: str = "",
+def hotsheet_recon(org_id: str = ORG_ID, store: str = "", market: str = "",
                          month: int = None, year: int = None, tolerance: float = 1.0):
     """Expected (pricing hotsheet promo) vs actual (Boost reimbursement) per activated device.
     Buckets: matched / underpaid / overpaid / no_expected (model on hotsheet but blank for that
@@ -2374,7 +2374,7 @@ def _sync_hotsheet_flags(client, org_id, tolerance=1.0):
 
 
 @router.post("/sync-hotsheet-flags")
-async def sync_hotsheet_flags(org_id: str = ORG_ID, tolerance: float = 1.0):
+def sync_hotsheet_flags(org_id: str = ORG_ID, tolerance: float = 1.0):
     """Manually write hotsheet-underpayment flags (opt-in; not auto-run on upload)."""
     return {"flags_written": _sync_hotsheet_flags(sb(), org_id, tolerance)}
 
@@ -2638,7 +2638,7 @@ def _sync_appeal_flags(client, org_id):
 
 
 @router.post("/sync-appeal-flags")
-async def sync_appeal_flags(org_id: str = ORG_ID):
+def sync_appeal_flags(org_id: str = ORG_ID):
     """Manual refresh: rewrite appeal flags from current asset data."""
     client = sb()
     n = _sync_appeal_flags(client, org_id)
@@ -2774,7 +2774,7 @@ def _sync_rma_flags(client, org_id):
 
 
 @router.post("/sync-rma-flags")
-async def sync_rma_flags(org_id: str = ORG_ID):
+def sync_rma_flags(org_id: str = ORG_ID):
     """Manual refresh of RMA flags."""
     client = sb()
     n = _sync_rma_flags(client, org_id)
@@ -3006,7 +3006,7 @@ def _sync_undercharge_flags(client, org_id):
 
 
 @router.post("/backfill-selling-price")
-async def backfill_selling_price(org_id: str = ORG_ID):
+def backfill_selling_price(org_id: str = ORG_ID):
     """Manual refresh: re-pull selling prices from sales, then re-sync undercharge flags.
     Run after uploading new sales data without re-uploading the asset file."""
     client = sb()
@@ -3016,7 +3016,7 @@ async def backfill_selling_price(org_id: str = ORG_ID):
 
 
 @router.post("/sync-undercharge-flags")
-async def sync_undercharge_flags(org_id: str = ORG_ID):
+def sync_undercharge_flags(org_id: str = ORG_ID):
     """Manual refresh of undercharge flags from current selling_price values."""
     client = sb()
     n = _sync_undercharge_flags(client, org_id)
@@ -3024,7 +3024,7 @@ async def sync_undercharge_flags(org_id: str = ORG_ID):
 
 
 @router.get("/ledger")
-async def get_asset_ledger(
+def get_asset_ledger(
     org_id: str = ORG_ID,
     status: str = "",
     category: str = "",
@@ -3112,7 +3112,7 @@ def _mp_num(v):
 
 
 @router.get("/marketplace-purchases")
-async def get_marketplace_purchases(org_id: str = ORG_ID, date_from: str = "", date_to: str = "",
+def get_marketplace_purchases(org_id: str = ORG_ID, date_from: str = "", date_to: str = "",
                                      business: str = "", status: str = "", order_type: str = ""):
     """Marketplace/handset-fulfillment purchase orders — the VidaPay 'MA - Marketplace Handset
     Fulfillment Orders' report, pulled by the commission report-pull engine and read here via the
@@ -3161,7 +3161,7 @@ async def get_marketplace_purchases(org_id: str = ORG_ID, date_from: str = "", d
 
 
 @router.get("/marketplace-purchases/filter-options")
-async def get_marketplace_purchases_filter_options(org_id: str = ORG_ID):
+def get_marketplace_purchases_filter_options(org_id: str = ORG_ID):
     """Distinct businesses (canonicalized through store_mapping)/statuses/order-types for the page's
     picker filters (RULE THREE — dropdown over existing values, never free text). Degrades to
     `available: false` (empty lists) if the view doesn't exist yet."""

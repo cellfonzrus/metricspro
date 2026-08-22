@@ -37,7 +37,7 @@ def require_org(org_id: str):
 
 # ── companies ────────────────────────────────────────────────────────────────────────────────
 @router.get("/companies")
-async def list_companies(org_id: str = ORG_ID):
+def list_companies(org_id: str = ORG_ID):
     require_org(org_id)
     rows = (sb().schema("commcalc").table("companies").select("*")
             .eq("org_id", org_id).order("name").execute().data) or []
@@ -57,7 +57,7 @@ class CompanyUpdateIn(LaxModel):
 
 
 @router.post("/companies")
-async def create_company(body: CompanyCreateIn, org_id: str = ORG_ID):
+def create_company(body: CompanyCreateIn, org_id: str = ORG_ID):
     require_org(org_id)
     name = (body.name or "").strip()
     if not name:
@@ -70,7 +70,7 @@ async def create_company(body: CompanyCreateIn, org_id: str = ORG_ID):
 
 
 @router.patch("/companies/{company_id}")
-async def update_company(company_id: str, body: CompanyUpdateIn, org_id: str = ORG_ID):
+def update_company(company_id: str, body: CompanyUpdateIn, org_id: str = ORG_ID):
     require_org(org_id)
     sent = body.model_fields_set
     upd = {k: getattr(body, k) for k in ("name", "legal_name", "ein") if k in sent}
@@ -83,7 +83,7 @@ async def update_company(company_id: str, body: CompanyUpdateIn, org_id: str = O
 
 # ── stores (registry + current company assignment) ────────────────────────────────────────────
 @router.get("/stores")
-async def list_stores(org_id: str = ORG_ID):
+def list_stores(org_id: str = ORG_ID):
     """Assignable stores + each store's current company assignment. Sources, canonicalized through
     coa.store_resolver so one physical store never appears twice:
       1. store_mapping (canonical registry, with market),
@@ -132,7 +132,7 @@ class AssignStoresIn(LaxModel):
 
 
 @router.post("/companies/assign")
-async def assign_stores(body: AssignStoresIn, org_id: str = ORG_ID):
+def assign_stores(body: AssignStoresIn, org_id: str = ORG_ID):
     """Body: {assignments:[{store_address, company_id}]}. Upserts the store→company map."""
     require_org(org_id)
     rows = body.assignments or []
@@ -153,7 +153,7 @@ async def assign_stores(body: AssignStoresIn, org_id: str = ORG_ID):
 
 # ── manual journal entries ──────────────────────────────────────────────────────────────────
 @router.get("/journal/{period}")
-async def get_journal(period: str, org_id: str = ORG_ID):
+def get_journal(period: str, org_id: str = ORG_ID):
     require_org(org_id)
     rows = (sb().schema("commcalc").table("journal_entries").select("*")
             .eq("org_id", org_id).eq("period", period).order("statement").execute().data) or []
@@ -166,7 +166,7 @@ class PutJournalIn(LaxModel):
 
 
 @router.put("/journal/{period}")
-async def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
+def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
     """Replace all journal entries for the period. Body: {rows:[{statement, account_type,
     account_line, amount, company_id?, store_address?, entry_date?, memo?}]}."""
     require_org(org_id)
@@ -203,7 +203,7 @@ async def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
 
 # ── editable inventory value (real-time b2bsoft Inventory Aging → Balance Sheet) ───────────────
 @router.get("/inventory-values")
-async def list_inventory_values(org_id: str = ORG_ID):
+def list_inventory_values(org_id: str = ORG_ID):
     """Per-store inventory value for the Balance Sheet: the swept value (b2bsoft Inventory
     Aging), an optional manual override, and the effective value used on the BS
     (manual_value if set, else swept_value). Lists every canonical store so any can be edited.
@@ -258,7 +258,7 @@ class PutInventoryValuesIn(LaxModel):
 
 
 @router.put("/inventory-values")
-async def put_inventory_values(body: PutInventoryValuesIn, org_id: str = ORG_ID):
+def put_inventory_values(body: PutInventoryValuesIn, org_id: str = ORG_ID):
     """Set/clear the manual inventory override per store. Body: {rows:[{store, manual_value,
     note?}]}. manual_value null/'' clears the override (the swept value then drives the BS).
     Never touches swept_value. Re-compute statements to apply to a stored Balance Sheet."""
@@ -287,7 +287,7 @@ async def put_inventory_values(body: PutInventoryValuesIn, org_id: str = ORG_ID)
 
 # ── per-org accounting config (booking rates — mig 611) ────────────────────────────────────────
 @router.get("/config")
-async def get_config(org_id: str = ORG_ID):
+def get_config(org_id: str = ORG_ID):
     """This tenant's finance/accounting config (currently the accessory COGS %). Returns the resolved
     values with the historical Boost defaults filled in, so a tenant with no saved row reads the same
     0.20 the code used to hard-code. `is_default` tells the UI whether a row has been explicitly saved."""
@@ -356,7 +356,7 @@ class AccountPutConfigIn(LaxModel):
 
 
 @router.put("/config")
-async def put_config(body: AccountPutConfigIn, org_id: str = ORG_ID):
+def put_config(body: AccountPutConfigIn, org_id: str = ORG_ID):
     """Set this tenant's finance/accounting config. Body may carry either knob, independently:
       accessory_cogs_pct    0..1 — accessory COGS as a fraction of gross accessory sales.
       service_fee_products  [str] — sale-line products that are FEE INCOME to the store (mig 613),
@@ -539,7 +539,7 @@ async def get_bs(period: str, scope: str = "consolidated", stores: str = "", mar
 
 
 @router.get("/overview/{period}")
-async def overview(period: str, org_id: str = ORG_ID):
+def overview(period: str, org_id: str = ORG_ID):
     """Headline numbers + the list of computed scopes for the dashboard + filter dropdowns."""
     require_org(org_id)
     rows = (sb().schema("commcalc").table("account_statements")
@@ -582,7 +582,7 @@ async def get_recon(period: str, tolerance: float = 1.0, date_col: str = "mi_act
 
 
 @router.post("/recon/{period}/sync-flags")
-async def sync_recon_flags(period: str, tolerance: float = 1.0, date_col: str = "mi_activation_date",
+def sync_recon_flags(period: str, tolerance: float = 1.0, date_col: str = "mi_activation_date",
                            org_id: str = ORG_ID):
     require_org(org_id)
     from app.modules.account import recon
@@ -590,7 +590,7 @@ async def sync_recon_flags(period: str, tolerance: float = 1.0, date_col: str = 
 
 
 @router.get("/credit-memos/{period}")
-async def get_credit_memos(period: str, org_id: str = ORG_ID):
+def get_credit_memos(period: str, org_id: str = ORG_ID):
     require_org(org_id)
     rows = (sb().schema("commcalc").table("vip_credit_memos").select("*")
             .eq("org_id", org_id).eq("period", period).order("created_on").execute().data) or []
@@ -598,7 +598,7 @@ async def get_credit_memos(period: str, org_id: str = ORG_ID):
 
 
 @router.post("/credit-memos/sweep")
-async def sweep_credit_memos(org_id: str = ORG_ID):
+def sweep_credit_memos(org_id: str = ORG_ID):
     """On-demand scrape of VIP credit memos (Weekly Incentive Credit) using the VIP sweep
     credentials already stored in commcalc.vip_sweep_config (backend-only). Auto-scheduling
     alongside the invoice sweep is a documented fast-follow."""
@@ -619,7 +619,7 @@ async def sweep_credit_memos(org_id: str = ORG_ID):
 
 # ── residual per subscriber (MI+ATU) per store, month over month + commission overlay ─────────
 @router.get("/residual-per-sub")
-async def residual_per_sub(months: int = 6, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def residual_per_sub(months: int = 6, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Residual (MI+ATU) per SUBSCRIBER per store, month over month, with each month's commission
     (rep_commissions.total_payout) alongside it — built to show the effect of lower commissions on the
     residual payout over time. Store/market filtering is client-side, so every store's monthly series
@@ -643,6 +643,6 @@ async def residual_per_sub(months: int = 6, authorization: str = Header(default=
 
 # ── health ──────────────────────────────────────────────────────────────────────────────────
 @router.get("/health")
-async def health():
+def health():
     return {"ok": True, "engine_configured": bool(settings.ANTHROPIC_API_KEY),
             "model": settings.ACCOUNT_ENGINE_MODEL}

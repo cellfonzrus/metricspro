@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
@@ -51,7 +52,7 @@ export default function BorrowedMoneyPage() {
     try {
       const qs = `store=${encodeURIComponent(fStore)}&market=${encodeURIComponent(fMarket)}`
       const [opt, list, sum] = await Promise.all([
-        api('/api/v1/asset/filter-options').catch(() => ({ stores: [], markets: [] })),
+        apiCached('/api/v1/asset/filter-options', LOOKUP).catch(() => ({ stores: [], markets: [] })),
         api(`/api/v1/asset/borrowings?${qs}&status=${fStatus}`),
         api(`/api/v1/asset/borrowings/summary?${qs}`),
       ])

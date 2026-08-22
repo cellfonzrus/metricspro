@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 
 type Payer = {
   id: string; name: string; kind: 'accounting' | 'dm' | 'third_party'
@@ -46,7 +47,7 @@ export default function PayrollPayersPage() {
       setPayers(d?.payers || []); setStoreMap(d?.stores || {})
     } catch (e: any) { setErr(e?.message || 'Could not load') }
     try {
-      const o = await api('/api/v1/core/filter-options')
+      const o = await apiCached('/api/v1/core/filter-options', LOOKUP)
       setStores(((o?.stores || []) as any[]).map(s => (typeof s === 'string' ? s : s.id || s.label)).filter(Boolean).sort())
     } catch { /* the store list is a convenience; the page still works without it */ }
   }, [])

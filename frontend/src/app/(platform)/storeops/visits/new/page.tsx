@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, apiUpload, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import EntityPicker from '@/components/EntityPicker'
 import VisitCoachingPanel from '@/components/VisitCoachingPanel'
@@ -53,7 +54,7 @@ export default function NewVisitPage() {
       api('/api/v1/storevisit/checklist-items').catch(() => []),
       // full company roster (not just the visiting DM's span) — a floater can be working a store
       // outside the DM's own scope; same all_company pattern the schedule picker uses.
-      api('/api/v1/storeops/employees?all_company=true').catch(() => []),
+      apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).catch(() => []),
     ]).then(([s, it, e]) => { setStores(s || []); setItems(it || []); setEmps(e || []) }).catch(console.error)
   }, [])
 

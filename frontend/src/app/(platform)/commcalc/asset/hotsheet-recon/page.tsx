@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { NoLedgerData } from '../_shared/NoLedgerData'
@@ -50,7 +51,7 @@ export default function HotsheetReconPage() {
   const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false)
 
   useEffect(() => {
-    api(`/api/v1/asset/filter-options?org_id=${ORG_ID}`)
+    apiCached(`/api/v1/asset/filter-options?org_id=${ORG_ID}`, LOOKUP)
       .then((d: any) => { setMarkets(d.markets || []); setStores(d.stores || []) })
       .catch(console.error)
       .finally(() => setFilterOptionsLoaded(true))

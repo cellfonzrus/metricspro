@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, localToday, parseLocalDate, addDays, mondayOf } from '@/lib/client'
+import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { buildScheduleExport } from '../lib/scheduleExport'
@@ -111,7 +112,7 @@ export default function SchedulePage() {
   // default Monday tenants — e.g. Boost — since dow===0 leaves weekStart unchanged).
   useEffect(() => {
     let cancelled = false
-    api('/api/v1/core/tenant-settings').then((r: any) => {
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
       const dow = r?.settings?.work_week_start_dow
       if (!cancelled && typeof dow === 'number' && dow !== 0) {
         setWwDow(dow)
@@ -125,13 +126,13 @@ export default function SchedulePage() {
     setLoading(true)
     Promise.all([
       api(`/api/v1/storeops/shifts?week_start=${weekStart}&week_end=${weekEnd}`),
-      api('/api/v1/storeops/employees'),
+      apiCached('/api/v1/storeops/employees', LOOKUP),
       // include_inactive=true: this page's OWN "view filter" dropdown deliberately still lists closed
       // stores (see the comment lower in this file) so historical schedule data stays viewable — the
       // "add shift" picker already independently filters to is_active!==false client-side.
-      api('/api/v1/storeops/stores?include_inactive=true'),
+      apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP),
       api('/api/v1/storeops/time-off').catch(() => []),
-      api('/api/v1/storeops/employees?all_company=true').catch(() => []),
+      apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).catch(() => []),
       // Agent stores (Boost sub-dealers, migration 904) are reporting-only — exclude them from the
       // schedule's store pickers/grid entirely (owner directive 2026-08-20). They still appear in
       // ePay/financial reporting; they are simply never schedulable.

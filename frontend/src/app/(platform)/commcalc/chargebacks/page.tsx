@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -31,7 +32,7 @@ export default function ChargebacksPage() {
   const [q, setQ] = useState('')
   const [emps, setEmps] = useState<any[]>([])   // roster: gives the rep picker its email sublabels
 
-  useEffect(() => { api('/api/v1/storeops/employees?all_company=true').then((r: any) => setEmps(Array.isArray(r) ? r : [])).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then((r: any) => setEmps(Array.isArray(r) ? r : [])).catch(() => {}) }, [])
 
   const load = useCallback(() => {
     setLoading(true)

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, apiDownload, apiFetchBase64, ORG_ID, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker from '@/components/EntityPicker'
@@ -244,14 +245,21 @@ export default function CommissionPlansPage() {
 
   async function load() {
     try {
-      const r = await api('/api/v1/commcalc/commission-plans')
-      setPlans(r.plans || []); setReady(r.ready !== false)
-      if (r.ready === false) setMsg(r.note || 'Run migration 059 to enable.')
-      setCarriers(await api('/api/v1/commcalc/carriers').catch(() => []))
+      // These four reads are independent — one round trip instead of a 4-deep waterfall. The three
+      // reference lists (carriers, roster, stores) are cache-served (LOOKUP); plans is live data.
       // include_inactive: the role-count preview must agree with the engine, which matches INACTIVE reps
       // too (a mid-month-terminated rep's sales still pay under their role). We show active/inactive split.
-      setEmployees(await api('/api/v1/storeops/employees?all_company=true&include_inactive=true').catch(() => []))
-      setStores(await api('/api/v1/storeops/stores').catch(() => []))
+      const [r, carr, emps, sts] = await Promise.all([
+        api('/api/v1/commcalc/commission-plans'),
+        apiCached('/api/v1/commcalc/carriers', LOOKUP).catch(() => []),
+        apiCached('/api/v1/storeops/employees?all_company=true&include_inactive=true', LOOKUP).catch(() => []),
+        apiCached('/api/v1/storeops/stores', LOOKUP).catch(() => []),
+      ])
+      setPlans(r.plans || []); setReady(r.ready !== false)
+      if (r.ready === false) setMsg(r.note || 'Run migration 059 to enable.')
+      setCarriers(carr)
+      setEmployees(emps)
+      setStores(sts)
       // (the value options load in their own effect below — they depend on the previewed period)
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }

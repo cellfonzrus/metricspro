@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
 import EntityPicker from '@/components/EntityPicker'
@@ -97,7 +98,7 @@ export default function EmailImportsPage() {
     })
     api('/api/v1/commcalc/email-sweep/processed').then((p: any) => setProcessed(p || [])).catch(() => {})
     api('/api/v1/commcalc/data-sources').then((r: any) => { setSources(r.sources || []); setSrcReady(r.ready !== false) }).catch(() => {})
-    api('/api/v1/commcalc/carriers').then((r: any) => setCarriers(r || [])).catch(() => {})
+    apiCached('/api/v1/commcalc/carriers', LOOKUP).then((r: any) => setCarriers(r || [])).catch(() => {})
     api('/api/v1/commcalc/distributors').then((r: any) => setDistributors(Array.isArray(r) ? r : (r?.distributors || []))).catch(() => {})
     api('/api/v1/commcalc/custom-import-types').then((r: any) => setCustomTypes(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])

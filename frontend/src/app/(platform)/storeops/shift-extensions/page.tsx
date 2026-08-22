@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { api, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
 // Shift-extension request → District Manager approval workflow (mig 086). A manager files a request
@@ -33,8 +34,8 @@ export default function ShiftExtensionsPage() {
   }, [])
   useEffect(() => {
     load()
-    api('/api/v1/storeops/employees').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
-    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : (r?.stores || []))).catch(() => {})
+    apiCached('/api/v1/storeops/employees', LOOKUP).then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
+    apiCached('/api/v1/storeops/stores', LOOKUP).then((r: any) => setStores(Array.isArray(r) ? r : (r?.stores || []))).catch(() => {})
   }, [load])
 
   async function submit() {

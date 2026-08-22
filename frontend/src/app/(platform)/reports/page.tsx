@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { apiCached, CONFIG } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { isSuperAdmin } from '@/lib/rbac'
 import { REPORT_CATEGORIES, clearedFor, PortalCfg } from '@/lib/reports'
@@ -20,7 +21,7 @@ export default function ReportCenterPage() {
     api('/api/v1/core/portal-reports').then((r: any) => setCfg(r?.config || {})).catch(() => {})
   }, [])
   useEffect(() => { loadCfg() }, [loadCfg])
-  useEffect(() => { if (admin) api('/api/v1/core/roles').then((r: any) => setRoles(r?.roles || [])).catch(() => {}) }, [admin])
+  useEffect(() => { if (admin) apiCached('/api/v1/core/roles', CONFIG).then((r: any) => setRoles(r?.roles || [])).catch(() => {}) }, [admin])
 
   async function save(href: string, label: string, category: string, patch: Partial<{ enabled: boolean; roles: string[] }>) {
     const cur = cfg[href] || { enabled: false, roles: [] }

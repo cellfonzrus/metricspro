@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { CheckboxDropdown } from '../_lib/CheckboxDropdown'
 import { cascadeStores, marketsFromStores, type StoreOpt } from '../_lib/market-store-cascade'
@@ -31,7 +32,7 @@ export default function EnvelopePayoutPage() {
   const [plan, setPlan] = useState<Plan>(null)
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
   // OWNER DIRECTIVE 2026-08-04 (market->store cascade + checkbox picker): this is a single-STORE
   // ACTION page (payout-due/envelope-plan only ever operate on ONE store_code at a time), so the store
   // control stays a single-select EntityPicker rather than the checkbox multi-select used on report

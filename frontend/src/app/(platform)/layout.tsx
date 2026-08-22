@@ -4,7 +4,8 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
-import { api, setActiveOrg } from '@/lib/client'
+import { setActiveOrg } from '@/lib/client'
+import { apiCached, CONFIG } from '@/lib/cache'
 import { NAV, canSeeItem, canAccessPath, carrierOK, safeHomeFor, applyNavLayout, type NavItem, type NavLayout } from '@/lib/rbac'
 import HelpPanel from '@/components/HelpPanel'
 import AdminAttention from '@/components/AdminAttention'
@@ -170,7 +171,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
   // navCfg empty, so built-in labels show and every item stays visible (today's behavior). Never blocks.
   useEffect(() => {
     let alive = true
-    api('/api/v1/commcalc/nav-config').then(c => { if (alive && c) setNavCfg(c) }).catch(() => {})
+    apiCached('/api/v1/commcalc/nav-config', CONFIG).then(c => { if (alive && c) setNavCfg(c) }).catch(() => {})
     return () => { alive = false }
   }, [])
   const caps = navCfg.capabilities || {}
@@ -180,12 +181,20 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
 
   // When login isn't enforced (open), show the full nav (today's behavior); otherwise gate it. Then
   // apply tenant capability gating (e.g. hide Asset Lending when no consignment distributor).
-  const filteredGroups = (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
-    .map(g => ({ ...g, items: g.items.filter(capOK).filter(it => carrierOK(it.href, carriers, caps)) }))
-    .filter(g => g.items.length > 0)
+  // Memoized: this walks all 219 NAV items through RBAC/capability/carrier predicates, and a fresh
+  // reference every render (e.g. on every search keystroke) would also defeat the `index` useMemo below.
+  const filteredGroups = useMemo(
+    () => (open ? NAV : NAV.map(g => ({ ...g, items: g.items.filter(it => canSeeItem(permissions, it)) })))
+      .map(g => ({ ...g, items: g.items.filter(capOK).filter(it => carrierOK(it.href, carriers, caps)) }))
+      .filter(g => g.items.length > 0),
+    // `caps`/`capOK` derive from `navCfg` (a new `navCfg.capabilities || {}` each render would defeat
+    // this memo), so key on the stable `navCfg` state object instead.
+    [open, permissions, carriers, navCfg])
   // Per-org admin layout override (move items between groups / hide) — applied AFTER all access gating,
   // so anything an admin hasn't touched keeps its built-in placement and a newly-enabled item still shows.
-  const groups = applyNavLayout(filteredGroups, navCfg.layout)
+  const groups = useMemo(
+    () => applyNavLayout(filteredGroups, navCfg.layout),
+    [filteredGroups, navCfg.layout])
 
   // Accordion: keep every module group collapsed and open only the one holding the current page
   // (so the user is never lost) — clicking another header opens that one and closes the rest.

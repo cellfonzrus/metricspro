@@ -137,7 +137,7 @@ def _monthly_equiv(amount: float, cycle: str) -> float:
 
 # ── plans ─────────────────────────────────────────────────────────────────────────────────────
 @router.get("/plans")
-async def list_plans(authorization: str = Header(default="")):
+def list_plans(authorization: str = Header(default="")):
     """Every tenant's plan (joined to the tenant name) + that tenant's LIVE quantity drivers."""
     _require_super_admin(authorization)
     client = sb()
@@ -162,7 +162,7 @@ async def list_plans(authorization: str = Header(default="")):
 
 
 @router.get("/plan")
-async def get_plan(org_id: str, authorization: str = Header(default="")):
+def get_plan(org_id: str, authorization: str = Header(default="")):
     """One tenant's plan + its live drivers."""
     _require_super_admin(authorization)
     try:
@@ -173,7 +173,7 @@ async def get_plan(org_id: str, authorization: str = Header(default="")):
 
 
 @router.post("/plan")
-async def upsert_plan(body: UpsertPlanIn, authorization: str = Header(default="")):
+def upsert_plan(body: UpsertPlanIn, authorization: str = Header(default="")):
     """Create/update a tenant's plan (keyed by org_id). Body: {org_id, basis, unit_price, cycle,
     currency?, modules?, is_active?, notes?}."""
     _require_super_admin(authorization)
@@ -212,7 +212,7 @@ async def upsert_plan(body: UpsertPlanIn, authorization: str = Header(default=""
 
 
 @router.delete("/plan")
-async def delete_plan(org_id: str, authorization: str = Header(default="")):
+def delete_plan(org_id: str, authorization: str = Header(default="")):
     """Remove a tenant's plan."""
     _require_super_admin(authorization)
     try:
@@ -224,7 +224,7 @@ async def delete_plan(org_id: str, authorization: str = Header(default="")):
 
 # ── invoices ──────────────────────────────────────────────────────────────────────────────────
 @router.post("/invoices/generate")
-async def generate_invoice(body: GenerateInvoiceIn, authorization: str = Header(default="")):
+def generate_invoice(body: GenerateInvoiceIn, authorization: str = Header(default="")):
     """Generate a DRAFT invoice for a tenant + period. Quantity is computed from the plan's basis
     against the LIVE drivers; amount = quantity × unit_price. The cycle's unit_price is taken as-is
     (monthly plan → monthly price, annual plan → annual price); v1 does NOT auto-prorate the period.
@@ -270,7 +270,7 @@ async def generate_invoice(body: GenerateInvoiceIn, authorization: str = Header(
 
 
 @router.get("/invoices")
-async def list_invoices(org_id: str = "", authorization: str = Header(default="")):
+def list_invoices(org_id: str = "", authorization: str = Header(default="")):
     """Invoices for one tenant (org_id) — or, if org_id is omitted, all tenants' invoices."""
     _require_super_admin(authorization)
     try:
@@ -284,7 +284,7 @@ async def list_invoices(org_id: str = "", authorization: str = Header(default=""
 
 
 @router.patch("/invoices/{invoice_id}")
-async def update_invoice(invoice_id: str, body: UpdateInvoiceIn, authorization: str = Header(default="")):
+def update_invoice(invoice_id: str, body: UpdateInvoiceIn, authorization: str = Header(default="")):
     """Update an invoice's lifecycle: status (sent|paid|void), payment_ref, issued_at, due_date, notes.
     Setting status=sent stamps issued_at if not already set."""
     _require_super_admin(authorization)
@@ -311,7 +311,7 @@ async def update_invoice(invoice_id: str, body: UpdateInvoiceIn, authorization: 
 
 
 @router.post("/invoices/{invoice_id}/pay")
-async def mark_paid(invoice_id: str, body: MarkPaidIn = None, authorization: str = Header(default="")):
+def mark_paid(invoice_id: str, body: MarkPaidIn = None, authorization: str = Header(default="")):
     """Mark an invoice PAID and store a payment reference.
 
     # TODO payment gateway: this is the SEAM for a real payment processor. A later phase will
@@ -334,7 +334,7 @@ async def mark_paid(invoice_id: str, body: MarkPaidIn = None, authorization: str
 
 # ── super-admin overview (MRR / ARR) ────────────────────────────────────────────────────────────
 @router.get("/summary")
-async def summary(authorization: str = Header(default="")):
+def summary(authorization: str = Header(default="")):
     """Super-admin overview across ALL tenants: per tenant {name, plan, quantity, monthly_amount,
     latest_invoice}, plus MRR (sum of monthly-equivalent recurring) + ARR (MRR × 12)."""
     _require_super_admin(authorization)
@@ -397,14 +397,14 @@ def _pc_out(row: dict) -> dict:
 
 
 @router.get("/platform-providers")
-async def platform_providers(authorization: str = Header(default="")):
+def platform_providers(authorization: str = Header(default="")):
     """The provider registry for the connector dropdown (which have a live cost API vs manual)."""
     _require_super_admin(authorization)
     return {"providers": _pc.PROVIDERS}
 
 
 @router.get("/platform-connectors")
-async def list_platform_connectors(authorization: str = Header(default="")):
+def list_platform_connectors(authorization: str = Header(default="")):
     _require_super_admin(authorization)
     try:
         rows = _pcstore().select("*").order("sort_order").order("provider").execute().data or []
@@ -414,7 +414,7 @@ async def list_platform_connectors(authorization: str = Header(default="")):
 
 
 @router.post("/platform-connectors")
-async def upsert_platform_connector(body: UpsertPlatformConnectorIn, authorization: str = Header(default="")):
+def upsert_platform_connector(body: UpsertPlatformConnectorIn, authorization: str = Header(default="")):
     """Add or update a platform connector. The credential is only overwritten when a NEW (non-masked)
     value is supplied — re-saving with the masked placeholder keeps the stored secret."""
     _require_super_admin(authorization)
@@ -448,7 +448,7 @@ async def upsert_platform_connector(body: UpsertPlatformConnectorIn, authorizati
 
 
 @router.delete("/platform-connectors/{cid}")
-async def delete_platform_connector(cid: str, authorization: str = Header(default="")):
+def delete_platform_connector(cid: str, authorization: str = Header(default="")):
     _require_super_admin(authorization)
     try:
         _pcstore().delete().eq("id", cid).execute()
@@ -466,7 +466,7 @@ def _active_tenant_count(client) -> int:
 
 
 @router.get("/platform-costs")
-async def platform_costs_summary(authorization: str = Header(default="")):
+def platform_costs_summary(authorization: str = Header(default="")):
     """Total monthly cost to run MetricsPro (sum of the last synced connector costs) + the derived
     break-even COST PER TENANT (total ÷ active tenants). Pair it with /summary's MRR to see margin."""
     _require_super_admin(authorization)

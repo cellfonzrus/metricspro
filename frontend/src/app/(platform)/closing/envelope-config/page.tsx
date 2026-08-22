@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
 // Envelope payout configuration (mig 507, EEP): what management allows to be taken from the daily
@@ -39,7 +40,7 @@ export default function EnvelopeConfigPage() {
   const [busy, setBusy] = useState(false)
   const [newStore, setNewStore] = useState<string | null>(null)
 
-  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
   const storeOptions: EntityOption[] = stores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code }))
   const storeLabel = (code: string) => storeOptions.find(o => o.id === code)?.label || code
 

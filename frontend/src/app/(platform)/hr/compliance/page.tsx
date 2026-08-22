@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, supabase, activeOrgHeader } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 
@@ -81,7 +82,7 @@ export default function CompliancePage() {
   const [employeeOptions, setEmployeeOptions] = useState<EntityOption[]>([])
   const [employeeIds, setEmployeeIds] = useState<string[]>([])
   useEffect(() => {
-    api('/api/v1/storeops/employees?all_company=true&include_inactive=true')
+    apiCached('/api/v1/storeops/employees?all_company=true&include_inactive=true', LOOKUP)
       .then((rows: any[]) => {
         const opts = (rows || [])
           .filter(e => (e?.employee_id || '').toString().trim())

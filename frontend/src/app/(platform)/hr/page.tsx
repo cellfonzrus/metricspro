@@ -5,6 +5,7 @@
 // StoreOps Admin. Gated by the `hr` module permission (default OFF for managers).
 import { useState, useEffect, useCallback } from 'react'
 import { api, ORG_ID, fmt } from '@/lib/client'
+import { apiCached, LOOKUP, CONFIG, invalidateApiCache } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -45,7 +46,7 @@ export default function HRPage() {
     setLoading(true); setErr('')
     try {
       if (tab === 'comp') setComp(await api(`/api/v1/hr/compensation?org_id=${ORG_ID}&period=${encodeURIComponent(period)}`))
-      else if (tab === 'employees') setEmps(await api('/api/v1/storeops/employees') || [])
+      else if (tab === 'employees') setEmps(await apiCached('/api/v1/storeops/employees', LOOKUP) || [])
       else if (tab === 'payroll') setPayroll(await api(`/api/v1/storeops/payroll?month=${periodToMonth(period)}`) || [])
       else if (tab === 'timeoff') setTimeoff(await api('/api/v1/storeops/time-off') || [])
     } catch (e: any) { setErr(e?.message || 'Failed to load') }
@@ -53,7 +54,7 @@ export default function HRPage() {
   }, [tab, period])
   useEffect(() => { load() }, [load])
   useEffect(() => {
-    api('/api/v1/core/tenant-settings').then((r: any) => setPpType(r?.settings?.pay_period_type || null)).catch(() => {})
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => setPpType(r?.settings?.pay_period_type || null)).catch(() => {})
   }, [])
 
   // pay_basis/pay_amount/termination_date only exist once migrations 416/417 have run — GET
@@ -83,6 +84,7 @@ export default function HRPage() {
       // already wins (harmless either way), but only 'on' has any business sending a minutes override.
       const body = { enabled: st.mode === 'default' ? null : st.mode === 'on', minutes: st.mode === 'on' && st.minutes.trim() !== '' ? Number(st.minutes) : null }
       await api(`/api/v1/storeops/employees/${e.id}/lunch-config`, { method: 'PUT', body: JSON.stringify(body) })
+      invalidateApiCache('/api/v1/storeops/employees')   // cached roster read must self-heal after an edit
       setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '✅' } }))
     } catch (err: any) {
       setLunchEdit(s => ({ ...s, [e.id]: { ...st, busy: false, msg: '❌ ' + (err?.message || err) } }))
@@ -107,6 +109,7 @@ export default function HRPage() {
     try {
       const body = { enabled: st.mode === 'default' ? null : st.mode === 'on', consent: st.consent === '' ? null : st.consent }
       const r = await api(`/api/v1/storeops/employees/${e.id}/face-config`, { method: 'PUT', body: JSON.stringify(body) })
+      invalidateApiCache('/api/v1/storeops/employees')   // cached roster read must self-heal after an edit
       // Re-seat the row from the SAVED values so the dirty check clears (the consent timestamp/source
       // are server-generated — echoing the request back would leave the row looking permanently dirty).
       setEmps(es => es.map(x => x.id === e.id ? { ...x, face_recognition_enabled: r.face_recognition_enabled, face_consent_status: r.face_consent_status, face_consent_at: r.face_consent_at, face_consent_source: r.face_consent_source } : x))
@@ -129,6 +132,7 @@ export default function HRPage() {
     }
     try {
       await api(`/api/v1/storeops/employees/${e.id}`, { method: 'PATCH', body: JSON.stringify(body) })
+      invalidateApiCache('/api/v1/storeops/employees')   // cached roster read must self-heal after an edit
       setEmps(es => es.map(x => x.id === e.id ? { ...x, _dirty: false } : x))
       setMsg(`Saved pay for ${e.name}`)
     } catch (err: any) { setErr('Save failed: ' + (err?.message || err)) } finally { setRowBusy('') }
@@ -150,6 +154,7 @@ export default function HRPage() {
         .filter(r => r.pay_rate !== '' && (r.employee_id || r.name))
       if (!rows.length) { setMsg('No valid rows (need pay_rate + employee_id/name).'); setUpBusy(false); return }
       const res = await api('/api/v1/storeops/employees/bulk-payscale', { method: 'POST', body: JSON.stringify({ rows }) })
+      invalidateApiCache('/api/v1/storeops/employees')   // cached roster read must self-heal before the reload
       setMsg(`Pay rates updated: ${res.updated}${(res.errors || []).length ? ` · ${res.errors.length} skipped` : ''}.`)
       await load()
     } catch (err: any) { setErr('Upload failed: ' + (err?.message || err)) } finally { setUpBusy(false) }

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
 // Rep-facing in-app closing form — one row per rep per day. Posts to /closing/row (source='manual').
@@ -199,7 +200,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     } catch { /* OCR best-effort */ } finally { setOcrBusy(false) }
   }
 
-  useEffect(() => { api('/api/v1/closing/stores').then(s => setStores(s || [])).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then(s => setStores(s || [])).catch(() => {}) }, [])
   // Configured tenders (mig 111): render the tenant's own tender fields; null → the built-in 7 (static).
   useEffect(() => { api('/api/v1/closing/tender-config').then((d: any) => setTdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setTdefs(null)) }, [])
   // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
@@ -208,7 +209,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Employee roster for the "Employee" picker (RULE THREE §3b — pick, don't type): company-wide,
   // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
   // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).
-  useEffect(() => { api('/api/v1/storeops/employees?all_company=true').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
   // Expense categories (mig 506, EEP) — lazy-seeded 5 presets on first call.
   useEffect(() => { api('/api/v1/closing/expense-categories').then((d: any) => setCats(d?.categories || [])).catch(() => setCats([])) }, [])
   // Envelope config (mig 507/510) — org default merged with this store's override, re-fetched whenever

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, parseLocalDate } from '@/lib/client'
+import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import ReportShell from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
 import PtoAccrualPanel from './PtoAccrualPanel'
@@ -53,7 +54,7 @@ export default function PayrollPage() {
 
   useEffect(() => {
     let cancelled = false
-    api('/api/v1/core/tenant-settings').then((r: any) => {
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
       if (cancelled) return
       const cur = currentPeriodFromSettingsResponse(r)
       if (cur) {
@@ -100,8 +101,8 @@ export default function PayrollPage() {
     // include_inactive=true: this report is a HISTORICAL surface (RULE FIVE filter bar) — a store
     // closed today may still own past rows in this range, and the market lookup below must still
     // resolve it. GET /stores now defaults to active-only (2026-08-06 disabled-T-store fix).
-    api('/api/v1/storeops/stores?include_inactive=true').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
-    api('/api/v1/storeops/employees').then((r: any) => {
+    apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP).then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    apiCached('/api/v1/storeops/employees', LOOKUP).then((r: any) => {
       const m: Record<string, string> = {}
       for (const e of (Array.isArray(r) ? r : [])) if (e.employee_id) m[e.employee_id] = e.email || ''
       setEmpEmail(m)
@@ -216,7 +217,7 @@ export default function PayrollPage() {
     setRange(next.start, next.end)
   }
   function useThisPayPeriod() {
-    api('/api/v1/core/tenant-settings').then((r: any) => {
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
       const cur = currentPeriodFromSettingsResponse(r)
       if (cur) { setPpSettings(cur.settings); setRange(cur.period.start, cur.period.end) }
     }).catch(() => {})
