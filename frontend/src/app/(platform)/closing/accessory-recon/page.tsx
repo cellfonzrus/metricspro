@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
@@ -18,7 +19,7 @@ export default function AccessoryReconPage() {
   // dimension at all before — joined here from the org-scoped store roster, same as the other recon
   // pages in this module.
   const [pStores, setPStores] = useState<any[]>([])
-  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
 
   function load() {
     setLoading(true)

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -65,8 +66,8 @@ export default function AttendanceExceptionsPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    api('/api/v1/storeops/employees?include_inactive=true').then((e: any) => setEmployees(e || [])).catch(() => {})
-    api('/api/v1/storeops/stores').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    apiCached('/api/v1/storeops/employees?include_inactive=true', LOOKUP).then((e: any) => setEmployees(e || [])).catch(() => {})
+    apiCached('/api/v1/storeops/stores', LOOKUP).then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
     api('/api/v1/storeops/timeclock/attendance-config').then((r: any) => { setCfg(r?.config || null); setAvailable(r?.available !== false) }).catch(() => {})
   }, [])
 

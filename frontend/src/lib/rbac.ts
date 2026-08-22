@@ -340,6 +340,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/epay-fee-recon', label: 'ePay Fee Recon', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/imei-recon', label: 'IMEI Reconciliation', icon: '📲', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/carrier-recon', label: 'Carrier Reconciliation', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
     // Agency (Master/Sub-Agent) console — config + billing, admin/owner scope only (NEEDS CORE for
     // agency-phase1). Intentionally NOT in REPORT_DIRECTORY: it is a config+invoicing surface, not a report.
     { href: '/commcalc/agency', label: 'Agency', icon: '🏢', module: 'commissions', scopes: ['all'] },
@@ -907,6 +908,51 @@ export function carrierOK(href: string, tenantCarriers: CarrierRef[] | undefined
   if (!tenantCarriers || tenantCarriers.length === 0) return true
   const have = tenantCarriers.map(c => (c.code || c.name || '').toLowerCase()).filter(Boolean)
   return need.some(k => have.some(t => t.includes(k) || k.includes(t)))
+}
+
+// ── Active-carrier lens (carrier-scoping compliance rewrite) ──────────────────────────────────────
+// The house org legitimately holds BOTH Boost and Total (Total Wireless is a carrier IN the house org),
+// so carrierOK — which only hides a carrier a tenant LACKS — cannot keep the two apart on screen. The
+// fix is an ACTIVE-CARRIER lens: one carrier is "in view" at a time, and every carrier-scoped surface
+// shows only that carrier's clause/figure/vendor. A single-carrier tenant's active carrier is fixed to
+// its only carrier, so these helpers reduce to the old behaviour for them.
+
+// Normalized lowercase carrier CODE for a CarrierRef. Prefers an explicit code, else derives a
+// canonical token from the name so 'Boost Mobile' → 'boost', 'Total Wireless' → 'total'. This is the
+// value carried in activeCarrier and matched against NAV_CARRIERS.
+export function carrierCode(c: CarrierRef | undefined): string {
+  if (!c) return ''
+  const raw = (c.code || c.name || '').toLowerCase().trim()
+  if (!raw) return ''
+  if (/boost/.test(raw)) return 'boost'
+  if (/total|vidapay/.test(raw)) return 'total'
+  if (/cricket/.test(raw)) return 'cricket'
+  return raw.replace(/\s+/g, '-')
+}
+
+// The DEFAULT active carrier for a tenant: the is_default carrier's code, else the sole carrier's
+// code, else 'boost'. Pure — the persisted per-(user,org) choice overrides this at the call site.
+export function defaultActiveCarrier(carriers: CarrierRef[] | undefined): string {
+  const cs = carriers || []
+  const def = cs.find(c => c.is_default)
+  if (def) { const k = carrierCode(def); if (k) return k }
+  if (cs.length === 1) { const k = carrierCode(cs[0]); if (k) return k }
+  return 'boost'
+}
+
+// Active-aware nav carrier gate — the sidebar uses this INSTEAD of carrierOK. Admin per-item override
+// still wins (caps['carrier:<href>']); else a carrier-scoped item shows only when the ACTIVE carrier
+// matches its required carrier(s). Unlisted hrefs are generic (all carriers). For a single-carrier
+// tenant (active = its only carrier) this returns exactly what carrierOK returned.
+export function carrierOKActive(href: string, activeCarrier: string | undefined, caps: Record<string, boolean | null>): boolean {
+  const ov = caps['carrier:' + href]
+  if (ov === true) return true
+  if (ov === false) return false
+  const need = NAV_CARRIERS[href]
+  if (!need || need.length === 0) return true
+  const a = (activeCarrier || '').toLowerCase().trim()
+  if (!a) return true
+  return need.some(k => a.includes(k) || k.includes(a))
 }
 
 // Pages restricted to management (company-wide leadership by default; DMs excluded), but still

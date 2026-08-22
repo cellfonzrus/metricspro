@@ -17,6 +17,7 @@
 // reportKey+filters server re-query — the export-filter-fix package's whole point).
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -120,7 +121,7 @@ export default function InvoiceDuePage() {
   const [syncMsg, setSyncMsg] = useState('')
 
   useEffect(() => {
-    api(`/api/v1/asset/invoice-due/filter-options?1=1${orgParam()}`)
+    apiCached(`/api/v1/asset/invoice-due/filter-options?1=1${orgParam()}`, LOOKUP)
       .then((d: any) => {
         if (d.available === false) { setErrMsg(d.note || 'Not available yet.'); return }
         setStatusOpts(d.statuses || []); setStoreOpts(d.stores || [])

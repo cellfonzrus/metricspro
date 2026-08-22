@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { api, apiUpload } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
 import { LastUploadLine, useLastUploads } from '../_lib/lastUpload'
 
@@ -29,7 +30,7 @@ export default function MaManualUpload() {
   const [reports, setReports] = useState<ReportInfo[]>([])
   const [reportKey, setReportKey] = useState('')
 
-  const loadCarriers = useCallback(() => api('/api/v1/commcalc/carriers').then((c: any) => setCarriers(c || [])).catch(() => {}), [])
+  const loadCarriers = useCallback(() => apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => setCarriers(c || [])).catch(() => {}), [])
   useEffect(() => { loadCarriers() }, [loadCarriers])
 
   const loadReports = useCallback(() => {

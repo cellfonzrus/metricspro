@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
@@ -32,11 +33,11 @@ export default function AccountabilityPage() {
   // Default the window to the CURRENT PAY PERIOD (the same window the morning alerts use), falling back
   // to the last ~4 weeks if tenant settings aren't available.
   useEffect(() => {
-    api('/api/v1/core/tenant-settings').then((r: any) => {
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
       const cur = (r?.preview || [])[0]
       if (cur?.start && cur?.end) setFilt(f => ({ ...f, period: cur.start, periodTo: cur.end }))
     }).catch(() => {})
-    api('/api/v1/storeops/stores?include_inactive=true').then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+    apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP).then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])
 
   useEffect(() => {

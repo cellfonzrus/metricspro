@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { api, fmt } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
@@ -84,7 +85,7 @@ export default function PayablesPage() {
   // never select a row and the market picker filtered the whole table away. /payables/filter-options
   // serves the vocabulary the DATA uses, with the market attached.
   useEffect(() => {
-    api(`/api/v1/payables/filter-options`)
+    apiCached(`/api/v1/payables/filter-options`, LOOKUP)
       .then((d: any) => setRoster((d?.stores || []).map((x: any) => ({ id: x.store, label: x.store, market: x.market || null }))))
       .catch(() => setRoster([]))
   }, [])

@@ -8,6 +8,7 @@ import { MultiSelect } from '@/lib/multiselect'
 import EntityPicker from '@/components/EntityPicker'
 import { optionsFromRows } from '@/lib/standard-filters'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // Targeted super-admin org-resolution mitigation (see NEEDS CORE): the sales-report reads carry NO org_id
 // in the URL, so for a super-admin (whom the tenant middleware does NOT rewrite) the backend defaults to
@@ -41,6 +42,9 @@ const hasCI = (arr: string[], v: string) => arr.some(x => x.toLowerCase() === v.
 const toggleCI = (arr: string[], v: string) => hasCI(arr, v) ? arr.filter(x => x.toLowerCase() !== v.toLowerCase()) : [...arr, v]
 
 export default function SalesReportPage() {
+  // Active-carrier lens: department/bill-payment help copy is neutralized (no carrier names) for a
+  // dual-carrier tenant. Single-carrier tenants keep the original Boost/Total wording.
+  const { multi } = useActiveCarrier()
   const [period, setPeriod] = useState(thisMonth())
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -616,7 +620,7 @@ export default function SalesReportPage() {
                     are a device "box". Multi-carrier orgs (e.g. Total Wireless IN the house org) must tick
                     the NON-Boost device departments too, or those device sales don't count as boxes. */}
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Box (device-unit) departments <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(which Department values count as a device &ldquo;box&rdquo; — for productivity boxes/hr, stack ranking, review &amp; conversion. Default = the Boost XP departments; a multi-carrier org must ALSO tick its Total/other device departments.)</span></div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Box (device-unit) departments <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(which Department values count as a device &ldquo;box&rdquo; — for productivity boxes/hr, stack ranking, review &amp; conversion. Default = the {multi ? 'built-in device' : 'Boost XP'} departments; a multi-carrier org must ALSO tick its {multi ? 'other' : 'Total/other'} device departments.)</span></div>
                   <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
                     {(accFields.departments || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no departments in this period</div> : (accFields.departments || []).map((v: string) => (
                       <label key={v} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '2px 0' }}>
@@ -633,10 +637,12 @@ export default function SalesReportPage() {
                     empty to fall back to the built-in Boost defaults (Boost RTR / Xfinity Prepaid Refill).
                     DISPLAY only — drives conversion, never a payout. */}
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bill-payment items <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(tick the product/item values that = a bill payment / walk-in recharge — drives the Daily-Targets conversion rate, boxes &divide; bill-payments. Leave empty to use the built-in Boost defaults. Display only, no pay change.)</span></div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bill-payment items <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(tick the product/item values that = a bill payment / walk-in recharge — drives the Daily-Targets conversion rate, boxes &divide; bill-payments. Leave empty to use the {multi ? 'built-in defaults' : 'built-in Boost defaults'}. Display only, no pay change.)</span></div>
                   <div style={{ fontSize: 11, marginBottom: 4, color: accSel.billpay.length === 0 ? 'var(--accent)' : 'var(--text3)' }}>
                     {accSel.billpay.length === 0
-                      ? <>Currently using <b>Boost defaults</b> (product name contains &ldquo;Boost RTR&rdquo; or &ldquo;Xfinity Prepaid Refill&rdquo;).</>
+                      ? (multi
+                          ? <>Currently using <b>built-in defaults</b>.</>
+                          : <>Currently using <b>Boost defaults</b> (product name contains &ldquo;Boost RTR&rdquo; or &ldquo;Xfinity Prepaid Refill&rdquo;).</>)
                       : <><b>{accSel.billpay.length}</b> item(s) active — only these count as bill payments.</>}
                   </div>
                   <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>

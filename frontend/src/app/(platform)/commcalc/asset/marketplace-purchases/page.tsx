@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, ORG_ID, getActiveOrg } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -104,9 +105,9 @@ export default function MarketplacePurchasesPage() {
   const [roster, setRoster] = useState<StoreOpt[]>([])
 
   useEffect(() => {
-    api(`/api/v1/asset/marketplace-purchases/filter-options?${orgQS()}`)
+    apiCached(`/api/v1/asset/marketplace-purchases/filter-options?${orgQS()}`, LOOKUP)
       .then(setOpts).catch(() => setOpts({ available: false, businesses: [], statuses: [], order_types: [] }))
-    api(`/api/v1/core/filter-options?${orgQS()}`)
+    apiCached(`/api/v1/core/filter-options?${orgQS()}`, LOOKUP)
       .then((d: any) => setRoster((d?.stores || []).map((x: any) => ({ id: x.store, label: x.store, market: x.market || null }))))
       .catch(() => setRoster([]))
   }, [])

@@ -4,6 +4,7 @@ import { api } from '@/lib/client'
 import { ReportShell } from '@/components/ReportShell'
 import { ExportButtons, type ExportColumn, type ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // MA Daily Tx — Product Name Classification.
 //
@@ -58,6 +59,9 @@ function Badge({ kind }: { kind: 'unmapped' | 'proposed' | 'confirmed' }) {
 }
 
 export default function MaProductClassPage() {
+  // Active-carrier lens: the exact-match example is neutralized (no carrier/brand names) for a
+  // dual-carrier tenant. Single-carrier tenants keep the original wording.
+  const { multi } = useActiveCarrier()
   const [tab, setTab] = useState<'names' | 'preview'>('names')
   const [classes, setClasses] = useState<ClassRow[]>([])
   const [assignable, setAssignable] = useState<string[]>([])
@@ -265,9 +269,11 @@ export default function MaProductClassPage() {
         One <code>product_name</code> column on the MA Daily Tx file carries commission installments, spiffs,
         residuals, customer <b>plan purchases</b>, <b>device sales</b>, dealer fees and credit memos side by
         side. Classify each name here so the file can be read as what it actually is.{' '}
-        <b>Matching is exact</b> (whitespace trimmed, nothing else) — “TW EDGE SPF Month 1” is the EDGE
-        financing tender, not a Motorola Edge phone, and “Total ALL ACCESS Plan $65” differs from
-        “Total ALL ACCESS Plan $65 New Activation Commission” only by suffix.
+        <b>Matching is exact</b> (whitespace trimmed, nothing else){multi
+          ? <> — a financing-tender line is not a device with a similar name, and two plan lines can differ only by suffix.</>
+          : <> — “TW EDGE SPF Month 1” is the EDGE
+             financing tender, not a Motorola Edge phone, and “Total ALL ACCESS Plan $65” differs from
+             “Total ALL ACCESS Plan $65 New Activation Commission” only by suffix.</>}
       </p>
 
       <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af', borderRadius: 8, padding: '8px 12px', fontSize: 12.5, marginBottom: 12, maxWidth: 900 }}>

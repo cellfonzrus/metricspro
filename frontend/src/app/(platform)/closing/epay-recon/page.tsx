@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
@@ -29,7 +30,7 @@ export default function EpayReconPage() {
   }
   useEffect(() => { load() }, [date])
   useEffect(() => {
-    api('/api/v1/closing/stores').then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {})
+    apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {})
     api('/api/v1/closing/deposit-config').then(setDepCfg).catch(() => {})
     api('/api/v1/closing/deposit-categories').then((d: any) => setDepCats(d?.categories || [])).catch(() => {})
   }, [])

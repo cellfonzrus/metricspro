@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt } from '@/lib/client'
+import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -35,7 +36,7 @@ export default function StoreOpsReportsPage() {
   // current calendar month if the endpoint/migration isn't reachable yet.
   useEffect(() => {
     let cancelled = false
-    api('/api/v1/core/tenant-settings').then((r: any) => {
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
       if (cancelled) return
       const cur = currentPeriodFromSettingsResponse(r)
       if (cur) {
@@ -59,7 +60,7 @@ export default function StoreOpsReportsPage() {
       // include_inactive=true: this is a HISTORICAL report — a closed store may still own rows in
       // range, and the market lookup below must still resolve it (GET /stores now defaults to
       // active-only, 2026-08-06 disabled-T-store fix).
-      api('/api/v1/storeops/stores?include_inactive=true').catch(() => []),
+      apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP).catch(() => []),
     ]).then(([p, s]) => { setRows(p || []); setStores(s || []) })
       .catch(console.error).finally(() => setLoading(false))
     api(`/api/v1/storeops/payroll/over-hours?start=${start}&end=${end}`).then((r: any) => {
@@ -184,7 +185,7 @@ export default function StoreOpsReportsPage() {
     setRange(next.start, next.end)
   }
   function useThisPayPeriod() {
-    api('/api/v1/core/tenant-settings').then((r: any) => {
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
       const cur = currentPeriodFromSettingsResponse(r)
       if (cur) { setPpSettings(cur.settings); setRange(cur.period.start, cur.period.end) }
     }).catch(() => {})

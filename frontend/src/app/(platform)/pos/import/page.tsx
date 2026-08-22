@@ -8,6 +8,7 @@
 //     {inserted, skipped, errors} response into the per-row results.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { parseCsv, serializeCsv, type CsvCell } from '@/lib/pos-csv'
 
 // ---------------------------------------------------------------------------
@@ -396,7 +397,7 @@ export default function PosImportPage() {
   // Store codes come from MetricsPro storeops — shown in the inventory hint so
   // users know what store_code values are valid.
   useEffect(() => {
-    api('/api/v1/storeops/stores')
+    apiCached('/api/v1/storeops/stores', LOOKUP)
       .then((stores: { store_code?: string | number | null }[]) => {
         const codes = (stores || []).map(s => String(s.store_code ?? '').trim()).filter(Boolean)
         setStoreCodes(codes)

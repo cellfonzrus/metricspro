@@ -6,6 +6,8 @@
 // ($2,090 at full attainment) is seeded; clone/edit it or add plans per level.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
+import { useActiveCarrier } from '@/lib/auth-context'
+import { presetVisibleForCarrier } from '@/lib/carrier-scope'
 
 type Comp = { label?: string; kind?: string; rate?: number; metric_source?: string; target_per_store?: number; store_count?: number | null; cap_at_target?: boolean; sort?: number }
 type Bonus = { label?: string; kind?: string; amount?: number; gated_by?: string; config?: any; sort?: number }
@@ -34,6 +36,9 @@ const emptyPlan = (): Plan => ({
 })
 
 export default function ManagementIncentivePage() {
+  // Active-carrier lens: hide carrier-named presets (e.g. the seeded "Total Wireless default") that
+  // aren't the active carrier. Single-carrier tenants see every preset (unchanged).
+  const { activeCarrier, multi } = useActiveCarrier()
   const [plans, setPlans] = useState<Plan[]>([])
   const [plan, setPlan] = useState<Plan | null>(null)
   const [tab, setTab] = useState<'plans' | 'compute'>('plans')
@@ -46,6 +51,11 @@ export default function ManagementIncentivePage() {
       .catch((e: any) => setMsg('❌ ' + (e?.message || e)))
   }, [])
   useEffect(() => { load() }, [load])
+
+  // Only the active carrier's presets are shown/selectable for a dual-carrier tenant.
+  const visiblePlans = useMemo(
+    () => plans.filter(p => presetVisibleForCarrier(p.name, activeCarrier, multi)),
+    [plans, activeCarrier, multi])
 
   const lbl: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 3 }
   const inp: React.CSSProperties = { width: '100%', padding: '6px 8px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
@@ -108,7 +118,7 @@ export default function ManagementIncentivePage() {
         <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 16 }}>
           <div className="card" style={{ padding: 12, height: 'fit-content' }}>
             <button className="btn btn-primary" style={{ width: '100%', fontSize: 13, marginBottom: 8 }} onClick={() => setPlan(emptyPlan())}>+ New plan</button>
-            {plans.map(p => (
+            {visiblePlans.map(p => (
               <div key={p.id} onClick={() => setPlan(JSON.parse(JSON.stringify(p)))}
                 style={{ padding: '8px 9px', borderRadius: 7, cursor: 'pointer', fontSize: 13, marginBottom: 4,
                   background: plan?.id === p.id ? 'var(--surface2)' : 'transparent', border: '1px solid var(--border)' }}>
@@ -116,7 +126,7 @@ export default function ManagementIncentivePage() {
                 <div style={{ fontSize: 11, color: 'var(--text3)' }}>{p.level || '—'} · {(p.components || []).length} comp · {(p.bonuses || []).length} bonus</div>
               </div>
             ))}
-            {plans.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>No plans yet (has migration 852 run?).</div>}
+            {visiblePlans.length === 0 && <div style={{ fontSize: 12, color: 'var(--text3)' }}>No plans yet (has migration 852 run?).</div>}
           </div>
 
           {!plan ? <div style={{ color: 'var(--text3)', fontSize: 13, paddingTop: 8 }}>Pick a plan to edit, or start a new one.</div> : (
@@ -219,7 +229,7 @@ export default function ManagementIncentivePage() {
         </div>
       )}
 
-      {tab === 'compute' && <ComputeTab plans={plans} />}
+      {tab === 'compute' && <ComputeTab plans={visiblePlans} />}
     </div>
   )
 }

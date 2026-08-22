@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { invalidateApiCache } from '@/lib/cache'
 import { NAV, NAV_CARRIERS } from '@/lib/rbac'
 
 // Display Labels — per-tenant nicknames for the sidebar. Rename what you SEE ("Distributors"→"Suppliers",
@@ -31,6 +32,7 @@ export default function DisplayLabelsPage() {
     const key = 'carrier:' + href
     try {
       await api('/api/v1/commcalc/nav-labels', { method: 'POST', body: JSON.stringify({ scope: 'cap', key, label: val === 'auto' ? '' : val }) })
+      invalidateApiCache('nav-config')   // sidebar (layout) caches nav-config → refresh it after this write
       setCaps(p => { const n = { ...p }; if (val === 'auto') delete n[key]; else n[key] = val === 'show'; return n })
       setMsg(val === 'auto' ? 'Reset to carrier default' : val === 'show' ? 'Always shown' : 'Always hidden')
       setTimeout(() => setMsg(''), 3000)
@@ -42,6 +44,7 @@ export default function DisplayLabelsPage() {
     if (label === (over[key] || '')) return   // unchanged
     try {
       await api('/api/v1/commcalc/nav-labels', { method: 'POST', body: JSON.stringify({ scope, key: scope === 'group' ? key.replace(/^group:/, '') : key, label }) })
+      invalidateApiCache('nav-config')   // sidebar (layout) caches nav-config → refresh it after this write
       setOver(p => { const n = { ...p }; if (label) n[key] = label; else delete n[key]; return n })
       setMsg(label ? `Saved "${label}"` : 'Reverted to default')
     } catch (e: any) {

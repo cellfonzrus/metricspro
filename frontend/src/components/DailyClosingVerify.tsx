@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api, apiUpload, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
@@ -240,8 +241,8 @@ export default function DailyClosingVerify() {
   const [pStores, setPStores] = useState<any[]>([])
   const [pEmps, setPEmps] = useState<any[]>([])
   useEffect(() => {
-    api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
-    api('/api/v1/storeops/employees?all_company=true').then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
+    apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
+    apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
   }, [])
   const storeOptions: EntityOption[] = useMemo(
     () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),

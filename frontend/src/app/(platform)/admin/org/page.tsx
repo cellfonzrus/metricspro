@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 
 type Level = { id: number; name: string; rank: number }
 type Manager = { employee_id: string; name: string }
@@ -27,7 +28,7 @@ export default function OrgStructurePage() {
     try {
       const [t, e] = await Promise.all([
         api('/api/v1/storeops/org/tree'),
-        api('/api/v1/storeops/employees'),
+        apiCached('/api/v1/storeops/employees', LOOKUP),
       ])
       setTree(t)
       setEmps((e || []).filter((x: Emp) => x.employee_id))

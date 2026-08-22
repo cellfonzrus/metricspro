@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 import MarketStorePicker from '@/components/MarketStorePicker'
-import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import { isStandardFilterActive } from '@/lib/standard-filters'
@@ -72,7 +72,7 @@ export default function StandardFilterBar({
   useEffect(() => {
     if (!optionsUrl) return
     let alive = true
-    api(optionsUrl).then((d: any) => {
+    apiCached(optionsUrl, LOOKUP).then((d: any) => {
       if (!alive || !d) return
       const stores: EntityOption[] = (d.stores || []).map((x: any) =>
         typeof x === 'string' ? { id: x, label: x } : { id: x.store ?? x.id ?? x.address, label: x.store ?? x.label ?? x.address, sublabel: x.market || undefined })

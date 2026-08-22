@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP, invalidateApiCache } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 
 // One-click carrier picker (Carrier workstream C2). Selecting a carrier writes commcalc.carrier for
@@ -24,7 +25,7 @@ export default function CarrierPicker({ canEdit }: { canEdit: boolean }) {
   const [msg, setMsg] = useState('')
 
   const load = useCallback(() => {
-    api('/api/v1/commcalc/carriers').then((d: any) => setCarriers(Array.isArray(d) ? d : [])).catch(() => {})
+    apiCached('/api/v1/commcalc/carriers', LOOKUP).then((d: any) => setCarriers(Array.isArray(d) ? d : [])).catch(() => {})
   }, [])
   useEffect(() => { load() }, [load])
 
@@ -40,6 +41,7 @@ export default function CarrierPicker({ canEdit }: { canEdit: boolean }) {
     try {
       if (existing) await api(`/api/v1/commcalc/carriers/${existing.id}`, { method: 'DELETE' })
       else await api('/api/v1/commcalc/carriers', { method: 'POST', body: JSON.stringify({ name: p.name, code: p.code, is_default: carriers.length === 0 }) })
+      invalidateApiCache('/api/v1/commcalc/carriers')   // cached read must self-heal after this write
       load(); await refresh()
       setMsg('✅ Updated — the menu now shows only what applies to your carrier(s).')
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
@@ -50,13 +52,14 @@ export default function CarrierPicker({ canEdit }: { canEdit: boolean }) {
     setBusy('custom'); setMsg('')
     try {
       await api('/api/v1/commcalc/carriers', { method: 'POST', body: JSON.stringify({ name: nm, code: nm.toLowerCase().replace(/[^a-z0-9]+/g, ''), is_default: carriers.length === 0 }) })
+      invalidateApiCache('/api/v1/commcalc/carriers')   // cached read must self-heal after this write
       setCustom(''); load(); await refresh()
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
   async function removeCarrier(c: Carrier) {
     if (!canEdit) return
     setBusy(c.id)
-    try { await api(`/api/v1/commcalc/carriers/${c.id}`, { method: 'DELETE' }); load(); await refresh() }
+    try { await api(`/api/v1/commcalc/carriers/${c.id}`, { method: 'DELETE' }); invalidateApiCache('/api/v1/commcalc/carriers'); load(); await refresh() }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setBusy('') }
   }
 

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 import ReportExportBar from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -37,7 +38,7 @@ export default function JournalPage() {
   const filterActive = filt.stores.length > 0 || filt.markets.length > 0
 
   useEffect(() => {
-    api(`/api/v1/core/filter-options?org_id=${ORG_ID}`).then((d: any) => setFopts(d || {})).catch(() => setFopts({}))
+    apiCached(`/api/v1/core/filter-options?org_id=${ORG_ID}`, LOOKUP).then((d: any) => setFopts(d || {})).catch(() => setFopts({}))
   }, [])
   const storeMarket = useMemo(() => {
     const m: Record<string, string> = {}

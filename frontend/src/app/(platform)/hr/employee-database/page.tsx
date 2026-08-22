@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import ReportShell from '@/components/ReportShell'
 import type { ExportColumn } from '@/lib/export'
@@ -84,7 +85,7 @@ export default function EmployeeDatabasePage() {
         // This is an audit/historical roster (defaults to including inactive EMPLOYEES) — the store
         // filter should be able to reference a since-closed store too, so it always requests the full
         // set (GET /stores now defaults to active-only, 2026-08-06 disabled-T-store fix).
-        api('/api/v1/storeops/stores?include_inactive=true').catch(() => []),
+        apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP).catch(() => []),
       ])
       const fields: FieldDef[] = fr?.fields || []
       setFieldsCatalog(fields)

@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api } from '@/lib/client'
+import { invalidateApiCache } from '@/lib/cache'
 import { NAV } from '@/lib/rbac'
 
 // Admin-only: rearrange the sidebar for the whole tenant — MOVE any item to a different group, show a
@@ -183,14 +184,14 @@ export default function MenuLayoutPage() {
 
   async function save() {
     setSaving(true); setMsg('')
-    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify(buildPayload()) }); setMsg('Saved ✓ — reload the page to see the menu update.') }
+    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify(buildPayload()) }); invalidateApiCache('nav-config'); setMsg('Saved ✓ — reload the page to see the menu update.') }
     catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
     setSaving(false)
   }
   async function resetAll() {
     if (!confirm('Reset the whole menu back to the built-in layout?')) return
     setSaving(true); setMsg('')
-    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items: {}, groups: [] }) }); setOv({}); setExtraGroups([]); setHideReports(false); setGroupOrder([]); setItemOrder({}); setSubOrder({}); setMsg('Reset to defaults — reload to see it.') }
+    try { await api('/api/v1/commcalc/nav-layout', { method: 'POST', body: JSON.stringify({ items: {}, groups: [] }) }); invalidateApiCache('nav-config'); setOv({}); setExtraGroups([]); setHideReports(false); setGroupOrder([]); setItemOrder({}); setSubOrder({}); setMsg('Reset to defaults — reload to see it.') }
     catch (e: any) { setMsg('Reset failed: ' + (e?.message || e)) }
     setSaving(false)
   }
