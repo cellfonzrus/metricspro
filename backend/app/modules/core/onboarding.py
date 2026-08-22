@@ -471,11 +471,14 @@ def build_status(org_id: str, module_key: str) -> dict:
 TEMPLATE_SPECS = {
     "customers": dict(
         schema="pos", table="customers", title="Customers",
-        exclude=["id", "org_id", "cust_number", "created_at", "updated_at", "password"],
+        exclude=["id", "org_id", "cust_number", "created_at", "updated_at", "password",
+                 # Retired by mig 909 — the columns still exist but the application neither reads
+                 # nor writes them, so offering them in a template would import into a dead end.
+                 "ssn_enc", "driver_license_enc", "driver_license_state"],
         alias=[], import_entity="customers",
         note="The carrier account PIN is NOT importable — it is credential-grade and is entered per "
              "customer in the app. Customer # is assigned by the system. SSN and driver-licence "
-             "details are no longer held by the platform at all (mig 909)."),
+             "fields are retired: the platform no longer collects them (mig 909)."),
     "vendors": dict(
         schema="pos", table="vendors", title="Vendors / Manufacturers / Dealers",
         exclude=["id", "org_id", "created_at", "updated_at"], alias=[], import_entity="vendors",
@@ -610,12 +613,12 @@ _SNAPSHOT = {
     ("pos", "customers"): [
         ("id", "uuid"), ("org_id", "uuid"), ("cust_number", "bigint"), ("account_type", "text"),
         ("company_name", "text"), ("first_name", "text"), ("last_name", "text"),
-        ("middle_initial", "text"), ("dob", "date"),
+        ("middle_initial", "text"), ("dob", "date"), ("driver_license_state", "text"),
         ("primary_account_no", "text"), ("password", "text"), ("email", "text"),
         ("phone_primary", "text"), ("phone_secondary", "text"), ("address_1", "text"),
         ("address_2", "text"), ("city", "text"), ("state", "text"), ("zip", "text"),
         ("referral_source", "text"), ("credit_limit", "numeric"), ("accept_checks", "boolean"),
-        ("is_active", "boolean"),
+        ("is_active", "boolean"), ("ssn_enc", "bytea"), ("driver_license_enc", "bytea"),
         ("created_at", "timestamp with time zone"), ("updated_at", "timestamp with time zone")],
     ("pos", "vendors"): [
         ("id", "uuid"), ("org_id", "uuid"), ("ban", "text"), ("legal_name", "text"),

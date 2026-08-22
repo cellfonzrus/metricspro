@@ -86,8 +86,15 @@ plaintiff will argue your calculation caused the shortfall.
 
 ### 4. Data breach involving identifiers — **resolved**
 
-**This exposure has been removed.** Migration 909 erased and dropped every SSN and driver's licence
-field, and the code that captured, stored, decrypted and displayed them is gone.
+**This exposure has been removed.** The code that captured, stored, decrypted and displayed SSNs and
+driver's licence numbers is gone, and migration 909 clears any stored value, revokes the database
+functions that could read them, and retires the columns.
+
+The columns themselves are **kept, empty and out of service** rather than dropped — the owner
+confirmed there is no such data in the system, and dropping a column you might want back is a
+one-way door with nothing to gain. What actually closes the exposure is that nothing collects it
+any more; an empty retired column holds no more risk than a dropped one. If you later want them
+physically gone, that is a follow-up migration and a `VACUUM FULL`, not an emergency.
 
 A correction to what I first told you: the POS held **full** SSNs and **full** driver's licence
 numbers, encrypted, not merely the last four digits. The last-4 was only what the screen displayed.
