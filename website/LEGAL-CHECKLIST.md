@@ -21,7 +21,7 @@ signage actually posted, the feature left switched off.
 | `legal/eula.html` | The software licence, and the clauses **Apple requires** in an app EULA. Missing these can hold up a review. |
 | `legal/acceptable-use.html` | Gives you clean grounds to suspend an account, and distances you from what a customer does with the tool. |
 | `legal/biometric-policy.html` | The publicly available written retention schedule **BIPA requires you to have**. See §2. |
-| `legal/subprocessors.html` | Standard due-diligence answer; supports the "we don't sell data" position. |
+| `legal/subprocessors.html` | Standard due-diligence answer; supports the "we don't sell data" position. Lists provider **categories**, not company names — a confirmed public vendor list mainly helps someone impersonate one of those vendors in a phishing attempt. Names go out on request. |
 | `legal/cookies.html` | Accurate today because the site sets no cookies. Stops being accurate the moment you add analytics. |
 
 ## 2. The five things that actually create lawsuit risk here

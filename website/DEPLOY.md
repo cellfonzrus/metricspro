@@ -24,7 +24,7 @@ Nothing below is something I can find in the code — each one is a business fac
 | 7 | **Payment terms**, price-change notice, non-renewal notice | Terms §5, §6 | e.g. net 15, 30 days, 30 days. |
 | 8 | **Data retention windows** — after trial, after termination, and for security logs | Terms §4, §8; Privacy §7 | 30 / 30 / 12 months are ordinary choices. |
 | 9 | **DMCA agent** name, address and email | Terms §21 | See §4 below — the page alone does not give you the safe harbour. |
-| 10 | **Your web host's legal name** | Subprocessors table | "Bluehost" is a brand of Newfold Digital; use whatever your invoice says. |
+| 10 | ~~Your web host's legal name~~ | — | **No longer needed.** The Service Providers page lists provider *categories* rather than company names, so there is nothing to fill in. |
 
 ### To point the site at the right places
 
