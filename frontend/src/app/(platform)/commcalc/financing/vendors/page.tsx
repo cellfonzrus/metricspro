@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { api, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import EntityPicker from '@/components/EntityPicker'
+import { useActiveCarrier } from '@/lib/auth-context'
+import { financingVendorLabel, vendorServesCarrier } from '@/lib/carrier-scope'
 
 // FINANCING VENDOR REGISTRY (admin) — owner directive 2026-08-04: "edge in case of total and acima in
 // case of boost, acima could also be added to total at a later date and more vendors can be added to
@@ -56,6 +58,10 @@ const BASIS_LABEL: Record<string, string> = {
 
 export default function FinancingVendorsPage() {
   const { period } = usePeriod()
+  // Active-carrier lens: a dual-carrier tenant configures ONE carrier's financing at a time. The vendor
+  // list is filtered to the active carrier, the vendor name + key show neutrally (never ACIMA/TW/Edge),
+  // and the carrier-naming assignment section is hidden. Single-carrier tenants are unchanged.
+  const { activeCarrier, multi } = useActiveCarrier()
   const [d, setD] = useState<Data | null>(null)
   const [tenders, setTenders] = useState<{ value: string; transactions: number }[]>([])
   const [busy, setBusy] = useState(false)
@@ -218,14 +224,20 @@ export default function FinancingVendorsPage() {
       {err && <div className="card" style={{ ...card, color: 'var(--red)' }}>{err}</div>}
       {msg && <div className="card" style={{ ...card, color: 'var(--green)' }}>{msg}</div>}
 
-      {(d?.vendors || []).map(v => (
+      {(d?.vendors || []).filter(v => !multi || vendorServesCarrier(v.carriers, activeCarrier)).map(v => (
         <div key={v.vendor_key} className="card" style={card}>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
-            <input className="input" style={{ width: 240, fontWeight: 600 }} value={String(value(v, 'label') ?? '')}
-              onChange={e => patch(v.vendor_key, { label: e.target.value })} />
-            <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
-              key <code>{v.vendor_key}</code>{v.source === 'seed' ? ' · built-in default (not yet saved)' : ''}
-            </span>
+            {/* Under the lens the vendor name shows neutrally and is not renamed here (renaming stays a
+                single-carrier action) so no brand string is ever printed; the real label is untouched. */}
+            {multi
+              ? <span style={{ width: 240, fontWeight: 600, fontSize: 14 }}>{financingVendorLabel(v.vendor_key, String(value(v, 'label') ?? ''))}</span>
+              : <input className="input" style={{ width: 240, fontWeight: 600 }} value={String(value(v, 'label') ?? '')}
+                  onChange={e => patch(v.vendor_key, { label: e.target.value })} />}
+            {!multi && (
+              <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+                key <code>{v.vendor_key}</code>{v.source === 'seed' ? ' · built-in default (not yet saved)' : ''}
+              </span>
+            )}
             <label style={{ fontSize: 12.5, display: 'inline-flex', gap: 6, alignItems: 'center' }}>
               <input type="checkbox" checked={!!value(v, 'enabled')}
                 onChange={e => patch(v.vendor_key, { enabled: e.target.checked })} />
@@ -244,10 +256,13 @@ export default function FinancingVendorsPage() {
             <button className="btn btn-primary" style={{ fontSize: 12 }} disabled={busy} onClick={() => save(v)}>💾 Save</button>
           </div>
 
-          <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>{v.detection_note}</div>
+          {/* The seed detection note can name the vendor brand / the other carrier — hide under the lens. */}
+          {!multi && <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>{v.detection_note}</div>}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 14 }}>
-            {/* carriers */}
+            {/* carriers — the chips name carriers, so the whole assignment section is hidden under the
+                lens (the vendor is already scoped to the active carrier). */}
+            {!multi && (
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Carriers this vendor serves</div>
               <div style={{ marginBottom: 6 }}>
@@ -269,6 +284,7 @@ export default function FinancingVendorsPage() {
                 <button className="btn" style={{ fontSize: 12 }} disabled={busy} onClick={() => addCarrier(v)}>Add</button>
               </div>
             </div>
+            )}
 
             {/* detection source */}
             <div>
@@ -276,7 +292,7 @@ export default function FinancingVendorsPage() {
               <select style={{ ...sel, width: '100%' }} value={String(value(v, 'detection_source'))}
                 onChange={e => patch(v.vendor_key, { detection_source: e.target.value })}>
                 {(d?.vocabulary.detection_sources || []).map(s =>
-                  <option key={s} value={s}>{SOURCE_LABEL[s] || s}</option>)}
+                  <option key={s} value={s}>{(multi && s === 'acima_config') ? 'Inherit this tenant’s existing lease-to-own tender mapping' : (SOURCE_LABEL[s] || s)}</option>)}
               </select>
               {String(value(v, 'detection_source')) === 'plan_rule' && (
                 <div style={{ marginTop: 8 }}>
@@ -292,8 +308,9 @@ export default function FinancingVendorsPage() {
               )}
               {String(value(v, 'detection_source')) === 'acima_config' && (
                 <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 6 }}>
-                  Currently mapped: {(d?.acima_tenders || []).map(t => `“${t}”`).join(', ')}
-                  {d?.acima_configured ? '' : ' (built-in fallback — nothing mapped yet)'}
+                  {multi
+                    ? (d?.acima_configured ? 'Inheriting this tenant’s existing tender mapping.' : 'Built-in fallback — nothing mapped yet.')
+                    : <>Currently mapped: {(d?.acima_tenders || []).map(t => `“${t}”`).join(', ')}{d?.acima_configured ? '' : ' (built-in fallback — nothing mapped yet)'}</>}
                 </div>
               )}
               <div style={{ fontSize: 12, fontWeight: 600, margin: '12px 0 6px' }}>Financed amount shown as</div>

@@ -13,6 +13,7 @@ import {
   UnassignedRow, UnmatchedExplorer, OrphanAssignments, StoreBridgePanel, ExcludedSellers,
 } from '../_lib/coverageDiagnosis'
 import RunCommissionButton from '../_lib/RunCommissionButton'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
 // rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
@@ -92,6 +93,10 @@ const UNIT_BASES: { value: string; label: string; help: string }[] = [
 const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', rules: [], tiers: [], assignments: [] })
 
 export default function CommissionPlansPage() {
+  // Active-carrier lens: the set-up-fee reference copy names only the active carrier for a dual-carrier
+  // tenant (single-carrier tenants keep the original Boost/Total reference text).
+  const { activeCarrier, multi } = useActiveCarrier()
+  const isTotalCarrier = activeCarrier === 'total'
   const [plans, setPlans] = useState<Plan[]>([])
   const [carriers, setCarriers] = useState<any[]>([])
   const [employees, setEmployees] = useState<any[]>([])
@@ -1247,7 +1252,7 @@ export default function CommissionPlansPage() {
             {(sf.keywords || []).map((k: string) => (
               <code key={k} style={{ background: 'var(--bg2)', padding: '1px 5px', borderRadius: 4, marginRight: 4 }}>{k}</code>
             ))}
-            {sf.keywords_are_default && <span style={{ marginLeft: 6, color: '#b45309' }}>← the built-in default (Boost wording). Map your own below if your POS calls it something else.</span>}
+            {sf.keywords_are_default && <span style={{ marginLeft: 6, color: '#b45309' }}>← the built-in default ({multi ? 'default' : 'Boost'} wording). Map your own below if your POS calls it something else.</span>}
           </div>
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 8 }}>
@@ -1276,14 +1281,20 @@ export default function CommissionPlansPage() {
 
           {sf.owner_reference && (
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
-              For reference (owner, 2026-08-01, <b>not applied</b>): Boost pays the dealer 100% of the set-up fee and the employee 10%;
-              Total pays the dealer 50% of the activation fee and the employee 0% today.
+              {multi
+                ? <>For reference (owner, 2026-08-01, <b>not applied</b>): {isTotalCarrier
+                    ? 'the carrier pays the dealer 50% of the activation fee and the employee 0% today.'
+                    : 'the carrier pays the dealer 100% of the set-up fee and the employee 10%.'}</>
+                : <>For reference (owner, 2026-08-01, <b>not applied</b>): Boost pays the dealer 100% of the set-up fee and the employee 10%;
+                   Total pays the dealer 50% of the activation fee and the employee 0% today.</>}
             </div>
           )}
 
           {!!(sf.carriers || []).length && (
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
-              Per-carrier overrides available for: {(sf.carriers || []).map((c: any) => c.name).join(', ')} — a plan’s carrier picks its own numbers, so one tenant can run Boost and Cricket side by side.
+              {multi
+                ? <>A plan’s carrier picks its own numbers, so each carrier can carry its own set-up-fee split.</>
+                : <>Per-carrier overrides available for: {(sf.carriers || []).map((c: any) => c.name).join(', ')} — a plan’s carrier picks its own numbers, so one tenant can run Boost and Cricket side by side.</>}
             </div>
           )}
 

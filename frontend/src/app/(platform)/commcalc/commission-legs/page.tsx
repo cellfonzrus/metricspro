@@ -6,6 +6,7 @@ import StandardFilterBar from '@/components/StandardFilterBar'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { TrendChart } from '@/components/TrendChart'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // COMMISSION LEGS — what we made, by month-of-life (owner directives 2026-08-04 + 2026-08-05)
 //
@@ -67,6 +68,9 @@ const legHead = (k: string) => (k === 'unsplit' ? 'Unsplit' : `M${k}`)
 
 export default function CommissionLegsPage() {
   const { period } = usePeriod()
+  // Active-carrier lens: the "a VidaPay/Total tenant has none" empty-state caveat is a Total-side note,
+  // so show it only under the Total lens for a dual-carrier tenant. Single-carrier tenants unchanged.
+  const { activeCarrier, multi } = useActiveCarrier()
   const [tab, setTab] = useState<'made' | 'map'>('made')
 
   // ── tab 1: the breakout ──────────────────────────────────────────────────────────────────────
@@ -461,8 +465,11 @@ export default function CommissionLegsPage() {
           ) : shown.length === 0 ? (
             <div style={{ color: 'var(--text3)', fontSize: 13, lineHeight: 1.7, maxWidth: 900 }}>
               No carrier commission labels in this window. Labels come from the ePay Commission Payment Detail and
-              Comprehensive Compensation reports; a VidaPay/Total tenant has none — its leg is the COLUMN on the MA
-              Commission Details export, which needs no mapping. See <b>💰 What we made</b>.
+              Comprehensive Compensation reports
+              {(!multi || activeCarrier === 'total')
+                ? <>; a VidaPay/Total tenant has none — its leg is the COLUMN on the MA
+                  Commission Details export, which needs no mapping.</>
+                : '.'} See <b>💰 What we made</b>.
             </div>
           ) : (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

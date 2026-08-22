@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import { useActiveCarrier } from '@/lib/auth-context'
 import { MultiSelect } from '@/lib/multiselect'
 
 // Sales Comparison — period-over-period % change per item sold (Phones, BYOD, Accessories, Tablets,
@@ -44,6 +45,9 @@ const WEEKS = [
 ]
 
 export default function SalesComparisonPage() {
+  // Active-carrier lens: the intro copy names financing vendors generically (never ACIMA/TW/Edge) for
+  // a dual-carrier tenant. Single-carrier tenants keep the original wording.
+  const { multi } = useActiveCarrier()
   const [period, setPeriod] = useState(thisMonth())
   const [mode, setMode] = useState('mom')
   const [comparePeriod, setComparePeriod] = useState('')   // custom mode only
@@ -123,7 +127,7 @@ export default function SalesComparisonPage() {
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📈 Sales Comparison</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Period-over-period change per item sold — <b>Phones, BYOD, Accessories, Tablets</b> and each
-          <b> Financing</b> vendor (ACIMA / TW / Edge) — across all stores. Compare month-over-month,
+          <b> Financing</b> vendor{multi ? '' : ' (ACIMA / TW / Edge)'} — across all stores. Compare month-over-month,
           year-over-year, or week-1-over-week-1, and align both periods to the same day of the month.
         </p>
       </div>

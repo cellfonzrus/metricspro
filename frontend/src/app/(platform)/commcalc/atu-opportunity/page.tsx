@@ -10,6 +10,8 @@
 // every figure on the page re-derives from them. Nothing is hard-coded.
 import { useState, useEffect, useCallback } from 'react'
 import { api, getActiveOrg } from '@/lib/client'
+import { useActiveCarrier } from '@/lib/auth-context'
+import { atuActiveCarry } from '@/lib/carrier-scope'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
 import { MultiSelect } from '@/lib/multiselect'
@@ -29,6 +31,11 @@ const inp: React.CSSProperties = { padding: '5px 8px', borderRadius: 7, border: 
 type StoreRow = { store: string; market?: string; card_acts: number; card_atu: number; card_open: number; attach_pct: number; rtr_open: number; carry_forgone: number }
 
 export default function AtuOpportunityPage() {
+  // Active-carrier lens: show only the active carrier's ATU rate/base/carry. The backend keeps
+  // returning BOTH carriers' figures (boost_carry_monthly + total_carry_monthly); we pick one and
+  // NEVER show the combined carry_monthly. Single-carrier tenants are unchanged.
+  const { activeCarrier, multi } = useActiveCarrier()
+  const isTotal = activeCarrier === 'total'
   const [period, setPeriod] = useState(thisMonth())
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
@@ -61,6 +68,8 @@ export default function AtuOpportunityPage() {
   const s = data?.summary
   const c = s?.customers, m = s?.money, rc = s?.recharge
   const stores: StoreRow[] = data?.stores || []
+  // The active carrier's commission carry — NEVER the combined carry_monthly (which sums both carriers).
+  const activeCarry = atuActiveCarry(m, activeCarrier)
 
   const cols: ExportColumn[] = [
     { header: 'Store', field: 'store', get: (r: StoreRow) => r.store },
@@ -123,8 +132,12 @@ export default function AtuOpportunityPage() {
             Set them to your current carrier terms — nothing here is fixed in the code.
           </p>
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            {([['saving_per_month', 'Customer saving / mo'], ['boost_rate_pct', 'Boost ATU rate %'],
+            {(([['saving_per_month', 'Customer saving / mo'], ['boost_rate_pct', 'Boost ATU rate %'],
                ['total_rate_pct', 'Total ATU rate %'], ['total_recharge_base', 'Total recharge base $/mo']] as [string, string][])
+              // Show only the ACTIVE carrier's rate/base for a dual-carrier tenant; single-carrier
+              // tenants keep every field (unchanged). 'saving_per_month' is carrier-neutral.
+              .filter(([k]) => !multi || k === 'saving_per_month'
+                || (isTotal ? k.startsWith('total_') : k.startsWith('boost_'))))
               .map(([k, label]) => (
                 <label key={k} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {label}
@@ -151,24 +164,25 @@ export default function AtuOpportunityPage() {
             {tile('Card customers', (c.card || 0).toLocaleString(), 'distinct lines')}
             {tile('On autopay', (c.card_on_atu || 0).toLocaleString(), `${c.card_attach_pct}% attach`, 'good')}
             {tile('Open position', (c.card_open || 0).toLocaleString(), 'card on file, not enrolled', 'warn')}
-            {tile('Commission forgone', money(m.carry_monthly), 'per month, recurring', 'warn')}
-            {tile('Annualised', money(m.carry_annual), 'this cohort held flat', 'warn')}
+            {tile('Commission forgone', money(activeCarry), 'per month, recurring', 'warn')}
+            {tile('Annualised', money(activeCarry * 12), 'this cohort held flat', 'warn')}
             {tile('Customer savings lost', money(m.customer_savings_monthly), 'per month, to customers')}
           </div>
 
           <div className="card" style={{ padding: 14, marginBottom: 14, fontSize: 13, color: 'var(--text2)' }}>
             <b style={{ color: 'var(--text)' }}>{money(rc.card_open)}</b> of card-tendered recharge each month comes from
             customers who are not on autopay — <b style={{ color: 'var(--text)' }}>{m.pct_of_card_recharge_forgone}%</b> of
-            the card recharge base. Converting them earns {cfg?.boost_rate_pct}% of it every month for the life of
+            the card recharge base. Converting them earns {isTotal ? cfg?.total_rate_pct : cfg?.boost_rate_pct}% of it every month for the life of
             the line, and hands each customer back {money(cfg?.saving_per_month)}.
             {c.noncard > 0 && (
               <> Cash customers attach at <b style={{ color: 'var(--text)' }}>{c.noncard_attach_pct}%</b> versus{' '}
                 <b style={{ color: 'var(--text)' }}>{c.card_attach_pct}%</b> on card — the case for working the card book is the
                 cost to close, not a better conversion rate.</>
             )}
-            {!s.totals_measurable?.total && (
+            {/* Total-side caveat (recharges settle through VidaPay) — only under the Total lens. */}
+            {isTotal && !s.totals_measurable?.total && (
               <div style={{ marginTop: 8, color: '#b45309' }}>
-                ⚠️ Boost only. {s.totals_measurable?.total_note}
+                ⚠️ {s.totals_measurable?.total_note}
               </div>
             )}
           </div>
