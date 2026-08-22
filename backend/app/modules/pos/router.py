@@ -1032,7 +1032,7 @@ def _span_filter(rows, keyset, field="store_code", allow_null=False):
 # would contradict this module's own threat model ("a compromised cashier session cannot exfiltrate
 # the customer book"). It survives only on the single-record fetch, where the edit form needs it.
 #
-# SSN and driver's licence are GONE from this table entirely (mig 908, owner directive): the
+# SSN and driver's licence are GONE from this table entirely (mig 909, owner directive): the
 # platform no longer collects, stores or displays them. Do not add them back — the cheapest defence
 # against a breach-notification obligation is not holding the data that triggers one.
 CUSTOMER_READ_COLS = (

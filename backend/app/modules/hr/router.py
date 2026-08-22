@@ -1105,7 +1105,7 @@ def onboarding_encrypt_existing(authorization: str = Header(default="")):
 #     comment: "full SSN is intentionally NOT captured", kept only inside the uploaded W-4/I-9 PDFs,
 #     which payroll and tax filing genuinely need). The one SSN-shaped value that did exist —
 #     employee_onboarding_profile.verify_ssn4, a last-4 used only as an identity gate on the
-#     credential-less onboarding link — was REMOVED by migration 908 on the owner's instruction to
+#     credential-less onboarding link — was REMOVED by migration 909 on the owner's instruction to
 #     take this data category out of the system. The onboarding gate is date-of-birth only now.
 #     There is deliberately no SSN column in the field catalog below: a column that renders
 #     "(not collected)" still tells every reader the product expects to hold one, and the point of
@@ -1647,7 +1647,7 @@ def onboarding_mint_token(employee_id: str, body: OnboardingMintTokenIn, org_id:
     verify_value, expires_days? Returns the token + the portal path the QR should encode.
 
     Date of birth is the ONLY gate. The last-4-SSN alternative was removed with the rest of the
-    SSN data (mig 908); `verify_kind` is kept in the body so an older client sending 'dob'
+    SSN data (mig 909); `verify_kind` is kept in the body so an older client sending 'dob'
     explicitly still works, and anything else is rejected rather than silently downgraded."""
     kind = (body.verify_kind or "dob").strip()
     val = (body.verify_value or "").strip()
@@ -1703,7 +1703,7 @@ def _check_gate(prof, value):
     value = (value or "").strip()
     if not value:
         return False
-    # Date of birth only. A profile still carrying verify_kind='ssn4' cannot match here — mig 908
+    # Date of birth only. A profile still carrying verify_kind='ssn4' cannot match here — mig 909
     # deactivates those tokens rather than leaving a door whose key no longer exists.
     if prof.get("verify_kind") not in (None, "", "dob"):
         return False

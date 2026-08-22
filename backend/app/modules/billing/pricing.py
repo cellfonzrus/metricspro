@@ -11,12 +11,12 @@ TWO AUDIENCES, deliberately split:
   · Everything else is SUPER-ADMIN, gated by the same `_require_super_admin` as the rest of billing.
     This is where the operator sets prices and the trial length.
 
-Nothing is published by default (migration 907 seeds the three packages with is_public = false and
+Nothing is published by default (migration 908 seeds the three packages with is_public = false and
 price 0). A price the operator did not type must never reach the public internet, so an empty public
 feed is the correct out-of-the-box state — the site falls back to a trial-led "pricing on request"
 card rather than inventing a number.
 
-If migration 907 has not been applied, every read degrades to {"ready": false} with the code
+If migration 908 has not been applied, every read degrades to {"ready": false} with the code
 defaults instead of 500ing, matching the mig-064 behaviour in router.py.
 """
 from datetime import datetime, timedelta, timezone
@@ -64,7 +64,7 @@ async def public_pricing():
                 .eq("is_public", True).order("sort_order").execute().data) or []
         packages = [_public_row(r) for r in rows]
     except Exception:
-        ready = False  # migration 907 not applied — trial defaults still answer, price list is empty
+        ready = False  # migration 908 not applied — trial defaults still answer, price list is empty
     return {
         "ready": ready,
         "trial_enabled": bool(s["trial_enabled"]),
@@ -135,7 +135,7 @@ async def save_pricing_settings(body: PricingSettingsIn, authorization: str = He
     try:
         sb().schema("storeops").table("pricing_settings").upsert(upd, on_conflict="id").execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migration 907 first: {e}")
+        raise HTTPException(500, f"save failed — run migration 908 first: {e}")
     return {"ok": True, "settings": load_settings(sb())}
 
 
@@ -202,7 +202,7 @@ async def upsert_package(body: PackageIn, authorization: str = Header(default=""
     try:
         sb().schema("storeops").table("pricing_package").upsert(row, on_conflict="key").execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migration 907 first: {e}")
+        raise HTTPException(500, f"save failed — run migration 908 first: {e}")
     return {"ok": True, "key": key}
 
 
@@ -304,7 +304,7 @@ async def set_tenant_plan(body: TenantPlanIn, authorization: str = Header(defaul
     try:
         client.schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
     except Exception as e:
-        raise HTTPException(500, f"save failed — run migration 907 first: {e}")
+        raise HTTPException(500, f"save failed — run migration 908 first: {e}")
     try:
         row = (client.schema("storeops").table("tenants").select("*")
                .eq("org_id", org_id).limit(1).execute().data or [{}])[0]

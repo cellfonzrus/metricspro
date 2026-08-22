@@ -475,7 +475,7 @@ TEMPLATE_SPECS = {
         alias=[], import_entity="customers",
         note="The carrier account PIN is NOT importable — it is credential-grade and is entered per "
              "customer in the app. Customer # is assigned by the system. SSN and driver-licence "
-             "details are no longer held by the platform at all (mig 908)."),
+             "details are no longer held by the platform at all (mig 909)."),
     "vendors": dict(
         schema="pos", table="vendors", title="Vendors / Manufacturers / Dealers",
         exclude=["id", "org_id", "created_at", "updated_at"], alias=[], import_entity="vendors",

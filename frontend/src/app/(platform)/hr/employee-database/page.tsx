@@ -12,7 +12,7 @@ import type { EntityOption } from '@/components/EntityPicker'
 // StoreOps roster + HR onboarding intake + the Documents board. See the backend docstring
 // (backend/app/modules/hr/router.py, "EMPLOYEE DATABASE report") for the full field-by-field
 // investigation of what's actually collected. SSN is not among it: the platform holds none, and
-// the placeholder column that used to render "(not collected)" was removed with mig 908.
+// the placeholder column that used to render "(not collected)" was removed with mig 909.
 //
 // PII SAFETY (server-side, never client-only): direct-deposit routing/account numbers come
 // back from `/hr/employee-database` ALREADY masked (last 4 real, rest 'x') unless this page asks

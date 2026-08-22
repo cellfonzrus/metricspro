@@ -27,11 +27,14 @@ The analyzer holds its own stream at the edge and posts only derived numbers.
 """
 import json
 import secrets
+import sys
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 
+from app.core.config import settings
 from app.core.crypto import encrypt, decrypt
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
@@ -368,6 +371,10 @@ def status(org_id: str = ORG_ID, authorization: str = Header(default=""),
         "homes": {
             "claimed": len(_rows("vision_structure", org_id)),
         },
+        # Whether Google's own person events are actually arriving. "Configured" is not the same as
+        # "working" for a push subscription — Google retries a broken push silently for days — so
+        # the settings page shows the RECEIVED COUNT and the last one, not a green tick.
+        "events": _event_health(org_id),
         "cameras": {
             "total": len(cams),
             "enabled": sum(1 for c in cams if c.get("enabled")),
@@ -387,6 +394,24 @@ def status(org_id: str = ORG_ID, authorization: str = Header(default=""),
             "pending": sum(1 for c in consents if c.get("status") == C.CONSENT_PENDING),
         },
     }
+
+
+def _event_health(org_id: str) -> dict:
+    """How many Google events landed recently, and when the last one did.
+
+    Deliberately a COUNT and a TIMESTAMP rather than a boolean. A Pub/Sub push subscription that is
+    misconfigured does not report itself — Google keeps retrying into the void — so "we have a
+    subscription" tells an operator nothing. "41 events, last one 3 minutes ago" tells them it
+    works; "0 events, none ever" tells them it does not."""
+    try:
+        since = _iso(_now() - timedelta(days=7))
+        rows = (sb().table("vision_camera_event").select("occurred_at")
+                .eq("org_id", org_id).gte("occurred_at", since)
+                .order("occurred_at", desc=True).limit(1000).execute().data) or []
+    except Exception:
+        return {"available": False, "last_7d": 0, "last_event_at": None}
+    return {"available": True, "last_7d": len(rows),
+            "last_event_at": rows[0]["occurred_at"] if rows else None}
 
 
 def _fresh(iso, minutes=10) -> bool:
@@ -470,6 +495,146 @@ def google_link(body: GoogleLinkIn, org_id: str = ORG_ID, authorization: str = H
     cred = (_rows("vision_credential", org_id, provider="google_sdm") or [None])[0] or {}
     return {"linked": bool(cred.get("refresh_token_enc")), "status": cred.get("status"),
             "project_id": cred.get("project_id")}
+
+
+def _verify_pubsub(request: Request) -> str:
+    """'' when this really is our Pub/Sub push; otherwise why not, for the log.
+
+    Pub/Sub attaches an OIDC token signed by Google for the service account the subscription was
+    created with. Verifying it is the ONLY authentication this endpoint has, so it fails closed in
+    every direction: unset config refuses everything, a token for a different audience is refused,
+    and a token from a different service account is refused — without that last check any
+    Google-issued OIDC token in the world would pass, which is not a gate at all.
+    """
+    aud = (settings.VISION_PUBSUB_AUDIENCE or "").strip()
+    sa = (settings.VISION_PUBSUB_SA_EMAIL or "").strip()
+    if not aud or not sa:
+        return "VISION_PUBSUB_AUDIENCE / VISION_PUBSUB_SA_EMAIL not configured"
+    header = (request.headers.get("authorization") or "").strip()
+    if not header.lower().startswith("bearer "):
+        return "no bearer token"
+    token = header.split(" ", 1)[1].strip()
+    try:
+        from google.oauth2 import id_token
+        from google.auth.transport import requests as google_requests
+        claims = id_token.verify_oauth2_token(token, google_requests.Request(), audience=aud)
+    except Exception as e:
+        return f"token rejected ({type(e).__name__})"
+    if (claims.get("email") or "").lower() != sa.lower():
+        return "token is for a different service account"
+    if not claims.get("email_verified", False):
+        return "service account email not verified"
+    return ""
+
+
+@router.post("/google/events", status_code=204)
+async def google_events(request: Request):
+    """Google Cloud Pub/Sub PUSH of an SDM camera event. PUBLIC by necessity; see _verify_pubsub.
+
+    Answers 204 for anything it will not or cannot store — an unknown device, a disabled tenant, a
+    trait update rather than a camera event, a body that does not parse. Pub/Sub redelivers on any
+    non-2xx, so returning an error for a message that can never succeed would produce an infinite
+    redelivery loop for as long as the subscription lives. 401 is reserved for the one case where
+    retrying IS the right behaviour: the caller is not proven to be Google.
+    """
+    why = _verify_pubsub(request)
+    if why:
+        # To STDERR, not vision_audit: the caller is unauthenticated so there is no tenant to file
+        # this under, and vision_audit.org_id is NOT NULL — the insert would fail and _audit would
+        # swallow it, leaving refused pushes on a public endpoint completely unrecorded.
+        print(f"[vision-pubsub] refused push: {why}", file=sys.stderr, flush=True)
+        # One message for every rejection. An unauthenticated caller learns whether it got the
+        # audience wrong, not which tenants exist.
+        raise HTTPException(401, "Unauthenticated push.")
+
+    try:
+        envelope = json.loads(await request.body() or b"{}")
+    except (ValueError, TypeError):
+        return Response(status_code=204)
+    ev = G.parse_event(G.decode_push(envelope))
+    if not ev:
+        return Response(status_code=204)
+
+    # TENANCY COMES FROM OUR TABLE, NOT THE BODY. The device name is looked up in vision_camera;
+    # an unknown device is silently dropped. A public endpoint that took org_id from the payload
+    # would be a cross-tenant write primitive.
+    try:
+        cams = (sb().table("vision_camera").select("id,org_id,store_code,enabled")
+                .eq("device_name", ev["device_name"]).limit(1).execute().data) or []
+    except Exception:
+        raise HTTPException(503, "Camera registry unavailable.")
+    if not cams or not cams[0].get("enabled"):
+        return Response(status_code=204)
+    cam = cams[0]
+    org_id = cam["org_id"]
+
+    cfg = _cfg(org_id)
+    if not cfg.get("available") or not C.feature_enabled(cfg, "google_events"):
+        return Response(status_code=204)
+
+    # Google's timestamp, placed in the STORE's local time — busy hours is a local-time question.
+    try:
+        when = datetime.fromisoformat(ev["occurred_at"].replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return Response(status_code=204)
+    local = when.astimezone(ZoneInfo(_tz_name(org_id, cam.get("store_code"))))
+
+    rows = [{
+        "org_id": org_id, "camera_id": cam["id"], "device_name": ev["device_name"],
+        "store_code": cam.get("store_code"), "event_type": kind,
+        "occurred_at": _iso(when),
+        "local_date": local.date().isoformat(), "local_hour": local.hour,
+        # One message can carry a person AND a motion event; the suffix keeps each row distinct
+        # while staying stable across redelivery, which is what makes the dedup index work.
+        "google_event_id": f"{ev['event_id']}:{kind}",
+    } for kind in ev["kinds"]]
+    try:
+        sb().table("vision_camera_event").upsert(
+            rows, on_conflict="org_id,google_event_id", ignore_duplicates=True).execute()
+    except Exception as e:
+        # A storage failure IS worth a retry, unlike everything above.
+        raise HTTPException(503, f"Could not record the event: {str(e)[:120]}")
+    return Response(status_code=204)
+
+
+@router.get("/busy-hours")
+def busy_hours(store_code: str = "", days: int = 28, org_id: str = ORG_ID,
+               authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Activity by local hour, from Google's own person events — no analyzer involved.
+
+    This is PRESENCE, not footfall: Google says a person was seen, never which way they walked, so
+    these are activity levels for staffing, not a customer count. The distinction is carried in the
+    response so a caller cannot quietly present it as traffic."""
+    caller = _require_caller(authorization, x_active_org)
+    cfg = _cfg(org_id)
+    _require_module(cfg, "google_events")
+    keyset = _keyset(authorization, org_id)
+    since = (_now().date() - timedelta(days=max(1, min(int(days or 28), 365)))).isoformat()
+
+    q = (sb().table("vision_camera_event")
+         .select("store_code,local_date,local_hour,event_type")
+         .eq("org_id", org_id).eq("event_type", "person").gte("local_date", since))
+    if store_code:
+        q = q.eq("store_code", store_code)
+    try:
+        rows = q.limit(50000).execute().data or []
+    except Exception:
+        raise HTTPException(503, "Event history unavailable.")
+    rows = [r for r in rows if _in_keyset(keyset, r.get("store_code"))]
+
+    hours, dates = {}, set()
+    for r in rows:
+        hours[r["local_hour"]] = hours.get(r["local_hour"], 0) + 1
+        dates.add(r["local_date"])
+    days_seen = len(dates) or 1
+    return {
+        "since": since, "days_with_data": days_seen, "events": len(rows),
+        "by_hour": [{"hour": h, "events": hours.get(h, 0),
+                     "per_day": round(hours.get(h, 0) / days_seen, 1)} for h in range(24)],
+        "measure": "presence",
+        "note": "Person sightings reported by the cameras themselves. This is activity, not "
+                "directional footfall — a customer leaving looks the same as one arriving.",
+    }
 
 
 @router.delete("/google/link")

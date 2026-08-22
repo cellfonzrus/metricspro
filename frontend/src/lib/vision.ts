@@ -17,6 +17,8 @@ export interface VisionConfig {
   traffic_enabled: boolean
   heatmap_enabled: boolean
   audio_analytics_enabled: boolean
+  // Google's own person events (mig 907). Presence only — never directional footfall.
+  google_events_enabled: boolean
   behavior_scoring_enabled: boolean
   audio_kill_switch: boolean
   audio_consent_mode: 'required' | 'off'

@@ -65,7 +65,7 @@ export default function PublicOnboardPage() {
   useEffect(() => {
     fetch(`${API_URL}/api/v1/hr/public/onboarding/${token}`)
       .then(r => r.ok ? r.json() : r.json().then(j => Promise.reject(j)))
-      // The response is not read: date of birth is the only identity gate (mig 908 removed the
+      // The response is not read: date of birth is the only identity gate (mig 909 removed the
       // last-4-SSN alternative). The call still runs because its REJECTION is what tells the
       // employee the link is invalid or expired — see the catch below.
       .then(() => {})

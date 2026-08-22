@@ -1,4 +1,4 @@
--- 907_pricing_and_trial.sql — PUBLIC price list + the 30-day free trial.
+-- 908_pricing_and_trial.sql — PUBLIC price list + the 30-day free trial.
 --
 -- WHY: MetricsPro is sold as SaaS, but until now there was no price the OPERATOR could set and no
 -- trial a new company could start on. Billing (mig 064) prices ONE tenant at a time, privately, after
@@ -99,4 +99,4 @@ GRANT ALL ON storeops.pricing_package  TO anon, authenticated, service_role;
 GRANT ALL ON storeops.pricing_settings TO anon, authenticated, service_role;
 
 NOTIFY pgrst, 'reload schema';
-SELECT 'Migration 907 complete — storeops.pricing_package + storeops.pricing_settings + tenant trial columns' AS status;
+SELECT 'Migration 908 complete — storeops.pricing_package + storeops.pricing_settings + tenant trial columns' AS status;

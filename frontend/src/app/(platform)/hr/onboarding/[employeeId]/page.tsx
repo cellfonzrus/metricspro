@@ -389,7 +389,7 @@ export default function EmployeeOnboardingPage() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                   {/* Date of birth is the only identity gate — the last-4-SSN option went with the
-                      rest of the SSN data (mig 908). Kept as a select so adding a future gate is a
+                      rest of the SSN data (mig 909). Kept as a select so adding a future gate is a
                       one-line change rather than a re-layout. */}
                   <select style={inp} value={gen.kind} onChange={e => setGen(g => ({ ...g, kind: e.target.value, value: '' }))}>
                     <option value="dob">Verify by date of birth</option>

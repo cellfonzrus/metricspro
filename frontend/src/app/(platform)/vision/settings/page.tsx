@@ -332,6 +332,43 @@ export default function VisionSettingsPage() {
         )}
       </Section>
 
+      {/* 4b. Google's own events — free, every camera, no analyzer */}
+      {status.google.linked && (
+        <Section title="4b · Busy hours from Google (no analyzer needed)"
+          note="Nest cameras detect people themselves. Google can push us an event each time — free, every camera, no video and no edge box. It gives ACTIVITY, not direction: a customer leaving looks the same as one arriving, so this is busy hours and staffing, never a footfall count.">
+          <Toggle label="Accept Google camera events" checked={cfg.google_events_enabled}
+            disabled={!canEdit || !cfg.enabled}
+            onChange={v => saveConfig({ google_events_enabled: v })}
+            hint="Person sightings pushed by Google" />
+          <div style={{ ...panel, marginTop: 12, fontSize: 13 }}>
+            {/* A push subscription that is wrong does not announce itself — Google retries into the
+                void for days. So this reports what ARRIVED, not what is configured. */}
+            {status.events?.last_7d ? (
+              <>
+                <b style={{ color: '#16a34a' }}>{status.events.last_7d} event(s)</b> in the last 7 days
+                {status.events.last_event_at && <> · most recent {fmtDateTime(status.events.last_event_at)}</>}
+              </>
+            ) : (
+              <span style={{ color: 'var(--text2)' }}>
+                No events received yet. Until some arrive this is set up but not working — the
+                subscription below has to be created on Google&apos;s side.
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 12 }}>
+            In the Google Cloud console, create a <b>Pub/Sub push subscription</b> on the Device
+            Access topic, pointing at:
+            <code style={{ display: 'block', margin: '6px 0', fontSize: 12, wordBreak: 'break-all' }}>
+              {apiBase()}/api/v1/vision/google/events
+            </code>
+            Enable <b>authentication</b> on the subscription and pick a service account — the
+            endpoint refuses anything that is not signed by it. Then set{' '}
+            <code>VISION_PUBSUB_AUDIENCE</code> and <code>VISION_PUBSUB_SA_EMAIL</code> on the API
+            server to match. Both unset means every push is refused, which is deliberate.
+          </div>
+        </Section>
+      )}
+
       {/* 5. Analyzers */}
       <Section title="5 · Edge analyzers"
         note="Video is never processed on our servers. A small box in each store holds the live feed and posts only derived numbers. Register one per store; the signing secret is shown once.">

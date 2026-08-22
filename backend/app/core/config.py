@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     WHATSAPP_OTP_LANG: str = "en"
     # Webhook (Meta App → WhatsApp → Configuration): the verify token you set on the callback URL,
     # and the app secret to validate X-Hub-Signature-256 on inbound POSTs (optional but recommended).
+    # ── Google SDM person events (mig 907) ──────────────────────────────────────────────────────
+    # Pub/Sub PUSHES to /api/v1/vision/google/events, which is therefore PUBLIC — Google carries no
+    # session of ours. Its only authentication is the OIDC token Pub/Sub attaches, so BOTH of these
+    # must be set for the endpoint to accept anything. Unset = fail closed, refuse every push, the
+    # same posture WHATSAPP_APP_SECRET takes below: an unauthenticated write path into a tenant's
+    # analytics is worse than no events at all.
+    #   AUDIENCE  — whatever you typed as the audience when creating the push subscription.
+    #   SA_EMAIL  — the service account Pub/Sub signs as; the token's email claim must equal it,
+    #               otherwise ANY Google-issued OIDC token would be accepted, which is no gate.
+    VISION_PUBSUB_AUDIENCE: str = ""
+    VISION_PUBSUB_SA_EMAIL: str = ""
+
     WHATSAPP_VERIFY_TOKEN: str = ""
     WHATSAPP_APP_SECRET: str = ""
     # POST /api/v1/remediation/whatsapp-webhook is on the PUBLIC allowlist (Meta carries no JWT), so its

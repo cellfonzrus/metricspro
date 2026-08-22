@@ -86,7 +86,7 @@ plaintiff will argue your calculation caused the shortfall.
 
 ### 4. Data breach involving identifiers — **resolved**
 
-**This exposure has been removed.** Migration 908 erased and dropped every SSN and driver's licence
+**This exposure has been removed.** Migration 909 erased and dropped every SSN and driver's licence
 field, and the code that captured, stored, decrypted and displayed them is gone.
 
 A correction to what I first told you: the POS held **full** SSNs and **full** driver's licence

@@ -62,7 +62,7 @@ function SetupBanner() {
   )
 }
 
-// Free-trial countdown (mig 907). Banner-only, exactly like SetupBanner above: NOTHING is blocked
+// Free-trial countdown (mig 908). Banner-only, exactly like SetupBanner above: NOTHING is blocked
 // when a trial lapses. Whether a lapsed customer keeps working stays the operator's explicit call
 // through the existing tenant on/off switch — an automatic lockout is not something this banner, or
 // anything else in this change, decides on their behalf.

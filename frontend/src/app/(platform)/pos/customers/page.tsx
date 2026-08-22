@@ -99,7 +99,7 @@ export default function PosCustomersPage() {
   const [notesError, setNotesError] = useState('')
   const [savingNote, setSavingNote] = useState(false)
   const [listError, setListError] = useState('')
-  // SSN and driver's licence are no longer part of this product (mig 908, owner directive). There
+  // SSN and driver's licence are no longer part of this product (mig 909, owner directive). There
   // is no capture field, no reveal, no masked last-4 and no stored value — the columns, the access
   // functions and the encryption key are all gone. Do not add them back without an owner decision.
 

@@ -4,13 +4,13 @@ Deliberately imports nothing from `app.modules.core`: core's router imports THIS
 trial at tenant provisioning, and the billing pricing router imports it too, so anything heavier here
 would be a circular import.
 
-Shape (migration 907):
+Shape (migration 908):
     storeops.pricing_settings.trial_days   how long a new company gets for free (default 30)
     storeops.tenants.trial_started_at      stamped once, at provisioning
     storeops.tenants.trial_ends_at         trial_started_at + trial_days
     storeops.tenants.plan_status           trialing | active | trial_expired | cancelled
 
-EVERY function here is best-effort: if migration 907 has not been applied, reads fall back to the
+EVERY function here is best-effort: if migration 908 has not been applied, reads fall back to the
 code defaults and the trial stamp is silently skipped. An un-run migration must never 500 a signup
 or /core/me — it just means nobody is on a trial yet.
 
@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 DEFAULT_TRIAL_DAYS = 30
 VALID_PLAN_STATUS = {"trialing", "active", "trial_expired", "cancelled"}
 
-# Defaults used when migration 907 is absent, so every caller sees the same shape either way.
+# Defaults used when migration 908 is absent, so every caller sees the same shape either way.
 DEFAULT_SETTINGS = {
     "trial_enabled": True,
     "trial_days": DEFAULT_TRIAL_DAYS,
@@ -42,7 +42,7 @@ def _now():
 
 def _read_settings(client) -> tuple[dict, bool]:
     """(settings, reachable). `reachable` is False when the pricing_settings table cannot be read at
-    all — i.e. migration 907 has not been applied. The two are separated because the callers want
+    all — i.e. migration 908 has not been applied. The two are separated because the callers want
     OPPOSITE things from that case: a display caller wants sensible defaults to render, while the
     trial STAMP must write nothing at all (see start_trial_fields)."""
     out = dict(DEFAULT_SETTINGS)
@@ -64,7 +64,7 @@ def _read_settings(client) -> tuple[dict, bool]:
 
 def load_settings(client) -> dict:
     """The singleton storeops.pricing_settings row, merged over DEFAULT_SETTINGS. Never raises — an
-    un-run migration 907 yields the code defaults, so the public pricing feed still answers."""
+    un-run migration 908 yields the code defaults, so the public pricing feed still answers."""
     return _read_settings(client)[0]
 
 
@@ -76,11 +76,11 @@ def trial_days(client) -> int:
 
 def start_trial_fields(client) -> dict:
     """The columns to write on a BRAND-NEW tenant so it starts on a trial. Empty dict when trials are
-    off, OR when migration 907 has not been applied — the caller then inserts the tenant with no
-    trial stamp, exactly as it did before 907.
+    off, OR when migration 908 has not been applied — the caller then inserts the tenant with no
+    trial stamp, exactly as it did before 908.
 
     The un-run-migration case is checked HERE rather than left to the caller's insert to fail: on a
-    pre-907 database the trial columns do not exist, so stamping them would make every signup insert
+    pre-908 database the trial columns do not exist, so stamping them would make every signup insert
     fail and fall back. Reading the settings table's absence up front keeps that path clean.
     """
     settings, reachable = _read_settings(client)
@@ -113,8 +113,8 @@ def _parse(ts):
 def trial_view(tenant_row: dict) -> dict | None:
     """What the app should show about this tenant's plan, computed from the stored stamp + the clock.
 
-    Returns None for a tenant carrying no plan state at all (pre-907 rows, or a tenant provisioned
-    while trials were off) — callers treat None as "say nothing", which is the pre-907 behaviour.
+    Returns None for a tenant carrying no plan state at all (pre-908 rows, or a tenant provisioned
+    while trials were off) — callers treat None as "say nothing", which is the pre-908 behaviour.
 
         {status, days_left, ends_at, expired}
 

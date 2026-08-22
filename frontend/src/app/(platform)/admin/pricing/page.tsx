@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, fmt } from '@/lib/client'
 import { useAuth } from '@/lib/auth-context'
 
-// Pricing & Free Trial (mig 907) — SUPER-ADMIN only. This is where the price the public sees is
+// Pricing & Free Trial (mig 908) — SUPER-ADMIN only. This is where the price the public sees is
 // SET. The marketing site (/welcome) renders whatever is published here and carries no price of its
 // own, so a change on this page IS the change on the website.
 //
@@ -136,7 +136,7 @@ export default function PricingAdmin() {
       </p>
 
       {!ready && <div className="card" style={{ borderColor: '#f59e0b', color: '#b45309', padding: 12, marginBottom: 12 }}>
-        ⚠️ Migration <code>907_pricing_and_trial.sql</code> hasn&apos;t been applied yet — prices and the trial length
+        ⚠️ Migration <code>908_pricing_and_trial.sql</code> hasn&apos;t been applied yet — prices and the trial length
         can&apos;t be saved. Run it in the Supabase SQL editor.</div>}
       {err && <div className="card" style={{ borderColor: '#c0392b', color: '#c0392b', padding: 12, marginBottom: 12 }}>{err}</div>}
       {note && <div className="card" style={{ borderColor: '#16a34a', color: '#16a34a', padding: 12, marginBottom: 12 }}>{note}</div>}

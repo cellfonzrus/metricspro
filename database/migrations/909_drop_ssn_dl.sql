@@ -1,4 +1,4 @@
--- 908_drop_ssn_dl.sql — REMOVE Social Security numbers and driver's licence data from the platform.
+-- 909_drop_ssn_dl.sql — REMOVE Social Security numbers and driver's licence data from the platform.
 --
 -- ⚠️ THIS MIGRATION DESTROYS DATA AND CANNOT BE UNDONE. ⚠️
 --
@@ -77,4 +77,4 @@ BEGIN
 END $$;
 
 NOTIFY pgrst, 'reload schema';
-SELECT 'Migration 908 complete — SSN and driver''s licence data removed from pos.customers and the HR identity gate' AS status;
+SELECT 'Migration 909 complete — SSN and driver''s licence data removed from pos.customers and the HR identity gate' AS status;
