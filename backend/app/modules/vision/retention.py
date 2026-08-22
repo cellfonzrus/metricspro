@@ -29,7 +29,7 @@ TARGETS = (
     ("presence", "vision_presence_sample", "sampled_at"),
     ("transcript", "vision_transcript", "started_at"),
     ("visit", "vision_visit", "entered_at"),
-    # mig 908. Sits above the aggregates because it carries the most per-person detail in the module
+    # mig 910. Sits above the aggregates because it carries the most per-person detail in the module
     # and has the shortest window; a partial run under a timeout should have cleared it already.
     ("activity", "vision_activity_bucket", "bucket_start"),
     ("coverage", "vision_coverage_bucket", "bucket_start"),

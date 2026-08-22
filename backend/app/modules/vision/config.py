@@ -59,7 +59,7 @@ DEFAULT_CONFIG = {
     "audio_analytics_enabled": False,
     "behavior_scoring_enabled": False,
     "audio_consent_mode": "required",
-    # Employee activity from pose (mig 908). Both default FALSE for the same reason the audio pair
+    # Employee activity from pose (mig 910). Both default FALSE for the same reason the audio pair
     # does: the safe state and the default state must be the same one. Coverage defaults TRUE — it
     # names nobody, needs no consent, and carries no per-person content at all.
     "activity_enabled": False,
@@ -203,7 +203,7 @@ def retention_cutoffs(cfg: dict, now=None) -> dict:
     for key, col in (("presence", "presence_retention_days"), ("visit", "visit_retention_days"),
                      ("transcript", "transcript_retention_days"), ("heat", "heat_retention_days"),
                      ("score", "score_retention_days"),
-                     # mig 908. Activity buckets are the most sensitive rows in the module, so they
+                     # mig 910. Activity buckets are the most sensitive rows in the module, so they
                      # expire fastest of anything but raw presence: long enough for a monthly
                      # coaching conversation, too short to accumulate a dossier. Coverage names
                      # nobody and keeps the heat map's reporting horizon.

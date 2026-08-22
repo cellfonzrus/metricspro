@@ -1423,7 +1423,7 @@ async def edge_config(request: Request):
             "traffic": C.feature_enabled(cfg, "traffic"),
             "heatmap": C.feature_enabled(cfg, "heatmap"),
             "audio_analytics": C.feature_enabled(cfg, "audio_analytics"),
-            # mig 908. The analyzer swaps to the POSE weights when activity is on, so this answer
+            # mig 910. The analyzer swaps to the POSE weights when activity is on, so this answer
             # changes which model it loads — hence it is polled like the rest rather than being a
             # start-up flag: an operator switching activity off stops the pose model at the edge on
             # the next poll instead of merely stopping the storage here.
@@ -1712,7 +1712,7 @@ async def edge_ingest(request: Request):
 
     cams = {c["device_name"]: c for c in _rows("vision_camera", org_id)}
     consents = {str(r.get("employee_id")): r for r in _rows("vision_consent", org_id, scope="audio")}
-    # Video consent is a SEPARATE scope from audio (mig 908) — an employee can agree to one and not
+    # Video consent is a SEPARATE scope from audio (mig 910) — an employee can agree to one and not
     # the other, and bundling them would mean signing for a transcript also signed for posture.
     video_consents = {str(r.get("employee_id")): r
                       for r in _rows("vision_consent", org_id, scope="video_analytics")}
@@ -1728,7 +1728,7 @@ async def edge_ingest(request: Request):
     # duplicating one nudges an aggregate imperceptibly, and inventing a key to dedupe on would cost
     # more than it saves.
     TRAFFIC_KEY = "org_id,store_code,camera_id,track_key,direction,occurred_at"
-    # Activity and coverage carry a natural key and a UNIQUE index on it (mig 908), so a retried
+    # Activity and coverage carry a natural key and a UNIQUE index on it (mig 910), so a retried
     # batch is upserted rather than doubled. Unlike traffic these OVERWRITE: the analyzer can post a
     # partial bucket and then the finished one, and the finished one is the truth.
     ACTIVITY_KEY = "org_id,camera_id,bucket_start,track_key"

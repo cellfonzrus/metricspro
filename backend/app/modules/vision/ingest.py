@@ -201,7 +201,7 @@ def normalize_batch(payload: dict, cameras_by_name: dict, cfg: dict, consent_by_
             })
 
         elif kind == "activity":
-            # Per-track posture / movement / company over one bucket (mig 908).
+            # Per-track posture / movement / company over one bucket (mig 910).
             if not C.camera_allows(cfg, cam, "activity"):
                 reject("activity_not_enabled")
                 continue

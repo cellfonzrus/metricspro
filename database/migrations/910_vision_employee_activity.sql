@@ -1,4 +1,4 @@
--- 908 · Vision — employee activity: posture, movement, company, and floor coverage
+-- 910 · Vision — employee activity: posture, movement, company, and floor coverage
 --
 -- OWNER DIRECTIVE 2026-08-22 (sanjot@), verbatim: "build the busy hours view , then the employee
 -- behavior , sitting , yawning, not doing anything walking , talking to the customer etc whatever
