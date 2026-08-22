@@ -26,6 +26,12 @@ name: deploy-website
 #      above the document root and needs to descend into it, e.g. public_html. Leave it unset when
 #      the account is already rooted at the document root, which is the arrangement in step 1.
 #
+#      IT MUST BE THE DOCUMENT ROOT ITSELF, NOT A SUBFOLDER OF IT. This step uploads the CONTENTS
+#      of website/, so index.html lands directly in whatever you name here. Ending the path with
+#      /website puts the whole site at yourdomain.com/website/ — where every internal link and the
+#      .htaccess pretty-URL rules, all of which assume the root, will 404. cPanel -> Domains lists
+#      the real document root for each domain. The step below warns when the path looks wrong.
+#
 # ONCE CONFIGURED, THE PLACEHOLDER GATE IS NOT SKIPPABLE. If any [[CONFIRM: ...]] marker is still in
 # the pages the job fails before it connects to anything. Publishing half-finished legal documents is
 # the one outcome this pipeline exists to prevent.
@@ -57,7 +63,7 @@ jobs:
     name: Publish website to Bluehost
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ── Are we configured to deploy at all? ─────────────────────────────────────────────────
       # This runs FIRST so that an unconfigured repository is simply not deploying, rather than
@@ -127,6 +133,30 @@ jobs:
           flags="$flags --exclude-glob check-before-launch.sh"
           if [ "${DO_DELETE:-false}" = "true" ]; then flags="$flags --delete"; fi
           if [ "${DRY_RUN:-false}"   = "true" ]; then flags="$flags --dry-run"; fi
+
+          echo "Uploading the contents of website/ into: $remote"
+
+          # The contents of website/ go INTO $remote, so $remote must be the document root itself.
+          # Naming the repo folder here is the easy mistake, and it is quiet: the upload succeeds and
+          # the site answers on a path nobody visits, with every root-relative link broken.
+          case "$remote" in
+            */website|website|*/public_html/website)
+              {
+                echo "### Check FTP_REMOTE_DIR"
+                echo ""
+                echo "The upload target ends in \`/website\`:"
+                echo ""
+                echo "    $remote"
+                echo ""
+                echo "This step uploads the **contents** of \`website/\`, so \`index.html\` is now at"
+                echo "\`$remote/index.html\` and the site answers at *yourdomain.com/website/* rather than"
+                echo "at the root — where its internal links and \`.htaccess\` rules will 404."
+                echo ""
+                echo "If that is not what you wanted, drop the last segment from the \`FTP_REMOTE_DIR\`"
+                echo "repository variable and re-run. cPanel → Domains lists the real document root."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "WARNING: upload target ends in /website — see the job summary." ;;
+          esac
 
           # ssl-force refuses to fall back to cleartext — an FTP password must never cross the wire in
           # the open. ssl-protect-data encrypts the file transfer too, not just the login. Bluehost's
