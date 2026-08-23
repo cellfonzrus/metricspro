@@ -24,12 +24,22 @@ import {
   peakHour, perDayLabel, type StoreOption, type BusyHourRow,
 } from '@/lib/vision'
 
+interface CameraShare { device_name: string; name: string; store_code: string; events: number; share: number }
+interface Dominant { store_code: string; name: string; share: number; events: number; of: number }
 interface BusyPayload {
   since: string
+  store_code: string
   days_with_data: number
   events: number
+  stores: number
+  stores_scored: number
+  stores_too_quiet: number
   by_hour: BusyHourRow[]
-  measure: string
+  cameras: CameraShare[]
+  dominant: Dominant[]
+  measure: string           // 'events' (one store, raw counts) | 'index' (several, equal-weighted)
+  caveat: string            // what this particular measure does and does not say
+  peak: BusyHourRow | null
   note: string
 }
 
@@ -38,6 +48,10 @@ const BAR = '#2563eb'          // the app's own accent; validated ≥3:1 on both
 export default function VisionBusyHoursPage() {
   const [data, setData] = useState<BusyPayload | null>(null)
   const [stores, setStores] = useState<StoreOption[] | null>(null)
+  // DEFAULT TO ONE STORE, not the whole estate. Summing raw sightings across stores lets a store
+  // with more cameras — or one chattier camera — outrank a genuinely busier store, and a real
+  // estate showed exactly that: five of 21 cameras produced 45% of all events. Reading one store
+  // is always sound, because its camera set is the same at 9am and at 5pm.
   const [store, setStore] = useState('')
   const [days, setDays] = useState(28)
   const [err, setErr] = useState('')
@@ -59,14 +73,24 @@ export default function VisionBusyHoursPage() {
   useEffect(() => { void load() }, [load])
   useEffect(() => {
     api('/api/v1/storeops/stores')
-      .then(r => setStores(storeOptions(r)))
+      .then(r => {
+        const opts = storeOptions(r)
+        setStores(opts)
+        // Land on a real store rather than the estate. The functional form cannot clobber a choice
+        // the operator has already made, and this effect runs once, so no extra guard is needed.
+        setStore(cur => cur || opts[0]?.code || '')
+      })
       .catch(() => setStores(null))
   }, [])
 
   const rows = data?.by_hour || []
-  const peak = peakHour(rows)
-  const ceiling = Math.max(peak.events, 1)
-  const open = rows.filter(r => r.events > 0)
+  // The server decides which measure is honest for this scope and says so; the page never picks,
+  // or the two could disagree about what the bars mean.
+  const indexed = data?.measure === 'index'
+  const valueOf = (r: BusyHourRow) => (indexed ? (r.index ?? 0) : r.events)
+  const peak = data?.peak || peakHour(rows)
+  const ceiling = Math.max(valueOf(peak as BusyHourRow), indexed ? 0.01 : 1)
+  const open = rows.filter(r => valueOf(r) > 0)
 
   const input: React.CSSProperties = {
     padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)',
@@ -107,7 +131,27 @@ export default function VisionBusyHoursPage() {
         never which direction they were walking. Someone leaving looks the same as someone arriving,
         and staff are counted alongside customers. Use it to see <i>when</i> the store is busy, and
         the entrance camera&apos;s in/out count for <i>how many</i>.
+        {/* The second half comes from the server, because it depends on WHICH measure is being
+            drawn — and a caveat that describes a different measure than the bars is worse than
+            none at all. */}
+        {data?.caveat && <div style={{ marginTop: 8, color: 'var(--text2)' }}>{data.caveat}</div>}
       </div>
+
+      {/* A store whose curve is really one camera's curve. This was invisible until somebody ran a
+          query by hand and found a lens facing the pavement carrying 96% of its store, a quarter of
+          it after midnight. Now it says so where the numbers are read. */}
+      {(data?.dominant?.length || 0) > 0 && (
+        <div style={{ ...panel, borderLeft: '3px solid #b45309', marginBottom: 16, fontSize: 13 }}>
+          <b>One camera is carrying {data!.dominant.length === 1 ? 'a store' : 'some stores'}.</b>
+          {data!.dominant.map(d => (
+            <div key={d.store_code} style={{ marginTop: 6, color: 'var(--text2)' }}>
+              <b>{d.store_code}</b> — {Math.round(d.share * 100)}% of its sightings come from{' '}
+              <b>{d.name}</b> ({d.events} of {d.of}). That store&apos;s bars are mostly that one
+              camera, so check what it is pointed at before staffing against them.
+            </div>
+          ))}
+        </div>
+      )}
 
       {err && <div style={{ ...panel, borderColor: '#dc2626', color: '#dc2626', fontSize: 13, marginBottom: 16 }}>{err}</div>}
 
@@ -129,9 +173,19 @@ export default function VisionBusyHoursPage() {
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text2)' }}>Sightings</div>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text2)' }}>
+                {indexed ? 'Stores compared' : 'Sightings'}
+              </div>
               <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.2, fontVariantNumeric: 'tabular-nums' }}>
-                {data.events.toLocaleString()}
+                {/* A summed sighting count across stores is the number that started all this — it
+                    reads as volume while measuring camera population. Under the index it is
+                    replaced by what the index actually averages over. */}
+                {indexed ? data.stores_scored : data.events.toLocaleString()}
+                {indexed && data.stores_too_quiet > 0 && (
+                  <span style={{ fontSize: 15, fontWeight: 400, color: 'var(--text2)' }}>
+                    {' '}of {data.stores}
+                  </span>
+                )}
               </div>
             </div>
             <div>
@@ -150,29 +204,38 @@ export default function VisionBusyHoursPage() {
 
           {/* The chart. Bars, one series, so no legend — the heading says what they are. */}
           <div style={{ ...panel, marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>Sightings per hour of day</div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>
+              {indexed ? 'Share of a typical store\u2019s day' : 'Sightings per hour of day'}
+            </div>
             <div style={{ fontSize: 11.5, color: 'var(--text2)', marginBottom: 16 }}>
-              Averaged across {data.days_with_data} day{data.days_with_data === 1 ? '' : 's'} · since {data.since}
+              {indexed
+                ? <>Each store weighted equally · {data.stores_scored} store{data.stores_scored === 1 ? '' : 's'} · since {data.since}</>
+                : <>Averaged across {data.days_with_data} day{data.days_with_data === 1 ? '' : 's'} · since {data.since}</>}
             </div>
             <div style={{ overflowX: 'auto' }}>
               <div style={{ minWidth: 620 }}>
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 190 }}>
                   {rows.map(r => {
-                    const h = r.events > 0 ? Math.max(3, (r.events / ceiling) * 160) : 0
-                    const isPeak = r.hour === peak.hour && r.events > 0
+                    const v = valueOf(r)
+                    const h = v > 0 ? Math.max(3, (v / ceiling) * 160) : 0
+                    const isPeak = r.hour === peak.hour && v > 0
                     return (
                       <div key={r.hour}
                         onMouseEnter={() => setHover(r.hour)} onMouseLeave={() => setHover(null)}
                         style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
                           alignItems: 'center', height: '100%', position: 'relative', cursor: 'default' }}>
                         {/* Selective direct label: the peak only. A number on every bar is noise. */}
-                        {(isPeak || hover === r.hour) && r.events > 0 && (
+                        {(isPeak || hover === r.hour) && v > 0 && (
                           <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4,
                             fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                            {perDayLabel(r)}<span style={{ color: 'var(--text3)', fontWeight: 400 }}>/day</span>
+                            {indexed
+                              ? <>{(r.index ?? 0).toFixed(1)}<span style={{ color: 'var(--text3)', fontWeight: 400 }}>%</span></>
+                              : <>{perDayLabel(r)}<span style={{ color: 'var(--text3)', fontWeight: 400 }}>/day</span></>}
                           </div>
                         )}
-                        <div title={`${hourLabel(r.hour)} · ${r.events} sighting${r.events === 1 ? '' : 's'} · ${perDayLabel(r)} per day`}
+                        <div title={indexed
+                          ? `${hourLabel(r.hour)} · ${(r.index ?? 0).toFixed(1)}% of a typical store's day`
+                          : `${hourLabel(r.hour)} · ${r.events} sighting${r.events === 1 ? '' : 's'} · ${perDayLabel(r)} per day`}
                           style={{
                             width: '100%', height: h, background: BAR,
                             // Rounded data-end, square at the baseline it is anchored to.
@@ -203,13 +266,17 @@ export default function VisionBusyHoursPage() {
             <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Show the numbers</summary>
             <div style={{ overflowX: 'auto', marginTop: 12 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead><tr><th style={th}>Hour</th><th style={th}>Sightings</th><th style={th}>Per day</th></tr></thead>
+                <thead><tr><th style={th}>Hour</th>
+                  <th style={th}>{indexed ? 'Share of day' : 'Sightings'}</th>
+                  <th style={th}>{indexed ? 'Sightings' : 'Per day'}</th></tr></thead>
                 <tbody>
                   {open.map(r => (
                     <tr key={r.hour}>
                       <td style={{ ...cell, fontWeight: r.hour === peak.hour ? 700 : 400 }}>{hourLabel(r.hour)}</td>
-                      <td style={{ ...cell, fontVariantNumeric: 'tabular-nums' }}>{r.events}</td>
-                      <td style={{ ...cell, fontVariantNumeric: 'tabular-nums' }}>{perDayLabel(r)}</td>
+                      <td style={{ ...cell, fontVariantNumeric: 'tabular-nums' }}>
+                        {indexed ? `${(r.index ?? 0).toFixed(1)}%` : r.events}</td>
+                      <td style={{ ...cell, fontVariantNumeric: 'tabular-nums' }}>
+                        {indexed ? r.events : perDayLabel(r)}</td>
                     </tr>
                   ))}
                 </tbody>

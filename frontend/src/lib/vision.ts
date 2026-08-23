@@ -149,7 +149,10 @@ export function hourLabel(h: number): string {
 }
 
 // ── Busy hours (Google's own person events, mig 907) ─────────────────────────────────────────────
-export interface BusyHourRow { hour: number; events: number; per_day: number }
+// `index` is each store's own day normalised to 100 and averaged with EQUAL WEIGHT across stores —
+// the honest estate-level measure. `events` is the raw count, honest within ONE store because its
+// camera set does not change across the day. Which one the page draws is the server's call.
+export interface BusyHourRow { hour: number; events: number; per_day: number; index?: number }
 
 // THE BUSIEST HOUR, and what happens on a tie. Equally-busy hours resolve to the EARLIER one:
 // a manager told "3p and 7p tie" still has to pick one, and the earlier is where the day's
