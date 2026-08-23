@@ -364,6 +364,20 @@ def explain_rep(client, org_id, period, rep, carrier_mode="plan", identity_map=N
             "store": plan_row.get("store"), "market": plan_row.get("market"), "has_sale_lines": True,
         }
         out["plan_component"] = _annotate_plan_component(out["plan_component"], _dq_cfg)
+        # PLAN ATTACHED BUT $0 — per-rule 'why' diagnosis. When the plan pays $0 (or EVERY rule matched
+        # zero lines), attach the engine's own coverage plan_warnings for this plan + a per-0-match-rule
+        # field distribution over this rep's lines. Isolated + graceful: any failure leaves today's shape
+        # (no `zero_diagnosis` key) and the `_zero_reasons` strings untouched. READ-ONLY.
+        try:
+            _pc = out["plan_component"]
+            _rules = _pc.get("rules") or []
+            _all_zero = bool(_rules) and all(not (r.get("matched_lines") or 0) for r in _rules)
+            if safe_float(_pc.get("total_payout")) == 0 or _all_zero:
+                _zd = _zero_diagnosis(client, org_id, period, rep, ce, _pc, identity_map)
+                if _zd:
+                    _pc["zero_diagnosis"] = _zd
+        except Exception as _zde:
+            out["note"] = (out.get("note") or "") + f" (zero_diagnosis unavailable: {_zde})"
     else:
         out["plan_component"] = _no_plan_narration(client, org_id, period, rep, ce,
                                                    identity_map=identity_map)
@@ -507,6 +521,94 @@ def _no_plan_narration(client, org_id, period, rep, ce, identity_map=None):
             "base_tier_metric": "none", "tiers": [], "total_payout": 0.0,
             "store": store, "market": market, "rep_role": rep_role,
             "has_sale_lines": has_lines, "plans_configured": len(plans), "ready": ready}
+
+
+# ── "plan attached but $0 — why" per-rule diagnosis (read/display only) ─────────────────────────────
+# A plan can resolve to a rep and still pay $0 because its rules match ZERO of the rep's sale lines —
+# e.g. an activation rule keyed on `contract_type` while the rep's Total lines carry a BLANK
+# contract_type, or an accessory rule on category spellings the lines don't have. The engine ALREADY
+# computes the explanation as coverage `plan_warnings` (commission_engine._coverage_block:
+# ct_rules_vs_blank_ct / accessory_rule_classifies_nothing / plan_without_rules), but that only runs
+# under coverage=True and never reached the drill-down for an ATTACHED rep. This surfaces it. It changes
+# NO payout number and NEVER rewrites a rule — a blind re-key could pay the wrong lines. Diagnosis only.
+_SYNTHETIC_MATCH_FIELDS = {"accessory", "activation_bucket", "any"}
+
+
+def _field_distribution(lines, field):
+    """Distribution of a rule's `match_field` across THIS rep's own sale lines (raw_sales dicts). PURE.
+
+    `blank_pct` is the share of the rep's lines whose value for the field is blank (the root cause of a
+    contract_type-keyed rule matching nothing); `top_values` are up to 5 most-common non-blank values so
+    the operator sees what the lines DO carry. A synthetic/computed match_field (accessory /
+    activation_bucket / any) is classified by the pay path, not a raw sale column, so a blank-vs-present
+    breakdown does not apply — it is flagged `computed_field` instead. Counting only; computes no money."""
+    f = str(field or "").strip().lower()
+    total = len(lines)
+    if not f or f in _SYNTHETIC_MATCH_FIELDS:
+        return {"total": total, "computed_field": True,
+                "note": (f"'{field or 'any'}' is a computed/synthetic field (the pay path classifies it "
+                         f"per line), not a raw sale column, so a blank-vs-present breakdown does not "
+                         f"apply here.")}
+    blank, counts = 0, {}
+    for ln in lines:
+        v = str(ln.get(f, "") or "").strip()
+        if not v:
+            blank += 1
+        else:
+            counts[v] = counts.get(v, 0) + 1
+    top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+    return {"total": total, "blank": blank,
+            "blank_pct": round(100.0 * blank / total, 1) if total else 0.0,
+            "top_values": [{"value": v, "count": c} for v, c in top]}
+
+
+def _zero_diagnosis(client, org_id, period, rep, ce, plan_component, identity_map=None):
+    """The operator-actionable 'plan attached but $0 — why' object for ONE rep whose attached plan's
+    rules matched no sale line. READ-ONLY; returns None on any failure or when there is nothing to say.
+
+    Two sources, both authoritative (never a second matching implementation):
+      • warnings — the attached plan's entries from the engine's OWN coverage pass `plan_warnings`
+        (ct_rules_vs_blank_ct / accessory_rule_classifies_nothing / plan_without_rules), run restricted
+        to this rep and threaded with identity_map so it matches the money path.
+      • rules   — for each 0-match rule (from the detail preview already fetched) its
+        {label, match_field, match_op, match_value, matched_lines} plus a `field_distribution` computed
+        HERE over this rep's own un-voided/non-return sale lines, so the number shown (e.g. contract_type
+        blank on 77%) is this rep's reality, not a fleet aggregate."""
+    plan_name = (plan_component or {}).get("plan_name")
+    pn = str(plan_name or "").strip().lower()
+    # 1. engine coverage warnings for THIS plan (carry the engine's own remediation text)
+    warnings = []
+    try:
+        pv = ce.preview(client, org_id, period, coverage=True, only_rep=rep, identity_map=identity_map)
+        cov = pv.get("coverage") or {}
+        warnings = [w for w in (cov.get("plan_warnings") or [])
+                    if str(w.get("plan") or "").strip().lower() == pn]
+    except Exception:
+        warnings = []
+    # 2. this rep's own sale lines (same un-voided / non-return gate the pay path applies)
+    rep_lines = []
+    try:
+        for r in ce._read_sales(client, org_id, period):
+            if _is_voided(r.get("voided")) or str(r.get("trans_type") or "").strip() == "Return":
+                continue
+            if _name_match(r.get("salesperson"), rep):
+                rep_lines.append(r)
+    except Exception:
+        rep_lines = []
+    # 3. per 0-match rule: identity + this rep's field distribution
+    rules_out = []
+    for rb in (plan_component.get("rules") or []):
+        if rb.get("matched_lines"):
+            continue
+        rules_out.append({
+            "label": rb.get("label"), "match_field": rb.get("match_field"),
+            "match_op": rb.get("match_op"), "match_value": rb.get("match_value"),
+            "matched_lines": rb.get("matched_lines") or 0,
+            "field_distribution": _field_distribution(rep_lines, rb.get("match_field")),
+        })
+    if not warnings and not rules_out:
+        return None
+    return {"warnings": warnings, "rules": rules_out, "rep_lines_total": len(rep_lines)}
 
 
 def _rep_no_plan_diagnosis(client, org_id, period, rep, ce, identity_map=None):

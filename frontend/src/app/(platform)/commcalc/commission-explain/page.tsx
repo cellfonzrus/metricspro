@@ -8,6 +8,7 @@ import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
+import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, useGoogleRatings } from '../_lib/googleRatings'
 
 // "How was this commission calculated" — READ-ONLY per-rep drill-down. Shows the two engines that can
@@ -349,7 +350,10 @@ export default function CommissionExplainPage() {
                   )}
                 </PlanLineBreakdown>
               ) : pc?.plan_name ? (
-                <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 8 }}>Plan attached but no rule matched a sale line (see explanation above).</div>
+                <>
+                  <div style={{ fontSize: 13, color: 'var(--text3)', marginTop: 8 }}>Plan attached but no rule matched a sale line (see explanation above).</div>
+                  <WhyZeroPanel zd={pc?.zero_diagnosis} />
+                </>
               ) : null}
             </div>
 
