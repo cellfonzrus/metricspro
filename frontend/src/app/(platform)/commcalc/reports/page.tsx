@@ -10,6 +10,7 @@ import { carrierMode } from '@/lib/rbac'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, filterRows, optionsFromRows, isStandardFilterActive, type StandardFilterValue } from '@/lib/standard-filters'
 import PlanLineBreakdown from '../_lib/PlanLineBreakdown'
+import WhyZeroPanel from '../_lib/WhyZeroPanel'
 import { GoogleRatingChips, GoogleRatingDetail, ratingsText, useGoogleRatings } from '../_lib/googleRatings'
 
 interface Rep {
@@ -1053,6 +1054,11 @@ export default function ReportsPage() {
                           </ul>
                         </div>
                       )}
+
+                      {/* PLAN ATTACHED BUT $0 — the engine's own coverage explanation + this rep's
+                          per-rule field distribution (read-only; no auto-fix). Renders nothing unless
+                          the backend attached plan_component.zero_diagnosis. */}
+                      <WhyZeroPanel zd={explainPc?.zero_diagnosis} />
                     </>
                   ) : (
                     <>
