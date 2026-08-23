@@ -40,6 +40,7 @@ from app.core.database import get_supabase
 from app.core.schemas import LaxModel
 from app.modules.vision import activity as A
 from app.modules.vision import behavior as B
+from app.modules.vision import busy as BUSY
 from app.modules.vision import config as C
 from app.modules.vision import enrollment as EN
 from app.modules.vision import google_sdm as G
@@ -619,7 +620,7 @@ def busy_hours(store_code: str = "", days: int = 28, org_id: str = ORG_ID,
     since = (_now().date() - timedelta(days=max(1, min(int(days or 28), 365)))).isoformat()
 
     q = (sb().table("vision_camera_event")
-         .select("store_code,local_date,local_hour,event_type")
+         .select("store_code,local_date,local_hour,device_name")
          .eq("org_id", org_id).eq("event_type", "person").gte("local_date", since))
     if store_code:
         q = q.eq("store_code", store_code)
@@ -629,16 +630,18 @@ def busy_hours(store_code: str = "", days: int = 28, org_id: str = ORG_ID,
         raise HTTPException(503, "Event history unavailable.")
     rows = [r for r in rows if _in_keyset(keyset, r.get("store_code"))]
 
-    hours, dates = {}, set()
-    for r in rows:
-        hours[r["local_hour"]] = hours.get(r["local_hour"], 0) + 1
-        dates.add(r["local_date"])
-    days_seen = len(dates) or 1
+    # Names for the per-camera contribution list, so a street-facing camera is visible on the page
+    # rather than only to somebody who writes the query.
+    cams = _rows("vision_camera", org_id, "device_name,display_name,store_code")
+    agg = BUSY.aggregate(rows, cameras=cams)
+    measure = BUSY.measure_for(store_code, agg["stores"])
     return {
-        "since": since, "days_with_data": days_seen, "events": len(rows),
-        "by_hour": [{"hour": h, "events": hours.get(h, 0),
-                     "per_day": round(hours.get(h, 0) / days_seen, 1)} for h in range(24)],
-        "measure": "presence",
+        "since": since,
+        "store_code": store_code,
+        "measure": measure,
+        "caveat": BUSY.caveat(measure, agg["stores"]),
+        "peak": BUSY.peak(agg["by_hour"], measure),
+        **agg,
         "note": "Person sightings reported by the cameras themselves. This is activity, not "
                 "directional footfall — a customer leaving looks the same as one arriving.",
     }
