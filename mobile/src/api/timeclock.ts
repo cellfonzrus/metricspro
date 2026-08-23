@@ -1,5 +1,5 @@
-import { api } from './client'
-import { enqueue } from '@/offline/queue'
+import { api, ApiError } from './client'
+import { enqueue, newClientId } from '@/offline/queue'
 import { getOnline } from '@/offline/net'
 
 // ── Time Clock API ───────────────────────────────────────────────────────────────────────────────
@@ -34,7 +34,11 @@ export type ClockInBody = {
   override?: boolean
   priority_ack?: boolean
   priority_ack_count?: number
+  // Stable per-punch id the backend dedupes on (idempotent_replay). Set by clockInDurable.
+  client_request_id?: string
 }
+
+export type ClockOutBody = { entry_id?: string; override?: boolean; client_request_id?: string }
 
 // The clock-in response is a discriminated union: success, or a "needs X" prompt the UI must resolve.
 export type ClockInResult =
@@ -70,37 +74,57 @@ export function clockIn(body: ClockInBody) {
   return api.post<ClockInResult>(`${BASE}/clock-in`, body)
 }
 
-export function clockOut(body: { entry_id?: string; override?: boolean } = {}) {
+export function clockOut(body: ClockOutBody = {}) {
   return api.post<ClockOutResult>(`${BASE}/clock-out`, body)
 }
 
 /**
- * Durable clock-in for the offline case: when there is no network we cannot resolve an override /
- * ack prompt, so we enqueue a straightforward punch for the already-selected store and let the server
- * apply its gates on replay. Online, callers should use clockIn() directly to handle the prompts.
+ * Durable clock-in: mint a stable client_request_id, try it online first (to resolve any override /
+ * ack prompt), and on a saturation TIMEOUT or network drop (ApiError status 0) — not only when we
+ * were already offline — fall through to the durable queue carrying the SAME id, so the punch is
+ * retried, never lost, and idempotent with the attempt that may have landed. Offline, we enqueue
+ * straight away and let the server apply its gates on replay.
  */
 export async function clockInDurable(body: ClockInBody): Promise<{ queued: true } | ClockInResult> {
-  if (getOnline()) return clockIn(body)
+  const clientId = newClientId()
+  const withId: ClockInBody = { ...body, client_request_id: clientId }
+  if (getOnline()) {
+    try {
+      return await clockIn(withId)
+    } catch (e) {
+      // A dead/saturated network surfaces as ApiError status 0 (timeout or fetch failure). Don't lose
+      // the punch — queue it for retry. Any other error (a real 4xx/5xx business answer) propagates.
+      if (!(e instanceof ApiError) || e.status !== 0) throw e
+    }
+  }
   await enqueue({
     kind: 'timeclock.clock-in',
     label: `Clock in${body.store_code ? ` @ ${body.store_code}` : ''}`,
     method: 'POST',
     path: `${BASE}/clock-in`,
-    body,
+    body: withId,
+    clientId,
   })
   return { queued: true }
 }
 
-export async function clockOutDurable(
-  body: { entry_id?: string; override?: boolean } = {},
-): Promise<{ queued: true } | ClockOutResult> {
-  if (getOnline()) return clockOut(body)
+export async function clockOutDurable(body: ClockOutBody = {}): Promise<{ queued: true } | ClockOutResult> {
+  const clientId = newClientId()
+  const withId: ClockOutBody = { ...body, client_request_id: clientId }
+  if (getOnline()) {
+    try {
+      return await clockOut(withId)
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 0) throw e
+    }
+  }
   await enqueue({
     kind: 'timeclock.clock-out',
     label: 'Clock out',
     method: 'POST',
     path: `${BASE}/clock-out`,
-    body,
+    body: withId,
+    clientId,
   })
   return { queued: true }
 }

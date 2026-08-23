@@ -3016,6 +3016,40 @@ class ClockInIn(LaxModel):
     gps_accuracy_m: Any = None
     face_match_pct: Any = None
     reason: Any = None
+    client_request_id: Any = None   # client-generated UUID, STABLE across retries of the SAME punch
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    """A Postgres unique-index rejection (23505), however PostgREST spells it this version. Checked
+    structurally (`code`) first, then by message — a miss here would turn a safe dedupe into a 500."""
+    code = getattr(exc, "code", None) or (exc.args[0].get("code") if exc.args and isinstance(exc.args[0], dict) else None)
+    if str(code) == "23505":
+        return True
+    msg = str(getattr(exc, "message", "") or exc).lower()
+    return "23505" in msg or "duplicate key" in msg
+
+
+def _clean_cri(v):
+    """Normalize an optional client_request_id: a trimmed non-empty string, else None (no dedupe)."""
+    s = ("" if v is None else str(v)).strip()
+    return s or None
+
+
+def _clockin_ok(saved, org_id, replay=False):
+    """The clock-in SUCCESS response built from a timelog row — identical shape whether the row was
+    just inserted or is being replayed/collapsed, so a retry sees the same outcome. Adds
+    `idempotent_replay` only on a replay/collapse (a fresh insert never carries it)."""
+    resp = {"success": True, "data": {"time": _fmt_time(saved.get("clock_in"), org_id),
+                                      "entry_id": saved.get("id"),
+                                      "store_code": saved.get("store_code")}}
+    if str(saved.get("permission_status") or "") == "pending":
+        resp["needs_dm_permission"] = True
+        resp["permission_status"] = "pending"
+        resp["message"] = ("You're clocked in, but this second session is pending your DM's permission "
+                           "and won't count toward your hours until they approve it.")
+    if replay:
+        resp["idempotent_replay"] = True
+    return resp
 
 
 @router.post("/timeclock/clock-in")
@@ -3024,11 +3058,26 @@ def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: s
     body employee_id is ignored, so you can only punch yourself. Selfie (base64) + GPS + face-match%
     are still stored for audit (defense in depth)."""
     org_id, employee_id = _caller_identity(authorization)
-    # guard: don't open a second concurrent entry
-    open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
-                 .is_("clock_out", "null").limit(1).execute().data) or []
-    if open_rows:
-        raise HTTPException(409, "Already clocked in — clock out first.")
+    cri = _clean_cri(body.client_request_id)
+    # IDEMPOTENCY (mig 912): a retry of the SAME punch (same client_request_id) returns the existing
+    # row — never a second punch. Check this BEFORE any gate/insert.
+    if cri:
+        try:
+            prior = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+                     .eq("client_request_id", cri).order("clock_in", desc=True).limit(1).execute().data) or []
+        except Exception:
+            prior = []
+        if prior:
+            return _clockin_ok(prior[0], org_id, replay=True)
+    # guard: don't open a second concurrent entry. With NO client_request_id this is today's behavior
+    # (409). WITH a client_request_id we skip the pre-check and rely on the one-open unique index +
+    # 23505 handling below, so a concurrent double clock-in collapses to a single row (both callers get
+    # success for the same open punch) instead of a confusing error or a duplicate open row.
+    if not cri:
+        open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
+                     .is_("clock_out", "null").limit(1).execute().data) or []
+        if open_rows:
+            raise HTTPException(409, "Already clocked in — clock out first.")
     name, home_store = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
     # Which store is this punch for? The kiosk sends the selected store; fall back to home store.
@@ -3089,9 +3138,26 @@ def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: s
            "device": body.device, "selfie_path": selfie_path,
            "gps_lat": body.gps_lat, "gps_lng": body.gps_lng,
            "gps_accuracy_m": body.gps_accuracy_m, "face_match_pct": body.face_match_pct}
+    if cri:
+        row["client_request_id"] = cri
     if is_reclock_pending:
         row["permission_status"] = "pending"
-    r = sb().table("timelog").insert(row).execute()
+    try:
+        r = sb().table("timelog").insert(row).execute()
+    except Exception as e:
+        # A unique-index rejection (mig 912) means another request already won the race. Re-select and
+        # return the existing row as SUCCESS so a concurrent double clock-in collapses to one row.
+        if _is_unique_violation(e):
+            if cri:   # idempotency-key collision: the same punch id already inserted
+                dup = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+                       .eq("client_request_id", cri).order("clock_in", desc=True).limit(1).execute().data) or []
+                if dup:
+                    return _clockin_ok(dup[0], org_id, replay=True)
+            openr = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+                     .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
+            if openr:   # one-open-index collision: return the already-open punch
+                return _clockin_ok(openr[0], org_id, replay=True)
+        raise
     saved = r.data[0] if r.data else row
     if body.priority_ack:   # record the "I will prioritize these phones" acknowledgment (module 095)
         try:
@@ -3336,13 +3402,41 @@ class ClockOutIn(LaxModel):
     entry_id: Any = None
     override: Any = None
     reason: Any = None
+    client_request_id: Any = None   # client-generated UUID, STABLE across retries of the SAME punch
+
+
+def _clockout_ok(row, org_id, replay=False):
+    """The clock-out SUCCESS response built from a finalized (closed) timelog row — identical shape and
+    values to the live close, so a retry after a successful close sees the same outcome. Adds
+    `idempotent_replay` only on a replay (the live close never carries it)."""
+    resp = {"success": True, "data": {"time": _fmt_time(row.get("clock_out"), org_id),
+                                      "hours": row.get("hours"),
+                                      "clock_in": _fmt_time(row.get("clock_in"), org_id)}}
+    if str(row.get("permission_status") or "") == "pending":
+        resp["permission_status"] = "pending"
+        resp["message"] = ("Clocked out — this second session is pending your DM's permission and won't "
+                           "count toward your hours until they approve it.")
+    if replay:
+        resp["idempotent_replay"] = True
+    return resp
 
 
 @router.post("/timeclock/clock-out")
-def clock_out(body: ClockOutIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def clock_out(body: ClockOutIn, background_tasks: BackgroundTasks = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Close the SIGNED-IN employee's open entry (updates the SAME row) and compute hours. Always
     scoped to the caller's own employee_id so one employee can't close another's punch."""
     org_id, employee_id = _caller_identity(authorization)
+    cri = _clean_cri(body.client_request_id)
+    # IDEMPOTENCY (mig 912): a retry of the SAME clock-out (same client_request_id) that already closed
+    # a row returns that closed row as SUCCESS — never a 404, never a re-close. Check BEFORE the gate.
+    if cri:
+        try:
+            prior = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+                     .eq("client_request_id", cri).order("clock_in", desc=True).limit(1).execute().data) or []
+        except Exception:
+            prior = []
+        if prior and prior[0].get("clock_out") is not None:
+            return _clockout_ok(prior[0], org_id, replay=True)
     entry_id = body.entry_id
     q = (sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")
          .eq("employee_id", employee_id))
@@ -3409,6 +3503,8 @@ def clock_out(body: ClockOutIn, authorization: str = Header(default=""), org_id:
         except Exception:
             hours = None
     upd = {"clock_out": out_at.isoformat(), "hours": hours}
+    if cri:   # stamp the clock-out's idempotency id so a retry after this close replays (mig 912)
+        upd["client_request_id"] = cri
     if auto_stamped and has432:   # only write the new column when migration 432 has added it
         upd["auto_clocked_out"] = True
     if note_add:
@@ -3446,9 +3542,12 @@ def clock_out(body: ClockOutIn, authorization: str = Header(default=""), org_id:
         resp["pending_permission"] = extra_permission
         resp["message"] = ("Clocked out. You were auto-clocked-out at your scheduled end + grace; the "
                            "extra time you worked is pending your DM's permission before it counts.")
-    notice = _missed_closing_notice(org_id, employee_id)
-    if notice:
-        resp["missed_closing_notice"] = notice
+    # Fast ack: the missed-closing detection is a cross-module read that must NOT hold the punch
+    # response. Run it AFTER the response is sent (FastAPI BackgroundTasks). It no longer contributes a
+    # `missed_closing_notice` field to the clock-out response — the kiosk surfaces missed closings via
+    # its /timeclock/status poll instead.
+    if background_tasks is not None:
+        background_tasks.add_task(_missed_closing_notice, org_id, employee_id)
     return resp
 
 

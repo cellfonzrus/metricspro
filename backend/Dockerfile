@@ -13,4 +13,7 @@ RUN playwright install --with-deps chromium
 RUN playwright install --with-deps chrome || true
 COPY . .
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Gunicorn with uvicorn workers so the API isn't a single event-loop process under punch-time load.
+# Worker count from WEB_CONCURRENCY (default a safe 2). --timeout 120 matches slow selfie/DB round trips.
+# Shell form so ${WEB_CONCURRENCY:-2} is expanded at container start.
+CMD gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:8000 --timeout 120
