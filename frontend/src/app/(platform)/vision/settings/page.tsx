@@ -106,8 +106,24 @@ export default function VisionSettingsPage() {
     <div style={{ padding: 20, maxWidth: 1000 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700 }}>⚙️ Vision Settings</h1>
-        <Link href="/vision" style={{ ...btn, textDecoration: 'none' }}>📹 Live Cameras</Link>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Link href="/vision/onboarding" style={{ ...btn, textDecoration: 'none' }}>🎥 Setup wizard</Link>
+          <Link href="/vision" style={{ ...btn, textDecoration: 'none' }}>📹 Live Cameras</Link>
+        </div>
       </div>
+
+      {/* THIS PAGE IS THE REFERENCE, THE WIZARD IS THE ROUTE. Every control here is reachable and
+          none of it is hidden — but a tenant connecting cameras for the first time is facing about
+          thirty minutes of work across three Google consoles, and a page of switches is the wrong
+          shape for that. Shown only while Google is unlinked, so it stops nagging the moment it has
+          served its purpose. */}
+      {cfg.available && !status.google.linked && (
+        <div style={{ ...panel, marginBottom: 12, borderLeft: '3px solid #2563eb', fontSize: 13.5 }}>
+          <b>Connecting cameras for the first time?</b> The setup wizard walks it end to end — every
+          console link, every value to paste, and the traps that only show up a week later.{' '}
+          <Link href="/vision/onboarding" style={{ fontWeight: 600 }}>Start the wizard →</Link>
+        </div>
+      )}
 
       {msg && <div style={{ ...panel, marginBottom: 12, borderLeft: '3px solid #16a34a', fontSize: 13 }}>{msg}</div>}
       {err && <div style={{ ...panel, marginBottom: 12, borderColor: '#dc2626', color: '#dc2626', fontSize: 13 }}>{err}</div>}

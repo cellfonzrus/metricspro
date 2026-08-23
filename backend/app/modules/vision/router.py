@@ -45,6 +45,7 @@ from app.modules.vision import enrollment as EN
 from app.modules.vision import google_sdm as G
 from app.modules.vision import heatmap as H
 from app.modules.vision import ingest as I
+from app.modules.vision import onboarding as O
 from app.modules.vision import retention as R
 
 router = APIRouter(prefix="/vision", tags=["Vision"])
@@ -484,6 +485,11 @@ def google_link(body: GoogleLinkIn, org_id: str = ORG_ID, authorization: str = H
         row["status"] = "ok"
         row["last_ok_at"] = _iso(_now())
         row["last_error"] = None
+        # mig 911. Google expires a refresh token from a Testing-mode consent screen after seven
+        # days, and exposes no way to read a project's publishing status — so the age of this grant
+        # is the only signal we have that an operator skipped publishing. Stamped here so the wizard
+        # can warn at day five, while one click still prevents the cameras going dark.
+        row["token_issued_at"] = _iso(_now())
     elif not existing.get("refresh_token_enc"):
         row["status"] = "needs_setup"
 
@@ -653,6 +659,331 @@ def google_unlink(org_id: str = ORG_ID, authorization: str = Header(default=""),
         raise HTTPException(400, f"Could not unlink: {str(e)[:200]}")
     _audit(org_id, caller.get("email"), "google_unlink", "vision_credential")
     return {"linked": False, "status": "revoked"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# THE CAMERA SETUP WIZARD (mig 911)
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Owner directive 2026-08-22: the setup was too hard to repeat. What made it hard was not the API —
+# it was that the work happens in three Google consoles, several values are called the same thing,
+# and every mistake fails late and silently. app/modules/vision/onboarding.py holds the field kit
+# (pure, proven offline by harness_vision_onboarding.py); these endpoints attach it to this tenant's
+# actual state and, crucially, VERIFY rather than take the operator's word for it.
+
+def _wizard_ctx(org_id: str, cred: dict, app_base: str) -> dict:
+    """Everything the steps interpolate, from what the tenant has told us so far.
+
+    api_base is the API's own public address, which the push subscription must point at. app_base is
+    where the browser is — taken from the request rather than configured, because the redirect URI
+    has to match the origin the operator is actually sitting on, and a tenant on a custom domain
+    would otherwise be handed a URI that Google rejects byte for byte."""
+    cred = cred or {}
+    return O.context(
+        api_base=str(getattr(settings, "API_PUBLIC_URL", "") or "").strip(),
+        # The browser's own origin wins: a tenant on a custom domain must be handed the redirect URI
+        # for the host they are actually sitting on, or Google rejects it byte for byte.
+        app_base=str(app_base or "").strip() or str(getattr(settings, "APP_PUBLIC_URL", "") or ""),
+        gcp_project=cred.get("cloud_project_id") or "",
+        gcp_number=cred.get("cloud_project_number") or "",
+        da_project=cred.get("project_id") or "",
+        client_id=cred.get("client_id") or "",
+        topic=cred.get("pubsub_topic") or "",
+        sa_email=cred.get("pubsub_sa_email") or getattr(settings, "VISION_PUBSUB_SA_EMAIL", "") or "",
+    )
+
+
+def _days_since(iso):
+    try:
+        t = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        return (_now() - t).total_seconds() / 86400.0
+    except (ValueError, TypeError):
+        return None
+
+
+def _wizard_done(org_id: str, cred: dict, acks: dict) -> dict:
+    """Which steps are actually finished — OBSERVED, not remembered.
+
+    The distinction is the whole point of the wizard. A stored "done" flag on a step whose work was
+    never really finished is how a setup wizard tells somebody they are ready while nothing works,
+    and this setup has four separate steps that fail silently. So every step that leaves a trace is
+    re-derived here on each read: a credential that holds a refresh token, cameras that exist, every
+    camera carrying a store, an event that actually arrived.
+
+    Only the steps with nothing observable from our side — "I enabled the API", "I published the
+    consent screen", "I granted the publisher role" — fall back to the operator's acknowledgement in
+    core.module_onboarding_state. Each of those is a step whose failure shows up later as a specific
+    error we can explain (see O.explain_google_error), which is the compensating control."""
+    cred = cred or {}
+    cams = _rows("vision_camera", org_id)
+    enabled = [c for c in cams if c.get("enabled")]
+    events = _event_health(org_id)
+    return {
+        "overview": bool(acks.get("overview")),
+        "cloud_project": bool((cred.get("cloud_project_id") or "").strip()),
+        "enable_api": bool(acks.get("enable_api")),
+        "consent_screen": bool(acks.get("consent_screen")),
+        "oauth_client": bool((cred.get("client_id") or "").strip()),
+        "device_access": bool((cred.get("project_id") or "").strip()),
+        "topic": bool((cred.get("pubsub_topic") or "").strip()),
+        "publisher_role": bool(acks.get("publisher_role")),
+        "link_topic": bool(acks.get("link_topic")),
+        "push_subscription": bool(acks.get("push_subscription")),
+        # Observed, every one of these:
+        "authorize": bool(cred.get("refresh_token_enc")),
+        "sync": len(cams) > 0,
+        "assign_stores": bool(enabled) and all((c.get("store_code") or "").strip() for c in enabled),
+        "entrance": any(c.get("is_entrance") for c in cams),
+        "walk_test": bool(events.get("last_7d")),
+    }
+
+
+@router.get("/onboarding")
+def onboarding_state(app_base: str = "", org_id: str = ORG_ID,
+                     authorization: str = Header(default=""),
+                     x_active_org: str = Header(default="")):
+    """The wizard: every step, resolved for this tenant, with exactly one marked current."""
+    caller = _require_caller(authorization, x_active_org)
+    _require_settings(caller)
+    cred = (_rows("vision_credential", org_id, provider="google_sdm") or [None])[0] or {}
+    acks = {}
+    try:
+        rows = (sb().table("module_onboarding_state").select("task_key,status")
+                .eq("org_id", org_id).eq("module_key", "vision").limit(200).execute().data) or []
+        acks = {r["task_key"]: r.get("status") in ("acknowledged", "skipped") for r in rows}
+    except Exception:
+        # An un-run mig 733 must not break the wizard — it just means the acknowledge-only steps
+        # cannot be ticked yet, which the page shows as "not confirmed" rather than as an error.
+        acks = {}
+    ctx = _wizard_ctx(org_id, cred, app_base)
+    done = _wizard_done(org_id, cred, acks)
+    steps = O.plan(ctx, done)
+    events = _event_health(org_id)
+    return {
+        "steps": steps,
+        "progress": O.progress(steps),
+        "values": {k: ctx.get(k) or "" for k in
+                   ("gcp_project", "gcp_number", "da_project", "client_id", "topic", "sa_email",
+                    "full_topic", "api_base", "app_base")},
+        "linked": bool(cred.get("refresh_token_enc")),
+        "has_secret": bool(cred.get("client_secret_enc")),
+        "events": events,
+        "cameras": len(_rows("vision_camera", org_id)),
+        "last_error": cred.get("last_error") or "",
+        "last_error_help": O.explain_google_error(cred.get("last_error")),
+        "token_warning": O.token_age_warning(_days_since(cred.get("token_issued_at")),
+                                             bool(cred.get("refresh_token_enc"))),
+        # The server settings an ADMIN has to apply for the push endpoint to accept anything. Shown
+        # so "0 events" can be attributed to this rather than to the operator's console work.
+        "push_ready": bool(getattr(settings, "VISION_PUBSUB_SA_EMAIL", "")
+                           or getattr(settings, "VISION_PUBSUB_AUDIENCE", "")),
+    }
+
+
+class WizardValue(LaxModel):
+    field: Any = None
+    value: Any = None
+
+
+@router.put("/onboarding/value")
+def onboarding_save_value(body: WizardValue, org_id: str = ORG_ID,
+                          authorization: str = Header(default=""),
+                          x_active_org: str = Header(default="")):
+    """Save ONE value the moment it is typed — the directive's "storing the information as we go".
+
+    Deliberately one field per call rather than a form submit. The operator is moving between browser
+    tabs the whole way through this setup, and a form that only persists when every box is filled is
+    exactly how the project ids kept getting lost the first time round."""
+    caller = _require_caller(authorization, x_active_org)
+    _require_settings(caller)
+    field = str(getattr(body, "field", "") or "").strip()
+    value = str(getattr(body, "value", "") or "").strip()
+    # Whitelist: a wizard field can never be turned into an arbitrary column write.
+    COLUMN = {"gcp_project": ("cloud_project_id", "cloud_project"),
+              "gcp_number": ("cloud_project_number", ""),
+              "da_project": ("project_id", "device_access_project"),
+              "client_id": ("client_id", "client_id"),
+              "topic": ("pubsub_topic", "topic"),
+              "sa_email": ("pubsub_sa_email", "")}
+    if field not in COLUMN:
+        raise HTTPException(400, f"Not a wizard field: {field[:40]}")
+    column, check = COLUMN[field]
+    if value and check:
+        problem = O.check_value(check, value)
+        if problem:
+            # 400 with Google's own vocabulary, not "invalid input". Telling an operator WHICH of the
+            # two project ids they pasted is the difference between a five-second fix and a retype
+            # of the same wrong string.
+            raise HTTPException(400, problem)
+    now = _iso(_now())
+    try:
+        existing = (_rows("vision_credential", org_id, provider="google_sdm") or [None])[0]
+        if existing:
+            sb().table("vision_credential").update({column: value or None, "updated_at": now}) \
+                .eq("org_id", org_id).eq("provider", "google_sdm").execute()
+        else:
+            sb().table("vision_credential").insert({
+                "org_id": org_id, "provider": "google_sdm", column: value or None,
+                "status": "needs_setup", "created_at": now, "updated_at": now}).execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not save: {str(e)[:200]}")
+    _audit(org_id, caller.get("email"), "wizard_value", "vision_credential",
+           detail={"field": field, "filled": bool(value)})
+    return {"saved": True, "field": field}
+
+
+class WizardAck(LaxModel):
+    step: Any = None
+    done: Any = True
+
+
+@router.post("/onboarding/ack")
+def onboarding_ack(body: WizardAck, org_id: str = ORG_ID,
+                   authorization: str = Header(default=""),
+                   x_active_org: str = Header(default="")):
+    """Tick an acknowledge-only step ("I published the consent screen").
+
+    Only accepted for steps whose verify kind is actually `ack`. A step we can OBSERVE — cameras
+    synced, stores assigned, events arriving — must never be tickable by hand, or the wizard would
+    let somebody mark the setup finished while it is not, which is the failure this design exists to
+    prevent."""
+    caller = _require_caller(authorization, x_active_org)
+    _require_settings(caller)
+    step = str(getattr(body, "step", "") or "").strip()
+    kit = O.field_kit(step, O.context())
+    if not kit:
+        raise HTTPException(400, f"No such step: {step[:40]}")
+    if kit["verify"] != "ack":
+        raise HTTPException(400, f"'{kit['title']}' is confirmed by checking your account, not by "
+                                 f"ticking it. Use the Check button.")
+    done = bool(getattr(body, "done", True))
+    now = _iso(_now())
+    row = {"org_id": org_id, "module_key": "vision", "task_key": step,
+           "status": "acknowledged" if done else "pending",
+           "actor": caller.get("email"), "acted_at": now, "updated_at": now}
+    try:
+        sb().table("module_onboarding_state").upsert(
+            row, on_conflict="org_id,module_key,task_key").execute()
+    except Exception as e:
+        raise HTTPException(400, f"Could not record that: {str(e)[:160]} — has migration 733 run?")
+    return {"step": step, "done": done}
+
+
+@router.post("/onboarding/verify/{step}")
+def onboarding_verify(step: str, org_id: str = ORG_ID,
+                      authorization: str = Header(default=""),
+                      x_active_org: str = Header(default="")):
+    """Actually check a step, against Google where possible.
+
+    Each branch answers with what it OBSERVED and, when it failed, which step to go back to. A
+    verifier that reports Google's raw message is barely better than no verifier: 'Error 403:
+    access_denied' is true and tells an operator nothing about the consent-screen checkbox that
+    caused it."""
+    caller = _require_caller(authorization, x_active_org)
+    _require_settings(caller)
+    cred = (_rows("vision_credential", org_id, provider="google_sdm") or [None])[0] or {}
+
+    if step == "authorize":
+        if not cred.get("refresh_token_enc"):
+            return {"ok": False, "message": "Not connected yet — press Connect above."}
+        try:
+            devices = _sdm_client(org_id).list_devices()
+        except G.SdmError as e:
+            help_ = O.explain_google_error(str(e))
+            return {"ok": False, "message": str(e)[:300], "help": help_}
+        except Exception as e:
+            return {"ok": False, "message": str(e)[:300],
+                    "help": O.explain_google_error(str(e))}
+        return {"ok": True, "message": f"Connected. Google is showing {len(devices)} camera(s) on "
+                                       f"this account.",
+                "detail": {"devices": len(devices)}}
+
+    if step == "sync":
+        cams = _rows("vision_camera", org_id)
+        if not cams:
+            return {"ok": False, "message": "No cameras yet — press Sync.",
+                    "help": "If Sync finds nothing, you may not have ticked any cameras on Google's "
+                            "consent screen. Reconnect and tick them."}
+        return {"ok": True, "message": f"{len(cams)} camera(s) in MetricsPro."}
+
+    if step == "assign_stores":
+        cams = [c for c in _rows("vision_camera", org_id) if c.get("enabled")]
+        missing = [c.get("display_name") or "unnamed camera"
+                   for c in cams if not (c.get("store_code") or "").strip()]
+        if not cams:
+            return {"ok": False, "message": "No enabled cameras to assign yet."}
+        if missing:
+            shown = ", ".join(str(m) for m in missing[:4])
+            more = f" and {len(missing) - 4} more" if len(missing) > 4 else ""
+            return {"ok": False,
+                    "message": f"{len(missing)} camera(s) still have no store: {shown}{more}.",
+                    "help": "A camera with no store contributes to no report at all, and nothing "
+                            "warns you about it later."}
+        return {"ok": True, "message": f"All {len(cams)} camera(s) are assigned to a store."}
+
+    if step == "entrance":
+        cams = _rows("vision_camera", org_id)
+        n = sum(1 for c in cams if c.get("is_entrance"))
+        if not n:
+            return {"ok": False, "message": "No camera is marked as an entrance.",
+                    "help": "Only needed for in/out counting and the heat map. Busy hours works "
+                            "without it."}
+        return {"ok": True, "message": f"{n} entrance camera(s) marked."}
+
+    if step in ("walk_test", "push_subscription"):
+        ev = _event_health(org_id)
+        if ev.get("last_7d"):
+            return {"ok": True,
+                    "message": f"{ev['last_7d']} event(s) received in the last 7 days"
+                               + (f", most recently {ev['last_event_at']}."
+                                  if ev.get("last_event_at") else "."),
+                    "detail": ev}
+        return {"ok": False, "message": "No camera events have ever arrived.",
+                "help": "Google gives no way to test this from its console, so this is the only "
+                        "proof. Use 'Watch for an event' and walk past a camera."}
+
+    # Everything else is an acknowledge-only step; there is nothing on our side to observe.
+    kit = O.field_kit(step, O.context())
+    if not kit:
+        raise HTTPException(400, f"No such step: {step[:40]}")
+    return {"ok": False, "message": f"'{kit['title']}' happens in Google's console — we cannot see "
+                                    f"it from here. Tick it once you have done it."}
+
+
+@router.get("/onboarding/watch")
+def onboarding_watch(since: str = "", org_id: str = ORG_ID,
+                     authorization: str = Header(default=""),
+                     x_active_org: str = Header(default="")):
+    """Has a camera event arrived since `since`? The walk-past-a-camera test.
+
+    THIS IS THE ONLY HONEST PROOF THE EVENT CHAIN WORKS. Four things have to be right — the topic,
+    the publisher permission, the Device Access link and the push subscription — and every one of
+    them fails silently: Google retries into the void for days and marks nothing red in any console.
+    So rather than reporting configuration back to the operator, we ask them to walk in front of a
+    camera and watch for the sighting to land.
+
+    A cheap poll on purpose: one indexed count, called every couple of seconds by the page for two
+    minutes. `since` is passed by the client from when it started watching, so an event from an hour
+    ago cannot be mistaken for the one they just triggered."""
+    _require_settings(_require_caller(authorization, x_active_org))
+    cutoff = str(since or "").strip() or _iso(_now() - timedelta(minutes=2))
+    try:
+        rows = (sb().table("vision_camera_event")
+                .select("occurred_at,device_name,store_code,event_type")
+                .eq("org_id", org_id).gte("received_at", cutoff)
+                .order("received_at", desc=True).limit(5).execute().data) or []
+    except Exception:
+        return {"seen": False, "available": False,
+                "message": "Could not read the event table — has migration 907 run?"}
+    if not rows:
+        return {"seen": False, "available": True, "since": cutoff}
+    r = rows[0]
+    cam = (_rows("vision_camera", org_id, device_name=r.get("device_name")) or [None])[0]
+    name = (cam or {}).get("display_name") or "a camera"
+    return {"seen": True, "available": True, "since": cutoff, "count": len(rows),
+            "message": f"Event received from {name}"
+                       + (f" at {r.get('store_code')}" if r.get("store_code") else "")
+                       + ". The whole chain works — busy hours will fill in from now on.",
+            "event": r}
 
 
 def _sdm_client(org_id: str) -> G.SdmClient:

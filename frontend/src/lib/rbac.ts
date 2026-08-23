@@ -290,6 +290,10 @@ export const NAV: NavGroup[] = [
   // reaches their OWN numbers through the server-side /vision/behavior/mine route, which needs no
   // manager role, so narrowing the nav here does not hide anyone's own data from them.
   { group: 'Vision', module: 'vision', items: [
+    // The setup wizard leads the group deliberately: a tenant whose cameras are not connected yet
+    // has nothing to look at on any other page here, and connecting them spans three Google
+    // consoles. Same 'all' scope as Vision Settings — it writes the company's Google credential.
+    { href: '/vision/onboarding', label: 'Camera Setup', icon: '🎥', module: 'vision', scopes: ['all'] },
     { href: '/vision', label: 'Live Cameras', icon: '📹', module: 'vision', scopes: ['all', 'market', 'store'] },
     { href: '/vision/heatmap', label: 'Traffic & Heat Map', icon: '🔥', module: 'vision', scopes: ['all', 'market', 'store'] },
     // Busy Hours reads Google's own person events (mig 907) — no analyzer, no video, every camera.
