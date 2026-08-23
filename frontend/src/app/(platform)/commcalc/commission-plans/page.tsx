@@ -13,6 +13,7 @@ import {
   UnassignedRow, UnmatchedExplorer, OrphanAssignments, StoreBridgePanel, ExcludedSellers,
 } from '../_lib/coverageDiagnosis'
 import RunCommissionButton from '../_lib/RunCommissionButton'
+import CoverageWizard from '../_lib/CoverageWizard'
 import { useActiveCarrier } from '@/lib/auth-context'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
@@ -115,6 +116,8 @@ export default function CommissionPlansPage() {
   // plan-coverage diagnostic (mig 232): uncovered sellers · unmatched lines · tier/CT warnings · stale snapshot
   const [cov, setCov] = useState<any>(null)
   const [covBusy, setCovBusy] = useState(false)
+  // Coverage Wizard (guided fix for "lines not paying") — opens a modal, writes nothing until its Apply.
+  const [wizOpen, setWizOpen] = useState(false)
   // Part D — the tenant's "not a commissionable seller" list (mig 248). Diagnostics only: it moves a $0
   // seller out of the uncovered list into a visible collapsed note; it can never change a payout.
   const [exclBusy, setExclBusy] = useState(false)
@@ -1379,6 +1382,7 @@ export default function CommissionPlansPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>🩺 Plan coverage <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)' }}>(read-only — who is uncovered, which lines no rule matched, why a tier didn’t move pay)</span></div>
           <span style={{ flex: 1 }} />
+          <button className="btn btn-primary" onClick={() => setWizOpen(true)} title="Guided step-by-step fix: attach plans + add owner-authored rules so unpaid lines pay. Writes nothing until you Apply.">▶ Fix coverage (wizard)</button>
           <button className="btn btn-secondary" disabled={covBusy} onClick={runCoverage}>{covBusy ? '…' : `Check ${period}`}</button>
           {cov?.coverage && <><ExportButtons payload={coveragePayload} /><SendReportButton exportPayload={coveragePayload} compact /></>}
         </div>
@@ -1450,10 +1454,19 @@ export default function CommissionPlansPage() {
               </div>
             </div>
           )}
-          {/* Part C — every line NOT considered for commission, from the pay engine itself */}
-          <UnmatchedExplorer period={cov.period || period} />
+          {/* Part C — every line NOT considered for commission, from the pay engine itself. The guided
+              "Fix coverage (wizard)" button above is now the primary way to act on this; the full detailed
+              table is kept here, collapsed, as the advanced view. */}
+          <details style={{ marginTop: 12 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>Advanced: full “lines not paying” table</summary>
+            <div style={{ marginTop: 8 }}>
+              <UnmatchedExplorer period={cov.period || period} />
+            </div>
+          </details>
         </>)}
       </div>
+      <CoverageWizard open={wizOpen} onClose={() => setWizOpen(false)} period={cov?.period || period}
+        plans={plans} onApplied={() => { runCoverage(); load() }} />
       </>)}
 
       {tab === 'bulk' && (
