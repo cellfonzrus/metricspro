@@ -116,6 +116,7 @@ jobs:
       #   DEPLOY.md              describes your hosting arrangement
       #   LEGAL-CHECKLIST.md     an inventory of what is not finished yet
       #   check-before-launch.sh
+      #   DOCROOT-SHIM.htaccess  installed by hand one level up; a copy in here would recurse
       - name: Upload to Bluehost
         if: steps.cfg.outputs.ready == 'true'
         env:
@@ -131,6 +132,9 @@ jobs:
           flags="--reverse --verbose --parallel=4"
           flags="$flags --exclude-glob DEPLOY.md --exclude-glob LEGAL-CHECKLIST.md"
           flags="$flags --exclude-glob check-before-launch.sh"
+          # The document-root shim is installed BY HAND one level above this folder and must never
+          # be uploaded into it — a copy inside deploy/ would rewrite deploy/ into deploy/deploy/.
+          flags="$flags --exclude-glob DOCROOT-SHIM.htaccess"
           if [ "${DO_DELETE:-false}" = "true" ]; then flags="$flags --delete"; fi
           if [ "${DRY_RUN:-false}"   = "true" ]; then flags="$flags --dry-run"; fi
 
