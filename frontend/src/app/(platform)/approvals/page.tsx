@@ -10,6 +10,22 @@ interface Approval {
   id: string; request_no?: number; type: string; title: string; summary?: string | null
   status: string; priority?: string; store_code?: string | null; requested_by_name?: string | null
   decided_by?: string | null; decided_at?: string | null; created_at?: string
+  payload?: Record<string, unknown> | null
+}
+
+// A held unscheduled clock-in (mig 915) is NOT approved with a tick — approval IS creating the
+// schedule. This builds the deep-link into the schedule editor, pre-filled (employee, store, date,
+// START = the rep's tap time), so the manager just enters the end time and saves. Relative link keeps
+// it inside the SPA; falls back to the absolute deeplink the backend stored.
+function scheduleLinkFor(x: Approval): string {
+  const p = (x.payload || {}) as Record<string, unknown>
+  const str = (v: unknown) => (v == null ? '' : String(v))
+  const date = str(p.work_date), store = str(p.store_code), emp = str(p.employee_name)
+  if (date) {
+    const qs = new URLSearchParams({ prefill: '1', emp, store, date, start: str(p.start), pending: str(p.pending_id) })
+    return `/storeops/schedule?${qs}`
+  }
+  return str(p.deeplink)
 }
 
 const badge: Record<string, { t: string; c: string; b: string }> = {
@@ -125,10 +141,18 @@ export default function ApprovalsPage() {
                   <td style={{ padding: '8px 9px', color: 'var(--text2)' }}>{x.requested_by_name || '—'}</td>
                   <td style={{ padding: '8px 9px', color: 'var(--text2)' }}>{(x.created_at || '').slice(0, 10)}</td>
                   {tab === 'pending' ? (
+                    x.type === 'pending_clockin_schedule' ? (
+                      // Held clock-in: the manager must ADD the rep to the schedule (which auto-clocks
+                      // them in). A plain tick would not create the shift, so link to the editor instead.
+                      <td style={{ padding: '8px 9px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <a className="btn btn-primary" href={scheduleLinkFor(x)} style={{ fontSize: 12, padding: '3px 10px', textDecoration: 'none' }}>Add to schedule →</a>
+                      </td>
+                    ) : (
                     <td style={{ padding: '8px 9px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button className="btn btn-primary" disabled={busy === x.id} style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => decide(x, 'approve')}>✓ Approve</button>{' '}
                       <button className="btn btn-secondary" disabled={busy === x.id} style={{ fontSize: 12, padding: '3px 10px', color: '#dc2626' }} onClick={() => decide(x, 'deny')}>✕ Deny</button>
                     </td>
+                    )
                   ) : (
                     <td style={{ padding: '8px 9px' }}>
                       <span style={{ padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 700, color: b.c, background: b.b }}>{b.t}</span>
