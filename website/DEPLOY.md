@@ -105,6 +105,27 @@ which assume the root, will 404. The failure is quiet: the upload succeeds and t
 answers on a path nobody visits. cPanel → **Domains** lists the real document root for each domain,
 and the workflow now warns in its job summary when the path looks like a subfolder.
 
+### If a deploy goes green but the site does not change
+
+The workflow now catches this itself. After uploading it stamps the commit into `index.html`,
+fetches your live URL, and fails the job if the page it gets back does not carry that stamp. A
+green run therefore means the site really changed — not merely that a server accepted the files.
+
+When it does fail, the cause is almost always the **FTP account's own directory**, because cPanel
+fills that field in from the username *as you type it*. Name an account `website` and it silently
+gets `…/website`; name it `github` and it gets `…/github`. The upload then lands one level below
+the document root and nothing complains. Both happened here.
+
+Two rules that prevent it:
+
+1. **Check FTP Accounts → Path against Domains → Document Root.** They must be the same folder.
+2. **The path belongs in exactly one place** — the FTP account's Directory *or* `FTP_REMOTE_DIR`,
+   never both. Setting both stacks them, and because the FTP account treats its own folder as `/`,
+   an absolute path in `FTP_REMOTE_DIR` gets resolved *inside* it rather than replacing it.
+
+When the FTP account already sits at the document root, which is the arrangement in §2 Option C,
+leave `FTP_REMOTE_DIR` unset entirely.
+
 ## 3. Domain and SSL
 
 1. **DNS.** If the domain is registered at Bluehost, point it at the hosting account there. If it is

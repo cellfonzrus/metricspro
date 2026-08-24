@@ -107,6 +107,19 @@ jobs:
         if: steps.cfg.outputs.ready == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq lftp
 
+      # ── Stamp this commit into the page ─────────────────────────────────────────────────────
+      # A marker unique to this run, so the verification step below can prove the LIVE site is
+      # serving what this job just uploaded — not a stale copy, not a different folder, not
+      # somebody else's page. Written into the runner's checkout only; nothing is committed.
+      - name: Stamp the commit into index.html
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          grep -q '</head>' website/index.html
+          sed -i "s#</head>#  <meta name=\"mp-deploy\" content=\"$GITHUB_SHA\">\n</head>#" website/index.html
+          grep -q "$GITHUB_SHA" website/index.html
+          echo "Stamped $GITHUB_SHA"
+
       # ── Publish ────────────────────────────────────────────────────────────────────────────
       # lftp rather than a marketplace action: this step holds a credential that can overwrite the
       # live site, and lftp is a distro package rather than a third party trusted afresh on every
@@ -187,6 +200,54 @@ jobs:
             mirror $flags website/ .;
             bye
           "
+
+      # ── Prove it reached the live site ──────────────────────────────────────────────────────
+      # An upload succeeding says only that a server accepted bytes. It says nothing about whether
+      # the domain serves them. This repo has already had three deploys report success while
+      # writing somewhere the site does not serve — a folder one level too deep, then a path
+      # resolved inside a restricted FTP account, then a folder named after the account itself.
+      # Every one was green. So the job now fetches the real URL and looks for this run's stamp.
+      #
+      # Retries because a just-written file can lag a moment. Fails, loudly, if the stamp never
+      # appears — that means the files went somewhere the domain does not serve, which is the one
+      # failure this pipeline could not previously see.
+      - name: Verify the live site serves this commit
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          SITE_URL: ${{ vars.SITE_URL || 'https://metricspro.tech' }}
+        run: |
+          set -uo pipefail
+          url="${SITE_URL%/}/"
+          echo "Checking $url for $GITHUB_SHA"
+          for wait in 0 5 10 20 30; do
+            [ "$wait" -gt 0 ] && sleep "$wait"
+            body=$(curl -fsSL --max-time 20 -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$url" 2>/dev/null || true)
+            if printf '%s' "$body" | grep -q "$GITHUB_SHA"; then
+              echo "Confirmed — $url is serving this commit."
+              {
+                echo "### Verified live"
+                echo ""
+                echo "[$url]($url) is serving commit \`${GITHUB_SHA:0:7}\`."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "  not yet visible; retrying"
+          done
+
+          {
+            echo "### Uploaded, but the live site does not show it"
+            echo ""
+            echo "The FTP upload succeeded, but [$url]($url) is **not** serving commit"
+            echo "\`${GITHUB_SHA:0:7}\`. The files went somewhere the domain does not serve."
+            echo ""
+            echo "Almost always the FTP account's own directory: cPanel fills that field in from the"
+            echo "username as you type it, so an account named \`website\` silently gets"
+            echo "\`…/website\` instead of the document root. Check **FTP Accounts → Path** against"
+            echo "the document root in **Domains**, and remember the path belongs in exactly one"
+            echo "place — the FTP account's directory *or* \`FTP_REMOTE_DIR\`, never both."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Upload succeeded but $url is not serving this commit."
+          exit 1
 
       - name: Summary
         if: steps.cfg.outputs.ready == 'true'
