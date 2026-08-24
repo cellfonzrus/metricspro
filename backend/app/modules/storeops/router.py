@@ -831,6 +831,22 @@ def _inactive_ids_from(employees_rows):
             if e.get("employee_id") and e.get("is_active") is False}
 
 
+def _shift_contributes_hours(s) -> bool:
+    """True iff a shift row carries ANY hours — scheduled_hours>0 OR actual_hours>0.
+
+    $0-clocked-day fix (2026-08-24, payroll investigation): only such a shift may SHADOW a same-day
+    closed punch out of payroll (the no-double-count rule). A pure ZERO-HOUR shell — the row
+    `clock_in_override` inserts to put an unscheduled store "on record" (status='scheduled', NO
+    scheduled_hours/actual_hours) — contributes nothing to pay, so letting it suppress the rep's real
+    6.5h punch paid them $0 for a full worked day. This is the SAME distinction the inactive-employee
+    path already draws with `real_shifts` (actual_hours>0), widened here to `scheduled_hours>0 OR
+    actual_hours>0` so a genuine SCHEDULED shift (sched>0, act not yet reconciled) still suppresses
+    its punch exactly as before — the schedule-vs-punch policy on real scheduled days is UNCHANGED;
+    only the never-paying zero shell stops hiding a punch. Never double-counts: a shell adds 0 hours,
+    so counting its punch is the only contribution that day."""
+    return float(s.get("scheduled_hours") or 0) > 0 or float(s.get("actual_hours") or 0) > 0
+
+
 def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
     """(real_shifts, timelog_rows) for INACTIVE employees only. real_shifts = storeops.shifts rows
     (is_deleted=false, in [lo,hi) when given) with actual_hours GENUINELY > 0 — a schedule-only row
@@ -1146,7 +1162,9 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
             if st:
                 sh = store_hours.setdefault(eid, {})
                 sh[st] = sh.get(st, 0.0) + sched + act
-            if eid:
+            if eid and _shift_contributes_hours(s):
+                # only a shift that actually contributes hours may block that day's punch — a
+                # zero-hour override shell must NOT (see _shift_contributes_hours; $0-clocked-day fix).
                 shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
 
         # UNIVERSAL FALLBACK (2026-07-18, payroll data-flow audit — luxelink showed employees+shifts+rates
@@ -1400,7 +1418,8 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
             if eid in inactive_ids:
                 continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
             store = (s.get("store_code") or "").strip()
-            if eid:
+            if eid and _shift_contributes_hours(s):
+                # zero-hour override shell must not shadow the punch here either ($0-clocked-day fix).
                 shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
             if not store:
                 continue
@@ -1651,7 +1670,11 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
             counted = act > 0
         else:
             eff = act if act > 0 else sched      # active-path act==0->scheduled fallback
-            counted = True
+            # A zero-hour shell (sched==0 AND act==0 — e.g. the clock_in_override "on record" row) is
+            # NOT counted, so it neither adds hours nor (below) shadows the day's real punch out of the
+            # total — matching /payroll's own $0-clocked-day fix (_shift_contributes_hours). A genuine
+            # scheduled shift (sched>0) still counts and still suppresses its punch, exactly as before.
+            counted = _shift_contributes_hours(s)
         row["scheduled_hours"] += sched if (not is_inactive or act > 0) else 0.0
         row["actual_hours"] += eff
         row["shift"] = {"id": s.get("id"), "start_time": s.get("start_time"), "end_time": s.get("end_time"),
