@@ -32,6 +32,28 @@
 -- fallback, and GET /payroll/actual-hours-detail all reconcile. No data mutation, no backfill —
 -- read-time preference, so historical months fix themselves. Idempotent; safe to re-run.
 
+-- ORDER MATTERS: the helper _payroll_day_is_punch_driven MUST be created BEFORE payroll_month_rows,
+-- which references it. A LANGUAGE sql function body is validated at CREATE time, so a forward
+-- reference errors 42883 ("function ... does not exist"). Helper first, then the RPC.
+CREATE OR REPLACE FUNCTION storeops._payroll_day_is_punch_driven(p_org_id uuid, p_emp text, p_day date)
+RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (SELECT 1
+                   FROM storeops.timelog t
+                  WHERE t.org_id = p_org_id
+                    AND t.employee_id = p_emp
+                    AND t.work_date = p_day
+                    AND t.clock_out IS NOT NULL
+                    AND t.hours IS NOT NULL)
+     AND NOT EXISTS (SELECT 1
+                       FROM storeops.shifts s
+                      WHERE s.org_id = p_org_id
+                        AND s.is_deleted = false
+                        AND s.employee_id = p_emp
+                        AND s.shift_date = p_day
+                        AND coalesce(s.actual_hours, 0)::double precision > 0);
+$$;
+
 CREATE OR REPLACE FUNCTION storeops.payroll_month_rows(p_org_id uuid, p_lo date, p_hi date)
 RETURNS TABLE (
   kind              text,
@@ -106,28 +128,6 @@ LANGUAGE sql STABLE AS $$
                         AND s2.shift_date = t.work_date
                         AND coalesce(s2.actual_hours, 0)::double precision > 0)
    GROUP BY t.employee_id, btrim(coalesce(t.store_code, ''))
-$$;
-
--- A (emp, day) is "punch-driven" iff it has a CLOSED punch AND no manual correction (actual_hours>0)
--- that day — the exact condition under which a scheduled shift's hours are replaced by the punch.
--- STABLE so it may be called from the aggregation above; keyed on the SAME raw employee_id grain.
-CREATE OR REPLACE FUNCTION storeops._payroll_day_is_punch_driven(p_org_id uuid, p_emp text, p_day date)
-RETURNS boolean
-LANGUAGE sql STABLE AS $$
-  SELECT EXISTS (SELECT 1
-                   FROM storeops.timelog t
-                  WHERE t.org_id = p_org_id
-                    AND t.employee_id = p_emp
-                    AND t.work_date = p_day
-                    AND t.clock_out IS NOT NULL
-                    AND t.hours IS NOT NULL)
-     AND NOT EXISTS (SELECT 1
-                       FROM storeops.shifts s
-                      WHERE s.org_id = p_org_id
-                        AND s.is_deleted = false
-                        AND s.employee_id = p_emp
-                        AND s.shift_date = p_day
-                        AND coalesce(s.actual_hours, 0)::double precision > 0);
 $$;
 
 GRANT EXECUTE ON FUNCTION storeops._payroll_day_is_punch_driven(uuid, text, date)

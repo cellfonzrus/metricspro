@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
 from app.core import scope as _cscope
+from app.core import identity as _identity
 from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops.pto_accrual import (
     DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
@@ -2510,6 +2511,8 @@ def bulk_create_stores(body: BulkCreateStoresIn, org_id: str = ORG_ID):
         r = sb().table("stores").insert(to_insert[i:i + 500]).execute()
         inserted += len(r.data or to_insert[i:i + 500])
     _sync_store_mapping(org_id, to_insert)   # propagate new stores to commcalc.store_mapping
+    for _s in to_insert:                      # register each store's entity + code/address aliases (SSOT)
+        _register_store_entity(org_id, _s.get("store_code"), _s.get("address"))
     if to_insert:
         _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return {"inserted": inserted, "skipped": skipped}
@@ -2530,13 +2533,15 @@ def create_store(store: dict, org_id: str = ORG_ID):
     r = sb().table("stores").insert(row).execute()
     _STORE_TZ_CACHE.clear()   # a new store's zone must be visible to the clock immediately
     _sync_store_mapping(org_id, [row])   # propagate the new store to commcalc.store_mapping
+    _register_store_entity(org_id, row.get("store_code"), row.get("address"),   # SSOT: entity + aliases
+                           (r.data[0].get("entity_id") if r.data else None))
     _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0] if r.data else row
 
 
 def _sync_store_mapping_update(org_id, store_code, patch):
     """Propagate an EXISTING store's is_active/address/market change into commcalc.store_mapping —
-    UPDATE only (creation-time propagation stays _sync_store_mapping's job, insert-if-absent).
+    now an APP-SIDE UPSERT (insert-if-absent), not update-only.
 
     2026-07-25 fix: `commcalc.store_mapping` has its OWN `is_active` column, and migration 003
     defines a `storeops.sync_to_commcalc()` trigger FUNCTION meant to keep it in sync — but that
@@ -2544,11 +2549,18 @@ def _sync_store_mapping_update(org_id, store_code, patch):
     `CREATE TRIGGER ... ON storeops.stores` exists for it), and the app-side `_sync_store_mapping`
     only INSERTS a mapping row for a brand-new store, never updates an existing one. So toggling a
     store inactive in StoreOps Admin correctly saved `storeops.stores.is_active` but never reached
-    `commcalc.store_mapping.is_active` at all — plausibly part of "stores not going inactive"
-    wherever a downstream surface reads store_mapping's own flag instead of storeops.stores'. This
-    closes that gap going forward from the PATCH path (the toggle's actual write path) without
-    touching the dormant SQL trigger. Best-effort: a sync failure must never break the store update
-    itself (same posture as _sync_store_mapping)."""
+    `commcalc.store_mapping.is_active` at all.
+
+    2026-08-24 SSOT guard fix (blueprint Part 3d.1 — the 1115-Liberty orphan class): the previous
+    version of this function was UPDATE-ONLY (`.update(...).eq(store_code)`). A store that has NO
+    store_mapping row yet (e.g. `1115 Liberty` / B-1115: a storeops.stores row exists but no mapping
+    row) matched nothing, so its market NEVER reached store_mapping → never reached asset_ledger.market
+    → it dropped from every market-filtered reader. FIX: SELECT the (org_id, store_code) mapping row;
+    if it exists, UPDATE exactly as before (byte-identical to the old path for the common case); if it
+    does NOT, INSERT a full mapping row via `_sync_store_mapping` (the SAME fields, the SAME
+    address-dedupe guard), then apply the toggled is_active. This only ever ADDS a missing mapping row
+    or updates one already targeted — it never deletes, never rewrites money. Best-effort: a sync
+    failure must never break the store update itself (same posture as _sync_store_mapping)."""
     upd = {}
     if "is_active" in patch:
         upd["is_active"] = bool(patch["is_active"])
@@ -2559,10 +2571,81 @@ def _sync_store_mapping_update(org_id, store_code, patch):
     if not upd or not store_code:
         return
     try:
-        (get_supabase().schema("commcalc").table("store_mapping").update(upd)
-         .eq("org_id", org_id).eq("store_code", store_code).execute())
+        c = get_supabase()
+        existing = (c.schema("commcalc").table("store_mapping").select("store_code")
+                    .eq("org_id", org_id).eq("store_code", store_code).execute().data) or []
+        if existing:
+            (c.schema("commcalc").table("store_mapping").update(upd)
+             .eq("org_id", org_id).eq("store_code", store_code).execute())
+            return
+        # No mapping row yet — INSERT a full one instead of a no-op UPDATE (the orphan-class fix).
+        # Build it from the patch, filling address/market from the live storeops.stores row when the
+        # patch did not carry them, then delegate to _sync_store_mapping so the INSERT uses the exact
+        # same fields + address-dedupe guard.
+        store_row = {"store_code": store_code,
+                     "address": patch.get("address"),
+                     "market": patch.get("market")}
+        if store_row["address"] is None or store_row["market"] is None:
+            live = (c.schema("storeops").table("stores").select("address,market")
+                    .eq("org_id", org_id).eq("store_code", store_code).execute().data) or []
+            if live:
+                if store_row["address"] is None:
+                    store_row["address"] = live[0].get("address")
+                if store_row["market"] is None:
+                    store_row["market"] = live[0].get("market")
+        _sync_store_mapping(org_id, [store_row])
+        # _sync_store_mapping inserts with store_mapping's own is_active default (true); apply the
+        # explicitly-toggled value so deactivating a mapping-less store still lands inactive.
+        if "is_active" in upd:
+            (c.schema("commcalc").table("store_mapping").update({"is_active": upd["is_active"]})
+             .eq("org_id", org_id).eq("store_code", store_code).execute())
     except Exception as e:
-        print(f"WARN store_mapping update-sync failed: {e}")
+        print(f"WARN store_mapping upsert-sync failed: {e}")
+
+
+def _register_store_entity(org_id, store_code, address, entity_id=None):
+    """Resolve-or-register a store's stable `entity_id` and write its `code`/`address` aliases into
+    storeops.store_alias (SSOT guard fix, blueprint Part 3d.2). Called on every store write so a store
+    can no longer exist without an entity + alias set.
+
+    Backend-only and PURELY ADDITIVE in Phase 1: nothing READS store_alias / entity_id on a money path
+    yet (app.core.identity is wired into no reader), so this changes no payout or market-filtered
+    dollar. Idempotent — an alias already present (compared on lower(trim(value)), the unique index)
+    is never re-inserted. Best-effort: a failure here NEVER breaks the store write and NEVER touches
+    money. Validation (blueprint 3d.3 / flag_store_resolver pri-2): an alias is written only against a
+    REAL store entity — the entity_id is confirmed to belong to a live storeops.stores row first."""
+    code = str(store_code or "").strip()
+    if not code:
+        return
+    try:
+        c = get_supabase()
+        if not entity_id:
+            rows = (c.schema("storeops").table("stores").select("entity_id")
+                    .eq("org_id", org_id).eq("store_code", code).execute().data) or []
+            entity_id = rows[0].get("entity_id") if rows else None
+        if not entity_id:                 # no real entity (registry migration not yet run) → no-op
+            return
+        want = [("code", code)]
+        addr = str(address or "").strip()
+        if addr:
+            want.append(("address", addr))
+        existing = (c.schema("storeops").table("store_alias").select("alias_kind,alias_value")
+                    .eq("org_id", org_id).execute().data) or []
+        have = {(str(r.get("alias_kind") or "").lower(),
+                 str(r.get("alias_value") or "").strip().lower()) for r in existing}
+        new = []
+        for kind, val in want:
+            key = (kind, val.strip().lower())
+            if key in have:
+                continue
+            new.append({"org_id": org_id, "alias_kind": kind, "alias_value": val,
+                        "entity_id": entity_id, "source": "store_write", "confidence": "seeded"})
+            have.add(key)
+        if new:
+            c.schema("storeops").table("store_alias").insert(new).execute()
+        _identity.invalidate(org_id)
+    except Exception as e:
+        print(f"WARN store entity register failed: {e}")
 
 
 @router.patch("/stores/{store_id}")
@@ -2581,6 +2664,8 @@ def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
     if "timezone" in row:
         _STORE_TZ_CACHE.clear()   # zone change must take effect without a restart
     _sync_store_mapping_update(org_id, r.data[0].get("store_code"), row)
+    _register_store_entity(org_id, r.data[0].get("store_code"), r.data[0].get("address"),  # SSOT
+                           r.data[0].get("entity_id"))
     _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0]
 
