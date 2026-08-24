@@ -159,20 +159,46 @@ harbour at all.
 ## 5. Connecting the price list (optional but recommended)
 
 The pricing section shows whatever you publish in the app under **Admin → Pricing & Free Trial**.
-For the browser to be allowed to read it, the API must name this website as an allowed origin.
+Three things all have to be true before a price appears on the website, and they are separate:
 
-On the Railway backend, set the environment variable:
+1. **Migration `908_pricing_and_trial.sql` has been applied.** It creates the tables the prices live
+   in. Without it the admin page shows an orange warning and nothing can be saved.
+2. **The package is Published, not just saved.** Every package is a draft until you press
+   **Publish** on its row. Saving a price does not publish it — that separation is deliberate, so a
+   half-typed number cannot reach the public internet.
+3. **The API allows this website to read it.** The site and the app are different origins, so the
+   browser blocks the call unless the API names this domain.
+
+For (3), `https://metricspro.tech` and `https://www.metricspro.tech` are now in the API's built-in
+default list, so a fresh deployment works with no configuration.
+
+**But an environment variable wins over that default.** If `CORS_ORIGINS` is set on the Railway
+backend, it *replaces* the built-in list entirely, and the marketing domains have to be in it too:
 
 ```
 CORS_ORIGINS=https://metricspro-five.vercel.app,https://www.metricspro.tech,https://metricspro.tech
 ```
 
-That variable already exists and overrides the default list, so this is a settings change, not a
-deploy. Keep the app's own URL in the list or **you will break the application** — this variable is
-the app's allow-list too.
+Keep the app's own URL in that list or **you will break the application** — the same variable is the
+app's allow-list. If you are not sure whether the variable is set, look at Railway → the service →
+Variables; if `CORS_ORIGINS` is not listed there, the built-in default is in force and there is
+nothing to do.
 
-If you skip this, nothing errors: the site shows the built-in trial-led card, exactly as it does when
-no package has been published.
+### If the pricing section still shows the trial-led card
+
+By design, nothing errors — every failure lands on the built-in "priced against your operation"
+card, because a visitor should never see a broken price list. That makes all the failures look
+identical from the outside, so the page **names which one it was on the browser console**:
+
+1. Open the site and press **F12** (or right-click → Inspect).
+2. Click the **Console** tab.
+3. Reload the page.
+4. Look for a line starting `MetricsPro pricing:` — it says exactly which of the causes above it is
+   and what to do about it.
+
+If there is no such line at all, the script never ran: check that `assets/config.js` and
+`assets/site.js` actually reached the server, by opening `https://metricspro.tech/assets/config.js`
+directly in a tab. You should see the configuration file, not a 404.
 
 ## 6. Changing the site later
 

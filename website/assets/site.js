@@ -8,10 +8,21 @@
  * pricing slot — the trial-led card — and this file replaces it only once a real price list comes
  * back. A blocked script, a blocked request, an API that is down, a CORS rejection, or nothing
  * published yet all end at the same place: the page you already see. Nothing here can blank it.
+ *
+ * That silence is right for a VISITOR and useless for whoever has to fix it: every failure looks
+ * identical from the outside. So each one now says which it was on the browser console (F12 →
+ * Console), prefixed 'MetricsPro pricing:'. Console only — never on the page, and never a reason
+ * to show a visitor an error about a price list they cannot do anything about.
  */
 (function () {
   'use strict'
   var cfg = window.MP_CONFIG || {}
+
+  // Says which failure mode happened, on the console, for whoever is diagnosing. Wrapped because
+  // console is absent in a few embedded browsers and this must never be what breaks the page.
+  var say = function (msg) {
+    try { if (window.console && console.warn) console.warn('MetricsPro pricing: ' + msg) } catch (e) {}
+  }
 
   // ── 1. App links ────────────────────────────────────────────────────────────────────────────
   if (cfg.appUrl) {
@@ -24,7 +35,12 @@
 
   // ── 2. Published pricing ────────────────────────────────────────────────────────────────────
   var slot = document.getElementById('pricing-cards')
-  if (!slot || !cfg.apiBase) return
+  if (!slot) { say('no #pricing-cards element on this page — nothing to fill.'); return }
+  if (!cfg.apiBase) {
+    say('MP_CONFIG.apiBase is empty, so no price list is requested. If assets/config.js did not '
+      + 'reach the server, this is what it looks like.')
+    return
+  }
 
   var esc = function (s) {
     return String(s == null ? '' : s)
@@ -72,7 +88,21 @@
   var render = function (data) {
     var pkgs = Array.isArray(data.packages) ? data.packages : []
     // Nothing published, or pricing switched off in the back office → keep the page as shipped.
-    if (!pkgs.length || data.show_pricing === false) return
+    if (data.ready === false) {
+      say('the platform answered, but its pricing tables are missing — migration '
+        + '908_pricing_and_trial.sql has not been applied. Run it in the SQL editor.')
+      return
+    }
+    if (data.show_pricing === false) {
+      say('the platform answered, but "show pricing" is switched off in Admin -> Pricing & Free '
+        + 'Trial. Turn it on there.')
+      return
+    }
+    if (!pkgs.length) {
+      say('the platform answered and no package is published. Packages are drafts until you press '
+        + '"Publish" on each one in Admin -> Pricing & Free Trial — saving a price does not publish it.')
+      return
+    }
     var trialOn = data.trial_enabled !== false
     var days = Number(data.trial_days) > 0 ? Number(data.trial_days) : 30
     var html = ''
@@ -99,8 +129,22 @@
   try {
     var url = String(cfg.apiBase).replace(/\/+$/, '') + '/api/v1/billing/public-pricing'
     fetch(url, { credentials: 'omit' })
-      .then(function (r) { return r.ok ? r.json() : null })
+      .then(function (r) {
+        if (r.ok) return r.json()
+        say('the platform answered ' + r.status + ' for ' + url + '. That is an API problem, not a '
+          + 'publishing one — the price list was never reached.')
+        return null
+      })
       .then(function (d) { if (d) render(d) })
-      .catch(function () { /* offline, blocked, CORS, down — the shipped card stands */ })
-  } catch (e) { /* no fetch in this browser — the shipped card stands */ }
+      .catch(function (e) {
+        // A browser deliberately hides WHY a cross-origin request failed, so this cannot name CORS
+        // with certainty — but on a reachable API, CORS is overwhelmingly what it is.
+        say('could not reach ' + url + ' at all (' + (e && e.message ? e.message : 'network error')
+          + '). Most likely this site\'s origin, ' + window.location.origin + ', is not in '
+          + 'CORS_ORIGINS on the API. Open the URL directly in a tab: if it returns data there but '
+          + 'fails here, it is CORS. The exact reason is on the Network tab.')
+      })
+  } catch (e) {
+    say('this browser has no fetch(), so no price list is requested. The shipped card stands.')
+  }
 })()

@@ -170,7 +170,15 @@ app.add_middleware(HardeningMiddleware)
 # branch deploy, which is exactly the kind of breakage that gets "fixed" by putting `*` back.
 _cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 CORS_ORIGINS = _cors_origins or [
-    "https://metricspro-five.vercel.app",   # the ONLY production app URL (metricspro.tech is email-only)
+    "https://metricspro-five.vercel.app",   # the production app
+    # The marketing site on shared hosting. It is a DIFFERENT origin from the app and reads exactly
+    # one endpoint here — GET /billing/public-pricing — to render the published price list. Without
+    # these two entries the browser blocks that call and the page silently falls back to its
+    # "priced against your operation" card, which looks identical to having published nothing.
+    # NOTE: setting CORS_ORIGINS in the environment REPLACES this whole list. If you set it, the
+    # marketing origins must be in it too, or pricing stops appearing on the website.
+    "https://metricspro.tech",
+    "https://www.metricspro.tech",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
