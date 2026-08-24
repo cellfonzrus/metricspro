@@ -223,6 +223,17 @@ def _security_posture_startup():
         pass
 
 
+@app.on_event("startup")
+def _service_role_startup():
+    # Announce which service this process is: the API service (SERVICE_ROLE=api/web) blocks
+    # Chromium/Playwright portal sweeps; unset or any other value (sweeps/worker) allows them.
+    try:
+        from app.core.service_role import role_banner
+        print("[service-role] " + role_banner(), flush=True)
+    except Exception:
+        pass
+
+
 # ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────
 # The modules list here used to be a hardcoded literal, and it went stale the moment a module was
 # added without someone editing it — by 2026-08 it was missing pos, crm, referral, payables, billing,

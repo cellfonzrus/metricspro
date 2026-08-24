@@ -44,6 +44,11 @@ except ImportError:                                     # loaded by path, not as
         _osmod2.path.join(_osmod2.path.dirname(_osmod2.path.abspath(__file__)), "url_guard.py"))
     _url_guard = _ilu2.module_from_spec(_ug_spec)
     _ug_spec.loader.exec_module(_url_guard)
+try:
+    from app.core.service_role import assert_browser_allowed   # SERVICE_ROLE=api guard
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    def assert_browser_allowed():                        # no-op fallback for path-loaded proof scripts
+        return None
 
 DEFAULT_URL = "https://ownerportal.epayworldwide.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -775,6 +780,7 @@ def discover_reports(url, user, pw):
             "Playwright is not installed in the backend image (add it to backend/Dockerfile).")
     base_url = _safe_base(url)
     items = []
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         ctx = browser.new_context(user_agent=UA)
@@ -1080,6 +1086,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
     base_url = _safe_base(url)
     results, errors = [], []
 
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         ctx = browser.new_context(user_agent=UA, accept_downloads=True)
