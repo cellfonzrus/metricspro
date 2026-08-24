@@ -1,0 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# DOCUMENT ROOT SHIM — install ONCE, by hand, then never touch again.
+#
+# WHERE THIS GOES:  /home1/gsmunlo7/metricspro.tech/.htaccess   (the DOCUMENT ROOT)
+# WHERE IT DOES NOT GO: deploy/ — that folder gets the site's own .htaccess, which the
+#                       automated deploy overwrites on every run. This file must survive that,
+#                       which is exactly why it lives one level up.
+#
+# WHY IT EXISTS
+#   The site is published by a scoped FTP account, and cPanel refuses to root an FTP account at a
+#   document root — it appends the account's username to whatever directory you type, however you
+#   fill the form. So the account lives at .../metricspro.tech/deploy, and this file makes Apache
+#   serve the site from there while the document root stays where Bluehost put it.
+#
+#   The alternative was putting the main cPanel password into GitHub, where it would have had
+#   reach over all twenty-odd domains on the account. This costs one file instead.
+#
+# WHAT IT DOES
+#   1. Sends anyone who asks for /deploy/... to the same page without it, so the site has exactly
+#      one address and search engines do not index two copies.
+#   2. Serves everything else out of deploy/ internally — the visitor's address bar never shows it.
+#
+# WHAT IT DELIBERATELY LEAVES ALONE
+#   b2b/        a different site living in this same folder
+#   cgi-bin/    Apache's own
+#   .well-known/ how AutoSSL proves it owns the domain — break this and certificate renewal fails
+#                QUIETLY, weeks later, which is the worst way for it to fail
+#
+# TO UNDO ALL OF THIS: delete this file and copy the site's files back up one level.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # One canonical address. A request that names deploy/ explicitly is redirected to the clean URL.
+  # Matched against THE_REQUEST (the raw request line) rather than REQUEST_URI, because the
+  # internal rewrite below changes REQUEST_URI and would otherwise re-trigger this rule forever.
+  RewriteCond %{THE_REQUEST} \s/+deploy/([^\s?]*) [NC]
+  RewriteRule ^ /%1 [R=301,L]
+
+  # Everything else: served from deploy/, invisibly.
+  RewriteCond %{REQUEST_URI} !^/(deploy|b2b|cgi-bin)/ [NC]
+  RewriteCond %{REQUEST_URI} !^/\.well-known/ [NC]
+  RewriteRule ^(.*)$ deploy/$1 [L]
+</IfModule>
+
+# If mod_rewrite were ever unavailable this file does nothing at all, and the document root would
+# serve a bare directory listing. Belt and braces:
+<IfModule mod_autoindex.c>
+  Options -Indexes
+</IfModule>
