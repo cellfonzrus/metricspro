@@ -847,6 +847,80 @@ def _shift_contributes_hours(s) -> bool:
     return float(s.get("scheduled_hours") or 0) > 0 or float(s.get("actual_hours") or 0) > 0
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PUNCH-DRIVEN PAY (owner directive 2026-08-24 — approved change to the pay model)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# When a rep has a CLOSED punch (timelog.hours NOT NULL) on a (employee_id, work_date), the PUNCH
+# hours are AUTHORITATIVE for pay on that day — overriding scheduled_hours. A 6.6h punch pays 6.6h,
+# not the scheduled 6.3h. With NO closed punch that day, pay stays schedule-driven (scheduled_hours),
+# exactly as before. Open / forgot-to-clock-out punches (hours IS NULL) are NOT a punch here.
+#
+# PRECEDENCE (owner constraint, money-critical):  manual correction  >  closed punch  >  scheduled.
+# A MANUAL correction is a human-set `shifts.actual_hours` (> 0). The ONLY writer of
+# shifts.actual_hours anywhere in the codebase is PATCH /storeops/shifts (update_shift, the DM edit
+# path), which logs the change to storeops.payroll_change_log — nothing auto-reconciles a punch into
+# shifts.actual_hours (clock_out and the force-clockout sweep write ONLY storeops.timelog). So
+# `actual_hours > 0` is, by construction, a manual correction, and it must WIN over the raw punch (a
+# DM who fixed a forgotten punch must not be overwritten by a partial/again-forgotten punch). This is
+# a READ-TIME preference (design A): no mutation of shifts, no backfill — historical months fix
+# themselves. Applied IDENTICALLY across get_payroll (legacy), get_payroll_by_store (legacy), the
+# payroll_month_rows RPC (migration 914), and the actual-hours drill-down, so all four reconcile.
+#
+# Keys are the RAW employee_id (shifts may carry a numeric id, kiosk punches the business id) — the
+# SAME raw-id grain the mig-407 anti-join and the legacy shift_days set already used, so the existing
+# identity-merge / double-count behavior is preserved unchanged; only the hours DECISION changes.
+def _punch_driven_day_maps(shifts, timelog):
+    """(manual_shift_days, closed_punch_days), each: raw employee_id -> set of 'YYYY-MM-DD'.
+
+    manual_shift_days: days the employee has a shift with actual_hours>0 (a human correction — see
+    module note above; actual_hours>0 == manual). closed_punch_days: days with >=1 CLOSED punch
+    (clock_out set AND hours NOT NULL). Open punches are excluded (they are not a punch for pay)."""
+    manual_days: dict = {}
+    punch_days: dict = {}
+    for s in shifts or []:
+        if float(s.get("actual_hours") or 0) > 0:
+            eid = s.get("employee_id")
+            if eid is not None:
+                manual_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
+    for t in timelog or []:
+        if t.get("clock_out") and t.get("hours") is not None:
+            eid = t.get("employee_id")
+            if eid:
+                punch_days.setdefault(eid, set()).add(str(t.get("work_date") or "")[:10])
+    return manual_days, punch_days
+
+
+def _shift_actual_contribution(s, manual_days, punch_days):
+    """Effective ACTUAL hours a shift row contributes to PAY under the punch-driven model:
+      * actual_hours            if actual_hours > 0        — a manual DM correction ALWAYS wins.
+      * 0                       elif a CLOSED punch exists that day AND no manual correction that day
+                                — the punch drives pay; the schedule is REPLACED (the punch is counted
+                                  separately, so this avoids double-counting), incl. the PR #74
+                                  zero-hour override shell (sched 0/act 0) whose punch already won.
+      * scheduled_hours         else                       — no punch that day: scheduled fallback,
+                                                              the pre-existing behavior, unchanged."""
+    act = float(s.get("actual_hours") or 0)
+    if act > 0:
+        return act
+    eid = s.get("employee_id")
+    d = str(s.get("shift_date") or "")[:10]
+    if d in punch_days.get(eid, ()) and d not in manual_days.get(eid, ()):
+        return 0.0
+    return float(s.get("scheduled_hours") or 0)
+
+
+def _punch_counts_for_pay(t, manual_days):
+    """True iff this CLOSED punch contributes its hours to pay: it counts UNLESS a manual correction
+    (a shift with actual_hours>0) exists that day for the SAME raw employee_id (manual wins). This
+    REPLACES PR #74's 'any hours-carrying shift blocks the punch' rule — a merely-SCHEDULED shift no
+    longer blocks its day's punch (that is the punch-driven change); only a manual correction does."""
+    if not (t.get("clock_out") and t.get("hours") is not None):
+        return False
+    eid = t.get("employee_id")
+    d = str(t.get("work_date") or "")[:10]
+    return d not in manual_days.get(eid, ())
+
+
 def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
     """(real_shifts, timelog_rows) for INACTIVE employees only. real_shifts = storeops.shifts rows
     (is_deleted=false, in [lo,hi) when given) with actual_hours GENUINELY > 0 — a schedule-only row
@@ -1133,9 +1207,14 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
         if lo and hi:
             q = q.gte("shift_date", lo).lt("shift_date", hi)
         shifts = q.execute().data or []
-        # employee_id -> {shift_date already represented by a shift row}, so the timelog fallback
-        # below never double-counts a day that's already schedule-tracked.
-        shift_days: dict = {}
+        # Fetch the period's CLOSED punches up-front so the shift loop below already knows which days
+        # are punch-driven (PUNCH-DRIVEN PAY, 2026-08-24). Open range (month=None) has no timelog
+        # basis -> empty, so the shift loop degrades to the pre-existing act>0?act:sched behavior.
+        tl = []
+        if lo and hi:
+            tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
+                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+        manual_days, punch_days = _punch_driven_day_maps(shifts, tl)
         for s in shifts:
             eid = s.get("employee_id")
             if eid in inactive_ids:
@@ -1152,9 +1231,10 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                     "shifts": 0,
                 }
             sched = float(s.get("scheduled_hours") or 0)
-            act = float(s.get("actual_hours") or 0)
-            if act == 0:
-                act = sched  # actual not recorded yet -> fall back to scheduled hours
+            # PUNCH-DRIVEN PAY: actual_hours>0 (manual) wins; else the punch drives (shift -> 0) on a
+            # day with a closed punch and no manual correction; else the scheduled fallback. The punch
+            # itself is added by the timelog loop below, so a punch-driven day counts its hours ONCE.
+            act = _shift_actual_contribution(s, manual_days, punch_days)
             summary[eid]["scheduled_hours"] += sched
             summary[eid]["actual_hours"]    += act
             summary[eid]["shifts"] += 1
@@ -1162,22 +1242,15 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
             if st:
                 sh = store_hours.setdefault(eid, {})
                 sh[st] = sh.get(st, 0.0) + sched + act
-            if eid and _shift_contributes_hours(s):
-                # only a shift that actually contributes hours may block that day's punch — a
-                # zero-hour override shell must NOT (see _shift_contributes_hours; $0-clocked-day fix).
-                shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
 
         # UNIVERSAL FALLBACK (2026-07-18, payroll data-flow audit — luxelink showed employees+shifts+rates
         # but an empty Payroll Report for periods where reps clock in via the kiosk without a formal
         # schedule entered): a real clock-in/out is "existing platform data" this report was silently
-        # dropping whenever no shifts row existed for that employee/day. ADDITIVE ONLY — a day already
-        # covered by a shift row is untouched (byte-identical for any tenant whose hours are already
-        # schedule-tracked, which is the house/Boost pattern today); only days with a clock punch and NO
-        # matching shift gain a row, using clocked hours as actual (no schedule existed, so
-        # scheduled_hours/scheduled_pay correctly stay 0 for that portion).
+        # dropping whenever no shifts row existed for that employee/day. Under PUNCH-DRIVEN PAY a punch
+        # counts UNLESS a manual correction (shift.actual_hours>0) covers its day — a merely-scheduled
+        # shift no longer suppresses it (the schedule contributed 0 above, so the punch is what's paid,
+        # never both). scheduled_hours stays 0 for a punch with no schedule of its own.
         if lo and hi:
-            tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
-                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
             for t in tl:
                 if not (t.get("clock_out") and t.get("hours") is not None):
                     continue   # only CLOSED punches count (matches /payroll-raw's own rule)
@@ -1185,8 +1258,8 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                 if eid in inactive_ids:
                     continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
                 wd = str(t.get("work_date") or "")[:10]
-                if not eid or not wd or wd in shift_days.get(eid, set()):
-                    continue   # already represented by a shift that day -> never double-count
+                if not eid or not wd or not _punch_counts_for_pay(t, manual_days):
+                    continue   # manual correction that day wins -> punch excluded (never double-count)
                 emp = emp_map.get(eid, {})
                 if eid not in summary:
                     summary[eid] = {
@@ -1412,20 +1485,24 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
         if lo and hi:
             q = q.gte("shift_date", lo).lt("shift_date", hi)
         shifts = q.execute().data or []
-        shift_days: dict = {}   # employee_id -> {shift_date} already represented by a shift row
+        # PUNCH-DRIVEN PAY (2026-08-24): fetch the period's punches up-front so the shift loop already
+        # knows which (emp, day) is punch-driven, EXACTLY as /payroll does above — the two reconcile.
+        tl = []
+        if lo and hi:
+            tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
+                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+        manual_days, punch_days = _punch_driven_day_maps(shifts, tl)
         for s in shifts:
             eid = s.get("employee_id")
             if eid in inactive_ids:
                 continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
             store = (s.get("store_code") or "").strip()
-            if eid and _shift_contributes_hours(s):
-                # zero-hour override shell must not shadow the punch here either ($0-clocked-day fix).
-                shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
             if not store:
                 continue
             sched = float(s.get("scheduled_hours") or 0)
-            act = float(s.get("actual_hours") or 0)
-            hrs = act if act > 0 else sched
+            # actual_hours>0 (manual) wins; else 0 on a punch-driven day (punch replaces the schedule,
+            # attributed to the punch's own store below); else scheduled fallback.
+            hrs = _shift_actual_contribution(s, manual_days, punch_days)
             rate = rate_map.get(eid, 0.0)
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
@@ -1434,12 +1511,11 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                 payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
                 payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
 
-        # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch with no matching shift
-        # row is real existing platform data this store auto-fill was dropping. ADDITIVE ONLY: a day
-        # already covered by a shift is skipped (byte-identical for a schedule-tracked tenant).
+        # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch is real existing
+        # platform data this store auto-fill was dropping. Under PUNCH-DRIVEN PAY it counts (at the
+        # punch's own store) UNLESS a manual correction covers its day; the schedule contributed 0 for
+        # a punch-driven day above, so the punch's hours land ONCE, never on top of the schedule.
         if lo and hi:
-            tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
-                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
             for t in tl:
                 if not (t.get("clock_out") and t.get("hours") is not None):
                     continue
@@ -1448,7 +1524,7 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                     continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
                 wd = str(t.get("work_date") or "")[:10]
                 store = (t.get("store_code") or "").strip()
-                if not eid or not wd or not store or wd in shift_days.get(eid, set()):
+                if not eid or not wd or not store or not _punch_counts_for_pay(t, manual_days):
                     continue
                 hrs = float(t.get("hours") or 0)
                 rate = rate_map.get(eid, 0.0)
@@ -1650,13 +1726,27 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
             row["store_code"] = store
         return row
 
-    # Shift contribution — a day covered by a shift ALWAYS gets the shift's own eff value added to
-    # `/payroll`'s bucket for whichever raw id that shift row carries. `matches_business_id` is
-    # exactly the test that determines whether THIS shift lands in the SAME aggregation bucket as
-    # the employee's timelog rows (both `/payroll`'s legacy Python `shift_days` set and mig-407's SQL
-    # anti-join key off raw employee_id equality) — reproducing it here is what makes the dedup below
-    # match `/payroll` instead of silently being "more correct" than the number it's explaining.
-    shift_days_same_bucket = set()
+    # PUNCH-DRIVEN PAY (2026-08-24) reconciliation: reproduce /payroll's exact per-day decision so
+    # this drill-down explains the paid number rather than a prettier one. Precedence is
+    # manual > punch > scheduled, keyed on the SAME raw-id grain /payroll uses. Two same-bucket sets:
+    #   manual_days_bucket — days with a shift in THIS employee's business-id bucket carrying a manual
+    #     correction (actual_hours>0). A manual correction WINS: it counts, and it suppresses the day's
+    #     punch (never double-counted).
+    #   punch_days_bucket — days with a closed punch (timelog always carries the business id, so every
+    #     closed punch is in the business-id bucket). On such a day, absent a manual correction, the
+    #     punch DRIVES pay and a same-bucket scheduled shift contributes 0 (its hours are replaced).
+    manual_days_bucket = set()
+    punch_days_bucket = set()
+    for t in timelog:
+        if t.get("clock_out") and t.get("hours") is not None:
+            _dd = str(t.get("work_date") or "")[:10]
+            if _dd:
+                punch_days_bucket.add(_dd)
+    for s in shifts:
+        if float(s.get("actual_hours") or 0) > 0 and str(s.get("employee_id")) == str(employee_id):
+            _dd = str(s.get("shift_date") or "")[:10]
+            if _dd:
+                manual_days_bucket.add(_dd)
     for s in shifts:
         d = str(s.get("shift_date") or "")[:10]
         if not d:
@@ -1667,14 +1757,16 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         matches_business_id = str(s.get("employee_id")) == str(employee_id)
         if is_inactive:
             eff = act if act > 0 else 0.0       # phantom (act==0) shift never counts for an inactive rep
-            counted = act > 0
+        elif act > 0:
+            eff = act                           # manual correction ALWAYS wins (manual > punch > sched)
+        elif matches_business_id and d in punch_days_bucket and d not in manual_days_bucket:
+            eff = 0.0                           # PUNCH-DRIVEN: the same-bucket closed punch replaces the
+                                                # schedule (the punch is added below) -> no double count.
+                                                # Also subsumes the PR #74 zero-hour override shell.
         else:
-            eff = act if act > 0 else sched      # active-path act==0->scheduled fallback
-            # A zero-hour shell (sched==0 AND act==0 — e.g. the clock_in_override "on record" row) is
-            # NOT counted, so it neither adds hours nor (below) shadows the day's real punch out of the
-            # total — matching /payroll's own $0-clocked-day fix (_shift_contributes_hours). A genuine
-            # scheduled shift (sched>0) still counts and still suppresses its punch, exactly as before.
-            counted = _shift_contributes_hours(s)
+            eff = sched                         # no punch that day -> scheduled fallback (unchanged)
+        counted = eff > 0                        # a shift whose hours are in the total (manual/scheduled);
+                                                 # a punch-driven or zero-shell shift contributes 0 -> False
         row["scheduled_hours"] += sched if (not is_inactive or act > 0) else 0.0
         row["actual_hours"] += eff
         row["shift"] = {"id": s.get("id"), "start_time": s.get("start_time"), "end_time": s.get("end_time"),
@@ -1683,8 +1775,6 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
                         "edited": ("shifts", str(s.get("id"))) in edited_source_ids}
         if row["shift"]["edited"]:
             row["edited"] = True
-        if matches_business_id and counted:
-            shift_days_same_bucket.add(d)
 
     for t in timelog:
         d = str(t.get("work_date") or "")[:10]
@@ -1693,7 +1783,7 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         row = day(d, t.get("store_code"))
         closed = bool(t.get("clock_out") and t.get("hours") is not None)
         hrs = float(t.get("hours") or 0) if closed else 0.0
-        counted = closed and d not in shift_days_same_bucket
+        counted = closed and d not in manual_days_bucket   # punch counts unless a manual correction wins
         edited = ("timelog", str(t.get("id"))) in edited_source_ids
         row["punches"].append({"id": t.get("id"), "clock_in": t.get("clock_in"), "clock_out": t.get("clock_out"),
                                "hours": t.get("hours"), "store_code": t.get("store_code"),
@@ -1703,9 +1793,11 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
             row["edited"] = True
         if counted:
             row["actual_hours"] += hrs
-        if closed and row.get("shift") is not None and row["shift"].get("counted") and d not in shift_days_same_bucket:
-            # the shift exists but landed in a DIFFERENT raw-id bucket than this punch (the common,
-            # buggy case) -> both counted -> flag it plainly.
+        if counted and row.get("shift") is not None and row["shift"].get("counted"):
+            # a shift's OWN hours counted this day AND a punch also counted -> the shift landed in a
+            # DIFFERENT raw-id bucket than the punch (the identity-mismatch double-count) -> flag it. A
+            # same-bucket punch-driven day never trips this: that shift's effective_hours is 0 (counted
+            # False), so only the punch counts.
             row["double_counted"] = True
             row["note"] = (f"{row['shift']['effective_hours']:.1f}h from the schedule AND "
                             f"{hrs:.1f}h from a separate clock punch both counted this day — see "
