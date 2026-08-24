@@ -6,6 +6,7 @@ import pandas as pd
 import io
 import re
 from app.core.database import get_supabase
+from app.core.service_role import require_browser_service   # SERVICE_ROLE=api → clean 503 on browser endpoints
 from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
@@ -9152,6 +9153,7 @@ async def epay_sweep_put_config(body: EpaySweepPutConfigIn, org_id: str = ORG_ID
 @router.post("/epay/sweep/run-now")
 def epay_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Run now' (background task)."""
+    require_browser_service()   # SERVICE_ROLE=api → this launches Chromium; run it on the sweeps worker
     require_org(org_id)
     cfg = _epay_cfg(sb(), org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
@@ -9165,6 +9167,7 @@ async def epay_discover_reports(org_id: str = ORG_ID):
     """Enumerate the epay Commissions report menu (id → label) so the Commission Payment Detail
     and Comprehensive Compensation report ids can be wired into the multi-report sweep. Runs the
     headless browser server-side (the portal WAF only allows Railway's egress), synchronously."""
+    require_browser_service()   # SERVICE_ROLE=api → this launches Chromium; run it on the sweeps worker
     require_org(org_id)
     cfg = _epay_cfg(sb(), org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
@@ -9185,6 +9188,7 @@ def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str =
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
+    require_browser_service()   # SERVICE_ROLE=api → this launches Chromium; repoint this cron to the sweeps worker
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     triggered = 0
@@ -25186,6 +25190,7 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
     COOLDOWN (mig 244): if the portal has temporarily blocked us, this returns blocked/requires_confirm
     instead of pulling. A human MAY override with ?confirm=true — the UI asks first, because another
     attempt during an active block typically extends it."""
+    require_browser_service()   # SERVICE_ROLE=api → portal pull launches Chromium; run it on the sweeps worker
     require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
@@ -25751,6 +25756,7 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
     cron = verify_notify_secret(x_notify_secret)
     if not cron:
         require_org(org_id)
+    require_browser_service()   # SERVICE_ROLE=api → portal sweeps launch Chromium; repoint this cron to the sweeps worker
     client = sb()
     now = datetime.now(timezone.utc)
     try:
@@ -25902,6 +25908,7 @@ def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id:
     COOLDOWN (mig 244): a fresh headless login is the most expensive request this module makes, so it is
     the one thing that must NEVER happen automatically during a portal block. Human override with
     ?confirm=true, exactly like the live login."""
+    require_browser_service()   # SERVICE_ROLE=api → portal login launches Chromium; run it on the sweeps worker
     require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
@@ -25933,6 +25940,7 @@ class LoginCodeIn(LaxModel):
 async def data_source_login_verify(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
     """Phase 2: submit the 2FA code against the pending session and, on success, store the durable
     authenticated session so scheduled/manual pulls reuse it until the portal invalidates it."""
+    require_browser_service()   # SERVICE_ROLE=api → 2FA verify re-launches Chromium; run it on the sweeps worker
     require_org(org_id)
     from app.modules.commcalc import vidapay_sweep as vp
     from fastapi.concurrency import run_in_threadpool
@@ -26157,6 +26165,7 @@ def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     ~HH:MM — another attempt may extend the block") and take a second, deliberate click. The AUTOMATIC
     post-login pull stays suppressed for the whole cooldown regardless of the confirm (auto_pull_gate),
     so a human look at the login screen never turns into 5 reports x N months of traffic."""
+    require_browser_service()   # SERVICE_ROLE=api → live login launches Chromium; run it on the sweeps worker
     require_org(org_id)
     from app.modules.commcalc import live_login
     client = sb()
@@ -26253,6 +26262,7 @@ class LiveLoginClickIn(LaxModel):
 def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     """'Take control': forward an operator click (NORMALIZED x/y in 0..1 of the streamed image) to the
     live page, so they can press a control the auto-clicker missed (e.g. the portal's Next button)."""
+    require_browser_service()   # SERVICE_ROLE=api → live-login sessions only run on the sweeps worker
     require_org(org_id)
     from app.modules.commcalc import live_login
     sess = live_login.get_session(sid, org_id)
@@ -26281,6 +26291,7 @@ def live_login_input(sid: str, body: LiveLoginInputIn, org_id: str = ORG_ID):
     RESEND / PULL). type ∈ click|dblclick|type|key|scroll. Click coords are NORMALIZED (0..1 of the
     streamed image) and multiplied by the live viewport size server-side (DPR-proof — the img is rendered
     smaller than the real viewport). The first human input pauses auto-driving for the rest of pre-auth."""
+    require_browser_service()   # SERVICE_ROLE=api → live-login sessions only run on the sweeps worker
     require_org(org_id)
     from app.modules.commcalc import live_login
     sess = live_login.get_session(sid, org_id)
