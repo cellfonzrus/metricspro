@@ -2386,8 +2386,12 @@ def _collect_markets(org_id: str):
 def _canonicalize_market(value, canonical_markets):
     """btrim + case-insensitive match to an existing market -> saves the canonical casing.
     A genuinely new (non-matching) value is kept as-typed (btrimmed) — that's the "create new"
-    path. Empty stays empty (Unassigned is explicit and allowed)."""
-    s = str(value or "").strip()
+    path. Empty stays empty (Unassigned is explicit and allowed).
+
+    HTML/angle-bracket junk (e.g. a pasted "<li>") is stripped FIRST (scope.sanitize_market_label) so
+    the free-text create path can never persist markup as a market — the defect that put "<li>" into
+    the vocabulary (migration 740). An all-markup value collapses to "" = unassigned."""
+    s = _cscope.sanitize_market_label(value)
     if not s:
         return ""
     for m in canonical_markets:
