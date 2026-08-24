@@ -14948,8 +14948,14 @@ def _canonical_market(client, org_id: str, value) -> str:
     case-insensitively — picking/typing "li" where "LI" already exists stores "LI", so the two can never
     become separate market buckets. A value matching nothing is kept verbatim (that IS how a genuinely
     new market is created — the UI makes that an explicit choice). Blank stays blank: no market is a
-    legitimate, explicit state."""
-    name = " ".join((value or "").split())
+    legitimate, explicit state.
+
+    HTML/angle-bracket junk (e.g. a pasted "<li>") is stripped FIRST (scope.sanitize_market_label) so
+    this verbatim create-new path can never persist markup as a market — the defect that put "<li>"
+    into commcalc.store_mapping.market (migration 740). An all-markup value collapses to "" =
+    unassigned."""
+    from app.core.scope import sanitize_market_label
+    name = sanitize_market_label(value)
     if not name:
         return ""
     key = _market_key(name)
