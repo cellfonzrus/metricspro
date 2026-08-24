@@ -43,6 +43,11 @@ export default function PortalPage() {
   const [allStores, setAllStores] = useState<{ code: string; label: string }[]>([])  // every store (for the picker)
   const [selStore, setSelStore] = useState('')           // the store they're clocking in at
   const [ovr, setOvr] = useState<{ store_code: string; selfie: string; g: any; client_request_id?: string } | null>(null)  // pending override
+  // Block-and-hold (mig 915): an unscheduled tap is HELD, not clocked in. This carries the waiting
+  // state (message + store + tap time) so the kiosk shows "waiting for your manager" instead of the
+  // scary error, and — reconciled from /timeclock/status — survives a refresh until the manager's
+  // schedule activates the punch (then status.clockedIn flips and this clears).
+  const [pendingSched, setPendingSched] = useState<{ store_code: string; message: string; requested_at?: string } | null>(null)
   const [prio, setPrio] = useState<any | null>(null)          // pending priority-sell ack (module 095)
   const [prioChecked, setPrioChecked] = useState(false)
   const [mgr, setMgr] = useState({ email: '', pw: '', busy: false, err: '' })
@@ -148,6 +153,31 @@ export default function PortalPage() {
   }, [empId, token, authed])
   useEffect(() => { refreshStatus() }, [refreshStatus])
 
+  // Reconcile the block-and-hold waiting state (mig 915) with /timeclock/status on every poll:
+  //  * clockedIn -> the manager scheduled them and the held punch activated: clear the waiting banner
+  //    and announce it (once), so the kiosk flips from "waiting" to "on the clock" with no re-tap.
+  //  * a pending request the server still holds -> (re)surface the waiting banner, so a hard refresh
+  //    mid-wait resumes it instead of showing a blank screen.
+  useEffect(() => {
+    if (!status) return
+    if (status.clockedIn) {
+      if (pendingSched) {
+        setPendingSched(null)
+        const t = status?.entry?.clock_in ? new Date(status.entry.clock_in).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: PORTAL_TZ }) : ''
+        setMsg(`✅ Your manager added you to the schedule — you're clocked in${t ? ` from ${t}` : ''}.`)
+      }
+      return
+    }
+    const reqs = status.pending_schedule_requests
+    if (Array.isArray(reqs) && reqs.length > 0) {
+      const p = reqs[0]
+      setPendingSched(prev => prev || { store_code: p.store_code || '', message: '', requested_at: p.requested_at })
+    } else if (pendingSched) {
+      // the server no longer holds it (denied/expired) and they're not clocked in — stop waiting.
+      setPendingSched(null)
+    }
+  }, [status])   // eslint-disable-line react-hooks/exhaustive-deps
+
   // Self-heal while the backend is unreachable — keep re-checking instead of sitting on a dead screen.
   useEffect(() => {
     if (!connErr) return
@@ -181,7 +211,12 @@ export default function PortalPage() {
     const selfie = (item.body.selfie as string) || ''
     const g = { lat: item.body.gps_lat as number | undefined, lng: item.body.gps_lng as number | undefined, acc: item.body.gps_accuracy_m as number | undefined }
     const store = (item.body.store_code as string) || selStore
-    if (res?.needs_override) {
+    if (res?.status === 'pending_schedule_approval') {
+      // BLOCKED-AND-HELD (mig 915): no punch was opened. Show the professional pending message and the
+      // waiting state; the status poll flips this to "Clocked in" once the manager schedules them.
+      setPendingSched({ store_code: res.store_code || store, message: res.message || '', requested_at: res.requested_at })
+      setMsg('⏳ ' + (res.message || "You're not scheduled here yet — your manager has been notified. You'll be clocked in automatically once they add you to the schedule."))
+    } else if (res?.needs_override) {
       setOvr({ store_code: res.store_code || store, selfie, g, client_request_id: item.client_request_id })
       setMsg(res.message || `You're not scheduled at ${res.store_code || store} today — manager approval needed.`)
     } else if (res?.needs_priority_ack) {
@@ -692,6 +727,23 @@ export default function PortalPage() {
         )}
 
         {msg && <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: msg.startsWith('✅') ? '#e7f6ec' : msg.startsWith('⏳') ? '#fff7e6' : '#fdeaea', fontSize: 14, textAlign: 'center' }}>{msg}</div>}
+
+        {/* ⏳ Block-and-hold waiting state (mig 915): the rep tapped in somewhere they're not scheduled.
+            No time is accruing — their manager was notified to add them to the schedule, and the status
+            poll flips this to "Clocked in" automatically once they do. Never the scary error. */}
+        {pendingSched && !status?.clockedIn && (
+          <div style={{ marginTop: 12, padding: 14, borderRadius: 10, background: '#fff7e6', border: '1px solid #f5a623' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+              ⏳ Waiting for your manager{pendingSched.store_code ? ` · ${pendingSched.store_code}` : ''}
+            </div>
+            <div style={{ fontSize: 12.5, color: '#78350f', marginTop: 6 }}>
+              {pendingSched.message || "You're not scheduled at this location right now. Your manager has been notified to add you to the schedule — once they approve, you'll be clocked in automatically from the time you tapped in."}
+            </div>
+            {pendingSched.requested_at && (
+              <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>You tapped in at {pendingSched.requested_at}. This screen updates by itself — no need to tap again.</div>
+            )}
+          </div>
+        )}
 
         {/* ⏳ persistent banner: this employee's own time-clock requests awaiting the DM's permission
             (second session after an auto-clock-out, or extra time worked past the scheduled end + grace).

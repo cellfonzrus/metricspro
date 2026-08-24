@@ -521,6 +521,15 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
     out = r.data[0] if r.data else shift
     if timeoff_warning:
         out = {**out, "timeoff_warning": timeoff_warning}
+    # AUTO CLOCK-IN (migration 915): if this new schedule covers a HELD unscheduled clock-in for the
+    # same (employee, store, day), activate it now — open the timelog punch back-dated to the original
+    # tap time and resolve the manager notification. Idempotent + one-open-safe; never blocks the save.
+    try:
+        activated = _activate_pending_clockins_for_shift(out.get("org_id") or org_id, out)
+        if activated:
+            out = {**out, "activated_clockins": activated}
+    except Exception:
+        pass
     return out
 
 @router.patch("/shifts/{shift_id}")
@@ -3040,6 +3049,27 @@ def _caller_identity(authorization: str):
 
 
 _TC432_PRESENT = None   # cached tri-state: None=unprobed, True/False after the first probe
+_PENDING_CLOCKIN_PRESENT = None   # cached tri-state for migration 915 (storeops.pending_clockin)
+
+
+def _pending_clockin_present():
+    """True once migration 915 has been applied — i.e. storeops.pending_clockin exists. Cached after
+    the first successful probe (a migration is never un-run, so True is permanent); a False answer is
+    NOT cached so the process self-heals the moment 915 lands without a restart.
+
+    DEPLOY-ORDER SAFETY (same posture _timeclock_432_present takes for 432): this code can go live
+    BEFORE the migration runs. When 915 is absent, the block-and-hold path is skipped entirely and an
+    unscheduled clock-in falls back to the pre-existing needs_override response — byte-identical to
+    today — instead of throwing 'relation does not exist'."""
+    global _PENDING_CLOCKIN_PRESENT
+    if _PENDING_CLOCKIN_PRESENT:
+        return True
+    try:
+        sb().table("pending_clockin").select("id").limit(1).execute()
+        _PENDING_CLOCKIN_PRESENT = True
+    except Exception:
+        _PENDING_CLOCKIN_PRESENT = False
+    return _PENDING_CLOCKIN_PRESENT
 
 
 def _timeclock_432_present():
@@ -3079,6 +3109,270 @@ def _pending_permissions_for(org_id, employee_id):
         return []
 
 
+def _pending_schedule_requests_for(org_id, employee_id):
+    """This employee's own PENDING block-and-hold clock-in requests (migration 915), so the kiosk can
+    keep showing the 'waiting for your manager to schedule you' state — and, crucially, RESUME it after
+    a hard refresh (the durable punch queue drops the tap on the 200 pending response, so /status is the
+    only thing that remembers it). Empty when 915 hasn't run yet (never break /timeclock/status)."""
+    if not _pending_clockin_present():
+        return []
+    try:
+        return (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                .eq("employee_id", employee_id).eq("status", "pending")
+                .order("requested_at", desc=True).limit(20).execute().data) or []
+    except Exception:
+        return []
+
+
+# The professional message the kiosk shows a rep whose unscheduled tap is HELD (owner decision 3 —
+# no "override" wording, because there is no override; their tap is captured and will auto-activate).
+_PENDING_SCHEDULE_MESSAGE = (
+    "You're not scheduled at this location right now. Your manager has been notified to add you to the "
+    "schedule — once they approve, you'll be clocked in automatically from the time you tapped in.")
+
+
+def _schedule_deeplink(org_id, *, employee_name, store_code, work_date, start_hhmm, pending_id):
+    """The manager's deep-link into the schedule editor, PRE-FILLED (employee, store, date, START = the
+    store-local tap time) so they only enter the END time and save. Save creates the schedule AND
+    activates the held clock-in. Best-effort; returns '' if the app base URL isn't configured."""
+    try:
+        from urllib.parse import urlencode
+        from app.core.config import settings
+        base = (settings.APP_PUBLIC_URL or "").rstrip("/")
+        if not base:
+            return ""
+        qs = urlencode({"prefill": "1", "emp": employee_name or "", "store": store_code or "",
+                        "date": str(work_date or "")[:10], "start": start_hhmm or "",
+                        "pending": str(pending_id or "")})
+        return f"{base}/storeops/schedule?{qs}"
+    except Exception:
+        return ""
+
+
+def _notify_pending_clockin_managers(org_id, pending: dict, start_hhmm, deeplink):
+    """FIRE-AND-FORGET manager notification for a held unscheduled clock-in: (a) an intimation into the
+    unified approvals inbox (mig 867) carrying the deep-link payload, and (b) an email to the store's
+    approvers (the SAME DM + managers-above + admin-fallback resolver every timeclock approval uses).
+    Runs in a daemon thread so it never delays the tap, and NEVER raises. Returns the approval_request
+    id synchronously (best-effort) so the pending row can link it for later resolution."""
+    who = pending.get("employee_name") or pending.get("employee_id") or "An employee"
+    store_code = pending.get("store_code")
+    work_date = str(pending.get("work_date") or "")[:10]
+    # (a) unified approvals inbox — created SYNCHRONOUSLY (idempotent on source id) so we can link its id
+    # back onto the pending row; notify=False here because we send the email ourselves just below.
+    req_id = None
+    try:
+        from app.modules.approvals import engine as _approvals
+        dm_eid, dm_email, _dm_name = _dm_for_store(org_id, store_code)
+        saved = _approvals.create_request(
+            org_id, type="pending_clockin_schedule",
+            source_table="pending_clockin", source_id=pending.get("id"),
+            title=f"{who} tapped in at {store_code or 'a store'} but isn't scheduled — add them to the schedule",
+            summary=f"Clock-in held since {start_hhmm or ''} (store time){(' on ' + work_date) if work_date else ''}. "
+                    f"Saving the schedule clocks them in automatically from that time.",
+            payload={"employee_name": pending.get("employee_name"), "employee_id": pending.get("employee_id"),
+                     "store_code": store_code, "work_date": work_date, "start": start_hhmm,
+                     "pending_id": pending.get("id"), "deeplink": deeplink},
+            requested_by=pending.get("employee_id"), requested_by_name=pending.get("employee_name"),
+            store_code=store_code, assignee_employee_id=dm_eid, assignee_email=dm_email,
+            assignee_kind="dm", notify=False)
+        req_id = (saved or {}).get("id")
+    except Exception:
+        dm_email = None
+
+    import threading
+
+    def _run():
+        try:
+            recips = set(_permission_approver_emails(org_id, pending, dm_email))
+            if not recips:
+                return
+            biz = _tenant_display_name(org_id)
+            subject = f"Add {who} to the schedule at {store_code or 'their store'} — they're clocked out waiting"
+            lines = [f"{who} tapped in at {store_code or 'a store'}"
+                     + (f" on {work_date}" if work_date else "") + f" at {start_hhmm or 'their tap time'} (store time), "
+                     "but they aren't scheduled there.", "",
+                     "They are NOT accruing any time — their clock-in is HELD until you add them to the "
+                     "schedule. When you save the shift, they are clocked in AUTOMATICALLY from the time "
+                     "they tapped in; they do not tap again.", ""]
+            if deeplink:
+                lines += [f"Add them to the schedule (pre-filled — you only enter the end time): {deeplink}", ""]
+            else:
+                lines += [f"Add them to the schedule in {biz}: Store Ops → Schedule.", ""]
+            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines))
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="pending-clockin-notify").start()
+    except Exception:
+        pass
+    return req_id
+
+
+def _create_pending_clockin(org_id, *, employee_id, employee_name, store_code, requested_at,
+                            work_date, client_request_id=None, reason=None):
+    """Capture an unscheduled tap as a HELD pending clock-in (migration 915) — NO timelog punch, NO
+    zero-hour shell. Idempotent: a retap with the same client_request_id, or any retap while a pending
+    row for this (employee, store, day) is still open, returns the EXISTING row (no stacking). Notifies
+    the store's manager(s) with the pre-filled deep-link. NEVER raises — returns None only if migration
+    915 is absent (the caller then degrades to the pre-existing needs_override response)."""
+    if not _pending_clockin_present():
+        return None
+    norm_store = _norm_store(store_code)
+    wd = str(work_date or "")[:10] or None
+    # store-local tap time as HH:MM, for the manager's prefilled schedule START (mig 851 zone).
+    try:
+        start_hhmm = requested_at.astimezone(_biz_tz_for_store(org_id, store_code)).strftime("%H:%M")
+    except Exception:
+        start_hhmm = ""
+    cri = _clean_cri(client_request_id)
+    # IDEMPOTENCY — check first (mirrors clock_in): same client_request_id, else any open pending for
+    # this (emp, store, day). Either way, return the existing row unchanged (no 2nd insert, no 2nd notify).
+    try:
+        if cri:
+            prior = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                     .eq("employee_id", employee_id).eq("client_request_id", cri)
+                     .order("requested_at", desc=True).limit(1).execute().data) or []
+            if prior:
+                return {**prior[0], "start_hhmm": start_hhmm, "idempotent_replay": True}
+        openp = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                 .eq("employee_id", employee_id).eq("store_code", norm_store)
+                 .eq("work_date", wd).eq("status", "pending")
+                 .order("requested_at", desc=True).limit(1).execute().data) or []
+        if openp:
+            return {**openp[0], "start_hhmm": start_hhmm, "idempotent_replay": True}
+    except Exception:
+        pass
+    row = {"org_id": org_id, "employee_id": employee_id, "employee_name": employee_name,
+           "store_code": norm_store, "requested_at": requested_at.isoformat(), "work_date": wd,
+           "status": "pending", "client_request_id": cri, "reason": reason,
+           "requested_by": employee_id}
+    try:
+        r = sb().table("pending_clockin").insert(row).execute()
+        saved = (r.data or [row])[0]
+    except Exception as e:
+        # A unique-index rejection (the one-open-pending or client_request_id guard) means a concurrent
+        # retap already won — re-select and return that existing row as the (replayed) pending request.
+        if _is_unique_violation(e):
+            try:
+                if cri:
+                    dup = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                           .eq("employee_id", employee_id).eq("client_request_id", cri)
+                           .order("requested_at", desc=True).limit(1).execute().data) or []
+                    if dup:
+                        return {**dup[0], "start_hhmm": start_hhmm, "idempotent_replay": True}
+                dup2 = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                        .eq("employee_id", employee_id).eq("store_code", norm_store)
+                        .eq("work_date", wd).eq("status", "pending")
+                        .order("requested_at", desc=True).limit(1).execute().data) or []
+                if dup2:
+                    return {**dup2[0], "start_hhmm": start_hhmm, "idempotent_replay": True}
+            except Exception:
+                pass
+        return None
+    # Notify the manager(s) with the pre-filled deep-link, and link the approvals row back on.
+    deeplink = _schedule_deeplink(org_id, employee_name=employee_name, store_code=norm_store,
+                                  work_date=wd, start_hhmm=start_hhmm, pending_id=saved.get("id"))
+    try:
+        req_id = _notify_pending_clockin_managers(org_id, saved, start_hhmm, deeplink)
+        if req_id and saved.get("id"):
+            sb().table("pending_clockin").update({"approval_request_id": str(req_id)}).eq("id", saved["id"]).execute()
+            saved["approval_request_id"] = str(req_id)
+    except Exception:
+        pass
+    return {**saved, "start_hhmm": start_hhmm, "deeplink": deeplink}
+
+
+def _activate_pending_clockins_for_shift(org_id, shift):
+    """AUTO CLOCK-IN (owner decision 2): a manager just saved `shift`; if it covers any HELD pending
+    clock-in for the same (employee, store, work_date), activate each — create the OPEN timelog punch
+    back-dated to the ORIGINAL tap time (requested_at), mark the pending row 'activated', and resolve
+    its approval. IDEMPOTENT and one-open-safe: a pending already activated is skipped, and if the
+    employee somehow already has an OPEN punch, we do NOT open a second (the mig-912 one-open index
+    would reject it anyway) — we just link/mark. NEVER raises — an activation miss must not fail the
+    schedule save the manager just made."""
+    if not _pending_clockin_present():
+        return []
+    try:
+        emp_id = shift.get("employee_id")
+        store = shift.get("store_code")
+        wd = str(shift.get("shift_date") or "")[:10]
+        if not (emp_id and store and wd):
+            return []
+        # Match by the employee's id variants (the schedule may carry the numeric id, the pending row the
+        # business id — the same reconciliation the clock-in gate does).
+        ids, _name = _emp_id_variants(org_id, emp_id)
+        pend = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                .eq("work_date", wd).eq("status", "pending")
+                .in_("employee_id", list(ids)).execute().data) or []
+        pend = [p for p in pend if _norm_store(p.get("store_code")) == _norm_store(store)]
+        activated = []
+        for p in pend:
+            emp_business_id = p.get("employee_id")   # activate the punch under the pending row's own id
+            # one-open safety: never open a 2nd punch if this employee already has one open.
+            already_open = (sb().table("timelog").select("id").eq("org_id", org_id)
+                            .eq("employee_id", emp_business_id).is_("clock_out", "null")
+                            .limit(1).execute().data) or []
+            if already_open:
+                sb().table("pending_clockin").update(
+                    {"status": "activated", "timelog_id": already_open[0].get("id"),
+                     "shift_id": shift.get("id"), "activated_at": datetime.now(timezone.utc).isoformat(),
+                     "decided_by": "schedule_save"}).eq("id", p["id"]).eq("status", "pending").execute()
+                _resolve_pending_clockin_approval(org_id, p)
+                continue
+            punch = {"org_id": org_id, "employee_id": emp_business_id,
+                     "employee_name": p.get("employee_name") or shift.get("employee_name"),
+                     "store_code": p.get("store_code"), "clock_in": p.get("requested_at"),
+                     "work_date": wd, "device": "auto-activated (manager scheduled)",
+                     "notes": "auto clock-in on manager schedule approval (held unscheduled tap, migration 915)"}
+            if p.get("client_request_id"):
+                punch["client_request_id"] = p["client_request_id"]
+            try:
+                ins = sb().table("timelog").insert(punch).execute()
+                tl = (ins.data or [punch])[0]
+            except Exception as e:
+                # a concurrent activation / retap already opened the punch — link it instead of a 2nd row.
+                if _is_unique_violation(e):
+                    ex = (sb().table("timelog").select("*").eq("org_id", org_id)
+                          .eq("employee_id", emp_business_id).is_("clock_out", "null")
+                          .order("clock_in", desc=True).limit(1).execute().data) or []
+                    tl = ex[0] if ex else None
+                else:
+                    continue
+            if not tl:
+                continue
+            r = sb().table("pending_clockin").update(
+                {"status": "activated", "timelog_id": tl.get("id"), "shift_id": shift.get("id"),
+                 "activated_at": datetime.now(timezone.utc).isoformat(), "decided_by": "schedule_save"}
+            ).eq("id", p["id"]).eq("status", "pending").execute()
+            # Only resolve/announce when THIS call won the pending→activated transition (r.data non-empty),
+            # so two concurrent saves don't double-announce.
+            if r.data:
+                _resolve_pending_clockin_approval(org_id, p)
+                activated.append({"pending_id": p["id"], "timelog_id": tl.get("id"),
+                                  "employee_name": p.get("employee_name"),
+                                  "clock_in": _fmt_time(tl.get("clock_in"), org_id)})
+        return activated
+    except Exception:
+        return []
+
+
+def _resolve_pending_clockin_approval(org_id, pending):
+    """Mark the manager-notification approvals row (mig 867) resolved once its pending clock-in is
+    activated, so it drops off the approval board. Best-effort; never raises."""
+    try:
+        rid = pending.get("approval_request_id")
+        if not rid:
+            return
+        from app.modules.approvals import engine as _approvals
+        _approvals.decide(org_id, rid, decision="approve", actor="schedule_save",
+                          actor_name="Schedule save (auto clock-in)",
+                          note="Employee added to the schedule; held clock-in activated automatically.")
+    except Exception:
+        pass
+
+
 @router.get("/timeclock/status")
 def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Is the SIGNED-IN employee currently clocked in? Identity AND tenant come from the auth token.
@@ -3086,12 +3380,15 @@ def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_
     show a '⏳ Pending your DM's permission' banner whether or not they're currently on the clock."""
     org_id, employee_id = _caller_identity(authorization)
     pending = _pending_permissions_for(org_id, employee_id)
+    pending_schedule = _pending_schedule_requests_for(org_id, employee_id)
     rows = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
             .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
     if rows:
         e = rows[0]; e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
-        return {"clockedIn": True, "entry": e, "pending_permissions": pending}
-    return {"clockedIn": False, "entry": None, "pending_permissions": pending}
+        return {"clockedIn": True, "entry": e, "pending_permissions": pending,
+                "pending_schedule_requests": pending_schedule}
+    return {"clockedIn": False, "entry": None, "pending_permissions": pending,
+            "pending_schedule_requests": pending_schedule}
 
 
 # A rep may clock in no earlier than this many minutes before their scheduled shift start (owner
@@ -3201,10 +3498,28 @@ def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: s
     # punch lands on the correct calendar day, not the Eastern one. Falls back to the tenant zone when
     # the store has no own zone set.
     work_date = now.astimezone(_biz_tz_for_store(org_id, req_store)).date().isoformat()
-    # Gate: home OR scheduled-today OR floater store. Anything else needs a manager override.
+    # Gate: home OR scheduled-today OR floater store. Anything else is BLOCKED-AND-HELD (owner
+    # 2026-08-24): the rep is NOT scheduled at this store today, so they CANNOT accrue time and NO
+    # punch is opened. Their tap is captured as a PENDING request (migration 915) that notifies the
+    # store's manager to add them to the schedule; saving that schedule auto-activates the held punch
+    # back-dated to this tap time. There is NO unpaid-override path (the manager /timeclock/override
+    # endpoint still exists for a manager acting directly, but the kiosk no longer routes there).
     if req_store:
         allowed = _allowed_clock_stores(org_id, employee_id, home_store, work_date)
         if allowed and _norm_store(req_store) not in allowed:
+            pending = _create_pending_clockin(
+                org_id, employee_id=employee_id, employee_name=name, store_code=req_store,
+                requested_at=now, work_date=work_date, client_request_id=cri,
+                reason=(body.reason or "Unscheduled tap-in — awaiting manager schedule"))
+            if pending is not None:
+                # Held: zero time accrued, no punch, no zero-hour shell. The kiosk shows the pending
+                # message and polls /timeclock/status until the manager's schedule activates the punch.
+                return {"success": False, "status": "pending_schedule_approval", "store_code": req_store,
+                        "home_store": home_store, "pending_request": pending,
+                        "requested_at": _fmt_time(now.isoformat(), org_id),
+                        "message": _PENDING_SCHEDULE_MESSAGE}
+            # Migration 915 not applied yet (deploy-order safety) — degrade to the pre-existing
+            # needs_override response so an old DB never breaks clock-in.
             return {"success": False, "needs_override": True, "store_code": req_store,
                     "allowed_stores": sorted(allowed), "home_store": home_store,
                     "message": f"You're not scheduled at {req_store} today. A manager can approve it."}

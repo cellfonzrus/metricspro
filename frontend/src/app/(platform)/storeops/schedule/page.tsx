@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useMemo, Fragment } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { api, localToday, parseLocalDate, addDays, mondayOf } from '@/lib/client'
 import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
@@ -139,6 +139,41 @@ export default function SchedulePage() {
     ]).then(([s, e, st, to, ae]) => { setShifts(s || []); setEmployees(e || []); setStores((st || []).filter((x: Store) => !x.is_agent)); setTimeOff(to || []); setAllEmps((ae && ae.length ? ae : e) || []) })
       .catch(console.error).finally(() => setLoading(false))
   }, [weekStart])
+
+  // ── Deep-link prefill (mig 915: block-and-hold auto clock-in) ─────────────────────────────────────
+  // A manager clicked "add them to the schedule" from a held-clock-in notification. The link carries
+  // ?prefill=1&emp=&store=&date=&start= (all store-local). We jump to that week and open the add-shift
+  // modal pre-filled with the employee, store, date, and START = the rep's tap time — the manager just
+  // enters the END time and saves. Saving POSTs the shift, which auto-activates the held punch. Read
+  // from window.location (the codebase's no-Suspense convention — see timeclock/page.tsx). Runs once,
+  // after the roster/stores load so openAdd can resolve the employee; then clears the query.
+  const prefillDoneRef = useRef(false)
+  useEffect(() => {
+    if (prefillDoneRef.current || loading || allEmps.length === 0) return
+    let sp: URLSearchParams
+    try { sp = new URLSearchParams(window.location.search) } catch { return }
+    if (sp.get('prefill') !== '1') return
+    const date = sp.get('date') || ''
+    const store = sp.get('store') || ''
+    const empName = sp.get('emp') || ''
+    const start = sp.get('start') || '10:00'
+    if (!date) { prefillDoneRef.current = true; return }
+    prefillDoneRef.current = true
+    // Show the week that contains the tap date, then open the modal on that day.
+    setWeekStart(workWeekStartOf(wwDow, date))
+    // Default END = tap start + 8h (clamped to 23:59) so the form is valid even before the manager
+    // adjusts it — they can, and should, change it to the real shift end.
+    const [sh, sm] = start.split(':').map((n) => parseInt(n, 10))
+    const endH = Number.isFinite(sh) ? Math.min(sh + 8, 23) : 18
+    const endM = Number.isFinite(sm) ? sm : 0
+    const end = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`
+    setNewShift({ start_time: start, end_time: end, store_code: store, employee_name: empName })
+    setAddModal({ date, store: store || undefined, emp: empName || undefined })
+    setNotice(`${empName || 'This employee'} tapped in at ${store || 'a store'} at ${start} and is waiting — set the end time and save to clock them in.`)
+    // strip the query so a refresh/back doesn't reopen the modal.
+    try { window.history.replaceState(null, '', window.location.pathname) } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, allEmps.length, wwDow])
 
   // Fetch the hours trend whenever the scope (market/store filter) or the anchor week changes. The
   // backend applies the SAME RBAC store keyset as the grid, so a DM never sees hours outside their span.
@@ -367,9 +402,17 @@ export default function SchedulePage() {
       const created = await api('/api/v1/storeops/shifts', { method: 'POST', body: JSON.stringify(payload) })
       setShifts(s => [...s, created])
       setAddModal(null)
-      // Backend-confirmed heads-up (org's policy is 'warn', default for every tenant) — the shift
-      // already saved; this never blocks, just informs.
-      if (created?.timeoff_warning) setNotice(created.timeoff_warning)
+      // AUTO CLOCK-IN confirmation (mig 915): if this schedule activated a held unscheduled tap, the
+      // backend clocked the rep in from their original tap time — tell the manager so.
+      const act = created?.activated_clockins
+      if (Array.isArray(act) && act.length > 0) {
+        const a = act[0]
+        setNotice(`${a.employee_name || employee_name} is now clocked in${a.clock_in ? ` from ${a.clock_in}` : ''}.`)
+      } else if (created?.timeoff_warning) {
+        // Backend-confirmed heads-up (org's policy is 'warn', default for every tenant) — the shift
+        // already saved; this never blocks, just informs.
+        setNotice(created.timeoff_warning)
+      }
     } catch (e: any) {
       // Backend still 409s when the tenant opted into 'block' via the timeoff-conflict-mode
       // setting (default is 'warn', which allows the schedule + returns `timeoff_warning` above).
