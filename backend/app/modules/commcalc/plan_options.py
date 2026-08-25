@@ -159,8 +159,17 @@ def vocabulary():
             {"value": "contains", "label": "contains", "help": "substring pattern — the only op that may need free text"},
             {"value": "in", "label": "in", "help": "any of a comma-separated list"},
         ],
+        # 'pct_price' (% of the SALE PRICE / ext_price) was defined in PAYOUT_KIND_LABELS and fully
+        # supported by commission_engine._line_payout, but was DROPPED from this served list — so the plan
+        # editor's payout-kind dropdown never offered it, while the frontend FALLBACK_VOCAB (used only when
+        # this endpoint fails) DID. That left an owner unable to build "10% of accessory SALES $" from the
+        # editor: %-of-GP and %-of-(price-cost) both depend on the B2B catalog cost, which is untrustworthy
+        # for accessories (see _line_payout, owner 2026-08-04), and %-of-MRC does not apply to accessories.
+        # Surfacing it changes NO payout math (the kind already computed identically wherever a saved rule
+        # used it); it only lets the editor SELECT the already-correct kind. Ordered to match the fallback.
         "payout_kinds": [{"value": k, "label": PAYOUT_KIND_LABELS[k][0], "uses": PAYOUT_KIND_LABELS[k][1]}
-                         for k in ("flat_per_unit", "pct_mrc", "pct_gp", "pct_price_over_cost", "flat")
+                         for k in ("flat_per_unit", "pct_mrc", "pct_gp", "pct_price",
+                                   "pct_price_over_cost", "flat")
                          if k in commission_engine.PAYOUT_KINDS],
         "tier_bases": [dict(b) for b in TIER_BASES],
         "tier_metrics": list(TIER_METRIC_SUGGESTIONS),
