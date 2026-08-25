@@ -16902,16 +16902,21 @@ def sales_report_detail(period: str = "", store: str = "", salesperson: str = ""
 @router.get("/sales-comparison")
 def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = "",
                      as_of_day: int = -1, week: int = 0, stores: str = "", markets: str = "",
-                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+                     carrier: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Period-over-period sales comparison, ALL stores, % change per item sold — Phones, BYOD,
-    Accessories, Tablets and each Financing vendor (ACIMA / TW / Edge…).
+    Activation, Tablets, Accessories ($) and a single carrier-scoped Financing line (units AND $).
 
     Scenarios (`mode`): `mom` = vs last month · `yoy` = vs the same month last year · `custom` = vs the
     explicit `compare_period`. `week` (1-5) compares one week-of-month across BOTH periods (week-1 over
     week-1). `as_of_day` cuts BOTH windows to day ≤ N (compare a mid-month base to the SAME first-N-days
     of the other period, never a partial month vs a full one); -1 = auto (today's day when the base is
     the current month, else the full month). `stores` / `markets` are comma-separated filters; the read
-    is RBAC store-scoped like every other sales report."""
+    is RBAC store-scoped like every other sales report.
+
+    CARRIER-SCOPED FINANCING (compliance-critical): `carrier` is the active-carrier lens code
+    ('boost'/'total'/…). Only that carrier's financing vendors feed the single Financing line, so the
+    report NEVER shows both Boost's and Total's financing vendors together. Blank → the tenant's resolved
+    single carrier (or the default carrier); the scoping is applied SERVER-SIDE before any math."""
     require_org(org_id)
     if week and not (1 <= week <= 5):
         week = 0
@@ -16987,7 +16992,23 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
 
     from app.modules.commcalc import installment_category as icat
     rules = icat.load_category_rules(client, org_id)
+    # CARRIER-SCOPED FINANCING (compliance-critical): resolve the active carrier, then keep ONLY that
+    # carrier's financing vendors so the single Financing line can never mix Boost + Total. Blank lens →
+    # a safe single carrier (the tenant's only carrier, else its default, else 'boost') — never "all".
+    active_carrier = (carrier or "").strip().lower()
+    if not active_carrier:
+        try:
+            crows = (client.schema('commcalc').table('carrier')
+                     .select('name,code,is_default').eq('org_id', org_id).execute().data) or []
+        except Exception:
+            crows = []
+        if len(crows) == 1:
+            active_carrier = str(crows[0].get('code') or crows[0].get('name') or '').strip().lower()
+        else:
+            dfl = next((c for c in crows if c.get('is_default')), None)
+            active_carrier = str((dfl or {}).get('code') or (dfl or {}).get('name') or 'boost').strip().lower()
     vendors = _finreg.resolve_vendors(client, org_id)
+    vendors = _salescmp.vendors_for_carrier(vendors, active_carrier)
     acfg = _accessory_config(client, org_id)
     is_acc = lambda r: _is_accessory(r.get("department"), r.get("category"), r.get("product_desc"), acfg)  # noqa: E731
 
@@ -16997,10 +17018,11 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
             base_period=base_p, compare_period=cmp_p, mode=mode, window_label=window_label,
             resolve_market=resolve_market,
             params={"period": base_p, "mode": mode, "compare_period": cmp_p,
-                    "as_of_day": eff_as_of, "week": week,
+                    "as_of_day": eff_as_of, "week": week, "carrier": active_carrier,
                     "stores": sorted(sel_stores), "markets": sorted(sel_markets)})
     except Exception as e:
         raise HTTPException(500, f"sales-comparison failed: {type(e).__name__}: {e}")
+    out["active_carrier"] = active_carrier
     out["stores"] = opt_stores
     out["markets"] = opt_markets
     out["source_meta"] = {"base": bmeta, "compare": cmeta,
