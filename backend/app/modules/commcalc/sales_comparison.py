@@ -11,16 +11,28 @@ cuts BOTH windows to the same day-of-month slice so a mid-month base is never co
 comparison month. Everything below is derived from `base_rows`/`cmp_rows` alone, so the harness drives
 it with fixtures.
 
-THE CATEGORIES (documented so the number is never a mystery):
-  Phones / Tablets       — the transaction's STRONGEST device signal (installment_category chain), so a
-                           phone sold with a case + a SIM is ONE phone and a tablet is ONE tablet. New
-                           and upgrade device sales both land here (an upgrade is still a phone sold).
-  BYOD                   — a transaction carrying a BYOD activation line (customer brought the device;
-                           there is no device unit, so it is tallied on its own exactly like the Sales
-                           Report's BYOD column).
-  Accessories            — accessory LINES sold (the ONE shared accessory classifier), with revenue.
-  Financing (per vendor) — a transaction carrying that vendor's financing tender (ACIMA / TW / Edge…),
-                           detected with the SAME matchers the Financing Report and the payout use.
+THE CATEGORIES (owner-specified order + metric; documented so the number is never a mystery):
+  Phones / Tablets       — UNITS. The transaction's STRONGEST device signal (installment_category chain),
+                           so a phone sold with a case + a SIM is ONE phone and a tablet is ONE tablet.
+                           New and upgrade device sales both land here (an upgrade is still a phone sold).
+  BYOD                   — UNITS. A transaction carrying a BYOD activation line (customer brought the
+                           device; there is no device unit, so it is tallied on its own exactly like the
+                           Sales Report's BYOD column) via the shared classify_contract_type.
+  Activation             — UNITS. A transaction carrying a PREMIUM (new-line) activation line
+                           (classify_contract_type == 'premium') — the SAME classifier the Sales Report /
+                           Exec MTD / commission engine use. Independent tally, exactly like BYOD: a new
+                           phone activation counts in BOTH Phones (a device sold) and Activation (a new
+                           line opened), which is how the Sales Report already shows those two columns.
+  Accessories            — DOLLARS. Accessory LINES sold (the ONE shared accessory classifier), summed on
+                           ext_price. Units are still carried for context but $ is the headline metric.
+  Financing              — UNITS **and** DOLLARS. ONE carrier-scoped line: a transaction carrying the
+                           ACTIVE CARRIER'S financing tender, detected with the SAME matchers the
+                           Financing Report and the payout use. CARRIER-SCOPED / COMPLIANCE-CRITICAL — the
+                           router hands `build` ONLY the vendors that serve the active carrier (see
+                           `vendors_for_carrier`), and all of them collapse into this single "Financing"
+                           row so no screen ever shows both Boost's and Total's financing vendors together
+                           (the dual-affiliation leak this report was flagged for). The vendor BRAND
+                           (ACIMA / TW / Edge) is never emitted — only the neutral label "Financing".
 
 UNITS are DISTINCT transactions per bucket — a multi-line receipt is one sale, not N. The two live-line
 filters (not voided, not a Return) are the same two every commcalc sales report applies.
@@ -111,21 +123,63 @@ def _txn_store(lines):
     return ""
 
 
+# ── carrier scoping (COMPLIANCE-CRITICAL; PURE — the backend mirror of carrier-scope.ts) ────────────
+def vendor_serves_carrier(vendor, active_carrier):
+    """Does a financing vendor serve the active carrier? Mirrors the frontend `vendorServesCarrier`:
+    a vendor with NO carrier assignment is carrier-neutral ("any carrier") and always matches; otherwise
+    it matches when any of its carrier rows names the active carrier (by carrier_name or carrier_id).
+    An empty active_carrier means "no lens applied" → everything matches. PURE.
+
+    This is the server-side guard that keeps the other carrier's financing vendor out of the payload
+    entirely, so the dual Boost+Total affiliation can never leak even if the frontend lens is bypassed."""
+    a = str(active_carrier or "").strip().lower()
+    if not a:
+        return True
+    cs = vendor.get("carriers") or []
+    if not cs:
+        return True
+    for c in cs:
+        t = str((c.get("carrier_name") or c.get("carrier_id") or "")).strip().lower()
+        if not t:                       # a carrier row with no name is itself neutral
+            return True
+        if a in t or t in a:
+            return True
+    return False
+
+
+def vendors_for_carrier(vendors, active_carrier):
+    """The subset of resolved vendors that serve the active carrier — the ONLY vendors the report may
+    count, so a single collapsed "Financing" line can never mix two carriers' vendors. PURE."""
+    return [v for v in (vendors or []) if vendor_serves_carrier(v, active_carrier)]
+
+
+def _financing_status(vendors):
+    """Aggregate detection status for the single Financing line, given the carrier-scoped vendors that
+    actually feed it. 'configured' if any usable vendor is configured; else the most-informative of the
+    remaining statuses; None when there are no carrier-scoped vendors at all. PURE."""
+    usable = [v for v in (vendors or []) if v.get("enabled") and (v.get("matchers") or [])]
+    if not usable:
+        return "not_configured" if vendors else None
+    order = {"configured": 0, "inherited_default": 1, "not_configured": 2, "unusable": 3}
+    return sorted((v.get("detection_status") or "not_configured" for v in usable),
+                  key=lambda s: order.get(s, 9))[0]
+
+
 def category_defs(vendors):
-    """The ordered list of category keys + labels this report tracks, given the tenant's resolved
-    financing vendors. Owner order: phones, byod, accessories, tablet, then one row per financing vendor
-    that actually has usable detection. PURE."""
+    """The ordered list of category keys + labels + primary metric this report tracks. OWNER ORDER +
+    METRIC (exact): Phones (units), BYOD (units), Activation (units), Tablets (units), Accessories ($),
+    Financing (units AND $). `vendors` is the ALREADY carrier-scoped vendor list — the single Financing
+    row is present whenever the tenant has any financing vendor for the active carrier. PURE."""
     defs = [
-        {"key": "phone", "label": "Phones"},
-        {"key": "byod", "label": "BYOD"},
-        {"key": "accessory", "label": "Accessories"},
-        {"key": "tablet", "label": "Tablets"},
+        {"key": "phone", "label": "Phones", "metric": "units"},
+        {"key": "byod", "label": "BYOD", "metric": "units"},
+        {"key": "activation", "label": "Activation", "metric": "units"},
+        {"key": "tablet", "label": "Tablets", "metric": "units"},
+        {"key": "accessory", "label": "Accessories", "metric": "dollars"},
     ]
-    for v in (vendors or []):
-        if not v.get("enabled") or not (v.get("matchers") or []):
-            continue
-        defs.append({"key": "fin:" + v["vendor_key"], "label": v["label"], "financing": True,
-                     "detection_status": v.get("detection_status")})
+    if vendors:
+        defs.append({"key": "financing", "label": "Financing", "metric": "both", "financing": True,
+                     "detection_status": _financing_status(vendors)})
     return defs
 
 
@@ -166,7 +220,12 @@ def tally(rows, rules, is_accessory, vendors):
         if any(classify_contract_type(ln.get("contract_type")) == "byod" for ln in lines):
             cats.setdefault("byod", _blank_metric())["units"] += 1
 
-        # ── Accessories: every accessory LINE on the receipt, with its revenue ──
+        # ── Activation (independent tally): a PREMIUM new-line activation on the receipt. Same shared
+        #    classify_contract_type the commission engine / Sales Report use; distinct-txn count. ──
+        if any(classify_contract_type(ln.get("contract_type")) == "premium" for ln in lines):
+            cats.setdefault("activation", _blank_metric())["units"] += 1
+
+        # ── Accessories: every accessory LINE on the receipt, with its revenue ($ is the headline) ──
         for ln in lines:
             if is_accessory and is_accessory(ln):
                 m = cats.setdefault("accessory", _blank_metric())
@@ -174,22 +233,19 @@ def tally(rows, rules, is_accessory, vendors):
                 m["revenue"] += safe_float(ln.get("ext_price"))
                 m["gp"] += safe_float(ln.get("gp"))
 
-        # ── Financing: a transaction carrying a vendor's tender = one financed unit for that vendor ──
-        for v in fin_vendors:
-            hit = None
-            for ln in lines:
-                for mch in v["matchers"]:
-                    if _finreg.matcher_hits(ln, mch):
-                        hit = ln
-                        break
-                if hit is not None:
-                    break
-            if hit is not None:
-                m = cats.setdefault("fin:" + v["vendor_key"], _blank_metric())
-                m["units"] += 1
-                # financed $ = the device (highest-value) line of the transaction — the same "unit line"
-                # basis the Financing Report defaults to; labelled, never guessed from a POS column.
-                m["revenue"] += max((safe_float(ln.get("ext_price")) for ln in lines), default=0.0)
+        # ── Financing (ONE carrier-scoped line): a transaction carrying ANY active-carrier vendor's
+        #    tender = one financed unit. `fin_vendors` is already carrier-scoped by the router, so this
+        #    can never mix two carriers. Counted ONCE per receipt even if several vendors would hit. ──
+        financed = any(
+            _finreg.matcher_hits(ln, mch)
+            for v in fin_vendors for ln in lines for mch in v["matchers"]
+        )
+        if financed:
+            m = cats.setdefault("financing", _blank_metric())
+            m["units"] += 1
+            # financed $ = the device (highest-value) line of the transaction — the same "unit line"
+            # basis the Financing Report defaults to; labelled, never guessed from a POS column.
+            m["revenue"] += max((safe_float(ln.get("ext_price")) for ln in lines), default=0.0)
     return per_store
 
 
@@ -224,6 +280,7 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
     cats = category_defs(vendors)
     cat_keys = [c["key"] for c in cats]
     cat_label = {c["key"]: c["label"] for c in cats}
+    cat_metric = {c["key"]: c.get("metric", "units") for c in cats}
 
     base = tally(base_rows, rules, is_accessory, vendors)
     comp = tally(cmp_rows, rules, is_accessory, vendors)
@@ -248,7 +305,7 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
                 continue
             row = dict(cm)
             row.update({"store": store or "—", "market": mkt,
-                        "category_key": k, "category": cat_label[k]})
+                        "category_key": k, "category": cat_label[k], "metric": cat_metric[k]})
             rows.append(row)
             tb = cat_tot[k]
             tb["cur"]["units"] += b["cats"].get(k, _blank_metric())["units"]
@@ -273,7 +330,8 @@ def build(base_rows, cmp_rows, rules, is_accessory, vendors, *,
     for c in cats:
         k = c["key"]
         m = _combine(cat_tot[k]["cur"], cat_tot[k]["prev"])
-        m.update({"key": k, "label": c["label"], "financing": bool(c.get("financing")),
+        m.update({"key": k, "label": c["label"], "metric": c.get("metric", "units"),
+                  "financing": bool(c.get("financing")),
                   "detection_status": c.get("detection_status")})
         totals_by_category.append(m)
 
