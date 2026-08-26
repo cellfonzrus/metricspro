@@ -121,7 +121,7 @@ export const REPORT_AREAS: { key: string; label: string }[] = [
 const REPORT_EXACT: Record<string, string> = { '/commcalc': 'commissions', '/reports': '*' }
 // Report page TREES (prefix → area), boundary-matched; longest prefix wins.
 const REPORT_TREES: [string, string][] = [
-  ['/commcalc/exec', 'commissions'], ['/commcalc/activations', 'commissions'], ['/commcalc/schematic', 'commissions'], ['/commcalc/reports', 'commissions'], ['/commcalc/gp', 'commissions'],
+  ['/commcalc/exec', 'commissions'], ['/commcalc/activations', 'commissions'], ['/commcalc/schematic', 'commissions'], ['/commcalc/onboarding', 'commissions'], ['/commcalc/reports', 'commissions'], ['/commcalc/gp', 'commissions'],
   ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
@@ -317,6 +317,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/activations', label: 'Activations', icon: '📲', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/schematic', label: 'System Schematic', icon: '🗺️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/onboarding', label: 'Setup Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/reports', label: 'Rep Incentive Report', icon: '📋', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
     { href: '/commcalc/device-history', label: 'Device History', icon: '📱', module: 'commissions' },
@@ -325,7 +326,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/productivity-insights', label: 'Productivity Insights', icon: '💡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
+    { href: '/commcalc/sales-analyzer', label: 'Retention Analysis', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/whatif', label: 'What‑If Analysis', icon: '🔮', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/comp-trend', label: 'Total Compensation', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/commission-ledger', label: 'Commission Ledger', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
@@ -666,7 +667,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/crm/reports', 'sales'],
   // Commissions & Pay
-  ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'], ['/commcalc/activations', 'comm'], ['/commcalc/schematic', 'comm'],
+  ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'], ['/commcalc/activations', 'comm'], ['/commcalc/schematic', 'comm'], ['/commcalc/onboarding', 'comm'],
   ['/commcalc/reports', 'comm'], ['/commcalc/comp-trend', 'comm'], ['/commcalc/commission-ledger', 'comm'],
   ['/commcalc/ma-commission', 'comm'], ['/commcalc/ma-overview-recon', 'comm'], ['/commcalc/financing', 'comm'],
   ['/commcalc/commission-legs', 'comm'],

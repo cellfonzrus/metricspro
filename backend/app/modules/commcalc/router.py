@@ -22344,6 +22344,126 @@ def get_data_lineage(org_id: str = ORG_ID, source_key: str = "", affected_key: s
             "note": (None if rows else "data_lineage is empty — apply migration 925 (the seed) to populate the schematic.")}
 
 
+# ── ONBOARDING READINESS CHECKLIST ───────────────────────────────────────────────────────────────
+# One row per DATA ITEM the platform can ingest, with: how it enters, which reports/functions it powers,
+# and — per tenant — whether it is actually present + wired. Derived from data_lineage (the schematic) so
+# the checklist and the schematic never drift. `check` names how presence is verified for THIS tenant.
+#   table      → count rows in schema.table for the org
+#   custom:KEY → the raw_custom_import capture resolves for that dataset (by column signature)
+#   config:X   → a per-org config is set (accessory depts / store mapping / activation basis)
+_ONBOARDING_ITEMS = [
+    ("sales_transactions",       "Sales Transaction Details", "table:commcalc.raw_sales|commcalc.daily_sales_feed"),
+    ("activation_details_report","b2b Activation Details",     "custom:serial#,contract type"),
+    ("bill_payments_report",     "b2b Bill Payment Transactions", "custom:discounts,bill pay system"),
+    ("product_sales_report",     "b2b Sales by Product",       "custom:product gp,total exp comm"),
+    ("store_performance_report", "b2b Store Performance",      "custom:acc ext price,bill payment qty"),
+    ("processor_epay",           "ePay processor feed (Boost)", "table:commcalc.raw_epay_daily_tx"),
+    ("processor_vidapay",        "VidaPay processor feed (Total)", "table:commcalc.raw_ma_daily_tx"),
+    ("residual_report",          "Residual / MA commission (drives Retention Analysis)", "table:commcalc.raw_ma_commission"),
+    ("mi_report",                "MI subscriber status (alt Retention basis)", "table:commcalc.raw_mi"),
+    ("daily_cash",               "Employee daily cash declaration", "table:commcalc.daily_closing"),
+    ("store_identity",           "Store identity / mapping",   "config:store_mapping"),
+    ("accessories",              "Accessory departments",      "config:accessory"),
+    ("activation_basis",         "Activation basis of truth",  "config:metric_source"),
+]
+
+
+def _oc_count(client, spec, org_id):
+    """Presence for a 'table:' spec (one or more schema.table, pipe-separated) → total row count for org."""
+    total = 0
+    for st in spec.split("|"):
+        try:
+            schema, table = st.split(".", 1)
+            r = (client.schema(schema).table(table).select("*", count="exact")
+                 .eq("org_id", org_id).limit(1).execute())
+            total += int(getattr(r, "count", 0) or 0)
+        except Exception:
+            pass
+    return total
+
+
+def _oc_custom_present(client, org_id, req_keys):
+    """Presence for a 'custom:' spec — does raw_custom_import hold a row carrying ALL the signature keys."""
+    req = [k.strip().lower() for k in req_keys.split(",") if k.strip()]
+    try:
+        rows = (client.schema("commcalc").table("raw_custom_import").select("data")
+                .eq("org_id", org_id).limit(2000).execute().data) or []
+    except Exception:
+        return 0
+    n = 0
+    for r in rows:
+        d = r.get("data") or {}
+        if isinstance(d, dict):
+            keys = {(k or "").strip().lower() for k in d.keys()}
+            if all(k in keys for k in req):
+                n += 1
+    return n
+
+
+def _oc_config_present(client, org_id, which):
+    """Presence for a 'config:' spec — is the per-org setup done."""
+    try:
+        if which == "store_mapping":
+            M = _store_maps(client, org_id)
+            return len(M.get("stores") or [])
+        if which == "accessory":
+            depts = (_accessory_config(client, org_id).get("departments") or set())
+            return len([d for d in depts if d and d != "ondigo"])
+        if which == "metric_source":
+            return 1 if _metric_source(client, org_id, "activations").get("configured") else 0
+    except Exception:
+        return 0
+    return 0
+
+
+def _onboarding_checklist(client, org_id):
+    """Per-tenant readiness: for each ingestable data item — how it enters, what it powers (from the lineage
+    schematic), and whether it is present/wired for THIS tenant. The systemic answer to 'this report is blank
+    because nothing was mapped to feed it'."""
+    # Pull the schematic once to describe what each source powers (its non-ingest consumer edges).
+    try:
+        edges = (client.schema("commcalc").table("data_lineage").select("*").limit(5000).execute().data) or []
+    except Exception:
+        edges = []
+    powers = {}
+    for e in edges:
+        if (e.get("kind") or "") != "ingest":
+            powers.setdefault(e.get("source_key") or "", []).append(
+                {"affected": e.get("affected_label") or e.get("affected_key"),
+                 "surface": e.get("surface"), "output": e.get("effect_english"), "kind": e.get("kind")})
+    items = []
+    for key, label, check in _ONBOARDING_ITEMS:
+        how, present = check, 0
+        if check.startswith("table:"):
+            present = _oc_count(client, check[6:], org_id)
+            how = "Uploaded / swept into " + check[6:].replace("|", " or ")
+        elif check.startswith("custom:"):
+            present = _oc_custom_present(client, org_id, check[7:])
+            how = "Custom import (email/upload) → raw_custom_import"
+        elif check.startswith("config:"):
+            present = _oc_config_present(client, org_id, check[7:])
+            how = "Configured in settings"
+        items.append({
+            "key": key, "label": label, "how": how,
+            "present": bool(present), "count": present,
+            "powers": powers.get(key, []),
+            "status": ("ready" if present else "missing"),
+        })
+    ready = sum(1 for i in items if i["present"])
+    return {"org_id": org_id, "items": items, "ready": ready, "total": len(items),
+            "missing": [i["key"] for i in items if not i["present"]]}
+
+
+@router.get("/onboarding-checklist")
+def onboarding_checklist(org_id: str = ORG_ID):
+    """Per-tenant ONBOARDING READINESS (owner 2026-08-26): every data item the platform ingests — how it
+    enters, what platform function/report it powers (from the data-lineage schematic), and whether it is
+    present + wired for this tenant. So a report is never silently blank 'because nothing was mapped to feed
+    it' — the missing feed is named here. DISPLAY/config."""
+    require_org(org_id)
+    return _onboarding_checklist(sb(), org_id)
+
+
 @router.get("/metric-source-config")
 def get_metric_source_config(org_id: str = ORG_ID):
     """The tenant's per-metric SOURCE-OF-TRUTH config (mig 923). Returns one entry per known metric, falling
