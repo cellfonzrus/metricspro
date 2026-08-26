@@ -213,3 +213,48 @@ def reconcile_bill_payments(report_by_store, sales_by_store, processor_by_store,
         "stores": rows,
         "remediation": remediation,
     }
+
+
+def reconcile_billpay_cash(actual_by_store, declared_by_store, tolerance_amt=1.0, assigned_user=None):
+    """Reconcile ACTUAL bill-payment CASH (the Bill Payment Transactions report, tender = cash) against the
+    cash employees DECLARED at daily closing (daily_closing.epay_on_cash), per store — the wiring the owner
+    asked for: "the bill pay reconciliation should also be wired in the daily cash being declared by the
+    employees." Join grain is (store, period); over/short per store.
+
+    Each *_by_store maps store key -> {'amount', optional '_name'}. delta = declared - actual: positive means
+    the rep declared MORE bill-payment cash than the transactions show (over / possible mis-tag); negative
+    means LESS (short / cash unaccounted). PURE."""
+    actual_by_store = actual_by_store or {}
+    declared_by_store = declared_by_store or {}
+    keys = set(actual_by_store) | set(declared_by_store)
+    rows, matched, over, short = [], 0, 0, 0
+    for k in keys:
+        a = float((actual_by_store.get(k) or {}).get("amount", 0.0) or 0.0)
+        d = float((declared_by_store.get(k) or {}).get("amount", 0.0) or 0.0)
+        delta = round(d - a, 2)
+        if abs(delta) <= tolerance_amt:
+            matched += 1
+            continue
+        kind = "over" if delta > 0 else "short"
+        over += 1 if delta > 0 else 0
+        short += 1 if delta < 0 else 0
+        name = (actual_by_store.get(k) or declared_by_store.get(k) or {}).get("_name") or k
+        rows.append({"store": name, "actual_cash": round(a, 2), "declared_cash": round(d, 2),
+                     "delta": delta, "kind": kind})
+    rows.sort(key=lambda r: -abs(r["delta"]))
+    status = ("no_data" if not keys else ("match" if not rows else "mismatch"))
+    remediation = None
+    if rows:
+        remediation = {"action": "review", "assigned_user": assigned_user,
+                       "reason": "Declared bill-payment cash and actual bill-payment transactions disagree — "
+                                 "review the flagged stores (a short means cash collected but not declared; an "
+                                 "over means declared cash the transactions don't support)."}
+    return {
+        "status": status, "tolerance_amt": tolerance_amt,
+        "totals": {"actual_cash": round(sum(float((v or {}).get("amount", 0.0) or 0.0)
+                                            for v in actual_by_store.values()), 2),
+                   "declared_cash": round(sum(float((v or {}).get("amount", 0.0) or 0.0)
+                                              for v in declared_by_store.values()), 2)},
+        "counts": {"stores": len(keys), "matched": matched, "over": over, "short": short},
+        "stores": rows, "remediation": remediation,
+    }

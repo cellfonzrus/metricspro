@@ -22181,6 +22181,41 @@ def _billpay_processor_by_store(client, org_id, period, processor, ckey_fn):
     return by_store
 
 
+def _billpay_cash_actual_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store ACTUAL bill-payment CASH {'amount','_name'} — the Bill Payment Transactions report
+    (basis of truth) filtered to a CASH tender. This is what the drawer SHOULD hold from bill payments."""
+    rows = _cr_resolve_bill_payments(client, org_id, period, {"market_for": (lambda s: "")})
+    out = {}
+    for r in rows:
+        if "cash" not in str(r.get("tender_type") or "").lower():
+            continue
+        st = (r.get("store") or "").strip() or "—"
+        k = ckey_fn(st) or "—"
+        slot = out.setdefault(k, {"amount": 0.0, "_name": st})
+        slot["amount"] += float(r.get("payment") or r.get("total_amt") or 0.0)
+    return out
+
+
+def _billpay_cash_declared_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store DECLARED bill-payment cash {'amount','_name'} — daily_closing.epay_on_cash (the
+    portion of the rep's declared cash they attributed to ePay / bill payments), summed for the period.
+    Defensive: a missing table/column yields {} so the recon degrades rather than 500-ing."""
+    try:
+        rows = (client.schema("commcalc").table("daily_closing")
+                .select("store_code,epay_on_cash,period")
+                .eq("org_id", org_id).in_("period", _pvariants(period)).limit(100000).execute().data) or []
+    except Exception as _ce:
+        print(f"WARN daily_closing read failed for bill-pay cash recon: {_ce}")
+        return {}
+    out = {}
+    for r in rows:
+        sc = str(r.get("store_code") or "").strip() or "—"
+        k = ckey_fn(sc) or "—"
+        slot = out.setdefault(k, {"amount": 0.0, "_name": sc})
+        slot["amount"] += float(r.get("epay_on_cash") or 0.0)
+    return out
+
+
 @router.get("/metric-recon/{period}")
 def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations"):
     """RECONCILIATION for a metric (owner 2026-08-26): prove the ingest is good when the sources agree, flag +
@@ -22230,9 +22265,18 @@ def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations")
             tolerance_amt=float(msrc.get("tolerance") or 0.0), tolerance_cnt=0,
             processor=processor, reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
             assigned_user=msrc.get("assigned_user"))
+        # DAILY-CASH linkage (owner 2026-08-26: "wire the bill-pay reconciliation into the daily cash being
+        # declared by the employees"). Reconcile ACTUAL bill-payment cash (report, tender=cash) against the
+        # cash the reps DECLARED at daily closing (daily_closing.epay_on_cash), per store — over/short.
+        cash_actual = _billpay_cash_actual_by_store(client, org_id, period, ckey)
+        cash_declared = _billpay_cash_declared_by_store(client, org_id, period, ckey)
+        daily_cash = metric_recon_mod.reconcile_billpay_cash(
+            cash_actual, cash_declared,
+            tolerance_amt=float(msrc.get("tolerance") or 1.0), assigned_user=msrc.get("assigned_user"))
         result.update({"period": period, "org_id": org_id, "metric": metric,
                        "config": {"configured": msrc.get("configured"), "processor": (processor or None)},
                        "primary_rows": rep_n,
+                       "daily_cash": daily_cash,
                        "note": (None if rep_n else
                                 "No Bill Payment Transactions rows for this period — upload or route the b2b "
                                 "'Bill Payment Transactions' report so the bill-payment basis is present.")})
