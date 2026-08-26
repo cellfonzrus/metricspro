@@ -24259,14 +24259,21 @@ def get_email_config(org_id: str = ORG_ID, account: str = "default"):
 
 
 class PutEmailConfigIn(LaxModel):
-    account: str = ""
-    label: str = ""
-    imap_host: str = ""
+    # These are Optional[str] (not str) ON PURPOSE: the PUT below persists a blank field as NULL
+    # (`(body.x or "").strip() or None`), the GET returns it as JSON null, and the frontend spreads that
+    # saved config straight back into the next save. A bare `str` field REJECTS an explicit null in
+    # Pydantic v2 ("Input should be a valid string") — the `= ""` default only applies when the key is
+    # ABSENT, not when it is sent as null — so editing any existing mailbox with an empty from_filter/
+    # label/host failed to save. The handler already coerces each with `(x or default)`, so accepting null
+    # here is safe and changes no stored value.
+    account: Optional[str] = ""
+    label: Optional[str] = ""
+    imap_host: Optional[str] = ""
     imap_port: Any = None
-    username: str = ""
+    username: Optional[str] = ""
     use_ssl: Any = True
-    mailbox: str = ""
-    from_filter: str = ""
+    mailbox: Optional[str] = ""
+    from_filter: Optional[str] = ""
     since_days: Any = None
     patterns: Any = None
     enabled: Any = None
