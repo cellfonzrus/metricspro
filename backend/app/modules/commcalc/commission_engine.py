@@ -1415,23 +1415,50 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     # until an owner writes such a rule / flips the setting AND runs a recalc.
     _pay_cfg = _plan_pay_config(client, org_id)
     _ct_mapped = (_pay_cfg.get("plan_ct_resolution") == "mapped")
-    # ── ACTIVATION SOURCE (mig 296) — per-tenant opt-in, DEFAULT 'raw_sales' (byte-identical) ──────────
-    # 'raw_sales'          — TODAY'S BEHAVIOUR. `_ad_on` is False and NOTHING below this comment runs:
-    #                        activations are classified from raw_sales exactly as before.
-    # 'activation_details' — activations are PAID from the ingested "Activation Details" custom report.
+    # ── ACTIVATION SOURCE (mig 296 org-level + mig 297 PER-PLAN) — opt-in, DEFAULT byte-identical ──────
+    # The activation source is decided PER REP, from the rep's EFFECTIVE (paying) plan, NOT org-wide:
+    #   resolution per rep = their paying plan's activation_source, unless 'inherit', then the org-level
+    #   commission_org_config.activation_source (mig 296), then 'raw_sales'.
+    # This is the whole point of mig 297: the Chicago/Luxelink org holds BOTH the NY reps and 13 Chicago
+    # stores in ONE org. The org-wide mig-296 switch would zero Chicago's activations (Chicago is not in
+    # the NY-only report). Moving the control to the plan lets the NY plan pay activations from the report
+    # while every Chicago rep (on an 'inherit'/'raw_sales' plan) is BYTE-IDENTICAL to today.
+    #
+    # 'raw_sales' / 'inherit'->org 'raw_sales' — TODAY'S BEHAVIOUR for that rep. activations classified from
+    #                        raw_sales exactly as before.
+    # 'activation_details' — for a rep whose effective plan resolves here, activations are PAID from the
+    #                        ingested "Activation Details" custom report:
     #   • Detail lines (deduped per activation by the resolver, Upgrade/Other/Returns excluded, mapped to
-    #     premium/byod) are APPENDED to the line set, carrying ONLY the activation_bucket match_field.
-    #   • raw_sales' own activation_bucket is SUPPRESSED (forced blank) so an activation_bucket rule can
-    #     match ONLY the Detail lines — SINGLE SOURCE, no union, no double-count.
+    #     premium/byod) are APPENDED to the line set and attached (by the name bridge) to the rep who owns
+    #     them, carrying ONLY the activation_bucket match_field.
+    #   • THAT REP'S raw_sales activation_bucket is SUPPRESSED (per-rep, in the payout loop) so an
+    #     activation_bucket rule matches ONLY the Detail lines — SINGLE SOURCE per rep, no double-count.
+    #   • A Detail line whose owning rep's effective plan is NOT activation_details is DROPPED (report
+    #     activations only ever pay a rep who is on the opted-in plan).
     #   • Accessories and every non-activation rule keep reading raw_sales UNCHANGED (Detail lines have
     #     blank department/category/product/contract_type, so no non-activation rule ever matches them).
     # Never on the pay-simulator's sales_override path (that substitutes the whole raw_sales set on purpose).
-    # The WHOLE branch is guarded behind `_ad_on`; with the default flag it is a complete no-op.
-    _act_src = _pay_cfg.get("activation_source", "raw_sales")
-    _ad_on = (_act_src == "activation_details") and (sales_override is None)
+    # The WHOLE branch is guarded behind `_ad_any`; when no plan resolves to activation_details it is a
+    # complete no-op and the result is byte-identical to the pre-296/297 engine.
+    _org_act_src = _pay_cfg.get("activation_source", "raw_sales")
+
+    def _plan_activation_source(p):
+        """Resolve one plan's activation source: its own value, 'inherit' -> the org-level setting.
+        Reads defensively (mig 297 column may be absent) — a missing/blank/unknown value = 'inherit'."""
+        v = str(p.get("activation_source") or "inherit").strip().lower()
+        if v not in ("inherit", "raw_sales", "activation_details"):
+            v = "inherit"
+        return _org_act_src if v == "inherit" else v
+
+    # Plan ids whose reps are paid activations from the Activation Details report.
+    _ad_plan_ids = {p.get("id") for p in plans
+                    if p.get("is_active", True) and _plan_activation_source(p) == "activation_details"}
+    _ad_any = bool(_ad_plan_ids) and (sales_override is None)
     _ad_meta, _ad_idmap = None, {}
     _ad_unsupported = {}   # (rule_id) -> {label, kind, lines} — pct_gp/pct_price on a Detail line, refused
-    if _ad_on:
+    _ad_suppressed_reps, _ad_paid_reps = set(), set()   # per-rep bookkeeping for the result block
+    _ad_dropped_non_ad_lines = 0   # Detail lines that resolved to a rep NOT on an activation_details plan
+    if _ad_any:
         _ad_idmap = dict(identity_map or {})
         if not _ad_idmap:
             try:
@@ -1446,7 +1473,7 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         for p in plans for rule in (p.get("rules") or [])) or any(
         (p.get("tier_match_field") or "").strip().lower() == "activation_bucket" for p in plans)
     _bucket_lines = 0
-    if _uses_bucket or _ct_mapped or _ad_on:
+    if _uses_bucket or _ct_mapped or _ad_any:
         _buckets = _activation_buckets(client, org_id, valid)
         for r, b in zip(valid, _buckets):
             _is_ad = r.get("_actsrc") == "activation_details"
@@ -1455,9 +1482,11 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
             if _uses_bucket:
                 if _is_ad:
                     pass                                   # keep the Detail line's own premium/byod bucket
-                elif _ad_on:
-                    r["activation_bucket"] = ""            # SUPPRESS raw_sales activations (single source)
                 else:
+                    # raw_sales activation bucket. Under per-plan AD, the SUPPRESSION is deferred to the
+                    # per-rep loop (only a rep whose effective plan is activation_details has its raw_sales
+                    # activations suppressed), so here the normal bucket is set for everyone — byte-identical
+                    # to the pre-296 path when no rep is AD-sourced.
                     r["activation_bucket"] = b or ""
             if _ct_mapped and b and not _is_ad:
                 r["_ct_resolved"] = b
@@ -1598,22 +1627,50 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
 
     # group lines per rep
     reps = {}  # key (upper rep name) -> {name, store, lines:[...]}
+    # PASS 1 — group the RAW_SALES lines by their POS name key, exactly as the pre-296 engine did. NO name
+    # bridge is applied here, so a raw_sales rep's grouping key is BYTE-IDENTICAL to today even when the org
+    # has an activation_details plan (this is what keeps every Chicago/non-AD rep unaffected).
     for r in valid:
+        if r.get("_actsrc") == "activation_details":
+            continue                                       # Detail lines are attached in PASS 2
         rep = str(r.get("salesperson", "") or "").strip()
         if not rep or rep.lower() == "admin":
             continue
-        # ACTIVATION SOURCE name bridge (mig 296): with the flag ON, canonicalise the grouping name
-        # through the SAME alias map the money path uses, so a rep's raw_sales accessories (POS name) and
-        # their Activation Details activations (report name) land in ONE roster-identity group instead of
-        # splitting into two — the Luxelink $0/name-mismatch class. Detail lines are already canonicalised,
-        # so this is idempotent for them; with the flag OFF (`_ad_idmap` empty) the key is byte-identical.
-        if _ad_on and _ad_idmap:
-            rep = _ad_idmap.get(rep.upper(), rep)
         key = rep.upper()
         e = reps.get(key)
         if not e:
             e = reps[key] = {"name": rep, "store": str(r.get("store", "") or "").strip(), "lines": []}
         e["lines"].append(r)
+
+    # PASS 2 (mig 297) — attach each Activation Details line to the rep who owns it, by IDENTITY, without
+    # disturbing any raw_sales grouping key. The Detail line's salesperson is already canonicalised to the
+    # roster name in _activation_detail_lines; a raw_sales group's roster identity is its POS name bridged
+    # through the SAME alias map. So a rep's raw_sales lines (POS name) and their Detail activations (roster
+    # name) land in ONE group — but the raw group's KEY stays the POS key, so non-AD reps are byte-identical.
+    # The per-rep payout loop DROPS these Detail lines again for any rep whose effective plan is not
+    # activation_details, so a report activation can only ever pay a rep on the opted-in plan.
+    if _ad_any:
+        _raw_bridge_index = {}   # bridged-roster-key(UPPER) -> raw group key
+        for _k, _e in reps.items():
+            _bridged = _ad_idmap.get(_e["name"].upper(), _e["name"]).upper() if _ad_idmap else _k
+            _raw_bridge_index.setdefault(_bridged, _k)
+        for r in valid:
+            if r.get("_actsrc") != "activation_details":
+                continue
+            rep = str(r.get("salesperson", "") or "").strip()
+            if not rep or rep.lower() == "admin":
+                continue
+            rkey = rep.upper()
+            tgt = _raw_bridge_index.get(rkey)
+            if tgt is not None:
+                reps[tgt]["lines"].append(r)               # merge into the rep's existing raw group
+            else:
+                e = reps.get(rkey)
+                if not e:                                  # Detail-only rep (no raw_sales this period)
+                    e = reps[rkey] = {"name": rep,
+                                      "store": str(r.get("store", "") or "").strip(), "lines": []}
+                    _raw_bridge_index.setdefault(rkey, rkey)
+                e["lines"].append(r)
 
     # only_rep (drill-down): restrict the rep grouping to the one rep — canon match, else token subset
     # (mirrors the tolerant match the commission-drill endpoint uses). Default None → no filter.
@@ -1655,6 +1712,52 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
             # incl. the case where a non-numeric assignment field would make the resolver raise).
             plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
                                                     store_keys=_skeys, identity_map=identity_map)
+        # ── PER-REP ACTIVATION SOURCE GATE (mig 297) ──────────────────────────────────────────────────
+        # Decide THIS rep's activation source from their EFFECTIVE (paying) plan. A rep pays under exactly
+        # ONE plan (most-specific assignment wins), so the effective plan is unambiguous — that is the
+        # multi-assignment rule: the plan that actually PAYS the rep governs. If the base resolution did not
+        # land the activation_details plan but this group carries Detail lines and the org has an AD plan,
+        # try the AD name bridge (roster identity) and adopt it ONLY when it yields an AD plan — this never
+        # disturbs a non-AD resolution (a rep who resolves to a raw_sales/inherit plan keeps that plan).
+        if _ad_any and not forced_plan:
+            _has_detail = any(r.get("_actsrc") == "activation_details" for r in e["lines"])
+            _plan_is_ad = bool(plan) and plan.get("id") in _ad_plan_ids
+            if _has_detail and not _plan_is_ad and _ad_idmap:
+                _pb = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
+                                        store_keys=_skeys, identity_map=_ad_idmap)
+                if _pb is not None and _pb.get("id") in _ad_plan_ids:
+                    plan = _pb
+                    if detail:
+                        resolution = _resolve_plan_for(
+                            e["name"], store, market, plans, rep_role=rep_role, explain=True,
+                            store_keys=_skeys, identity_map=_ad_idmap)
+        _rep_ad = bool(plan) and (plan.get("id") in _ad_plan_ids)
+        if _ad_any:
+            if _rep_ad:
+                # SINGLE SOURCE for this rep: suppress its raw_sales activations so only the Detail lines
+                # (which keep their own premium/byod bucket) can satisfy an activation_bucket rule.
+                _sup = 0
+                for r in e["lines"]:
+                    if r.get("_actsrc") != "activation_details" and r.get("activation_bucket"):
+                        r["activation_bucket"] = ""
+                        _sup += 1
+                if any(r.get("_actsrc") == "activation_details" for r in e["lines"]):
+                    _ad_paid_reps.add(e["name"])
+                if _sup:
+                    _ad_suppressed_reps.add(e["name"])
+            else:
+                # A report activation resolved to a rep whose effective plan is NOT activation_details —
+                # drop those Detail lines so they can never pay a non-opted-in rep, and keep the rep
+                # byte-identical to today (raw_sales activations untouched). Counted for the result block.
+                _keep, _drop = [], 0
+                for r in e["lines"]:
+                    if r.get("_actsrc") == "activation_details":
+                        _drop += 1
+                    else:
+                        _keep.append(r)
+                if _drop:
+                    e["lines"] = _keep
+                    _ad_dropped_non_ad_lines += _drop
         if not plan:
             # COVERAGE (mig 232): a seller with real sales and NO plan attached is skipped here — which is
             # exactly how a carrier_mode='plan' tenant ends up with a legitimate-looking $0 for that rep.
@@ -2050,20 +2153,29 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
              "source": r.get("source")} for r in (_excl_rules or [])]
         _guard["accessory_definition_loaded"] = bool(_acc_fn)
         out["pay_gate"] = _guard
-    # ACTIVATION SOURCE REPORT (mig 296) — emitted ONLY when the tenant is opted into activation_details,
-    # so an opted-out tenant's result dict is byte-identical. Makes the single-source substitution visible:
-    # how many Detail lines were paid on, the bucket split, how many Upgrade/Other lines were dropped, and
+    # ACTIVATION SOURCE REPORT (mig 296 org-level + mig 297 per-plan) — emitted ONLY when at least one plan
+    # in this org resolves to activation_details, so an org with no such plan is byte-identical. Makes the
+    # single-source substitution visible AND per-rep scoped: which plans are AD-sourced, which reps were paid
+    # from the report and had their raw_sales activations suppressed, how many report activations were dropped
+    # because they belonged to a rep NOT on an AD plan (the Chicago-safety count), plus the bucket split and
     # any rule refused for an unsupported payout kind.
-    if _ad_on:
+    if _ad_any:
         out["activation_source"] = {
             "source": "activation_details",
-            "raw_sales_activation_bucket_suppressed": True,
+            "scope": "per_plan",
+            "org_activation_source": _org_act_src,
+            "activation_details_plan_ids": sorted(str(p) for p in _ad_plan_ids),
+            "raw_sales_activation_bucket_suppressed": True,   # policy: AD reps' raw activations are suppressed
+            "reps_paid_from_report": sorted(_ad_paid_reps),
+            "reps_raw_sales_suppressed": sorted(_ad_suppressed_reps),
+            "detail_lines_dropped_non_ad_rep": _ad_dropped_non_ad_lines,
             "detail": _ad_meta or {},
             "unsupported_payout_kinds": list(_ad_unsupported.values()),
             "basis": ("Activations are paid from the ingested Activation Details report (deduped per "
-                      "activation; Upgrade/Other/Returns excluded), and raw_sales activations are "
-                      "suppressed so nothing is counted twice. Accessories and every non-activation rule "
-                      "still read raw_sales. Owner opt-in, mig 296."),
+                      "activation; Upgrade/Other/Returns excluded) ONLY for reps whose effective plan is "
+                      "activation_details; those reps' raw_sales activations are suppressed so nothing is "
+                      "counted twice. Every other rep (inherit/raw_sales plan) is unchanged. Accessories "
+                      "and every non-activation rule still read raw_sales. Per-plan opt-in, mig 296+297."),
         }
     if _acc_stamp is not None and (detail or coverage):
         # DIAGNOSTICS ONLY — attached for the drill-down / coverage callers, never on the money path,
