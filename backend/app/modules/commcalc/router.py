@@ -22464,6 +22464,322 @@ def onboarding_checklist(org_id: str = ORG_ID):
     return _onboarding_checklist(sb(), org_id)
 
 
+def _data_report_map(client, org_id):
+    """DATA-FIRST reverse map (owner 2026-08-26: "the first check should be what data is being ingested, then
+    reverse-engineer what reports/menus that data runs"). Starts from what THIS tenant actually has ingested,
+    then walks the data_lineage graph forward to every report/menu (surface) each ingested source powers — and
+    conversely lists the reports that are BLOCKED because their feeding data isn't ingested yet, naming what to
+    provide. Reuses the presence engine (_onboarding_checklist) + the lineage graph. DISPLAY/documentation."""
+    checklist = _onboarding_checklist(client, org_id)
+    present = {i["key"]: bool(i["present"]) for i in checklist["items"]}
+    counts = {i["key"]: i.get("count") for i in checklist["items"]}
+    labels = {i["key"]: i["label"] for i in checklist["items"]}
+    try:
+        edges = (client.schema("commcalc").table("data_lineage").select("*").limit(5000).execute().data) or []
+    except Exception:
+        edges = []
+    # forward adjacency + the set of ingest roots
+    adj, ingest_roots, src_label = {}, set(), {}
+    for e in edges:
+        sk = e.get("source_key") or ""
+        adj.setdefault(sk, []).append(e)
+        if e.get("source_label"):
+            src_label.setdefault(sk, e["source_label"])
+        if (e.get("kind") or "") == "ingest":
+            ingest_roots.add(sk)
+
+    def _surfaces_from(root):
+        """Every report/menu (surface) reachable downstream of an ingest root, via the lineage graph."""
+        seen, stack, out = set(), [root], {}
+        while stack:
+            n = stack.pop()
+            for e in adj.get(n, []):
+                surf = (e.get("surface") or "").strip()
+                if surf and (e.get("kind") or "") != "ingest":
+                    out[surf] = e.get("kind") or "display"
+                nxt = e.get("affected_key") or ""
+                if nxt and nxt not in seen:
+                    seen.add(nxt); stack.append(nxt)
+        return out
+
+    ingested, surface_feeders = [], {}
+    for root in sorted(ingest_roots):
+        surfs = _surfaces_from(root)
+        is_present = present.get(root, False)
+        ingested.append({
+            "source_key": root, "source_label": src_label.get(root) or labels.get(root) or root,
+            "present": is_present, "count": counts.get(root),
+            "reports": sorted(surfs.keys()),
+        })
+        for surf in surfs:
+            fed = surface_feeders.setdefault(surf, {"powered_by": [], "needs": []})
+            (fed["powered_by"] if is_present else fed["needs"]).append(src_label.get(root) or root)
+
+    reports = []
+    for surf, fed in sorted(surface_feeders.items()):
+        powered = bool(fed["powered_by"])
+        reports.append({"report": surf, "powered": powered,
+                        "powered_by": sorted(set(fed["powered_by"])),
+                        "needs": sorted(set(fed["needs"])) if not powered else []})
+    return {
+        "org_id": org_id,
+        "ingested": ingested,
+        "reports": reports,
+        "ingested_count": sum(1 for i in ingested if i["present"]),
+        "reports_powered": sum(1 for r in reports if r["powered"]),
+        "reports_total": len(reports),
+        "note": (None if edges else
+                 "The data-lineage schematic is empty — apply migrations 924/925 to populate the data→reports map."),
+    }
+
+
+@router.get("/data-readiness")
+def data_readiness(org_id: str = ORG_ID):
+    """DATA-FIRST readiness (owner 2026-08-26): what data is ingested for this tenant, reverse-engineered to
+    the reports/menus each ingested source powers — and the reports still blocked because their feed is
+    missing (with what to provide). The entry view of the Setup Wizard. DISPLAY/documentation."""
+    require_org(org_id)
+    return _data_report_map(sb(), org_id)
+
+
+# ── ADAPTIVE ONBOARDING WIZARD ────────────────────────────────────────────────────────────────────
+# The step catalog. The wizard ADAPTS: the `profile` step's answers (carrier / company / POS / processor)
+# TAILOR which later steps appear via `applies_when`. Each step writes through its OWN existing config page
+# (cta.href) — the wizard never stores that config; completion is DERIVED from a readiness `check`:
+#   profile            → all required profile answers present
+#   table:schema.table (>=N)  → row count for the org meets N (default 1)
+#   custom:k1,k2       → raw_custom_import carries a row with those signature keys
+#   config:X           → a per-org config is set (store_mapping / accessory / metric_source)
+#   review             → no automatic probe; done when the user marks it reviewed or skipped
+_ONBOARDING_PROFILE = {
+    "key": "profile", "phase": "1. Tell us about your business", "kind": "profile",
+    "title": "Your business", "question": "Who are we setting up, and what do you sell on?",
+    "check": "profile",
+    "questions": [
+        {"key": "company", "label": "Company / entity name", "type": "text"},
+        {"key": "carriers", "label": "Carrier(s) you sell", "type": "multiselect",
+         "options": ["Boost", "Total", "Other"]},
+        {"key": "pos", "label": "Point of sale (POS)", "type": "select",
+         "options": ["B2B Soft", "Other"]},
+        {"key": "processor", "label": "Payment processor", "type": "select",
+         "options": ["ePay (Boost)", "VidaPay (Total)", "Other"]},
+    ],
+}
+# processor answer → normalized token used by applies_when + downstream config.
+_PROC_TOKEN = {"epay (boost)": "epay", "vidapay (total)": "vidapay"}
+
+
+def _onboarding_steps():
+    """The ordered step catalog (adaptive). `applies_when` gates a step on the profile answers."""
+    return [
+        _ONBOARDING_PROFILE,
+        {"key": "users_roles", "phase": "1. Tell us about your business", "kind": "action",
+         "title": "Users & roles", "question": "Who needs a login, and what can each person see?",
+         "check": "review", "cta": {"label": "Add users & roles", "href": "/commcalc/settings"}, "prereqs": ["profile"]},
+        # 2. Stores & team — require at least one of each.
+        {"key": "stores", "phase": "2. Stores & team", "kind": "gate",
+         "title": "Add your stores", "question": "List your stores (code, address, market). Add at least one.",
+         "check": "config:store_mapping", "cta": {"label": "Add stores", "href": "/commcalc/mapping"}, "prereqs": ["profile"]},
+        {"key": "employees", "phase": "2. Stores & team", "kind": "gate",
+         "title": "Add your team", "question": "Add your employees. Add at least one.",
+         "check": "table:storeops.employees", "cta": {"label": "Add employees", "href": "/storeops/team"}, "prereqs": ["stores"]},
+        # 3. Connections & credentials.
+        {"key": "connections", "phase": "3. Connect your data", "kind": "action",
+         "title": "Connect your feeds", "question": "Do your reports arrive by email or a portal? Add the mailbox / credentials, or we'll show you how to get access.",
+         "check": "review", "cta": {"label": "Set up email / FTP imports", "href": "/commcalc/email-imports"}, "prereqs": ["profile"]},
+        # 4. Data feeds — tailored by POS / processor.
+        {"key": "feed_sales", "phase": "4. Load your data", "kind": "action",
+         "title": "Sales transactions", "question": "Upload or route your Sales Transaction Details.",
+         "check": "table:commcalc.raw_sales|commcalc.daily_sales_feed", "cta": {"label": "Upload sales", "href": "/commcalc/upload"}, "prereqs": ["stores"]},
+        {"key": "feed_activation_details", "phase": "4. Load your data", "kind": "action",
+         "title": "Activation Details", "question": "Upload the b2b Activation Details report (the activation basis of truth).",
+         "check": "custom:serial#,contract type", "cta": {"label": "Upload Activation Details", "href": "/commcalc/upload"},
+         "applies_when": {"pos": "b2b soft"}, "prereqs": ["stores"]},
+        {"key": "feed_bill_payments", "phase": "4. Load your data", "kind": "action",
+         "title": "Bill Payment Transactions", "question": "Upload the b2b Bill Payment Transactions report.",
+         "check": "custom:discounts,bill pay system", "cta": {"label": "Upload Bill Payments", "href": "/commcalc/upload"},
+         "applies_when": {"pos": "b2b soft"}, "prereqs": ["stores"]},
+        {"key": "feed_store_performance", "phase": "4. Load your data", "kind": "action",
+         "title": "Store Performance", "question": "Upload the b2b Store Performance scorecard (per-store accessories + activations + bill pays).",
+         "check": "custom:acc ext price,bill payment qty", "cta": {"label": "Upload Store Performance", "href": "/commcalc/upload"},
+         "applies_when": {"pos": "b2b soft"}, "prereqs": ["stores"]},
+        {"key": "feed_epay", "phase": "4. Load your data", "kind": "action",
+         "title": "ePay processor feed", "question": "Connect / upload your ePay daily transactions (Boost bill payments).",
+         "check": "table:commcalc.raw_epay_daily_tx", "cta": {"label": "Set up ePay", "href": "/commcalc/epay"},
+         "applies_when": {"processor": "epay"}, "prereqs": ["stores"]},
+        {"key": "feed_vidapay", "phase": "4. Load your data", "kind": "action",
+         "title": "VidaPay processor feed", "question": "Connect / upload your VidaPay (MA) daily transactions.",
+         "check": "table:commcalc.raw_ma_daily_tx", "cta": {"label": "Set up VidaPay / MA", "href": "/commcalc/ma-upload"},
+         "applies_when": {"processor": "vidapay"}, "prereqs": ["stores"]},
+        {"key": "feed_residual", "phase": "4. Load your data", "kind": "action",
+         "title": "Residual / MA commission", "question": "Upload your residual report (drives Retention Analysis — month-3 residual = retained).",
+         "check": "table:commcalc.raw_ma_commission", "cta": {"label": "Upload residual", "href": "/commcalc/ma-upload"},
+         "applies_when": {"processor": "vidapay"}, "prereqs": ["stores"]},
+        # 5. Mapping.
+        {"key": "dealer_code_map", "phase": "5. Map your data", "kind": "action",
+         "title": "Map Dealer Codes to stores", "question": "Link each Activation Details Dealer Code to a store so activations show under the named store.",
+         "check": "review", "cta": {"label": "Map Dealer Codes", "href": "/commcalc/activations"},
+         "applies_when": {"pos": "b2b soft"}, "prereqs": ["feed_activation_details", "stores"]},
+        {"key": "accessories", "phase": "5. Map your data", "kind": "action",
+         "title": "Accessory departments", "question": "Which POS departments are accessory sales? (pick from your own data)",
+         "check": "config:accessory", "cta": {"label": "Set accessory departments", "href": "/commcalc/sales-report"}, "prereqs": ["feed_sales"]},
+        {"key": "activation_basis", "phase": "5. Map your data", "kind": "action",
+         "title": "Activation basis of truth", "question": "Which report is authoritative for activations, and what does it reconcile against?",
+         "check": "config:metric_source", "cta": {"label": "Choose activation basis", "href": "/commcalc/activations"}, "prereqs": ["feed_sales"]},
+        # 6. Pay & goals.
+        {"key": "commission_plans", "phase": "6. Pay & goals", "kind": "action",
+         "title": "Commission plans", "question": "Define each commission plan and assign every rep.",
+         "check": "table:commcalc.commission_plan", "cta": {"label": "Set up commission plans", "href": "/commcalc/commission-plans"}, "prereqs": ["employees"]},
+        {"key": "targets", "phase": "6. Pay & goals", "kind": "action",
+         "title": "Monthly targets", "question": "Set monthly targets per store / metric.",
+         "check": "table:commcalc.targets", "cta": {"label": "Set targets", "href": "/commcalc/targets"}, "prereqs": ["stores"]},
+    ]
+
+
+def _wiz_profile_answers(state):
+    """Normalized profile answers from onboarding_state (lower-cased; processor mapped to its token)."""
+    ans = ((state.get("profile") or {}).get("answers") or {})
+    out = {}
+    for k, v in ans.items():
+        if isinstance(v, list):
+            out[k] = [str(x).strip().lower() for x in v]
+        else:
+            out[k] = str(v or "").strip().lower()
+    if out.get("processor"):
+        out["processor"] = _PROC_TOKEN.get(out["processor"], out["processor"])
+    return out
+
+
+def _wiz_applies(applies_when, profile):
+    """True if a step applies given the profile answers. Absent condition → always applies."""
+    if not applies_when:
+        return True
+    for k, want in applies_when.items():
+        have = profile.get(k)
+        wants = [w.strip().lower() for w in (want if isinstance(want, list) else [want])]
+        if isinstance(have, list):
+            if not (set(have) & set(wants)):
+                return False
+        else:
+            if (have or "") not in wants:
+                return False
+    return True
+
+
+def _wiz_check(client, org_id, step, profile):
+    """(done, count) for a step's readiness check. Never raises."""
+    chk = step.get("check") or "review"
+    try:
+        if chk == "profile":
+            req = [q["key"] for q in step.get("questions", [])]
+            ok = all(profile.get(k) for k in req)
+            return ok, (len(req) if ok else 0)
+        if chk.startswith("table:"):
+            spec = chk[6:]
+            need = 1
+            if ">=" in spec:
+                spec, n = spec.split(">=", 1)
+                need = int(n)
+            c = _oc_count(client, spec, org_id)
+            return c >= need, c
+        if chk.startswith("custom:"):
+            c = _oc_custom_present(client, org_id, chk[7:])
+            return c > 0, c
+        if chk.startswith("config:"):
+            c = _oc_config_present(client, org_id, chk[7:])
+            return c > 0, c
+    except Exception:
+        return False, 0
+    return None, 0   # 'review' — no automatic probe
+
+
+def _onboarding_wizard(client, org_id):
+    """The adaptive wizard: profile-tailored steps, each with its readiness, unlock (prereqs), CTA, and the
+    reports it powers (from data_lineage). Composes existing config — never a parallel store."""
+    try:
+        rows = (client.schema("commcalc").table("onboarding_state").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    state = {r["step_key"]: r for r in rows}
+    profile = _wiz_profile_answers(state)
+    # 'powers' text from the lineage schematic (best-effort).
+    try:
+        edges = (client.schema("commcalc").table("data_lineage").select("source_key,affected_label,surface,kind")
+                 .limit(5000).execute().data) or []
+    except Exception:
+        edges = []
+    powers = {}
+    for e in edges:
+        if (e.get("kind") or "") != "ingest":
+            powers.setdefault(e.get("source_key") or "", []).append(e.get("surface") or e.get("affected_label"))
+
+    steps, done_keys = [], set()
+    for st in _onboarding_steps():
+        if not _wiz_applies(st.get("applies_when"), profile):
+            continue
+        stt = state.get(st["key"]) or {}
+        manual = (stt.get("status") or "")
+        auto_done, count = _wiz_check(client, org_id, st, profile)
+        done = bool(auto_done) if auto_done is not None else (manual in ("reviewed", "skipped"))
+        if done:
+            done_keys.add(st["key"])
+        steps.append({
+            "key": st["key"], "phase": st["phase"], "kind": st["kind"], "title": st["title"],
+            "question": st["question"], "options": st.get("questions"),
+            "cta": st.get("cta"), "prereqs": st.get("prereqs", []),
+            "status": manual or ("done" if done else "not_started"), "done": done, "count": count,
+            "answers": (stt.get("answers") or {}),
+            "auto": auto_done is not None,   # false → completion is by review/skip
+            "powers": [p for p in (powers.get(st["key"].replace("feed_", "").replace("_report", "") + "_report", [])
+                                   or powers.get(st["key"], [])) if p][:5],
+        })
+    # unlocked = all prereqs done
+    for s in steps:
+        s["unlocked"] = all(p in done_keys for p in s["prereqs"])
+    total = len(steps)
+    ready = sum(1 for s in steps if s["done"])
+    return {"org_id": org_id, "profile": profile, "steps": steps, "ready": ready, "total": total,
+            "note": (None if rows or True else None)}
+
+
+@router.get("/onboarding")
+def get_onboarding(org_id: str = ORG_ID):
+    """The ADAPTIVE onboarding wizard (owner 2026-08-26): a profile questionnaire (carrier / company / POS /
+    processor) that TAILORS which later steps + menus appear, then stores/team, connections, data feeds,
+    mapping, and pay/goals — each deep-linking to its existing settings page, with readiness derived from the
+    same probes the pages use. State persists in onboarding_state; config never lives here. DISPLAY/config."""
+    require_org(org_id)
+    return _onboarding_wizard(sb(), org_id)
+
+
+class PutOnboardingIn(LaxModel):
+    status: Any = None
+    answers: Any = None
+
+
+@router.put("/onboarding/{step_key}")
+def put_onboarding(step_key: str, body: PutOnboardingIn, org_id: str = ORG_ID):
+    """Record a wizard step's status and/or answers (upsert onboarding_state on org+step). Used for the
+    profile answers (which tailor the flow), 'skipped'/'reviewed' acknowledgements, and free-text notes —
+    NEVER for carrier/store/plan config, which round-trips its own endpoint. Degrades with a hint if mig 927
+    hasn't run."""
+    require_org(org_id)
+    valid = {s["key"] for s in _onboarding_steps()}
+    if step_key not in valid:
+        raise HTTPException(400, f"unknown step '{step_key}'")
+    row = {"org_id": org_id, "step_key": step_key, "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    if body.status is not None:
+        row["status"] = str(body.status).strip() or "in_progress"
+    if body.answers is not None and isinstance(body.answers, dict):
+        row["answers"] = body.answers
+    try:
+        sb().schema("commcalc").table("onboarding_state").upsert(row, on_conflict="org_id,step_key").execute()
+        return {"ok": True, "step_key": step_key}
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 927 (onboarding_state)", "error": str(e)[:200]}
+
+
 @router.get("/metric-source-config")
 def get_metric_source_config(org_id: str = ORG_ID):
     """The tenant's per-metric SOURCE-OF-TRUTH config (mig 923). Returns one entry per known metric, falling
@@ -24443,6 +24759,38 @@ def _email_status_update(client, org_id, account, upd):
             pass
 
 
+def _auto_custom_report_patterns(client, org_id):
+    """Auto-derived filename patterns for every registered CUSTOM report (report_definitions), so a report
+    added for email ingestion is matched WITHOUT the tenant hand-crafting a glob (owner 2026-08-26: adding a
+    custom report should make it ingest automatically — "email has the data but the system did not get them"
+    was exactly a new report with no filename rule). Pattern = the label's words joined by '*'
+    (e.g. 'Activation Details' → '*activation*details*'); the report_key slug is also accepted. Used as a
+    FALLBACK appended AFTER the explicit patterns (first-match wins in match_upload_type), so nothing that
+    already matched changes. Never raises."""
+    import re as _re_ap
+    out, seen = [], set()
+    try:
+        defs = (client.schema("commcalc").table("report_definitions")
+                .select("report_key,label,target_table,upload_endpoint").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return out
+    for d in defs:
+        if not (d.get("upload_endpoint") == "custom" or d.get("target_table") == CUSTOM_IMPORT_TABLE):
+            continue
+        rk = (d.get("report_key") or "").strip()
+        if not rk:
+            continue
+        for raw in ((d.get("label") or rk), rk):
+            words = [w for w in _re_ap.split(r"[^a-z0-9]+", str(raw).lower()) if w]
+            if not words:
+                continue
+            pat = "*" + "*".join(words) + "*"
+            if pat not in seen:
+                seen.add(pat)
+                out.append({"pattern": pat, "upload_type": rk, "auto": True})
+    return out
+
+
 async def _run_email_sweep(org_id, account='default'):
     """Connect to ONE tenant mailbox (org, account), download every NEW attachment matching a configured
     pattern, route each through the existing upload pipeline, and record what was processed (dedup by
@@ -24453,6 +24801,12 @@ async def _run_email_sweep(org_id, account='default'):
     account = (cfg or {}).get('account') or account
     if not cfg or not (cfg.get('imap_host') or '').strip():
         return {"ok": False, "error": "Email/IMAP not configured", "account": account}
+    # AUTO-MATCH new custom reports: append derived patterns for every registered custom sheet AFTER the
+    # explicit rules (explicit wins first), so a report the tenant just added ingests without a hand-written
+    # glob. This closes the "attachment is in the inbox but never imports because no rule matched it" gap.
+    _auto_pats = _auto_custom_report_patterns(client, org_id)
+    if _auto_pats:
+        cfg = {**cfg, 'patterns': (cfg.get('patterns') or []) + _auto_pats}
     # An empty rules list matches NOTHING — fail loudly instead of a silent "0/0 ingested" while
     # reports sit in the inbox (bit the Total/luxelink mailbox setup 2026-07-02).
     if not any((p.get('pattern') or '').strip() for p in (cfg.get('patterns') or []) if isinstance(p, dict)):
