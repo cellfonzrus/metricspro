@@ -21712,36 +21712,63 @@ def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
                      date_from=date_from or None, date_to=date_to or None)
 
 
+# Type buckets that make up b2b's "Total Activation" — everything the Activation Details report classifies
+# EXCEPT an Upgrade. Verified against the b2b "Month To Date Location Sales Report" totals row
+# (Activation+Port+BYOD+Tablet+HomeInternet+Edge = Total Activation; Upgrade is a separate column).
+_ACT_TOTAL_BUCKETS = ("New Activation", "Port", "BYOD", "Tablet", "Home Internet", "Edge", "Other")
+_ACT_BUCKET_FIELD = {"New Activation": "activation", "Port": "port", "BYOD": "byod", "Tablet": "tablet",
+                     "Home Internet": "home_internet", "Edge": "edge", "Upgrade": "upgrade", "Other": "other"}
+
+
 @router.get("/activation-counts/{period}")
-def activation_counts(period: str, org_id: str = ORG_ID):
-    """Store activation COUNTS from the b2b "Activation Details" report (owner 2026-08-26).
+def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = ""):
+    """Store activation COUNTS from the b2b "Activation Details" report, in the SHAPE of the b2b "Month To
+    Date Location Sales Report" so the two reconcile line-for-line (owner 2026-08-26).
 
-    A dedicated, unambiguous count surface: the Custom Report "Activations" dataset shows the same numbers
-    but alongside its money columns (MRC etc.), which read as "a total of $$" if you're looking at the raw
-    captured sheet. This returns ONLY the counts — one row per activation (Service-Plan rows; Plan-Option/
-    insurance and Returns/cancelled excluded, deduped by Activation#) — per store, with a type breakdown and
-    the grand total that must reconcile to the b2b MTD figure (Diversey = 49).
+    One row per activation (Service-Plan rows; Plan-Option/insurance + Returns/cancelled excluded, deduped by
+    Activation#). Per store it returns `total_activation` = Activation + Port + BYOD + Tablet + Home Internet
+    + Edge (EXCLUDING Upgrade — that is b2b's own definition, verified against its totals row), the per-type
+    breakdown, and `upgrade` alongside. Compare `total_activation` to the b2b report's "Total Activation"
+    column: match ⇒ the mapping is right; a gap ⇒ the type breakdown shows which category is off.
 
-    Reads the self-serve custom-import capture (raw_custom_import), so it is EMPTY until the Activation
-    Details report is uploaded/registered as a custom import (or routed via the email import) for `period`;
-    the `note` says so rather than showing a silent 0. DISPLAY-ONLY."""
+    AS-OF CUTOFF: `as_of` (YYYY-MM-DD, or a b2b M/D/YYYY date) counts only activations dated on/before that
+    day, so the count can be pinned to "as of last night" and compared against a b2b snapshot taken at the
+    same cutoff instead of a moving live total. Undated rows are always included (they cannot be placed).
+
+    Reads the self-serve custom-import capture (raw_custom_import) — EMPTY until the Activation Details report
+    is uploaded/registered as a custom import (or routed via the email import) for `period`; the `note` says
+    so rather than showing a silent 0. DISPLAY-ONLY."""
     require_org(org_id)
-    from collections import Counter
     rows = _cr_resolve_activation_details(sb(), org_id, period, {"market_for": (lambda s: "")})
-    by_store, types = {}, Counter()
+    cutoff = _norm_report_date(as_of) if as_of else ""
+    excluded_after = 0
+
+    def _blank_store(st):
+        d = {"store": st, "total_activation": 0, "upgrade": 0}
+        for f in _ACT_BUCKET_FIELD.values():
+            d[f] = 0
+        return d
+
+    by_store, grand = {}, _blank_store("TOTAL")
+    counted = 0
     for r in rows:
+        d10 = r.get("trans_date") or ""
+        if cutoff and d10 and d10 > cutoff:
+            excluded_after += 1
+            continue
+        counted += 1
         st = (r.get("store") or "").strip() or "—"
-        d = by_store.setdefault(st, {"store": st, "activations": 0, "by_type": Counter()})
-        d["activations"] += 1
-        d["by_type"][r.get("bucket") or "Other"] += 1
-        types[r.get("bucket") or "Other"] += 1
-    stores = sorted(
-        ({"store": d["store"], "activations": d["activations"], "by_type": dict(d["by_type"])}
-         for d in by_store.values()),
-        key=lambda x: -x["activations"])
+        bucket = r.get("bucket") or "Other"
+        fld = _ACT_BUCKET_FIELD.get(bucket, "other")
+        for d in (by_store.setdefault(st, _blank_store(st)), grand):
+            d[fld] += 1
+            if bucket != "Upgrade":       # b2b Total Activation excludes Upgrade
+                d["total_activation"] += 1
+    stores = sorted(by_store.values(), key=lambda x: -x["total_activation"])
     return {
         "period": period, "org_id": org_id,
-        "total_activations": len(rows), "stores": stores, "by_type": dict(types),
+        "as_of": cutoff or None, "excluded_after_cutoff": excluded_after,
+        "counted": counted, "stores": stores, "total": grand,
         "note": (None if rows else
                  "No Activation Details rows found for this period. Upload or register the b2b "
                  "'Activation Details' report as a Custom Import (Data Imports → Custom Reports), or route "
@@ -27260,28 +27287,51 @@ def _cr_resolve_bill_payments(client, org_id, period, ctx):
 
 
 def _activation_details_bucket(contract_type, sp_name, product, category):
-    """Best-effort activation TYPE for the b2b Activation Details report, from the fields the report carries.
-    The store TOTAL never depends on this (that is just the Service-Plan row count); this only drives the
-    optional 'group by Type' breakdown, so it is labelled 'derived'. Order matters: BYOD/Upgrade are decided
-    from Contract Type first (so a tablet upgrade stays Upgrade), then the non-phone device categories from
-    the plan/product wording, then Port (IDV) vs a plain New activation."""
+    """Activation TYPE for the b2b Activation Details report — the SAME columns the b2b "Month To Date
+    Location Sales Report" breaks Total Activation into: New Activation / Port / BYOD / Tablet / Home Internet
+    / Edge / Upgrade. That report's Total Activation = Activation+Port+BYOD+Tablet+HomeInternet+Edge and
+    EXCLUDES Upgrade (verified against its totals row: 148+195+119+162+62+1 = 687), so `activation_counts`
+    sums every bucket EXCEPT 'Upgrade'.
+
+    PRECEDENCE (owner reconciliation 2026-08-26): the non-phone DEVICE categories (Home Internet / Edge /
+    Tablet) are decided FIRST — before Upgrade — so a tablet/FWA/edge line lands in its own column and is
+    counted in Total Activation the way b2b counts it, and only a plain phone Upgrade is excluded. Then BYOD
+    (customer-phone), then Port (IDV) vs a plain New activation. If a store's total is off, this precedence
+    is the first knob to turn."""
     ct = str(contract_type or "").lower()
     nm = f"{sp_name or ''} {product or ''} {category or ''}".lower()
-    if "byod" in ct or "customer phone" in nm:
-        return "BYOD"
-    if "upgrade" in ct:
-        return "Upgrade"
-    if "tablet" in nm or "galaxy tab" in nm:
-        return "Tablet"
     if "home internet" in nm or "fwa" in nm or "fixed wireless" in nm:
         return "Home Internet"
     if "edge" in nm or "edge" in ct:
         return "Edge"
+    if "tablet" in nm or "galaxy tab" in nm:
+        return "Tablet"
+    if "byod" in ct or "customer phone" in nm:
+        return "BYOD"
+    if "upgrade" in ct:
+        return "Upgrade"
     if "idv" in ct or "port" in ct:
         return "Port"
     if "activation" in ct:
         return "New Activation"
     return "Other"
+
+
+def _norm_report_date(v):
+    """Normalize a b2b report date cell to an ISO 'YYYY-MM-DD' string (or '' if unparseable). The Activation
+    Details / Bill Payment exports carry M/D/YYYY ('8/1/2026') and datetime ('8/1/2026 10:39:45 AM'); the
+    date COLUMN and any as-of cutoff need a real, sortable ISO date, not the first 10 characters of
+    '8/1/2026'. Pure; never raises."""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    s = s.split(" ")[0].split("T")[0]   # drop any time part
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%m/%d/%y", "%Y/%m/%d"):
+        try:
+            return _datetime.strptime(s, fmt).date().isoformat()
+        except Exception:
+            continue
+    return s[:10]
 
 
 _ACT_CANCELLED_STATUS = {"cancelled", "canceled", "void", "voided", "deactivated", "reversed"}
@@ -27359,7 +27409,7 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
             "store": store,
             "market": market_for(store),
             "salesperson": str(_get(d_low, "Salesperson", "User Login")).strip(),
-            "trans_date": str(_get(d_low, "Trans Date", "Service Date", "Trans Date Time"))[:10],
+            "trans_date": _norm_report_date(_get(d_low, "Trans Date", "Service Date", "Trans Date Time")),
             "trans_id": tid,
             "activation_no": act_no,
             "contract_type": ct,
