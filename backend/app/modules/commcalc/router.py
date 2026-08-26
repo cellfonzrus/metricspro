@@ -16647,7 +16647,12 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
     # cells (rolled up by store/employee with an MTD date-cut) instead of its old per-line/config loop.
     # Canonical store grouping (P0): collapse spelling variants of one store into a single report row,
     # via the shipped store-resolution machinery. Degrades to case/whitespace fold if the resolver errors.
-    agg = _sales_cell_agg(rows, acfg, store_key=_canonical_store_key_fn(client, org_id))
+    _ck_sr = _canonical_store_key_fn(client, org_id)
+    agg = _sales_cell_agg(rows, acfg, store_key=_ck_sr)
+    # SOURCE OF TRUTH (mig 923) — ONE shared applier decides the activation basis for both this report and
+    # Exec MTD (wire once). Sets act_new/act_port/act_byod/act_upg on every cell; on the Activation Details
+    # basis they come from AD (else the sales feed, byte-identical). No filter here → whole org.
+    _sr_src = _apply_activation_basis(client, org_id, period, agg, _ck_sr)
 
     # Resolve each store to its market (store_mapping) so the report can filter by market —
     # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
@@ -16679,45 +16684,18 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
         return (mkt_by_addr.get(st.lower()) or mkt_by_code.get(st)
                 or mkt_by_num.get(_lead_sr(st)) or "")
 
+    # Activation columns read the shared basis fields (act_new+act_port = the Sales Report's premium sense;
+    # byod/upgrades their own) — set once by _apply_activation_basis, so this report and Exec MTD agree.
     out = []
     for a in agg.values():
         st = a["store"] or "—"
         out.append({
             "store": st, "salesperson": a["salesperson"], "trans_date": a["trans_date"],
-            "txns": len(a["_txn"]), "activations": len(a["_prem"]), "byod": len(a["_byod"]),
-            "upgrades": len(a["_upg"]), "swaps": len(a["_swap"]), "lines": a["lines"],
+            "txns": len(a["_txn"]), "activations": a["act_new"] + a["act_port"], "byod": a["act_byod"],
+            "upgrades": a["act_upg"], "swaps": len(a["_swap"]), "lines": a["lines"],
             "accessory_rev": round(a["accessory_rev"], 2), "revenue": round(a["revenue"], 2),
             "gp": round(a["gp"], 2), "market": _market_for(st),
         })
-    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS ────────────────────────────────────────────────────
-    # When Activation Details is the activation basis (auto-on when that report has rows — owner: "Sales
-    # Report and Exec MTD populated from the SAME data"), REPLACE the sales-derived activation columns
-    # (activations / byod / upgrades) with the Activation Details counts, so this report matches Exec MTD
-    # and the b2b figure. TOTAL-SAFE: zero every cell's activation columns, then apply the AD cells (adding
-    # a row when none matches) — each store total and the grand total then equal the AD basis. Other columns
-    # (txns / accessory$ / revenue / gp) stay from the sales feed. No AD rows for the period → untouched →
-    # byte-identical. The reconciliation surface (/metric-recon) flags any store where the bases disagree.
-    _msrc_sr = _metric_source(client, org_id, 'activations')
-    if _msrc_sr.get('enabled') and _msrc_sr.get('source') == 'activation_details':
-        _ck_sr = _canonical_store_key_fn(client, org_id)
-        _ad_cells, _ad_n_sr = _ad_sales_cells(client, org_id, period, ckey_fn=_ck_sr)
-        if _ad_n_sr:
-            _idx = {}
-            for _row in out:
-                _row['activations'] = _row['byod'] = _row['upgrades'] = 0   # AD is authoritative
-                _idx[(_ck_sr(_row['store']), _row['salesperson'], _row['trans_date'])] = _row
-            for _key, _ad in _ad_cells.items():
-                _row = _idx.get(_key)
-                if _row is None:                       # AD activity the sales feed didn't carry → add a row
-                    _cs, _rep, _date = _key
-                    _row = {"store": _ad.get('_name') or _cs, "salesperson": _rep, "trans_date": _date,
-                            "txns": 0, "byod": 0, "upgrades": 0, "swaps": 0, "lines": 0,
-                            "accessory_rev": 0.0, "revenue": 0.0, "gp": 0.0,
-                            "market": _market_for(_ad.get('_name') or _cs), "activations": 0}
-                    out.append(_row); _idx[_key] = _row
-                _row['activations'] = _ad['activations']
-                _row['byod'] = _ad['byod']
-                _row['upgrades'] = _ad['upgrades']
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
     try:
         from app.modules.storeops.router import scope_keyset, in_keyset
@@ -16755,16 +16733,13 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
         _cls_gaps = _classification_gaps(rows, acfg, is_excluded=_is_exc)
     except Exception:
         _cls_gaps = {'note': None}
-    _sr_ad_active = bool(_msrc_sr.get('enabled') and _msrc_sr.get('source') == 'activation_details'
-                         and locals().get('_ad_n_sr'))
     return {"period": period, "source": source, "org_id": org_id, "rows": out, "totals": totals,
             "periods": sorted(periods, reverse=True), "classification_gaps": _cls_gaps,
             "stores": filter_stores, "markets": filter_markets,
-            # SOURCE OF TRUTH (mig 923): when true, activations/byod/upgrades on this report come from the
-            # Activation Details basis (matches Exec MTD + b2b), not the sales feed. Default false → the
-            # historical sales-feed columns, byte-identical.
-            "activation_source": {"active": _sr_ad_active,
-                                  "basis": "activation_details" if _sr_ad_active else "sales_agg"},
+            # SOURCE OF TRUTH (mig 923): when active, activations/byod/upgrades come from the Activation
+            # Details basis (matches Exec MTD + b2b), set by the shared _apply_activation_basis. Default →
+            # the historical sales-feed columns, byte-identical.
+            "activation_source": {"active": bool(_sr_src.get("active")), "basis": _sr_src.get("basis")},
             # Transparency (owner's debug-first mandate): exactly what this read used, so a truncated or
             # wrong-tenant view is self-evident. `org_id` above surfaces the super-admin org-resolution
             # default (a no-org_id request reads the HOUSE org). `source_meta` explains the union.
@@ -21406,35 +21381,76 @@ def _ad_activation_buckets(client, org_id, period, ckey_fn=None, cut=None,
     return by_store, by_rep, n
 
 
-def _ad_sales_cells(client, org_id, period, ckey_fn=None):
-    """Aggregate the Activation Details basis into per-(canonical-store, rep, date) cells shaped for the
-    SALES REPORT's activation columns — {'activations','byod','upgrades','_name'} — so the Sales Report and
-    Exec MTD move together off the SAME basis of truth. `activations` = New Activation + Port + Tablet/Home
-    Internet/Edge (the Sales Report's premium sense); `byod`/`upgrades` are their own columns.
-
-    Returns {(canon_store, rep, date): {...}} plus the total row count. The Sales Report override is
-    TOTAL-SAFE: it zeroes every sales cell's activation columns then applies these, adding a row when no
-    sales cell matches — so each store's total and the grand total equal the AD basis even if per-day/per-rep
-    keys don't line up exactly (the imperfect part is only which day/rep a count lands on, never the total).
-    Empty when Activation Details has no rows for the period → the caller leaves the report untouched."""
+def _ad_cells_full(client, org_id, period, ckey_fn=None):
+    """Per-(canonical-store, rep, date) Activation Details counts split {new, port, byod, upgrade} — the ONE
+    AD activation source both Exec MTD and the Sales Report read through _apply_activation_basis. `new` folds
+    New Activation + Tablet + Home Internet + Edge + Other (everything that is not Port / BYOD / Upgrade)."""
     rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": (lambda s: "")})
     ck = ckey_fn or (lambda s: str(s or "").strip().lower())
     cells, n = {}, 0
     for r in rows:
         n += 1
         b = r.get("bucket") or ""
-        cstore = ck(r.get("store") or "") or "—"
-        rep = (r.get("salesperson") or "").strip() or "—"
-        date = str(r.get("trans_date") or "")[:10]
-        slot = cells.setdefault((cstore, rep, date),
-                                {"activations": 0, "byod": 0, "upgrades": 0, "_name": (r.get("store") or cstore)})
+        key = (ck(r.get("store") or "") or "—", (r.get("salesperson") or "").strip() or "—",
+               str(r.get("trans_date") or "")[:10])
+        slot = cells.setdefault(key, {"new": 0, "port": 0, "byod": 0, "upgrade": 0,
+                                      "_name": (r.get("store") or key[0])})
         if b == "Upgrade":
-            slot["upgrades"] += 1
+            slot["upgrade"] += 1
         elif b == "BYOD":
             slot["byod"] += 1
-        else:                              # New Activation / Port / Tablet / Home Internet / Edge / Other
-            slot["activations"] += 1
+        elif b == "Port":
+            slot["port"] += 1
+        else:
+            slot["new"] += 1
     return cells, n
+
+
+def _blank_sales_cell(store, rep, date):
+    """An empty _sales_cell_agg-shaped cell (all metrics zero) — used to ADD a store/rep/day that exists in
+    Activation Details but not in the sales feed, so its activations still show (with zero sales columns)."""
+    return {"store": store, "salesperson": rep, "trans_date": date, "login": None,
+            "_txn": set(), "_prem": set(), "_byod": set(), "_upg": set(), "_port": set(),
+            "_swap": set(), "_billpay": set(), "lines": 0, "revenue": 0.0, "gp": 0.0,
+            "accessory_rev": 0.0, "setup_fee_rev": 0.0, "box_count": 0, "total_phones": 0,
+            "bill_qty": 0, "bill_amt": 0.0, "activation_fee": 0.0, "protect": 0,
+            "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0}
+
+
+def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None):
+    """THE single place that decides the activation BASIS for every display consumer (owner 2026-08-26:
+    "wire once, applies everywhere — no per-surface wiring"). Sets explicit activation COUNT fields
+    (act_new / act_port / act_byod / act_upg) on every shared cell; the Sales Report and Exec MTD both read
+    THESE instead of re-deriving from the trans-id sets, so a basis change moves both at once.
+
+    Defaults exactly reproduce the sales-feed counts (act_new = prem−port, etc.) → an INACTIVE basis is
+    BYTE-IDENTICAL. When the tenant's basis is Activation Details (auto-on when that report has rows), the
+    fields are REPLACED with the AD counts per (canonical store, rep, date): a cell present only in AD is
+    ADDED (respecting `restrict_stores` — the filtered store set — when given), a sales cell absent from AD
+    has its activation counts ZEROED (AD is authoritative). Mutates `cells` in place; returns src_meta
+    {active, basis, ad_rows}."""
+    for a in cells.values():
+        a["act_new"] = len(a["_prem"]) - len(a["_port"])
+        a["act_port"] = len(a["_port"])
+        a["act_byod"] = len(a["_byod"])
+        a["act_upg"] = len(a["_upg"])
+    msrc = _metric_source(client, org_id, "activations")
+    if not (msrc.get("enabled") and msrc.get("source") == "activation_details"):
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+    ad_cells, ad_n = _ad_cells_full(client, org_id, period, ckey_fn)
+    if not ad_n:
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+    for a in cells.values():
+        a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
+    for key, ad in ad_cells.items():
+        if key not in cells:
+            if restrict_stores is not None and key[0] not in restrict_stores:
+                continue
+            cells[key] = _blank_sales_cell(ad.get("_name") or key[0], key[1], key[2])
+        a = cells[key]
+        a["act_new"], a["act_port"] = ad["new"], ad["port"]
+        a["act_byod"], a["act_upg"] = ad["byod"], ad["upgrade"]
+    return {"active": True, "basis": "activation_details", "ad_rows": ad_n}
 
 
 def _exec_line_match(rule, dept, cat, pdesc):
@@ -21682,6 +21698,16 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     # total. Activation = premium−port (Port is a sub-split of premium); Total Activation = prem+byod+upg,
     # which EQUALS the Sales Report's (activations+byod+upgrades) over the same rows.
     cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=_ckey_ex)
+    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS — the SAME shared applier the Sales Report uses (wire once).
+    # It sets act_new/act_port/act_byod/act_upg on every cell: from the sales feed by default (byte-identical)
+    # or from Activation Details when that is the basis (auto-on with data). When a filter is active we
+    # restrict AD-added cells to the filtered store set so the selection is respected; unfiltered → all AD
+    # stores (incl. AD-only) appear. The MTD cut / date-range below then windows both bases identically.
+    _flt_active = bool(store_sel or rep_sel or market_sel)
+    _restrict = {k[0] for k in cells} if _flt_active else None
+    _act_src = _apply_activation_basis(client, org_id, period, cells, _ckey_ex, restrict_stores=_restrict)
+    _act_override, _ad_n = bool(_act_src.get('active')), _act_src.get('ad_rows') or 0
+    _msrc_act = _metric_source(client, org_id, 'activations')
 
     def _blank():
         # NOTE (n3): by_store dicts also gain a '_name' key (the raw display spelling) set in the loop
@@ -21701,64 +21727,29 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 continue
             if date < rng_from_s or date > rng_to_s:
                 continue
-        prem, port = len(a['_prem']), len(a['_port'])
-        # by_store is keyed on the CANONICAL store key `st` (so spelling variants collapse to one row),
-        # but LABELLED with the first-seen RAW display spelling `a['store']` (not the lowercased key).
+        # Activation buckets read the SHARED basis fields (set once above), so Exec MTD and the Sales Report
+        # never diverge. On the AD basis these are the Activation Details counts; else the sales-feed counts.
+        # by_store is keyed on the CANONICAL store key `st` (spelling variants collapse), LABELLED with the
+        # first-seen RAW display spelling.
         ds = by_store.setdefault(st or '—', _blank())
         if '_name' not in ds:
             ds['_name'] = a.get('store') or st
         for d in (ds, by_emp.setdefault(rep or '—', _blank())):
-            d['activation'] += prem - port
-            d['port'] += port
-            d['byod'] += len(a['_byod'])
-            d['upgrade'] += len(a['_upg'])
+            d['activation'] += a['act_new']
+            d['port'] += a['act_port']
+            d['byod'] += a['act_byod']
+            d['upgrade'] += a['act_upg']
             d['total_phones'] += a['total_phones']
             d['bill_qty'] += a['bill_qty']
             d['bill_amt'] += a['bill_amt']
             d['acc_sales'] += a['accessory_rev']
             # DEVICE SET-UP FEE — the SAME `setup_fee_rev` accumulator the accessory TARGET attainment
             # folds in (owner directive 2026-07-17: the set-up fee is a SEPARATE pay item, never blended
-            # into the accessory$ number, but it DOES count toward the accessory target). Carried here so
-            # Executive MTD can state BOTH bases from the ONE shared aggregation instead of silently
-            # showing a different number than the Accessory Targets page. `acc_sales` is UNCHANGED.
+            # into the accessory$ number, but it DOES count toward the accessory target).
             d['setup_fee'] += a['setup_fee_rev']
             d['activation_fee'] += a['activation_fee']
             d['protect'] += a['protect']
 
-    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS ────────────────────────────────────────────────────
-    # When the tenant names Activation Details the activation basis of truth, REPLACE the sales-derived
-    # activation buckets (activation/port/byod/upgrade) with the Activation Details counts — distinct
-    # Serial#, and Total Activation then EXCLUDES Upgrade (the b2b-consistent definition, matching the
-    # b2bsoft MTD report and /activation-counts). The AD counts are windowed by the SAME MTD cut / date
-    # range applied to the sales cells above, so the two bases compare on the same days.
-    #   • EMPTY/absent config (every existing org, house/Boost) → override OFF → the block below is a
-    #     no-op and Total Activation stays activation+port+byod+upgrade → BYTE-IDENTICAL.
-    #   • A store/rep present in sales but absent from AD has its activation buckets ZEROED — AD is
-    #     authoritative, so "no AD activation there" means none; the other columns (bill pays, acc$)
-    #     are preserved. The reconciliation surface flags any store where the two bases disagree.
-    _msrc_act = _metric_source(client, org_id, 'activations')
-    _act_override = bool(_msrc_act.get('enabled')) and _msrc_act.get('source') == 'activation_details'
-    _ad_n = 0
-    if _act_override:
-        _ad_store, _ad_rep, _ad_n = _ad_activation_buckets(
-            client, org_id, period, ckey_fn=_ckey_ex, cut=cut,
-            rng_from=(rng_from_s if rng_on else None), rng_to=(rng_to_s if rng_on else None),
-            no_overlap=(rng_on and no_overlap))
-        if _ad_n:
-            def _apply_ad(agg, admap):
-                for k, ad in admap.items():
-                    slot = agg.get(k)
-                    if slot is None:                      # a store/rep only in AD → add it
-                        slot = _blank(); slot['_name'] = ad.get('_name') or k; agg[k] = slot
-                    slot['activation'], slot['port'] = ad['activation'], ad['port']
-                    slot['byod'], slot['upgrade'] = ad['byod'], ad['upgrade']
-                for k, slot in agg.items():               # in sales but not AD → AD says zero
-                    if k not in admap:
-                        slot['activation'] = slot['port'] = slot['byod'] = slot['upgrade'] = 0
-            _apply_ad(by_store, _ad_store)
-            _apply_ad(by_emp, _ad_rep)
-        else:
-            _act_override = False    # AD configured but no rows for this window → keep sales basis, never blank
     # Total Activation EXCLUDES Upgrade only on the AD basis (b2b-consistent); the sales basis is unchanged.
     _ta_excl_upgrade = bool(_act_override)
 
