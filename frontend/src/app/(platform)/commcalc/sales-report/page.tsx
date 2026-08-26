@@ -98,7 +98,24 @@ export default function SalesReportPage() {
   }
   function openAccCfg() {
     setAccOpen(true); setAccFields(null); setAccMsg(''); setKwInput(''); setSetupInput('')
-    api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}${orgParam()}`).then((f: any) => {
+    // Owner 2026-08-26: the accessory departments must NOT be hard-coded — they are an OPTION pulled from the
+    // b2b "Sales by Product" report (that is where 'Accessories' / 'C2Wireless' live, not the sales upload).
+    // Fetch that report's observed departments alongside the sales-field distincts and MERGE them into the
+    // Department pick-list, so the tenant ticks them here and they save to the SAME accessory-config the
+    // Sales Report + the Sales-by-Product resolver both read. Non-fatal: if the report isn't present the
+    // sales-field departments still show.
+    const _pq = orgParam() ? `?${orgParam().slice(1)}` : ''
+    Promise.all([
+      api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}${orgParam()}`),
+      api(`/api/v1/commcalc/product-sales-departments/${encodeURIComponent(period)}${_pq}`).catch(() => null),
+    ]).then(([f, pd]: any[]) => {
+      // Union the Sales-by-Product departments into f.departments (dedup, case-insensitive), keeping the
+      // sales-field order first so nothing that showed before moves.
+      const extra = ((pd && pd.departments) || []).map((d: any) => d.department).filter(Boolean)
+      if (extra.length) {
+        const have = new Set((f.departments || []).map((s: string) => String(s).toLowerCase()))
+        f.departments = [...(f.departments || []), ...extra.filter((d: string) => !have.has(String(d).toLowerCase()))]
+      }
       setAccFields(f)
       setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [],
         a: f.acima_tenders || [], box: f.box_departments || [], setup: f.setup_fee_keywords || [], billpay: f.billpay_products || [] })
