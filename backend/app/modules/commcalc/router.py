@@ -16647,7 +16647,12 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
     # cells (rolled up by store/employee with an MTD date-cut) instead of its old per-line/config loop.
     # Canonical store grouping (P0): collapse spelling variants of one store into a single report row,
     # via the shipped store-resolution machinery. Degrades to case/whitespace fold if the resolver errors.
-    agg = _sales_cell_agg(rows, acfg, store_key=_canonical_store_key_fn(client, org_id))
+    _ck_sr = _canonical_store_key_fn(client, org_id)
+    agg = _sales_cell_agg(rows, acfg, store_key=_ck_sr)
+    # SOURCE OF TRUTH (mig 923) — ONE shared applier decides the activation basis for both this report and
+    # Exec MTD (wire once). Sets act_new/act_port/act_byod/act_upg on every cell; on the Activation Details
+    # basis they come from AD (else the sales feed, byte-identical). No filter here → whole org.
+    _sr_src = _apply_activation_basis(client, org_id, period, agg, _ck_sr)
 
     # Resolve each store to its market (store_mapping) so the report can filter by market —
     # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
@@ -16679,45 +16684,18 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
         return (mkt_by_addr.get(st.lower()) or mkt_by_code.get(st)
                 or mkt_by_num.get(_lead_sr(st)) or "")
 
+    # Activation columns read the shared basis fields (act_new+act_port = the Sales Report's premium sense;
+    # byod/upgrades their own) — set once by _apply_activation_basis, so this report and Exec MTD agree.
     out = []
     for a in agg.values():
         st = a["store"] or "—"
         out.append({
             "store": st, "salesperson": a["salesperson"], "trans_date": a["trans_date"],
-            "txns": len(a["_txn"]), "activations": len(a["_prem"]), "byod": len(a["_byod"]),
-            "upgrades": len(a["_upg"]), "swaps": len(a["_swap"]), "lines": a["lines"],
+            "txns": len(a["_txn"]), "activations": a["act_new"] + a["act_port"], "byod": a["act_byod"],
+            "upgrades": a["act_upg"], "swaps": len(a["_swap"]), "lines": a["lines"],
             "accessory_rev": round(a["accessory_rev"], 2), "revenue": round(a["revenue"], 2),
             "gp": round(a["gp"], 2), "market": _market_for(st),
         })
-    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS ────────────────────────────────────────────────────
-    # When Activation Details is the activation basis (auto-on when that report has rows — owner: "Sales
-    # Report and Exec MTD populated from the SAME data"), REPLACE the sales-derived activation columns
-    # (activations / byod / upgrades) with the Activation Details counts, so this report matches Exec MTD
-    # and the b2b figure. TOTAL-SAFE: zero every cell's activation columns, then apply the AD cells (adding
-    # a row when none matches) — each store total and the grand total then equal the AD basis. Other columns
-    # (txns / accessory$ / revenue / gp) stay from the sales feed. No AD rows for the period → untouched →
-    # byte-identical. The reconciliation surface (/metric-recon) flags any store where the bases disagree.
-    _msrc_sr = _metric_source(client, org_id, 'activations')
-    if _msrc_sr.get('enabled') and _msrc_sr.get('source') == 'activation_details':
-        _ck_sr = _canonical_store_key_fn(client, org_id)
-        _ad_cells, _ad_n_sr = _ad_sales_cells(client, org_id, period, ckey_fn=_ck_sr)
-        if _ad_n_sr:
-            _idx = {}
-            for _row in out:
-                _row['activations'] = _row['byod'] = _row['upgrades'] = 0   # AD is authoritative
-                _idx[(_ck_sr(_row['store']), _row['salesperson'], _row['trans_date'])] = _row
-            for _key, _ad in _ad_cells.items():
-                _row = _idx.get(_key)
-                if _row is None:                       # AD activity the sales feed didn't carry → add a row
-                    _cs, _rep, _date = _key
-                    _row = {"store": _ad.get('_name') or _cs, "salesperson": _rep, "trans_date": _date,
-                            "txns": 0, "byod": 0, "upgrades": 0, "swaps": 0, "lines": 0,
-                            "accessory_rev": 0.0, "revenue": 0.0, "gp": 0.0,
-                            "market": _market_for(_ad.get('_name') or _cs), "activations": 0}
-                    out.append(_row); _idx[_key] = _row
-                _row['activations'] = _ad['activations']
-                _row['byod'] = _ad['byod']
-                _row['upgrades'] = _ad['upgrades']
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
     try:
         from app.modules.storeops.router import scope_keyset, in_keyset
@@ -16755,16 +16733,13 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
         _cls_gaps = _classification_gaps(rows, acfg, is_excluded=_is_exc)
     except Exception:
         _cls_gaps = {'note': None}
-    _sr_ad_active = bool(_msrc_sr.get('enabled') and _msrc_sr.get('source') == 'activation_details'
-                         and locals().get('_ad_n_sr'))
     return {"period": period, "source": source, "org_id": org_id, "rows": out, "totals": totals,
             "periods": sorted(periods, reverse=True), "classification_gaps": _cls_gaps,
             "stores": filter_stores, "markets": filter_markets,
-            # SOURCE OF TRUTH (mig 923): when true, activations/byod/upgrades on this report come from the
-            # Activation Details basis (matches Exec MTD + b2b), not the sales feed. Default false → the
-            # historical sales-feed columns, byte-identical.
-            "activation_source": {"active": _sr_ad_active,
-                                  "basis": "activation_details" if _sr_ad_active else "sales_agg"},
+            # SOURCE OF TRUTH (mig 923): when active, activations/byod/upgrades come from the Activation
+            # Details basis (matches Exec MTD + b2b), set by the shared _apply_activation_basis. Default →
+            # the historical sales-feed columns, byte-identical.
+            "activation_source": {"active": bool(_sr_src.get("active")), "basis": _sr_src.get("basis")},
             # Transparency (owner's debug-first mandate): exactly what this read used, so a truncated or
             # wrong-tenant view is self-evident. `org_id` above surfaces the super-admin org-resolution
             # default (a no-org_id request reads the HOUSE org). `source_meta` explains the union.
@@ -21406,35 +21381,76 @@ def _ad_activation_buckets(client, org_id, period, ckey_fn=None, cut=None,
     return by_store, by_rep, n
 
 
-def _ad_sales_cells(client, org_id, period, ckey_fn=None):
-    """Aggregate the Activation Details basis into per-(canonical-store, rep, date) cells shaped for the
-    SALES REPORT's activation columns — {'activations','byod','upgrades','_name'} — so the Sales Report and
-    Exec MTD move together off the SAME basis of truth. `activations` = New Activation + Port + Tablet/Home
-    Internet/Edge (the Sales Report's premium sense); `byod`/`upgrades` are their own columns.
-
-    Returns {(canon_store, rep, date): {...}} plus the total row count. The Sales Report override is
-    TOTAL-SAFE: it zeroes every sales cell's activation columns then applies these, adding a row when no
-    sales cell matches — so each store's total and the grand total equal the AD basis even if per-day/per-rep
-    keys don't line up exactly (the imperfect part is only which day/rep a count lands on, never the total).
-    Empty when Activation Details has no rows for the period → the caller leaves the report untouched."""
+def _ad_cells_full(client, org_id, period, ckey_fn=None):
+    """Per-(canonical-store, rep, date) Activation Details counts split {new, port, byod, upgrade} — the ONE
+    AD activation source both Exec MTD and the Sales Report read through _apply_activation_basis. `new` folds
+    New Activation + Tablet + Home Internet + Edge + Other (everything that is not Port / BYOD / Upgrade)."""
     rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": (lambda s: "")})
     ck = ckey_fn or (lambda s: str(s or "").strip().lower())
     cells, n = {}, 0
     for r in rows:
         n += 1
         b = r.get("bucket") or ""
-        cstore = ck(r.get("store") or "") or "—"
-        rep = (r.get("salesperson") or "").strip() or "—"
-        date = str(r.get("trans_date") or "")[:10]
-        slot = cells.setdefault((cstore, rep, date),
-                                {"activations": 0, "byod": 0, "upgrades": 0, "_name": (r.get("store") or cstore)})
+        key = (ck(r.get("store") or "") or "—", (r.get("salesperson") or "").strip() or "—",
+               str(r.get("trans_date") or "")[:10])
+        slot = cells.setdefault(key, {"new": 0, "port": 0, "byod": 0, "upgrade": 0,
+                                      "_name": (r.get("store") or key[0])})
         if b == "Upgrade":
-            slot["upgrades"] += 1
+            slot["upgrade"] += 1
         elif b == "BYOD":
             slot["byod"] += 1
-        else:                              # New Activation / Port / Tablet / Home Internet / Edge / Other
-            slot["activations"] += 1
+        elif b == "Port":
+            slot["port"] += 1
+        else:
+            slot["new"] += 1
     return cells, n
+
+
+def _blank_sales_cell(store, rep, date):
+    """An empty _sales_cell_agg-shaped cell (all metrics zero) — used to ADD a store/rep/day that exists in
+    Activation Details but not in the sales feed, so its activations still show (with zero sales columns)."""
+    return {"store": store, "salesperson": rep, "trans_date": date, "login": None,
+            "_txn": set(), "_prem": set(), "_byod": set(), "_upg": set(), "_port": set(),
+            "_swap": set(), "_billpay": set(), "lines": 0, "revenue": 0.0, "gp": 0.0,
+            "accessory_rev": 0.0, "setup_fee_rev": 0.0, "box_count": 0, "total_phones": 0,
+            "bill_qty": 0, "bill_amt": 0.0, "activation_fee": 0.0, "protect": 0,
+            "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0}
+
+
+def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None):
+    """THE single place that decides the activation BASIS for every display consumer (owner 2026-08-26:
+    "wire once, applies everywhere — no per-surface wiring"). Sets explicit activation COUNT fields
+    (act_new / act_port / act_byod / act_upg) on every shared cell; the Sales Report and Exec MTD both read
+    THESE instead of re-deriving from the trans-id sets, so a basis change moves both at once.
+
+    Defaults exactly reproduce the sales-feed counts (act_new = prem−port, etc.) → an INACTIVE basis is
+    BYTE-IDENTICAL. When the tenant's basis is Activation Details (auto-on when that report has rows), the
+    fields are REPLACED with the AD counts per (canonical store, rep, date): a cell present only in AD is
+    ADDED (respecting `restrict_stores` — the filtered store set — when given), a sales cell absent from AD
+    has its activation counts ZEROED (AD is authoritative). Mutates `cells` in place; returns src_meta
+    {active, basis, ad_rows}."""
+    for a in cells.values():
+        a["act_new"] = len(a["_prem"]) - len(a["_port"])
+        a["act_port"] = len(a["_port"])
+        a["act_byod"] = len(a["_byod"])
+        a["act_upg"] = len(a["_upg"])
+    msrc = _metric_source(client, org_id, "activations")
+    if not (msrc.get("enabled") and msrc.get("source") == "activation_details"):
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+    ad_cells, ad_n = _ad_cells_full(client, org_id, period, ckey_fn)
+    if not ad_n:
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+    for a in cells.values():
+        a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
+    for key, ad in ad_cells.items():
+        if key not in cells:
+            if restrict_stores is not None and key[0] not in restrict_stores:
+                continue
+            cells[key] = _blank_sales_cell(ad.get("_name") or key[0], key[1], key[2])
+        a = cells[key]
+        a["act_new"], a["act_port"] = ad["new"], ad["port"]
+        a["act_byod"], a["act_upg"] = ad["byod"], ad["upgrade"]
+    return {"active": True, "basis": "activation_details", "ad_rows": ad_n}
 
 
 def _exec_line_match(rule, dept, cat, pdesc):
@@ -21682,6 +21698,16 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     # total. Activation = premium−port (Port is a sub-split of premium); Total Activation = prem+byod+upg,
     # which EQUALS the Sales Report's (activations+byod+upgrades) over the same rows.
     cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=_ckey_ex)
+    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS — the SAME shared applier the Sales Report uses (wire once).
+    # It sets act_new/act_port/act_byod/act_upg on every cell: from the sales feed by default (byte-identical)
+    # or from Activation Details when that is the basis (auto-on with data). When a filter is active we
+    # restrict AD-added cells to the filtered store set so the selection is respected; unfiltered → all AD
+    # stores (incl. AD-only) appear. The MTD cut / date-range below then windows both bases identically.
+    _flt_active = bool(store_sel or rep_sel or market_sel)
+    _restrict = {k[0] for k in cells} if _flt_active else None
+    _act_src = _apply_activation_basis(client, org_id, period, cells, _ckey_ex, restrict_stores=_restrict)
+    _act_override, _ad_n = bool(_act_src.get('active')), _act_src.get('ad_rows') or 0
+    _msrc_act = _metric_source(client, org_id, 'activations')
 
     def _blank():
         # NOTE (n3): by_store dicts also gain a '_name' key (the raw display spelling) set in the loop
@@ -21701,64 +21727,29 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 continue
             if date < rng_from_s or date > rng_to_s:
                 continue
-        prem, port = len(a['_prem']), len(a['_port'])
-        # by_store is keyed on the CANONICAL store key `st` (so spelling variants collapse to one row),
-        # but LABELLED with the first-seen RAW display spelling `a['store']` (not the lowercased key).
+        # Activation buckets read the SHARED basis fields (set once above), so Exec MTD and the Sales Report
+        # never diverge. On the AD basis these are the Activation Details counts; else the sales-feed counts.
+        # by_store is keyed on the CANONICAL store key `st` (spelling variants collapse), LABELLED with the
+        # first-seen RAW display spelling.
         ds = by_store.setdefault(st or '—', _blank())
         if '_name' not in ds:
             ds['_name'] = a.get('store') or st
         for d in (ds, by_emp.setdefault(rep or '—', _blank())):
-            d['activation'] += prem - port
-            d['port'] += port
-            d['byod'] += len(a['_byod'])
-            d['upgrade'] += len(a['_upg'])
+            d['activation'] += a['act_new']
+            d['port'] += a['act_port']
+            d['byod'] += a['act_byod']
+            d['upgrade'] += a['act_upg']
             d['total_phones'] += a['total_phones']
             d['bill_qty'] += a['bill_qty']
             d['bill_amt'] += a['bill_amt']
             d['acc_sales'] += a['accessory_rev']
             # DEVICE SET-UP FEE — the SAME `setup_fee_rev` accumulator the accessory TARGET attainment
             # folds in (owner directive 2026-07-17: the set-up fee is a SEPARATE pay item, never blended
-            # into the accessory$ number, but it DOES count toward the accessory target). Carried here so
-            # Executive MTD can state BOTH bases from the ONE shared aggregation instead of silently
-            # showing a different number than the Accessory Targets page. `acc_sales` is UNCHANGED.
+            # into the accessory$ number, but it DOES count toward the accessory target).
             d['setup_fee'] += a['setup_fee_rev']
             d['activation_fee'] += a['activation_fee']
             d['protect'] += a['protect']
 
-    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS ────────────────────────────────────────────────────
-    # When the tenant names Activation Details the activation basis of truth, REPLACE the sales-derived
-    # activation buckets (activation/port/byod/upgrade) with the Activation Details counts — distinct
-    # Serial#, and Total Activation then EXCLUDES Upgrade (the b2b-consistent definition, matching the
-    # b2bsoft MTD report and /activation-counts). The AD counts are windowed by the SAME MTD cut / date
-    # range applied to the sales cells above, so the two bases compare on the same days.
-    #   • EMPTY/absent config (every existing org, house/Boost) → override OFF → the block below is a
-    #     no-op and Total Activation stays activation+port+byod+upgrade → BYTE-IDENTICAL.
-    #   • A store/rep present in sales but absent from AD has its activation buckets ZEROED — AD is
-    #     authoritative, so "no AD activation there" means none; the other columns (bill pays, acc$)
-    #     are preserved. The reconciliation surface flags any store where the two bases disagree.
-    _msrc_act = _metric_source(client, org_id, 'activations')
-    _act_override = bool(_msrc_act.get('enabled')) and _msrc_act.get('source') == 'activation_details'
-    _ad_n = 0
-    if _act_override:
-        _ad_store, _ad_rep, _ad_n = _ad_activation_buckets(
-            client, org_id, period, ckey_fn=_ckey_ex, cut=cut,
-            rng_from=(rng_from_s if rng_on else None), rng_to=(rng_to_s if rng_on else None),
-            no_overlap=(rng_on and no_overlap))
-        if _ad_n:
-            def _apply_ad(agg, admap):
-                for k, ad in admap.items():
-                    slot = agg.get(k)
-                    if slot is None:                      # a store/rep only in AD → add it
-                        slot = _blank(); slot['_name'] = ad.get('_name') or k; agg[k] = slot
-                    slot['activation'], slot['port'] = ad['activation'], ad['port']
-                    slot['byod'], slot['upgrade'] = ad['byod'], ad['upgrade']
-                for k, slot in agg.items():               # in sales but not AD → AD says zero
-                    if k not in admap:
-                        slot['activation'] = slot['port'] = slot['byod'] = slot['upgrade'] = 0
-            _apply_ad(by_store, _ad_store)
-            _apply_ad(by_emp, _ad_rep)
-        else:
-            _act_override = False    # AD configured but no rows for this window → keep sales basis, never blank
     # Total Activation EXCLUDES Upgrade only on the AD basis (b2b-consistent); the sales basis is unchanged.
     _ta_excl_upgrade = bool(_act_override)
 
@@ -22088,39 +22079,228 @@ def _sales_activation_by_store(client, org_id, period):
     return by_store
 
 
+def _billpay_report_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the b2b "Bill Payment Transactions"
+    report (the BASIS OF TRUTH) — count = txns, amount = payment (fallback total_amt). Returns (map, n_rows)."""
+    rows = _cr_resolve_bill_payments(client, org_id, period, {"market_for": (lambda s: "")})
+    by_store = {}
+    for r in rows:
+        st = (r.get("store") or "").strip() or "—"
+        k = ckey_fn(st) or "—"
+        slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": st})
+        slot["count"] += int(r.get("txns") or 1)
+        slot["amount"] += float(r.get("payment") or r.get("total_amt") or 0.0)
+    return by_store, len(rows)
+
+
+def _billpay_sales_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the shared sales aggregation — the
+    SECONDARY source (the Exec-MTD 'Bill Payment Qty' / '$' basis: _sales_cell_agg bill_qty / bill_amt)."""
+    cfg = _exec_metric_config(client, org_id)
+    acfg = _accessory_config(client, org_id)
+    rows, _meta = _sales_rows_union(client, org_id, period)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=ckey_fn)
+    by_store = {}
+    for (st, _rep, _date), a in cells.items():
+        slot = by_store.setdefault(st or "—", {"count": 0, "amount": 0.0, "_name": (a.get("store") or st or "—")})
+        slot["count"] += int(a.get("bill_qty") or 0)
+        slot["amount"] += float(a.get("bill_amt") or 0.0)
+    # Drop stores with zero bill payments so they don't dilute the recon's store set.
+    return {k: v for k, v in by_store.items() if v["count"] or v["amount"]}
+
+
+def _billpay_processor_name(client, org_id, msrc):
+    """Which carrier PROCESSOR to reconcile bill payments against: the metric_source_of_truth.processor
+    config wins ('epay'|'vidapay'); else auto-detect from commcalc.data_source (the enabled portal login's
+    processor, 'total_access' → vidapay). '' when unknown → the recon runs two-way (report vs sales)."""
+    p = str((msrc or {}).get("processor") or "").strip().lower()
+    if p in ("epay", "vidapay"):
+        return p
+    try:
+        rows = (client.schema("commcalc").table("data_source").select("processor,enabled")
+                .eq("org_id", org_id).execute().data) or []
+        for r in rows:
+            if not r.get("enabled"):
+                continue
+            pp = str(r.get("processor") or "").strip().lower()
+            if pp in ("epay",):
+                return "epay"
+            if pp in ("vidapay", "total_access"):
+                return "vidapay"
+    except Exception:
+        pass
+    return ""
+
+
+def _billpay_processor_by_store(client, org_id, period, processor, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the carrier PROCESSOR feed — ePay
+    (raw_epay_daily_tx via epay_ingest.per_store_day) for Boost, VidaPay (raw_ma_daily_tx, account_id →
+    store_code via storeops.merchant_ids) for Total. Best-effort + defensive: any failure or an unknown
+    processor returns {} so the recon degrades to report-vs-sales rather than 500-ing."""
+    if processor not in ("epay", "vidapay"):
+        return {}
+    mo, yr = _month_year(period)
+    if not (1 <= mo <= 12 and yr):
+        return {}
+    date_from = f"{yr}-{mo:02d}-01"
+    date_to = f"{yr}-{mo:02d}-{_calendar.monthrange(yr, mo)[1]:02d}"
+    by_store = {}
+    try:
+        if processor == "epay":
+            from app.modules.commcalc import epay_ingest as _epi
+            for (sc, _d), v in (_epi.per_store_day(client, org_id, date_from, date_to) or {}).items():
+                k = ckey_fn(str(sc)) or str(sc) or "—"
+                slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": str(sc)})
+                slot["count"] += int(v.get("lines") or 0)
+                slot["amount"] += float(v.get("payment") or 0.0)
+        else:  # vidapay
+            from app.modules.storeops import merchant_ids as _mids
+            amap = _mids.resolve_map(org_id, "vidapay") or {}
+            q = (client.schema("commcalc").table("raw_ma_daily_tx")
+                 .select("account_id,retail_cost").eq("org_id", org_id))
+            rows = q.in_("period", _pvariants(period)).limit(200000).execute().data or []
+            for r in rows:
+                acct = str(r.get("account_id") or "").strip()
+                sc = amap.get(acct) or acct or "—"
+                k = ckey_fn(str(sc)) or str(sc) or "—"
+                slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": str(sc)})
+                slot["count"] += 1
+                slot["amount"] += float(r.get("retail_cost") or 0.0)
+    except Exception as _pe:
+        print(f"WARN bill-payment processor read failed ({processor}): {_pe}")
+        return {}
+    return by_store
+
+
+def _billpay_cash_actual_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store ACTUAL bill-payment CASH {'amount','_name'} — the Bill Payment Transactions report
+    (basis of truth) filtered to a CASH tender. This is what the drawer SHOULD hold from bill payments."""
+    rows = _cr_resolve_bill_payments(client, org_id, period, {"market_for": (lambda s: "")})
+    out = {}
+    for r in rows:
+        if "cash" not in str(r.get("tender_type") or "").lower():
+            continue
+        st = (r.get("store") or "").strip() or "—"
+        k = ckey_fn(st) or "—"
+        slot = out.setdefault(k, {"amount": 0.0, "_name": st})
+        slot["amount"] += float(r.get("payment") or r.get("total_amt") or 0.0)
+    return out
+
+
+def _billpay_cash_declared_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store DECLARED bill-payment cash {'amount','_name'} — daily_closing.epay_on_cash (the
+    portion of the rep's declared cash they attributed to ePay / bill payments), summed for the period.
+    Defensive: a missing table/column yields {} so the recon degrades rather than 500-ing."""
+    try:
+        rows = (client.schema("commcalc").table("daily_closing")
+                .select("store_code,epay_on_cash,period")
+                .eq("org_id", org_id).in_("period", _pvariants(period)).limit(100000).execute().data) or []
+    except Exception as _ce:
+        print(f"WARN daily_closing read failed for bill-pay cash recon: {_ce}")
+        return {}
+    out = {}
+    for r in rows:
+        sc = str(r.get("store_code") or "").strip() or "—"
+        k = ckey_fn(sc) or "—"
+        slot = out.setdefault(k, {"amount": 0.0, "_name": sc})
+        slot["amount"] += float(r.get("epay_on_cash") or 0.0)
+    return out
+
+
 @router.get("/metric-recon/{period}")
 def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations"):
-    """Two-source RECONCILIATION for a metric (owner 2026-08-26): prove the ingest is good when the two
-    sources agree, flag + name a remediation when they don't. For `activations` it compares the b2b
-    Activation Details basis (PRIMARY / basis of truth — distinct Serial#, Upgrade excluded) against the
-    shared sales aggregation (SECONDARY), per store, on the b2b-consistent Total Activation. Read-only.
+    """RECONCILIATION for a metric (owner 2026-08-26): prove the ingest is good when the sources agree, flag +
+    name a remediation when they don't.
 
-    The `tolerance`, `reconcile_with` and `assigned_user` come from the tenant's metric_source_of_truth
-    config (mig 923); with no config the recon still runs with sensible defaults (exact match, sales_agg)
-    so a tenant can SEE the two sources line up before switching Exec MTD onto the AD basis."""
+    • `activations` — the b2b Activation Details basis (PRIMARY / basis of truth, distinct Serial#, Upgrade
+      excluded) vs the shared sales aggregation, per store, on the b2b-consistent Total Activation.
+    • `bill_payments` — THREE-way: the b2b Bill Payment Transactions report (PRIMARY) vs the sales aggregation
+      vs the carrier PROCESSOR (ePay for Boost / VidaPay for Total, chosen from config or data_source), per
+      store, on amount + count.
+
+    `tolerance`, `reconcile_with`, `processor` and `assigned_user` come from the tenant's
+    metric_source_of_truth config (mig 923); with no config the recon still runs with sensible defaults.
+    Read-only."""
     require_org(org_id)
-    if metric != "activations":
-        raise HTTPException(400, "only the 'activations' metric is reconciled today")
     from app.modules.commcalc import metric_recon as metric_recon_mod
     client = sb()
-    msrc = _metric_source(client, org_id, metric)
     ckey = _canonical_store_key_fn(client, org_id)
-    ad_by_store, _ad_rep, ad_n = _ad_activation_buckets(client, org_id, period, ckey_fn=ckey)
-    sales_by_store = _sales_activation_by_store(client, org_id, period)
-    result = metric_recon_mod.reconcile_activations(
-        ad_by_store, sales_by_store,
-        tolerance=msrc.get("tolerance") or 0,
-        source=(msrc.get("source") if msrc.get("configured") else "activation_details"),
-        reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
-        assigned_user=msrc.get("assigned_user"))
-    result.update({"period": period, "org_id": org_id, "metric": metric,
-                   "config": {"configured": msrc.get("configured"), "enabled": msrc.get("enabled"),
-                              "source": msrc.get("source"), "processor": msrc.get("processor")},
-                   "primary_rows": ad_n,
-                   "note": (None if ad_n else
-                            "No Activation Details rows for this period — upload or route the b2b 'Activation "
-                            "Details' report so the activation basis of truth is present to reconcile.")})
-    return result
+
+    if metric == "activations":
+        msrc = _metric_source(client, org_id, metric)
+        ad_by_store, _ad_rep, ad_n = _ad_activation_buckets(client, org_id, period, ckey_fn=ckey)
+        sales_by_store = _sales_activation_by_store(client, org_id, period)
+        result = metric_recon_mod.reconcile_activations(
+            ad_by_store, sales_by_store,
+            tolerance=msrc.get("tolerance") or 0,
+            source=(msrc.get("source") if msrc.get("configured") else "activation_details"),
+            reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
+            assigned_user=msrc.get("assigned_user"))
+        result.update({"period": period, "org_id": org_id, "metric": metric,
+                       "config": {"configured": msrc.get("configured"), "enabled": msrc.get("enabled"),
+                                  "source": msrc.get("source"), "processor": msrc.get("processor")},
+                       "primary_rows": ad_n,
+                       "note": (None if ad_n else
+                                "No Activation Details rows for this period — upload or route the b2b "
+                                "'Activation Details' report so the activation basis of truth is present.")})
+        return result
+
+    if metric == "bill_payments":
+        msrc = _metric_source(client, org_id, metric)
+        report_by_store, rep_n = _billpay_report_by_store(client, org_id, period, ckey)
+        sales_by_store = _billpay_sales_by_store(client, org_id, period, ckey)
+        processor = _billpay_processor_name(client, org_id, msrc)
+        proc_by_store = _billpay_processor_by_store(client, org_id, period, processor, ckey)
+        result = metric_recon_mod.reconcile_bill_payments(
+            report_by_store, sales_by_store, proc_by_store,
+            tolerance_amt=float(msrc.get("tolerance") or 0.0), tolerance_cnt=0,
+            processor=processor, reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
+            assigned_user=msrc.get("assigned_user"))
+        # DAILY-CASH linkage (owner 2026-08-26: "wire the bill-pay reconciliation into the daily cash being
+        # declared by the employees"). Reconcile ACTUAL bill-payment cash (report, tender=cash) against the
+        # cash the reps DECLARED at daily closing (daily_closing.epay_on_cash), per store — over/short.
+        cash_actual = _billpay_cash_actual_by_store(client, org_id, period, ckey)
+        cash_declared = _billpay_cash_declared_by_store(client, org_id, period, ckey)
+        daily_cash = metric_recon_mod.reconcile_billpay_cash(
+            cash_actual, cash_declared,
+            tolerance_amt=float(msrc.get("tolerance") or 1.0), assigned_user=msrc.get("assigned_user"))
+        result.update({"period": period, "org_id": org_id, "metric": metric,
+                       "config": {"configured": msrc.get("configured"), "processor": (processor or None)},
+                       "primary_rows": rep_n,
+                       "daily_cash": daily_cash,
+                       "note": (None if rep_n else
+                                "No Bill Payment Transactions rows for this period — upload or route the b2b "
+                                "'Bill Payment Transactions' report so the bill-payment basis is present.")})
+        return result
+
+    raise HTTPException(400, "unknown metric (allowed: activations, bill_payments)")
+
+
+@router.get("/data-lineage")
+def get_data_lineage(org_id: str = ORG_ID, source_key: str = "", affected_key: str = "", kind: str = ""):
+    """The system DATA-LINEAGE registry (mig 924/925) — the documented schematic of how ingested data and
+    derived metrics feed each other. Each row is a dependency edge (source → affected) with entry_point, a
+    code reference, a plain-English effect, kind, and auto_updated. Optional filters narrow to one source /
+    affected item / kind. Returns rows + an index grouped by source so the UI can render 'if X changes, these
+    update'. Empty until migration 925 (the seed) is applied. DISPLAY/documentation only."""
+    require_org(org_id)
+    try:
+        q = sb().schema("commcalc").table("data_lineage").select("*")
+        if source_key:
+            q = q.eq("source_key", source_key)
+        if affected_key:
+            q = q.eq("affected_key", affected_key)
+        if kind:
+            q = q.eq("kind", kind)
+        rows = q.order("source_key").order("seq").limit(5000).execute().data or []
+    except Exception as e:
+        return {"rows": [], "by_source": {}, "sources": [], "note": f"data_lineage unavailable (run migration 924/925): {str(e)[:160]}"}
+    by_source = {}
+    for r in rows:
+        by_source.setdefault(r.get("source_key") or "?", []).append(r)
+    return {"rows": rows, "by_source": by_source, "sources": sorted(by_source.keys()),
+            "count": len(rows),
+            "note": (None if rows else "data_lineage is empty — apply migration 925 (the seed) to populate the schematic.")}
 
 
 @router.get("/metric-source-config")
@@ -27778,6 +27958,44 @@ _ACT_BUCKET_RANK = {"Home Internet": 6, "Edge": 6, "Tablet": 6, "BYOD": 4, "Port
                     "New Activation": 2, "Other": 1, "Upgrade": 0}
 
 
+def _dealer_to_store_map(client, org_id):
+    """{dealer/store code (UPPER) -> display store name} so the b2b Activation Details "Dealer Code" (a
+    numeric b2b id like 168872) resolves to the SAME store string the sales feed uses (the address, e.g.
+    '104-08 Lefferts Blvd') — letting the activation numbers MERGE onto the named store row instead of
+    landing as a separate numeric-ID row. Sources, chained: commcalc.store_mapping (store_code ->
+    store_address), storeops.stores (store_code -> address/name), storeops.store_merchant_id (merchant/
+    terminal id -> store_code -> name). Best-effort + defensive: any read failure is skipped, {} at worst."""
+    out = {}
+    try:
+        for r in (client.schema("commcalc").table("store_mapping")
+                  .select("store_code,store_address").eq("org_id", org_id).execute().data) or []:
+            c = str(r.get("store_code") or "").strip()
+            a = str(r.get("store_address") or "").strip()
+            if c and a:
+                out[c.upper()] = a
+    except Exception:
+        pass
+    try:
+        for r in (client.schema("storeops").table("stores")
+                  .select("store_code,address,name").eq("org_id", org_id).execute().data) or []:
+            c = str(r.get("store_code") or "").strip()
+            a = str(r.get("address") or "").strip() or str(r.get("name") or "").strip()
+            if c and a:
+                out.setdefault(c.upper(), a)
+    except Exception:
+        pass
+    try:
+        for r in (client.schema("storeops").table("store_merchant_id")
+                  .select("store_code,merchant_id").eq("org_id", org_id).execute().data) or []:
+            mid = str(r.get("merchant_id") or "").strip()
+            c = str(r.get("store_code") or "").strip()
+            if mid and c:
+                out.setdefault(mid.upper(), out.get(c.upper()) or c)
+    except Exception:
+        pass
+    return out
+
+
 def _cr_resolve_activation_details(client, org_id, period, ctx):
     """The b2b "Activation Details" report (owner 2026-08-26) — the ACTIVATION BASIS OF TRUTH for every
     b2bsoft tenant — read from the self-serve CUSTOM IMPORT capture (commcalc.raw_custom_import JSONB, no
@@ -27799,6 +28017,9 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
     DISPLAY + RECON basis. `activation_counts` sums every bucket EXCEPT Upgrade for Total Activation. No
     payout path reads this yet — moving commission onto this basis is a separate, explicit config opt-in."""
     market_for = ctx["market_for"]
+    # Dealer Code -> store name, so the AD numeric Dealer Code merges onto the sales feed's named store row
+    # (built once; empty when nothing maps → falls back to the code, same as before).
+    _dmap = _dealer_to_store_map(client, org_id)
     try:
         q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
              .select("data,period,source_filename,row_index").eq("org_id", org_id))
@@ -27854,7 +28075,11 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
         division = str(_get(d_low, "Division")).strip()
         region = str(_get(d_low, "Region")).strip()
         district = str(_get(d_low, "District")).strip()
+        # Prefer an explicit Store/name column; else resolve the Dealer Code to the store's real name (so the
+        # activation numbers merge onto the sales feed's named store row instead of showing as a numeric ID);
+        # else fall back to the raw dealer code / district / division.
         store = (str(_get(d_low, "Store", "Store Name", "Location", "Site")).strip()
+                 or _dmap.get(dealer.upper()) or _dmap.get(district.upper())
                  or dealer or district or division)
         mkt = market_for(store) or region or division
         ct = str(_get(d_low, "Contract Type")).strip()
@@ -27989,11 +28214,87 @@ def _cr_resolve_product_sales(client, org_id, period, ctx):
     return out
 
 
+def _cr_resolve_store_performance(client, org_id, period, ctx):
+    """The b2b "Store Performance" scorecard (owner 2026-08-26) — ONE row per store with Activations, Bill
+    Payments (qty + $), and the ACCESSORY store breakup (Acc Ext Price / Acc GP) that Sales-by-Product lacks,
+    plus Discounts / GP / hours / conversion ratios. Read from the self-serve CUSTOM IMPORT capture
+    (raw_custom_import JSONB). DETECTED BY COLUMN SIGNATURE ('Acc Ext Price' + 'Bill Payment Qty'), so it
+    lights up whatever report_key the sheet was registered under.
+
+    Already per-store aggregated, so the resolver just maps columns to numeric fields (money parsed incl.
+    parenthesised negatives like '($5,683.27)') and resolves each store's market. Group by Division/Region to
+    split multi-brand exports (e.g. LuxeLink vs Nova). DISPLAY + the accessory-per-store basis."""
+    market_for = ctx["market_for"]
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report store_performance read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "").replace("%", "")
+        neg = s.startswith("(") and s.endswith(")")
+        s = s.strip("()")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            f = float(s)
+        except Exception:
+            f = safe_float(s)
+        return -f if neg else f
+
+    out = []
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — the scorecard's accessory + bill-payment columns, not carried by any other dataset.
+        if "acc ext price" not in keys or "bill payment qty" not in keys:
+            continue
+        store = str(_get(d_low, "Store")).strip()
+        if not store or store.lower() in ("total", "grand total"):
+            continue                                   # skip the totals row
+        division = str(_get(d_low, "Division")).strip()
+        region = str(_get(d_low, "Region")).strip()
+        out.append({
+            "store": store,
+            "market": market_for(store) or region or division,
+            "division": division, "region": region, "district": str(_get(d_low, "District")).strip(),
+            "activations": int(_num(_get(d_low, "Activations", "Act"))),
+            "renewals": int(_num(_get(d_low, "Renewals"))),
+            "prepaid": int(_num(_get(d_low, "Prepaid"))),
+            "bill_payments": _num(_get(d_low, "Bill Payments")),
+            "bill_payment_qty": int(_num(_get(d_low, "Bill Payment Qty"))),
+            "discounts": _num(_get(d_low, "Discounts")),
+            "gp": _num(_get(d_low, "GP")),
+            "acc_ext_price": _num(_get(d_low, "Acc Ext Price")),
+            "acc_gp": _num(_get(d_low, "Acc GP")),
+            "acc_gp_on_billpay": _num(_get(d_low, "Acc GP on Bill Payment Trans")),
+            "trade_in_credits": _num(_get(d_low, "Trade-in Credits")),
+            "third_party_insurance": _num(_get(d_low, "3rd Party Insurance")),
+        })
+    return out
+
+
 _CUSTOM_REPORT_RESOLVERS = {
     "sales_line": _cr_resolve_sales_line,
     "bill_payments": _cr_resolve_bill_payments,
     "activation_details": _cr_resolve_activation_details,
     "product_sales": _cr_resolve_product_sales,
+    "store_performance": _cr_resolve_store_performance,
     "rep_commissions": _cr_resolve_rep_commissions,
     "targets_actuals": _cr_resolve_targets_actuals,
     "kpi_metrics": _cr_resolve_kpi_metrics,

@@ -311,6 +311,35 @@ DATASETS = [
             _col("accessory_gp", "Accessory GP $", "money"),
         ],
     },
+    {
+        # Store Performance — the b2b per-store scorecard (owner 2026-08-26). Unlike Sales by Product this is
+        # already PER STORE, so it gives the accessory store breakup (Acc Ext Price / Acc GP) the owner wanted,
+        # plus Activations and Bill Payments (qty + $) per store, with Division / Region / District. Ingested
+        # via the self-serve CUSTOM IMPORT path (raw_custom_import JSONB). Detected by signature (Acc Ext Price
+        # + Bill Payment Qty). Group by Division / Region to split multi-brand exports (LuxeLink vs Nova).
+        "key": "store_performance", "name": "Store Performance", "resolver": "store_performance", "sort_order": 18,
+        "field_map": {"store": "store", "rep": None, "market": "market", "day": None},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("store", "Store", "text", group=True),
+            _col("market", "Market", "text", group=True),
+            _col("division", "Division", "text", group=True),
+            _col("region", "Region", "text", group=True),
+            _col("district", "District", "text", group=True),
+            _col("activations", "Activations", "count"),
+            _col("renewals", "Renewals", "count"),
+            _col("prepaid", "Prepaid", "count"),
+            _col("bill_payment_qty", "Bill Payment Qty", "count"),
+            _col("bill_payments", "Bill Payments $", "money"),
+            _col("acc_ext_price", "Acc Ext Price $", "money"),
+            _col("acc_gp", "Acc GP $", "money"),
+            _col("acc_gp_on_billpay", "Acc GP on Bill Pay $", "money"),
+            _col("discounts", "Discounts $", "money"),
+            _col("gp", "GP $", "money"),
+            _col("trade_in_credits", "Trade-in Credits $", "money"),
+            _col("third_party_insurance", "3rd Party Insurance $", "money"),
+        ],
+    },
 ]
 
 _BY_KEY = {d["key"]: d for d in DATASETS}
