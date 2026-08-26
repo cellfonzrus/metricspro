@@ -1,6 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { api } from '@/lib/client'
+import { api, apiUpload } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
@@ -45,6 +45,8 @@ export default function EmailImportsPage() {
   const [health, setHealth] = useState<any>(null)   // per-day ingest health (mig 200)
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [upPeriod, setUpPeriod] = useState('')   // period for a manual custom-sheet upload (e.g. "August 2026")
+  const [upBusy, setUpBusy] = useState('')        // report_key currently uploading
   const [sources, setSources] = useState<any[]>([])
   const [srcReady, setSrcReady] = useState(true)
   const [srcDraft, setSrcDraft] = useState<any>(null)   // add/edit form for a data-source login
@@ -287,6 +289,23 @@ export default function EmailImportsPage() {
     setViewer(c); setViewData(null)
     try { const r: any = await api(`/api/v1/commcalc/custom-import/${encodeURIComponent(c.report_key)}`); setViewData(r) }
     catch (e: any) { setViewData({ error: e?.message || String(e) }) }
+  }
+  // Manual upload for a custom sheet — for the MTD file (and daily files) when you don't want to wait for
+  // the email sweep. POSTs straight to /upload/<report_key>, the SAME capture the sweep uses, so the row
+  // lands in raw_custom_import and the report's dataset (Activations / Bill Payments / Sales by Product)
+  // lights up. `period` scopes the capture: a re-upload of the same period REPLACES it (the b2b MTD export
+  // is cumulative, so re-uploading the latest MTD file is correct); leave it blank to capture by filename.
+  async function uploadCustom(rk: string, label: string, file: File | null | undefined) {
+    if (!file) return
+    const per = (upPeriod || '').trim()
+    setUpBusy(rk)
+    try {
+      const form = new FormData(); form.append('file', file)
+      const path = `/api/v1/commcalc/upload/${encodeURIComponent(rk)}${per ? `?period=${encodeURIComponent(per)}` : ''}`
+      const r: any = await apiUpload(path, form)
+      setMsg(`✅ Uploaded "${file.name}" to ${label} — ${r?.saved ?? 0} rows captured${per ? ` for ${per}` : ''}.`)
+      await reloadCustom()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setUpBusy('') }
   }
 
   async function saveSource() {
@@ -656,15 +675,31 @@ export default function EmailImportsPage() {
             onChange={e => setNewSheet(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addCustomSheet() }} />
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={addCustomSheet}>＋ Add sheet</button>
         </div>
+        {/* Manual upload — for the MTD file (and daily files) when you don't want to wait for the email sweep.
+            Set the period this file is FOR, then Upload on the sheet's row. Re-uploading the same period
+            replaces it (the b2b MTD export is cumulative, so re-uploading the latest MTD is correct). */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <span style={{ fontSize: 12, color: 'var(--text2)' }}>Manual upload period:</span>
+          <input style={{ ...sel, minWidth: 160 }} placeholder="e.g. August 2026" value={upPeriod}
+            onChange={e => setUpPeriod(e.target.value)} />
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>then click <b>Upload</b> on a sheet below (leave blank to capture by filename).</span>
+        </div>
         {customTypes.length > 0 ? (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr style={{ background: 'var(--surface2)' }}>{['Sheet', 'Key (use in a pattern)', 'Captured rows', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+            <thead><tr style={{ background: 'var(--surface2)' }}>{['Sheet', 'Key (use in a pattern)', 'Captured rows', 'Manual upload', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
             <tbody>
               {customTypes.map((c: any) => (
                 <tr key={c.report_key} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
                   <td style={{ padding: '6px 8px', fontWeight: 600 }}>{c.label}</td>
                   <td style={{ padding: '6px 8px' }}><code>{c.report_key}</code></td>
                   <td style={{ padding: '6px 8px' }}>{c.rows || 0}</td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                    <label className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', cursor: 'pointer', opacity: upBusy === c.report_key ? 0.6 : 1 }}>
+                      {upBusy === c.report_key ? 'Uploading…' : '⬆ Upload file'}
+                      <input type="file" accept=".csv,.txt,.xlsx,.xls" style={{ display: 'none' }} disabled={upBusy === c.report_key}
+                        onChange={e => { const f = e.target.files?.[0]; uploadCustom(c.report_key, c.label, f); e.currentTarget.value = '' }} />
+                    </label>
+                  </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openViewer(c)}>👁 View data</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delCustomSheet(c.report_key, c.label)}>✕</button>
