@@ -32,6 +32,8 @@ export default function ActivationsPage() {
   const [tab, setTab] = useState<'market' | 'store'>('market')
   const [srcCfg, setSrcCfg] = useState<any>(null)   // metric-source-config (the no-SQL basis toggle)
   const [savingSrc, setSavingSrc] = useState(false)
+  const [dmap, setDmap] = useState<any>(null)       // dealer-code → store mapping status
+  const [mapBusy, setMapBusy] = useState('')        // dealer_code currently being saved
 
   const load = useCallback(() => {
     if (!period) return
@@ -40,12 +42,26 @@ export default function ActivationsPage() {
       api(`/api/v1/commcalc/activation-counts/${encodeURIComponent(period)}${orgQ()}${orgQ() ? '&' : '?'}include_upgrade=${inclUpg}`),
       api(`/api/v1/commcalc/metric-recon/${encodeURIComponent(period)}${orgQ()}${orgQ() ? '&' : '?'}metric=activations`).catch(() => null),
       api(`/api/v1/commcalc/metric-source-config${orgQ()}`).catch(() => null),
-    ]).then(([ac, rc, sc]: any[]) => {
-      setData(ac); setRecon(rc)
+      api(`/api/v1/commcalc/dealer-code-map/${encodeURIComponent(period)}${orgQ()}`).catch(() => null),
+    ]).then(([ac, rc, sc, dm]: any[]) => {
+      setData(ac); setRecon(rc); setDmap(dm)
       const act = (sc?.metrics || []).find((m: any) => m.metric === 'activations')
       setSrcCfg(act || null)
     }).catch(e => setErr(e?.message || String(e))).finally(() => setLoading(false))
   }, [period, inclUpg])
+
+  // Map one Dealer Code to a store (writes commcalc.store_aliases via the shared endpoint) → the activations
+  // then merge onto that store's named row. Empty store_code clears nothing here (delete is via Store Matching).
+  const mapDealer = async (code: string, storeCode: string) => {
+    if (!storeCode) return
+    setMapBusy(code)
+    try {
+      await api('/api/v1/commcalc/store-aliases' + orgQ(), {
+        method: 'POST', body: JSON.stringify({ alias: code, store_code: storeCode, source: 'manual' }),
+      })
+      load()
+    } catch (e: any) { setErr(e?.message || String(e)) } finally { setMapBusy('') }
+  }
 
   useEffect(() => { load() }, [load])
 
@@ -168,6 +184,47 @@ export default function ActivationsPage() {
         <div style={{ marginTop: 18 }}>
           <h2 style={{ fontSize: 15, fontWeight: 800, margin: '0 0 6px' }}>Reconciliation</h2>
           <ReconPanel recon={recon} />
+        </div>
+      )}
+
+      {/* Dealer Code → Store mapping: link the b2b numeric Dealer Codes to stores so activations merge onto
+          the named store row instead of showing as a numeric ID. Only shows when there are unmapped codes. */}
+      {dmap && (dmap.unmapped > 0) && (
+        <div style={{ marginTop: 18 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 800, margin: '0 0 6px' }}>
+            Dealer Code → Store <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12.5 }}>({dmap.unmapped} unmapped)</span>
+          </h2>
+          <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 8, maxWidth: 820 }}>
+            These Dealer Codes from the Activation Details report aren&rsquo;t linked to a store yet, so their
+            activations show under the numeric ID. Pick the matching store to merge them onto the named row.
+          </div>
+          <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 10 }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 640 }}>
+              <thead><tr>
+                <th style={thL}>Dealer Code</th><th style={th}>Activations</th>
+                <th style={thL}>District / Region</th><th style={thL}>Map to store</th>
+              </tr></thead>
+              <tbody>
+                {(dmap.codes || []).filter((c: any) => !c.mapped).map((c: any) => (
+                  <tr key={c.dealer_code}>
+                    <td style={tdL}><b>{c.dealer_code}</b></td>
+                    <td style={td}>{int(c.activations)}</td>
+                    <td style={tdL}>{[c.district, c.region].filter(Boolean).join(' · ') || '—'}</td>
+                    <td style={tdL}>
+                      <select disabled={mapBusy === c.dealer_code} defaultValue=""
+                        onChange={e => mapDealer(c.dealer_code, e.target.value)}
+                        style={{ padding: '5px 8px', fontSize: 12.5, border: '1px solid var(--border)', borderRadius: 8, minWidth: 260 }}>
+                        <option value="">{mapBusy === c.dealer_code ? 'Saving…' : 'Select a store…'}</option>
+                        {(dmap.stores || []).map((s: any) => (
+                          <option key={s.store_code} value={s.store_code}>{s.address || s.store_code}</option>
+                        ))}
+                      </select>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
