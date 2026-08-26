@@ -250,11 +250,13 @@ DATASETS = [
     {
         # Activations — the b2b "Activation Details" report (owner 2026-08-26). Ingested via the self-serve
         # CUSTOM IMPORT path (raw_custom_import JSONB — no per-report table/migration); the resolver returns
-        # ONE ROW PER ACTIVATION (Commission Item = 'Service Plan'; Plan Option/insurance rows excluded), so
-        # `activations` summed per Store is the store's activation total that reconciles to the b2b MTD figure
-        # (Diversey = 49). Group by Store for the count, by Type/Contract Type for the new/port/byod/tablet/
-        # home-internet breakdown; Trans ID drills into Sales Transaction Details. DISPLAY-ONLY (the Exec-MTD
-        # replacement and the commission wiring are separate, later changes).
+        # ONE ROW PER DISTINCT DEVICE (deduped by Serial#; insurance/Plan-Option lines share the serial and
+        # count once), so `activations` summed per Store/Market/Division reconciles to the b2b MTD figure
+        # (LuxeLink 687 new activations, Nova 250). The export carries NO "Store" column — its geography is
+        # Dealer Code / Division / Region / District (LuxeLink vs Nova are Division/Region values), all exposed
+        # here so you can group by any level; `store` derives to the most granular non-empty. Group by Type
+        # (derived) or Contract Type for the new/port/byod/tablet/upgrade breakdown; Upgrade is excluded from
+        # Total Activation (b2b's own definition) but shown in its own row. DISPLAY + reconciliation basis.
         "key": "activation_details", "name": "Activations", "resolver": "activation_details",
         "sort_order": 15,
         "field_map": {"store": "store", "rep": "salesperson", "market": "market", "day": "trans_date"},
@@ -262,9 +264,14 @@ DATASETS = [
         "columns": [
             _col("store", "Store", "text", group=True),
             _col("market", "Market", "text", group=True),
+            _col("division", "Division", "text", group=True),
+            _col("region", "Region", "text", group=True),
+            _col("district", "District", "text", group=True),
+            _col("dealer_code", "Dealer Code", "text", group=True),
             _col("salesperson", "Salesperson", "text", group=True),
             _col("trans_date", "Date", "date", group=True),
             _col("trans_id", "Trans ID", "text"),
+            _col("serial", "Serial #", "text"),
             _col("activation_no", "Activation #", "text"),
             _col("bucket", "Type (derived)", "text", group=True),
             _col("contract_type", "Contract Type", "text", group=True),
