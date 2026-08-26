@@ -21712,6 +21712,43 @@ def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
                      date_from=date_from or None, date_to=date_to or None)
 
 
+@router.get("/activation-counts/{period}")
+def activation_counts(period: str, org_id: str = ORG_ID):
+    """Store activation COUNTS from the b2b "Activation Details" report (owner 2026-08-26).
+
+    A dedicated, unambiguous count surface: the Custom Report "Activations" dataset shows the same numbers
+    but alongside its money columns (MRC etc.), which read as "a total of $$" if you're looking at the raw
+    captured sheet. This returns ONLY the counts — one row per activation (Service-Plan rows; Plan-Option/
+    insurance and Returns/cancelled excluded, deduped by Activation#) — per store, with a type breakdown and
+    the grand total that must reconcile to the b2b MTD figure (Diversey = 49).
+
+    Reads the self-serve custom-import capture (raw_custom_import), so it is EMPTY until the Activation
+    Details report is uploaded/registered as a custom import (or routed via the email import) for `period`;
+    the `note` says so rather than showing a silent 0. DISPLAY-ONLY."""
+    require_org(org_id)
+    from collections import Counter
+    rows = _cr_resolve_activation_details(sb(), org_id, period, {"market_for": (lambda s: "")})
+    by_store, types = {}, Counter()
+    for r in rows:
+        st = (r.get("store") or "").strip() or "—"
+        d = by_store.setdefault(st, {"store": st, "activations": 0, "by_type": Counter()})
+        d["activations"] += 1
+        d["by_type"][r.get("bucket") or "Other"] += 1
+        types[r.get("bucket") or "Other"] += 1
+    stores = sorted(
+        ({"store": d["store"], "activations": d["activations"], "by_type": dict(d["by_type"])}
+         for d in by_store.values()),
+        key=lambda x: -x["activations"])
+    return {
+        "period": period, "org_id": org_id,
+        "total_activations": len(rows), "stores": stores, "by_type": dict(types),
+        "note": (None if rows else
+                 "No Activation Details rows found for this period. Upload or register the b2b "
+                 "'Activation Details' report as a Custom Import (Data Imports → Custom Reports), or route "
+                 "it to the email import, then re-check."),
+    }
+
+
 @router.get("/exec-metric-config")
 def get_exec_metric_config(org_id: str = ORG_ID):
     """The tenant's Executive-MTD metric DEFINITIONS (config, falling back to code defaults). Drives the
