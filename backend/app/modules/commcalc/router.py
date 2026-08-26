@@ -16689,6 +16689,35 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
             "accessory_rev": round(a["accessory_rev"], 2), "revenue": round(a["revenue"], 2),
             "gp": round(a["gp"], 2), "market": _market_for(st),
         })
+    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS ────────────────────────────────────────────────────
+    # When Activation Details is the activation basis (auto-on when that report has rows — owner: "Sales
+    # Report and Exec MTD populated from the SAME data"), REPLACE the sales-derived activation columns
+    # (activations / byod / upgrades) with the Activation Details counts, so this report matches Exec MTD
+    # and the b2b figure. TOTAL-SAFE: zero every cell's activation columns, then apply the AD cells (adding
+    # a row when none matches) — each store total and the grand total then equal the AD basis. Other columns
+    # (txns / accessory$ / revenue / gp) stay from the sales feed. No AD rows for the period → untouched →
+    # byte-identical. The reconciliation surface (/metric-recon) flags any store where the bases disagree.
+    _msrc_sr = _metric_source(client, org_id, 'activations')
+    if _msrc_sr.get('enabled') and _msrc_sr.get('source') == 'activation_details':
+        _ck_sr = _canonical_store_key_fn(client, org_id)
+        _ad_cells, _ad_n_sr = _ad_sales_cells(client, org_id, period, ckey_fn=_ck_sr)
+        if _ad_n_sr:
+            _idx = {}
+            for _row in out:
+                _row['activations'] = _row['byod'] = _row['upgrades'] = 0   # AD is authoritative
+                _idx[(_ck_sr(_row['store']), _row['salesperson'], _row['trans_date'])] = _row
+            for _key, _ad in _ad_cells.items():
+                _row = _idx.get(_key)
+                if _row is None:                       # AD activity the sales feed didn't carry → add a row
+                    _cs, _rep, _date = _key
+                    _row = {"store": _ad.get('_name') or _cs, "salesperson": _rep, "trans_date": _date,
+                            "txns": 0, "byod": 0, "upgrades": 0, "swaps": 0, "lines": 0,
+                            "accessory_rev": 0.0, "revenue": 0.0, "gp": 0.0,
+                            "market": _market_for(_ad.get('_name') or _cs), "activations": 0}
+                    out.append(_row); _idx[_key] = _row
+                _row['activations'] = _ad['activations']
+                _row['byod'] = _ad['byod']
+                _row['upgrades'] = _ad['upgrades']
     out.sort(key=lambda r: (r["store"], r["trans_date"], r["salesperson"]))
     try:
         from app.modules.storeops.router import scope_keyset, in_keyset
@@ -16726,9 +16755,16 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
         _cls_gaps = _classification_gaps(rows, acfg, is_excluded=_is_exc)
     except Exception:
         _cls_gaps = {'note': None}
+    _sr_ad_active = bool(_msrc_sr.get('enabled') and _msrc_sr.get('source') == 'activation_details'
+                         and locals().get('_ad_n_sr'))
     return {"period": period, "source": source, "org_id": org_id, "rows": out, "totals": totals,
             "periods": sorted(periods, reverse=True), "classification_gaps": _cls_gaps,
             "stores": filter_stores, "markets": filter_markets,
+            # SOURCE OF TRUTH (mig 923): when true, activations/byod/upgrades on this report come from the
+            # Activation Details basis (matches Exec MTD + b2b), not the sales feed. Default false → the
+            # historical sales-feed columns, byte-identical.
+            "activation_source": {"active": _sr_ad_active,
+                                  "basis": "activation_details" if _sr_ad_active else "sales_agg"},
             # Transparency (owner's debug-first mandate): exactly what this read used, so a truncated or
             # wrong-tenant view is self-evident. `org_id` above surfaces the super-admin org-resolution
             # default (a no-org_id request reads the HOUSE org). `source_meta` explains the union.
@@ -21291,20 +21327,27 @@ def _exec_metric_config(client, org_id):
 
 
 # ── PER-METRIC SOURCE OF TRUTH (mig 923) ─────────────────────────────────────────────────────────
-# The historical default source for each metric — what every org WITHOUT a metric_source_of_truth row
-# keeps (byte-identical): activations + bill payments both come from the shared sales aggregation.
-_METRIC_SOURCE_DEFAULTS = {"activations": "sales_agg", "bill_payments": "sales_agg"}
+# The default authoritative source for each metric when the tenant has no metric_source_of_truth row.
+_METRIC_SOURCE_DEFAULTS = {"activations": "activation_details", "bill_payments": "sales_agg"}
+# Metrics whose basis-of-truth AUTO-ACTIVATES with no config (owner 2026-08-26: "it should be automatic,
+# no need to update or wire it — Activation Details becomes the basis of truth for all b2bsoft tenants").
+# The consumers (Exec MTD / Sales Report) STILL fall back to the sales basis when the report has NO rows
+# for the period, so a tenant that never uploaded Activation Details stays BYTE-IDENTICAL. Auto-on only
+# changes anything for a tenant that actually has the report ingested — exactly the intended set.
+_METRIC_AUTO_ENABLED = {"activations"}
 
 
 def _metric_source(client, org_id, metric):
     """Resolve the per-metric SOURCE OF TRUTH (mig 923). Returns
     {'metric','source','enabled','reconcile_with','processor','assigned_user','tolerance','configured'}.
 
-    EMPTY/absent (every existing org, the house/Boost org, or pre-923) → the historical default source with
-    enabled=False, configured=False, so every caller takes the byte-identical default path. Never raises."""
+    No config row (every org, pre-923): a metric in _METRIC_AUTO_ENABLED (activations) defaults to its
+    basis-of-truth source ENABLED — but the consumer gates on the report actually having rows, so a tenant
+    without that report is byte-identical. An explicit config row always wins (a tenant can disable it).
+    Never raises."""
     default = {"metric": metric, "source": _METRIC_SOURCE_DEFAULTS.get(metric, "sales_agg"),
-               "enabled": False, "reconcile_with": None, "processor": None,
-               "assigned_user": None, "tolerance": 0.0, "configured": False}
+               "enabled": (metric in _METRIC_AUTO_ENABLED), "reconcile_with": "sales_agg",
+               "processor": None, "assigned_user": None, "tolerance": 0.0, "configured": False}
     try:
         rows = (client.schema("commcalc").table("metric_source_of_truth")
                 .select("*").eq("org_id", org_id).eq("metric", metric).limit(1).execute().data) or []
@@ -21361,6 +21404,37 @@ def _ad_activation_buckets(client, org_id, period, ckey_fn=None, cut=None,
         s_slot[fld] += 1
         r_slot[fld] += 1
     return by_store, by_rep, n
+
+
+def _ad_sales_cells(client, org_id, period, ckey_fn=None):
+    """Aggregate the Activation Details basis into per-(canonical-store, rep, date) cells shaped for the
+    SALES REPORT's activation columns — {'activations','byod','upgrades','_name'} — so the Sales Report and
+    Exec MTD move together off the SAME basis of truth. `activations` = New Activation + Port + Tablet/Home
+    Internet/Edge (the Sales Report's premium sense); `byod`/`upgrades` are their own columns.
+
+    Returns {(canon_store, rep, date): {...}} plus the total row count. The Sales Report override is
+    TOTAL-SAFE: it zeroes every sales cell's activation columns then applies these, adding a row when no
+    sales cell matches — so each store's total and the grand total equal the AD basis even if per-day/per-rep
+    keys don't line up exactly (the imperfect part is only which day/rep a count lands on, never the total).
+    Empty when Activation Details has no rows for the period → the caller leaves the report untouched."""
+    rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": (lambda s: "")})
+    ck = ckey_fn or (lambda s: str(s or "").strip().lower())
+    cells, n = {}, 0
+    for r in rows:
+        n += 1
+        b = r.get("bucket") or ""
+        cstore = ck(r.get("store") or "") or "—"
+        rep = (r.get("salesperson") or "").strip() or "—"
+        date = str(r.get("trans_date") or "")[:10]
+        slot = cells.setdefault((cstore, rep, date),
+                                {"activations": 0, "byod": 0, "upgrades": 0, "_name": (r.get("store") or cstore)})
+        if b == "Upgrade":
+            slot["upgrades"] += 1
+        elif b == "BYOD":
+            slot["byod"] += 1
+        else:                              # New Activation / Port / Tablet / Home Internet / Edge / Other
+            slot["activations"] += 1
+    return cells, n
 
 
 def _exec_line_match(rule, dept, cat, pdesc):
