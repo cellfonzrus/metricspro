@@ -11,6 +11,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc', label: 'Commissions Dashboard', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/activations', label: 'Activations', module: 'commissions', scopes: ['all', 'market'], desc: 'b2b Activation Details basis of truth — distinct devices by market/store, Upgrade toggle, and automatic reconciliation against the sales feed' },
+    { href: '/commcalc/schematic', label: 'System Schematic', module: 'commissions', scopes: ['all'], desc: 'Data-lineage map: how ingested data and metrics feed each other, with code references and plain-English effects' },
     { href: '/commcalc/gp', label: 'Gross Profit', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', module: 'commissions' },
     { href: '/commcalc/coaching', label: 'Rep Coaching', module: 'commissions', scopes: ['all', 'market'] },
