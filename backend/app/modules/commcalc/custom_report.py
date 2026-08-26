@@ -219,6 +219,34 @@ DATASETS = [
             _col("retail_cost", "Retail Cost $", "money", gate="carrier_residual"),
         ],
     },
+    {
+        # Bill Payments — the b2b "Bill Payment Transactions Processed" report (owner 2026-08-26). Ingested
+        # via the self-serve CUSTOM IMPORT path (raw_custom_import JSONB — no per-report table/migration);
+        # the resolver detects it by column signature, so it works whatever report_key the tenant registered
+        # it under. Group by Store and read the summed `discount` column for the "discounts on bill payments"
+        # report the owner asked for; every money column subtotals correctly. Voided lines are excluded by
+        # the resolver so the sums reconcile. DISPLAY-ONLY.
+        "key": "bill_payments", "name": "Bill Payments", "resolver": "bill_payments", "sort_order": 100,
+        "field_map": {"store": "store", "rep": "salesperson", "market": "market", "day": "trans_date"},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("store", "Store", "text", group=True),
+            _col("market", "Market", "text", group=True),
+            _col("salesperson", "Processed by", "text", group=True),
+            _col("trans_date", "Date", "date", group=True),
+            _col("trans_id", "Trans ID", "text"),
+            _col("bill_pay_system", "Bill Pay System", "text", group=True),
+            _col("carrier_id", "Carrier", "text", group=True),
+            _col("customer_type", "Customer Type", "text", group=True),
+            _col("tender_type", "Tender", "text", group=True),
+            _col("txns", "Bill Payments", "count"),
+            _col("payment", "Payment $", "money"),
+            _col("fee", "Fee $", "money"),
+            _col("total_amt", "Total $", "money"),
+            _col("discount", "Discount $", "money"),
+            _col("tax", "Tax $", "money"),
+        ],
+    },
 ]
 
 _BY_KEY = {d["key"]: d for d in DATASETS}

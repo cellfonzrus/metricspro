@@ -27148,8 +27148,83 @@ def _cr_resolve_ma_daily_tx(client, org_id, period, ctx):
     return q.limit(100000).execute().data or []
 
 
+def _cr_resolve_bill_payments(client, org_id, period, ctx):
+    """The b2b "Bill Payment Transactions Processed" report (owner 2026-08-26), read from the self-serve
+    CUSTOM IMPORT capture (commcalc.raw_custom_import JSONB — no per-report table/migration needed).
+
+    DETECTED BY COLUMN SIGNATURE, not report_key: a sheet qualifies when its captured columns include a
+    'Discounts' column together with a Bill-Pay identifier ('Bill Pay System' / 'Bill Pay ID'). This means
+    the dataset lights up no matter what report_key the tenant registered the sheet under (the sweep/manual
+    upload only has to land it in raw_custom_import), which removes the one coordination point that would
+    otherwise silently show an empty report.
+
+    Money columns ($ Payment / Fee / Total / Discount / Tax) are coerced from the stringified JSONB values
+    ('$1.50', '1,234.00', '') to numbers so they subtotal. VOIDED lines are excluded so the sums reconcile
+    (a voided bill payment was reversed). One row = one bill payment, so `txns`=1 per row sums to the count.
+    Powers the Bill Payment Discounts report: dataset 'Bill Payments', group by Store, read summed Discount."""
+    market_for = ctx["market_for"]
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report bill_payments read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    out = []
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — only the bill-payment sheet carries a Discounts column alongside a Bill-Pay identifier.
+        if "discounts" not in keys or not ({"bill pay system", "bill pay id", "bill pay id#"} & keys):
+            continue
+        if str(_get(d_low, "Voided")).strip().lower() in _VOID_TOKENS:
+            continue
+        store = str(_get(d_low, "Store")).strip()
+        out.append({
+            "store": store,
+            "market": market_for(store),
+            "salesperson": str(_get(d_low, "Created By", "Salesperson", "User Login")).strip(),
+            "trans_date": str(_get(d_low, "Trans Date", "Trans Date Time", "Service Date"))[:10],
+            "trans_id": str(_get(d_low, "Trans ID")).strip(),
+            "bill_pay_system": str(_get(d_low, "Bill Pay System")).strip(),
+            "carrier_id": str(_get(d_low, "Carrier ID")).strip(),
+            "customer_type": str(_get(d_low, "Customer Type")).strip(),
+            "tender_type": str(_get(d_low, "Tender Type")).strip(),
+            "txns": 1,
+            "payment": _num(_get(d_low, "Payment")),
+            "fee": _num(_get(d_low, "Fee")),
+            "total_amt": _num(_get(d_low, "Total Amt", "Total Amount")),
+            "discount": _num(_get(d_low, "Discounts", "Discount")),
+            "tax": _num(_get(d_low, "Tax")),
+        })
+    return out
+
+
 _CUSTOM_REPORT_RESOLVERS = {
     "sales_line": _cr_resolve_sales_line,
+    "bill_payments": _cr_resolve_bill_payments,
     "rep_commissions": _cr_resolve_rep_commissions,
     "targets_actuals": _cr_resolve_targets_actuals,
     "kpi_metrics": _cr_resolve_kpi_metrics,
