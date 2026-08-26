@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import Link from 'next/link'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
@@ -286,6 +287,19 @@ export default function SalesReportPage() {
             {(data.source_meta.completeness_rows ?? 0) > 0 && <> · recovered <b>{data.source_meta.completeness_rows}</b> sale line(s) present in raw_sales that the feed missed on a shared store-day</>}
           </span>
           {data.org_id && <span style={{ color: 'var(--text3)' }}>org <code style={{ fontSize: 11 }}>{String(data.org_id).slice(0, 8)}…</code></span>}
+        </div>
+      )}
+
+      {/* SOURCE OF TRUTH (mig 923): activations/BYOD/upgrades on this report come from the Activation Details
+          basis (matches Exec MTD + the b2b figure), not the sales feed. Shown only when that basis is active. */}
+      {data?.activation_source?.active && (
+        <div style={{ fontSize: 12.5, background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7',
+                      borderRadius: 8, padding: '8px 12px', marginBottom: 14 }}>
+          ✓ Activations, BYOD and Upgrades on this report come from the <b>Activation Details</b> basis of truth
+          (matches Executive MTD &amp; the b2b figure). Other columns come from the sales feed.{' '}
+          <Link href="/commcalc/activations" style={{ color: '#065f46', fontWeight: 700, textDecoration: 'underline' }}>
+            Activations report &amp; reconciliation →
+          </Link>
         </div>
       )}
 
