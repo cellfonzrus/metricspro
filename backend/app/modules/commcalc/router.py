@@ -24759,6 +24759,38 @@ def _email_status_update(client, org_id, account, upd):
             pass
 
 
+def _auto_custom_report_patterns(client, org_id):
+    """Auto-derived filename patterns for every registered CUSTOM report (report_definitions), so a report
+    added for email ingestion is matched WITHOUT the tenant hand-crafting a glob (owner 2026-08-26: adding a
+    custom report should make it ingest automatically — "email has the data but the system did not get them"
+    was exactly a new report with no filename rule). Pattern = the label's words joined by '*'
+    (e.g. 'Activation Details' → '*activation*details*'); the report_key slug is also accepted. Used as a
+    FALLBACK appended AFTER the explicit patterns (first-match wins in match_upload_type), so nothing that
+    already matched changes. Never raises."""
+    import re as _re_ap
+    out, seen = [], set()
+    try:
+        defs = (client.schema("commcalc").table("report_definitions")
+                .select("report_key,label,target_table,upload_endpoint").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return out
+    for d in defs:
+        if not (d.get("upload_endpoint") == "custom" or d.get("target_table") == CUSTOM_IMPORT_TABLE):
+            continue
+        rk = (d.get("report_key") or "").strip()
+        if not rk:
+            continue
+        for raw in ((d.get("label") or rk), rk):
+            words = [w for w in _re_ap.split(r"[^a-z0-9]+", str(raw).lower()) if w]
+            if not words:
+                continue
+            pat = "*" + "*".join(words) + "*"
+            if pat not in seen:
+                seen.add(pat)
+                out.append({"pattern": pat, "upload_type": rk, "auto": True})
+    return out
+
+
 async def _run_email_sweep(org_id, account='default'):
     """Connect to ONE tenant mailbox (org, account), download every NEW attachment matching a configured
     pattern, route each through the existing upload pipeline, and record what was processed (dedup by
@@ -24769,6 +24801,12 @@ async def _run_email_sweep(org_id, account='default'):
     account = (cfg or {}).get('account') or account
     if not cfg or not (cfg.get('imap_host') or '').strip():
         return {"ok": False, "error": "Email/IMAP not configured", "account": account}
+    # AUTO-MATCH new custom reports: append derived patterns for every registered custom sheet AFTER the
+    # explicit rules (explicit wins first), so a report the tenant just added ingests without a hand-written
+    # glob. This closes the "attachment is in the inbox but never imports because no rule matched it" gap.
+    _auto_pats = _auto_custom_report_patterns(client, org_id)
+    if _auto_pats:
+        cfg = {**cfg, 'patterns': (cfg.get('patterns') or []) + _auto_pats}
     # An empty rules list matches NOTHING — fail loudly instead of a silent "0/0 ingested" while
     # reports sit in the inbox (bit the Total/luxelink mailbox setup 2026-07-02).
     if not any((p.get('pattern') or '').strip() for p in (cfg.get('patterns') or []) if isinstance(p, dict)):
