@@ -22285,6 +22285,33 @@ def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations")
     raise HTTPException(400, "unknown metric (allowed: activations, bill_payments)")
 
 
+@router.get("/data-lineage")
+def get_data_lineage(org_id: str = ORG_ID, source_key: str = "", affected_key: str = "", kind: str = ""):
+    """The system DATA-LINEAGE registry (mig 924/925) — the documented schematic of how ingested data and
+    derived metrics feed each other. Each row is a dependency edge (source → affected) with entry_point, a
+    code reference, a plain-English effect, kind, and auto_updated. Optional filters narrow to one source /
+    affected item / kind. Returns rows + an index grouped by source so the UI can render 'if X changes, these
+    update'. Empty until migration 925 (the seed) is applied. DISPLAY/documentation only."""
+    require_org(org_id)
+    try:
+        q = sb().schema("commcalc").table("data_lineage").select("*")
+        if source_key:
+            q = q.eq("source_key", source_key)
+        if affected_key:
+            q = q.eq("affected_key", affected_key)
+        if kind:
+            q = q.eq("kind", kind)
+        rows = q.order("source_key").order("seq").limit(5000).execute().data or []
+    except Exception as e:
+        return {"rows": [], "by_source": {}, "sources": [], "note": f"data_lineage unavailable (run migration 924/925): {str(e)[:160]}"}
+    by_source = {}
+    for r in rows:
+        by_source.setdefault(r.get("source_key") or "?", []).append(r)
+    return {"rows": rows, "by_source": by_source, "sources": sorted(by_source.keys()),
+            "count": len(rows),
+            "note": (None if rows else "data_lineage is empty — apply migration 925 (the seed) to populate the schematic.")}
+
+
 @router.get("/metric-source-config")
 def get_metric_source_config(org_id: str = ORG_ID):
     """The tenant's per-metric SOURCE-OF-TRUTH config (mig 923). Returns one entry per known metric, falling
@@ -27940,6 +27967,44 @@ _ACT_BUCKET_RANK = {"Home Internet": 6, "Edge": 6, "Tablet": 6, "BYOD": 4, "Port
                     "New Activation": 2, "Other": 1, "Upgrade": 0}
 
 
+def _dealer_to_store_map(client, org_id):
+    """{dealer/store code (UPPER) -> display store name} so the b2b Activation Details "Dealer Code" (a
+    numeric b2b id like 168872) resolves to the SAME store string the sales feed uses (the address, e.g.
+    '104-08 Lefferts Blvd') — letting the activation numbers MERGE onto the named store row instead of
+    landing as a separate numeric-ID row. Sources, chained: commcalc.store_mapping (store_code ->
+    store_address), storeops.stores (store_code -> address/name), storeops.store_merchant_id (merchant/
+    terminal id -> store_code -> name). Best-effort + defensive: any read failure is skipped, {} at worst."""
+    out = {}
+    try:
+        for r in (client.schema("commcalc").table("store_mapping")
+                  .select("store_code,store_address").eq("org_id", org_id).execute().data) or []:
+            c = str(r.get("store_code") or "").strip()
+            a = str(r.get("store_address") or "").strip()
+            if c and a:
+                out[c.upper()] = a
+    except Exception:
+        pass
+    try:
+        for r in (client.schema("storeops").table("stores")
+                  .select("store_code,address,name").eq("org_id", org_id).execute().data) or []:
+            c = str(r.get("store_code") or "").strip()
+            a = str(r.get("address") or "").strip() or str(r.get("name") or "").strip()
+            if c and a:
+                out.setdefault(c.upper(), a)
+    except Exception:
+        pass
+    try:
+        for r in (client.schema("storeops").table("store_merchant_id")
+                  .select("store_code,merchant_id").eq("org_id", org_id).execute().data) or []:
+            mid = str(r.get("merchant_id") or "").strip()
+            c = str(r.get("store_code") or "").strip()
+            if mid and c:
+                out.setdefault(mid.upper(), out.get(c.upper()) or c)
+    except Exception:
+        pass
+    return out
+
+
 def _cr_resolve_activation_details(client, org_id, period, ctx):
     """The b2b "Activation Details" report (owner 2026-08-26) — the ACTIVATION BASIS OF TRUTH for every
     b2bsoft tenant — read from the self-serve CUSTOM IMPORT capture (commcalc.raw_custom_import JSONB, no
@@ -27961,6 +28026,9 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
     DISPLAY + RECON basis. `activation_counts` sums every bucket EXCEPT Upgrade for Total Activation. No
     payout path reads this yet — moving commission onto this basis is a separate, explicit config opt-in."""
     market_for = ctx["market_for"]
+    # Dealer Code -> store name, so the AD numeric Dealer Code merges onto the sales feed's named store row
+    # (built once; empty when nothing maps → falls back to the code, same as before).
+    _dmap = _dealer_to_store_map(client, org_id)
     try:
         q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
              .select("data,period,source_filename,row_index").eq("org_id", org_id))
@@ -28016,7 +28084,11 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
         division = str(_get(d_low, "Division")).strip()
         region = str(_get(d_low, "Region")).strip()
         district = str(_get(d_low, "District")).strip()
+        # Prefer an explicit Store/name column; else resolve the Dealer Code to the store's real name (so the
+        # activation numbers merge onto the sales feed's named store row instead of showing as a numeric ID);
+        # else fall back to the raw dealer code / district / division.
         store = (str(_get(d_low, "Store", "Store Name", "Location", "Site")).strip()
+                 or _dmap.get(dealer.upper()) or _dmap.get(district.upper())
                  or dealer or district or division)
         mkt = market_for(store) or region or division
         ct = str(_get(d_low, "Contract Type")).strip()
