@@ -278,6 +278,32 @@ DATASETS = [
             _col("mrc", "MRC $", "money"),
         ],
     },
+    {
+        # Sales by Product — the b2b "Sales by Product" report (owner 2026-08-26), for accessory sales by
+        # department. Ingested via the self-serve CUSTOM IMPORT path (raw_custom_import JSONB — no per-report
+        # table/migration). The resolver walks the report's Department: header / product / subtotal structure
+        # and carries the Department onto each product row, flagging Accessories & C2wireless as accessory
+        # departments. Group by Department (or filter is_accessory = Yes) and read accessory_sales /
+        # accessory_gp for the accessory-sales totals. NB: the report carries no Store/Rep/Date column, so
+        # this dataset aggregates at the report's own scope, not per store. DISPLAY-ONLY.
+        "key": "product_sales", "name": "Sales by Product", "resolver": "product_sales", "sort_order": 55,
+        "field_map": {"store": None, "rep": None, "market": None, "day": None},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("department", "Department", "text", group=True),
+            _col("category", "Category", "text", group=True),
+            _col("product_desc", "Product", "text", group=True),
+            _col("is_accessory", "Accessory dept?", "text", group=True),
+            _col("qty", "Qty", "count"),
+            _col("ext_price", "Ext Price $", "money"),
+            _col("ext_cost", "Ext Cost $", "money"),
+            _col("gp", "GP $", "money"),
+            _col("product_gp", "Product GP $", "money"),
+            _col("total_exp_comm", "Total Exp Comm $", "money"),
+            _col("accessory_sales", "Accessory Sales $", "money"),
+            _col("accessory_gp", "Accessory GP $", "money"),
+        ],
+    },
 ]
 
 _BY_KEY = {d["key"]: d for d in DATASETS}

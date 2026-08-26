@@ -27339,10 +27339,103 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
     return out
 
 
+# The departments that count as ACCESSORY sales for the "Sales by Product" report (owner 2026-08-26:
+# "currently 2 departments accessories and C2wireless are in accessory sales"). Lower-cased for matching.
+# Kept here as the single place to extend if the tenant adds an accessory department.
+_ACCESSORY_DEPARTMENTS = {"accessories", "c2wireless"}
+
+
+def _cr_resolve_product_sales(client, org_id, period, ctx):
+    """The b2b "Sales by Product" report (owner 2026-08-26) — read from the self-serve CUSTOM IMPORT capture
+    (commcalc.raw_custom_import JSONB — no per-report table/migration).
+
+    HIERARCHICAL SHEET: rows come as 'Department: X' HEADER rows, then the product rows under them, then a
+    per-department SUBTOTAL row (blank Product Desc). This resolver walks the rows IN FILE ORDER (row_index),
+    carries the current Department down onto each product row, and DROPS the header + subtotal rows so
+    nothing is double-counted. Per source_filename the department resets, so two files never bleed together.
+
+    Flags each product row `is_accessory` when its Department is in _ACCESSORY_DEPARTMENTS (Accessories /
+    C2wireless), and exposes `accessory_sales` (Ext Price on accessory rows) + `accessory_gp` (GP on
+    accessory rows) so grouping gives the accessory-sales totals the owner asked for. The report carries no
+    Store/Rep/Date column, so this dataset aggregates at the report's own scope (by Department/Category/
+    Product), not per store. DISPLAY-ONLY."""
+    from collections import defaultdict
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,row_index,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report product_sales read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    # Only this report's sheets qualify (Product GP + Total Exp Comm columns), grouped per file for ordered
+    # department tracking.
+    byfile = defaultdict(list)
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        keys = {(k or "").strip().lower() for k in d.keys()}
+        if "product gp" not in keys or "total exp comm" not in keys:
+            continue
+        byfile[r.get("source_filename") or ""].append(r)
+
+    out = []
+    for _fname, rrows in byfile.items():
+        rrows.sort(key=lambda x: x.get("row_index") if x.get("row_index") is not None else 0)
+        dept = ""
+        for r in rrows:
+            d_low = {(k or "").strip().lower(): v for k, v in (r.get("data") or {}).items()}
+            cat = str(_get(d_low, "Category")).strip()
+            prod = str(_get(d_low, "Product Desc")).strip()
+            if cat.lower().startswith("department:"):
+                dept = cat.split(":", 1)[1].strip()   # carry this department onto the rows that follow
+                continue
+            if not prod:
+                continue                               # subtotal / blank row — never a product line
+            is_acc = dept.strip().lower() in _ACCESSORY_DEPARTMENTS
+            ext = _num(_get(d_low, "Ext Price"))
+            gp = _num(_get(d_low, "GP"))
+            out.append({
+                "department": dept,
+                "category": cat,
+                "product_desc": prod,
+                "is_accessory": "Yes" if is_acc else "No",
+                "qty": _num(_get(d_low, "Qty")),
+                "ext_price": ext,
+                "ext_cost": _num(_get(d_low, "Ext Cost")),
+                "gp": gp,
+                "product_gp": _num(_get(d_low, "Product GP")),
+                "total_exp_comm": _num(_get(d_low, "Total Exp Comm")),
+                "accessory_sales": ext if is_acc else 0.0,
+                "accessory_gp": gp if is_acc else 0.0,
+            })
+    return out
+
+
 _CUSTOM_REPORT_RESOLVERS = {
     "sales_line": _cr_resolve_sales_line,
     "bill_payments": _cr_resolve_bill_payments,
     "activation_details": _cr_resolve_activation_details,
+    "product_sales": _cr_resolve_product_sales,
     "rep_commissions": _cr_resolve_rep_commissions,
     "targets_actuals": _cr_resolve_targets_actuals,
     "kpi_metrics": _cr_resolve_kpi_metrics,
