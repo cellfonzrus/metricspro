@@ -286,6 +286,22 @@ export default function ExecMtdPage() {
         </div>
       )}
 
+      {/* SOURCE OF TRUTH (mig 923). When the tenant names Activation Details the activation basis, Total
+          Activation on this page comes from that report (distinct Serial#) and EXCLUDES Upgrade — the
+          b2b-consistent definition that matches /activation-counts. Says so plainly so the number is never
+          silently redefined. Hidden on the default sales basis (active:false). */}
+      {data?.activation_source?.active && (
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#ecfdf5', border: '1px solid #6ee7b7',
+          color: '#065f46', borderRadius: 8, padding: '9px 12px' }}>
+          <span style={{ fontWeight: 700 }}>✓ Activations from the Activation Details report (basis of truth).</span>{' '}
+          Total Activation counts distinct devices and <b>excludes Upgrade</b> (b2b-consistent); Upgrade is shown
+          in its own column. {int(data.activation_source.ad_rows || 0)} activation rows for this window.{' '}
+          <Link href="/commcalc/activations" style={{ color: '#065f46', fontWeight: 700, textDecoration: 'underline' }}>
+            Open the Activations report &amp; reconciliation →
+          </Link>
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
         <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
           {(['location', 'employee'] as const).map((tb) => (

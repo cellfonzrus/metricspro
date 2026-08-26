@@ -21290,6 +21290,79 @@ def _exec_metric_config(client, org_id):
     return cfg
 
 
+# ── PER-METRIC SOURCE OF TRUTH (mig 923) ─────────────────────────────────────────────────────────
+# The historical default source for each metric — what every org WITHOUT a metric_source_of_truth row
+# keeps (byte-identical): activations + bill payments both come from the shared sales aggregation.
+_METRIC_SOURCE_DEFAULTS = {"activations": "sales_agg", "bill_payments": "sales_agg"}
+
+
+def _metric_source(client, org_id, metric):
+    """Resolve the per-metric SOURCE OF TRUTH (mig 923). Returns
+    {'metric','source','enabled','reconcile_with','processor','assigned_user','tolerance','configured'}.
+
+    EMPTY/absent (every existing org, the house/Boost org, or pre-923) → the historical default source with
+    enabled=False, configured=False, so every caller takes the byte-identical default path. Never raises."""
+    default = {"metric": metric, "source": _METRIC_SOURCE_DEFAULTS.get(metric, "sales_agg"),
+               "enabled": False, "reconcile_with": None, "processor": None,
+               "assigned_user": None, "tolerance": 0.0, "configured": False}
+    try:
+        rows = (client.schema("commcalc").table("metric_source_of_truth")
+                .select("*").eq("org_id", org_id).eq("metric", metric).limit(1).execute().data) or []
+    except Exception:
+        return default
+    if not rows:
+        return default
+    r = rows[0]
+    return {"metric": metric, "source": (r.get("source") or default["source"]),
+            "enabled": bool(r.get("enabled")),
+            "reconcile_with": r.get("reconcile_with") or None,
+            "processor": r.get("processor") or None,
+            "assigned_user": r.get("assigned_user") or None,
+            "tolerance": float(r.get("tolerance") or 0.0),
+            "configured": True}
+
+
+# Map an Activation Details bucket (New Activation / Port / BYOD / Upgrade / Tablet / Home Internet / Edge /
+# Other) onto the Exec-MTD activation keys. Only Port / BYOD / Upgrade are their own columns; every other
+# activation family folds into the base 'activation' column (Tablet / Home Internet / Edge / plain New all
+# count as activations toward Total Activation, exactly as the b2bsoft MTD report counts them).
+_AD_EXEC_KEY = {"Port": "port", "BYOD": "byod", "Upgrade": "upgrade"}
+
+
+def _ad_activation_buckets(client, org_id, period, ckey_fn=None, cut=None,
+                           rng_from=None, rng_to=None, no_overlap=False):
+    """Aggregate the b2b Activation Details basis into per-canonical-store and per-rep activation buckets
+    {'activation','port','byod','upgrade'} for the Exec-MTD source-of-truth override + reconciliation.
+    Applies the SAME MTD date-cut / date-range window the sales cells use, so the two bases compare on the
+    same window. Stores are keyed by the SAME canonical key Exec MTD groups by (`ckey_fn`), so an override
+    lands on the matching store row. Returns (by_store, by_rep, n_rows); empty maps when Activation Details
+    has no rows for the period. DISPLAY/recon only."""
+    rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": (lambda s: "")})
+    ck = ckey_fn or (lambda s: str(s or "").strip().lower())
+    by_store, by_rep, n = {}, {}, 0
+    for r in rows:
+        d10 = r.get("trans_date") or ""
+        if cut and d10 and d10 > cut:
+            continue
+        if rng_from or rng_to:
+            if no_overlap:
+                continue
+            if not d10:
+                continue            # a windowed report cannot place an undated activation
+            if (rng_from and d10 < rng_from) or (rng_to and d10 > rng_to):
+                continue
+        n += 1
+        fld = _AD_EXEC_KEY.get(r.get("bucket") or "", "activation")
+        st = ck(r.get("store") or "") or "—"
+        rep = (r.get("salesperson") or "").strip() or "—"
+        s_slot = by_store.setdefault(st, {"activation": 0, "port": 0, "byod": 0, "upgrade": 0,
+                                          "_name": (r.get("store") or st)})
+        r_slot = by_rep.setdefault(rep, {"activation": 0, "port": 0, "byod": 0, "upgrade": 0, "_name": rep})
+        s_slot[fld] += 1
+        r_slot[fld] += 1
+    return by_store, by_rep, n
+
+
 def _exec_line_match(rule, dept, cat, pdesc):
     """True if a sale line matches a bucket rule (all case-insensitive; inputs already lowercased).
     category/department = exact membership in a token list; product_desc_contains = substring; exclude_*
@@ -21578,6 +21651,43 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
             d['activation_fee'] += a['activation_fee']
             d['protect'] += a['protect']
 
+    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS ────────────────────────────────────────────────────
+    # When the tenant names Activation Details the activation basis of truth, REPLACE the sales-derived
+    # activation buckets (activation/port/byod/upgrade) with the Activation Details counts — distinct
+    # Serial#, and Total Activation then EXCLUDES Upgrade (the b2b-consistent definition, matching the
+    # b2bsoft MTD report and /activation-counts). The AD counts are windowed by the SAME MTD cut / date
+    # range applied to the sales cells above, so the two bases compare on the same days.
+    #   • EMPTY/absent config (every existing org, house/Boost) → override OFF → the block below is a
+    #     no-op and Total Activation stays activation+port+byod+upgrade → BYTE-IDENTICAL.
+    #   • A store/rep present in sales but absent from AD has its activation buckets ZEROED — AD is
+    #     authoritative, so "no AD activation there" means none; the other columns (bill pays, acc$)
+    #     are preserved. The reconciliation surface flags any store where the two bases disagree.
+    _msrc_act = _metric_source(client, org_id, 'activations')
+    _act_override = bool(_msrc_act.get('enabled')) and _msrc_act.get('source') == 'activation_details'
+    _ad_n = 0
+    if _act_override:
+        _ad_store, _ad_rep, _ad_n = _ad_activation_buckets(
+            client, org_id, period, ckey_fn=_ckey_ex, cut=cut,
+            rng_from=(rng_from_s if rng_on else None), rng_to=(rng_to_s if rng_on else None),
+            no_overlap=(rng_on and no_overlap))
+        if _ad_n:
+            def _apply_ad(agg, admap):
+                for k, ad in admap.items():
+                    slot = agg.get(k)
+                    if slot is None:                      # a store/rep only in AD → add it
+                        slot = _blank(); slot['_name'] = ad.get('_name') or k; agg[k] = slot
+                    slot['activation'], slot['port'] = ad['activation'], ad['port']
+                    slot['byod'], slot['upgrade'] = ad['byod'], ad['upgrade']
+                for k, slot in agg.items():               # in sales but not AD → AD says zero
+                    if k not in admap:
+                        slot['activation'] = slot['port'] = slot['byod'] = slot['upgrade'] = 0
+            _apply_ad(by_store, _ad_store)
+            _apply_ad(by_emp, _ad_rep)
+        else:
+            _act_override = False    # AD configured but no rows for this window → keep sales basis, never blank
+    # Total Activation EXCLUDES Upgrade only on the AD basis (b2b-consistent); the sales basis is unchanged.
+    _ta_excl_upgrade = bool(_act_override)
+
     # The tenant's set-up-fee economics, read ONCE (mig 263). Unset -> None -> the two new columns are
     # em-dashes and every pre-existing number is untouched.
     _sf_emp_pct = _sf_dealer_pct = None
@@ -21592,7 +21702,10 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         _sf_emp_pct = _sf_dealer_pct = None
 
     def _row(name, label_key, d):
-        ta = d['activation'] + d['port'] + d['byod'] + d['upgrade']
+        # Total Activation = Activation+Port+BYOD+Upgrade on the sales basis (unchanged); on the Activation
+        # Details basis it EXCLUDES Upgrade (b2b-consistent, matching /activation-counts). Upgrade is still
+        # reported in its own column either way.
+        ta = d['activation'] + d['port'] + d['byod'] + (0 if _ta_excl_upgrade else d['upgrade'])
         return {label_key: name,
                 'total_activation': ta, 'activation': d['activation'], 'port': d['port'],
                 'byod': d['byod'], 'upgrade': d['upgrade'], 'total_phones': d['total_phones'],
@@ -21671,6 +21784,14 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
     return {'period': period, 'source': meta,
             'classification_gaps': _cls_gaps_ex,
+            # SOURCE OF TRUTH (mig 923): tells the UI which basis drove Total Activation and whether Upgrade
+            # is excluded from it, so the number is never silently redefined. Sales basis (the default) →
+            # active:false, byte-identical response otherwise.
+            'activation_source': {'source': _msrc_act.get('source'),
+                                  'active': bool(_act_override),
+                                  'basis': 'activation_details' if _act_override else 'sales_agg',
+                                  'ad_rows': (_ad_n if _act_override else 0),
+                                  'total_activation_excludes_upgrade': bool(_act_override)},
             'filters': filters, 'applied': applied,
             'date_range': {'active': rng_on, 'from': rng_from_s, 'to': rng_to_s,
                            'requested_from': (str(date_from)[:10] or None) if date_from else None,
@@ -21729,37 +21850,77 @@ _ACT_BUCKET_FIELD = {"New Activation": "activation", "Port": "port", "BYOD": "by
                      "Home Internet": "home_internet", "Edge": "edge", "Upgrade": "upgrade", "Other": "other"}
 
 
+def _market_for_fn(client, org_id):
+    """A `market_for(store) -> market` resolver from commcalc.store_mapping (by address / store_code /
+    leading store-number), mirroring the Exec-MTD / Sales-Report market resolvers so every activation
+    surface agrees on which market a store belongs to. Empty ('') when the store has no mapping — never
+    raises (a store_mapping read failure just yields '' for every store)."""
+    import re as _re_mf
+    try:
+        rows = (client.schema("commcalc").table("store_mapping")
+                .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    by_code, by_addr, by_num = {}, {}, {}
+
+    def _lead(s):
+        m = _re_mf.match(r"\s*(\d+)", str(s or ""))
+        return m.group(1) if m else ""
+    for s in rows:
+        mk = (s.get("market") or "").strip()
+        if not mk:
+            continue
+        code = str(s.get("store_code") or "").strip()
+        addr = str(s.get("store_address") or "").strip()
+        if code:
+            by_code[code] = mk
+        if addr:
+            by_addr[addr.lower()] = mk
+        n = _lead(addr)
+        if n:
+            by_num.setdefault(n, mk)
+
+    def market_for(store):
+        st = str(store or "").strip()
+        return by_addr.get(st.lower()) or by_code.get(st) or by_num.get(_lead(st)) or ""
+    return market_for
+
+
 @router.get("/activation-counts/{period}")
-def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = ""):
-    """Store activation COUNTS from the b2b "Activation Details" report, in the SHAPE of the b2b "Month To
-    Date Location Sales Report" so the two reconcile line-for-line (owner 2026-08-26).
+def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = "", include_upgrade: bool = False):
+    """Store + MARKET activation COUNTS from the b2b "Activation Details" report, in the SHAPE of the b2b
+    "Month To Date Location Sales Report" so the two reconcile line-for-line (owner 2026-08-26).
 
     One row per distinct device (deduped by Serial#; a device's insurance/Plan-Option lines share its serial
-    and count once; Returns/cancelled excluded). Per store it returns `total_activation` = Activation + Port +
-    BYOD + Tablet + Home Internet
-    + Edge (EXCLUDING Upgrade — that is b2b's own definition, verified against its totals row), the per-type
-    breakdown, and `upgrade` alongside. Compare `total_activation` to the b2b report's "Total Activation"
-    column: match ⇒ the mapping is right; a gap ⇒ the type breakdown shows which category is off.
+    and count once; Returns/cancelled excluded). Every store row carries its `market`, the per-type breakdown
+    (activation / port / byod / tablet / home_internet / edge / upgrade), and BOTH totals so the UI can toggle
+    without a re-fetch:
+      • `total_activation`     = Activation+Port+BYOD+Tablet+Home Internet+Edge, EXCLUDING Upgrade (b2b's own
+                                 definition — LuxeLink 687, Nova 250).
+      • `total_with_upgrade`   = the above PLUS Upgrade (LuxeLink 726, Nova 261).
+    `include_upgrade=true` makes the store list SORT by (and `default_total` report) the with-Upgrade total;
+    the two numbers are always both present regardless. A `markets` rollup splits multi-market files (e.g.
+    LuxeLink vs Nova in one export) so each market's total stands on its own.
 
     AS-OF CUTOFF: `as_of` (YYYY-MM-DD, or a b2b M/D/YYYY date) counts only activations dated on/before that
-    day, so the count can be pinned to "as of last night" and compared against a b2b snapshot taken at the
-    same cutoff instead of a moving live total. Undated rows are always included (they cannot be placed).
+    day. Undated rows are always included (they cannot be placed).
 
     Reads the self-serve custom-import capture (raw_custom_import) — EMPTY until the Activation Details report
-    is uploaded/registered as a custom import (or routed via the email import) for `period`; the `note` says
-    so rather than showing a silent 0. DISPLAY-ONLY."""
+    is uploaded/registered as a custom import (or routed via the email import) for `period`. DISPLAY-ONLY."""
     require_org(org_id)
-    rows = _cr_resolve_activation_details(sb(), org_id, period, {"market_for": (lambda s: "")})
+    client = sb()
+    mfor = _market_for_fn(client, org_id)
+    rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": mfor})
     cutoff = _norm_report_date(as_of) if as_of else ""
     excluded_after = 0
 
-    def _blank_store(st):
-        d = {"store": st, "total_activation": 0, "upgrade": 0}
+    def _blank(label, key="store"):
+        d = {key: label, "market": "", "total_activation": 0, "total_with_upgrade": 0, "upgrade": 0}
         for f in _ACT_BUCKET_FIELD.values():
             d[f] = 0
         return d
 
-    by_store, grand = {}, _blank_store("TOTAL")
+    by_store, by_market, grand = {}, {}, _blank("TOTAL")
     counted = 0
     for r in rows:
         d10 = r.get("trans_date") or ""
@@ -21768,17 +21929,26 @@ def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = ""):
             continue
         counted += 1
         st = (r.get("store") or "").strip() or "—"
+        mk = (r.get("market") or "").strip() or "(no market)"
         bucket = r.get("bucket") or "Other"
         fld = _ACT_BUCKET_FIELD.get(bucket, "other")
-        for d in (by_store.setdefault(st, _blank_store(st)), grand):
+        s_row = by_store.setdefault(st, _blank(st))
+        s_row["market"] = (r.get("market") or "").strip()
+        m_row = by_market.setdefault(mk, _blank(mk, key="market"))
+        for d in (s_row, m_row, grand):
             d[fld] += 1
+            d["total_with_upgrade"] += 1
             if bucket != "Upgrade":       # b2b Total Activation excludes Upgrade
                 d["total_activation"] += 1
-    stores = sorted(by_store.values(), key=lambda x: -x["total_activation"])
+    _sort_key = (lambda x: -x["total_with_upgrade"]) if include_upgrade else (lambda x: -x["total_activation"])
+    stores = sorted(by_store.values(), key=_sort_key)
+    markets = sorted(by_market.values(), key=_sort_key)
     return {
         "period": period, "org_id": org_id,
         "as_of": cutoff or None, "excluded_after_cutoff": excluded_after,
-        "counted": counted, "stores": stores, "total": grand,
+        "include_upgrade": include_upgrade,
+        "default_total": ("total_with_upgrade" if include_upgrade else "total_activation"),
+        "counted": counted, "stores": stores, "markets": markets, "total": grand,
         "note": (None if rows else
                  "No Activation Details rows found for this period. Upload or register the b2b "
                  "'Activation Details' report as a Custom Import (Data Imports → Custom Reports), or route "
@@ -21820,6 +21990,117 @@ def product_sales_departments(period: str, org_id: str = ORG_ID):
                  "No Sales by Product rows found for this period. Upload or route the b2b 'Sales by Product' "
                  "report (Data Imports → Custom Reports / Email Imports), then re-check."),
     }
+
+
+def _sales_activation_by_store(client, org_id, period):
+    """Per-canonical-store activation buckets {'activation','port','byod','upgrade','_name'} from the SHARED
+    sales aggregation (_sales_cell_agg) — the SECONDARY activation source for reconciliation, computed the
+    exact way Exec MTD rolls its by_location activations up (so a mismatch is real, not a method artifact).
+    Whole-period (no MTD cut): the recon asks whether the month ingested the same, not a to-date slice."""
+    cfg = _exec_metric_config(client, org_id)
+    acfg = _accessory_config(client, org_id)
+    rows, _meta = _sales_rows_union(client, org_id, period)
+    ckey = _canonical_store_key_fn(client, org_id)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=ckey)
+    by_store = {}
+    for (st, _rep, _date), a in cells.items():
+        prem, port = len(a['_prem']), len(a['_port'])
+        slot = by_store.setdefault(st or '—', {"activation": 0, "port": 0, "byod": 0, "upgrade": 0,
+                                               "_name": (a.get('store') or st or '—')})
+        slot['activation'] += prem - port
+        slot['port'] += port
+        slot['byod'] += len(a['_byod'])
+        slot['upgrade'] += len(a['_upg'])
+    return by_store
+
+
+@router.get("/metric-recon/{period}")
+def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations"):
+    """Two-source RECONCILIATION for a metric (owner 2026-08-26): prove the ingest is good when the two
+    sources agree, flag + name a remediation when they don't. For `activations` it compares the b2b
+    Activation Details basis (PRIMARY / basis of truth — distinct Serial#, Upgrade excluded) against the
+    shared sales aggregation (SECONDARY), per store, on the b2b-consistent Total Activation. Read-only.
+
+    The `tolerance`, `reconcile_with` and `assigned_user` come from the tenant's metric_source_of_truth
+    config (mig 923); with no config the recon still runs with sensible defaults (exact match, sales_agg)
+    so a tenant can SEE the two sources line up before switching Exec MTD onto the AD basis."""
+    require_org(org_id)
+    if metric != "activations":
+        raise HTTPException(400, "only the 'activations' metric is reconciled today")
+    from app.modules.commcalc import metric_recon as metric_recon_mod
+    client = sb()
+    msrc = _metric_source(client, org_id, metric)
+    ckey = _canonical_store_key_fn(client, org_id)
+    ad_by_store, _ad_rep, ad_n = _ad_activation_buckets(client, org_id, period, ckey_fn=ckey)
+    sales_by_store = _sales_activation_by_store(client, org_id, period)
+    result = metric_recon_mod.reconcile_activations(
+        ad_by_store, sales_by_store,
+        tolerance=msrc.get("tolerance") or 0,
+        source=(msrc.get("source") if msrc.get("configured") else "activation_details"),
+        reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
+        assigned_user=msrc.get("assigned_user"))
+    result.update({"period": period, "org_id": org_id, "metric": metric,
+                   "config": {"configured": msrc.get("configured"), "enabled": msrc.get("enabled"),
+                              "source": msrc.get("source"), "processor": msrc.get("processor")},
+                   "primary_rows": ad_n,
+                   "note": (None if ad_n else
+                            "No Activation Details rows for this period — upload or route the b2b 'Activation "
+                            "Details' report so the activation basis of truth is present to reconcile.")})
+    return result
+
+
+@router.get("/metric-source-config")
+def get_metric_source_config(org_id: str = ORG_ID):
+    """The tenant's per-metric SOURCE-OF-TRUTH config (mig 923). Returns one entry per known metric, falling
+    back to the historical default (sales_agg, disabled) for any metric with no row — so the admin panel
+    always renders every metric with its current basis. DISPLAY/config only."""
+    require_org(org_id)
+    client = sb()
+    return {"org_id": org_id,
+            "metrics": [_metric_source(client, org_id, m) for m in ("activations", "bill_payments")]}
+
+
+class PutMetricSourceIn(LaxModel):
+    metric: str = ""
+    source: str = ""
+    enabled: Any = None
+    reconcile_with: Any = None
+    processor: Any = None
+    assigned_user: Any = None
+    tolerance: Any = None
+
+
+_METRIC_SOURCE_ALLOWED = {"activations": {"sales_agg", "activation_details"},
+                          "bill_payments": {"sales_agg", "bill_payments"}}
+
+
+@router.put("/metric-source-config")
+def put_metric_source_config(body: PutMetricSourceIn, org_id: str = ORG_ID):
+    """Upsert ONE metric's source-of-truth row (mig 923), org-scoped. Only known metrics + their allowed
+    sources are accepted, so a typo can never point a metric at a source that has no reader. Degrades with a
+    clear hint if mig 923 has not run. This is the seam the tenant flips to put Executive MTD / Sales Report
+    activations onto the Activation Details basis — no code change, no re-wiring."""
+    require_org(org_id)
+    metric = str(body.metric or "").strip()
+    source = str(body.source or "").strip()
+    if metric not in _METRIC_SOURCE_ALLOWED:
+        raise HTTPException(400, f"unknown metric (allowed: {', '.join(sorted(_METRIC_SOURCE_ALLOWED))})")
+    if source not in _METRIC_SOURCE_ALLOWED[metric]:
+        raise HTTPException(400, f"source '{source}' not allowed for '{metric}' "
+                                 f"(allowed: {', '.join(sorted(_METRIC_SOURCE_ALLOWED[metric]))})")
+    row = {"org_id": org_id, "metric": metric, "source": source,
+           "enabled": (True if body.enabled is None else bool(body.enabled)),
+           "reconcile_with": (str(body.reconcile_with).strip() or None) if body.reconcile_with is not None else None,
+           "processor": (str(body.processor).strip() or None) if body.processor is not None else None,
+           "assigned_user": (str(body.assigned_user).strip() or None) if body.assigned_user is not None else None,
+           "tolerance": float(body.tolerance) if str(body.tolerance or "").strip() not in ("", "None") else 0.0,
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        sb().schema("commcalc").table("metric_source_of_truth").upsert(
+            row, on_conflict="org_id,metric").execute()
+        return {"ok": True, "metric": metric, "source": source, "enabled": row["enabled"]}
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 923 (metric_source_of_truth)", "error": str(e)[:200]}
 
 
 @router.get("/exec-metric-config")
@@ -27490,7 +27771,18 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
         act_no = str(_get(d_low, "Activation#")).strip()
         tid = str(_get(d_low, "Trans ID")).strip()
         key = serial or act_no or tid or f"_i{r.get('row_index')}_{len(by_key)}"
-        store = str(_get(d_low, "Store")).strip()
+        # GEOGRAPHY (owner 2026-08-26): the real Activation Details export carries NO "Store" column — its
+        # hierarchy is Dealer Code / Division / Region / District (LuxeLink vs Nova live at the Division /
+        # Region level). Expose all four so a report can group by any of them, and derive `store` (most
+        # granular non-empty) + `market` (Region/Division, or store_mapping) so the store/market columns and
+        # per-market rollups actually populate instead of collapsing to one blank "—" group.
+        dealer = str(_get(d_low, "Dealer Code", "Dealer")).strip()
+        division = str(_get(d_low, "Division")).strip()
+        region = str(_get(d_low, "Region")).strip()
+        district = str(_get(d_low, "District")).strip()
+        store = (str(_get(d_low, "Store", "Store Name", "Location", "Site")).strip()
+                 or dealer or district or division)
+        mkt = market_for(store) or region or division
         ct = str(_get(d_low, "Contract Type")).strip()
         sp = str(_get(d_low, "SP/PO Name")).strip()
         prod = str(_get(d_low, "Product Desc")).strip()
@@ -27498,7 +27790,11 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
         bucket = _activation_details_bucket(ct, sp, prod, cat)
         row = {
             "store": store,
-            "market": market_for(store),
+            "market": mkt,
+            "dealer_code": dealer,
+            "division": division,
+            "region": region,
+            "district": district,
             "salesperson": str(_get(d_low, "Salesperson", "User Login")).strip(),
             "trans_date": _norm_report_date(_get(d_low, "Trans Date", "Service Date", "Trans Date Time")),
             "trans_id": tid,
