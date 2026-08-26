@@ -25,9 +25,11 @@ const money = (n: number) => (n || 0).toLocaleString('en-US', { style: 'currency
 
 export default function CommissionCategoryMapPage() {
   // Active-carrier lens: name only the active carrier in template copy for a dual-carrier tenant.
-  const { activeCarrier, multi } = useActiveCarrier()
-  const carrierNames = multi ? carrierDisplayName(activeCarrier) : 'Total / Boost'
-  const carrierNames2 = multi ? carrierDisplayName(activeCarrier) : 'Total, Boost,'
+  const { activeCarrier } = useActiveCarrier()
+  // Carrier-neutral: name only THIS tenant's active carrier (single- or multi-carrier), never a
+  // hardcoded "Total / Boost" pair that would leak Boost to a non-Boost tenant.
+  const carrierNames = carrierDisplayName(activeCarrier)
+  const carrierNames2 = carrierDisplayName(activeCarrier)
   const [tmpls, setTmpls] = useState<Tmpl[]>([])
   const [src, setSrc] = useState('ma_daily_tx')
   const [rules, setRules] = useState<Rule[]>([])

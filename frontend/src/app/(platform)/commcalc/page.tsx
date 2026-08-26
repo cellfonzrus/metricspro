@@ -219,7 +219,7 @@ export default function CommCalcDashboard() {
           <div style={{ fontWeight: 600, marginBottom: 16 }}>{isBoost ? 'Tier Distribution' : 'Payout Basis'}</div>
           {!isBoost && (
             <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
-              Reps on this carrier are paid from their assigned <b>Incentive Plan</b> — the Boost KPI‑tier
+              Reps on this carrier are paid from their assigned <b>Incentive Plan</b> — the built‑in KPI‑tier
               multiplier does not apply. Manage pay under{' '}
               <a href="/commcalc/payout-plans" style={{ color: 'var(--accent)' }}>Incentive Payout Plans</a>.
             </div>

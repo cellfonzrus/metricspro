@@ -896,6 +896,10 @@ export const NAV_CARRIERS: Record<string, string[]> = {
   '/commcalc/asset/dashboard': ['boost'], '/commcalc/asset/aging': ['boost'],
   '/commcalc/asset/missing-phones': ['boost'], '/commcalc/asset/aging-rebate': ['boost'],
   '/commcalc/asset/on-inventory': ['boost'], '/commcalc/asset/charges/rma': ['boost'],
+  // ePay (Boost processor) reconciliation reports — their body copy names the "Boost portal" and a
+  // "Boost" column, and they read Boost/ePay data that is empty for a non-Boost tenant. Gate to boost so
+  // a Total-only tenant never sees Boost language here (admin can re-enable per tenant at /admin/labels).
+  '/commcalc/epay-fee-recon': ['boost'], '/commcalc/carrier-recon': ['boost'],
   '/commcalc/kpi': ['boost'], '/commcalc/coaching': ['boost'],
   // MA / VidaPay (T-CETRA) pages — the mirror gate of Boost's ePay pages. Total-processor only.
   // Marketplace Purchases reads commcalc.raw_ma_marketplace_orders (VidaPay MA orders), so it is
