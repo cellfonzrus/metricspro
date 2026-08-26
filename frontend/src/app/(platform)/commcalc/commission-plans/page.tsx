@@ -36,7 +36,11 @@ type Plan = { id?: string; name: string; carrier_id?: string | null; base_tier_m
   // mig 232 — how the tier metric is COUNTED. Null/'rule_units' = the legacy count (every qualifying
   // rule-matched LINE, summed across rules). 'transactions' counts DISTINCT matched trans_ids.
   tier_count_basis?: string | null; tier_match_field?: string | null; tier_match_op?: string | null
-  tier_match_value?: string | null; tier_below_min_multiplier?: number | string | null }
+  tier_match_value?: string | null; tier_below_min_multiplier?: number | string | null
+  // mig 297 — where THIS plan's reps get their activations classified from. 'inherit' (default) defers to
+  // the org-level setting → today's POS raw_sales. 'raw_sales' pins POS even if the org flips. 'activation_details'
+  // pays activations from the uploaded Activation Details report and suppresses POS activations for this plan.
+  activation_source?: string | null }
 // bulk-assignment roster (people-centric surface)
 type CurPlan = { plan_id: string; plan_name: string }
 type Person = { id?: string; name: string; value: string; role: string; market: string; email: string
@@ -91,7 +95,7 @@ const UNIT_BASES: { value: string; label: string; help: string }[] = [
   { value: 'per_device', label: 'per device', help: 'Pay once per distinct device serial on the sale. The payment lands on the line carrying the serial, so accessory / rate-plan / fee lines never carry it.' },
   { value: 'per_transaction', label: 'per sale', help: 'Pay exactly once per transaction, however many devices or lines it has.' },
 ]
-const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', rules: [], tiers: [], assignments: [] })
+const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', activation_source: 'inherit', rules: [], tiers: [], assignments: [] })
 
 export default function CommissionPlansPage() {
   // Active-carrier lens: the set-up-fee reference copy names only the active carrier for a dual-carrier
@@ -705,11 +709,26 @@ export default function CommissionPlansPage() {
                 {tierMetrics.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </label>
+            <label style={lbl}>Activation source
+              <select style={sel} value={draft.activation_source || 'inherit'}
+                onChange={e => upd({ activation_source: e.target.value })}>
+                <option value="inherit">Inherit (default)</option>
+                <option value="raw_sales">POS sales</option>
+                <option value="activation_details">Activation Details report</option>
+              </select>
+            </label>
             <label style={{ ...lbl, justifyContent: 'flex-end' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
                 <input type="checkbox" checked={draft.is_active} onChange={e => upd({ is_active: e.target.checked })} /> Active
               </span>
             </label>
+          </div>
+          {/* mig 297 — one-line explainer for the Activation source dropdown above. */}
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: -8, marginBottom: 16 }}>
+            <b>Activation source</b> controls where this plan's reps get their activations counted from.
+            {' '}<b>Inherit</b> uses the org default (POS sales). <b>POS sales</b> always counts POS activations.
+            {' '}<b>Activation Details report</b> pays activations from the uploaded report and suppresses POS
+            activations for this plan's reps (single source, no double-count). Changes nothing until you recalculate.
           </div>
 
           {/* RULES */}
