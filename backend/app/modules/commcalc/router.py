@@ -28214,11 +28214,87 @@ def _cr_resolve_product_sales(client, org_id, period, ctx):
     return out
 
 
+def _cr_resolve_store_performance(client, org_id, period, ctx):
+    """The b2b "Store Performance" scorecard (owner 2026-08-26) — ONE row per store with Activations, Bill
+    Payments (qty + $), and the ACCESSORY store breakup (Acc Ext Price / Acc GP) that Sales-by-Product lacks,
+    plus Discounts / GP / hours / conversion ratios. Read from the self-serve CUSTOM IMPORT capture
+    (raw_custom_import JSONB). DETECTED BY COLUMN SIGNATURE ('Acc Ext Price' + 'Bill Payment Qty'), so it
+    lights up whatever report_key the sheet was registered under.
+
+    Already per-store aggregated, so the resolver just maps columns to numeric fields (money parsed incl.
+    parenthesised negatives like '($5,683.27)') and resolves each store's market. Group by Division/Region to
+    split multi-brand exports (e.g. LuxeLink vs Nova). DISPLAY + the accessory-per-store basis."""
+    market_for = ctx["market_for"]
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report store_performance read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "").replace("%", "")
+        neg = s.startswith("(") and s.endswith(")")
+        s = s.strip("()")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            f = float(s)
+        except Exception:
+            f = safe_float(s)
+        return -f if neg else f
+
+    out = []
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — the scorecard's accessory + bill-payment columns, not carried by any other dataset.
+        if "acc ext price" not in keys or "bill payment qty" not in keys:
+            continue
+        store = str(_get(d_low, "Store")).strip()
+        if not store or store.lower() in ("total", "grand total"):
+            continue                                   # skip the totals row
+        division = str(_get(d_low, "Division")).strip()
+        region = str(_get(d_low, "Region")).strip()
+        out.append({
+            "store": store,
+            "market": market_for(store) or region or division,
+            "division": division, "region": region, "district": str(_get(d_low, "District")).strip(),
+            "activations": int(_num(_get(d_low, "Activations", "Act"))),
+            "renewals": int(_num(_get(d_low, "Renewals"))),
+            "prepaid": int(_num(_get(d_low, "Prepaid"))),
+            "bill_payments": _num(_get(d_low, "Bill Payments")),
+            "bill_payment_qty": int(_num(_get(d_low, "Bill Payment Qty"))),
+            "discounts": _num(_get(d_low, "Discounts")),
+            "gp": _num(_get(d_low, "GP")),
+            "acc_ext_price": _num(_get(d_low, "Acc Ext Price")),
+            "acc_gp": _num(_get(d_low, "Acc GP")),
+            "acc_gp_on_billpay": _num(_get(d_low, "Acc GP on Bill Payment Trans")),
+            "trade_in_credits": _num(_get(d_low, "Trade-in Credits")),
+            "third_party_insurance": _num(_get(d_low, "3rd Party Insurance")),
+        })
+    return out
+
+
 _CUSTOM_REPORT_RESOLVERS = {
     "sales_line": _cr_resolve_sales_line,
     "bill_payments": _cr_resolve_bill_payments,
     "activation_details": _cr_resolve_activation_details,
     "product_sales": _cr_resolve_product_sales,
+    "store_performance": _cr_resolve_store_performance,
     "rep_commissions": _cr_resolve_rep_commissions,
     "targets_actuals": _cr_resolve_targets_actuals,
     "kpi_metrics": _cr_resolve_kpi_metrics,
