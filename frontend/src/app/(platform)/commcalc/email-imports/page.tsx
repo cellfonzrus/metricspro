@@ -697,7 +697,7 @@ export default function EmailImportsPage() {
                     <label className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', cursor: 'pointer', opacity: upBusy === c.report_key ? 0.6 : 1 }}>
                       {upBusy === c.report_key ? 'Uploading…' : '⬆ Upload file'}
                       <input type="file" accept=".csv,.txt,.xlsx,.xls" style={{ display: 'none' }} disabled={upBusy === c.report_key}
-                        onChange={e => { const f = e.target.files?.[0]; uploadCustom(c.report_key, c.label, f); e.currentTarget.value = '' }} />
+                        onChange={e => { const inp = e.target as HTMLInputElement; const f = inp.files?.[0]; if (f) uploadCustom(c.report_key, c.label, f); inp.value = '' }} />
                     </label>
                   </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>

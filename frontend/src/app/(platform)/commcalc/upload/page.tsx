@@ -56,6 +56,16 @@ const FILE_TYPES: { id: string; label: string; icon: string; required: boolean; 
 const PERIODLESS = new Set(['catalog', 'master_cats', 'inventory_aging', 'x_report', 'ma_commission', 'ma_daily_tx', 'ma_fulfillment'])
 const TYPE_META = Object.fromEntries(FILE_TYPES.map(t => [t.id, t]))
 
+// The b2b "Activation Details" / "Bill Payment Transactions Processed" / "Sales by Product" reports the
+// owner ingests by email — given direct upload tiles here. Captured through the self-serve custom-import
+// path (the resolver detects each by its columns, not its key), and the tile auto-provisions the sheet on
+// first upload so there is no separate setup step.
+const CUSTOM_REPORTS: { label: string; icon: string; desc: string }[] = [
+  { label: 'Activation Details', icon: '📲', desc: 'b2b Activation Details — one row per activation (Service Plan = the activation). Drives the store activation counts.' },
+  { label: 'Bill Payments', icon: '💵', desc: 'b2b Bill Payment Transactions Processed — powers the bill-payment discounts report.' },
+  { label: 'Sales by Product', icon: '🧾', desc: 'b2b Sales by Product — accessory sales by department (Accessories + C2wireless).' },
+]
+
 // Auto-import sources + the period granularities the user asked for, per source.
 const AUTO_SOURCES = [
   { id: 'dlar', name: 'Metrics Rep/Store (carrier KPI portal)', icon: '📊', desc: 'Store + Rep KPI reports',
@@ -143,6 +153,14 @@ export default function UploadPage() {
   const [running, setRunning] = useState<Record<string, boolean>>({})
   const [autoMsg, setAutoMsg] = useState<Record<string, string>>({})
   const [modDate, setModDate] = useState<Record<string, string>>({})
+  // Self-serve custom import sheets (mig 099) — the b2b reports added on Email Imports (Activation Details,
+  // Bill Payments, Sales by Product). Uploadable here too so the owner isn't forced onto the Email Imports
+  // page. Each uses the SAME proven handleUpload → /upload/<report_key> capture as the built-in reports.
+  const [customTypes, setCustomTypes] = useState<any[]>([])
+  const loadCustomTypes = useCallback(async () => {
+    try { const r = await api('/api/v1/commcalc/custom-import-types'); setCustomTypes(Array.isArray(r) ? r : []) }
+    catch { /* best-effort */ }
+  }, [])
 
   const loadHistory = useCallback(async () => {
     // via api() so scopeOrg() rewrites org_id to the signed-in tenant (multi-tenant): a new tenant
@@ -160,7 +178,7 @@ export default function UploadPage() {
     setCfgs(out)
   }, [])
 
-  useEffect(() => { loadHistory(); loadCfgs() }, [loadHistory, loadCfgs])
+  useEffect(() => { loadHistory(); loadCfgs(); loadCustomTypes() }, [loadHistory, loadCfgs, loadCustomTypes])
 
   function lastUpload(fileType: string): UploadRecord | undefined {
     return history.find(h => h.file_type === fileType &&
@@ -223,6 +241,33 @@ export default function UploadPage() {
       setMessages(m => ({ ...m, [entry.id]: `❌ ${e.message}` }))
     }
     setUploading(null)
+  }
+
+  // The 3 b2b reports the owner ingests by email (Activation Details / Bill Payments / Sales by Product),
+  // uploadable HERE directly. Each is captured through the self-serve custom-import path; the report's
+  // dataset detects it by column SIGNATURE, so the report_key doesn't matter — the tile auto-PROVISIONS the
+  // custom sheet on first upload (POST /custom-import-types) so there is no separate setup step, then posts
+  // the file through the SAME /upload/<report_key> capture as every other tile. Status/messages keyed by the
+  // report's fixed label.
+  async function uploadCustomReport(rep: typeof CUSTOM_REPORTS[number], file: File) {
+    if (!period.trim()) { alert('Enter the period this data is for first'); return }
+    setStatuses(s => ({ ...s, [rep.label]: 'uploading' }))
+    try {
+      let key = customTypes.find((c: any) => (c.label || '').trim().toLowerCase() === rep.label.toLowerCase())?.report_key
+      if (!key) {
+        const r: any = await api('/api/v1/commcalc/custom-import-types', { method: 'POST', body: JSON.stringify({ label: rep.label }) })
+        key = r.report_key; await loadCustomTypes()
+      }
+      const form = new FormData(); form.append('file', file)
+      const data = await apiUpload(`/api/v1/commcalc/upload/${encodeURIComponent(key)}?period=${encodeURIComponent(period)}&org_id=${ORG_ID}`, form)
+      const o = readUploadOutcome(data, 'rows')
+      setStatuses(s => ({ ...s, [rep.label]: o.tone === 'ok' ? 'done' : 'warn' }))
+      setMessages(m => ({ ...m, [rep.label]: (o.tone === 'ok' ? '✅ ' : '⚠️ ') + o.text }))
+      loadHistory(); reloadLast(); loadCustomTypes()
+    } catch (e: any) {
+      setStatuses(s => ({ ...s, [rep.label]: 'error' }))
+      setMessages(m => ({ ...m, [rep.label]: `❌ ${e.message || e}` }))
+    }
   }
 
   return (
@@ -415,6 +460,43 @@ export default function UploadPage() {
             </div>
           </a>
         ))}
+      </div>
+
+      {/* ── The 3 b2b reports ingested by email — direct upload links here (owner 2026-08-26). Each posts
+          through the SAME /upload/<report_key> capture as the built-in tiles (so it can't freeze differently),
+          auto-provisioning its sheet on first upload. Period-scoped (re-uploading a period replaces it). */}
+      <div style={{ fontWeight: 700, fontSize: 14, margin: '24px 0 10px' }}>
+        📥 B2B email reports <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>— upload the Activation Details, Bill Payment &amp; Sales-by-Product exports here too</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+        {CUSTOM_REPORTS.map(rep => {
+          const status = statuses[rep.label] || 'idle'; const msg = messages[rep.label] || ''
+          const landed = customTypes.find((c: any) => (c.label || '').trim().toLowerCase() === rep.label.toLowerCase())
+          return (
+            <div key={rep.label} className="card" style={{ border: status === 'done' ? '1px solid #86efac' : status === 'error' ? '1px solid #fca5a5' : status === 'warn' ? '1px solid #fcd34d' : undefined, background: status === 'done' ? '#f0fdf4' : status === 'error' ? '#fef2f2' : status === 'warn' ? '#fffbeb' : undefined }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <span style={{ fontSize: 28 }}>{rep.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{rep.label}</span>
+                    {(landed?.rows || 0) > 0 && <span style={{ fontSize: 10, background: '#dcfce7', color: '#15803d', padding: '1px 7px', borderRadius: 999, fontWeight: 600 }}>{Number(landed.rows).toLocaleString()} rows</span>}
+                  </div>
+                  <div style={{ color: 'var(--text3)', fontSize: 12, margin: '2px 0 6px' }}>{rep.desc}</div>
+                  <div style={{ color: 'var(--text2)', fontSize: 12, margin: '0 0 10px' }}>Captured as-is; re-uploading a period replaces it (the b2b MTD export is cumulative).</div>
+                  {status === 'uploading' ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text2)', fontSize: 13 }}><div className="spinner" />Uploading...</div>
+                  ) : (
+                    <label style={{ cursor: 'pointer' }}>
+                      <div className="btn btn-secondary" style={{ display: 'inline-flex' }}>{landed?.rows ? '⬆️ Upload additional file' : '📂 Choose File'}</div>
+                      <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) uploadCustomReport(rep, f) }} />
+                    </label>
+                  )}
+                  {msg && <div style={{ marginTop: 8, fontSize: 12, color: status === 'done' ? '#16a34a' : status === 'warn' ? '#b45309' : '#dc2626' }}>{msg}</div>}
+                </div>
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
