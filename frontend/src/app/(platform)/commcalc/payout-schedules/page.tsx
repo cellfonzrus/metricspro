@@ -342,7 +342,7 @@ export default function PayoutSchedulesPage() {
           Maps a subscriber&apos;s plan (the raw_mi <strong>Customer Plan</strong>) → its monthly recurring charge.
           A <strong>% of MRC</strong> line uses this directly when its basis is <strong>Per-product MRC</strong>, and as
           a fallback whenever the carrier statement reports $0 MRC — so residual installments
-          compute real amounts instead of $0.{!multi && ' Some carriers (e.g. Total Wireless) report $0 MRC; carriers that report a real MRC (Boost) are unaffected.'}
+          compute real amounts instead of $0.{!multi && ' Some carrier statements report $0 MRC; those that report a real MRC are unaffected.'}
         </p>
         {!mrcReady && <div style={{ padding: 12, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ Run migration 074_product_mrc.sql in Supabase to enable this catalog.</div>}
 

@@ -407,7 +407,7 @@ def compute(client, org_id, months=6):
         if not sf:
             continue
         by_sfid[sf] = {"store": (s.get("store_address") or "").strip(),
-                       "market": ((s.get("market") or "Boost").strip() or "Boost"),
+                       "market": (s.get("market") or "").strip(),
                        "store_code": (s.get("store_code") or "").strip(),
                        "num": _street_num(s.get("store_address"))}
 

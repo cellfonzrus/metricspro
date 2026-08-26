@@ -10001,10 +10001,10 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             if prior_paid:
                 raise Exception(
                     f"REFUSED to overwrite {period}: plan-mode calc produced $0 for all {len(comms)} reps "
-                    f"while {prior_paid} stored rows currently pay non-zero — the 2026-07-13 zero-wipe "
-                    f"signature (non-Boost default carrier with nothing configured to pay from). Kept the "
-                    f"existing snapshot. Fix the default carrier on the Carriers page or configure "
-                    f"Commission Plan assignments, then recalculate; or POST /calculate/{period}"
+                    f"while {prior_paid} stored rows currently pay non-zero — a zero-wipe "
+                    f"signature (the store's default carrier resolved to plan mode with nothing configured "
+                    f"to pay from). Kept the existing snapshot. Fix the default carrier on the Carriers page "
+                    f"or configure Commission Plan assignments, then recalculate; or POST /calculate/{period}"
                     f"?force=true to overwrite deliberately.")
 
         try:
@@ -15550,7 +15550,7 @@ def _trend_shape(kept, by_store, comp, mkt, value_keys):
     stores = []
     for code, per in by_store.items():
         series = [{'period': p, **{k: round((per.get(p) or {}).get(k, 0.0), 2) for k in value_keys}} for p in kept]
-        stores.append({'store': code, 'store_code': code, 'market': mkt.get(code, 'Boost'), 'series': series})
+        stores.append({'store': code, 'store_code': code, 'market': mkt.get(code, ''), 'series': series})
     sort_key = value_keys[0]
     stores.sort(key=lambda x: -sum(s[sort_key] for s in x['series']))
     company = [{'period': p, **{k: round(comp[p].get(k, 0.0), 2) for k in value_keys}} for p in kept]
@@ -15564,7 +15564,7 @@ def expenses_trend(months: int = 6, org_id: str = ORG_ID):
     sc = sb().schema('commcalc')
     rows = sc.table('store_expenses').select('period,store_code,amount').eq('org_id', org_id).limit(200000).execute().data or []
     sm = sc.table('store_mapping').select('store_code,market').eq('org_id', org_id).execute().data or []
-    mkt = {str(s.get('store_code') or '').strip(): (s.get('market') or 'Boost') for s in sm}
+    mkt = {str(s.get('store_code') or '').strip(): (s.get('market') or '') for s in sm}
     kept = _tperiods({r.get('period') for r in rows}, months); ks = set(kept)
     by, comp = {}, {p: {'total': 0.0} for p in kept}
     for r in rows:
@@ -15598,7 +15598,7 @@ def commission_trend(months: int = 6, org_id: str = ORG_ID):
     for s in sm:
         code = str(s.get('store_code') or '').strip()
         if code:
-            codes.add(code); mkt[code] = s.get('market') or 'Boost'
+            codes.add(code); mkt[code] = s.get('market') or ''
         n = _num(s.get('store_address'))
         if n and code:
             code_by_num.setdefault(n, code)
@@ -15652,7 +15652,7 @@ def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
             code = str(r.get('store_code') or r.get('store') or '').strip()
             if not code:
                 continue
-            mkt.setdefault(code, r.get('market') or 'Boost')
+            mkt.setdefault(code, r.get('market') or '')
             by.setdefault(code, {})[p] = {'total_rev': safe_float(r.get('total_rev')),
                                           'net_profit': safe_float(r.get('net_profit'))}
             comp[p]['total_rev'] += safe_float(r.get('total_rev'))

@@ -91,7 +91,7 @@ export default function PayoutPlansHub() {
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
         <Link href="/commcalc/commission-plans" className="btn btn-sm">🧮 Incentive Plans</Link>
         <Link href="/commcalc/payout-schedules" className="btn btn-sm">📆 Payout Schedules</Link>
-        {(!multi || activeCarrier === 'boost') && <Link href="/commcalc/settings" className="btn btn-sm">⚙️ Boost Rates</Link>}
+        {activeCarrier === 'boost' && <Link href="/commcalc/settings" className="btn btn-sm">⚙️ Boost Rates</Link>}
         <Link href="/commcalc/carrier-mapping" className="btn btn-sm">📡 Carrier Mapping</Link>
         <Link href="/commcalc/commission-category-map" className="btn btn-sm">🗺️ Category → Bucket Map</Link>
         <Link href="/commcalc/commission-import" className="btn btn-sm">🪄 Import Wizard</Link>
@@ -165,9 +165,9 @@ export default function PayoutPlansHub() {
                     {activeCarrier === 'boost' ? 'BOOST ENGINE' : 'CONFIGURABLE PLANS'}
                   </span></>
               : <><b>How pay is decided:</b> the calculator looks at this company’s <b>default carrier</b>
-                  {ov.default_carrier ? <> (<b>{ov.default_carrier.name}</b>)</> : ''}. If it’s Boost, reps are paid
-                  by the built‑in KPI‑tier rates. If it’s any other carrier, the Boost tiers are <b>skipped entirely</b>
-                  {' '}and each rep is paid from the Incentive Plan / Payout Schedule assigned to them. Current mode:{' '}
+                  {ov.default_carrier ? <> (<b>{ov.default_carrier.name}</b>)</> : ''}. {ov.org_carrier_mode === 'boost'
+                    ? 'Reps are paid by the built‑in KPI‑tier rates.'
+                    : 'Each rep is paid from the Incentive Plan / Payout Schedule assigned to them.'} Current mode:{' '}
                   <span style={chip(ov.org_carrier_mode === 'boost' ? 'var(--accent)' : '#16a34a')}>
                     {ov.org_carrier_mode === 'boost' ? 'BOOST ENGINE' : 'CONFIGURABLE PLANS'}
                   </span></>}

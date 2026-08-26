@@ -34,7 +34,7 @@ export default function AtuOpportunityPage() {
   // Active-carrier lens: show only the active carrier's ATU rate/base/carry. The backend keeps
   // returning BOTH carriers' figures (boost_carry_monthly + total_carry_monthly); we pick one and
   // NEVER show the combined carry_monthly. Single-carrier tenants are unchanged.
-  const { activeCarrier, multi } = useActiveCarrier()
+  const { activeCarrier } = useActiveCarrier()
   const isTotal = activeCarrier === 'total'
   const [period, setPeriod] = useState(thisMonth())
   const [start, setStart] = useState('')
@@ -134,9 +134,9 @@ export default function AtuOpportunityPage() {
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             {(([['saving_per_month', 'Customer saving / mo'], ['boost_rate_pct', 'Boost ATU rate %'],
                ['total_rate_pct', 'Total ATU rate %'], ['total_recharge_base', 'Total recharge base $/mo']] as [string, string][])
-              // Show only the ACTIVE carrier's rate/base for a dual-carrier tenant; single-carrier
-              // tenants keep every field (unchanged). 'saving_per_month' is carrier-neutral.
-              .filter(([k]) => !multi || k === 'saving_per_month'
+              // Show only the ACTIVE carrier's rate/base — for every tenant, so a non-Boost store never
+              // sees a "Boost ATU rate %" field. 'saving_per_month' is carrier-neutral.
+              .filter(([k]) => k === 'saving_per_month'
                 || (isTotal ? k.startsWith('total_') : k.startsWith('boost_'))))
               .map(([k, label]) => (
                 <label key={k} style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', flexDirection: 'column', gap: 4 }}>

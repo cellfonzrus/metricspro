@@ -43,8 +43,11 @@ const toggleCI = (arr: string[], v: string) => hasCI(arr, v) ? arr.filter(x => x
 
 export default function SalesReportPage() {
   // Active-carrier lens: department/bill-payment help copy is neutralized (no carrier names) for a
-  // dual-carrier tenant. Single-carrier tenants keep the original Boost/Total wording.
-  const { multi } = useActiveCarrier()
+  // dual-carrier tenant AND for any non-Boost tenant. Boost-branded default wording ("Boost XP",
+  // "Boost RTR") is shown ONLY to a single-carrier Boost tenant (showBoost), so a non-Boost store
+  // never sees Boost language.
+  const { multi, isBoost } = useActiveCarrier()
+  const showBoost = !multi && isBoost
   const [period, setPeriod] = useState(thisMonth())
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -620,7 +623,7 @@ export default function SalesReportPage() {
                     are a device "box". Multi-carrier orgs (e.g. Total Wireless IN the house org) must tick
                     the NON-Boost device departments too, or those device sales don't count as boxes. */}
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Box (device-unit) departments <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(which Department values count as a device &ldquo;box&rdquo; — for productivity boxes/hr, stack ranking, review &amp; conversion. Default = the {multi ? 'built-in device' : 'Boost XP'} departments; a multi-carrier org must ALSO tick its {multi ? 'other' : 'Total/other'} device departments.)</span></div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Box (device-unit) departments <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(which Department values count as a device &ldquo;box&rdquo; — for productivity boxes/hr, stack ranking, review &amp; conversion. Default = the {showBoost ? 'Boost XP' : 'built-in device'} departments; a multi-carrier org must ALSO tick its other device departments.)</span></div>
                   <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
                     {(accFields.departments || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no departments in this period</div> : (accFields.departments || []).map((v: string) => (
                       <label key={v} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '2px 0' }}>
@@ -637,12 +640,12 @@ export default function SalesReportPage() {
                     empty to fall back to the built-in Boost defaults (Boost RTR / Xfinity Prepaid Refill).
                     DISPLAY only — drives conversion, never a payout. */}
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bill-payment items <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(tick the product/item values that = a bill payment / walk-in recharge — drives the Daily-Targets conversion rate, boxes &divide; bill-payments. Leave empty to use the {multi ? 'built-in defaults' : 'built-in Boost defaults'}. Display only, no pay change.)</span></div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bill-payment items <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(tick the product/item values that = a bill payment / walk-in recharge — drives the Daily-Targets conversion rate, boxes &divide; bill-payments. Leave empty to use the {showBoost ? 'built-in Boost defaults' : 'built-in defaults'}. Display only, no pay change.)</span></div>
                   <div style={{ fontSize: 11, marginBottom: 4, color: accSel.billpay.length === 0 ? 'var(--accent)' : 'var(--text3)' }}>
                     {accSel.billpay.length === 0
-                      ? (multi
-                          ? <>Currently using <b>built-in defaults</b>.</>
-                          : <>Currently using <b>Boost defaults</b> (product name contains &ldquo;Boost RTR&rdquo; or &ldquo;Xfinity Prepaid Refill&rdquo;).</>)
+                      ? (showBoost
+                          ? <>Currently using <b>Boost defaults</b> (product name contains &ldquo;Boost RTR&rdquo; or &ldquo;Xfinity Prepaid Refill&rdquo;).</>
+                          : <>Currently using <b>built-in defaults</b>.</>)
                       : <><b>{accSel.billpay.length}</b> item(s) active — only these count as bill payments.</>}
                   </div>
                   <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
@@ -745,7 +748,7 @@ export default function SalesReportPage() {
                     Use these rules for the Gross-Profit report buckets
                   </label>
                   <div style={{ fontSize: 11, color: 'var(--text3)', margin: '4px 0 8px' }}>
-                    When on, the <a href="/commcalc/gp" style={{ color: 'var(--accent)' }}>GP report</a> counts a line as <b>Acc GP</b> using the accessory rules above (department, category, keyword, catalog) and as <b>Phone Sales</b> using the box departments — instead of the built-in Boost department labels. Turn this on when your POS departments don&apos;t match the Boost names (e.g. a Total feed where the same department holds both phones and accessories). Display-only: rep pay never reads it.
+                    When on, the <a href="/commcalc/gp" style={{ color: 'var(--accent)' }}>GP report</a> counts a line as <b>Acc GP</b> using the accessory rules above (department, category, keyword, catalog) and as <b>Phone Sales</b> using the box departments — instead of the built-in default department labels. Turn this on when your POS departments don&apos;t match the built-in names (e.g. a feed where the same department holds both phones and accessories). Display-only: rep pay never reads it.
                   </div>
                 </div>
                 {/* CATALOG-driven accessory classification (migs 230/231). A product-catalog upload's category
