@@ -22088,39 +22088,157 @@ def _sales_activation_by_store(client, org_id, period):
     return by_store
 
 
+def _billpay_report_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the b2b "Bill Payment Transactions"
+    report (the BASIS OF TRUTH) — count = txns, amount = payment (fallback total_amt). Returns (map, n_rows)."""
+    rows = _cr_resolve_bill_payments(client, org_id, period, {"market_for": (lambda s: "")})
+    by_store = {}
+    for r in rows:
+        st = (r.get("store") or "").strip() or "—"
+        k = ckey_fn(st) or "—"
+        slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": st})
+        slot["count"] += int(r.get("txns") or 1)
+        slot["amount"] += float(r.get("payment") or r.get("total_amt") or 0.0)
+    return by_store, len(rows)
+
+
+def _billpay_sales_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the shared sales aggregation — the
+    SECONDARY source (the Exec-MTD 'Bill Payment Qty' / '$' basis: _sales_cell_agg bill_qty / bill_amt)."""
+    cfg = _exec_metric_config(client, org_id)
+    acfg = _accessory_config(client, org_id)
+    rows, _meta = _sales_rows_union(client, org_id, period)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=ckey_fn)
+    by_store = {}
+    for (st, _rep, _date), a in cells.items():
+        slot = by_store.setdefault(st or "—", {"count": 0, "amount": 0.0, "_name": (a.get("store") or st or "—")})
+        slot["count"] += int(a.get("bill_qty") or 0)
+        slot["amount"] += float(a.get("bill_amt") or 0.0)
+    # Drop stores with zero bill payments so they don't dilute the recon's store set.
+    return {k: v for k, v in by_store.items() if v["count"] or v["amount"]}
+
+
+def _billpay_processor_name(client, org_id, msrc):
+    """Which carrier PROCESSOR to reconcile bill payments against: the metric_source_of_truth.processor
+    config wins ('epay'|'vidapay'); else auto-detect from commcalc.data_source (the enabled portal login's
+    processor, 'total_access' → vidapay). '' when unknown → the recon runs two-way (report vs sales)."""
+    p = str((msrc or {}).get("processor") or "").strip().lower()
+    if p in ("epay", "vidapay"):
+        return p
+    try:
+        rows = (client.schema("commcalc").table("data_source").select("processor,enabled")
+                .eq("org_id", org_id).execute().data) or []
+        for r in rows:
+            if not r.get("enabled"):
+                continue
+            pp = str(r.get("processor") or "").strip().lower()
+            if pp in ("epay",):
+                return "epay"
+            if pp in ("vidapay", "total_access"):
+                return "vidapay"
+    except Exception:
+        pass
+    return ""
+
+
+def _billpay_processor_by_store(client, org_id, period, processor, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the carrier PROCESSOR feed — ePay
+    (raw_epay_daily_tx via epay_ingest.per_store_day) for Boost, VidaPay (raw_ma_daily_tx, account_id →
+    store_code via storeops.merchant_ids) for Total. Best-effort + defensive: any failure or an unknown
+    processor returns {} so the recon degrades to report-vs-sales rather than 500-ing."""
+    if processor not in ("epay", "vidapay"):
+        return {}
+    mo, yr = _month_year(period)
+    if not (1 <= mo <= 12 and yr):
+        return {}
+    date_from = f"{yr}-{mo:02d}-01"
+    date_to = f"{yr}-{mo:02d}-{_calendar.monthrange(yr, mo)[1]:02d}"
+    by_store = {}
+    try:
+        if processor == "epay":
+            from app.modules.commcalc import epay_ingest as _epi
+            for (sc, _d), v in (_epi.per_store_day(client, org_id, date_from, date_to) or {}).items():
+                k = ckey_fn(str(sc)) or str(sc) or "—"
+                slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": str(sc)})
+                slot["count"] += int(v.get("lines") or 0)
+                slot["amount"] += float(v.get("payment") or 0.0)
+        else:  # vidapay
+            from app.modules.storeops import merchant_ids as _mids
+            amap = _mids.resolve_map(org_id, "vidapay") or {}
+            q = (client.schema("commcalc").table("raw_ma_daily_tx")
+                 .select("account_id,retail_cost").eq("org_id", org_id))
+            rows = q.in_("period", _pvariants(period)).limit(200000).execute().data or []
+            for r in rows:
+                acct = str(r.get("account_id") or "").strip()
+                sc = amap.get(acct) or acct or "—"
+                k = ckey_fn(str(sc)) or str(sc) or "—"
+                slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": str(sc)})
+                slot["count"] += 1
+                slot["amount"] += float(r.get("retail_cost") or 0.0)
+    except Exception as _pe:
+        print(f"WARN bill-payment processor read failed ({processor}): {_pe}")
+        return {}
+    return by_store
+
+
 @router.get("/metric-recon/{period}")
 def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations"):
-    """Two-source RECONCILIATION for a metric (owner 2026-08-26): prove the ingest is good when the two
-    sources agree, flag + name a remediation when they don't. For `activations` it compares the b2b
-    Activation Details basis (PRIMARY / basis of truth — distinct Serial#, Upgrade excluded) against the
-    shared sales aggregation (SECONDARY), per store, on the b2b-consistent Total Activation. Read-only.
+    """RECONCILIATION for a metric (owner 2026-08-26): prove the ingest is good when the sources agree, flag +
+    name a remediation when they don't.
 
-    The `tolerance`, `reconcile_with` and `assigned_user` come from the tenant's metric_source_of_truth
-    config (mig 923); with no config the recon still runs with sensible defaults (exact match, sales_agg)
-    so a tenant can SEE the two sources line up before switching Exec MTD onto the AD basis."""
+    • `activations` — the b2b Activation Details basis (PRIMARY / basis of truth, distinct Serial#, Upgrade
+      excluded) vs the shared sales aggregation, per store, on the b2b-consistent Total Activation.
+    • `bill_payments` — THREE-way: the b2b Bill Payment Transactions report (PRIMARY) vs the sales aggregation
+      vs the carrier PROCESSOR (ePay for Boost / VidaPay for Total, chosen from config or data_source), per
+      store, on amount + count.
+
+    `tolerance`, `reconcile_with`, `processor` and `assigned_user` come from the tenant's
+    metric_source_of_truth config (mig 923); with no config the recon still runs with sensible defaults.
+    Read-only."""
     require_org(org_id)
-    if metric != "activations":
-        raise HTTPException(400, "only the 'activations' metric is reconciled today")
     from app.modules.commcalc import metric_recon as metric_recon_mod
     client = sb()
-    msrc = _metric_source(client, org_id, metric)
     ckey = _canonical_store_key_fn(client, org_id)
-    ad_by_store, _ad_rep, ad_n = _ad_activation_buckets(client, org_id, period, ckey_fn=ckey)
-    sales_by_store = _sales_activation_by_store(client, org_id, period)
-    result = metric_recon_mod.reconcile_activations(
-        ad_by_store, sales_by_store,
-        tolerance=msrc.get("tolerance") or 0,
-        source=(msrc.get("source") if msrc.get("configured") else "activation_details"),
-        reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
-        assigned_user=msrc.get("assigned_user"))
-    result.update({"period": period, "org_id": org_id, "metric": metric,
-                   "config": {"configured": msrc.get("configured"), "enabled": msrc.get("enabled"),
-                              "source": msrc.get("source"), "processor": msrc.get("processor")},
-                   "primary_rows": ad_n,
-                   "note": (None if ad_n else
-                            "No Activation Details rows for this period — upload or route the b2b 'Activation "
-                            "Details' report so the activation basis of truth is present to reconcile.")})
-    return result
+
+    if metric == "activations":
+        msrc = _metric_source(client, org_id, metric)
+        ad_by_store, _ad_rep, ad_n = _ad_activation_buckets(client, org_id, period, ckey_fn=ckey)
+        sales_by_store = _sales_activation_by_store(client, org_id, period)
+        result = metric_recon_mod.reconcile_activations(
+            ad_by_store, sales_by_store,
+            tolerance=msrc.get("tolerance") or 0,
+            source=(msrc.get("source") if msrc.get("configured") else "activation_details"),
+            reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
+            assigned_user=msrc.get("assigned_user"))
+        result.update({"period": period, "org_id": org_id, "metric": metric,
+                       "config": {"configured": msrc.get("configured"), "enabled": msrc.get("enabled"),
+                                  "source": msrc.get("source"), "processor": msrc.get("processor")},
+                       "primary_rows": ad_n,
+                       "note": (None if ad_n else
+                                "No Activation Details rows for this period — upload or route the b2b "
+                                "'Activation Details' report so the activation basis of truth is present.")})
+        return result
+
+    if metric == "bill_payments":
+        msrc = _metric_source(client, org_id, metric)
+        report_by_store, rep_n = _billpay_report_by_store(client, org_id, period, ckey)
+        sales_by_store = _billpay_sales_by_store(client, org_id, period, ckey)
+        processor = _billpay_processor_name(client, org_id, msrc)
+        proc_by_store = _billpay_processor_by_store(client, org_id, period, processor, ckey)
+        result = metric_recon_mod.reconcile_bill_payments(
+            report_by_store, sales_by_store, proc_by_store,
+            tolerance_amt=float(msrc.get("tolerance") or 0.0), tolerance_cnt=0,
+            processor=processor, reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
+            assigned_user=msrc.get("assigned_user"))
+        result.update({"period": period, "org_id": org_id, "metric": metric,
+                       "config": {"configured": msrc.get("configured"), "processor": (processor or None)},
+                       "primary_rows": rep_n,
+                       "note": (None if rep_n else
+                                "No Bill Payment Transactions rows for this period — upload or route the b2b "
+                                "'Bill Payment Transactions' report so the bill-payment basis is present.")})
+        return result
+
+    raise HTTPException(400, "unknown metric (allowed: activations, bill_payments)")
 
 
 @router.get("/metric-source-config")
