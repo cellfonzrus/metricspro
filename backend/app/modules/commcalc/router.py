@@ -803,6 +803,15 @@ async def _ingest_custom_report(report_key, file, period, org_id, rdef=None):
         df = _read_upload_df(contents, fname)
     except Exception as e:
         raise HTTPException(400, f"Could not read file for '{report_key}': {e}")
+    # BACK-COMPAT SAFETY NET: if a B2B Soft export arrives in the GROUPED layout (Store / Trans ID as
+    # section-HEADER rows in the first column rather than as columns — the older Activation Details shape),
+    # flatten it so the section header carries down onto every detail line and the header/subtotal rows are
+    # dropped. NO-OP on the current flat exports (owner removed the store-header rows 2026-08-26) and on
+    # every non-grouped custom sheet (Bill Payments / Sales by Product), so there is zero regression.
+    try:
+        df = _flatten_grouped_sales(df)
+    except Exception as _fe:
+        print(f"WARN grouped-flatten skipped for '{report_key}': {_fe}")
     # Honor the report's period_mode: 'none' → capture periodless (ignore any month the sweep supplied).
     if (rdef or {}).get("period_mode") == "none":
         period = ""
@@ -21725,8 +21734,9 @@ def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = ""):
     """Store activation COUNTS from the b2b "Activation Details" report, in the SHAPE of the b2b "Month To
     Date Location Sales Report" so the two reconcile line-for-line (owner 2026-08-26).
 
-    One row per activation (Service-Plan rows; Plan-Option/insurance + Returns/cancelled excluded, deduped by
-    Activation#). Per store it returns `total_activation` = Activation + Port + BYOD + Tablet + Home Internet
+    One row per distinct device (deduped by Serial#; a device's insurance/Plan-Option lines share its serial
+    and count once; Returns/cancelled excluded). Per store it returns `total_activation` = Activation + Port +
+    BYOD + Tablet + Home Internet
     + Edge (EXCLUDING Upgrade — that is b2b's own definition, verified against its totals row), the per-type
     breakdown, and `upgrade` alongside. Compare `total_activation` to the b2b report's "Total Activation"
     column: match ⇒ the mapping is right; a gap ⇒ the type breakdown shows which category is off.
@@ -21773,6 +21783,42 @@ def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = ""):
                  "No Activation Details rows found for this period. Upload or register the b2b "
                  "'Activation Details' report as a Custom Import (Data Imports → Custom Reports), or route "
                  "it to the email import, then re-check."),
+    }
+
+
+@router.get("/product-sales-departments/{period}")
+def product_sales_departments(period: str, org_id: str = ORG_ID):
+    """The DISTINCT Departments the b2b "Sales by Product" report actually contains for `period`, each flagged
+    with whether it currently counts as an accessory department (owner 2026-08-26: the accessory departments
+    must NOT be hard-coded — they are an OPTION pulled from this report, then saved to the org's accessory
+    config once). The Sales Report → Accessory settings picker calls this to offer the observed departments as
+    checkboxes instead of a free-text field, so 'Accessories' / 'C2Wireless' (or whatever a tenant's report
+    calls them) come straight from the tenant's own data. Selecting them writes through the existing
+    accessory-config API (put_accessory_config → accessory_config.departments), the SAME single source the
+    Sales Report and this Sales-by-Product resolver both read. DISPLAY-ONLY."""
+    require_org(org_id)
+    client = sb()
+    rows = _cr_resolve_product_sales(client, org_id, period, {"market_for": (lambda s: "")})
+    try:
+        acc = _accessory_config(client, org_id).get("departments") or set()
+    except Exception:
+        acc = set()
+    seen = {}
+    for r in rows:
+        dept = (r.get("department") or "").strip()
+        if not dept:
+            continue
+        d = seen.setdefault(dept, {"department": dept, "is_accessory": dept.lower() in acc,
+                                   "products": 0, "ext_price": 0.0})
+        d["products"] += 1
+        d["ext_price"] += float(r.get("ext_price") or 0.0)
+    departments = sorted(seen.values(), key=lambda x: (not x["is_accessory"], -x["ext_price"], x["department"]))
+    return {
+        "period": period, "org_id": org_id, "departments": departments,
+        "accessory_departments": sorted([d["department"] for d in departments if d["is_accessory"]]),
+        "note": (None if departments else
+                 "No Sales by Product rows found for this period. Upload or route the b2b 'Sales by Product' "
+                 "report (Data Imports → Custom Reports / Email Imports), then re-check."),
     }
 
 
@@ -27318,11 +27364,18 @@ def _activation_details_bucket(contract_type, sp_name, product, category):
     EXCLUDES Upgrade (verified against its totals row: 148+195+119+162+62+1 = 687), so `activation_counts`
     sums every bucket EXCEPT 'Upgrade'.
 
-    PRECEDENCE (owner reconciliation 2026-08-26): the non-phone DEVICE categories (Home Internet / Edge /
-    Tablet) are decided FIRST — before Upgrade — so a tablet/FWA/edge line lands in its own column and is
-    counted in Total Activation the way b2b counts it, and only a plain phone Upgrade is excluded. Then BYOD
-    (customer-phone), then Port (IDV) vs a plain New activation. If a store's total is off, this precedence
-    is the first knob to turn."""
+    PRECEDENCE (owner reconciliation 2026-08-26, verified against the real Contract Type distribution):
+    the non-phone DEVICE categories (Home Internet / Edge / Tablet — detected by product/category NAME)
+    are decided FIRST so a tablet/FWA/edge line lands in its own column and is counted the way b2b counts
+    it. Then UPGRADE (any Contract Type containing 'upgrade', incl. 'BYOD Upgrade') — the ONLY family
+    excluded from Total Activation — then BYOD, then Port, then a plain New activation.
+
+    CRITICAL ORDERING: 'upgrade' is tested BEFORE 'byod' so 'BYOD Upgrade' is an Upgrade (excluded), and
+    'port' is matched on the word 'port' ONLY — NOT on 'idv' — because the real Contract Types include
+    'Activation With IDV' and 'Port with IDV': IDV is an insurance attach, not a port signal, so keying
+    Port on 'idv' wrongly tagged every insured Activation as a Port. Distinct-Serial# totals per family
+    (New Activation 497 / Port 287 / BYOD 174, Upgrade 78 excluded) reconcile to the owner's sanity check
+    of 953 non-upgrade activations. If a store's total is off, this precedence is the first knob to turn."""
     ct = str(contract_type or "").lower()
     nm = f"{sp_name or ''} {product or ''} {category or ''}".lower()
     if "home internet" in nm or "fwa" in nm or "fixed wireless" in nm:
@@ -27331,11 +27384,11 @@ def _activation_details_bucket(contract_type, sp_name, product, category):
         return "Edge"
     if "tablet" in nm or "galaxy tab" in nm:
         return "Tablet"
-    if "byod" in ct or "customer phone" in nm:
-        return "BYOD"
     if "upgrade" in ct:
         return "Upgrade"
-    if "idv" in ct or "port" in ct:
+    if "byod" in ct or "customer phone" in nm:
+        return "BYOD"
+    if "port" in ct:
         return "Port"
     if "activation" in ct:
         return "New Activation"
@@ -27362,23 +27415,38 @@ def _norm_report_date(v):
 _ACT_CANCELLED_STATUS = {"cancelled", "canceled", "void", "voided", "deactivated", "reversed"}
 
 
+# Bucket precedence for de-duping a Serial# that appears on more than one line: the STRONGEST
+# classification wins, so a device with both an Upgrade line and an Activation/Port/BYOD line counts as
+# the real activation (never silently dropped to the excluded Upgrade family). Rank order matches
+# _activation_details_bucket's own precedence; Upgrade is lowest so it only wins when nothing else does.
+_ACT_BUCKET_RANK = {"Home Internet": 6, "Edge": 6, "Tablet": 6, "BYOD": 4, "Port": 3,
+                    "New Activation": 2, "Other": 1, "Upgrade": 0}
+
+
 def _cr_resolve_activation_details(client, org_id, period, ctx):
-    """The b2b "Activation Details" report (owner 2026-08-26), read from the self-serve CUSTOM IMPORT
-    capture (commcalc.raw_custom_import JSONB — no per-report table/migration).
+    """The b2b "Activation Details" report (owner 2026-08-26) — the ACTIVATION BASIS OF TRUTH for every
+    b2bsoft tenant — read from the self-serve CUSTOM IMPORT capture (commcalc.raw_custom_import JSONB, no
+    per-report table/migration).
 
-    ONE ROW PER ACTIVATION, per the owner's rule: `Commission Item` = 'Service Plan' denotes the activation;
-    'Plan Option' rows are FEATURES (insurance) and are excluded from the count. Returns one row per
-    activation (deduped by Activation#, falling back to Trans ID), so the `activations` count column sums to
-    the store's activation total — the number that must reconcile to the b2b MTD figure (Diversey = 49).
-    `Trans ID` is carried for drill-down into Sales Transaction Details.
+    ONE ROW PER DISTINCT DEVICE, per the owner's rule and verified against the real export's Contract Type
+    distribution: an activation is a distinct `Serial#` (device IMEI). A single device spans several lines
+    (Service Plan + insurance Plan-Option share the serial), and de-duping on Serial# counts it exactly
+    once — the grain the owner's own sanity check used (distinct Serial# excluding Upgrade = 953). When a
+    serial carries lines of different Contract Types, the STRONGEST bucket wins (_ACT_BUCKET_RANK) so a
+    device is never dropped into the excluded Upgrade family by row order. `Trans ID` is carried for
+    drill-down into Sales Transaction Details.
 
-    DETECTED BY COLUMN SIGNATURE ('Activation#' + 'SP/PO Name'/'Commission Item'), so it lights up whatever
-    report_key the sheet was registered under. Returns/cancelled lines are excluded so the count is clean.
-    DISPLAY-ONLY — no payout path reads this (the commission wiring is a separate, later change)."""
+    SIGNATURE — the real export is device-serial shaped: `Serial#` + `Contract Type` (+ SP/PO plan name).
+    The legacy `Activation#`-keyed shape is still accepted for back-compat. Section-header rows from an
+    older grouped export (no Serial#/Contract Type) simply fail the signature and are ignored. Cancelled /
+    voided / return lines are excluded so the count is clean.
+
+    DISPLAY + RECON basis. `activation_counts` sums every bucket EXCEPT Upgrade for Total Activation. No
+    payout path reads this yet — moving commission onto this basis is a separate, explicit config opt-in."""
     market_for = ctx["market_for"]
     try:
         q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
-             .select("data,period,source_filename").eq("org_id", org_id))
+             .select("data,period,source_filename,row_index").eq("org_id", org_id))
         if period:
             q = q.in_("period", _pvariants(period))
         raw = q.limit(100000).execute().data or []
@@ -27402,44 +27470,43 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
         except Exception:
             return safe_float(s)
 
-    out, seen = [], set()
+    by_key = {}          # dedup key (serial, else activation#/trans id/row) -> chosen row
     for r in raw:
         d = r.get("data") or {}
         if not isinstance(d, dict):
             continue
         d_low = {(k or "").strip().lower(): v for k, v in d.items()}
         keys = set(d_low.keys())
-        # SIGNATURE — the Activation Details sheet carries an Activation# alongside the SP/PO plan name.
-        if "activation#" not in keys or not ({"sp/po name", "commission item"} & keys):
-            continue
-        # Activations only: 'Service Plan' rows. 'Plan Option' (insurance/features) rows are not activations.
-        if str(_get(d_low, "Commission Item")).strip().lower() != "service plan":
+        # SIGNATURE — device-serial export (Serial# + Contract Type), OR the legacy Activation#-keyed shape.
+        _is_serial_shape = "serial#" in keys and "contract type" in keys
+        _is_legacy_shape = "activation#" in keys and ({"sp/po name", "commission item"} & keys)
+        if not (_is_serial_shape or _is_legacy_shape):
             continue
         if str(_get(d_low, "Trans Type")).strip().lower() in ("return", "refund"):
             continue
         if str(_get(d_low, "Activation Status")).strip().lower() in _ACT_CANCELLED_STATUS:
             continue
+        serial = str(_get(d_low, "Serial#", "Serial", "IMEI")).strip()
         act_no = str(_get(d_low, "Activation#")).strip()
         tid = str(_get(d_low, "Trans ID")).strip()
-        key = act_no or tid or f"_i{len(out)}"
-        if key in seen:
-            continue  # one row per activation (a plan split across lines counts once)
-        seen.add(key)
+        key = serial or act_no or tid or f"_i{r.get('row_index')}_{len(by_key)}"
         store = str(_get(d_low, "Store")).strip()
         ct = str(_get(d_low, "Contract Type")).strip()
         sp = str(_get(d_low, "SP/PO Name")).strip()
         prod = str(_get(d_low, "Product Desc")).strip()
         cat = str(_get(d_low, "Category")).strip()
-        out.append({
+        bucket = _activation_details_bucket(ct, sp, prod, cat)
+        row = {
             "store": store,
             "market": market_for(store),
             "salesperson": str(_get(d_low, "Salesperson", "User Login")).strip(),
             "trans_date": _norm_report_date(_get(d_low, "Trans Date", "Service Date", "Trans Date Time")),
             "trans_id": tid,
             "activation_no": act_no,
+            "serial": serial,
             "contract_type": ct,
             "action_type": str(_get(d_low, "Action Type")).strip(),
-            "bucket": _activation_details_bucket(ct, sp, prod, cat),
+            "bucket": bucket,
             "service_plan": sp,
             "product_desc": prod,
             "category": cat,
@@ -27447,14 +27514,13 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
             "activation_status": str(_get(d_low, "Activation Status")).strip(),
             "activations": 1,
             "mrc": _num(_get(d_low, "MRC")),
-        })
-    return out
-
-
-# The departments that count as ACCESSORY sales for the "Sales by Product" report (owner 2026-08-26:
-# "currently 2 departments accessories and C2wireless are in accessory sales"). Lower-cased for matching.
-# Kept here as the single place to extend if the tenant adds an accessory department.
-_ACCESSORY_DEPARTMENTS = {"accessories", "c2wireless"}
+        }
+        prev = by_key.get(key)
+        # First line for this device wins its slot; a later line only replaces it when it classifies to a
+        # STRONGER bucket (so the device counts as its real activation, not an Upgrade line seen first).
+        if prev is None or _ACT_BUCKET_RANK.get(bucket, 1) > _ACT_BUCKET_RANK.get(prev["bucket"], 1):
+            by_key[key] = row
+    return list(by_key.values())
 
 
 def _cr_resolve_product_sales(client, org_id, period, ctx):
@@ -27498,6 +27564,16 @@ def _cr_resolve_product_sales(client, org_id, period, ctx):
         except Exception:
             return safe_float(s)
 
+    # ACCESSORY DEFINITION — the SAME per-org config the Sales Report uses (_accessory_config, mig 208), so
+    # "accessory sales" means one thing across every page (single source). The tenant edits its accessory
+    # DEPARTMENTS once under Sales Report → Accessory settings; this report reads that set — no second,
+    # divergent hard-coded list. Empty/unconfigured org → the config's own house default (byte-identical).
+    try:
+        _acc_depts = _accessory_config(client, org_id).get("departments") or set()
+    except Exception as _ae:
+        print(f"WARN product_sales accessory config read failed: {_ae}")
+        _acc_depts = set()
+
     # Only this report's sheets qualify (Product GP + Total Exp Comm columns), grouped per file for ordered
     # department tracking.
     byfile = defaultdict(list)
@@ -27523,7 +27599,7 @@ def _cr_resolve_product_sales(client, org_id, period, ctx):
                 continue
             if not prod:
                 continue                               # subtotal / blank row — never a product line
-            is_acc = dept.strip().lower() in _ACCESSORY_DEPARTMENTS
+            is_acc = dept.strip().lower() in _acc_depts
             ext = _num(_get(d_low, "Ext Price"))
             gp = _num(_get(d_low, "GP"))
             out.append({
