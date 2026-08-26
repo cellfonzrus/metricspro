@@ -27222,9 +27222,127 @@ def _cr_resolve_bill_payments(client, org_id, period, ctx):
     return out
 
 
+def _activation_details_bucket(contract_type, sp_name, product, category):
+    """Best-effort activation TYPE for the b2b Activation Details report, from the fields the report carries.
+    The store TOTAL never depends on this (that is just the Service-Plan row count); this only drives the
+    optional 'group by Type' breakdown, so it is labelled 'derived'. Order matters: BYOD/Upgrade are decided
+    from Contract Type first (so a tablet upgrade stays Upgrade), then the non-phone device categories from
+    the plan/product wording, then Port (IDV) vs a plain New activation."""
+    ct = str(contract_type or "").lower()
+    nm = f"{sp_name or ''} {product or ''} {category or ''}".lower()
+    if "byod" in ct or "customer phone" in nm:
+        return "BYOD"
+    if "upgrade" in ct:
+        return "Upgrade"
+    if "tablet" in nm or "galaxy tab" in nm:
+        return "Tablet"
+    if "home internet" in nm or "fwa" in nm or "fixed wireless" in nm:
+        return "Home Internet"
+    if "edge" in nm or "edge" in ct:
+        return "Edge"
+    if "idv" in ct or "port" in ct:
+        return "Port"
+    if "activation" in ct:
+        return "New Activation"
+    return "Other"
+
+
+_ACT_CANCELLED_STATUS = {"cancelled", "canceled", "void", "voided", "deactivated", "reversed"}
+
+
+def _cr_resolve_activation_details(client, org_id, period, ctx):
+    """The b2b "Activation Details" report (owner 2026-08-26), read from the self-serve CUSTOM IMPORT
+    capture (commcalc.raw_custom_import JSONB — no per-report table/migration).
+
+    ONE ROW PER ACTIVATION, per the owner's rule: `Commission Item` = 'Service Plan' denotes the activation;
+    'Plan Option' rows are FEATURES (insurance) and are excluded from the count. Returns one row per
+    activation (deduped by Activation#, falling back to Trans ID), so the `activations` count column sums to
+    the store's activation total — the number that must reconcile to the b2b MTD figure (Diversey = 49).
+    `Trans ID` is carried for drill-down into Sales Transaction Details.
+
+    DETECTED BY COLUMN SIGNATURE ('Activation#' + 'SP/PO Name'/'Commission Item'), so it lights up whatever
+    report_key the sheet was registered under. Returns/cancelled lines are excluded so the count is clean.
+    DISPLAY-ONLY — no payout path reads this (the commission wiring is a separate, later change)."""
+    market_for = ctx["market_for"]
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report activation_details read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    out, seen = [], set()
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — the Activation Details sheet carries an Activation# alongside the SP/PO plan name.
+        if "activation#" not in keys or not ({"sp/po name", "commission item"} & keys):
+            continue
+        # Activations only: 'Service Plan' rows. 'Plan Option' (insurance/features) rows are not activations.
+        if str(_get(d_low, "Commission Item")).strip().lower() != "service plan":
+            continue
+        if str(_get(d_low, "Trans Type")).strip().lower() in ("return", "refund"):
+            continue
+        if str(_get(d_low, "Activation Status")).strip().lower() in _ACT_CANCELLED_STATUS:
+            continue
+        act_no = str(_get(d_low, "Activation#")).strip()
+        tid = str(_get(d_low, "Trans ID")).strip()
+        key = act_no or tid or f"_i{len(out)}"
+        if key in seen:
+            continue  # one row per activation (a plan split across lines counts once)
+        seen.add(key)
+        store = str(_get(d_low, "Store")).strip()
+        ct = str(_get(d_low, "Contract Type")).strip()
+        sp = str(_get(d_low, "SP/PO Name")).strip()
+        prod = str(_get(d_low, "Product Desc")).strip()
+        cat = str(_get(d_low, "Category")).strip()
+        out.append({
+            "store": store,
+            "market": market_for(store),
+            "salesperson": str(_get(d_low, "Salesperson", "User Login")).strip(),
+            "trans_date": str(_get(d_low, "Trans Date", "Service Date", "Trans Date Time"))[:10],
+            "trans_id": tid,
+            "activation_no": act_no,
+            "contract_type": ct,
+            "action_type": str(_get(d_low, "Action Type")).strip(),
+            "bucket": _activation_details_bucket(ct, sp, prod, cat),
+            "service_plan": sp,
+            "product_desc": prod,
+            "category": cat,
+            "carrier": str(_get(d_low, "Carrier")).strip(),
+            "activation_status": str(_get(d_low, "Activation Status")).strip(),
+            "activations": 1,
+            "mrc": _num(_get(d_low, "MRC")),
+        })
+    return out
+
+
 _CUSTOM_REPORT_RESOLVERS = {
     "sales_line": _cr_resolve_sales_line,
     "bill_payments": _cr_resolve_bill_payments,
+    "activation_details": _cr_resolve_activation_details,
     "rep_commissions": _cr_resolve_rep_commissions,
     "targets_actuals": _cr_resolve_targets_actuals,
     "kpi_metrics": _cr_resolve_kpi_metrics,
