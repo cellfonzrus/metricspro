@@ -219,6 +219,91 @@ DATASETS = [
             _col("retail_cost", "Retail Cost $", "money", gate="carrier_residual"),
         ],
     },
+    {
+        # Bill Payments — the b2b "Bill Payment Transactions Processed" report (owner 2026-08-26). Ingested
+        # via the self-serve CUSTOM IMPORT path (raw_custom_import JSONB — no per-report table/migration);
+        # the resolver detects it by column signature, so it works whatever report_key the tenant registered
+        # it under. Group by Store and read the summed `discount` column for the "discounts on bill payments"
+        # report the owner asked for; every money column subtotals correctly. Voided lines are excluded by
+        # the resolver so the sums reconcile. DISPLAY-ONLY.
+        "key": "bill_payments", "name": "Bill Payments", "resolver": "bill_payments", "sort_order": 100,
+        "field_map": {"store": "store", "rep": "salesperson", "market": "market", "day": "trans_date"},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("store", "Store", "text", group=True),
+            _col("market", "Market", "text", group=True),
+            _col("salesperson", "Processed by", "text", group=True),
+            _col("trans_date", "Date", "date", group=True),
+            _col("trans_id", "Trans ID", "text"),
+            _col("bill_pay_system", "Bill Pay System", "text", group=True),
+            _col("carrier_id", "Carrier", "text", group=True),
+            _col("customer_type", "Customer Type", "text", group=True),
+            _col("tender_type", "Tender", "text", group=True),
+            _col("txns", "Bill Payments", "count"),
+            _col("payment", "Payment $", "money"),
+            _col("fee", "Fee $", "money"),
+            _col("total_amt", "Total $", "money"),
+            _col("discount", "Discount $", "money"),
+            _col("tax", "Tax $", "money"),
+        ],
+    },
+    {
+        # Activations — the b2b "Activation Details" report (owner 2026-08-26). Ingested via the self-serve
+        # CUSTOM IMPORT path (raw_custom_import JSONB — no per-report table/migration); the resolver returns
+        # ONE ROW PER ACTIVATION (Commission Item = 'Service Plan'; Plan Option/insurance rows excluded), so
+        # `activations` summed per Store is the store's activation total that reconciles to the b2b MTD figure
+        # (Diversey = 49). Group by Store for the count, by Type/Contract Type for the new/port/byod/tablet/
+        # home-internet breakdown; Trans ID drills into Sales Transaction Details. DISPLAY-ONLY (the Exec-MTD
+        # replacement and the commission wiring are separate, later changes).
+        "key": "activation_details", "name": "Activations", "resolver": "activation_details",
+        "sort_order": 15,
+        "field_map": {"store": "store", "rep": "salesperson", "market": "market", "day": "trans_date"},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("store", "Store", "text", group=True),
+            _col("market", "Market", "text", group=True),
+            _col("salesperson", "Salesperson", "text", group=True),
+            _col("trans_date", "Date", "date", group=True),
+            _col("trans_id", "Trans ID", "text"),
+            _col("activation_no", "Activation #", "text"),
+            _col("bucket", "Type (derived)", "text", group=True),
+            _col("contract_type", "Contract Type", "text", group=True),
+            _col("action_type", "Action Type", "text", group=True),
+            _col("service_plan", "Service Plan", "text"),
+            _col("product_desc", "Product", "text"),
+            _col("category", "Category", "text", group=True),
+            _col("carrier", "Carrier", "text", group=True),
+            _col("activation_status", "Status", "text", group=True),
+            _col("activations", "Activations", "count"),
+            _col("mrc", "MRC $", "money"),
+        ],
+    },
+    {
+        # Sales by Product — the b2b "Sales by Product" report (owner 2026-08-26), for accessory sales by
+        # department. Ingested via the self-serve CUSTOM IMPORT path (raw_custom_import JSONB — no per-report
+        # table/migration). The resolver walks the report's Department: header / product / subtotal structure
+        # and carries the Department onto each product row, flagging Accessories & C2wireless as accessory
+        # departments. Group by Department (or filter is_accessory = Yes) and read accessory_sales /
+        # accessory_gp for the accessory-sales totals. NB: the report carries no Store/Rep/Date column, so
+        # this dataset aggregates at the report's own scope, not per store. DISPLAY-ONLY.
+        "key": "product_sales", "name": "Sales by Product", "resolver": "product_sales", "sort_order": 55,
+        "field_map": {"store": None, "rep": None, "market": None, "day": None},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("department", "Department", "text", group=True),
+            _col("category", "Category", "text", group=True),
+            _col("product_desc", "Product", "text", group=True),
+            _col("is_accessory", "Accessory dept?", "text", group=True),
+            _col("qty", "Qty", "count"),
+            _col("ext_price", "Ext Price $", "money"),
+            _col("ext_cost", "Ext Cost $", "money"),
+            _col("gp", "GP $", "money"),
+            _col("product_gp", "Product GP $", "money"),
+            _col("total_exp_comm", "Total Exp Comm $", "money"),
+            _col("accessory_sales", "Accessory Sales $", "money"),
+            _col("accessory_gp", "Accessory GP $", "money"),
+        ],
+    },
 ]
 
 _BY_KEY = {d["key"]: d for d in DATASETS}

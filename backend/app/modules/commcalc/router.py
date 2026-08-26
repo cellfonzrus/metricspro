@@ -24259,14 +24259,21 @@ def get_email_config(org_id: str = ORG_ID, account: str = "default"):
 
 
 class PutEmailConfigIn(LaxModel):
-    account: str = ""
-    label: str = ""
-    imap_host: str = ""
+    # These are Optional[str] (not str) ON PURPOSE: the PUT below persists a blank field as NULL
+    # (`(body.x or "").strip() or None`), the GET returns it as JSON null, and the frontend spreads that
+    # saved config straight back into the next save. A bare `str` field REJECTS an explicit null in
+    # Pydantic v2 ("Input should be a valid string") — the `= ""` default only applies when the key is
+    # ABSENT, not when it is sent as null — so editing any existing mailbox with an empty from_filter/
+    # label/host failed to save. The handler already coerces each with `(x or default)`, so accepting null
+    # here is safe and changes no stored value.
+    account: Optional[str] = ""
+    label: Optional[str] = ""
+    imap_host: Optional[str] = ""
     imap_port: Any = None
-    username: str = ""
+    username: Optional[str] = ""
     use_ssl: Any = True
-    mailbox: str = ""
-    from_filter: str = ""
+    mailbox: Optional[str] = ""
+    from_filter: Optional[str] = ""
     since_days: Any = None
     patterns: Any = None
     enabled: Any = None
@@ -27141,8 +27148,294 @@ def _cr_resolve_ma_daily_tx(client, org_id, period, ctx):
     return q.limit(100000).execute().data or []
 
 
+def _cr_resolve_bill_payments(client, org_id, period, ctx):
+    """The b2b "Bill Payment Transactions Processed" report (owner 2026-08-26), read from the self-serve
+    CUSTOM IMPORT capture (commcalc.raw_custom_import JSONB — no per-report table/migration needed).
+
+    DETECTED BY COLUMN SIGNATURE, not report_key: a sheet qualifies when its captured columns include a
+    'Discounts' column together with a Bill-Pay identifier ('Bill Pay System' / 'Bill Pay ID'). This means
+    the dataset lights up no matter what report_key the tenant registered the sheet under (the sweep/manual
+    upload only has to land it in raw_custom_import), which removes the one coordination point that would
+    otherwise silently show an empty report.
+
+    Money columns ($ Payment / Fee / Total / Discount / Tax) are coerced from the stringified JSONB values
+    ('$1.50', '1,234.00', '') to numbers so they subtotal. VOIDED lines are excluded so the sums reconcile
+    (a voided bill payment was reversed). One row = one bill payment, so `txns`=1 per row sums to the count.
+    Powers the Bill Payment Discounts report: dataset 'Bill Payments', group by Store, read summed Discount."""
+    market_for = ctx["market_for"]
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report bill_payments read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    out = []
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — only the bill-payment sheet carries a Discounts column alongside a Bill-Pay identifier.
+        if "discounts" not in keys or not ({"bill pay system", "bill pay id", "bill pay id#"} & keys):
+            continue
+        if str(_get(d_low, "Voided")).strip().lower() in _VOID_TOKENS:
+            continue
+        store = str(_get(d_low, "Store")).strip()
+        out.append({
+            "store": store,
+            "market": market_for(store),
+            "salesperson": str(_get(d_low, "Created By", "Salesperson", "User Login")).strip(),
+            "trans_date": str(_get(d_low, "Trans Date", "Trans Date Time", "Service Date"))[:10],
+            "trans_id": str(_get(d_low, "Trans ID")).strip(),
+            "bill_pay_system": str(_get(d_low, "Bill Pay System")).strip(),
+            "carrier_id": str(_get(d_low, "Carrier ID")).strip(),
+            "customer_type": str(_get(d_low, "Customer Type")).strip(),
+            "tender_type": str(_get(d_low, "Tender Type")).strip(),
+            "txns": 1,
+            "payment": _num(_get(d_low, "Payment")),
+            "fee": _num(_get(d_low, "Fee")),
+            "total_amt": _num(_get(d_low, "Total Amt", "Total Amount")),
+            "discount": _num(_get(d_low, "Discounts", "Discount")),
+            "tax": _num(_get(d_low, "Tax")),
+        })
+    return out
+
+
+def _activation_details_bucket(contract_type, sp_name, product, category):
+    """Best-effort activation TYPE for the b2b Activation Details report, from the fields the report carries.
+    The store TOTAL never depends on this (that is just the Service-Plan row count); this only drives the
+    optional 'group by Type' breakdown, so it is labelled 'derived'. Order matters: BYOD/Upgrade are decided
+    from Contract Type first (so a tablet upgrade stays Upgrade), then the non-phone device categories from
+    the plan/product wording, then Port (IDV) vs a plain New activation."""
+    ct = str(contract_type or "").lower()
+    nm = f"{sp_name or ''} {product or ''} {category or ''}".lower()
+    if "byod" in ct or "customer phone" in nm:
+        return "BYOD"
+    if "upgrade" in ct:
+        return "Upgrade"
+    if "tablet" in nm or "galaxy tab" in nm:
+        return "Tablet"
+    if "home internet" in nm or "fwa" in nm or "fixed wireless" in nm:
+        return "Home Internet"
+    if "edge" in nm or "edge" in ct:
+        return "Edge"
+    if "idv" in ct or "port" in ct:
+        return "Port"
+    if "activation" in ct:
+        return "New Activation"
+    return "Other"
+
+
+_ACT_CANCELLED_STATUS = {"cancelled", "canceled", "void", "voided", "deactivated", "reversed"}
+
+
+def _cr_resolve_activation_details(client, org_id, period, ctx):
+    """The b2b "Activation Details" report (owner 2026-08-26), read from the self-serve CUSTOM IMPORT
+    capture (commcalc.raw_custom_import JSONB — no per-report table/migration).
+
+    ONE ROW PER ACTIVATION, per the owner's rule: `Commission Item` = 'Service Plan' denotes the activation;
+    'Plan Option' rows are FEATURES (insurance) and are excluded from the count. Returns one row per
+    activation (deduped by Activation#, falling back to Trans ID), so the `activations` count column sums to
+    the store's activation total — the number that must reconcile to the b2b MTD figure (Diversey = 49).
+    `Trans ID` is carried for drill-down into Sales Transaction Details.
+
+    DETECTED BY COLUMN SIGNATURE ('Activation#' + 'SP/PO Name'/'Commission Item'), so it lights up whatever
+    report_key the sheet was registered under. Returns/cancelled lines are excluded so the count is clean.
+    DISPLAY-ONLY — no payout path reads this (the commission wiring is a separate, later change)."""
+    market_for = ctx["market_for"]
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report activation_details read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    out, seen = [], set()
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — the Activation Details sheet carries an Activation# alongside the SP/PO plan name.
+        if "activation#" not in keys or not ({"sp/po name", "commission item"} & keys):
+            continue
+        # Activations only: 'Service Plan' rows. 'Plan Option' (insurance/features) rows are not activations.
+        if str(_get(d_low, "Commission Item")).strip().lower() != "service plan":
+            continue
+        if str(_get(d_low, "Trans Type")).strip().lower() in ("return", "refund"):
+            continue
+        if str(_get(d_low, "Activation Status")).strip().lower() in _ACT_CANCELLED_STATUS:
+            continue
+        act_no = str(_get(d_low, "Activation#")).strip()
+        tid = str(_get(d_low, "Trans ID")).strip()
+        key = act_no or tid or f"_i{len(out)}"
+        if key in seen:
+            continue  # one row per activation (a plan split across lines counts once)
+        seen.add(key)
+        store = str(_get(d_low, "Store")).strip()
+        ct = str(_get(d_low, "Contract Type")).strip()
+        sp = str(_get(d_low, "SP/PO Name")).strip()
+        prod = str(_get(d_low, "Product Desc")).strip()
+        cat = str(_get(d_low, "Category")).strip()
+        out.append({
+            "store": store,
+            "market": market_for(store),
+            "salesperson": str(_get(d_low, "Salesperson", "User Login")).strip(),
+            "trans_date": str(_get(d_low, "Trans Date", "Service Date", "Trans Date Time"))[:10],
+            "trans_id": tid,
+            "activation_no": act_no,
+            "contract_type": ct,
+            "action_type": str(_get(d_low, "Action Type")).strip(),
+            "bucket": _activation_details_bucket(ct, sp, prod, cat),
+            "service_plan": sp,
+            "product_desc": prod,
+            "category": cat,
+            "carrier": str(_get(d_low, "Carrier")).strip(),
+            "activation_status": str(_get(d_low, "Activation Status")).strip(),
+            "activations": 1,
+            "mrc": _num(_get(d_low, "MRC")),
+        })
+    return out
+
+
+# The departments that count as ACCESSORY sales for the "Sales by Product" report (owner 2026-08-26:
+# "currently 2 departments accessories and C2wireless are in accessory sales"). Lower-cased for matching.
+# Kept here as the single place to extend if the tenant adds an accessory department.
+_ACCESSORY_DEPARTMENTS = {"accessories", "c2wireless"}
+
+
+def _cr_resolve_product_sales(client, org_id, period, ctx):
+    """The b2b "Sales by Product" report (owner 2026-08-26) — read from the self-serve CUSTOM IMPORT capture
+    (commcalc.raw_custom_import JSONB — no per-report table/migration).
+
+    HIERARCHICAL SHEET: rows come as 'Department: X' HEADER rows, then the product rows under them, then a
+    per-department SUBTOTAL row (blank Product Desc). This resolver walks the rows IN FILE ORDER (row_index),
+    carries the current Department down onto each product row, and DROPS the header + subtotal rows so
+    nothing is double-counted. Per source_filename the department resets, so two files never bleed together.
+
+    Flags each product row `is_accessory` when its Department is in _ACCESSORY_DEPARTMENTS (Accessories /
+    C2wireless), and exposes `accessory_sales` (Ext Price on accessory rows) + `accessory_gp` (GP on
+    accessory rows) so grouping gives the accessory-sales totals the owner asked for. The report carries no
+    Store/Rep/Date column, so this dataset aggregates at the report's own scope (by Department/Category/
+    Product), not per store. DISPLAY-ONLY."""
+    from collections import defaultdict
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,row_index,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report product_sales read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    # Only this report's sheets qualify (Product GP + Total Exp Comm columns), grouped per file for ordered
+    # department tracking.
+    byfile = defaultdict(list)
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        keys = {(k or "").strip().lower() for k in d.keys()}
+        if "product gp" not in keys or "total exp comm" not in keys:
+            continue
+        byfile[r.get("source_filename") or ""].append(r)
+
+    out = []
+    for _fname, rrows in byfile.items():
+        rrows.sort(key=lambda x: x.get("row_index") if x.get("row_index") is not None else 0)
+        dept = ""
+        for r in rrows:
+            d_low = {(k or "").strip().lower(): v for k, v in (r.get("data") or {}).items()}
+            cat = str(_get(d_low, "Category")).strip()
+            prod = str(_get(d_low, "Product Desc")).strip()
+            if cat.lower().startswith("department:"):
+                dept = cat.split(":", 1)[1].strip()   # carry this department onto the rows that follow
+                continue
+            if not prod:
+                continue                               # subtotal / blank row — never a product line
+            is_acc = dept.strip().lower() in _ACCESSORY_DEPARTMENTS
+            ext = _num(_get(d_low, "Ext Price"))
+            gp = _num(_get(d_low, "GP"))
+            out.append({
+                "department": dept,
+                "category": cat,
+                "product_desc": prod,
+                "is_accessory": "Yes" if is_acc else "No",
+                "qty": _num(_get(d_low, "Qty")),
+                "ext_price": ext,
+                "ext_cost": _num(_get(d_low, "Ext Cost")),
+                "gp": gp,
+                "product_gp": _num(_get(d_low, "Product GP")),
+                "total_exp_comm": _num(_get(d_low, "Total Exp Comm")),
+                "accessory_sales": ext if is_acc else 0.0,
+                "accessory_gp": gp if is_acc else 0.0,
+            })
+    return out
+
+
 _CUSTOM_REPORT_RESOLVERS = {
     "sales_line": _cr_resolve_sales_line,
+    "bill_payments": _cr_resolve_bill_payments,
+    "activation_details": _cr_resolve_activation_details,
+    "product_sales": _cr_resolve_product_sales,
     "rep_commissions": _cr_resolve_rep_commissions,
     "targets_actuals": _cr_resolve_targets_actuals,
     "kpi_metrics": _cr_resolve_kpi_metrics,
