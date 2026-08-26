@@ -24347,6 +24347,27 @@ class PutEmailConfigIn(LaxModel):
     acknowledge_cross_org: Any = None
 
 
+def _ensure_email_sweep_cron():
+    """Self-register the GLOBAL email-sweep pg_cron job so NO ONE runs SQL by hand — the trigger is enabling
+    a mailbox (put_email_config below). Reads the backend's own API URL + notify secret from settings and
+    calls the idempotent commcalc.ensure_email_sweep_cron RPC (mig 922) as service_role.
+
+    NON-FATAL by design: a missing secret, the RPC not present (mig 922 not applied yet), or pg_cron/pg_net
+    not installed just means auto-scheduling is skipped — the mailbox save still succeeds, and manual upload /
+    'Run now' still work. Returns the RPC's status string (or None)."""
+    try:
+        url = (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().schema("commcalc").rpc(
+            "ensure_email_sweep_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_email_sweep_cron skipped: {e}")
+        return None
+
+
 @router.put("/email-sweep/config")
 def put_email_config(body: PutEmailConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save one mailbox. `account` keys which mailbox (default 'default'); pass a distinct key + label to
@@ -24388,6 +24409,10 @@ def put_email_config(body: PutEmailConfigIn, org_id: str = ORG_ID, authorization
         row.pop("account", None); row.pop("label", None)
         sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
     resp = {"ok": True, "account": account}
+    # Enabling a mailbox self-registers the GLOBAL email-sweep pg_cron job (mig 922) so no one runs SQL by
+    # hand. Best-effort + non-fatal: the save already succeeded above; a skipped schedule never fails it.
+    if row.get("enabled"):
+        resp["cron"] = _ensure_email_sweep_cron()
     if conflicts:
         resp["warning"] = "cross_org_mailbox"
         resp["conflicts"] = conflicts
