@@ -1,0 +1,70 @@
+-- 925_data_lineage_seed.sql — populate the system DATA-LINEAGE registry (owner 2026-08-26)
+--
+-- Seeds commcalc.data_lineage (mig 924) from a full codebase audit (ingestion entry points, the derived-
+-- metric fan-out, and the daily-cash model). Each row is ONE dependency edge: source item → affected item,
+-- with the entry point, a CODE reference (file:function), a plain-ENGLISH effect, the edge kind, and the
+-- auto_updated flag (FALSE = a change does NOT propagate on its own — the wiring gaps to watch).
+--
+-- Mirrored in docs/DATA_LINEAGE.md. Idempotent: clears prior HOUSE-seed rows for these source keys, then
+-- reinserts. Global registry (org_id-less rows describe the code, which is the same for every tenant).
+--
+-- REVERT:  delete from commcalc.data_lineage;  (or drop the table via 924's revert)
+
+-- Idempotent reseed: wipe the documented edges then repopulate (this is documentation, not tenant data).
+delete from commcalc.data_lineage;
+
+insert into commcalc.data_lineage
+  (source_key, source_label, entry_point, affected_key, affected_label, surface, kind, auto_updated, effect_code, effect_english, seq)
+values
+-- ── INGEST: where each data item ENTERS the system (raw capture) ──────────────────────────────────
+('sales_transactions','Sales Transaction Details','POST /commcalc/upload/sales · email/FTP sweep','raw_sales','commcalc.raw_sales','Data Imports','ingest',true,'router.py:_upload_file_impl (TABLE_MAP)','The monthly Sales Transaction Details upload lands verbatim in raw_sales, replace-by-period.',1),
+('sales_transactions','Daily sales feed','POST /commcalc/upload/daily_sales · email sweep','daily_sales_feed','commcalc.daily_sales_feed','Data Imports','ingest',true,'router.py:_upload_file_impl (daily_sales branch)','The emailed daily feed lands in daily_sales_feed, replace-by-trans_date; promoted into raw_sales by _promote_feed_to_raw_sales.',2),
+('activation_details_report','b2b Activation Details','Custom import (email sweep / upload) → raw_custom_import','raw_custom_import','commcalc.raw_custom_import','Data Imports','ingest',true,'router.py:_ingest_custom_report','The Activation Details sheet is captured as JSONB keyed by report_key; detected downstream by column signature (Serial# + Contract Type).',3),
+('bill_payments_report','b2b Bill Payment Transactions','Custom import → raw_custom_import','raw_custom_import','commcalc.raw_custom_import','Data Imports','ingest',true,'router.py:_ingest_custom_report','The Bill Payment Transactions sheet is captured as JSONB; detected by signature (Discounts + Bill Pay System).',4),
+('product_sales_report','b2b Sales by Product','Custom import → raw_custom_import','raw_custom_import','commcalc.raw_custom_import','Data Imports','ingest',true,'router.py:_ingest_custom_report','Sales by Product captured as JSONB; detected by signature (Product GP + Total Exp Comm).',5),
+('processor_epay','ePay Daily Transaction Detail','POST /commcalc/epay/upload · Boost portal sweep','raw_epay_daily_tx','commcalc.raw_epay_daily_tx','ePay','ingest',true,'epay_ingest.ingest','ePay settlement rows land in raw_epay_daily_tx; terminal→store via storeops.merchant_ids (processor epay).',6),
+('processor_vidapay','VidaPay MA Daily Tx','POST /commcalc/upload/ma_daily_tx · VidaPay sweep','raw_ma_daily_tx','commcalc.raw_ma_daily_tx','MA / VidaPay','ingest',true,'router.py:_upload_file_impl (ma_daily_tx) / report_pull.ingest_report_rows','VidaPay airtime/top-up rows land in raw_ma_daily_tx keyed by account_id + tx_date.',7),
+('daily_cash','Employee daily cash declaration','POST /closing/row · /closing/upload · GSheet sweep','daily_closing','commcalc.daily_closing','Daily Closing','ingest',true,'closing/router.py:create_row','A rep declares cash + tenders per store-day; t_cash = cash, epay_on_cash = the bill-payment cash portion.',8),
+
+-- ── SALES → the ONE shared display aggregation, and its fan-out ───────────────────────────────────
+('sales_transactions','Sales rows (raw_sales / feed union)','—','sales_cell_agg','_sales_cell_agg cells','(internal)','display',true,'router.py:_sales_cell_agg','THE shared per-(store,rep,day) aggregation: distinct-txn activation/byod/upgrade/port sets, accessory_rev, setup_fee_rev, bill_qty/bill_amt, revenue, gp. One change here moves every consumer below.',10),
+('sales_cell_agg','Shared sales aggregation','—','sales_report','Sales Report','Sales Report','display',true,'router.py:sales_report','Activations/BYOD/Upgrades/Swaps/Txns/Accessory$/Revenue/GP per store-rep-day come straight from the shared cells.',11),
+('sales_cell_agg','Shared sales aggregation','—','exec_mtd','Executive MTD','Executive MTD','display',true,'router.py:_exec_mtd','by_location/by_employee Total Activation, trending, conversion, APB, acc_sales all roll up from the shared cells.',12),
+('sales_cell_agg','Shared sales aggregation','—','daily_targets','Daily Targets attainment/pace/conversion','Daily Targets','target',true,'router.py:_compute_feed_actuals_py → targets_engine.py','prem/byod/upg/acc_gp/setup_fee/box/billpay counts feed targets attainment, catch-up pace, DM roll-up, and the boxes÷billpays conversion.',13),
+('sales_cell_agg','Shared sales aggregation','—','productivity','Productivity / Stack Ranking / Review','Productivity','display',true,'router.py:_prod_gather → productivity.py','boxes, acc$/hr, activations, upgrades, swaps per rep feed productivity, ranking and review.',14),
+('sales_cell_agg','Shared sales aggregation','—','metric_recon','Reconciliation (secondary side)','Activations / Bill Payments recon','recon',true,'router.py:_sales_activation_by_store / _billpay_sales_by_store','The sales side of the activation + bill-payment reconciliations is the shared cells.',15),
+
+-- ── ACTIVATIONS ──────────────────────────────────────────────────────────────────────────────────
+('activation_details_report','Activation Details (basis of truth)','—','activation_counts','/activation-counts (per store + market)','Activations report','display',true,'router.py:_cr_resolve_activation_details → activation_counts','Distinct Serial# per store/market, Upgrade excluded from Total Activation; both totals + per-bucket breakdown.',20),
+('activation_details_report','Activation Details (basis of truth)','—','exec_mtd','Executive MTD activations','Executive MTD','display',true,'router.py:_ad_activation_buckets / _sales_cells_for_report','When the activation basis is Activation Details (auto-on with data), Exec MTD Total Activation comes from AD (Upgrade excluded), replacing the sales-derived buckets.',21),
+('activation_details_report','Activation Details (basis of truth)','—','sales_report','Sales Report activations','Sales Report','display',true,'router.py:sales_report (AD override)','On the AD basis, the Sales Report activations/BYOD/upgrades come from Activation Details, total-safe per store.',22),
+('activation_details_report','Activation Details (basis of truth)','—','metric_recon','Activation reconciliation (primary side)','Activations recon','recon',true,'router.py:metric_recon (activations)','AD is the primary/basis-of-truth side reconciled against the sales aggregation.',23),
+('metric_source_of_truth','Activation basis config','PUT /commcalc/metric-source-config','activation_basis','Which source drives activations','Exec MTD / Sales Report / Activations','display',true,'router.py:_metric_source','Flipping the basis (or auto-on when AD data present) switches Exec MTD + Sales Report activations between the sales feed and Activation Details.',24),
+('activations','Activation counts','—','commission_pay_activations','Commission payout (activations)','Commission','pay',false,'calculator.py:classify_contract_type / commission_engine.py:_activation_buckets','PAY re-derives activations from its OWN classifier over raw_sales — it does NOT read _sales_cell_agg or Activation Details. Changing display activations does NOT move pay; pay moves when the classifier/config changes. Moving pay onto the AD basis is a separate explicit opt-in.',25),
+
+-- ── BILL PAYMENTS ────────────────────────────────────────────────────────────────────────────────
+('bill_payments_report','Bill Payment Transactions (basis)','—','metric_recon','Bill-payment reconciliation (primary)','Bill Payments recon','recon',true,'router.py:_billpay_report_by_store → metric_recon','The report is the basis of truth for the three-way bill-payment recon.',30),
+('bill_payments_sales','Bill payments (sales feed)','—','exec_mtd','Exec MTD Bill Payment Qty / $ / Conversion','Executive MTD','display',true,'router.py:_sales_cell_agg (bill_qty/bill_amt) → _exec_mtd','bill_qty/bill_amt drive the Exec MTD bill-payment columns and conv = total_activation ÷ bill_qty.',31),
+('bill_payments_sales','Bill payments (sales feed)','—','daily_targets','Daily Targets conversion (boxes÷billpays)','Daily Targets','target',true,'router.py:_sales_cell_agg (_billpay) → targets_engine.scope_conversion','The _billpay distinct-txn set is the denominator of the conversion metric.',32),
+('processor_epay','ePay processor feed','—','metric_recon','Bill-payment reconciliation (processor side, Boost)','Bill Payments recon','recon',true,'router.py:_billpay_processor_by_store (epay_ingest.per_store_day)','ePay per-store payment is the processor side reconciled against the report + sales.',33),
+('processor_vidapay','VidaPay processor feed','—','metric_recon','Bill-payment reconciliation (processor side, Total)','Bill Payments recon','recon',true,'router.py:_billpay_processor_by_store (raw_ma_daily_tx)','VidaPay per-store retail_cost is the processor side reconciled against the report + sales.',34),
+('bill_payments_report','Bill Payment Transactions (cash)','—','daily_cash_recon','Bill-pay cash vs declared cash','Bill Payments recon → daily_cash','recon',true,'router.py:_billpay_cash_actual_by_store + metric_recon.reconcile_billpay_cash','Actual bill-payment CASH (tender=cash) is reconciled against daily_closing.epay_on_cash per store — over/short.',35),
+('daily_cash','Declared bill-payment cash','—','daily_cash_recon','Bill-pay cash vs declared cash','Bill Payments recon → daily_cash','recon',true,'router.py:_billpay_cash_declared_by_store','daily_closing.epay_on_cash (what the rep declared as bill-payment cash) is the declared side of the cash reconciliation.',36),
+('daily_cash','Declared cash / tenders','—','deposit_recon','Cash Deposit Recon','Daily Closing → Deposit Recon','recon',true,'closing/deposit_recon.py','Declared t_cash / epay_on_cash reconcile against bank_deposit per deposit category.',37),
+
+-- ── ACCESSORIES ──────────────────────────────────────────────────────────────────────────────────
+('accessories','Accessory $ (config-driven)','Accessory settings (accessory_config)','sales_cell_agg','accessory_rev / setup_fee_rev','(internal)','display',true,'router.py:_accessory_config + _is_accessory → _sales_cell_agg','Which departments/categories/products count as accessory drives accessory_rev across every display consumer.',40),
+('accessories','Accessory $','—','exec_mtd','Exec MTD Acc Sales / APB / Acc+Setup','Executive MTD','display',true,'router.py:_exec_mtd (acc_sales, acc_plus_setup)','Accessory$ (and setup fee, as the target basis) shown on Exec MTD.',41),
+('accessories','Accessory $','—','accessory_targets','Accessory target attainment','Accessory Targets','target',true,'targets_engine.py (accessories + setup_fee_mtd)','Accessory target attainment = accessory$ + device set-up fee.',42),
+('accessories','Accessory departments','Accessory settings picker','product_sales_report','Sales-by-Product accessory flag','Custom Report','display',true,'router.py:_cr_resolve_product_sales / product_sales_departments','The Sales-by-Product accessory flag reads the SAME per-org accessory_config departments (single source), selectable from the report''s observed departments.',43),
+('accessories','Accessory $ (pay)','—','commission_pay_accessories','Commission payout (accessories)','Commission','pay',false,'calculator.py (own acc depts/kw) / commission_engine.py (accessory match field)','PAY uses calculator''s OWN accessory dept/keyword config — separate from the display _accessory_config. Changing display accessory config does NOT move accessory pay.',44),
+
+-- ── UPGRADES ─────────────────────────────────────────────────────────────────────────────────────
+('upgrades','Upgrades','—','exec_mtd','Exec MTD Upgrade column / Total Activation','Executive MTD','display',true,'router.py:_exec_mtd','Upgrades shown; INCLUDED in Total Activation on the sales basis, EXCLUDED on the Activation Details basis (b2b-consistent).',50),
+('upgrades','Upgrades','—','daily_targets','Upgrades target attainment','Daily Targets','target',true,'targets_engine.py (upgrades)','Upgrade counts feed the upgrades target category.',51),
+
+-- ── STORE IDENTITY (the merge key everything joins on) ───────────────────────────────────────────
+('store_identity','Store identity / aliases','Store Management · store_mapping · merchant IDs','all_store_grouped','Every per-store report','All reports','display',false,'router.py:_canonical_store_key_fn / _dealer_to_store_map','Store spelling/ID variants collapse to one canonical key. If a b2b Dealer Code is NOT linked to a store record, Activation Details rows show as numeric IDs instead of merging onto the named store row — a mapping gap to close.',60);
+
+notify pgrst, 'reload schema';
+select count(*) || ' data_lineage edges seeded' as status from commcalc.data_lineage;
