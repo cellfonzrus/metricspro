@@ -22464,6 +22464,84 @@ def onboarding_checklist(org_id: str = ORG_ID):
     return _onboarding_checklist(sb(), org_id)
 
 
+def _data_report_map(client, org_id):
+    """DATA-FIRST reverse map (owner 2026-08-26: "the first check should be what data is being ingested, then
+    reverse-engineer what reports/menus that data runs"). Starts from what THIS tenant actually has ingested,
+    then walks the data_lineage graph forward to every report/menu (surface) each ingested source powers — and
+    conversely lists the reports that are BLOCKED because their feeding data isn't ingested yet, naming what to
+    provide. Reuses the presence engine (_onboarding_checklist) + the lineage graph. DISPLAY/documentation."""
+    checklist = _onboarding_checklist(client, org_id)
+    present = {i["key"]: bool(i["present"]) for i in checklist["items"]}
+    counts = {i["key"]: i.get("count") for i in checklist["items"]}
+    labels = {i["key"]: i["label"] for i in checklist["items"]}
+    try:
+        edges = (client.schema("commcalc").table("data_lineage").select("*").limit(5000).execute().data) or []
+    except Exception:
+        edges = []
+    # forward adjacency + the set of ingest roots
+    adj, ingest_roots, src_label = {}, set(), {}
+    for e in edges:
+        sk = e.get("source_key") or ""
+        adj.setdefault(sk, []).append(e)
+        if e.get("source_label"):
+            src_label.setdefault(sk, e["source_label"])
+        if (e.get("kind") or "") == "ingest":
+            ingest_roots.add(sk)
+
+    def _surfaces_from(root):
+        """Every report/menu (surface) reachable downstream of an ingest root, via the lineage graph."""
+        seen, stack, out = set(), [root], {}
+        while stack:
+            n = stack.pop()
+            for e in adj.get(n, []):
+                surf = (e.get("surface") or "").strip()
+                if surf and (e.get("kind") or "") != "ingest":
+                    out[surf] = e.get("kind") or "display"
+                nxt = e.get("affected_key") or ""
+                if nxt and nxt not in seen:
+                    seen.add(nxt); stack.append(nxt)
+        return out
+
+    ingested, surface_feeders = [], {}
+    for root in sorted(ingest_roots):
+        surfs = _surfaces_from(root)
+        is_present = present.get(root, False)
+        ingested.append({
+            "source_key": root, "source_label": src_label.get(root) or labels.get(root) or root,
+            "present": is_present, "count": counts.get(root),
+            "reports": sorted(surfs.keys()),
+        })
+        for surf in surfs:
+            fed = surface_feeders.setdefault(surf, {"powered_by": [], "needs": []})
+            (fed["powered_by"] if is_present else fed["needs"]).append(src_label.get(root) or root)
+
+    reports = []
+    for surf, fed in sorted(surface_feeders.items()):
+        powered = bool(fed["powered_by"])
+        reports.append({"report": surf, "powered": powered,
+                        "powered_by": sorted(set(fed["powered_by"])),
+                        "needs": sorted(set(fed["needs"])) if not powered else []})
+    return {
+        "org_id": org_id,
+        "ingested": ingested,
+        "reports": reports,
+        "ingested_count": sum(1 for i in ingested if i["present"]),
+        "reports_powered": sum(1 for r in reports if r["powered"]),
+        "reports_total": len(reports),
+        "note": (None if edges else
+                 "The data-lineage schematic is empty — apply migrations 924/925 to populate the data→reports map."),
+    }
+
+
+@router.get("/data-readiness")
+def data_readiness(org_id: str = ORG_ID):
+    """DATA-FIRST readiness (owner 2026-08-26): what data is ingested for this tenant, reverse-engineered to
+    the reports/menus each ingested source powers — and the reports still blocked because their feed is
+    missing (with what to provide). The entry view of the Setup Wizard. DISPLAY/documentation."""
+    require_org(org_id)
+    return _data_report_map(sb(), org_id)
+
+
 @router.get("/metric-source-config")
 def get_metric_source_config(org_id: str = ORG_ID):
     """The tenant's per-metric SOURCE-OF-TRUTH config (mig 923). Returns one entry per known metric, falling

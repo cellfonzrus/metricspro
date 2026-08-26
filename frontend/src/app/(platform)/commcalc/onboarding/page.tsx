@@ -31,11 +31,15 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [showDone, setShowDone] = useState(true)
+  const [dr, setDr] = useState<any>(null)   // data-first reverse map (what's ingested → what it powers)
 
   const load = () => {
     setLoading(true); setErr(null)
-    api(`/api/v1/commcalc/onboarding-checklist${orgQ()}`)
-      .then(setData).catch(e => setErr(e?.message || String(e))).finally(() => setLoading(false))
+    Promise.all([
+      api(`/api/v1/commcalc/onboarding-checklist${orgQ()}`),
+      api(`/api/v1/commcalc/data-readiness${orgQ()}`).catch(() => null),
+    ]).then(([cl, d]: any[]) => { setData(cl); setDr(d) })
+      .catch(e => setErr(e?.message || String(e))).finally(() => setLoading(false))
   }
   useEffect(load, [])
 
@@ -53,6 +57,51 @@ export default function OnboardingPage() {
         what it powers, and a button to complete it. Green means ready; amber means a report or number will be
         blank until you provide it.
       </p>
+
+      {/* DATA-FIRST view (owner): what's ingested → what it powers, and which reports are blocked. */}
+      {!loading && dr && (
+        <div style={{ marginBottom: 20 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 800, margin: '0 0 6px' }}>
+            Your data <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12.5 }}>({dr.ingested_count ?? 0} feeds ingested · {dr.reports_powered ?? 0}/{dr.reports_total ?? 0} reports powered)</span>
+          </h2>
+          <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 8, maxWidth: 780 }}>
+            What the platform has actually ingested for you, and the reports each feed powers. This is the
+            reverse of the schematic — start here to see what&rsquo;s live and what&rsquo;s still blank.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            {/* Ingested feeds */}
+            <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ background: 'var(--surface2, #f8fafc)', padding: '7px 11px', fontSize: 12, fontWeight: 700 }}>Ingested feeds</div>
+              {(dr.ingested || []).map((s: any) => (
+                <div key={s.source_key} style={{ padding: '7px 11px', borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
+                  <span style={{ marginRight: 6 }}>{s.present ? '✅' : '⬜'}</span>
+                  <b>{s.source_label}</b>{s.present && s.count ? <span style={{ color: 'var(--text3)' }}> · {s.count}</span> : null}
+                  {(s.reports || []).length > 0 && (
+                    <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2, marginLeft: 20 }}>
+                      powers: {(s.reports || []).slice(0, 5).join(' · ')}{(s.reports || []).length > 5 ? ` +${s.reports.length - 5}` : ''}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {/* Reports status */}
+            <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ background: 'var(--surface2, #f8fafc)', padding: '7px 11px', fontSize: 12, fontWeight: 700 }}>Reports &amp; menus</div>
+              {(dr.reports || []).map((r: any, i: number) => (
+                <div key={i} style={{ padding: '7px 11px', borderTop: '1px solid var(--border)', fontSize: 12.5 }}>
+                  <span style={{ marginRight: 6 }}>{r.powered ? '🟢' : '🔴'}</span>
+                  <b>{r.report}</b>
+                  {!r.powered && (r.needs || []).length > 0 && (
+                    <div style={{ fontSize: 11.5, color: '#92400e', marginTop: 2, marginLeft: 20 }}>needs: {(r.needs || []).join(' · ')}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <h2 style={{ fontSize: 15, fontWeight: 800, margin: '4px 0 8px' }}>Setup steps</h2>
 
       {/* Progress */}
       {!loading && !err && (
