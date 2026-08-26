@@ -22021,6 +22021,47 @@ def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = "", includ
     }
 
 
+@router.get("/dealer-code-map/{period}")
+def dealer_code_map(period: str, org_id: str = ORG_ID):
+    """The b2b Activation Details "Dealer Code" → store mapping status (owner 2026-08-26). The export
+    identifies a store by a numeric Dealer Code; until that code is linked to a store record, its activations
+    show as the numeric ID instead of merging onto the named store row. This lists every Dealer Code observed
+    in the period's Activation Details with its device count and whether it currently resolves to a store,
+    plus the org's store roster for the picker. Map an unmapped code via POST /store-aliases
+    {alias: <dealer_code>, store_code: <chosen>} — the SAME explicit-alias table the resolver reads, so the
+    numbers merge immediately. DISPLAY/config."""
+    require_org(org_id)
+    client = sb()
+    dmap = _dealer_to_store_map(client, org_id)
+    rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": _market_for_fn(client, org_id)})
+    agg = {}
+    for r in rows:
+        dc = (r.get("dealer_code") or "").strip()
+        if not dc:
+            continue
+        slot = agg.setdefault(dc, {"dealer_code": dc, "activations": 0, "mapped": False, "store": None,
+                                   "division": (r.get("division") or ""), "region": (r.get("region") or ""),
+                                   "district": (r.get("district") or "")})
+        slot["activations"] += 1        # resolver rows are already one-per-device (distinct Serial#)
+        addr = dmap.get(dc.upper())
+        slot["mapped"] = bool(addr)
+        slot["store"] = addr or None
+    codes = sorted(agg.values(), key=lambda x: (x["mapped"], -x["activations"]))
+    try:
+        M = _store_maps(client, org_id)
+        stores = [{"store_code": s.get("store_code"), "address": (s.get("address") or s.get("store_code"))}
+                  for s in (M.get("stores") or []) if s.get("store_code")]
+    except Exception:
+        stores = []
+    return {
+        "period": period, "org_id": org_id, "codes": codes, "stores": stores,
+        "unmapped": sum(1 for c in codes if not c["mapped"]),
+        "note": (None if codes else
+                 "No Dealer Codes found in Activation Details for this period. Upload/route the b2b "
+                 "'Activation Details' report, then re-check."),
+    }
+
+
 @router.get("/product-sales-departments/{period}")
 def product_sales_departments(period: str, org_id: str = ORG_ID):
     """The DISTINCT Departments the b2b "Sales by Product" report actually contains for `period`, each flagged
@@ -27991,6 +28032,18 @@ def _dealer_to_store_map(client, org_id):
             c = str(r.get("store_code") or "").strip()
             if mid and c:
                 out.setdefault(mid.upper(), out.get(c.upper()) or c)
+    except Exception:
+        pass
+    # EXPLICIT per-org mapping — commcalc.store_aliases (the same table the /store-aliases write API + Store
+    # Matching UI use). A Dealer Code registered here as alias -> store_code resolves to that store's address,
+    # so the owner can map a b2b Dealer Code to a store with the existing tooling (no new table).
+    try:
+        for r in (client.schema("commcalc").table("store_aliases")
+                  .select("alias,store_code").eq("org_id", org_id).execute().data) or []:
+            al = str(r.get("alias") or "").strip()
+            c = str(r.get("store_code") or "").strip()
+            if al and c:
+                out[al.upper()] = out.get(c.upper()) or c
     except Exception:
         pass
     return out
