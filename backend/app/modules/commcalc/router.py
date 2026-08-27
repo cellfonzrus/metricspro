@@ -771,6 +771,12 @@ BUILTIN_UPLOAD_TYPES = ["sales", "daily_sales", "payment_detail", "mi_report", "
 # wants one captured can register it under Data Imports → Custom Reports (report_definitions).
 KNOWN_IGNORED_TYPES = {"sales_trend"}
 CUSTOM_IMPORT_TABLE = "raw_custom_import"
+# A custom sheet may be BOUND to a canonical dataset so its rows also flow into the standard report (no
+# per-report resolver code). The binding lives IN the existing commcalc.column_mapping table under the custom
+# report_key: one sentinel row (target_field=__dataset__, source_header=<dataset>) names the target dataset,
+# the rest are ordinary source_header→canonical-field rules. Reusing column_mapping means NO new table/migration
+# and the same mapping editor — the single-source rule (migs 208/923), not a parallel store.
+CUSTOM_BINDING_SENTINEL = "__dataset__"
 
 
 def _custom_report_def(client, org_id, report_key):
@@ -850,8 +856,23 @@ async def _ingest_custom_report(report_key, file, period, org_id, rdef=None):
              "filename": fname or None, "rows_saved": saved}).execute()
     except Exception as e:
         print(f"WARN upload_log insert failed: {e}")
-    return {"saved": saved, "report_key": report_key, "target_table": CUSTOM_IMPORT_TABLE,
-            "period": period, "rows_read": len(records)}
+    res = {"saved": saved, "report_key": report_key, "target_table": CUSTOM_IMPORT_TABLE,
+           "period": period, "rows_read": len(records)}
+    # OPT-IN dataset binding (set at setup via PUT /custom-import-types/{key}/binding): ALSO map the rows we
+    # just captured through the shared column_mapping engine into the bound canonical dataset's table, so a
+    # report the user set up flows into the standard report with NO per-report resolver code. Additive +
+    # best-effort — capture already succeeded above, a binding failure can never fail the capture, and NO
+    # binding reproduces today's behaviour byte-for-byte.
+    try:
+        binding = _custom_report_binding(client, org_id, report_key)
+        ds, brules = binding.get("target_dataset"), binding.get("rules") or []
+        table = column_mapping.TABLE_MAP.get(ds) if ds else None
+        if ds and brules and table:
+            res["mapped"] = _ingest_mapped_df(org_id, ds, table, brules, df, period=period,
+                                              fname=fname or None, trace_source="custom-binding")
+    except Exception as _be:
+        print(f"WARN custom-import binding apply for '{report_key}' failed: {_be}")
+    return res
 
 
 # ── Upload endpoints ─────────────────────────────────────────
@@ -3742,48 +3763,14 @@ def _restore_rows(client, table, rows, chunk=500):
     return restored, None
 
 
-@router.post("/upload-mapped")
-async def upload_mapped(
-    report_key: str = Form(...),
-    target_table: str = Form(""),
-    carrier_id: str = Form(""),
-    period: str = Form(""),
-    file: UploadFile = File(...),
-    org_id: str = ORG_ID,
-):
-    """Generic, config-driven ingest for a NEW carrier's report. Maps the sheet via
-    commcalc.column_mapping into the report's target_table, applying the SAME safety guards as the
-    legacy upload (defer-delete, never-wipe-on-empty, batched insert, upload_log). The legacy
-    /upload/{file_type} path is untouched — this is the additive any-carrier path."""
-    require_org(org_id)
-    table = (target_table or column_mapping.TABLE_MAP.get(report_key) or "").strip()
-    if not table:
-        # resolve from report_definitions if the caller didn't pass it
-        rd = (sb().schema("commcalc").table("report_definitions").select("target_table")
-              .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute().data) or []
-        table = (rd[0].get("target_table") if rd else "") or ""
-    if not table:
-        raise HTTPException(400, f"No target_table for report_key '{report_key}'. Pass target_table or set it on the report definition.")
-
-    rules = column_mapping.load_rules(sb(), org_id, report_key, carrier_id or None)
-    used_defaults = False
-    if not rules:
-        # No SAVED column_mapping rows → fall back to the code-default seed layout (report_pull-derived for
-        # the MA reports, TARGET_FIELDS for the Boost layouts) so the onboarding import works out of the box
-        # without a manual "Seed default layout" click. Previously this raised 400 → the MA reports (which
-        # had NO seed at all) could never import from onboarding. A genuinely-unmapped key still 400s below.
-        rules = column_mapping.default_mapping(report_key, sb(), org_id)
-        used_defaults = bool(rules)
-    if not rules:
-        raise HTTPException(400, f"No column mapping configured for '{report_key}' and no default layout "
-                                 f"exists to seed. Map its columns first on the Column Mapping page.")
-
-    contents = await file.read()
-    try:
-        df = _read_upload_df(contents, getattr(file, "filename", ""))
-    except Exception as e:
-        raise HTTPException(400, f"Could not read file: {e}")
-
+def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrier_id="",
+                      fname=None, used_defaults=False, trace_source="onboarding-import"):
+    """Config-driven mapper CORE — shared by /upload-mapped and the custom-report→dataset binding.
+    Given already-loaded `rules` and a read `df`, maps rows into `table` with the FULL safety guard set
+    (column pre-validation so a stray field can't 42703 the insert; partition-scoped + source-aware
+    replace; snapshot/restore so a failed insert never leaves the period emptier than before; upload_log;
+    upload_trace). Extracted verbatim from upload_mapped so BOTH callers apply byte-identical invariants —
+    the single-source rule (migs 208/923), not a second copy that can drift."""
     pm = parse_period(period) if period else {"month": 0, "year": 0}
     base = {"org_id": org_id}
     if period:
@@ -3807,14 +3794,13 @@ async def upload_mapped(
 
     client = sb()
     started = _datetime.now(timezone.utc)
-    fname = getattr(file, "filename", None)
     parsed_n = len(df)
 
     def _trace(status, rows_saved, note, error=None):
         # mig-202 upload_trace (source='onboarding-import') so 🩺 Ingest health sees these imports too.
         guard = {"dropped_columns": dropped_columns} if dropped_columns else None
         _write_upload_trace(
-            org_id, source="onboarding-import", filename=fname, upload_type=report_key, period=period,
+            org_id, source=trace_source, filename=fname, upload_type=report_key, period=period,
             result={"saved": rows_saved, "note": note, "guard": guard,
                     "_trace": {"rows_in": parsed_n, "target_table": table}},
             duration_ms=int((_datetime.now(timezone.utc) - started).total_seconds() * 1000),
@@ -3930,6 +3916,53 @@ async def upload_mapped(
             "replace_scope": ({"column": scope["partition_col"], "values": len(scope["values"]),
                                "from": scope["lo"], "to": scope["hi"]} if scope and period else None),
             "note": note}
+
+
+@router.post("/upload-mapped")
+async def upload_mapped(
+    report_key: str = Form(...),
+    target_table: str = Form(""),
+    carrier_id: str = Form(""),
+    period: str = Form(""),
+    file: UploadFile = File(...),
+    org_id: str = ORG_ID,
+):
+    """Generic, config-driven ingest for a NEW carrier's report. Maps the sheet via
+    commcalc.column_mapping into the report's target_table, applying the SAME safety guards as the
+    legacy upload (defer-delete, never-wipe-on-empty, batched insert, upload_log). The legacy
+    /upload/{file_type} path is untouched — this is the additive any-carrier path."""
+    require_org(org_id)
+    table = (target_table or column_mapping.TABLE_MAP.get(report_key) or "").strip()
+    if not table:
+        # resolve from report_definitions if the caller didn't pass it
+        rd = (sb().schema("commcalc").table("report_definitions").select("target_table")
+              .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute().data) or []
+        table = (rd[0].get("target_table") if rd else "") or ""
+    if not table:
+        raise HTTPException(400, f"No target_table for report_key '{report_key}'. Pass target_table or set it on the report definition.")
+
+    rules = column_mapping.load_rules(sb(), org_id, report_key, carrier_id or None)
+    used_defaults = False
+    if not rules:
+        # No SAVED column_mapping rows → fall back to the code-default seed layout (report_pull-derived for
+        # the MA reports, TARGET_FIELDS for the Boost layouts) so the onboarding import works out of the box
+        # without a manual "Seed default layout" click. Previously this raised 400 → the MA reports (which
+        # had NO seed at all) could never import from onboarding. A genuinely-unmapped key still 400s below.
+        rules = column_mapping.default_mapping(report_key, sb(), org_id)
+        used_defaults = bool(rules)
+    if not rules:
+        raise HTTPException(400, f"No column mapping configured for '{report_key}' and no default layout "
+                                 f"exists to seed. Map its columns first on the Column Mapping page.")
+
+    contents = await file.read()
+    try:
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+
+    return _ingest_mapped_df(org_id, report_key, table, rules, df, period=period,
+                             carrier_id=carrier_id, fname=getattr(file, "filename", None),
+                             used_defaults=used_defaults, trace_source="onboarding-import")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -7200,6 +7233,220 @@ def view_custom_import(report_key: str, limit: int = 200, period: str = "", org_
              '_period': r.get('period'), '_file': r.get('source_filename')} for r in rows]
     periods = sorted({r.get('period') for r in rows if r.get('period')})
     return {"report_key": report_key, "columns": cols, "rows": flat, "count": len(flat), "periods": periods}
+
+
+# ── Custom report → canonical dataset binding (header-at-setup wiring) ──────────────────────────
+# Owner design (2026-08-27): at setup, capture the report's HEADER and let the user map its columns to a
+# standard dataset, so the backend is wired WITHOUT a developer writing a per-report resolver. The mapping
+# reuses the proven column_mapping engine + _ingest_mapped_df; the binding is stored in column_mapping under
+# the custom report_key (sentinel row names the dataset). Header is AUTO-READ from the mailbox when possible
+# (the backend holds the tenant's IMAP creds even when no dev can see the inbox), with a paste fallback.
+def _custom_report_binding(client, org_id, report_key):
+    """The optional canonical-dataset binding for a custom sheet, read from column_mapping under the custom
+    report_key. Returns {'target_dataset', 'rules'} where rules are in the shape column_mapping.map_records
+    expects. Degrades to {'target_dataset': None, 'rules': []} — so an unbound sheet stays capture-only."""
+    try:
+        rows = (client.schema("commcalc").table("column_mapping").select("*")
+                .eq("org_id", org_id).eq("report_key", report_key).eq("is_active", True).execute().data) or []
+    except Exception:
+        return {"target_dataset": None, "rules": []}
+    ds, rules = None, []
+    for r in rows:
+        if r.get("target_field") == CUSTOM_BINDING_SENTINEL:
+            ds = (r.get("source_header") or "").strip() or None
+        elif r.get("source_header") and r.get("target_field"):
+            rules.append({"target_field": r["target_field"], "source_header": r["source_header"],
+                          "transform": r.get("transform") or "text"})
+    return {"target_dataset": ds, "rules": rules}
+
+
+def _custom_binding_datasets(client, org_id):
+    """Canonical datasets a custom sheet may be bound to — ONLY those with a real target table (so the
+    mapping actually flows into a standard report). Each: dataset key, target table, and field count."""
+    out = []
+    for k in column_mapping.known_report_keys(client, org_id):
+        tbl = column_mapping.TABLE_MAP.get(k)
+        if not tbl:
+            continue
+        out.append({"dataset": k, "table": tbl, "fields": len(column_mapping.target_fields(k, client, org_id))})
+    return out
+
+
+def _autoread_custom_header(client, org_id, report_key, sample_rows=3):
+    """Connect to the tenant's mailbox(es) and read ONLY the header (+ a few sample rows) of the first
+    attachment matching THIS custom report — without ingesting. Scopes the IMAP match to this report's own
+    auto-derived pattern so it downloads just its file. Returns {'columns','sample','source'} or None."""
+    pats = [p for p in _auto_custom_report_patterns(client, org_id) if p.get("upload_type") == report_key]
+    if not pats:
+        return None
+    for acct in _email_accounts(client, org_id):
+        cfg = dict(acct or {})
+        if not (cfg.get("imap_host") or "").strip():
+            continue
+        cfg = {**cfg, "patterns": pats}   # match ONLY this report's file, not the whole inbox
+        try:
+            files = _email.fetch_new_attachments(cfg, set())
+        except Exception:
+            continue
+        for f in files:
+            if f.get("upload_type") != report_key:
+                continue
+            try:
+                df = _flatten_grouped_sales(_read_upload_df(f["bytes"], f.get("name") or ""))
+            except Exception:
+                continue
+            cols = [str(c).strip() for c in df.columns if str(c).strip()]
+            if not cols:
+                continue
+            sample = [{str(k).strip(): ("" if v is None else str(v)) for k, v in rec.items() if str(k).strip()}
+                      for rec in df.head(sample_rows).to_dict("records")]
+            return {"columns": cols, "sample": sample, "source": "email:" + (cfg.get("account") or "default")}
+    return None
+
+
+def _custom_report_columns(client, org_id, report_key, auto_email=True, sample_rows=3):
+    """Detected header columns for a custom sheet — captured-first (raw_custom_import), else AUTO-READ from
+    the mailbox so a report can be mapped BEFORE its first sweep. {'columns','sample','source'}; never raises."""
+    try:
+        rows = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE).select("data,created_at,row_index")
+                .eq("org_id", org_id).eq("report_key", report_key)
+                .order("created_at", desc=True).order("row_index").limit(50).execute().data) or []
+    except Exception:
+        rows = []
+    if rows:
+        cols, seen = [], set()
+        for r in rows:
+            for k in (r.get("data") or {}).keys():
+                if k not in seen:
+                    seen.add(k); cols.append(k)
+        return {"columns": cols, "sample": [r.get("data") or {} for r in rows[:sample_rows]], "source": "captured"}
+    if auto_email:
+        try:
+            hdr = _autoread_custom_header(client, org_id, report_key, sample_rows=sample_rows)
+            if hdr and hdr.get("columns"):
+                return hdr
+        except Exception as e:
+            print(f"WARN auto-read header for '{report_key}' failed: {e}")
+    return {"columns": [], "sample": [], "source": "none"}
+
+
+def _reingest_custom_binding(org_id, report_key):
+    """Apply a custom sheet's dataset binding to its ALREADY-CAPTURED rows (raw_custom_import), per period, so
+    binding an existing report flows its history into the canonical dataset without waiting for the next email.
+    Best-effort — a mapping failure is logged, never raised."""
+    client = sb()
+    binding = _custom_report_binding(client, org_id, report_key)
+    ds, rules = binding.get("target_dataset"), binding.get("rules") or []
+    table = column_mapping.TABLE_MAP.get(ds) if ds else None
+    if not (ds and rules and table):
+        return
+    try:
+        rows = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+                .select("period,source_filename,row_index,data")
+                .eq("org_id", org_id).eq("report_key", report_key).limit(100000).execute().data) or []
+    except Exception:
+        return
+    by_period = {}
+    for r in rows:
+        by_period.setdefault(r.get("period") or "", []).append(r)
+    for period, prows in by_period.items():
+        prows.sort(key=lambda x: (x.get("row_index") or 0))
+        df = pd.DataFrame([(p.get("data") or {}) for p in prows], dtype=str)
+        if df.empty:
+            continue
+        try:
+            _ingest_mapped_df(org_id, ds, table, rules, df, period=period,
+                              fname=(prows[0].get("source_filename") or f"{report_key}.captured"),
+                              trace_source="custom-binding")
+        except Exception as e:
+            print(f"WARN reingest binding {report_key}->{ds} period {period!r}: {e}")
+
+
+@router.get("/custom-import-types/{report_key}/columns")
+def custom_import_columns(report_key: str, auto: bool = True, org_id: str = ORG_ID):
+    """Detected header columns for a custom sheet (captured-first, else auto-read from the mailbox). Drives the
+    setup-time 'map your columns' step so a new report can be wired the moment it is registered."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    return {"report_key": report_key, **_custom_report_columns(client, org_id, report_key, auto_email=auto)}
+
+
+@router.get("/custom-import-types/{report_key}/binding")
+def get_custom_import_binding(report_key: str, target_dataset: str = "", org_id: str = ORG_ID):
+    """The custom sheet's dataset binding + a PRE-FILLED column mapping. When a dataset is selected (or already
+    bound), returns suggestions (source header→canonical field) from the detected header so the mapping opens
+    mostly done. `datasets` lists the mappable canonical datasets."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    binding = _custom_report_binding(client, org_id, report_key)
+    ds = (target_dataset or "").strip() or binding.get("target_dataset") or ""
+    cols = _custom_report_columns(client, org_id, report_key, auto_email=True)
+    headers = cols.get("columns") or []
+    suggestions, fields = [], []
+    if ds:
+        existing = [{"target_field": r["target_field"], "source_header": r["source_header"]}
+                    for r in binding.get("rules", [])]
+        suggestions = column_mapping.suggest(headers, ds, existing, client, org_id)
+        fields = column_mapping.target_fields(ds, client, org_id)
+    return {"report_key": report_key, "target_dataset": binding.get("target_dataset"),
+            "selected_dataset": ds or None, "rules": binding.get("rules", []),
+            "columns": headers, "sample": cols.get("sample", []), "source": cols.get("source"),
+            "suggestions": suggestions, "fields": fields, "datasets": _custom_binding_datasets(client, org_id)}
+
+
+class CustomBindingIn(LaxModel):
+    target_dataset: str = ""
+    rules: Any = None   # [{target_field, source_header, transform?}]
+
+
+@router.put("/custom-import-types/{report_key}/binding")
+def put_custom_import_binding(report_key: str, body: CustomBindingIn, background_tasks: BackgroundTasks,
+                              org_id: str = ORG_ID):
+    """Bind a custom sheet to a canonical dataset + save its column mapping (stored in column_mapping under the
+    custom report_key). Replaces the prior binding wholesale. Empty target_dataset UNBINDS (capture-only). On a
+    non-empty binding, kicks a background re-ingest so the mapping applies to already-captured data at once."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    ds = (body.target_dataset or "").strip()
+    if ds and not column_mapping.TABLE_MAP.get(ds):
+        raise HTTPException(400, f"dataset '{ds}' has no target table to map into — pick a mappable dataset")
+    try:
+        client.schema("commcalc").table("column_mapping").delete() \
+            .eq("org_id", org_id).eq("report_key", report_key).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not clear prior binding: {e}")
+    saved = 0
+    if ds:
+        rowset = [{"org_id": org_id, "report_key": report_key, "carrier_id": None,
+                   "target_field": CUSTOM_BINDING_SENTINEL, "source_header": ds, "transform": "text",
+                   "priority": 0, "is_active": True, "updated_at": column_mapping.now_iso()}]
+        for r in (body.rules or []):
+            tf = str((r or {}).get("target_field") or "").strip()
+            sh = str((r or {}).get("source_header") or "").strip()
+            if not tf or not sh:
+                continue
+            tr = str((r or {}).get("transform") or "text").strip()
+            if tr not in column_mapping.TRANSFORMS:
+                tr = "text"
+            rowset.append({"org_id": org_id, "report_key": report_key, "carrier_id": None,
+                           "target_field": tf, "source_header": sh, "transform": tr,
+                           "priority": 100, "is_active": True, "updated_at": column_mapping.now_iso()})
+        try:
+            client.schema("commcalc").table("column_mapping").insert(rowset).execute()
+        except Exception as e:
+            raise HTTPException(500, f"could not save binding: {e}")
+        saved = len(rowset) - 1
+        try:
+            background_tasks.add_task(_reingest_custom_binding, org_id, report_key)
+        except Exception:
+            pass
+    return {"ok": True, "report_key": report_key, "target_dataset": ds or None, "rules_saved": saved}
 
 
 # ── Connector sweep registry (B-phase2 de-hardcode) ────────────────────────────────────────────
