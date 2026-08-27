@@ -7125,11 +7125,18 @@ class CustomImportTypeIn(LaxModel):
 
 
 @router.post("/custom-import-types")
-def create_custom_import_type(body: CustomImportTypeIn, org_id: str = ORG_ID):
+def create_custom_import_type(body: CustomImportTypeIn, background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Register a self-serve custom sheet. body: {label, report_key?, period_mode?, note?}. Auto-slugs a
     report_key from the label, rejects a collision with a built-in type, and marks it as a generic JSONB
     capture (target_table=raw_custom_import). Returns the report_key to use in a filename pattern.
-    Idempotent (upsert by report_key)."""
+    Idempotent (upsert by report_key).
+
+    Per the hands-off design (owner: "the user will not upload anything to the backend"): registering a
+    report is itself the trigger — we fire an immediate background email sweep so the just-added sheet
+    ingests on the next moment, not on the next 15-min cron tick. The sweep's auto-match
+    (`_auto_custom_report_patterns`) derives the filename glob from this label + report_key, so NO manual
+    filename rule is needed. The pg_cron every-15-min sweep and the "Run now" button remain as the
+    scheduled and on-demand paths; this is the on-registration path."""
     require_org(org_id)
     label = (body.label or '').strip()
     if not label:
@@ -7143,6 +7150,12 @@ def create_custom_import_type(body: CustomImportTypeIn, org_id: str = ORG_ID):
            'auto': True, 'note': (body.note or None),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
+    # Fire-and-forget: pull any already-arrived email for this new sheet right away. Defensive — a tenant
+    # with no configured mailbox just gets a no-op run; never blocks or fails the registration response.
+    try:
+        background_tasks.add_task(_run_email_sweep_all, org_id)
+    except Exception:
+        pass
     return (r.data[0] if r.data else row)
 
 
