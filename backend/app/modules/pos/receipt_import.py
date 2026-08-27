@@ -205,31 +205,32 @@ def _match_or_create_customer(client, org_id: str, parsed: dict, note: str | Non
 
 
 # ── Encryption at rest (import ledger) ─────────────────────────────────────────────────────────────
-# The receipt PII lives in pos.receipt_imports (denormalized columns + the parsed/raw_ocr blobs). We
-# store those ENCRYPTED (app.core.crypto, 'enc:v1:' envelope) so a raw DB export is useless, and keep
-# search working via keyed-HMAC BLIND-INDEX columns (phone_bidx/imei_bidx exact, search_bidx word).
+# By owner decision, customer NAME / PHONE / EMAIL / ADDRESS stay PLAINTEXT system-wide (they must be
+# searched/matched directly, and the same values live plaintext in pos.customers, so encrypting them
+# only here would add complexity without real protection). What we DO encrypt at rest here: the IMEI
+# (a device identifier), the free-text note, and the parsed/raw_ocr blobs (audit payloads that can
+# carry email / card last-4 / other sensitive fragments). Search over the encrypted IMEI is served by
+# a keyed-HMAC BLIND-INDEX column (imei_bidx); name/phone/device search stays plain ILIKE.
 # crypto is imported LAZILY so this module (and the pure normalize_receipt) stays importable without
 # the app config/pydantic stack — see backend/harness_pos_receipt_parse.py.
-_ENCRYPTED_IMPORT_COLUMNS = ("imei", "phone", "customer_name", "device_name", "notes")
+_ENCRYPTED_IMPORT_COLUMNS = ("imei", "notes")
 
 
 def _encrypt_import_row(imp: dict) -> dict:
-    """Encrypt the PII columns + parsed/raw_ocr blobs and add the blind-index columns. No-op columns
-    (blank) are left as-is; with no key configured crypto passes through (graceful)."""
+    """Encrypt the IMEI + note + parsed/raw_ocr blobs and add the IMEI blind index. Name/phone/device
+    are left plaintext. No-op on blank columns; with no key configured crypto passes through."""
     from app.core import crypto
     out = crypto.encrypt_map(imp, _ENCRYPTED_IMPORT_COLUMNS)
     out["parsed"] = crypto.encrypt_json(imp.get("parsed"))
     out["raw_ocr"] = crypto.encrypt_json(imp.get("raw_ocr"))
-    out["phone_bidx"] = crypto.blind_index(imp.get("phone"), mode="digits")
     out["imei_bidx"] = crypto.blind_index(imp.get("imei"), mode="digits")
-    out["search_bidx"] = crypto.blind_index_words(imp.get("customer_name"), imp.get("device_name"))
     return out
 
 
 def decrypt_receipt_row(row: dict | None) -> dict | None:
-    """Reverse _encrypt_import_row for an authorized reader: decrypt the PII columns + parsed/raw_ocr,
-    and drop the *_bidx tokens (never returned to the client). A row written before encryption (plain
-    values, no 'enc:v1:' prefix) passes through unchanged. Value that can't be decrypted → None."""
+    """Reverse _encrypt_import_row for an authorized reader: decrypt the IMEI + note + parsed/raw_ocr,
+    and drop the imei_bidx token (never returned to the client). A row written before encryption (plain
+    values, no 'enc:v1:' prefix) passes through unchanged. A value that can't be decrypted → None."""
     if not row:
         return row
     from app.core import crypto
@@ -242,7 +243,7 @@ def decrypt_receipt_row(row: dict | None) -> dict | None:
     if "raw_ocr" in out:
         out["raw_ocr"] = crypto.decrypt_json(out["raw_ocr"])
     for k in ("phone_bidx", "imei_bidx", "search_bidx"):
-        out.pop(k, None)
+        out.pop(k, None)  # phone_bidx / search_bidx are now unused (kept nullable in the table)
     return out
 
 

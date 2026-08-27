@@ -69,7 +69,7 @@ def main():
     check("unrelated query word absent", crypto.blind_query_word_tokens("nokia")[0] not in words)
     check("blind_index_words(None…) is None", crypto.blind_index_words(None, None) is None)
 
-    # ── receipt row: encrypt at rest, decrypt for reader, strip bidx ───────────────────────────
+    # ── receipt row: IMEI/note/blobs encrypted; name/phone/device stay PLAINTEXT (owner decision) ──
     imp = {
         "org_id": "org1", "imei": "355128070000000", "phone": "415-555-1234",
         "customer_name": "John Smith", "device_name": "iPhone 15 Pro", "notes": "trade-in",
@@ -77,32 +77,31 @@ def main():
         "raw_ocr": {"total": "1299.00"}, "total": 1299.0,
     }
     enc = R._encrypt_import_row(imp)
-    check("row PII encrypted (phone)", crypto.is_encrypted(enc["phone"]))
-    check("row PII encrypted (customer_name)", crypto.is_encrypted(enc["customer_name"]))
-    check("row notes encrypted", crypto.is_encrypted(enc["notes"]))
+    check("row IMEI encrypted", crypto.is_encrypted(enc["imei"]))
+    check("row note encrypted", crypto.is_encrypted(enc["notes"]))
+    check("row phone stays PLAINTEXT", enc["phone"] == "415-555-1234")
+    check("row customer_name stays PLAINTEXT", enc["customer_name"] == "John Smith")
+    check("row device_name stays PLAINTEXT", enc["device_name"] == "iPhone 15 Pro")
     check("row parsed blob wrapped", set(enc["parsed"].keys()) == {"enc"})
     check("row raw_ocr blob wrapped", set(enc["raw_ocr"].keys()) == {"enc"})
-    check("row phone_bidx populated", bool(enc["phone_bidx"]))
     check("row imei_bidx populated", bool(enc["imei_bidx"]))
-    check("row search_bidx populated", bool(enc["search_bidx"]))
-    check("phone_bidx equals blind_index(phone)", enc["phone_bidx"] == crypto.blind_index("4155551234", mode="digits"))
     check("imei_bidx equals blind_index(imei)", enc["imei_bidx"] == crypto.blind_index("355128070000000", mode="digits"))
-    check("name search token hits row search_bidx", crypto.blind_query_word_tokens("smith")[0] in enc["search_bidx"])
+    check("no phone_bidx written", "phone_bidx" not in enc)
+    check("no search_bidx written", "search_bidx" not in enc)
 
     dec = R.decrypt_receipt_row(enc)
-    check("decrypt row → phone plaintext", dec["phone"] == "415-555-1234")
-    check("decrypt row → customer_name plaintext", dec["customer_name"] == "John Smith")
+    check("decrypt row → imei plaintext", dec["imei"] == "355128070000000")
     check("decrypt row → notes plaintext", dec["notes"] == "trade-in")
+    check("decrypt row → phone unchanged", dec["phone"] == "415-555-1234")
+    check("decrypt row → customer_name unchanged", dec["customer_name"] == "John Smith")
     check("decrypt row → parsed unwrapped", dec["parsed"] == imp["parsed"])
     check("decrypt row → raw_ocr unwrapped", dec["raw_ocr"] == imp["raw_ocr"])
-    check("decrypt row strips phone_bidx", "phone_bidx" not in dec)
     check("decrypt row strips imei_bidx", "imei_bidx" not in dec)
-    check("decrypt row strips search_bidx", "search_bidx" not in dec)
 
     # legacy plaintext row (written before encryption) still reads through decrypt
-    legacy = {"phone": "5105550000", "customer_name": "Jane Doe", "parsed": {"a": 1}}
+    legacy = {"imei": "355000000000000", "phone": "5105550000", "parsed": {"a": 1}}
     ldec = R.decrypt_receipt_row(legacy)
-    check("legacy plaintext row passes through", ldec["phone"] == "5105550000" and ldec["customer_name"] == "Jane Doe")
+    check("legacy plaintext row passes through", ldec["imei"] == "355000000000000" and ldec["phone"] == "5105550000")
 
     print(f"\n{_passed} passed, {_failed} failed")
     return 1 if _failed else 0

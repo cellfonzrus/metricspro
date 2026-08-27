@@ -2313,52 +2313,41 @@ def receipt_imports_list(q: str = "", imei: str = "", phone: str = "", customer:
     """Search imported receipts by IMEI / phone / customer name (or a free-text q across all three
     + device). Powers the 'find that imported sale' lookup on both the app and desktop.
 
-    The PII columns are encrypted at rest, so search runs against keyed-HMAC BLIND-INDEX columns
-    (phone_bidx/imei_bidx exact, search_bidx per-word) instead of the ciphertext. When no encryption
-    key is configured (or for legacy plaintext rows), we fall back to the old ILIKE on the plaintext
-    columns so search keeps working during/after the transition."""
+    Name / phone / device are plaintext, so they search by ILIKE (unchanged). The IMEI is encrypted at
+    rest, so it searches against its keyed-HMAC BLIND-INDEX column (imei_bidx, exact match); when no
+    key is configured (or for legacy plaintext rows) we fall back to ILIKE on the imei column."""
     import re as _re
     from app.core import crypto
 
     keyed = crypto.is_enabled()
+
+    def _imei_token(v: str):
+        return crypto.blind_index(v, mode="digits") if keyed else None
+
     query = (sb().schema("pos").table("receipt_imports")
              .select("id,store_code,sale_id,customer_id,status,imei,phone,customer_name,"
-                     "device_name,total,sale_date,notes,created_at,phone_bidx,imei_bidx,search_bidx")
+                     "device_name,total,sale_date,notes,created_at,imei_bidx")
              .eq("org_id", org_id))
     if store_code.strip():
         query = query.eq("store_code", store_code.strip())
 
     if imei.strip():
-        tok = crypto.blind_index(imei, mode="digits") if keyed else None
+        tok = _imei_token(imei)
         query = query.eq("imei_bidx", tok) if tok else query.ilike("imei", f"%{imei.strip()}%")
     if phone.strip():
-        tok = crypto.blind_index(phone, mode="digits") if keyed else None
         digits = _re.sub(r"\D", "", phone)
-        query = query.eq("phone_bidx", tok) if tok else query.ilike("phone", f"%{digits}%")
+        query = query.ilike("phone", f"%{digits}%")
     if customer.strip():
-        toks = crypto.blind_query_word_tokens(customer) if keyed else []
-        if toks:
-            for t in toks:  # AND: every query word must appear in the row's word-token column
-                query = query.ilike("search_bidx", f"%{t}%")
-        else:
-            query = query.ilike("customer_name", f"%{customer.strip()}%")
+        query = query.ilike("customer_name", f"%{customer.strip()}%")
     if q.strip():
-        s = q.strip()
-        if keyed:
-            digits = _re.sub(r"\D", "", s)
-            # A mostly-numeric query is a phone/IMEI lookup (exact via blind index); otherwise it's a
-            # name/device lookup (AND word-tokens). This matches how staff actually search.
-            if digits and len(digits) >= 7 and len(_re.sub(r"[\d\s\-()]", "", s)) == 0:
-                ptok = crypto.blind_index(digits, mode="digits")
-                itok = crypto.blind_index(digits, mode="digits")  # same normalization; either column
-                query = query.or_(f"phone_bidx.eq.{ptok},imei_bidx.eq.{itok}")
-            else:
-                for t in crypto.blind_query_word_tokens(s):
-                    query = query.ilike("search_bidx", f"%{t}%")
-        else:
-            s2 = s.replace(",", " ")
-            query = query.or_(f"imei.ilike.%{s2}%,phone.ilike.%{s2}%,customer_name.ilike.%{s2}%,"
-                              f"device_name.ilike.%{s2}%")
+        s = q.strip().replace(",", " ")
+        # Free text matches the plaintext columns; if it's a full IMEI, also match the blind index
+        # (the imei column itself is ciphertext, so an ILIKE on it can't hit).
+        ors = [f"phone.ilike.%{s}%", f"customer_name.ilike.%{s}%", f"device_name.ilike.%{s}%"]
+        digits = _re.sub(r"\D", "", s)
+        itok = _imei_token(digits) if 14 <= len(digits) <= 16 else None
+        ors.append(f"imei_bidx.eq.{itok}" if itok else f"imei.ilike.%{s}%")
+        query = query.or_(",".join(ors))
 
     rows = query.order("created_at", desc=True).limit(min(max(limit, 1), 200)).execute().data or []
     return {"receipt_imports": [_receipt.decrypt_receipt_row(r) for r in rows]}
