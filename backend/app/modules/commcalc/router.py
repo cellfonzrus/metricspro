@@ -7495,7 +7495,7 @@ def _integration_probe(client, org_id, spec):
     if not spec:
         return "info"
     try:
-        q = client.schema("commcalc").table(spec["table"]).select("*").eq("org_id", org_id)
+        q = client.schema(spec.get("schema") or "commcalc").table(spec["table"]).select("*").eq("org_id", org_id)
         for col, val in (spec.get("filter") or {}).items():
             q = q.eq(col, val)
         rows = q.limit(50).execute().data or []
@@ -7587,6 +7587,18 @@ _INTEGRATIONS_CATALOG = [
          "carrier_specific": False, "deep_link": "/commcalc/report-mappings",
          "probe": {"table": "report_pull_map"},
          "steps": [{"title": "See the portal reports", "body": "List the report names the portal exposes."}, {"title": "Route each one", "body": "Map each to the matching standard report, then save."}]},
+    ]},
+    {"category": "Point of sale & cameras", "blurb": "Bring in data from your in-store systems and devices.", "items": [
+        {"key": "pos_import", "title": "Point-of-Sale Data", "icon": "🛒",
+         "purpose": "Pull customers, inventory and sales activity from your point-of-sale system.",
+         "carrier_specific": False, "deep_link": "/pos/import",
+         "probe": {"schema": "core", "table": "import_feed"},
+         "steps": [{"title": "Connect the POS feed", "body": "Register the point-of-sale data feed and choose what to bring in (customers, inventory, sales)."}, {"title": "Import & confirm", "body": "Run the import and confirm the records landed against your stores."}]},
+        {"key": "cameras", "title": "Camera Feeds", "icon": "📹",
+         "purpose": "Connect store cameras to bring in foot-traffic and in-store activity data.",
+         "carrier_specific": False, "deep_link": "/vision/onboarding",
+         "probe": {"schema": "core", "table": "vision_config"},
+         "steps": [{"title": "Connect the cameras", "body": "Link your camera account and grant access to the store cameras."}, {"title": "Verify & watch", "body": "Verify a camera, then turn on watching so activity data flows in."}]},
     ]},
     {"category": "Guided setup", "blurb": "Step-by-step help to get everything connected.", "items": [
         {"key": "onboarding", "title": "Setup Wizard", "icon": "🚀",
