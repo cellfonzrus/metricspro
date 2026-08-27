@@ -2290,26 +2290,57 @@ def receipt_import_create(body: dict, authorization: str = Header(default=""), o
 def receipt_imports_list(q: str = "", imei: str = "", phone: str = "", customer: str = "",
                          store_code: str = "", limit: int = 50, org_id: str = ORG_ID):
     """Search imported receipts by IMEI / phone / customer name (or a free-text q across all three
-    + device). Powers the 'find that imported sale' lookup on both the app and desktop."""
+    + device). Powers the 'find that imported sale' lookup on both the app and desktop.
+
+    The PII columns are encrypted at rest, so search runs against keyed-HMAC BLIND-INDEX columns
+    (phone_bidx/imei_bidx exact, search_bidx per-word) instead of the ciphertext. When no encryption
+    key is configured (or for legacy plaintext rows), we fall back to the old ILIKE on the plaintext
+    columns so search keeps working during/after the transition."""
+    import re as _re
+    from app.core import crypto
+
+    keyed = crypto.is_enabled()
     query = (sb().schema("pos").table("receipt_imports")
              .select("id,store_code,sale_id,customer_id,status,imei,phone,customer_name,"
-                     "device_name,total,sale_date,notes,created_at")
+                     "device_name,total,sale_date,notes,created_at,phone_bidx,imei_bidx,search_bidx")
              .eq("org_id", org_id))
     if store_code.strip():
         query = query.eq("store_code", store_code.strip())
+
     if imei.strip():
-        query = query.ilike("imei", f"%{imei.strip()}%")
+        tok = crypto.blind_index(imei, mode="digits") if keyed else None
+        query = query.eq("imei_bidx", tok) if tok else query.ilike("imei", f"%{imei.strip()}%")
     if phone.strip():
-        import re as _re
-        query = query.ilike("phone", f"%{_re.sub(chr(92) + 'D', '', phone)}%")
+        tok = crypto.blind_index(phone, mode="digits") if keyed else None
+        digits = _re.sub(r"\D", "", phone)
+        query = query.eq("phone_bidx", tok) if tok else query.ilike("phone", f"%{digits}%")
     if customer.strip():
-        query = query.ilike("customer_name", f"%{customer.strip()}%")
+        toks = crypto.blind_query_word_tokens(customer) if keyed else []
+        if toks:
+            for t in toks:  # AND: every query word must appear in the row's word-token column
+                query = query.ilike("search_bidx", f"%{t}%")
+        else:
+            query = query.ilike("customer_name", f"%{customer.strip()}%")
     if q.strip():
-        s = q.strip().replace(",", " ")
-        query = query.or_(f"imei.ilike.%{s}%,phone.ilike.%{s}%,customer_name.ilike.%{s}%,"
-                          f"device_name.ilike.%{s}%")
+        s = q.strip()
+        if keyed:
+            digits = _re.sub(r"\D", "", s)
+            # A mostly-numeric query is a phone/IMEI lookup (exact via blind index); otherwise it's a
+            # name/device lookup (AND word-tokens). This matches how staff actually search.
+            if digits and len(digits) >= 7 and len(_re.sub(r"[\d\s\-()]", "", s)) == 0:
+                ptok = crypto.blind_index(digits, mode="digits")
+                itok = crypto.blind_index(digits, mode="digits")  # same normalization; either column
+                query = query.or_(f"phone_bidx.eq.{ptok},imei_bidx.eq.{itok}")
+            else:
+                for t in crypto.blind_query_word_tokens(s):
+                    query = query.ilike("search_bidx", f"%{t}%")
+        else:
+            s2 = s.replace(",", " ")
+            query = query.or_(f"imei.ilike.%{s2}%,phone.ilike.%{s2}%,customer_name.ilike.%{s2}%,"
+                              f"device_name.ilike.%{s2}%")
+
     rows = query.order("created_at", desc=True).limit(min(max(limit, 1), 200)).execute().data or []
-    return {"receipt_imports": rows}
+    return {"receipt_imports": [_receipt.decrypt_receipt_row(r) for r in rows]}
 
 
 @router.get("/receipt-imports/{import_id}")
@@ -2318,4 +2349,4 @@ def receipt_imports_get(import_id: str, org_id: str = ORG_ID):
             .eq("org_id", org_id).eq("id", import_id).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(404, "receipt import not found")
-    return {"receipt_import": rows[0]}
+    return {"receipt_import": _receipt.decrypt_receipt_row(rows[0])}

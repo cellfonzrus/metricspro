@@ -204,12 +204,54 @@ def _match_or_create_customer(client, org_id: str, parsed: dict, note: str | Non
         return None  # a customer-link failure must not sink the whole import
 
 
+# ── Encryption at rest (import ledger) ─────────────────────────────────────────────────────────────
+# The receipt PII lives in pos.receipt_imports (denormalized columns + the parsed/raw_ocr blobs). We
+# store those ENCRYPTED (app.core.crypto, 'enc:v1:' envelope) so a raw DB export is useless, and keep
+# search working via keyed-HMAC BLIND-INDEX columns (phone_bidx/imei_bidx exact, search_bidx word).
+# crypto is imported LAZILY so this module (and the pure normalize_receipt) stays importable without
+# the app config/pydantic stack — see backend/harness_pos_receipt_parse.py.
+_ENCRYPTED_IMPORT_COLUMNS = ("imei", "phone", "customer_name", "device_name", "notes")
+
+
+def _encrypt_import_row(imp: dict) -> dict:
+    """Encrypt the PII columns + parsed/raw_ocr blobs and add the blind-index columns. No-op columns
+    (blank) are left as-is; with no key configured crypto passes through (graceful)."""
+    from app.core import crypto
+    out = crypto.encrypt_map(imp, _ENCRYPTED_IMPORT_COLUMNS)
+    out["parsed"] = crypto.encrypt_json(imp.get("parsed"))
+    out["raw_ocr"] = crypto.encrypt_json(imp.get("raw_ocr"))
+    out["phone_bidx"] = crypto.blind_index(imp.get("phone"), mode="digits")
+    out["imei_bidx"] = crypto.blind_index(imp.get("imei"), mode="digits")
+    out["search_bidx"] = crypto.blind_index_words(imp.get("customer_name"), imp.get("device_name"))
+    return out
+
+
+def decrypt_receipt_row(row: dict | None) -> dict | None:
+    """Reverse _encrypt_import_row for an authorized reader: decrypt the PII columns + parsed/raw_ocr,
+    and drop the *_bidx tokens (never returned to the client). A row written before encryption (plain
+    values, no 'enc:v1:' prefix) passes through unchanged. Value that can't be decrypted → None."""
+    if not row:
+        return row
+    from app.core import crypto
+    out = dict(row)
+    for col in _ENCRYPTED_IMPORT_COLUMNS:
+        if col in out:
+            out[col] = crypto.decrypt(out[col])
+    if "parsed" in out:
+        out["parsed"] = crypto.decrypt_json(out["parsed"])
+    if "raw_ocr" in out:
+        out["raw_ocr"] = crypto.decrypt_json(out["raw_ocr"])
+    for k in ("phone_bidx", "imei_bidx", "search_bidx"):
+        out.pop(k, None)
+    return out
+
+
 def import_receipt(client, *, org_id: str, store_code: str | None, uploaded_by: str | None,
                    parsed: dict, raw_ocr: dict, notes: str | None,
                    image_path: str | None = None) -> dict:
     """Create the customer link, the pos.sales header (source='receipt_import') with line detail in
-    the receipt JSONB, and the pos.receipt_imports audit row. Returns {import_id, sale_id,
-    customer_id, transaction_id}."""
+    the receipt JSONB, and the pos.receipt_imports audit row (PII encrypted at rest). Returns
+    {import_id, sale_id, customer_id, transaction_id}."""
     customer_id = _match_or_create_customer(client, org_id, parsed, notes)
 
     total = parsed.get("total") or 0.0
@@ -239,7 +281,7 @@ def import_receipt(client, *, org_id: str, store_code: str | None, uploaded_by: 
         "customer_name": parsed.get("customer_name"), "device_name": parsed.get("device_name"),
         "total": total, "sale_date": parsed.get("sale_date"), "uploaded_by": uploaded_by,
     }
-    ir = client.schema("pos").table("receipt_imports").insert(imp).execute()
+    ir = client.schema("pos").table("receipt_imports").insert(_encrypt_import_row(imp)).execute()
     import_id = (ir.data or [{}])[0].get("id")
 
     return {"import_id": import_id, "sale_id": sale_id, "customer_id": customer_id,
