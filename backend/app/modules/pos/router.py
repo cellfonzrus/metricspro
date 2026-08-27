@@ -2236,3 +2236,86 @@ def commcalc_sync(body: dict, authorization: str = Header(default=""), org_id: s
 @router.get("/commcalc/status")
 def commcalc_status(org_id: str = ORG_ID):
     return _feed.feed_status(org_id)
+
+
+# ── Receipt import (secondary-POS: photograph a primary-system receipt → a sale) ──────────────────
+# See app/modules/pos/receipt_import.py + migration 864. Router-level `_require_pos_access` already
+# gates these to a signed-in org member; the sale is attributed to the uploader (never a body field).
+from app.modules.pos import receipt_import as _receipt
+
+
+def _decode_image(image_b64: str) -> tuple[bytes, str]:
+    """Accept a bare base64 string or a data URL ('data:image/png;base64,....'). Returns (bytes, ext)."""
+    import base64 as _b64
+    s = image_b64 or ""
+    ext = "jpg"
+    if s.startswith("data:"):
+        header, _, s = s.partition(",")
+        if "png" in header:
+            ext = "png"
+    try:
+        return _b64.b64decode(s), ext
+    except Exception:
+        raise HTTPException(400, "image must be base64-encoded")
+
+
+@router.post("/receipt-import")
+def receipt_import_create(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Photograph → OCR → (optionally) create a sale. Body: {image (base64 or data URL), ext?,
+    store_code?, notes?, dry_run?}. dry_run=true returns the parsed preview WITHOUT writing, so the
+    UI can show the fields for confirmation first; omit / false to actually create the sale."""
+    if not (body.get("image") or "").strip():
+        raise HTTPException(400, "image is required")
+    raw, ext = _decode_image(body["image"])
+    parsed, raw_ocr = _receipt.ocr_receipt(raw, body.get("ext") or ext)
+
+    if body.get("dry_run"):
+        return {"dry_run": True, "parsed": parsed, "raw_ocr": raw_ocr}
+
+    # Nothing usable came back (no vision key, unreadable photo) → don't fabricate a sale; hand the
+    # preview back so the client can fall to manual entry.
+    if not (parsed.get("items") or parsed.get("total") or parsed.get("customer_name")):
+        return {"imported": False, "parsed": parsed, "raw_ocr": raw_ocr,
+                "message": "Couldn't read the receipt automatically — enter it manually."}
+
+    uploader = _caller_employee(authorization, org_id) or None
+    result = _receipt.import_receipt(
+        sb(), org_id=org_id, store_code=(body.get("store_code") or "").strip() or None,
+        uploaded_by=uploader, parsed=parsed, raw_ocr=raw_ocr,
+        notes=(body.get("notes") or "").strip() or None)
+    return {"imported": True, "parsed": parsed, **result}
+
+
+@router.get("/receipt-imports")
+def receipt_imports_list(q: str = "", imei: str = "", phone: str = "", customer: str = "",
+                         store_code: str = "", limit: int = 50, org_id: str = ORG_ID):
+    """Search imported receipts by IMEI / phone / customer name (or a free-text q across all three
+    + device). Powers the 'find that imported sale' lookup on both the app and desktop."""
+    query = (sb().schema("pos").table("receipt_imports")
+             .select("id,store_code,sale_id,customer_id,status,imei,phone,customer_name,"
+                     "device_name,total,sale_date,notes,created_at")
+             .eq("org_id", org_id))
+    if store_code.strip():
+        query = query.eq("store_code", store_code.strip())
+    if imei.strip():
+        query = query.ilike("imei", f"%{imei.strip()}%")
+    if phone.strip():
+        import re as _re
+        query = query.ilike("phone", f"%{_re.sub(chr(92) + 'D', '', phone)}%")
+    if customer.strip():
+        query = query.ilike("customer_name", f"%{customer.strip()}%")
+    if q.strip():
+        s = q.strip().replace(",", " ")
+        query = query.or_(f"imei.ilike.%{s}%,phone.ilike.%{s}%,customer_name.ilike.%{s}%,"
+                          f"device_name.ilike.%{s}%")
+    rows = query.order("created_at", desc=True).limit(min(max(limit, 1), 200)).execute().data or []
+    return {"receipt_imports": rows}
+
+
+@router.get("/receipt-imports/{import_id}")
+def receipt_imports_get(import_id: str, org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("receipt_imports").select("*")
+            .eq("org_id", org_id).eq("id", import_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "receipt import not found")
+    return {"receipt_import": rows[0]}
