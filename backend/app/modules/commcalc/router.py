@@ -13673,6 +13673,7 @@ class SaveCommissionPlanIn(LaxModel):
     tier_match_op: Any = None
     tier_match_value: Any = None
     tier_below_min_multiplier: Any = None
+    activation_source: Any = None
     rules: Any = None
     tiers: Any = None
     assignments: Any = None
@@ -13710,6 +13711,16 @@ def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
             _m = body.tier_below_min_multiplier
             plan_row["tier_below_min_multiplier"] = (
                 None if _m is None or str(_m).strip() == "" else safe_float(_m))
+    # PER-PLAN ACTIVATION SOURCE (mig 297) — money-safe: this only persists the flag the engine already
+    # reads (commission_engine._plan_activation_source, p.get("activation_source") default 'inherit'); it
+    # moves no money by itself. Written only when the caller sent the field AND the column exists, so a
+    # pre-297 database saves exactly as before. Unknown values collapse to 'inherit' (the safe default that
+    # defers to the org-level mig-296 setting -> today's raw_sales behaviour).
+    if "activation_source" in body.model_fields_set and _plan_activation_source_col_present(client):
+        _as = str(body.activation_source or "inherit").strip().lower()
+        if _as not in ("inherit", "raw_sales", "activation_details"):
+            _as = "inherit"
+        plan_row["activation_source"] = _as
     try:
         if body.id:
             r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body.id).eq('org_id', org_id).execute()
@@ -14425,6 +14436,22 @@ def exclusion_impact(period: str, org_id: str = ORG_ID):
 
 
 _PLAN_TIER_COLS_OK = {}
+_PLAN_ACTIVATION_SOURCE_COL_OK = {}
+
+
+def _plan_activation_source_col_present(client):
+    """True when commcalc.commission_plan carries the mig-297 activation_source column. Probed ONCE per
+    process (the schema cannot change under us mid-run) so a pre-297 deployment keeps saving plans exactly
+    as before instead of failing on an unknown column. The engine already reads this column defensively
+    (select("*") + p.get default 'inherit'), so a missing column degrades every plan to 'inherit'."""
+    if "ok" not in _PLAN_ACTIVATION_SOURCE_COL_OK:
+        try:
+            (client.schema('commcalc').table('commission_plan')
+             .select('activation_source').limit(1).execute())
+            _PLAN_ACTIVATION_SOURCE_COL_OK["ok"] = True
+        except Exception:
+            _PLAN_ACTIVATION_SOURCE_COL_OK["ok"] = False
+    return _PLAN_ACTIVATION_SOURCE_COL_OK["ok"]
 
 
 def _plan_tier_cols_present(client):

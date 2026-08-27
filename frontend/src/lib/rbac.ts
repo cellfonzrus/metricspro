@@ -366,6 +366,11 @@ export const NAV: NavGroup[] = [
   // Boost Rates is carrier-gated to Boost tenants (NAV_CARRIERS) so a Total-only tenant never sees the
   // hardcoded Boost tiers. Regroup is a ZERO-RBAC-CHANGE move — every item keeps its module + scopes.
   { group: 'Incentive Payout Plans', module: 'commissions', items: [
+    // FRONT DOOR (owner directive 2026-08-26): one guided place to set up the ENTIRE commission structure
+    // in the UI — pick/create the plan, set activation + accessory payouts, choose the per-plan Activation
+    // source, confirm accessory classification, assign reps, see the estimate. Composes/deep-links the
+    // existing plan editor, accessory settings and coverage wizard — additive, nothing else changes.
+    { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', icon: '🧭', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/commission-plans', label: 'Incentive Plans', icon: '🧮', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/management-incentive', label: 'Management Incentives', icon: '🏆', module: 'commissions', scopes: ['all'] },
