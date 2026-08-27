@@ -48,6 +48,8 @@ export default function Pos() {
           data={rows}
           keyExtractor={(p) => p.id}
           contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           renderItem={({ item }) => <ProductRow product={item} onAdd={() => addToCart(item)} />}
         />
       )}

@@ -81,6 +81,20 @@ export function listLeads(params: { status?: LeadStatus; owner?: string; search?
   return api.get<{ leads: Lead[]; stages?: Stage[] }>(`${BASE}/leads?${q.toString()}`)
 }
 
+export type NewLead = {
+  first_name?: string
+  last_name?: string
+  phone?: string
+  email?: string
+  company_name?: string
+  store_code?: string
+  notes?: string
+}
+
+export function createLead(body: NewLead) {
+  return api.post<{ lead: Lead }>(`${BASE}/leads`, body)
+}
+
 export function getLead(leadId: string) {
   return api.get<{ lead: Lead; stages?: Stage[]; activities?: any[]; tasks?: CrmTask[] }>(
     `${BASE}/leads/${leadId}`,

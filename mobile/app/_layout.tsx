@@ -25,6 +25,7 @@ function RootNavigator() {
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
       <Stack.Screen name="login" />
+      <Stack.Screen name="choose-company" />
       <Stack.Screen name="(app)" />
     </Stack>
   )

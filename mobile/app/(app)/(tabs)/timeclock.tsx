@@ -15,13 +15,30 @@ import { Badge, Body, Button, Card, H2, Loading, Screen } from '@/components/ui'
 import { OfflineBanner } from '@/components/OfflineBanner'
 import { colors, font, radius, spacing } from '@/theme'
 
-// Best-effort GPS for a clock-in punch (attendance verification). Never blocks the punch: a denied
-// permission or a slow fix just means the punch is recorded without coordinates.
+// Cap any promise so a slow GPS/permission call can never hang the clock-in. Resolves to `fallback`
+// if `p` doesn't settle within `ms`.
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([p, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms))])
+}
+
+// Best-effort GPS for a clock-in punch (attendance verification). NEVER blocks the punch: a denied
+// permission or a slow/indoor fix just means the punch is recorded without coordinates. Previously a
+// slow `getCurrentPositionAsync` could hang indefinitely, so tapping "Clock in" looked like nothing
+// happened — every step is now time-boxed.
 async function tryGetLocation(): Promise<Pick<ClockInBody, 'gps_lat' | 'gps_lng' | 'gps_accuracy_m'>> {
   try {
-    const { status } = await Location.requestForegroundPermissionsAsync()
-    if (status !== 'granted') return {}
-    const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+    const perm = await withTimeout(
+      Location.requestForegroundPermissionsAsync(),
+      4000,
+      { status: 'undetermined' } as Awaited<ReturnType<typeof Location.requestForegroundPermissionsAsync>>,
+    )
+    if (perm.status !== 'granted') return {}
+    const pos = await withTimeout(
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      5000,
+      null,
+    )
+    if (!pos) return {}
     return { gps_lat: pos.coords.latitude, gps_lng: pos.coords.longitude, gps_accuracy_m: pos.coords.accuracy ?? undefined }
   } catch {
     return {}

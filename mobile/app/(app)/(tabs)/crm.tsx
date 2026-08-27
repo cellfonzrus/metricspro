@@ -16,6 +16,7 @@ const priorityColor = (p: Lead['priority']) =>
 
 export default function Crm() {
   const [tab, setTab] = useState<Tab>('leads')
+  const router = useRouter()
   return (
     <Screen>
       <OfflineBanner />
@@ -24,6 +25,11 @@ export default function Crm() {
         <Seg label="Tasks" active={tab === 'tasks'} onPress={() => setTab('tasks')} />
       </View>
       {tab === 'leads' ? <LeadsList /> : <TasksList />}
+      {tab === 'leads' && (
+        <Pressable style={styles.fab} onPress={() => router.push('/crm/new')} accessibilityLabel="New lead">
+          <Text style={styles.fabText}>+ New lead</Text>
+        </Pressable>
+      )}
     </Screen>
   )
 }
@@ -161,4 +167,19 @@ const styles = StyleSheet.create({
   taskActions: { flexDirection: 'row', marginTop: spacing.xs },
   doneBtn: { backgroundColor: colors.surfaceAlt, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
   doneText: { color: colors.success, fontSize: font.small, fontWeight: '700' },
+  fab: {
+    position: 'absolute',
+    right: spacing.lg,
+    bottom: spacing.lg,
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+  },
+  fabText: { color: colors.primaryText, fontSize: font.body, fontWeight: '800' },
 })
