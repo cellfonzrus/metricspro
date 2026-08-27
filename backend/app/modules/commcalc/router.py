@@ -7373,18 +7373,13 @@ def custom_import_columns(report_key: str, auto: bool = True, org_id: str = ORG_
     return {"report_key": report_key, **_custom_report_columns(client, org_id, report_key, auto_email=auto)}
 
 
-@router.get("/custom-import-types/{report_key}/binding")
-def get_custom_import_binding(report_key: str, target_dataset: str = "", org_id: str = ORG_ID):
-    """The custom sheet's dataset binding + a PRE-FILLED column mapping. When a dataset is selected (or already
-    bound), returns suggestions (source header→canonical field) from the detected header so the mapping opens
-    mostly done. `datasets` lists the mappable canonical datasets."""
-    require_org(org_id)
-    client = sb()
-    if not _custom_report_def(client, org_id, report_key):
-        raise HTTPException(404, f"no custom sheet '{report_key}'")
+def _binding_payload(client, org_id, report_key, cols, target_dataset=""):
+    """Shared mapper-modal payload: the saved binding, the detected header (`cols` = {columns, sample,
+    source} from EITHER the captured/auto-read probe OR an uploaded sample), the pre-filled per-field
+    suggestions for the selected dataset, and the mappable dataset list. One builder so the GET-binding
+    and POST-sample paths return an identical shape the frontend can drop in."""
     binding = _custom_report_binding(client, org_id, report_key)
     ds = (target_dataset or "").strip() or binding.get("target_dataset") or ""
-    cols = _custom_report_columns(client, org_id, report_key, auto_email=True)
     headers = cols.get("columns") or []
     suggestions, fields = [], []
     if ds:
@@ -7396,6 +7391,44 @@ def get_custom_import_binding(report_key: str, target_dataset: str = "", org_id:
             "selected_dataset": ds or None, "rules": binding.get("rules", []),
             "columns": headers, "sample": cols.get("sample", []), "source": cols.get("source"),
             "suggestions": suggestions, "fields": fields, "datasets": _custom_binding_datasets(client, org_id)}
+
+
+@router.get("/custom-import-types/{report_key}/binding")
+def get_custom_import_binding(report_key: str, target_dataset: str = "", org_id: str = ORG_ID):
+    """The custom sheet's dataset binding + a PRE-FILLED column mapping. When a dataset is selected (or already
+    bound), returns suggestions (source header→canonical field) from the detected header so the mapping opens
+    mostly done. `datasets` lists the mappable canonical datasets."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    cols = _custom_report_columns(client, org_id, report_key, auto_email=True)
+    return _binding_payload(client, org_id, report_key, cols, target_dataset)
+
+
+@router.post("/custom-import-types/{report_key}/sample")
+async def custom_import_sample(report_key: str, target_dataset: str = Form(""),
+                               file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Read a SAMPLE of this report (uploaded, NOT ingested) to drive the mapping when the file isn't in the
+    mailbox yet — the owner's "ask for the sample report" at setup. Returns the same shape as GET binding, but
+    the header + sample rows come from the uploaded file, so the per-field mapping opens pre-filled from real
+    columns and values. Nothing is captured or changed."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    contents = await file.read()
+    try:
+        df = _flatten_grouped_sales(_read_upload_df(contents, getattr(file, "filename", "") or ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read the sample file: {e}")
+    columns = [str(c).strip() for c in df.columns if str(c).strip()]
+    if not columns:
+        raise HTTPException(400, "No columns found in the sample file — is it the right sheet?")
+    sample = [{str(k).strip(): ("" if v is None else str(v)) for k, v in rec.items() if str(k).strip()}
+              for rec in df.head(5).to_dict("records")]
+    cols = {"columns": columns, "sample": sample, "source": "sample:" + (getattr(file, "filename", "") or "upload")}
+    return _binding_payload(client, org_id, report_key, cols, target_dataset)
 
 
 class CustomBindingIn(LaxModel):

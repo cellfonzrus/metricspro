@@ -11,12 +11,15 @@ code later — so we **capture the header** and let the user **map its columns t
 
 1. **Register** the sheet (Data Imports → Custom Reports). It auto-imports on the next sweep (#99 auto-match,
    #101 on-registration sweep) — the rows land verbatim in `raw_custom_import`.
-2. **Detect the header** — `GET /custom-import-types/{key}/columns`:
-   - **captured-first**: the union of column keys already in `raw_custom_import`; else
+2. **Detect the header** — three sources, in order of what's available:
+   - **Upload a sample** (owner: *"I would ask for the sample report"*) — `POST /custom-import-types/{key}/sample`
+     reads the header **and sample values** from a file the user uploads at setup (NOT ingested). Most
+     reliable: no mailbox dependency, and the user can eyeball each field's real value in the mapper.
+   - **captured-first**: `GET /custom-import-types/{key}/columns` returns the union of column keys already
+     in `raw_custom_import`; else
    - **auto-read**: the backend opens the tenant's mailbox and reads *just this report's* first matching
      attachment header (no ingest), scoped to the report's own auto-derived filename pattern. Works even
      though no developer can see the inbox — the backend holds the IMAP creds.
-   - Paste fallback: if no email has arrived, the user types the columns.
 3. **Map** — `🔗 Map to report` opens a modal: pick the target dataset, then confirm each canonical field's
    incoming column. The dropdowns are **pre-filled** by `column_mapping.suggest()` (exact > alias > fuzzy).
 4. **Save** — `PUT /custom-import-types/{key}/binding` stores the binding, and a background re-ingest applies
@@ -43,6 +46,7 @@ code later — so we **capture the header** and let the user **map its columns t
 |---|---|---|
 | GET | `/custom-import-types/{key}/columns?auto=true` | Detected header (captured-first, else auto-read) + samples |
 | GET | `/custom-import-types/{key}/binding?target_dataset=` | Current binding + pre-filled suggestions + mappable datasets |
+| POST | `/custom-import-types/{key}/sample` | Read header + sample rows from an UPLOADED file (no ingest); same payload as GET binding |
 | PUT | `/custom-import-types/{key}/binding` | Save `{target_dataset, rules[]}` (empty dataset unbinds); kicks a re-ingest |
 
 ## Notes / limits

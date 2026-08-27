@@ -311,6 +311,23 @@ export default function EmailImportsPage() {
   function mapSetSource(tf: string, src: string) {
     setMapData((d: any) => ({ ...d, _rules: { ...(d?._rules || {}), [tf]: src } }))
   }
+  // Ask for the sample report: read a header + sample rows from an uploaded file (NOT ingested) so the mapping
+  // pre-fills from real columns/values even before the file is in the mailbox.
+  async function uploadSample(file: File | null | undefined) {
+    if (!file || !mapper) return
+    setMapBusy('sample')
+    try {
+      const form = new FormData(); form.append('file', file)
+      const ds = (mapData?._sel || '').trim(); if (ds) form.append('target_dataset', ds)
+      const r: any = await apiUpload(`/api/v1/commcalc/custom-import-types/${encodeURIComponent(mapper.report_key)}/sample`, form)
+      const rules: Record<string, string> = {}
+      for (const rr of (r.rules || [])) rules[rr.target_field] = rr.source_header
+      for (const s of (r.suggestions || [])) if (s.suggested_source && !rules[s.target_field]) rules[s.target_field] = s.suggested_source
+      setMapData({ ...r, _sel: r.selected_dataset || r.target_dataset || '', _rules: rules })
+      setMsg(`✅ Read sample "${file.name}" — ${(r.columns || []).length} column(s) detected.`)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setMapBusy('') }
+  }
   async function saveMapping() {
     if (!mapper || !mapData) return
     const ds = (mapData._sel || '').trim()
@@ -1019,15 +1036,24 @@ export default function EmailImportsPage() {
                 <div>
                   {/* detected header */}
                   <div style={{ fontSize: 12, marginBottom: 10 }}>
-                    <b>Detected columns</b>{' '}
-                    <span style={{ color: 'var(--text3)' }}>
-                      ({mapData.source === 'captured' ? 'from captured data'
-                        : String(mapData.source || '').startsWith('email') ? 'auto-read from the mailbox'
-                        : 'none yet'})
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <b>Detected columns</b>
+                      <span style={{ color: 'var(--text3)' }}>
+                        ({mapData.source === 'captured' ? 'from captured data'
+                          : String(mapData.source || '').startsWith('email') ? 'auto-read from the mailbox'
+                          : String(mapData.source || '').startsWith('sample') ? 'from your uploaded sample'
+                          : 'none yet'})
+                      </span>
+                      <div style={{ flex: 1 }} />
+                      <label className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer', opacity: mapBusy === 'sample' ? 0.6 : 1 }}>
+                        {mapBusy === 'sample' ? 'Reading…' : '⬆ Upload a sample'}
+                        <input type="file" accept=".csv,.txt,.xlsx,.xls" style={{ display: 'none' }} disabled={mapBusy === 'sample'}
+                          onChange={e => { const inp = e.target as HTMLInputElement; const f = inp.files?.[0]; if (f) uploadSample(f); inp.value = '' }} />
+                      </label>
+                    </div>
                     <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                       {(mapData.columns || []).length === 0
-                        ? <span style={{ color: 'var(--text3)' }}>No header found yet — run a sweep (or Test connection) so the file arrives, then reopen this.</span>
+                        ? <span style={{ color: 'var(--text3)' }}>No header found yet — <b>upload a sample</b> of this report (right), or run a sweep so the file arrives from email, then reopen this.</span>
                         : (mapData.columns || []).map((c: string) => <code key={c} style={{ background: 'var(--surface2)', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>{c}</code>)}
                     </div>
                   </div>
@@ -1049,16 +1075,20 @@ export default function EmailImportsPage() {
                       <tbody>
                         {(mapData.fields || []).map((f: any) => {
                           const sug = (mapData.suggestions || []).find((s: any) => s.target_field === f.target_field)
+                          const src = (mapData._rules || {})[f.target_field] || ''
+                          const sampleVal = src ? String(((mapData.sample || [])[0] || {})[src] ?? '') : ''
                           return (
                             <tr key={f.target_field} style={{ borderTop: '1px solid var(--border)' }}>
                               <td style={{ padding: '4px 8px' }}>{f.label}{f.required ? <span style={{ color: '#dc2626' }}> *</span> : ''} <span style={{ color: 'var(--text3)' }}>({f.target_field})</span></td>
                               <td style={{ padding: '4px 8px' }}>
-                                <select value={(mapData._rules || {})[f.target_field] || ''} onChange={e => mapSetSource(f.target_field, e.target.value)} style={{ ...sel, minWidth: 200 }}>
+                                <select value={src} onChange={e => mapSetSource(f.target_field, e.target.value)} style={{ ...sel, minWidth: 200 }}>
                                   <option value="">— none —</option>
                                   {(mapData.columns || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
                                 </select>
                               </td>
-                              <td style={{ padding: '4px 8px', color: 'var(--text3)', fontSize: 11 }}>{sug?.confidence ? `auto: ${sug.confidence}` : ''}</td>
+                              <td style={{ padding: '4px 8px', color: 'var(--text3)', fontSize: 11 }}>
+                                {sampleVal ? <span title="first sample value">e.g. “{sampleVal.length > 24 ? sampleVal.slice(0, 24) + '…' : sampleVal}”</span> : (sug?.confidence ? `auto: ${sug.confidence}` : '')}
+                              </td>
                             </tr>
                           )
                         })}
