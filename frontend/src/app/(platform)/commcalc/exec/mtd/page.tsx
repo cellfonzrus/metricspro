@@ -125,6 +125,9 @@ export default function ExecMtdPage() {
     { header: 'Activation', field: 'activation', type: 'number', get: (r) => r.activation },
     { header: 'Port', field: 'port', type: 'number', get: (r) => r.port },
     { header: 'BYOD', field: 'byod', type: 'number', get: (r) => r.byod },
+    { header: 'Tablet', field: 'tablet', type: 'number', get: (r) => r.tablet },
+    { header: 'Home Internet', field: 'home_internet', type: 'number', get: (r) => r.home_internet },
+    { header: 'Edge', field: 'edge', type: 'number', get: (r) => r.edge },
     { header: 'Upgrade', field: 'upgrade', type: 'number', get: (r) => r.upgrade },
     { header: 'Total Phones', field: 'total_phones', type: 'number', get: (r) => r.total_phones },
     { header: 'Trending Box', field: 'trending_box', type: 'number', get: (r) => r.trending_box },
@@ -158,7 +161,7 @@ export default function ExecMtdPage() {
     { name: 'By employee', columns: cols('employee'), rows: withTotal(data?.by_employee?.rows || [], data?.by_employee?.total || {}, 'employee') },
   ]
 
-  const HEADERS = ['Total Activation', 'Activation', 'Port', 'BYOD', 'Upgrade', 'Total Phones', 'Trending Box',
+  const HEADERS = ['Total Activation', 'Activation', 'Port', 'BYOD', 'Tablet', 'Home Internet', 'Edge', 'Upgrade', 'Total Phones', 'Trending Box',
     'Bill Payment Qty', '$', 'Conv.', 'Acc. Sales', 'APB', 'Trending Acc. Sales', 'Activation Fee', 'Total Protect',
     'Set-up Fee', 'Dealer share', 'Employee pay', 'Acc.+Set-up']
   // Tooltips only on the two appended reconciliation columns (the b2bsoft 15 are unchanged).
@@ -176,7 +179,7 @@ export default function ExecMtdPage() {
   // cannot be read as "the dealer gets nothing".
   const dash = (v: any) => (v === null || v === undefined ? '—' : fmt(v))
   const cellVals = (r: any) => [
-    int(r.total_activation), int(r.activation), int(r.port), int(r.byod), int(r.upgrade), int(r.total_phones),
+    int(r.total_activation), int(r.activation), int(r.port), int(r.byod), int(r.tablet), int(r.home_internet), int(r.edge), int(r.upgrade), int(r.total_phones),
     int(r.trending_box), int(r.bill_payment_qty), fmt(r.amount), pct(r.conv), fmt(r.acc_sales), n2(r.apb),
     fmt(r.trending_acc_sales), fmt(r.activation_fee), int(r.total_protect),
     fmt(r.setup_fee), dash(r.setup_fee_dealer_share), dash(r.setup_fee_employee_pay), fmt(r.acc_plus_setup),
