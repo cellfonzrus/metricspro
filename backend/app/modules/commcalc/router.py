@@ -7482,6 +7482,146 @@ def put_custom_import_binding(report_key: str, body: CustomBindingIn, background
     return {"ok": True, "report_key": report_key, "target_dataset": ds or None, "rules_saved": saved}
 
 
+# ── Integrations hub (owner 2026-08-27: "all integrations on ONE page, clear carrier-neutral purpose,
+#    a 2-step wizard even for a 2-step job, best in class") ───────────────────────────────────────────
+# This is a COMPOSITION + NAVIGATOR layer, never a config store — every card deep-links to the page that
+# already owns that config (single-source, migs 208/923). Titles are carrier-NEUTRAL; `badge` marks the
+# few that are genuinely bound to a processor / carrier / distributor. `status` is a best-effort live probe
+# of each integration's own config table (degrades to 'unknown', never 500s the page). Each item carries a
+# uniform 2-step wizard so setup feels the same everywhere.
+def _integration_probe(client, org_id, spec):
+    """Best-effort status for one integration from its own config table. Returns connected | action_needed
+    (configured but not enabled) | not_started | unknown. Never raises."""
+    if not spec:
+        return "info"
+    try:
+        q = client.schema("commcalc").table(spec["table"]).select("*").eq("org_id", org_id)
+        for col, val in (spec.get("filter") or {}).items():
+            q = q.eq(col, val)
+        rows = q.limit(50).execute().data or []
+    except Exception:
+        return "unknown"
+    if not rows:
+        return "not_started"
+    ec = spec.get("enabled_col")
+    if ec:
+        return "connected" if any(r.get(ec) for r in rows) else "action_needed"
+    return "connected"
+
+
+_STEP_VERIFY = {"title": "Turn it on & verify",
+                "body": "Save your details, run Test connection, then Run now. When the first data lands, "
+                        "this integration shows Connected. You can change it any time — nothing is locked in."}
+
+_INTEGRATIONS_CATALOG = [
+    {"category": "Automatic data feeds", "blurb": "Connect a source once; it brings your data in on a schedule.", "items": [
+        {"key": "email", "title": "Email Inbox Import", "icon": "📨",
+         "purpose": "Pull report attachments straight from an email inbox on a schedule — no uploading.",
+         "carrier_specific": False, "deep_link": "/commcalc/email-imports",
+         "probe": {"table": "email_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the inbox", "body": "Add the mailbox (host, address, app password) and a rule for which attachments to grab. A one-click standard is offered for common POS exports."}, _STEP_VERIFY]},
+        {"key": "portal_login", "title": "Portal Auto-Login", "icon": "🔐",
+         "purpose": "Sign in to a vendor or carrier portal (including 2-factor) and pull reports automatically.",
+         "carrier_specific": False, "deep_link": "/commcalc/email-imports",
+         "probe": {"table": "data_source"},
+         "steps": [{"title": "Add the login", "body": "Enter the portal URL and credentials. For 2-factor or tricky sites, use the guided live-login once to establish the session."}, _STEP_VERIFY]},
+        {"key": "connectors", "title": "Connectors Registry", "icon": "🔌",
+         "purpose": "One place to store portal credentials, set each one's schedule, and choose what it pulls.",
+         "carrier_specific": False, "deep_link": "/commcalc/connectors",
+         "probe": {"table": "connector_instances", "enabled_col": "enabled"},
+         "steps": [{"title": "Register a connector", "body": "Pick the source type, store its credentials, and map which reports it should fetch."}, _STEP_VERIFY]},
+        {"key": "ftp", "title": "FTP / SFTP Import", "icon": "🔁",
+         "purpose": "Automatically fetch files a vendor drops on an FTP/SFTP server.",
+         "carrier_specific": False, "deep_link": "/commcalc/ftp-imports",
+         "probe": {"table": "ftp_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the server", "body": "Enter host and credentials, and a rule that routes each filename to the right report."}, _STEP_VERIFY]},
+        {"key": "processor_sync", "title": "Payment Processor Sync", "icon": "🏦", "badge": "Processor",
+         "purpose": "Pull subscriber activity (MI + ATU) from your payment-processor portal.",
+         "carrier_specific": False, "deep_link": "/commcalc/epay/sweep",
+         "probe": {"table": "epay_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the processor", "body": "Enter the processor portal login and the accounts to pull."}, _STEP_VERIFY]},
+        {"key": "metrics_sync", "title": "Rep / Store Metrics Sync", "icon": "📈", "badge": "Carrier",
+         "purpose": "Pull daily rep and store performance metrics from the carrier portal.",
+         "carrier_specific": False, "deep_link": "/commcalc/dlar/sweep",
+         "probe": {"table": "dlar_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the portal", "body": "Enter the carrier portal login for the metrics report."}, _STEP_VERIFY]},
+        {"key": "distributor_sweep", "title": "Distributor Invoice Sweep", "icon": "🚚", "badge": "Distributor",
+         "purpose": "Pull distributor / dealer invoices from the distributor portal automatically.",
+         "carrier_specific": True, "deep_link": "/commcalc/vip/sweep",
+         "probe": {"table": "vip_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the distributor", "body": "Enter the distributor portal login and the account to pull invoices for."}, _STEP_VERIFY]},
+        {"key": "closing_sheet", "title": "Daily Closing Sheet Import", "icon": "📋",
+         "purpose": "Import daily store-closing numbers from a shared Google Sheet.",
+         "carrier_specific": False, "deep_link": "/closing/imports",
+         "probe": {"table": "closing_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Link the sheet", "body": "Share the sheet with the service account, then paste its ID and tab."}, _STEP_VERIFY]},
+    ]},
+    {"category": "Manual imports", "blurb": "Bring a file in by hand whenever you have it.", "items": [
+        {"key": "upload", "title": "Upload a Report File", "icon": "📁",
+         "purpose": "Drop in any report file by hand — the same pipeline the automatic feeds use.",
+         "carrier_specific": False, "deep_link": "/commcalc/upload", "probe": None,
+         "steps": [{"title": "Pick the report", "body": "Choose which report you're uploading and select the file."}, {"title": "Confirm the import", "body": "Review the row count and period, then import. Re-uploading the same period replaces it."}]},
+        {"key": "custom_report", "title": "Custom Report Capture", "icon": "🧾",
+         "purpose": "Add any report the vendor sends, capture it, and map it to a standard report — no code.",
+         "carrier_specific": False, "deep_link": "/commcalc/email-imports",
+         "probe": {"table": "report_definitions", "filter": {"target_table": "raw_custom_import"}},
+         "steps": [{"title": "Register the report", "body": "Name the report; it auto-imports on the next sweep (or upload a sample now)."}, {"title": "Map it to a report", "body": "Confirm which incoming column feeds each standard field, and save — it flows automatically from then on."}]},
+        {"key": "carrier_file", "title": "Commission Statement Extract", "icon": "📑",
+         "purpose": "Turn a commission / compensation statement file into a clean table.",
+         "carrier_specific": False, "deep_link": "/commcalc/carrier-comm-file", "probe": None,
+         "steps": [{"title": "Upload the statement", "body": "Select the statement file the carrier or processor sent."}, {"title": "Confirm the table", "body": "Review the extracted rows and commit them."}]},
+    ]},
+    {"category": "Make the data make sense", "blurb": "Tell the system what incoming columns, stores and report names mean.", "items": [
+        {"key": "column_mapping", "title": "Column Mapping", "icon": "🧩",
+         "purpose": "Tell the system which spreadsheet column means which field, for any source.",
+         "carrier_specific": False, "deep_link": "/commcalc/column-mapping",
+         "probe": {"table": "column_mapping"},
+         "steps": [{"title": "Load a sample", "body": "Detect a report's headers so the mapping pre-fills from best-guess matches."}, {"title": "Confirm & save", "body": "Adjust any column, then save. Required fields are flagged."}]},
+        {"key": "store_match", "title": "Store Matching", "icon": "🏬",
+         "purpose": "Match store names that appear in feeds to your canonical stores.",
+         "carrier_specific": False, "deep_link": "/commcalc/store-match",
+         "probe": {"table": "store_aliases"},
+         "steps": [{"title": "Review unmatched", "body": "See which store names from the data don't yet map to a store."}, {"title": "Link them", "body": "Point each alias at the right store; future imports resolve automatically."}]},
+        {"key": "report_mapping", "title": "Report Name Mapping", "icon": "🗂️",
+         "purpose": "Map a portal's report names to the right importer so pulls route correctly.",
+         "carrier_specific": False, "deep_link": "/commcalc/report-mappings",
+         "probe": {"table": "report_pull_map"},
+         "steps": [{"title": "See the portal reports", "body": "List the report names the portal exposes."}, {"title": "Route each one", "body": "Map each to the matching standard report, then save."}]},
+    ]},
+    {"category": "Guided setup", "blurb": "Step-by-step help to get everything connected.", "items": [
+        {"key": "onboarding", "title": "Setup Wizard", "icon": "🚀",
+         "purpose": "Full guided setup: every data feed and config the platform needs, and where to complete each.",
+         "carrier_specific": False, "deep_link": "/commcalc/onboarding", "probe": None,
+         "steps": [{"title": "Answer a few questions", "body": "Tell us your carrier, POS and processor; the wizard tailors the rest."}, {"title": "Complete each step", "body": "Work the checklist — green means done."}]},
+        {"key": "implementation", "title": "Implementation Wizard", "icon": "🧭",
+         "purpose": "Map a new carrier's columns and run the first end-to-end ingest.",
+         "carrier_specific": False, "deep_link": "/commcalc/implementation", "probe": None,
+         "steps": [{"title": "Map the columns", "body": "Match the new carrier's export columns to standard fields."}, {"title": "Run the first ingest", "body": "Import a file and confirm the data lands where expected."}]},
+    ]},
+]
+
+
+@router.get("/integrations")
+def list_integrations(org_id: str = ORG_ID):
+    """The single Integrations hub: every connection/import surface with a carrier-neutral purpose, a live
+    status probe, a deep-link to where it's configured, and a uniform 2-step wizard. Composition only —
+    never stores config. Status probes are best-effort (degrade to 'unknown'); the page never 500s."""
+    require_org(org_id)
+    client = sb()
+    cats = []
+    counts = {"connected": 0, "action_needed": 0, "not_started": 0}
+    for cat in _INTEGRATIONS_CATALOG:
+        items = []
+        for it in cat["items"]:
+            st = _integration_probe(client, org_id, it.get("probe"))
+            if st in counts:
+                counts[st] += 1
+            items.append({k: v for k, v in it.items() if k != "probe"} | {"status": st})
+        cats.append({"category": cat["category"], "blurb": cat.get("blurb"), "items": items})
+    total = sum(len(c["items"]) for c in _INTEGRATIONS_CATALOG)
+    return {"categories": cats, "summary": {"total": total, **counts}}
+
+
 # ── Connector sweep registry (B-phase2 de-hardcode) ────────────────────────────────────────────
 # Maps a connector's sweep_kind → its puller so NEITHER dispatch site below hard-codes the vendor
 # list. Built-in pullers resolve via this module's globals (defined later in the file, so order

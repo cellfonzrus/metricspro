@@ -517,6 +517,10 @@ export const NAV: NavGroup[] = [
     { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'] },
   ]},
   { group: 'Integrations & Imports', module: 'commissions', items: [
+    // Front door: ONE page listing every connection/import surface with a carrier-neutral purpose, a live
+    // status probe, and a 2-step wizard (owner 2026-08-27). The individual pages below stay reachable — this
+    // hub deep-links to each — but this is where setup should start.
+    { href: '/commcalc/integrations', label: 'Integrations', icon: '🧩', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/connectors', label: 'Connectors', icon: '🔌', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/onboarding', label: 'Onboarding Wizard', icon: '🚀', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/implementation', label: 'Implementation Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
