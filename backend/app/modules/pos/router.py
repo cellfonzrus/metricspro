@@ -330,6 +330,27 @@ def _clean_customer(body: dict) -> dict:
     return out
 
 
+# The carrier account PIN (`password`) is the credential behind SIM-swap / account-takeover — the
+# single most damaging field to leak from the customer book. SSN/DL already ride the mig-725 pgcrypto
+# vault; the PIN did not. Seal it as application-layer ciphertext ('enc:v1:') on every write and open
+# it only on the single-record edit fetch. crypto.encrypt is idempotent and a no-op without a key, so
+# this is safe to run before the backfill and on already-sealed values.
+def _seal_customer_pin(d: dict) -> dict:
+    if d.get("password"):
+        from app.core import crypto
+        d = dict(d)
+        d["password"] = crypto.encrypt(d["password"])
+    return d
+
+
+def _open_customer_pin(row):
+    if row and row.get("password"):
+        from app.core import crypto
+        row = dict(row)
+        row["password"] = crypto.decrypt(row["password"])
+    return row
+
+
 def _caller_employee(authorization: str, org_id: str) -> str:
     """The signed-in caller's employee_id ('' when the login isn't linked). Sales, notes and
     drawer sessions are stamped with THIS, never a body field — same anti-spoofing stance as
@@ -546,7 +567,7 @@ def get_customer(customer_id: str, org_id: str = ORG_ID,
             .eq("org_id", org_id).eq("id", customer_id).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(404, "not found")
-    return {"customer": rows[0]}
+    return {"customer": _open_customer_pin(rows[0])}
 
 
 @router.post("/customers")
@@ -555,8 +576,8 @@ def create_customer(body: dict, org_id: str = ORG_ID):
     if not (ins.get("first_name") or ins.get("last_name") or ins.get("company_name")):
         raise HTTPException(400, "a name is required")
     ins["org_id"] = org_id
-    r = sb().schema("pos").table("customers").insert(ins).execute()
-    return {"customer": (r.data or [{}])[0]}
+    r = sb().schema("pos").table("customers").insert(_seal_customer_pin(ins)).execute()
+    return {"customer": _open_customer_pin((r.data or [{}])[0])}
 
 
 @router.patch("/customers/{customer_id}")
@@ -564,11 +585,11 @@ def update_customer(customer_id: str, body: dict, org_id: str = ORG_ID):
     upd = _clean_customer(body)
     if not upd:
         raise HTTPException(400, "nothing to update")
-    r = (sb().schema("pos").table("customers").update(upd)
+    r = (sb().schema("pos").table("customers").update(_seal_customer_pin(upd))
          .eq("org_id", org_id).eq("id", customer_id).execute())
     if not r.data:
         raise HTTPException(404, "not found")
-    return {"customer": r.data[0]}
+    return {"customer": _open_customer_pin(r.data[0])}
 
 
 @router.get("/customers/{customer_id}/notes")
@@ -2016,7 +2037,7 @@ def import_rows(entity: str, body: dict, org_id: str = ORG_ID):
         seen = {k for r in existing for k in
                 (_digits(r.get("phone_primary")), (r.get("email") or "").strip().lower()) if k}
         for i, row in enumerate(rows):
-            p = _clean_customer(row)
+            p = _seal_customer_pin(_clean_customer(row))
             key = _digits(p.get("phone_primary")) or (p.get("email") or "").strip().lower()
             if key and key in seen:
                 skipped.append({"index": i, "message": "duplicate (phone/email already exists)"})
