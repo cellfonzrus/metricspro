@@ -198,6 +198,35 @@ def _security_posture_startup():
         pass
 
 
+# One-shot encryption backfill for operators WITHOUT shell access: set ENCRYPTION_BACKFILL_ON_BOOT=1
+# and redeploy, and this seals any data that predates a field becoming encrypted (currently the carrier
+# PINs in pos.customers.password). Runs in a daemon thread so it never blocks or fails the boot; each
+# sweep is idempotent, so leaving the flag on across deploys/replicas is safe (clear it once done).
+@app.on_event("startup")
+def _encryption_backfill_startup():
+    import os
+    if os.environ.get("ENCRYPTION_BACKFILL_ON_BOOT", "0").strip().lower() not in ("1", "true", "yes"):
+        return
+    import threading
+
+    def _work():
+        import logging
+        log = logging.getLogger("encryption_backfill")
+        try:
+            from app.core import crypto
+            if not crypto.is_enabled():
+                log.warning("ENCRYPTION_BACKFILL_ON_BOOT set but FIELD_ENCRYPTION_KEY is missing — skipping.")
+                return
+            from app.core.database import get_supabase
+            from app.core.encryption_backfill import run_all
+            res = run_all(get_supabase())
+            log.warning("encryption backfill complete: %s (you can now clear ENCRYPTION_BACKFILL_ON_BOOT)", res)
+        except Exception as e:  # never let a backfill crash the app
+            log.exception("encryption backfill failed: %s", e)
+
+    threading.Thread(target=_work, name="encryption-backfill", daemon=True).start()
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "1.0.0", "modules": ["commcalc", "storeops", "notify", "core", "account", "storevisit", "closing", "helpdesk", "hr"]}

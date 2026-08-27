@@ -103,8 +103,81 @@ def main():
     ldec = R.decrypt_receipt_row(legacy)
     check("legacy plaintext row passes through", ldec["imei"] == "355000000000000" and ldec["phone"] == "5105550000")
 
+    # ── customer-PIN backfill sweep (stub client — no DB) ──────────────────────────────────────
+    from app.core.encryption_backfill import backfill_customer_pins
+    store = [
+        {"id": "1", "password": "1234"},                       # plaintext → seal
+        {"id": "2", "password": crypto.encrypt("9999")},       # already sealed → skip
+        {"id": "3", "password": None},                         # empty → skip
+        {"id": "4", "password": "0000"},                       # plaintext → seal
+    ]
+    client = _StubClient(store)
+    res = backfill_customer_pins(client, page=2)  # page<rows to exercise paging
+    check("backfill sealed exactly the 2 plaintext PINs", res == {"scanned": 4, "sealed": 2, "enabled": True})
+    check("backfill row1 now ciphertext", crypto.is_encrypted(store[0]["password"]))
+    check("backfill row1 decrypts to original", crypto.decrypt(store[0]["password"]) == "1234")
+    check("backfill left already-sealed row untouched", crypto.decrypt(store[1]["password"]) == "9999")
+    check("backfill left null row untouched", store[2]["password"] is None)
+    res2 = backfill_customer_pins(client, page=2)  # idempotent second pass
+    check("backfill is idempotent (0 sealed on re-run)", res2["sealed"] == 0)
+
     print(f"\n{_passed} passed, {_failed} failed")
     return 1 if _failed else 0
+
+
+# ── Minimal Supabase-style stub for the backfill sweep (schema().table().select()… / .update()…) ──
+class _StubQuery:
+    def __init__(self, rows):
+        self._rows = rows
+        self._lo, self._hi = 0, None
+
+    def order(self, *a, **k):
+        return self
+
+    def range(self, lo, hi):
+        self._lo, self._hi = lo, hi
+        return self
+
+    def execute(self):
+        page = self._rows[self._lo:self._hi + 1] if self._hi is not None else self._rows
+        return type("R", (), {"data": [dict(r) for r in page]})()
+
+
+class _StubUpdate:
+    def __init__(self, rows, patch):
+        self._rows, self._patch = rows, patch
+
+    def eq(self, col, val):
+        self._col, self._val = col, val
+        return self
+
+    def execute(self):
+        for r in self._rows:
+            if r.get(self._col) == self._val:
+                r.update(self._patch)
+        return type("R", (), {"data": []})()
+
+
+class _StubTable:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *a, **k):
+        return _StubQuery(self._rows)
+
+    def update(self, patch):
+        return _StubUpdate(self._rows, patch)
+
+
+class _StubClient:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def schema(self, *_):
+        return self
+
+    def table(self, *_):
+        return _StubTable(self._rows)
 
 
 if __name__ == "__main__":
