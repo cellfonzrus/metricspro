@@ -7752,11 +7752,20 @@ async def _data_freshness_monitor(client, org_id):
             ld = f.get("latest_data_date") or "unknown"
             li_full = f.get("last_ingest_at")
             li = str(li_full or "")[:10] or "unknown"
-            # Arrival vs stale-content: if the last ingest is itself old (≈ the data date), new files aren't
-            # coming; if the last ingest is recent but the data is old, the file arrives with stale content.
-            arrival_stopped = (not li_full) or (li <= (ld if ld != "unknown" else li))
-            why = ("the report email appears to have STOPPED ARRIVING — an automatic re-pull just ran and "
-                   "found nothing newer" if arrival_stopped else
+            # Arrival vs stale-content, keyed on the LAST INGEST's OWN age (not the data date): if no new file
+            # has ingested for ~2+ days, files aren't arriving; if a file DID ingest in the last day but its
+            # data is still old, the file arrives with stale content. (An as-of-last-night export ingested
+            # today legitimately carries yesterday's data, so the data date alone can't tell these apart.)
+            ingest_age = None
+            if li != "unknown":
+                try:
+                    ingest_age = (_date.today() - _datetime.strptime(li, "%Y-%m-%d").date()).days
+                except Exception:
+                    ingest_age = None
+            arrival_stopped = (not li_full) or (ingest_age is None) or (ingest_age >= 2)
+            why = ("the report email appears to have STOPPED ARRIVING — no new file has ingested in "
+                   f"{ingest_age if ingest_age is not None else 'several'} day(s) and an automatic re-pull "
+                   "just ran and found nothing newer" if arrival_stopped else
                    "the file is still arriving but its CONTENT is stale (the same data is being re-sent)")
             subject = f"⚠️ Data not updating: {f['label']} is {f.get('days_stale', '?')} day(s) behind"
             text = (f"MetricsPro auto-check — {f['label']} has not updated for this tenant.\n\n"
