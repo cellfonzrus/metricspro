@@ -53,7 +53,7 @@ except Exception as e:                                   # pragma: no cover
     print(f"aiortc/av not installed ({type(e).__name__}) — install with: pip install aiortc")
     sys.exit(0)
 
-from vision_edge_analyzer import (PersonDetector, WebRtcFrameSource,   # noqa: E402
+from vision_edge_analyzer import (LazyFrame, PersonDetector, WebRtcFrameSource,   # noqa: E402
                                   capacity, webrtc_available)
 
 
@@ -137,22 +137,63 @@ print("\n(0) Capability detection")
 check("webrtc_available() is True with aiortc installed", webrtc_available() is True)
 
 print("\n(0b) Machine sizing — 'can we reuse the PC already in the store?'")
-# The arithmetic behind --benchmark. Sequential detection across cameras, so the machine's budget is
-# 1/per_detection detections per second and each camera claims detect_fps of them; half is withheld
-# because the usual host is also running the register.
-c = capacity(0.040, 6)                      # 40ms/detection, 6 fps per camera
-check("25 detections/sec measured from 40ms", c["fps_ceiling"] == 25.0)
-check("only half is offered — the register keeps the rest", c["usable_fps"] == 12.5)
-check("12.5 usable / 6 fps -> 2 cameras", c["cameras"] == 2)
-check("halving the frame rate doubles the cameras", capacity(0.040, 3)["cameras"] == 4)
-check("a slow machine reports ZERO cameras rather than rounding up to one",
-      capacity(0.200, 6)["cameras"] == 0)
-check("and tells the operator the rate that WOULD work",
-      capacity(0.200, 6)["max_fps_for_one_camera"] == 2.5)
-check("a fast machine scales linearly", capacity(0.010, 6)["cameras"] == 8)
-check("headroom is honoured when overridden", capacity(0.040, 6, headroom=1.0)["cameras"] == 4)
-check("a nonsense measurement cannot divide by zero", capacity(0, 6)["cameras"] > 0)
-check("detect_fps is floored so it can never divide by zero", capacity(0.040, 0)["detect_fps"] == 0.5)
+# The arithmetic behind --benchmark. CORES IS PASSED EXPLICITLY IN EVERY CHECK: it defaults to
+# os.cpu_count(), so a proof that let it default would assert something different on every
+# machine that ran it, which is not a proof.
+#
+# WHAT THE MODEL PRICES, and why the first version was wrong. Capacity is not "one core's
+# detection rate divided by detect_fps". A camera costs its video before it costs a detection:
+# receiving and decoding 1080p30 is ~180 CPU-ms every second whether or not anything looks at
+# the frames. The old model saw none of that and counted a single core, and told an owner with
+# a perfectly serviceable four-core box that it could carry "about 1 camera".
+c = capacity(0.040, 6, cores=4)             # 40 ms/detection, 6 fps per camera, 1080p WebRTC
+check("a whole camera-second is priced, not just the detections",
+      c["cpu_ms_per_camera_second"] == 502.9)
+check("...and it is more than the detections alone (6 x 40 = 240 ms)",
+      c["cpu_ms_per_camera_second"] > 6 * 40)
+check("four cores at 40ms/detection, half withheld -> 3 cameras", c["cameras"] == 3)
+check("the unrounded number is reported too, so 3.7 is not read as exactly 3",
+      c["cameras_exact"] == 3.7)
+check("the machine's core count is reported back", c["cores"] == 4)
+
+check("twice the cores carries more cameras", capacity(0.040, 6, cores=8)["cameras"] == 7)
+check("detecting half as often carries more cameras", capacity(0.040, 3, cores=4)["cameras"] == 4)
+
+# THE FLOOR THAT THE OLD MODEL COULD NOT SEE. Make the detector free and the machine does NOT
+# become infinite: the video is still arriving, still being decoded, and that is what is left.
+free = capacity(0.0, 6, cores=4)
+check("a FREE detector does not give infinite cameras — the video is the floor",
+      free["cameras"] == 7)
+check("...and that floor is receive + decode + process overhead, not detection",
+      free["cpu_ms_per_camera_second"] == 262.9)
+check("a faster detector helps, but cannot beat that floor",
+      capacity(0.017, 6, cores=4)["cameras"] < free["cameras"])
+
+# RESOLUTION IS THE CHEAPEST LEVER AN OWNER HAS, and it is invisible unless the model prices
+# video, which is why it is proven here rather than left as a comment.
+check("720p carries more cameras than 1080p on the same box",
+      capacity(0.040, 6, cores=4, res="720p")["cameras"]
+      > capacity(0.040, 6, cores=4, res="1080p")["cameras"])
+check("an unknown resolution falls back to the dearer one rather than flattering the machine",
+      capacity(0.040, 6, cores=4, res="4k")["cpu_ms_per_camera_second"]
+      == capacity(0.040, 6, cores=4, res="1080p")["cpu_ms_per_camera_second"])
+check("RTSP costs less than WebRTC — no RTP receive to pay for",
+      capacity(0.040, 6, cores=4, webrtc=False)["cpu_ms_per_camera_second"]
+      < capacity(0.040, 6, cores=4, webrtc=True)["cpu_ms_per_camera_second"])
+
+check("headroom is the fraction OFFERED, so 1.0 offers the whole machine",
+      capacity(0.040, 6, cores=4, headroom=1.0)["cameras"] == 7)
+check("...and 0.5 is what --benchmark reports, leaving the register the rest",
+      capacity(0.040, 6, cores=4, headroom=0.5)["cameras"] == 3)
+
+check("a machine too slow for one camera reports ZERO rather than rounding up to one",
+      capacity(0.200, 6, cores=1)["cameras"] == 0)
+check("and tells the operator the rate that WOULD work instead",
+      capacity(0.200, 6, cores=1)["max_fps_for_one_camera"] == 1.1)
+
+check("a nonsense measurement cannot divide by zero", capacity(0, 6, cores=4)["cameras"] > 0)
+check("detect_fps is floored so it can never divide by zero",
+      capacity(0.040, 0, cores=4)["detect_fps"] == 0.5)
 
 print("\n(0c) A missing detector is refused, not run blind")
 det = PersonDetector(prefer_yolo=False)
@@ -181,15 +222,28 @@ try:
     check("the offer is ICE-gathered before sending (candidates inline)", "a=candidate:" in offer)
     check("the offer ends gathering cleanly", "a=end-of-candidates" in offer or "a=candidate:" in offer)
 
-    print("\n(4) Frames arrive as BGR ndarrays")
+    print("\n(4) Frames arrive as LazyFrames that convert to BGR only when asked")
     deadline = time.time() + 30
-    ok, frame = False, None
+    ok, lazy = False, None
     while time.time() < deadline:
-        ok, frame = src.read()
+        ok, lazy = src.read()
         if ok:
             break
         time.sleep(0.2)
-    check("a frame was decoded and slotted", ok is True and frame is not None)
+    check("a frame was slotted", ok is True and lazy is not None)
+    # THE DEFERRAL IS THE POINT, so it is asserted rather than assumed. read() must hand back
+    # something that has NOT been converted yet: the pump used to pay 3.0 CPU-ms of YUV->BGR on
+    # every arriving frame, 30 times a second, and the loop then threw four fifths of them away
+    # at detect_fps 6. If read() ever goes back to returning a converted array, this check is
+    # what says so — the cost would otherwise be invisible, because everything still works.
+    if lazy is not None:
+        check("read() returns a LazyFrame, not an array", isinstance(lazy, LazyFrame))
+        check("...which has not converted anything yet", lazy._arr is None)
+        frame = lazy.array()
+        check("...and converts on demand", frame is not None)
+        check("...caching, so a second caller does not pay again", lazy.array() is frame)
+    else:
+        frame = None
     if frame is not None:
         check("shape is (h, w, 3)", frame.ndim == 3 and frame.shape[2] == 3)
         check("dtype is uint8", str(frame.dtype) == "uint8")
