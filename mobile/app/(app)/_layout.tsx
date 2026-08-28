@@ -34,6 +34,7 @@ export default function AppLayout() {
       <Stack.Screen name="pos/checkout" options={{ title: 'Checkout', presentation: 'modal' }} />
       <Stack.Screen name="pos/receipts" options={{ title: 'Imported receipts' }} />
       <Stack.Screen name="pos/receipt-import" options={{ title: 'Import receipt', presentation: 'modal' }} />
+      <Stack.Screen name="pos/receipt-import-pdf" options={{ title: 'Import PDF receipt' }} />
       <Stack.Screen name="crm/[leadId]" options={{ title: 'Lead' }} />
       <Stack.Screen name="crm/new" options={{ title: 'New lead', presentation: 'modal' }} />
       <Stack.Screen name="earnings/targets" options={{ title: 'Targets' }} />
