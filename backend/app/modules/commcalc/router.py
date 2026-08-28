@@ -7495,7 +7495,7 @@ def _integration_probe(client, org_id, spec):
     if not spec:
         return "info"
     try:
-        q = client.schema("commcalc").table(spec["table"]).select("*").eq("org_id", org_id)
+        q = client.schema(spec.get("schema") or "commcalc").table(spec["table"]).select("*").eq("org_id", org_id)
         for col, val in (spec.get("filter") or {}).items():
             q = q.eq(col, val)
         rows = q.limit(50).execute().data or []
@@ -7587,6 +7587,18 @@ _INTEGRATIONS_CATALOG = [
          "carrier_specific": False, "deep_link": "/commcalc/report-mappings",
          "probe": {"table": "report_pull_map"},
          "steps": [{"title": "See the portal reports", "body": "List the report names the portal exposes."}, {"title": "Route each one", "body": "Map each to the matching standard report, then save."}]},
+    ]},
+    {"category": "Point of sale & cameras", "blurb": "Bring in data from your in-store systems and devices.", "items": [
+        {"key": "pos_import", "title": "Point-of-Sale Data", "icon": "🛒",
+         "purpose": "Pull customers, inventory and sales activity from your point-of-sale system.",
+         "carrier_specific": False, "deep_link": "/pos/import",
+         "probe": {"schema": "core", "table": "import_feed"},
+         "steps": [{"title": "Connect the POS feed", "body": "Register the point-of-sale data feed and choose what to bring in (customers, inventory, sales)."}, {"title": "Import & confirm", "body": "Run the import and confirm the records landed against your stores."}]},
+        {"key": "cameras", "title": "Camera Feeds", "icon": "📹",
+         "purpose": "Connect store cameras to bring in foot-traffic and in-store activity data.",
+         "carrier_specific": False, "deep_link": "/vision/onboarding",
+         "probe": {"schema": "core", "table": "vision_config"},
+         "steps": [{"title": "Connect the cameras", "body": "Link your camera account and grant access to the store cameras."}, {"title": "Verify & watch", "body": "Verify a camera, then turn on watching so activity data flows in."}]},
     ]},
     {"category": "Guided setup", "blurb": "Step-by-step help to get everything connected.", "items": [
         {"key": "onboarding", "title": "Setup Wizard", "icon": "🚀",
@@ -21842,27 +21854,37 @@ def _ad_activation_buckets(client, org_id, period, ckey_fn=None, cut=None,
 
 
 def _ad_cells_full(client, org_id, period, ckey_fn=None):
-    """Per-(canonical-store, rep, date) Activation Details counts split {new, port, byod, upgrade} — the ONE
-    AD activation source both Exec MTD and the Sales Report read through _apply_activation_basis. `new` folds
-    New Activation + Tablet + Home Internet + Edge + Other (everything that is not Port / BYOD / Upgrade)."""
+    """Per-(canonical-store, rep, date) Activation Details counts, split into the SAME columns b2b's Location
+    Sales Report shows: {new, port, byod, tablet, home_internet, edge, upgrade}. `new` = New Activation + Other
+    only (the pure New column); Tablet / Home Internet / Edge are broken out on their own so the Sales Report
+    can reconcile column-by-column with the back-office (owner 2026-08-27: those were previously folded into
+    `new`, inflating the Activation column). Total Activation = new+port+byod+tablet+home_internet+edge,
+    excluding Upgrade. The ONE AD activation source both Exec MTD and the Sales Report read via
+    _apply_activation_basis."""
     rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": (lambda s: "")})
     ck = ckey_fn or (lambda s: str(s or "").strip().lower())
     cells, n = {}, 0
+    _slot0 = {"new": 0, "port": 0, "byod": 0, "tablet": 0, "home_internet": 0, "edge": 0, "upgrade": 0}
     for r in rows:
         n += 1
         b = r.get("bucket") or ""
         key = (ck(r.get("store") or "") or "—", (r.get("salesperson") or "").strip() or "—",
                str(r.get("trans_date") or "")[:10])
-        slot = cells.setdefault(key, {"new": 0, "port": 0, "byod": 0, "upgrade": 0,
-                                      "_name": (r.get("store") or key[0])})
+        slot = cells.setdefault(key, {**_slot0, "_name": (r.get("store") or key[0])})
         if b == "Upgrade":
             slot["upgrade"] += 1
         elif b == "BYOD":
             slot["byod"] += 1
         elif b == "Port":
             slot["port"] += 1
+        elif b == "Tablet":
+            slot["tablet"] += 1
+        elif b == "Home Internet":
+            slot["home_internet"] += 1
+        elif b == "Edge":
+            slot["edge"] += 1
         else:
-            slot["new"] += 1
+            slot["new"] += 1          # New Activation + Other
     return cells, n
 
 
@@ -21874,7 +21896,8 @@ def _blank_sales_cell(store, rep, date):
             "_swap": set(), "_billpay": set(), "lines": 0, "revenue": 0.0, "gp": 0.0,
             "accessory_rev": 0.0, "setup_fee_rev": 0.0, "box_count": 0, "total_phones": 0,
             "bill_qty": 0, "bill_amt": 0.0, "activation_fee": 0.0, "protect": 0,
-            "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0}
+            "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0,
+            "act_tablet": 0, "act_home_internet": 0, "act_edge": 0}
 
 
 def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None):
@@ -21894,6 +21917,9 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         a["act_port"] = len(a["_port"])
         a["act_byod"] = len(a["_byod"])
         a["act_upg"] = len(a["_upg"])
+        # The sales feed does not distinguish tablet / home-internet / edge → 0 (they stay folded inside the
+        # feed's own `new` sense). An INACTIVE basis is therefore byte-identical to before this split.
+        a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
     msrc = _metric_source(client, org_id, "activations")
     if not (msrc.get("enabled") and msrc.get("source") == "activation_details"):
         return {"active": False, "basis": "sales_agg", "ad_rows": 0}
@@ -21902,14 +21928,19 @@ def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_sto
         return {"active": False, "basis": "sales_agg", "ad_rows": 0}
     for a in cells.values():
         a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
+        a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
     for key, ad in ad_cells.items():
         if key not in cells:
             if restrict_stores is not None and key[0] not in restrict_stores:
                 continue
             cells[key] = _blank_sales_cell(ad.get("_name") or key[0], key[1], key[2])
         a = cells[key]
-        a["act_new"], a["act_port"] = ad["new"], ad["port"]
-        a["act_byod"], a["act_upg"] = ad["byod"], ad["upgrade"]
+        # act_new stays FOLDED (new + tablet + home-internet + edge) so every existing consumer — Exec MTD's
+        # act_new+act_port, the Sales Report total — is unchanged; the three sub-counts are ALSO exposed so the
+        # Sales Report can show them as their own columns and display a PURE New column (act_new − the three).
+        a["act_tablet"], a["act_home_internet"], a["act_edge"] = ad["tablet"], ad["home_internet"], ad["edge"]
+        a["act_new"] = ad["new"] + ad["tablet"] + ad["home_internet"] + ad["edge"]
+        a["act_port"], a["act_byod"], a["act_upg"] = ad["port"], ad["byod"], ad["upgrade"]
     return {"active": True, "basis": "activation_details", "ad_rows": ad_n}
 
 
@@ -22173,6 +22204,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         # NOTE (n3): by_store dicts also gain a '_name' key (the raw display spelling) set in the loop
         # below — a metric sentinel, NOT a bucket. Any future code iterating these dicts must skip '_name'.
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
+                'tablet': 0, 'home_internet': 0, 'edge': 0,
                 'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'setup_fee': 0.0,
                 'activation_fee': 0.0, 'protect': 0}
     by_store, by_emp = {}, {}
@@ -22195,10 +22227,13 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         if '_name' not in ds:
             ds['_name'] = a.get('store') or st
         for d in (ds, by_emp.setdefault(rep or '—', _blank())):
-            d['activation'] += a['act_new']
+            d['activation'] += a['act_new']          # FOLDED (new + tablet + home-internet + edge)
             d['port'] += a['act_port']
             d['byod'] += a['act_byod']
             d['upgrade'] += a['act_upg']
+            d['tablet'] += a['act_tablet']
+            d['home_internet'] += a['act_home_internet']
+            d['edge'] += a['act_edge']
             d['total_phones'] += a['total_phones']
             d['bill_qty'] += a['bill_qty']
             d['bill_amt'] += a['bill_amt']
@@ -22229,11 +22264,17 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     def _row(name, label_key, d):
         # Total Activation = Activation+Port+BYOD+Upgrade on the sales basis (unchanged); on the Activation
         # Details basis it EXCLUDES Upgrade (b2b-consistent, matching /activation-counts). Upgrade is still
-        # reported in its own column either way.
+        # reported in its own column either way. `d['activation']` is the FOLDED count (New + Tablet + Home
+        # Internet + Edge), so `ta` is unchanged; the displayed Activation column is the PURE New count and
+        # Tablet / Home Internet / Edge are broken out on their own — matching b2b's Location Sales Report
+        # column-for-column (owner 2026-08-27 reconciliation).
+        _tab, _hi, _edge = d['tablet'], d['home_internet'], d['edge']
+        _pure_new = d['activation'] - _tab - _hi - _edge
         ta = d['activation'] + d['port'] + d['byod'] + (0 if _ta_excl_upgrade else d['upgrade'])
         return {label_key: name,
-                'total_activation': ta, 'activation': d['activation'], 'port': d['port'],
-                'byod': d['byod'], 'upgrade': d['upgrade'], 'total_phones': d['total_phones'],
+                'total_activation': ta, 'activation': _pure_new, 'port': d['port'],
+                'byod': d['byod'], 'tablet': _tab, 'home_internet': _hi, 'edge': _edge,
+                'upgrade': d['upgrade'], 'total_phones': d['total_phones'],
                 'trending_box': round(ta * trend_factor),
                 'bill_payment_qty': d['bill_qty'], 'amount': round(d['bill_amt'], 2),
                 'conv': round(ta / d['bill_qty'], 4) if d['bill_qty'] else 0.0,
@@ -22268,7 +22309,8 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
     def _totals(rowset, label_key):
         t = {label_key: 'TOTAL'}
-        for k in ('total_activation', 'activation', 'port', 'byod', 'upgrade', 'total_phones',
+        for k in ('total_activation', 'activation', 'port', 'byod', 'tablet', 'home_internet', 'edge',
+                  'upgrade', 'total_phones',
                   'trending_box', 'bill_payment_qty', 'amount', 'acc_sales', 'trending_acc_sales',
                   'setup_fee', 'acc_plus_setup', 'trending_acc_plus_setup',
                   'activation_fee', 'total_protect'):

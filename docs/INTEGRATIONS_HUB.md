@@ -43,5 +43,7 @@ no report-area gate — same gating as Connectors / Column Mapping.
 ## Coverage vs. the raw inventory
 The catalog folds near-duplicates into one clear purpose (Upload Files + Upload Wizard + MA upload →
 "Upload a Report File"; the mapping screens surface under "Make the data make sense") and **surfaces the two
-orphaned routes** so nothing is missable. POS Import and Camera Setup live in their own modules and keep their
-own setup wizards; they can be added as cards later if the hub should span every module.
+orphaned routes** so nothing is missable. It spans other modules too: a **Point of sale & cameras** category
+pulls in POS data (`core.import_feed`) and camera feeds (`core.vision_config`), each deep-linking to its own
+module's page. `_integration_probe` takes an optional `schema` so a card can probe any schema's config table,
+not just `commcalc`.
