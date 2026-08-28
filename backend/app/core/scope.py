@@ -377,6 +377,28 @@ def market_store_codes(client, org_id: str, market) -> set:
     return set(b["codes"]) if b else set()
 
 
+def _orphan_stores_visible() -> bool:
+    """Fail-safe switch for the market-orphan fix. Default ON — a market-scoped login sees the org's
+    market-less stores (owner ruling, 2026-08). MARKET_ORPHAN_STORES_VISIBLE=0 restores the old
+    behaviour (orphans hidden) via one env change, same reversible posture as the other scope knobs."""
+    import os
+    return os.environ.get("MARKET_ORPHAN_STORES_VISIBLE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def orphan_codes_from_index(idx) -> set:
+    """PURE: UPPER store_codes that belong to NO market in EITHER vocabulary — the market-less
+    'orphan' stores. `stores[…]["market"]` is the folded 'first non-empty market wins' across
+    storeops.stores + commcalc.store_mapping, so a falsy value here means unassigned on BOTH sides.
+    Codeless rows are skipped (a span is keyed by code)."""
+    return {_up(s.get("store_code")) for s in ((idx or {}).get("stores") or [])
+            if _norm(s.get("store_code")) and not _norm(s.get("market"))}
+
+
+def orphan_store_codes(client, org_id: str) -> set:
+    """The org's market-less store codes (see orphan_codes_from_index), off the cached market index."""
+    return orphan_codes_from_index(market_index(client, org_id))
+
+
 def market_store_keys(client, org_id: str, market) -> set:
     """Like `market_store_codes` but ALSO the store addresses — rows across this codebase key their
     store column on either a code or an address, which is exactly why `scope_keyset` widens codes
@@ -572,6 +594,17 @@ def login_grant_breakdown(client, org_id: str, app_user) -> dict:
             out[GRANT_KIND_MARKET]["codes"] |= codes
         else:
             out[GRANT_KIND_MARKET]["unresolved"].append(m)
+    # Market-less (orphan) stores — owner "fix by design" (2026-08): a store assigned to NO market in
+    # EITHER vocabulary is in no market's keyset, so a market-scoped login never saw it (live: Lefferts
+    # in Luxelink + 2 on the cellfonzrus side, all reported missing). By design a market-scoped manager
+    # should still see an unassigned store in their own org — an orphan is a data gap, not a deliberate
+    # exclusion. Fold the org's orphans into a login that holds AT LEAST ONE market grant; store-only
+    # and self logins hold none and are untouched. Same-tenant only (market_index is org-scoped), so
+    # this cannot leak across companies. Reversible via MARKET_ORPHAN_STORES_VISIBLE=0.
+    if out[GRANT_KIND_MARKET]["granted"] and _orphan_stores_visible():
+        orphans = orphan_store_codes(client, org_id)
+        out[GRANT_KIND_MARKET]["orphans"] = sorted(orphans)
+        out[GRANT_KIND_MARKET]["codes"] |= orphans
     pinned = []
     if app_user.get("store_code"):
         pinned.append(_norm(app_user["store_code"]))

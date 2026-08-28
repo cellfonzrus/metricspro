@@ -525,5 +525,47 @@ ok("codeless rows contribute no addr_keys entry",
 ok("build_market_index tolerates garbage rows",
    S.build_market_index([], [{"nope": 1}])["addr_keys"] == {})
 
+print("\n── K. market-less (orphan) stores fold into a market-scoped span (2026-08 owner fix) ──")
+# A store that is market-NULL in BOTH vocabularies (live: Lefferts in Luxelink). NY lives in both.
+ORPHAN_DATA = {
+    "storeops": {"stores": [
+        {"org_id": ORG, "store_code": "B101", "address": "100 BROADWAY", "market": "NY"},
+        {"org_id": ORG, "store_code": "LEF", "address": "55 LEFFERTS BLVD", "market": None},   # orphan
+        {"org_id": ORG, "store_code": "ORP2", "address": "9 ORPHAN WAY", "market": ""},          # orphan
+        {"org_id": OTHER, "store_code": "ZORP", "address": "OTHER ORPHAN", "market": None},       # other tenant
+    ]},
+    "commcalc": {
+        "store_mapping": [
+            {"org_id": ORG, "store_code": "B101", "store_address": "100 BROADWAY", "market": "NY"},
+            {"org_id": ORG, "store_code": "LEF", "store_address": "55 LEFFERTS BLVD", "market": None},
+        ],
+        "store_aliases": [],
+    },
+}
+S.invalidate_market_index()
+oc = FakeClient(ORPHAN_DATA)
+idx_o = S.market_index(oc, ORG)
+ok("orphan_codes_from_index finds the market-less stores", S.orphan_codes_from_index(idx_o) == {"LEF", "ORP2"})
+ok("orphan set excludes the market-assigned store", "B101" not in S.orphan_codes_from_index(idx_o))
+ok("orphan set is org-scoped (no other tenant)", "ZORP" not in S.orphan_store_codes(oc, ORG))
+u_ny = {"role": "market_manager", "market": "NY", "store_code": None, "store_codes": []}
+span_o = S.reporting_span_codes(oc, ORG, u_ny, "market")
+ok("market-scoped login now SEES the orphan store", "LEF" in span_o and "ORP2" in span_o, sorted(span_o))
+ok("market-scoped login still sees its market's store", "B101" in span_o)
+bd = S.login_grant_breakdown(oc, ORG, u_ny)
+ok("orphans attributed under the market grant kind", set(bd["market"]["orphans"]) == {"LEF", "ORP2"})
+u_store = {"market": "", "store_code": "B101", "store_codes": []}
+ok("store-only login (no market grant) does NOT get orphans",
+   "LEF" not in S.reporting_span_codes(oc, ORG, u_store, "store"))
+ok("'self' login never gets orphans",
+   S.reporting_span_codes(oc, ORG, u_ny, "self") == set())
+# reversible via env
+os.environ["MARKET_ORPHAN_STORES_VISIBLE"] = "0"
+S.invalidate_market_index()
+ok("MARKET_ORPHAN_STORES_VISIBLE=0 restores old behaviour (orphan hidden)",
+   "LEF" not in S.reporting_span_codes(FakeClient(ORPHAN_DATA), ORG, u_ny, "market"))
+os.environ.pop("MARKET_ORPHAN_STORES_VISIBLE", None)
+
 print(f"\n{'='*72}\n  RESULT: {PASS} passed, {FAIL} failed\n{'='*72}")
+sys.exit(1 if FAIL else 0)
 sys.exit(1 if FAIL else 0)
