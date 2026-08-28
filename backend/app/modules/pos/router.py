@@ -2880,18 +2880,29 @@ def receipt_import_structured(body: dict, authorization: str = Header(default=""
     src = (body.get("pos_source") or "").strip().lower()
     if not _rfmt.get(src):
         raise HTTPException(400, f"unknown pos_source; choose one of {[f['source'] for f in _rfmt.list_formats()]}")
-    raw, _ext = _decode_image(body.get("file") or body.get("image") or "")
-    if not _rpdf.is_pdf(raw):
-        raise HTTPException(400, "a PDF receipt is required for structured import")
-    words = _rpdf.extract_pages_words(raw)
-    if not words:
-        raise HTTPException(422, "could not read text from this PDF")
-    doc = _rfmt.parse(src, words)
-    try:  # remember the tenant's POS choice so the picker pre-selects it next time
-        sb().schema("pos").table("receipt_import_prefs").upsert(
-            {"org_id": org_id, "default_source": src}, on_conflict="org_id").execute()
-    except Exception:
-        pass
+
+    # Commit can carry the EDITED document from the preview (description/qty/tax/price already changed),
+    # so the user's edits are saved in one call without re-parsing the PDF. dry_run always parses fresh.
+    edited = body.get("document") if isinstance(body.get("document"), dict) and body.get("document") else None
+    if edited and not body.get("dry_run"):
+        doc = edited
+    else:
+        raw, _ext = _decode_image(body.get("file") or body.get("image") or "")
+        if not _rpdf.is_pdf(raw):
+            raise HTTPException(400, "a PDF receipt is required for structured import")
+        words = _rpdf.extract_pages_words(raw)
+        if not words:
+            raise HTTPException(422, "could not read text from this PDF")
+        doc = _rfmt.parse(src, words)
+        try:  # remember the tenant's POS choice so the picker pre-selects it next time
+            sb().schema("pos").table("receipt_import_prefs").upsert(
+                {"org_id": org_id, "default_source": src}, on_conflict="org_id").execute()
+        except Exception:
+            pass
+    # keep derived fields in sync with any edits before storage
+    if edited and not body.get("dry_run"):
+        from app.modules.pos.receipt_formats import base as _rbase
+        doc["derived"] = _rbase.compute_derived(doc)
     if body.get("dry_run"):
         return {"dry_run": True, "pos_source": src, "document": doc}
     uploader = _caller_employee(authorization, org_id) or None

@@ -523,6 +523,21 @@ export async function apiFetchBase64(path: string): Promise<string> {
   return btoa(binary)
 }
 
+// Fetch a server-rendered HTML page (authed) and open it in a print-ready popup. Used to REPRINT an
+// imported receipt in its original format: the backend renders the layout, we fetch it with auth (a
+// plain window.open would not carry the bearer/org headers) and hand it to the browser's print dialog.
+export async function apiPrintHtml(path: string) {
+  const res = await authedFileGet(path)
+  const html = await res.text()
+  const w = window.open('', '_blank', 'width=820,height=1000')
+  if (!w) throw new Error('Popup blocked — allow popups to print the receipt.')
+  w.document.open()
+  w.document.write(html)
+  w.document.close()
+  // give the browser a tick to lay out before invoking print
+  setTimeout(() => { try { w.focus(); w.print() } catch { /* user can print manually */ } }, 400)
+}
+
 export const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n || 0)
 
