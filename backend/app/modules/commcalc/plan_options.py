@@ -82,7 +82,14 @@ _CUSTOM_IMPORT_TABLE = "raw_custom_import"
 # each captured row's header after strip().lower(), so 'Contract Type', 'contract_type' and 'CONTRACT TYPE'
 # all resolve. Deliberately NOT mapping a bare 'type' (it would swallow Customer Type / Tender Type / …).
 CUSTOM_FIELD_ALIASES = {
-    "department":    ("department", "dept"),
+    # 'department' also surfaces the SERVICE PLAN (the b2b Activation Details "SP/PO Name" column) — the
+    # owner picks those service-plan values in the department picker to pay per activation, and the engine's
+    # bridged activation line carries the report's Department OR SP/PO service plan under `department`
+    # (commission_engine._activation_detail_lines). Aliasing SP/PO Name -> department here makes the
+    # dropdown vocabulary MATCH what the line pays, whether the sheet names the column 'Department' or
+    # 'SP/PO Name'. ADDITIVE: raw_sales has no such column, so this only adds custom-report values.
+    "department":    ("department", "dept", "sp/po name", "sp/po", "service plan",
+                      "service plan name", "plan name"),
     "category":      ("category", "product category"),
     "contract_type": ("contract type", "contract_type", "activation type", "action type"),
     "product_desc":  ("product desc", "product description", "product", "product_desc",
