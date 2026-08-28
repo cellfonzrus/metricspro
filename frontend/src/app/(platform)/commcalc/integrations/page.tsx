@@ -31,6 +31,9 @@ export default function IntegrationsPage() {
   const [filter, setFilter] = useState<'all' | 'todo' | 'connected'>('all')
   const [wiz, setWiz] = useState<Item | null>(null)
   const [step, setStep] = useState(0)
+  const [fresh, setFresh] = useState<any>(null)   // per-feed data freshness (auto-monitored)
+  const [freshBusy, setFreshBusy] = useState(false)
+  const [freshMsg, setFreshMsg] = useState('')
 
   const load = useCallback(() => {
     setLoading(true); setErr(null)
@@ -38,6 +41,23 @@ export default function IntegrationsPage() {
       .then((r: any) => setData(r)).catch(e => setErr(e?.message || String(e))).finally(() => setLoading(false))
   }, [])
   useEffect(() => { load() }, [load])
+
+  const loadFresh = useCallback(() => {
+    api(`/api/v1/commcalc/ingest-freshness${orgQ()}`).then(setFresh).catch(() => setFresh(null))
+  }, [])
+  useEffect(() => { loadFresh() }, [loadFresh])
+
+  // Manual "check & fix now": runs the same auto re-pull + freshness check the platform runs daily.
+  const recheck = async () => {
+    setFreshBusy(true); setFreshMsg('')
+    try {
+      const r: any = await api(`/api/v1/commcalc/data-freshness/run-now${orgQ()}`, { method: 'POST' })
+      setFresh(r?.freshness || null)
+      const ing = r?.swept?.ingested
+      setFreshMsg(`Re-pull complete${typeof ing === 'number' ? ` — ${ing} row(s) ingested` : ''}. Freshness refreshed.`)
+    } catch (e: any) { setFreshMsg('❌ ' + (e?.message || e)) }
+    finally { setFreshBusy(false) }
+  }
 
   const openWiz = (it: Item) => { setWiz(it); setStep(0) }
   const s = data?.summary || { total: 0, connected: 0, action_needed: 0, not_started: 0 }
@@ -73,6 +93,42 @@ export default function IntegrationsPage() {
                 border: '1px solid var(--border)', background: filter === c.k ? 'var(--primary, #2563eb)' : 'var(--surface)',
                 color: filter === c.k ? '#fff' : 'var(--text2)' }}>{c.label}</button>
           ))}
+        </div>
+      )}
+
+      {/* DATA HEALTH — the platform auto-checks each feed's freshness after every daily pull and auto re-pulls;
+          a feed still behind is alerted to admins. This panel shows the live status and a manual check button. */}
+      {fresh?.feeds?.length > 0 && (
+        <div className="card" style={{ padding: 14, marginBottom: 16,
+          border: fresh.any_stale ? '1px solid #fde68a' : '1px solid var(--border)',
+          background: fresh.any_stale ? '#fffbeb' : 'var(--surface)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5 }}>
+              {fresh.any_stale ? '⚠️ Data health — a feed is behind' : '✅ Data health — all feeds current'}
+            </div>
+            <div style={{ flex: 1 }} />
+            <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 10px' }} disabled={freshBusy} onClick={recheck}>
+              {freshBusy ? 'Checking…' : '↻ Re-check & re-pull now'}
+            </button>
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
+            The platform checks these automatically after each daily import and re-pulls; you’re alerted only if a feed stays behind. As of {fresh.as_of}.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 }}>
+            {(fresh.feeds || []).filter((f: any) => f.rows).map((f: any) => (
+              <div key={f.key} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', background: 'var(--surface)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 13 }}>{f.stale ? '🔴' : '🟢'}</span>
+                  <span style={{ fontWeight: 600, fontSize: 12.5 }}>{f.label}</span>
+                </div>
+                <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 3 }}>
+                  latest data {f.latest_data_date || '—'}
+                  {typeof f.days_stale === 'number' && f.days_stale > 0 ? ` · ${f.days_stale}d behind` : ' · current'}
+                </div>
+              </div>
+            ))}
+          </div>
+          {freshMsg && <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 8 }}>{freshMsg}</div>}
         </div>
       )}
 
