@@ -250,6 +250,7 @@ export const NAV: NavGroup[] = [
     { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
+    { href: '/pos/receipts', label: 'Receipt Import', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'] },
   ]},
   // CRM (mig 800, owner directive 2026-08-12) — the sales pipeline + follow-up system + the

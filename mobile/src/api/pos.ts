@@ -177,3 +177,64 @@ export function getReceiptImport(id: string) {
     `${BASE}/receipt-imports/${encodeURIComponent(id)}`,
   )
 }
+
+// ── Structured, per-POS receipt import (RQ / B2B PDFs → editable + reprintable) ────────────────────
+export type ReceiptCol = { key: string; label: string; kind: string; align?: string }
+export type ReceiptItemRow = { cells: Record<string, string>; editable: string[] }
+export type ReceiptTotal = { key: string; label: string; amount: number | null; editable?: boolean }
+export type ReceiptMeta = { key: string; label: string; value: string; editable?: boolean }
+export type ReceiptDocument = {
+  pos_source?: string
+  format_label?: string
+  title?: string
+  meta?: ReceiptMeta[]
+  store?: { lines?: string[]; phone?: string | null; fax?: string | null }
+  bill_to?: { lines?: string[]; name?: string }
+  ship_to?: { lines?: string[] } | null
+  columns?: ReceiptCol[]
+  items?: ReceiptItemRow[]
+  totals?: ReceiptTotal[]
+  payments?: { label: string; amount: number | null }[]
+  comments?: string | null
+  footer_text?: string | null
+  derived?: Record<string, unknown>
+}
+
+export function getReceiptFormats() {
+  return api.get<{ formats: { source: string; label: string }[]; default_source?: string | null }>(
+    `${BASE}/receipt-import/formats`,
+  )
+}
+
+/** OCR a PDF of a known POS format into an editable Document WITHOUT writing (for the edit screen). */
+export function previewStructuredReceipt(pos_source: string, fileBase64: string) {
+  return api.post<{ dry_run: true; pos_source: string; document: ReceiptDocument }>(
+    `${BASE}/receipt-import/structured`,
+    { pos_source, file: fileBase64, dry_run: true },
+  )
+}
+
+/** Commit the (possibly edited) Document as a stored, reprintable receipt + summary sale. */
+export function importStructuredReceipt(body: {
+  pos_source: string
+  document: ReceiptDocument
+  store_code?: string
+  notes?: string
+}) {
+  return api.post<{ imported: boolean; pos_source: string; document: ReceiptDocument; import_id?: string; sale_id?: string }>(
+    `${BASE}/receipt-import/structured`,
+    body,
+  )
+}
+
+export function updateReceiptDocument(id: string, document: ReceiptDocument) {
+  return api.patch<{ ok: true; document: ReceiptDocument }>(
+    `${BASE}/receipt-imports/${encodeURIComponent(id)}/document`,
+    { document },
+  )
+}
+
+/** The reprint route path (fetched as HTML via apiGetText → expo-print). */
+export function receiptPrintPath(id: string) {
+  return `${BASE}/receipt-imports/${encodeURIComponent(id)}/print`
+}

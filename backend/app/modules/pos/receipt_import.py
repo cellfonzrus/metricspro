@@ -287,3 +287,66 @@ def import_receipt(client, *, org_id: str, store_code: str | None, uploaded_by: 
 
     return {"import_id": import_id, "sale_id": sale_id, "customer_id": customer_id,
             "transaction_id": transaction_id}
+
+
+# ── Structured (per-POS) import — the editable + reprintable Document (migration 866) ──────────────
+# The v2 path: a PDF from a KNOWN POS format is parsed (app/modules/pos/receipt_formats) into ONE
+# editable `document`, stored on the receipt_imports row alongside the usual denormalized search
+# columns (derived from the document, so an edit stays searchable). A summary pos.sales row keeps it
+# in the sales ledger; the full line/section/footer detail lives in `document` for the reprint.
+def _derived(document: dict) -> dict:
+    from app.modules.pos.receipt_formats import base as _b
+    return _b.compute_derived(document or {})
+
+
+def import_structured(client, *, org_id: str, pos_source: str, document: dict,
+                      uploaded_by: str | None, store_code: str | None, notes: str | None,
+                      image_path: str | None = None) -> dict:
+    """Store a parsed structured receipt: a summary sale + the receipt_imports row carrying the
+    editable `document`. Returns {import_id, sale_id, transaction_id}."""
+    der = (document or {}).get("derived") or _derived(document)
+    total = der.get("total") or 0.0
+
+    sale_row = {
+        "org_id": org_id, "store_code": store_code, "employee_id": uploaded_by,
+        "receipt_type": "sale", "status": "completed", "source": "receipt_import",
+        "subtotal": total, "tax_total": 0, "total": total, "balance": 0, "notes": notes,
+        "receipt": {"source": "receipt_import", "pos_source": pos_source,
+                    "invoice_no": der.get("invoice_no"), "imeis": der.get("imeis")},
+    }
+    sr = client.schema("pos").table("sales").insert(sale_row).execute()
+    sale = (sr.data or [{}])[0]
+    sale_id, transaction_id = sale.get("id"), sale.get("transaction_id")
+
+    imp = {
+        "org_id": org_id, "store_code": store_code, "sale_id": sale_id, "status": "imported",
+        "image_path": image_path, "notes": notes, "pos_source": pos_source, "document": document,
+        "invoice_no": der.get("invoice_no"), "salesperson": der.get("salesperson"),
+        "imei": der.get("imei"), "phone": der.get("phone"), "customer_name": der.get("customer_name"),
+        "device_name": der.get("device_name"), "total": total, "sale_date": der.get("sale_date"),
+        "uploaded_by": uploaded_by,
+    }
+    row = _encrypt_import_row(imp)  # encrypts imei/note + imei_bidx; `document` passes through plaintext
+    ir = client.schema("pos").table("receipt_imports").insert(row).execute()
+    return {"import_id": (ir.data or [{}])[0].get("id"), "sale_id": sale_id,
+            "transaction_id": transaction_id}
+
+
+def update_structured_document(client, org_id: str, import_id: str, document: dict) -> dict:
+    """Save edits to a structured receipt. Recomputes the derived search/summary fields from the
+    edited document (so a changed description/qty/price/tax stays searchable and the summary total
+    tracks the edit), refreshes the encrypted imei + its blind index, and returns the saved doc."""
+    from app.core import crypto
+    d = dict(document or {})
+    d["derived"] = _derived(d)
+    der = d["derived"]
+    imei = der.get("imei")
+    patch = {
+        "document": d, "invoice_no": der.get("invoice_no"), "salesperson": der.get("salesperson"),
+        "customer_name": der.get("customer_name"), "device_name": der.get("device_name"),
+        "total": der.get("total"), "sale_date": der.get("sale_date"),
+        "imei": crypto.encrypt(imei) if imei else None,
+        "imei_bidx": crypto.blind_index(imei, mode="digits") if imei else None,
+    }
+    client.schema("pos").table("receipt_imports").update(patch).eq("org_id", org_id).eq("id", import_id).execute()
+    return d

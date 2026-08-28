@@ -2848,3 +2848,89 @@ def receipt_imports_get(import_id: str, org_id: str = ORG_ID):
     if not rows:
         raise HTTPException(404, "receipt import not found")
     return {"receipt_import": _receipt.decrypt_receipt_row(rows[0])}
+
+
+# ── Structured, per-POS receipt import (migration 866) — editable + reprintable ───────────────────
+# Upload a PDF from a KNOWN POS format (RQ / B2B / …), parse it to one editable Document, edit the
+# description/qty/tax/price, and reprint it later in the SAME layout. Formats live in
+# app/modules/pos/receipt_formats; nothing about a layout is hardcoded here.
+from app.modules.pos import receipt_pdf as _rpdf
+from app.modules.pos.receipt_formats import registry as _rfmt, render as _rrender
+
+
+@router.get("/receipt-import/formats")
+def receipt_import_formats(org_id: str = ORG_ID):
+    """The POS formats the upload picker offers + this tenant's remembered default (asked on upload:
+    'which POS are you uploading from — RQ / B2B?')."""
+    default = None
+    try:
+        rows = (sb().schema("pos").table("receipt_import_prefs").select("default_source")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        default = rows[0].get("default_source") if rows else None
+    except Exception:
+        pass
+    return {"formats": _rfmt.list_formats(), "default_source": default}
+
+
+@router.post("/receipt-import/structured")
+def receipt_import_structured(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Parse a PDF receipt of a chosen POS format into an editable Document. Body: {file|image (PDF
+    base64 or data URL), pos_source ('rq'|'b2b'|…), store_code?, notes?, dry_run?}. dry_run=true
+    returns the Document WITHOUT writing (for the confirm/edit screen); else stores it + a summary sale."""
+    src = (body.get("pos_source") or "").strip().lower()
+    if not _rfmt.get(src):
+        raise HTTPException(400, f"unknown pos_source; choose one of {[f['source'] for f in _rfmt.list_formats()]}")
+
+    # Commit can carry the EDITED document from the preview (description/qty/tax/price already changed),
+    # so the user's edits are saved in one call without re-parsing the PDF. dry_run always parses fresh.
+    edited = body.get("document") if isinstance(body.get("document"), dict) and body.get("document") else None
+    if edited and not body.get("dry_run"):
+        doc = edited
+    else:
+        raw, _ext = _decode_image(body.get("file") or body.get("image") or "")
+        if not _rpdf.is_pdf(raw):
+            raise HTTPException(400, "a PDF receipt is required for structured import")
+        words = _rpdf.extract_pages_words(raw)
+        if not words:
+            raise HTTPException(422, "could not read text from this PDF")
+        doc = _rfmt.parse(src, words)
+        try:  # remember the tenant's POS choice so the picker pre-selects it next time
+            sb().schema("pos").table("receipt_import_prefs").upsert(
+                {"org_id": org_id, "default_source": src}, on_conflict="org_id").execute()
+        except Exception:
+            pass
+    # keep derived fields in sync with any edits before storage
+    if edited and not body.get("dry_run"):
+        from app.modules.pos.receipt_formats import base as _rbase
+        doc["derived"] = _rbase.compute_derived(doc)
+    if body.get("dry_run"):
+        return {"dry_run": True, "pos_source": src, "document": doc}
+    uploader = _caller_employee(authorization, org_id) or None
+    result = _receipt.import_structured(
+        sb(), org_id=org_id, pos_source=src, document=doc, uploaded_by=uploader,
+        store_code=(body.get("store_code") or "").strip() or None,
+        notes=(body.get("notes") or "").strip() or None)
+    return {"imported": True, "pos_source": src, "document": doc, **result}
+
+
+@router.patch("/receipt-imports/{import_id}/document")
+def receipt_import_update_document(import_id: str, body: dict, org_id: str = ORG_ID):
+    """Save edits to a structured receipt's Document (description / qty / tax / price). Recomputes the
+    search + summary fields so an edit stays findable and the totals track it."""
+    doc = body.get("document")
+    if not isinstance(doc, dict):
+        raise HTTPException(400, "document (object) is required")
+    updated = _receipt.update_structured_document(sb(), org_id, import_id, doc)
+    return {"ok": True, "document": updated}
+
+
+@router.get("/receipt-imports/{import_id}/print")
+def receipt_import_print(import_id: str, editable: bool = False, org_id: str = ORG_ID):
+    """Reprint a stored receipt in its ORIGINAL layout — HTML, ready for the browser's Print → PDF.
+    editable=true returns the same markup with contenteditable hooks for an in-place editor."""
+    from fastapi.responses import HTMLResponse
+    rows = (sb().schema("pos").table("receipt_imports").select("document")
+            .eq("org_id", org_id).eq("id", import_id).limit(1).execute().data) or []
+    if not rows or not rows[0].get("document"):
+        raise HTTPException(404, "no printable document for this import")
+    return HTMLResponse(content=_rrender.render_html(rows[0]["document"], editable=bool(editable)))

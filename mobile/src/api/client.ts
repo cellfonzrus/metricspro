@@ -160,6 +160,25 @@ export const api = {
   del: <T>(path: string, opts?: ApiOptions) => request<T>(path, { ...opts, method: 'DELETE' }),
 }
 
+/** Authed GET that returns the raw TEXT body (not JSON) — for a server-rendered HTML response such as
+ *  the receipt reprint, which is then handed to expo-print. Carries the same auth/org headers as api. */
+export async function apiGetText(path: string, opts: ApiOptions = {}): Promise<string> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS } = opts
+  const headers = await authHeaders()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let res: Response
+  try {
+    res = await fetch(`${ENV.apiUrl}${withOrgScope(path)}`, { signal: controller.signal, headers })
+  } catch (e: any) {
+    clearTimeout(timer)
+    throw new ApiError(e?.name === 'AbortError' ? 'Request timed out' : 'Network unavailable', 0)
+  }
+  clearTimeout(timer)
+  if (!res.ok) throw new ApiError(`API error ${res.status}`, res.status)
+  return res.text()
+}
+
 /** Force a token refresh (used before a critical mutation to avoid a mid-write expiry). */
 export async function refreshSession(): Promise<void> {
   await supabase.auth.refreshSession().catch(() => {})

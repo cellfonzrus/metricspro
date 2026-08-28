@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native'
+import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 
@@ -38,9 +38,14 @@ export default function Receipts() {
         />
       </View>
 
-      <Pressable style={styles.importBtn} onPress={() => router.push('/pos/receipt-import')}>
-        <Text style={styles.importBtnText}>＋ Import a new receipt</Text>
-      </Pressable>
+      <View style={styles.importRow}>
+        <Pressable style={styles.importBtn} onPress={() => router.push('/pos/receipt-import-pdf')}>
+          <Text style={styles.importBtnText}>📄 Import PDF (RQ/B2B)</Text>
+        </Pressable>
+        <Pressable style={styles.importBtn} onPress={() => router.push('/pos/receipt-import')}>
+          <Text style={styles.importBtnText}>📷 Photo</Text>
+        </Pressable>
+      </View>
 
       {imports.isLoading ? (
         <Loading label="Loading…" />
@@ -70,6 +75,27 @@ export default function Receipts() {
 function Row({ item }: { item: ReceiptImport }) {
   const title = item.customer_name || item.device_name || item.imei || 'Imported receipt'
   const sub = [item.phone, item.imei, item.store_code, item.sale_date].filter(Boolean).join(' · ')
+  const [printing, setPrinting] = React.useState(false)
+
+  // Reprint in the original format: fetch the backend-rendered HTML (authed) → OS print sheet.
+  // Only structured (PDF) imports have a printable document; a photo import has none (handled).
+  const print = async () => {
+    setPrinting(true)
+    try {
+      const { apiGetText } = await import('@/api/client')
+      const { receiptPrintPath } = await import('@/api/pos')
+      const Print = await import('expo-print')
+      const html = await apiGetText(receiptPrintPath(item.id))
+      await Print.printAsync({ html })
+    } catch (e) {
+      Alert.alert('Can’t print this one', e instanceof Error && /404/.test(e.message)
+        ? 'This receipt has no printable document (it was a photo import).'
+        : e instanceof Error ? e.message : 'Try again.')
+    } finally {
+      setPrinting(false)
+    }
+  }
+
   return (
     <View style={styles.card}>
       <View style={styles.cardHead}>
@@ -88,15 +114,20 @@ function Row({ item }: { item: ReceiptImport }) {
           {item.notes}
         </Text>
       )}
+      <View style={styles.rowActions}>
+        <Pressable style={styles.printBtn} onPress={print} disabled={printing}>
+          <Text style={styles.printBtnText}>{printing ? 'Preparing…' : '🖨 Reprint'}</Text>
+        </Pressable>
+      </View>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
   searchWrap: { padding: spacing.lg, paddingBottom: spacing.sm },
+  importRow: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
   importBtn: {
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    flex: 1,
     paddingVertical: spacing.md,
     borderRadius: radius.md,
     borderWidth: StyleSheet.hairlineWidth,
@@ -104,7 +135,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.surface,
   },
-  importBtnText: { color: colors.primary, fontSize: font.body, fontWeight: '800' },
+  importBtnText: { color: colors.primary, fontSize: font.small, fontWeight: '800' },
+  rowActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: spacing.xs },
+  printBtn: { backgroundColor: colors.surfaceAlt, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
+  printBtnText: { color: colors.primary, fontSize: font.small, fontWeight: '700' },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.sm },
   card: {
     backgroundColor: colors.surface,
