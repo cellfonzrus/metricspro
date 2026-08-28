@@ -670,17 +670,24 @@ def build_inputs(client, org_id, period):
 
     # activation-report feed (commcalc.activation_rebate_ledger, migration 867) — a DEDICATED,
     # collision-free source so this never shares raw_comp_report's wholesale per-period replace.
-    # Commission → carrier_comm (revenue). Device rebate → device_rebate (CONTRA-COGS, booked
-    # NEGATIVE), the same treatment as the MA rebate (owner ruling K1); device cost is NOT posted here
-    # — it comes from the sales side, so the rebate only reduces that already-booked cost. Additive:
-    # a tenant with no rows here is byte-identical to before.
+    # Commission → carrier_comm (revenue). For the financed devices this report covers, the tenant's
+    # SALES feed does NOT book the device (receipt-import sales write no sale_items, so no device cost
+    # reaches the P&L — verified 2026-08), so we book BOTH sides here or the rebate would read as pure
+    # phantom gross profit:
+    #   • device cost (report's Related Cost) → device_cost (COGS, positive)
+    #   • rebate → device_rebate (CONTRA-COGS, negative, owner ruling K1)
+    # Net device COGS = cost − rebate, so device gross profit = rebate − cost (owner's P&L rule). The
+    # customer down payment is a financing pass-through (balance sheet), NOT device margin, so it is
+    # deliberately not on the P&L here. Additive: a tenant with no ledger rows is byte-identical.
     try:
         for r in _fetch_all(client, "activation_rebate_ledger",
-                            "business_address,period,commission_amount,device_rebate_amount",
+                            "business_address,period,commission_amount,device_rebate_amount,device_cost",
                             {"org_id": org_id, "period": period_keys}):
             st = _norm_store(r.get("business_address"))
             add("carrier_comm", st, safe_float(r.get("commission_amount")),
                 detail_label="Activation report commission")
+            add("device_cost", st, safe_float(r.get("device_cost")),
+                detail_label="Device cost (activation report)")
             add("device_rebate", st, -safe_float(r.get("device_rebate_amount")),
                 detail_label="Device rebate (activation report)")
     except Exception:

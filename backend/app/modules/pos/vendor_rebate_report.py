@@ -6,18 +6,21 @@ commission, and WHICH it is, is encoded in the `Product Name`. From one file we 
 
   1. CUSTOMERS   — name + phone + ZIP per line (deduped by phone on write).
   2. ACTIVATIONS — device (Related Product + IMEI), rate plan, sold-on date, salesperson, contract #.
-  3. P&L / GROSS PROFIT — commission → `carrier_comm`; device rebate → `device_rebate` (contra-COGS).
+  3. P&L / GROSS PROFIT — commission → `carrier_comm`; device cost → `device_cost` (COGS); device
+     rebate → `device_rebate` (contra-COGS). Net device COGS = cost − rebate, so device GP = rebate − cost.
 
-STRUCTURAL GROSS-PROFIT IDENTITY (owner, 2026-08 — nothing hardcoded, no margin constant):
-    gross profit = customer down payment + commission + accessories + rebate − device cost
-  A financed device (DPA) is reimbursed by the carrier: structurally the rebate ≈ cost − down − margin,
-  so the true device GP = down + rebate − cost is a small POSITIVE margin — NOT `rebate − cost`, which
-  omits the down payment and can read negative. This report supplies only the COMMISSION and the
-  REBATE; the DOWN PAYMENT and DEVICE COST come from the sales/receipt side. So the rebate is booked
-  as a contra-COGS (it reduces the cost already booked from sales) and the cost is NEVER re-posted
-  here. BYOD lines have no device cost/rebate (commission only); an upfront (non-financed) purchase is
-  selling price − cost, handled on the sales side (no DPA rebate line in this report). The parser's
-  `device_gp` field is `rebate − cost` for REFERENCE only — it is deliberately not the booked GP.
+OWNER P&L RULE (2026-08 — nothing hardcoded, no margin constant):
+    device gross profit = total rebate − COGS (i.e. rebate − Related Cost)
+  For a receipt-only tenant (MetricsPro is the SECONDARY POS) the sales feed does NOT book these
+  financed devices — receipt-import sales write no sale_items, so neither device cost nor down payment
+  reaches the P&L (verified 2026-08). This report is therefore the source of the device COST as well
+  as the rebate, so BOTH are posted here: cost → device_cost (COGS), rebate → device_rebate
+  (contra-COGS). Booking only the rebate (as an earlier draft did) would show the full rebate as
+  phantom gross profit. The customer DOWN PAYMENT is a financing pass-through (it reduces the
+  customer's financed balance owed to the carrier), NOT store device margin — it belongs on the
+  BALANCE SHEET (total received), not P&L GP, so it is deliberately not posted to the P&L here.
+  BYOD lines carry no device cost/rebate (commission only); an upfront purchase is price − cost on the
+  sales side. The `device_gp` field below is `rebate − cost` = the booked device gross profit.
 
 Owner-confirmed classification (2026-08):
   • "Device Payment Agreement Rebate Amount"  → DEVICE REBATE   (GP = Unit Rebate − Related Cost)
