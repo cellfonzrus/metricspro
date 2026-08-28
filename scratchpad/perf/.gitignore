@@ -1,0 +1,9 @@
+# Regenerable build output from the throughput investigation: exported model graphs,
+# quantised weights, downloaded checkpoints and the synthetic clips they were timed on.
+# 161 MB, all reproducible from the scripts beside them.
+*.onnx
+*.bin
+*.xml
+*.pt
+*.mp4
+__pycache__/

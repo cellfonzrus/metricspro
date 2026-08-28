@@ -1,0 +1,907 @@
+<title>Cameras Per Box</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+:root{
+  --paper:#F2F5F3;
+  --surface:#FFFFFF;
+  --surface-2:#E9EEEB;
+  --ink:#0F1E1C;
+  --ink-2:#3A4B48;
+  --ink-3:#667A76;
+  --rule:#D2DBD7;
+  --rule-strong:#B4C2BD;
+  --accent:#0B6E63;
+  --accent-soft:#D6E8E4;
+  --amber:#8A5A06;
+  --amber-soft:#F2E4C9;
+  --brick:#93341F;
+  --brick-soft:#F3DCD5;
+  --good:#2F6B3C;
+  --shadow:0 1px 2px rgba(15,30,28,.05),0 8px 24px -12px rgba(15,30,28,.18);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0B1413;
+    --surface:#121D1B;
+    --surface-2:#182523;
+    --ink:#E6EDEA;
+    --ink-2:#B4C4C0;
+    --ink-3:#7E918D;
+    --rule:#24332F;
+    --rule-strong:#33443F;
+    --accent:#4FB3A5;
+    --accent-soft:#12302C;
+    --amber:#D9A441;
+    --amber-soft:#2E2413;
+    --brick:#D97C60;
+    --brick-soft:#311912;
+    --good:#71B37E;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0B1413;
+  --surface:#121D1B;
+  --surface-2:#182523;
+  --ink:#E6EDEA;
+  --ink-2:#B4C4C0;
+  --ink-3:#7E918D;
+  --rule:#24332F;
+  --rule-strong:#33443F;
+  --accent:#4FB3A5;
+  --accent-soft:#12302C;
+  --amber:#D9A441;
+  --amber-soft:#2E2413;
+  --brick:#D97C60;
+  --brick-soft:#311912;
+  --good:#71B37E;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  font-size:16.5px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px 96px}
+.prose{max-width:68ch}
+
+h1,h2,h3,h4{font-family:Archivo,"IBM Plex Sans",sans-serif;text-wrap:balance;margin:0}
+h1{font-size:clamp(2.3rem,5.2vw,3.5rem);font-weight:700;letter-spacing:-.025em;line-height:1.03}
+h2{font-size:clamp(1.5rem,2.6vw,1.95rem);font-weight:650;letter-spacing:-.018em;line-height:1.15}
+h3{font-size:1.13rem;font-weight:600;letter-spacing:-.008em}
+h4{font-size:.95rem;font-weight:600}
+p{margin:0 0 1.05em}
+a{color:var(--accent)}
+strong{font-weight:600;color:var(--ink)}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+code{font-size:.87em;background:var(--surface-2);padding:.1em .34em;border-radius:3px}
+
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;font-size:.7rem;font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+}
+
+/* ── masthead ─────────────────────────────────────────── */
+header.top{
+  border-bottom:1px solid var(--rule);
+  background:var(--surface);
+  padding:56px 0 40px;
+  margin-bottom:52px;
+}
+header.top .wrap{padding-bottom:0}
+.kicker{
+  display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;
+  font-family:"IBM Plex Mono",monospace;font-size:.72rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:20px;
+}
+.kicker .tag{color:var(--accent);font-weight:600}
+.standfirst{font-size:1.16rem;color:var(--ink-2);max-width:62ch;margin-top:20px}
+
+/* ── verdict tiles ────────────────────────────────────── */
+.verdicts{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));
+  gap:1px;background:var(--rule);border:1px solid var(--rule);
+  border-radius:6px;overflow:hidden;margin:38px 0 0;
+}
+.v{background:var(--surface);padding:20px 22px 22px}
+.v .n{
+  font-family:Archivo,sans-serif;font-weight:700;font-size:2.35rem;line-height:1;
+  letter-spacing:-.03em;font-variant-numeric:tabular-nums;display:block;margin-bottom:8px;
+}
+.v .n small{font-size:1rem;font-weight:600;letter-spacing:0;color:var(--ink-3)}
+.v .lbl{font-size:.86rem;color:var(--ink-2);line-height:1.45}
+.v.up .n{color:var(--accent)}
+.v.down .n{color:var(--brick)}
+.v.flat .n{color:var(--amber)}
+
+/* ── sections ─────────────────────────────────────────── */
+section{margin:0 0 68px;scroll-margin-top:20px}
+.shead{display:flex;gap:16px;align-items:baseline;border-bottom:2px solid var(--ink);padding-bottom:10px;margin-bottom:26px;flex-wrap:wrap}
+.shead .num{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:.8rem;color:var(--accent);letter-spacing:.08em;padding-top:4px}
+
+/* ── data tables ──────────────────────────────────────── */
+.tw{overflow-x:auto;margin:22px 0;border:1px solid var(--rule);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.9rem;min-width:520px}
+th,td{padding:9px 14px;text-align:left;border-bottom:1px solid var(--rule)}
+thead th{
+  font-family:"IBM Plex Mono",monospace;font-size:.7rem;font-weight:600;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);
+  border-bottom:1px solid var(--rule-strong);white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.hi td{background:var(--accent-soft)}
+tr.bad td{background:var(--brick-soft)}
+tr.total td{font-weight:600;border-top:1px solid var(--rule-strong)}
+caption{caption-side:bottom;text-align:left;padding:10px 14px;font-size:.78rem;color:var(--ink-3);font-family:"IBM Plex Mono",monospace;border-top:1px solid var(--rule)}
+
+/* ── the budget bar: the whole report in one device ───── */
+.budget{margin:26px 0 10px}
+.budget .brow{display:flex;align-items:center;gap:14px;margin-bottom:11px}
+.budget .bname{width:132px;flex:none;font-size:.82rem;font-weight:600;text-align:right;line-height:1.25}
+.budget .bname em{display:block;font-style:normal;font-weight:400;font-size:.72rem;color:var(--ink-3)}
+.bar{flex:1;display:flex;height:26px;border-radius:3px;overflow:hidden;background:var(--surface-2);min-width:180px}
+.bar span{display:block;height:100%}
+.bar .s-recv{background:#7C93B8}
+.bar .s-dec{background:#4E8C81}
+.bar .s-conv{background:#C9A227}
+.bar .s-det{background:var(--accent)}
+.bar .s-proc{background:#96A5A1}
+.bar .s-free{background:transparent}
+.budget .btot{width:96px;flex:none;font-family:"IBM Plex Mono",monospace;font-size:.82rem;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font-size:.78rem;color:var(--ink-2);margin:14px 0 0 146px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:baseline}
+
+/* ── callouts ─────────────────────────────────────────── */
+.note{
+  border-left:3px solid var(--accent);background:var(--surface);
+  padding:16px 20px;margin:24px 0;border-radius:0 5px 5px 0;box-shadow:var(--shadow);
+}
+.note.warn{border-left-color:var(--amber)}
+.note.stop{border-left-color:var(--brick)}
+.note h4{margin-bottom:6px;font-family:Archivo,sans-serif}
+.note p:last-child{margin-bottom:0}
+.note .eyebrow{display:block;margin-bottom:4px}
+
+pre{
+  background:var(--surface);border:1px solid var(--rule);border-radius:5px;
+  padding:14px 16px;overflow-x:auto;font-family:"IBM Plex Mono",monospace;
+  font-size:.82rem;line-height:1.55;margin:16px 0;color:var(--ink-2);
+}
+pre b{color:var(--ink);font-weight:600}
+
+.prov{
+  font-family:"IBM Plex Mono",monospace;font-size:.73rem;color:var(--ink-3);
+  margin:-8px 0 22px;padding-left:2px;
+}
+.prov::before{content:"measured by ";color:var(--rule-strong)}
+
+ul,ol{margin:0 0 1.05em;padding-left:1.25em}
+li{margin-bottom:.42em}
+li::marker{color:var(--ink-3)}
+
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:26px;margin:24px 0}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:20px 22px;box-shadow:var(--shadow)}
+.card h3{margin-bottom:8px}
+.card .price{font-family:"IBM Plex Mono",monospace;font-size:.85rem;color:var(--accent);font-weight:600;margin-bottom:10px}
+.card p:last-child{margin-bottom:0}
+.card.pick{border-color:var(--accent);border-width:2px}
+.pill{
+  display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:.66rem;
+  font-weight:600;letter-spacing:.09em;text-transform:uppercase;padding:2px 8px;
+  border-radius:99px;margin-bottom:10px;
+}
+.pill.rec{background:var(--accent-soft);color:var(--accent)}
+.pill.no{background:var(--brick-soft);color:var(--brick)}
+.pill.alt{background:var(--surface-2);color:var(--ink-3)}
+
+footer{border-top:1px solid var(--rule);margin-top:20px;padding-top:24px;font-size:.85rem;color:var(--ink-3)}
+@media (max-width:640px){
+  .budget .bname{width:88px;font-size:.74rem}
+  .budget .btot{width:76px;font-size:.75rem}
+  .legend{margin-left:0}
+}
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="kicker">
+      <span class="tag">Throughput &amp; capacity</span>
+      <span>MetricsPro Vision · LuxeLink · 18 stores, 21 Nest cameras</span>
+    </div>
+    <h1>The box was never the problem</h1>
+    <p class="standfirst">
+      A benchmark said this hardware could carry about one camera. Measured properly, the same
+      shape of machine carries fourteen — and what stops it at fourteen is not the detector and
+      not video decoding, but the WebRTC receiving code that nobody had priced.
+    </p>
+
+    <div class="verdicts">
+      <div class="v down">
+        <span class="n">2–3</span>
+        <span class="lbl">cameras per 4-core box, the analyzer exactly as it ships today, measured under real-time load</span>
+      </div>
+      <div class="v up">
+        <span class="n">14</span>
+        <span class="lbl">cameras on the same box after three changes, all of which are in the worktree and running</span>
+      </div>
+      <div class="v flat">
+        <span class="n">9<small> &nbsp;realistic</small></span>
+        <span class="lbl">once the WebRTC receive layer is added back — it costs more than decoding does</span>
+      </div>
+      <div class="v up">
+        <span class="n">2<small> &nbsp;boxes</small></span>
+        <span class="lbl">is the right shape for 21 cameras. Not 18, and not 1</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">01</span><h2>What the old benchmark got wrong</h2></div>
+  <div class="prose">
+    <p>
+      The <code>--benchmark</code> command reported 44.3&nbsp;ms per detection on the Windows
+      machine and concluded <em>about 1 camera</em>. The 44.3&nbsp;ms was probably accurate. The
+      conclusion drawn from it was wrong three separate ways, and the errors did not cancel.
+    </p>
+    <ol>
+      <li>
+        <strong>It timed a stopwatch, not a bill.</strong> A detection that takes 44&nbsp;ms of
+        wall clock on four cores costs the machine up to 176&nbsp;ms of CPU, spread thin. Dividing
+        wall-clock latency by <code>detect_fps</code> quietly assumed the other three cores were
+        free. They were being used by the same detection.
+      </li>
+      <li>
+        <strong>It never looked at the video.</strong> Receiving and decoding one 1080p30 stream
+        costs about <strong>193 CPU-ms every second, per camera</strong>, before any detector
+        runs. The analyzer pays that whether or not it looks at the frame. On a fast detector it
+        is now the largest single line in the budget.
+      </li>
+      <li>
+        <strong>It measured random noise at 720p.</strong> Random pixels produce almost no
+        detections, so the NMS stage — a real per-frame cost — never ran, and the frame size did
+        not match what the cameras actually send.
+      </li>
+    </ol>
+    <p>
+      The practical damage: an owner with a perfectly serviceable machine was told to plan for one
+      camera per store. The patched benchmark in the worktree prices a whole camera-second and
+      divides by the whole machine.
+    </p>
+  </div>
+
+  <div class="note">
+    <span class="eyebrow">Same box, both numbers</span>
+    <p>
+      On the machine I measured on, the shipped benchmark logic reports <strong>2.6 cameras</strong>
+      and a real-time soak of the shipped code holds <strong>2–3</strong>. So the arithmetic was not
+      wildly optimistic — it was measuring the wrong thing, on hardware whose speed it then had no
+      way to convert into a camera count.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">02</span><h2>Where the second actually goes</h2></div>
+  <div class="prose">
+    <p>
+      Everything below is in <strong>CPU-milliseconds per second of video, per camera</strong>.
+      That is the only currency that adds up: a machine has 1000 CPU-ms per second for every core
+      it has, a camera costs what it costs, and capacity is division. A 4-core box has 4000 to
+      spend and, measured, can actually reach about 3720 of them before cameras start slipping.
+    </p>
+  </div>
+
+  <div class="budget">
+    <div class="brow">
+      <div class="bname">As it ships<em>PyTorch, 4 threads</em></div>
+      <div class="bar" role="img" aria-label="954 CPU-ms per second: receive 84, decode 108, convert 91, detect 667, process 4">
+        <span class="s-recv" style="width:8.8%"></span><span class="s-dec" style="width:11.3%"></span><span class="s-conv" style="width:9.5%"></span><span class="s-det" style="width:69.9%"></span><span class="s-proc" style="width:0.5%"></span>
+      </div>
+      <div class="btot">954 ms/s</div>
+    </div>
+    <div class="brow">
+      <div class="bname">Patched<em>OpenVINO, 1 thread</em></div>
+      <div class="bar" role="img" aria-label="394 CPU-ms per second: receive 84, decode 94, convert 18, detect 131, process 67">
+        <span class="s-recv" style="width:8.8%"></span><span class="s-dec" style="width:9.9%"></span><span class="s-conv" style="width:1.9%"></span><span class="s-det" style="width:13.7%"></span><span class="s-proc" style="width:7.0%"></span><span class="s-free" style="width:58.7%"></span>
+      </div>
+      <div class="btot">394 ms/s</div>
+    </div>
+    <div class="legend">
+      <span><i style="background:#7C93B8"></i>WebRTC receive</span>
+      <span><i style="background:#4E8C81"></i>H.264 decode</span>
+      <span><i style="background:#C9A227"></i>colour convert</span>
+      <span><i style="background:var(--accent)"></i>detection</span>
+      <span><i style="background:#96A5A1"></i>process overhead</span>
+    </div>
+  </div>
+  <p class="prov">bench_pipeline.py, webrtc_loopback.py, bench_decode_cpu.py</p>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th>Stage</th><th>What it is</th>
+          <th class="num">Ships</th><th class="num">Patched</th><th class="num">Why it moved</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>WebRTC receive</td><td>RTP depacketize, SRTP decrypt, jitter buffer</td><td class="num">84</td><td class="num">84</td><td class="num">unchanged</td></tr>
+        <tr><td>H.264 decode</td><td>compressed packets to YUV</td><td class="num">108</td><td class="num">94</td><td class="num">1 thread</td></tr>
+        <tr class="hi"><td>Colour convert</td><td>YUV to a BGR array the detector can read</td><td class="num">91</td><td class="num">18</td><td class="num">5.1&times;</td></tr>
+        <tr class="hi"><td>Detection</td><td>letterbox, network, NMS &mdash; 6&times;/sec</td><td class="num">667</td><td class="num">131</td><td class="num">5.1&times;</td></tr>
+        <tr><td>Track + geometry</td><td>IoU tracker, line crossing, zone tests</td><td class="num">3</td><td class="num">2</td><td class="num">&mdash;</td></tr>
+        <tr><td>Process overhead</td><td>the Python loop and the frame handoff</td><td class="num">&mdash;</td><td class="num">65</td><td class="num">new shape</td></tr>
+        <tr class="total"><td>Per camera</td><td>1080p at 30&nbsp;fps, <code>detect_fps</code> 6</td><td class="num">954</td><td class="num">394</td><td class="num">2.4&times;</td></tr>
+      </tbody>
+      <caption>CPU-ms per second of video, per camera. 4-core box = 4000 available, ~3720 reachable.</caption>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="eyebrow">The line nobody had priced</span>
+    <h4>Colour conversion was being bought thirty times a second and used six</h4>
+    <p>
+      <code>WebRtcFrameSource._pump</code> called <code>to_ndarray(format="bgr24")</code> on every
+      frame aiortc handed it — 30 a second — and the loop then discarded four out of five because
+      detection is rate-limited to 6. At 3.04 CPU-ms a conversion that is <strong>73 CPU-ms per
+      second per camera bought and binned</strong>, about a fifth of a whole camera's budget, per
+      camera. The fix is a lazy wrapper: hold the frame, convert past the rate limiter.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">03</span><h2>Testing the decode-ceiling hypothesis</h2></div>
+  <div class="prose">
+    <p>
+      The working hypothesis was that <em>video decode is the real ceiling — roughly 16 cameras on
+      a 4-core box</em>. The number is close to right. The reason is not.
+    </p>
+    <p>
+      One core of the measured machine decodes a 1080p30 H.264 stream in
+      <strong>3.14 CPU-ms per frame</strong>, which is <strong>10.6 streams per core</strong>, or
+      about <strong>42 concurrent 1080p30 streams on four cores</strong> if decoding were all you
+      did. At 720p it is 1.47&nbsp;ms per frame — <strong>22.7 streams per core</strong>. Decode is
+      not what stops you at 16, or anywhere near it.
+    </p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Threading</th><th class="num">1080p CPU-ms/frame</th><th class="num">wall ms/frame</th><th class="num">CPU-ms/s at 30&nbsp;fps</th><th class="num">720p CPU-ms/frame</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td>1 thread</td><td class="num">3.14</td><td class="num">3.14</td><td class="num">94</td><td class="num">1.47</td></tr>
+        <tr><td>AUTO (the default aiortc leaves on)</td><td class="num">3.62</td><td class="num">1.38</td><td class="num">109</td><td class="num">2.03</td></tr>
+        <tr><td>4 frame-threads</td><td class="num">3.98</td><td class="num">1.47</td><td class="num">120</td><td class="num">1.91</td></tr>
+        <tr><td>4 slice-threads</td><td class="num">3.12</td><td class="num">1.11</td><td class="num">94</td><td class="num">1.86</td></tr>
+      </tbody>
+      <caption>bench_decode_cpu.py — best of 3 full passes over a 600-frame 2 Mbps clip.</caption>
+    </table>
+  </div>
+
+  <p class="prose">
+    What <em>does</em> sit next to decode in the budget is the thing above it in the stack. Holding
+    a real WebRTC stream costs <strong>6.44 CPU-ms per 1080p frame end to end</strong>; only 3.6 of
+    that is the decoder. The other <strong>2.8&nbsp;ms is aiortc</strong> — RTP depacketization,
+    SRTP decryption, the jitter buffer, the asyncio machinery — and it is Python. Per camera that
+    is 84 CPU-ms every second, and in the patched build it is the single largest line.
+  </p>
+  <p class="prov">webrtc_loopback.py — two processes, real UDP on loopback, receiver's CPU only</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Receiving one live stream</th><th class="num">CPU-ms/frame</th><th class="num">CPU-ms/s</th><th class="num">of which decode</th><th class="num">of which aiortc</th></tr></thead>
+      <tbody>
+        <tr><td>1080p30</td><td class="num">6.44</td><td class="num">193</td><td class="num">109</td><td class="num">84</td></tr>
+        <tr><td>720p30</td><td class="num">3.81</td><td class="num">114</td><td class="num">61</td><td class="num">53</td></tr>
+        <tr class="bad"><td>1080p30 + eager BGR (as shipped)</td><td class="num">9.49</td><td class="num">285</td><td class="num">109</td><td class="num">84</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note stop">
+    <span class="eyebrow">Verdict on the hypothesis</span>
+    <p>
+      <strong>~16 cameras on a 4-core box is a good number arrived at for the wrong reason, and it
+      is optimistic once WebRTC is included.</strong> Decode alone would allow 42. Inference, even
+      after a 5&times; speed-up, is still 131 CPU-ms/s against decode's 94. The realistic figure is
+      <strong>9 cameras</strong> at 1080p30 and <code>detect_fps</code> 6 — and the constraint you
+      hit is a three-way tie between aiortc, libavcodec and the network, not any one of them.
+    </p>
+    <p>
+      Hardware decode would help less than it sounds: it addresses at most the 94&nbsp;ms decode
+      line and none of the 84&nbsp;ms aiortc line, and <strong>aiortc has no hook to use it</strong>
+      — it drives PyAV's software decoder with no way to swap in QSV or VAAPI without patching the
+      library. I could not test it here in any case: this VM has no <code>/dev/dri</code>.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">04</span><h2>The optimisations, ranked by measured gain over effort</h2></div>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>#</th><th>Change</th><th class="num">Measured effect</th><th>Effort</th><th>Risk to the counts</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hi">
+          <td class="num">1</td>
+          <td><strong>One inference thread per camera</strong>, not all cores per detection</td>
+          <td class="num">1.7–2.2&times;<br>machine throughput</td><td>Config. One line.</td><td>None — same arithmetic</td>
+        </tr>
+        <tr class="hi">
+          <td class="num">2</td>
+          <td><strong>OpenVINO instead of PyTorch</strong>, same yolov8n weights</td>
+          <td class="num">2.2&times; (fp32)<br>6.0&times; (bf16)</td><td>New backend + a one-off export</td><td>fp32 low, bf16 needs validation</td>
+        </tr>
+        <tr class="hi">
+          <td class="num">3</td>
+          <td><strong>Convert to BGR lazily</strong>, only for frames that get detected</td>
+          <td class="num">saves 73 CPU-ms/s<br>per camera</td><td>~15 lines</td><td>None</td>
+        </tr>
+        <tr>
+          <td class="num">4</td>
+          <td>Pin the H.264 decoder to one thread</td>
+          <td class="num">saves 15 CPU-ms/s<br>per camera</td><td>One line, needs an aiortc hook</td><td>None</td>
+        </tr>
+        <tr>
+          <td class="num">5</td>
+          <td><code>detect_fps</code> 6 &rarr; 4</td>
+          <td class="num">+15% cameras</td><td>A flag</td><td><strong>Accuracy call</strong></td>
+        </tr>
+        <tr>
+          <td class="num">6</td>
+          <td>Smaller network input, 640&times;384 &rarr; 320&times;192</td>
+          <td class="num">17.1 &rarr; 4.7 CPU-ms<br>per detection</td><td>A constant</td><td><strong>Accuracy call — large</strong></td>
+        </tr>
+        <tr>
+          <td class="num">7</td>
+          <td>Motion gating</td>
+          <td class="num">0 on a busy shop<br>37&times; on an empty one</td><td>~20 lines</td><td>Low, tunable</td>
+        </tr>
+        <tr>
+          <td class="num">8</td>
+          <td>ONNX Runtime instead of PyTorch</td>
+          <td class="num">2.1&times;</td><td>Same shape as OpenVINO</td><td>None — fp32 throughout</td>
+        </tr>
+        <tr class="bad">
+          <td class="num">9</td>
+          <td>ROI crop to the doorway at the same input size</td>
+          <td class="num">1.19&times; <em>slower</em></td><td>—</td><td>Loses people outside the crop</td>
+        </tr>
+        <tr class="bad">
+          <td class="num">10</td>
+          <td>int8 quantization (NNCF)</td>
+          <td class="num">no measurable gain</td><td>Calibration set required</td><td>Would need full re-validation</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin-top:34px">Why the runtime is worth more than the resolution</h3>
+  <p class="prose">
+    Everything here runs the identical yolov8n weights on an identical 640&times;384 letterboxed
+    frame. The only thing that changes is what executes the graph — and it is worth up to
+    <strong>6&times;</strong>, which is more than any accuracy-affecting dial on the list.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>Engine</th><th class="num">1 thread</th><th class="num">2 threads</th><th class="num">4 threads</th><th class="num">cores used at 4</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hi"><td>OpenVINO (bf16, this CPU's default)</td><td class="num">20.0</td><td class="num">25.7</td><td class="num">43.0</td><td class="num">3.04</td></tr>
+        <tr><td>ONNX Runtime</td><td class="num">53.6</td><td class="num">66.9</td><td class="num">92.3</td><td class="num">3.94</td></tr>
+        <tr class="bad"><td>PyTorch (what ships)</td><td class="num">102.1</td><td class="num">126.7</td><td class="num">175.8</td><td class="num">3.94</td></tr>
+      </tbody>
+      <caption>bench_cputime.py — CPU-ms consumed per detection, 640&times;384. Lower is more cameras.</caption>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="eyebrow">Read that table sideways</span>
+    <h4>Multi-threaded inference makes one camera faster and the machine smaller</h4>
+    <p>
+      Going from one thread to four cuts the <em>latency</em> of a detection but raises its
+      <em>cost</em> by 2.15&times; on OpenVINO and 1.72&times; on PyTorch. The analyzer today runs one
+      loop and lets PyTorch spread each detection over every core — the worst square on this table,
+      at 175.8 CPU-ms, against 20.0 for the best. That single structural choice is a
+      <strong>8.8&times;</strong> difference in how many cameras a box holds, and it costs nothing to
+      change: cameras are already parallel work, so give each one a core rather than giving each
+      detection four.
+    </p>
+  </div>
+
+  <h3 style="margin-top:34px">The instruction set matters more than the core count</h3>
+  <p class="prose">
+    This is the finding that should drive the hardware decision. The measuring machine is an
+    Emerald-Rapids-class Xeon with AVX-512 and AMX, and OpenVINO silently runs the graph in
+    bfloat16 on it. Capping oneDNN at AVX2 — which is all an N100 or a Ryzen-mobile mini PC has —
+    on the very same silicon, at the very same clock:
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Instruction set available</th><th class="num">OpenVINO</th><th class="num">PyTorch</th><th>Found on</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td>AVX-512 + AMX (bf16)</td><td class="num">17.1</td><td class="num">82.2</td><td>Sapphire/Emerald Rapids Xeon — most current cloud VMs</td></tr>
+        <tr><td>AVX-512, fp32</td><td class="num">45.7</td><td class="num">81.6</td><td>AMD Zen 4/5, older Xeon, Rocket Lake</td></tr>
+        <tr class="bad"><td>AVX2 only</td><td class="num">85.1</td><td class="num">106.8</td><td>Intel N100/N305, Core mobile, anything pre-2017</td></tr>
+      </tbody>
+      <caption>run_avx2.sh / run_isa.sh — CPU-ms per detection, 1 thread, 640&times;384, same physical core throughout.</caption>
+    </table>
+  </div>
+
+  <p class="prose">
+    <strong>A 5&times; spread on identical silicon.</strong> OpenVINO's advantage over PyTorch
+    collapses from 4.8&times; to 1.3&times; the moment AVX-512 is gone. Buying a cheap mini PC does not
+    just buy slower cores; it buys cores that cannot run the fast path at all. On AVX2 hardware,
+    <strong>ONNX Runtime is the better engine</strong> — though I could not verify that directly,
+    because ONNX Runtime uses its own MLAS kernels and ignores the oneDNN switch I used to cap the
+    instruction set, so its AVX2 row is unmeasured.
+  </p>
+
+  <div class="note warn">
+    <span class="eyebrow">A trap that costs you the whole machine</span>
+    <h4>OpenVINO pins its threads, and every process picks the same core</h4>
+    <p>
+      Running one analyzer process per camera with OpenVINO's default settings, eight workers took
+      <strong>159&nbsp;ms of wall clock for 27&nbsp;ms of CPU each while the machine sat 61% idle</strong>.
+      OpenVINO pins inference threads to specific cores and chooses them per process, knowing nothing
+      about its neighbours, so all eight pinned to core 0. <code>ENABLE_CPU_PINNING: False</code> fixes
+      it completely. A box that looks bored and still cannot keep up is the hardest kind of capacity
+      bug to find, and it is set in the patched detector.
+    </p>
+  </div>
+
+  <h3 style="margin-top:34px">Two things I want to be blunt about</h3>
+  <p class="prose">
+    <strong>ROI cropping to the doorway is slower, not faster</strong>, if you keep the input size.
+    Cropping a 1080p frame to the entrance region and letterboxing that to 640 gives 640&times;448 —
+    <em>more</em> pixels than the 640&times;384 the full frame produces, because the crop is squarer.
+    Measured: 70.1&nbsp;ms cropped against 59.0&nbsp;ms uncropped. ROI only pays if you shrink the
+    input in proportion, at which point it is really the resolution dial wearing a hat.
+  </p>
+  <p class="prose">
+    <strong>Motion gating is not a general win.</strong> The gate itself is nearly free
+    (0.19&nbsp;ms per frame at 160&times;90). On footage with people in it continuously, it saved
+    nothing at all. On an empty shop it dropped detection from 126.9 to 3.4 CPU-ms/s — a 37&times;
+    reduction. So its value is exactly <em>the fraction of the day a camera sees no motion</em>,
+    which is a per-store fact I do not have. It is worth adding — it can only help — but do not
+    size hardware on it.
+  </p>
+  <p class="prose">
+    <strong>Batching I did not measure</strong>, and I would not pursue it. Cameras arrive
+    asynchronously, so batching means holding early frames until late ones show up — buying
+    throughput with the one thing a door counter cannot spend, which is timing.
+  </p>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">05</span><h2>The capacity model, and where it breaks</h2></div>
+  <div class="prose">
+    <p>
+      The model is arithmetic on measured coefficients. A camera costs
+      <code>stream_fps &times; (rtp + decode) + detect_fps &times; (bgr + infer + post) + 65</code>
+      CPU-ms per second; a machine has <code>cores &times; 1000 &times; 0.93</code> to spend. The 0.93
+      is not a safety margin — it is the measured ceiling a real-time soak reached before cameras
+      began to slip.
+    </p>
+    <p>I checked it against a real-time soak rather than trusting it:</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Configuration, 4 cores</th><th class="num">model predicts</th><th class="num">soak measured</th><th class="num">error</th></tr></thead>
+      <tbody>
+        <tr><td>1080p30, <code>detect_fps</code> 6</td><td class="num">12.0</td><td class="num">12 ok / 14 behind</td><td class="num">0%</td></tr>
+        <tr><td>720p30, <code>detect_fps</code> 6</td><td class="num">14.3</td><td class="num">14 ok / 18 behind</td><td class="num">+2%</td></tr>
+        <tr><td>1080p30, <code>detect_fps</code> 3</td><td class="num">15.8</td><td class="num">20 ok / 24 behind</td><td class="num">&minus;21%, safe</td></tr>
+      </tbody>
+      <caption>soak.py — N real processes, decode paced to the source rate, WebRTC receive excluded on both sides.</caption>
+    </table>
+  </div>
+
+  <h3 style="margin-top:30px">Cameras per box</h3>
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>Machine</th><th class="num">1080p<br><code>df</code>&nbsp;6</th><th class="num">1080p<br><code>df</code>&nbsp;4</th><th class="num">720p<br><code>df</code>&nbsp;6</th><th class="num">720p<br><code>df</code>&nbsp;4</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hi"><td>4 cores, AVX-512 + AMX</td><td class="num">9.4</td><td class="num">10.8</td><td class="num">11.9</td><td class="num">14.1</td></tr>
+        <tr><td>8 cores, AVX-512 + AMX</td><td class="num">18.9</td><td class="num">21.6</td><td class="num">23.7</td><td class="num">28.3</td></tr>
+        <tr><td>4 cores, AVX-512 fp32</td><td class="num">6.6</td><td class="num">8.1</td><td class="num">7.7</td><td class="num">9.8</td></tr>
+        <tr><td>8 cores, AVX-512 fp32</td><td class="num">13.1</td><td class="num">16.2</td><td class="num">15.3</td><td class="num">19.7</td></tr>
+        <tr><td>4 cores, AVX2 only</td><td class="num">4.6</td><td class="num">6.0</td><td class="num">5.2</td><td class="num">6.9</td></tr>
+        <tr class="bad"><td>4 cores, as the analyzer ships</td><td class="num">2.6</td><td class="num">3.5</td><td class="num">2.8</td><td class="num">3.8</td></tr>
+      </tbody>
+      <caption>capacity_model.py — includes the WebRTC receive layer. Physical cores, not vCPUs; a cloud "4 vCPU" is 2 cores with hyper-threading and delivers roughly 60–70% of a 4-core row.</caption>
+    </table>
+  </div>
+
+  <h4 style="margin-top:26px">Five ways this model is wrong</h4>
+  <ol class="prose">
+    <li><strong>It is an average.</strong> Decode cost rises with motion and NMS with people in frame, so a shop at 5pm is dearer than the same shop at 3pm. The test footage holds four people continuously — busy, but not a worst case.</li>
+    <li><strong>It assumes the stream arrives at 30&nbsp;fps.</strong> If Nest drops to 15 in low light, receive and decode halve and the box gets cheaper. Assuming 30 is the safe error; assuming 15 is not.</li>
+    <li><strong>It treats memory bandwidth as free.</strong> On four cores it never bound. On sixteen cores with sixteen cameras it might, and the model would not see it coming.</li>
+    <li><strong>It says nothing about Google's API limits</strong>, which bound a central deployment before CPU does. See below.</li>
+    <li><strong>The coefficients come from one CPU.</strong> The inference term moves 5&times; with instruction set alone. Re-measure on the machine you actually buy — <code>--benchmark</code> now does exactly this.</li>
+  </ol>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">06</span><h2>Deploying to 18 stores</h2></div>
+
+  <div class="note stop">
+    <span class="eyebrow">Start here</span>
+    <h4>Putting a box in the store buys you nothing</h4>
+    <p>
+      Nest cameras stream from <em>Google's cloud</em>, not over the shop LAN. A machine in the
+      stockroom pulls the same bytes over the same public internet as a machine in a rack — it just
+      does it from somewhere with a consumer ISP, no remote hands, and a cleaner who can unplug it.
+      "Edge" here has all of the operational cost of edge and none of the locality benefit. And with
+      one camera per store, an edge box runs at about 11% utilisation.
+    </p>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <span class="pill no">Not recommended</span>
+      <h3>A box per store</h3>
+      <div class="price">18 &times; ~$170 = ~$3,100 one-off</div>
+      <p>
+        Cheapest on paper. Eighteen failure points in retail stores, eighteen site visits when
+        something needs a hand, eighteen machines at a tenth of their capacity. One store blind is
+        the failure mode, which is the one genuine advantage — but you are paying for it eighteen
+        times over.
+      </p>
+    </div>
+    <div class="card pick">
+      <span class="pill rec">Recommended</span>
+      <h3>Two boxes, one per metro</h3>
+      <div class="price">~$1,100 one-off, or ~$105/mo hosted</div>
+      <p>
+        Roughly 10–11 cameras each, which every option below carries comfortably. Halves the blast
+        radius against a single box, and each can be sized to pick up the other's cameras at a
+        reduced <code>detect_fps</code> if one dies. It also keeps you under Google's per-account
+        command limits if the two metros sit on separate Google accounts.
+      </p>
+    </div>
+    <div class="card">
+      <span class="pill alt">Workable</span>
+      <h3>One central machine</h3>
+      <div class="price">~$260–520/mo cloud</div>
+      <p>
+        Simplest to operate and what the analyzer's own design notes argue for. The trade is stated
+        plainly in that code: one box down is every store blind. At 21 cameras you also need 9–13
+        physical cores, which is a large enough VM that two smaller ones cost the same.
+      </p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:34px">Bandwidth, and what I do not know about it</h3>
+  <p class="prose">
+    Sustained ingress for a central deployment is <code>cameras &times; bitrate</code>, plus about 5%
+    for RTP and UDP headers. <strong>I do not know Nest's actual bitrate</strong> and will not guess
+    it; the figures below use the 2&nbsp;Mbps my 1080p test clips were encoded at, which is a
+    plausible midpoint and nothing more.
+  </p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Assumption</th><th class="num">sustained</th><th class="num">per day</th><th class="num">per month</th></tr></thead>
+      <tbody>
+        <tr><td>21 cameras, 2&nbsp;Mbps, store hours only (10&nbsp;h)</td><td class="num">44 Mbps</td><td class="num">197 GB</td><td class="num">5.9 TB</td></tr>
+        <tr><td>21 cameras, 2&nbsp;Mbps, 24/7</td><td class="num">44 Mbps</td><td class="num">473 GB</td><td class="num">14.2 TB</td></tr>
+        <tr><td>21 cameras, 4&nbsp;Mbps, 24/7</td><td class="num">88 Mbps</td><td class="num">946 GB</td><td class="num">28.4 TB</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">
+    On AWS and GCP ingress is free, so this is a capacity question, not a billing one. On a
+    budget host or an office broadband line it is neither: several providers cap total traffic in
+    the 1–8&nbsp;TB range, which the middle row alone would exceed. <strong>Check the traffic policy
+    before choosing a host</strong>, and check whether it counts inbound.
+  </p>
+
+  <div class="note warn">
+    <span class="eyebrow">Unverified, and important enough to verify</span>
+    <h4>Google's command rate limit may bind before your CPU does</h4>
+    <p>
+      Google documents <code>devices.executeCommand</code> at <strong>5 queries per minute per
+      project, per user, per device</strong>, and secondary sources report an aggregate ceiling of
+      <strong>10 QPM for a project's user across all devices</strong>. I could not read Google's
+      limits page directly — this network blocks <code>developers.google.com</code> — so treat the
+      aggregate figure as unconfirmed.
+    </p>
+    <p>
+      If it is right, it matters a great deal. Holding a WebRTC stream open means calling
+      <code>ExtendWebRtcStream</code> roughly every 200 seconds, so 21 cameras generate about
+      <strong>6.3 QPM sustained</strong> — inside 10, but with very little room. Worse, the analyzer
+      as written opens every camera in one pass of its loop, so a cold start fires 21 commands in
+      about a second, gets throttled, retries, and gets throttled harder. Every camera then looks
+      offline for reasons that have nothing to do with cameras.
+    </p>
+    <p>
+      I have added a token-bucket budget (<code>--open-qpm</code>, default 4) that spaces stream
+      opens and lets extensions win, since a missed extension costs a full renegotiation.
+      <strong>Verify the real quota</strong> in the Google Cloud console under
+      <code>smartdevicemanagement.googleapis.com</code> before committing to a single-account
+      central deployment — and note that splitting the two metros across two Google accounts doubles
+      the ceiling for free.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">07</span><h2>What to actually buy</h2></div>
+  <p class="prose">
+    Named machines, with the reasoning attached. Prices are what I could find in August 2026 and
+    should be treated as indicative — check them. Every one of these should be run through
+    <code>--benchmark</code> before purchase; that is what the command is for.
+  </p>
+
+  <div class="cols">
+    <div class="card pick">
+      <span class="pill rec">Best value</span>
+      <h3>2 &times; AMD Zen 4 mini PC</h3>
+      <div class="price">~$500–600 each · ~$1,100 total, one-off</div>
+      <p>
+        A Ryzen 7 8845HS or 7840HS box — Minisforum UM890, Beelink SER8 and similar — 8 cores, 32&nbsp;GB.
+        Zen 4 has <strong>AVX-512</strong>, which puts it in the fp32 row at roughly
+        <strong>13 cameras per box</strong>: two cover 21 with real headroom. Caveat I must flag:
+        I measured AVX-512 on Intel silicon, and OpenVINO's AVX-512 path on AMD is
+        <strong>unmeasured</strong>. Benchmark one before buying two.
+      </p>
+    </div>
+    <div class="card">
+      <span class="pill alt">No hardware to own</span>
+      <h3>2 &times; Hetzner CCX33</h3>
+      <div class="price">~$52/mo each · ~$105/mo</div>
+      <p>
+        8 dedicated AMD EPYC vCPUs and 32&nbsp;GB each. Same AVX-512 fp32 profile, same caveat
+        about AMD being unmeasured, and vCPUs are threads rather than cores so derate accordingly.
+        Cheapest hosted option by a wide margin — but US plans carry 1–8&nbsp;TB traffic allowances,
+        so confirm inbound is free before you commit.
+      </p>
+    </div>
+    <div class="card">
+      <span class="pill alt">Fastest per core</span>
+      <h3>AWS c7i.4xlarge</h3>
+      <div class="price">~$0.71/hr · ~$520/mo on demand</div>
+      <p>
+        16 vCPU = 8 physical Sapphire Rapids cores with <strong>AMX</strong> — the only option here
+        that runs the 17.1&nbsp;ms bf16 path I measured, at about <strong>19 cameras</strong>.
+        Free ingress and no hardware to own. Five times the running cost of the mini PCs; a
+        one-year reservation takes roughly a third off, and stopping it overnight takes more.
+      </p>
+    </div>
+    <div class="card">
+      <span class="pill no">Only if per-store</span>
+      <h3>Intel N100 mini PC</h3>
+      <div class="price">~$150–180 each</div>
+      <p>
+        AVX2 only, so it lives in the slowest row — modelled at 4.6 cameras, and that is generous
+        because my AVX2 figure came from a capped server core rather than an N100. Ample for the
+        one or two cameras a single store has. Do not build the central plan on these.
+      </p>
+    </div>
+  </div>
+
+  <div class="note">
+    <span class="eyebrow">Worth a test I could not run</span>
+    <p>
+      A <strong>Core Ultra</strong> mini PC (the GMKtec K9 with a Core Ultra 5 125H was around $361)
+      has an NPU that OpenVINO can target with <code>device_name="NPU"</code>. That could be a
+      substantial win on cheap hardware and would change the recommendation — but there is no NPU
+      in this environment and I will not estimate it. One machine, one afternoon, one
+      <code>--benchmark</code> run settles it.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">08</span><h2>What is in the worktree</h2></div>
+  <p class="prose">
+    <code>backend/vision_edge_analyzer.py</code> is patched and running; everything else is under
+    <code>scratchpad/perf/</code>. The patch is 371 insertions and touches five things.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>File</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td class="mono">backend/vision_edge_analyzer.py</td><td>Patched: <code>_OpenVinoYolo</code> backend, <code>LazyFrame</code>, a corrected <code>capacity()</code> and <code>benchmark()</code>, a <code>CommandBudget</code> token bucket on stream opens, and flags <code>--no-openvino --ov-threads --ov-precision --open-qpm --benchmark-res</code></td></tr>
+        <tr><td class="mono">capacity_model.py</td><td>The model above, with every coefficient sourced, plus its own validation against the soak</td></tr>
+        <tr><td class="mono">soak.py / soak_single.py</td><td>Real-time multi-camera soaks — one process per camera, and the shipped one-loop topology</td></tr>
+        <tr><td class="mono">webrtc_loopback.py</td><td>Two-process aiortc loopback; the only way to price the receive layer without a Nest camera</td></tr>
+        <tr><td class="mono">bench_cputime.py, bench_engines.py</td><td>CPU-ms per detection by engine, thread count and input shape</td></tr>
+        <tr><td class="mono">bench_decode.py, bench_decode_cpu.py</td><td>Decode cost and how many streams a core sustains</td></tr>
+        <tr><td class="mono">bench_pipeline.py, bench_ladder.py</td><td>End-to-end per-stage budgets; the optimisation ladder on identical frames</td></tr>
+        <tr><td class="mono">run_avx2.sh, run_isa.sh</td><td>The instruction-set sensitivity table</td></tr>
+        <tr><td class="mono">verify_ov_parity2.py, verify_patch.py</td><td>Does the fast path find the same people, and count the same crossings</td></tr>
+        <tr><td class="mono">measure_nest_stream.py</td><td><strong>Run this on site.</strong> Holds one real camera and reports resolution, frame rate and CPU per camera</td></tr>
+        <tr><td class="mono">make_clips.py</td><td>Builds the test footage: a real photographic background held still, real COCO people walking across it, sensor noise, H.264 at 2 Mbps</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 style="margin-top:30px">The three commands worth running on real hardware</h3>
+  <pre><b># 1. What can this candidate machine carry? No camera, no network, no credentials.</b>
+python3 backend/vision_edge_analyzer.py --benchmark --benchmark-res 1080p
+
+<b># 2. What does ONE REAL Nest camera cost, and what does Google actually send?</b>
+python3 scratchpad/perf/measure_nest_stream.py --api https://… --seconds 120 --detect
+
+<b># 3. Plan a rollout against measured coefficients rather than these ones.</b>
+python3 scratchpad/perf/capacity_model.py --cores 8 --detect-fps 6 --measure</pre>
+</section>
+
+<!-- ══════════════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">09</span><h2>One thing I am handing to the accuracy work</h2></div>
+  <div class="note stop">
+    <p>
+      <strong>The fast detector does not produce bit-identical counts, and I did not chase it,
+      because counting accuracy is not my ground.</strong>
+    </p>
+    <p>
+      On boxes it is very close: 75 of 76 person boxes matched the PyTorch answer at IoU above
+      0.976, with the one disagreement sitting at the confidence threshold. But replaying the same
+      clip through the real <code>CameraWorker</code>, PyTorch produced 10 line crossings, OpenVINO
+      in bf16 produced 11, and OpenVINO in fp32 produced 10 in a different in/out order. A box that
+      moves by a pixel at the threshold becomes a different track under the IoU tracker, and a
+      different track can be an extra crossing.
+    </p>
+    <p>
+      That was a stress case — a synthetic clip with four people looping across a mid-frame line,
+      detecting every frame rather than six times a second — so I would not read a failure into it.
+      But it is a real signal about how sensitive the tracker is to marginal boxes, and it needs a
+      verdict on real footage before bf16 ships. <code>--ov-precision f32</code> gives up half the
+      speed-up and stays numerically much closer; <code>--no-openvino</code> restores the original
+      path exactly. Both are there so the choice can be made on evidence rather than by default.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <p>
+    Measured on a 4-core Intel Xeon (Emerald Rapids class, 2.10&nbsp;GHz, AVX-512 + AMX, 15&nbsp;GB
+    RAM), Python 3.11, OpenVINO 2026.3, ONNX Runtime 1.29, PyTorch 2.13, aiortc 1.15, PyAV 17.1.
+    Some runs shared the machine with another agent's workload; every per-detection and per-frame
+    figure is CPU-time rather than wall-clock and is unaffected, and the real-time soaks were run
+    on an otherwise idle box.
+  </p>
+  <p>
+    Sources for the external figures:
+    <a href="https://developers.google.com/nest/device-access/project/limits">Google · Device Access user and rate limits</a> ·
+    <a href="https://developers.google.com/nest/device-access/traits/device/camera-live-stream">Google · CameraLiveStream trait</a> ·
+    <a href="https://instances.vantage.sh/aws/ec2/c7i.xlarge">Vantage · c7i pricing</a> ·
+    <a href="https://sparecores.com/server/hcloud/ccx33">Spare Cores · Hetzner CCX33</a> ·
+    <a href="https://www.notebookcheck.net/GMKtec-K9-mini-PC-debuts-with-Intel-Core-Ultra-5-125H-for-361.813323.0.html">Notebookcheck · GMKtec K9</a>
+  </p>
+</footer>
+
+</div>

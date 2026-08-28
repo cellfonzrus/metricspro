@@ -1,0 +1,86 @@
+[
+ {
+  "name": "baseline yolov8n imgsz=640 (letterbox 640x384)",
+  "med_ms": 58.94665449994818,
+  "mean_ms": 68.40453535000108,
+  "boxes": 4.425
+ },
+ {
+  "name": "yolov8n imgsz=512",
+  "med_ms": 43.05525850003278,
+  "mean_ms": 43.266107075004356,
+  "boxes": 3.75
+ },
+ {
+  "name": "yolov8n imgsz=416",
+  "med_ms": 30.900298999995357,
+  "mean_ms": 31.49414347500965,
+  "boxes": 4.125
+ },
+ {
+  "name": "yolov8n imgsz=320",
+  "med_ms": 31.182324999974753,
+  "mean_ms": 31.83127559999832,
+  "boxes": 2.925
+ },
+ {
+  "name": "yolov8n imgsz=256",
+  "med_ms": 28.87610250002126,
+  "mean_ms": 28.416948049996904,
+  "boxes": 2.2
+ },
+ {
+  "name": "ROI crop + imgsz=640",
+  "med_ms": 70.10709450003105,
+  "mean_ms": 70.95685402499896,
+  "boxes": 3.05
+ },
+ {
+  "name": "ROI crop + imgsz=416",
+  "med_ms": 43.74960000001238,
+  "mean_ms": 43.32242814998608,
+  "boxes": 2.825
+ },
+ {
+  "name": "ROI crop + imgsz=320",
+  "med_ms": 36.01961700002221,
+  "mean_ms": 39.08246235001229,
+  "boxes": 2.625
+ },
+ {
+  "name": "motion gate only (160x90 absdiff)",
+  "med_ms": 0.18754149999722358,
+  "mean_ms": 0.1956942500129344,
+  "boxes": 1
+ },
+ {
+  "name": "onnxruntime imgsz=640",
+  "med_ms": 68.10613499999363,
+  "mean_ms": 78.01208725001061,
+  "boxes": 4.375
+ },
+ {
+  "name": "onnxruntime imgsz=320",
+  "med_ms": 63.99741349997612,
+  "mean_ms": 69.98679032499524,
+  "boxes": 2.775
+ },
+ {
+  "name": "openvino fp32 imgsz=640",
+  "med_ms": 27.72256949998564,
+  "mean_ms": 27.806709400002205,
+  "boxes": 4.4
+ },
+ {
+  "name": "openvino fp32 imgsz=320",
+  "med_ms": 10.06352600001037,
+  "mean_ms": 10.505510999999501,
+  "boxes": 2.775
+ },
+ {
+  "name": "yolov8n-pose imgsz=640",
+  "med_ms": 59.40474599998424,
+  "mean_ms": 63.15678247498795,
+  "boxes": 4.525
+ }
+]
