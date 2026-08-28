@@ -880,14 +880,21 @@ def _activation_detail_lines(client, org_id, period, id_map=None):
                        still lands under the rep's roster identity (the Luxelink $0 class) instead of a
                        new orphan group.
       • store / trans_date / trans_id(=activation key) — for grouping, market resolution and drill-down.
-      • activation_bucket ('premium'|'byod') — the ONLY match_field these lines expose.
+      • activation_bucket ('premium'|'byod') — the classifier-resolved match_field these lines expose.
+      • department — the report's own "Department" column (its value is the SERVICE PLAN; falls back to the
+        SP/PO service-plan name). Carried so the owner can pick those service plans in the plan editor's
+        `department` picker and pay $10 per activation on the checked ones (owner 2026-08-28) — the SAME
+        values `plan_options._custom_report_values` surfaces in that dropdown from the report's Department
+        column, so a selected value matches the line it pays. It is SAFE to expose: the accessory stamp
+        runs over `valid` BEFORE these lines are appended, so an `accessory equals yes` rule never matches
+        a Detail line; and a POS department string never collides with a b2b service-plan name.
       • mrc — the report-carried monthly recurring charge, for pct_mrc.
       • _actsrc='activation_details' — the marker _line_payout uses to (a) price pct_mrc off the row's own
         mrc and (b) refuse pct_gp/pct_price/pct_price_over_cost (no cost/price columns on this report).
-    department / category / product_desc / contract_type are deliberately left BLANK so NO non-activation
-    rule (accessory, department-keyed, contract_type-keyed, product-keyed) can ever match a Detail line —
-    those lines come exclusively from raw_sales, and activations come exclusively from here. `service_plan`,
-    `carrier`, the original report bucket and contract_type are carried under private keys for transparency.
+    category / product_desc / contract_type are deliberately left BLANK so no category/product/contract-type
+    rule can match a Detail line — those dimensions come exclusively from raw_sales, and activations come
+    exclusively from here. `service_plan`, `carrier`, the original report bucket and contract_type are also
+    carried under private keys for transparency.
     Never raises: any failure returns ([], meta with an error note) and the caller falls back to raw_sales."""
     meta = {"source": "activation_details", "resolver_rows": 0, "lines": 0, "distinct_activations": 0,
             "by_bucket": {"premium": 0, "byod": 0}, "dropped_upgrade_other": 0, "error": None}
@@ -926,7 +933,10 @@ def _activation_detail_lines(client, org_id, period, id_map=None):
             "mrc": safe_float(r.get("mrc")),
             "ext_price": 0.0, "gp": 0.0,
             "voided": "", "trans_type": "Sale",
-            "department": "", "category": "", "product_desc": "", "contract_type": "",
+            # department carries the report's Department (= service plan) so a `department in <plans>`
+            # $10-per-unit rule pays these activations; category/product/contract_type stay blank.
+            "department": str(r.get("department") or r.get("service_plan") or "").strip(),
+            "category": "", "product_desc": "", "contract_type": "",
             "_actsrc": "activation_details",
             "_ad_bucket": r.get("bucket"),
             "_ad_contract_type": r.get("contract_type"),

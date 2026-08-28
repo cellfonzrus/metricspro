@@ -28933,6 +28933,12 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
         sp = str(_get(d_low, "SP/PO Name")).strip()
         prod = str(_get(d_low, "Product Desc")).strip()
         cat = str(_get(d_low, "Category")).strip()
+        # DEPARTMENT (owner 2026-08-28): the real export groups activations under a "Department" column
+        # whose value is the SERVICE PLAN. The owner wants to pick those service plans in the plan editor's
+        # `department` picker and pay $10 per activation on the checked ones — so carry the column through
+        # (falling back to the SP/PO service-plan name when the sheet has no explicit Department header, so
+        # the payable value matches what `plan_options._custom_report_values` surfaces in that dropdown).
+        dept = str(_get(d_low, "Department", "Dept")).strip() or sp
         bucket = _activation_details_bucket(ct, sp, prod, cat)
         row = {
             "store": store,
@@ -28949,6 +28955,7 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
             "contract_type": ct,
             "action_type": str(_get(d_low, "Action Type")).strip(),
             "bucket": bucket,
+            "department": dept,
             "service_plan": sp,
             "product_desc": prod,
             "category": cat,

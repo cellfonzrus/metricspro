@@ -41,10 +41,13 @@ const ACT_SRC_LABEL: Record<string, string> = {
   inherit: 'Inherit (default)', raw_sales: 'POS sales', activation_details: 'Activation Details report',
 }
 
-// Does this plan carry an ACTIVATION payout rule? ($ per unit on activation_bucket in premium/byod.)
+// Does this plan carry an ACTIVATION payout rule? A flat $/unit rule keyed on activation_bucket
+// (premium/byod) OR on department — the latter being the Activation Details "Department" (service-plan)
+// values the owner checks to pay activations from the report.
 function activationRules(p?: Plan | null): Rule[] {
   return (p?.rules || []).filter(r =>
-    (r.match_field || '') === 'activation_bucket' && (r.payout_kind || '') === 'flat_per_unit')
+    ['activation_bucket', 'department'].includes(r.match_field || '') &&
+    (r.payout_kind || '') === 'flat_per_unit')
 }
 // Does this plan carry an ACCESSORY payout rule? (% of price on accessory=yes.)
 function accessoryRules(p?: Plan | null): Rule[] {
