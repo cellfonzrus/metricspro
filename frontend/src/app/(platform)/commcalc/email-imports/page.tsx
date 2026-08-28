@@ -681,6 +681,13 @@ export default function EmailImportsPage() {
           </div>
           <div><label style={lbl}>Hour (0–23)</label><input style={{ ...sel, width: '100%' }} value={cfg.hour ?? 7} onChange={e => set({ hour: Number(e.target.value) || 0 })} /></div>
           <div><label style={lbl}>Auto-run</label><label style={{ fontSize: 12 }}><input type="checkbox" checked={!!cfg.enabled} onChange={e => set({ enabled: e.target.checked })} /> enabled</label></div>
+          <div><label style={lbl}>After import</label>
+            <select style={{ ...sel, width: '100%' }} value={cfg.cleanup_mode || 'off'} onChange={e => set({ cleanup_mode: e.target.value })}>
+              <option value="off">keep every email</option>
+              <option value="delete">delete once imported</option>
+            </select>
+            <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 2 }}>“delete once imported” removes a report email after its data is captured, so the mailbox doesn’t fill up. Only ingested report emails are removed. Needs migration 928.</div>
+          </div>
         </div>
         {cfg.has_password && /auth/i.test(String(cfg.last_status || '')) && (
           <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', border: '1px solid var(--border)', fontSize: 12, color: 'var(--text2)' }}>

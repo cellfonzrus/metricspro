@@ -369,3 +369,72 @@ def fetch_new_attachments(cfg, already):
         except Exception:
             pass
     return out
+
+
+def _parse_msgid(raw_header_bytes):
+    """Message-ID from a header-only fetch payload. Empty on any parse failure."""
+    try:
+        m = email.message_from_bytes(raw_header_bytes or b"")
+        return (m.get("Message-ID") or m.get("Message-Id") or "").strip()
+    except Exception:
+        return ""
+
+
+def cleanup_ingested(cfg, ok_mids):
+    """Delete report emails whose data was ALREADY successfully ingested — their Message-ID is in `ok_mids`
+    (the set of message-ids the sweep itself recorded as status ok + rows saved). So this NEVER deletes a
+    non-report email, nor one that failed/hasn't ingested: only a redundant copy whose data already lives in
+    the platform. Header-only fetch (Message-ID), WRITABLE select, expunge; scans the same folders the sweep
+    reads (incl. Junk/Spam). Best-effort — returns {'deleted', 'scanned'}, never raises the sweep.
+
+    This is the mailbox 'cleaner': it runs on the sweep's OWN authenticated connection (no separate login, no
+    shared password), only when the mailbox's cleanup_mode is 'delete'."""
+    ok_mids = {m for m in (ok_mids or set()) if m}
+    if not ok_mids:
+        return {"deleted": 0, "scanned": 0}
+    M = _connect(cfg)
+    deleted = scanned = 0
+    try:
+        for folder in _folder_candidates(cfg):
+            try:
+                typ, _sel = M.select(folder, readonly=False)   # WRITABLE — required to flag \Deleted
+                if typ != "OK":
+                    continue
+            except Exception:
+                continue
+            try:
+                typ, data = M.search(None, *_search_criteria(cfg))
+            except Exception:
+                continue
+            if typ != "OK" or not data or not data[0]:
+                continue
+            exp = False
+            for num in data[0].split():
+                try:
+                    typ, msgdata = M.fetch(num, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+                except Exception:
+                    continue
+                if typ != "OK" or not msgdata or not msgdata[0]:
+                    continue
+                scanned += 1
+                first = msgdata[0]
+                raw = first[1] if isinstance(first, (tuple, list)) and len(first) > 1 else b""
+                mid = _parse_msgid(raw)
+                if mid and mid in ok_mids:
+                    try:
+                        M.store(num, "+FLAGS", "\\Deleted")
+                        deleted += 1
+                        exp = True
+                    except Exception:
+                        pass
+            if exp:
+                try:
+                    M.expunge()
+                except Exception:
+                    pass
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+    return {"deleted": deleted, "scanned": scanned}
