@@ -6,8 +6,18 @@ commission, and WHICH it is, is encoded in the `Product Name`. From one file we 
 
   1. CUSTOMERS   — name + phone + ZIP per line (deduped by phone on write).
   2. ACTIVATIONS — device (Related Product + IMEI), rate plan, sold-on date, salesperson, contract #.
-  3. P&L / GROSS PROFIT — commission → the `carrier_comm` revenue line; device rebate nets against the
-     device's Related Cost so gross profit = Unit Rebate − Related Cost (owner-confirmed).
+  3. P&L / GROSS PROFIT — commission → `carrier_comm`; device rebate → `device_rebate` (contra-COGS).
+
+STRUCTURAL GROSS-PROFIT IDENTITY (owner, 2026-08 — nothing hardcoded, no margin constant):
+    gross profit = customer down payment + commission + accessories + rebate − device cost
+  A financed device (DPA) is reimbursed by the carrier: structurally the rebate ≈ cost − down − margin,
+  so the true device GP = down + rebate − cost is a small POSITIVE margin — NOT `rebate − cost`, which
+  omits the down payment and can read negative. This report supplies only the COMMISSION and the
+  REBATE; the DOWN PAYMENT and DEVICE COST come from the sales/receipt side. So the rebate is booked
+  as a contra-COGS (it reduces the cost already booked from sales) and the cost is NEVER re-posted
+  here. BYOD lines have no device cost/rebate (commission only); an upfront (non-financed) purchase is
+  selling price − cost, handled on the sales side (no DPA rebate line in this report). The parser's
+  `device_gp` field is `rebate − cost` for REFERENCE only — it is deliberately not the booked GP.
 
 Owner-confirmed classification (2026-08):
   • "Device Payment Agreement Rebate Amount"  → DEVICE REBATE   (GP = Unit Rebate − Related Cost)

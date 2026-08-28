@@ -99,22 +99,25 @@ export default function ActivationReportPage() {
 
       {t && (
         <>
-          {/* headline totals */}
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+          {/* headline totals — the TWO P&L contributions this report supplies, then reference figures */}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
             <Stat label="Activations" value={t.activations.toLocaleString()} />
-            <Stat label="Commission income" value={money(t.commission_income)} good />
-            <Stat label="Device rebate" value={money(t.device_rebate)} />
-            <Stat label="Device cost" value={money(t.device_cost)} />
-            <Stat label="Device GP (rebate − cost)" value={money(t.device_gp)} warn={t.device_gp < 0} />
+            <Stat label="Commission → carrier_comm" value={money(t.commission_income)} good />
+            <Stat label="Device rebate → device_rebate" value={money(t.device_rebate)} good />
             <Stat label="Customers" value={t.distinct_customers.toLocaleString()} />
           </div>
-          {t.device_gp < 0 && (
-            <div style={{ background: '#fff7e6', color: '#8a5a00', padding: '8px 12px', borderRadius: 6, marginBottom: 14, fontSize: 12 }}>
-              Note: device GP (rebate − cost) is negative because the customer-paid device revenue isn&apos;t in this report.
-              The P&amp;L feed books the rebate as a <b>contra-COGS</b> (it reduces the device cost already booked from sales),
-              so it does <b>not</b> post this figure as a standalone loss.
-            </div>
-          )}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+            <Stat label="Device cost (from sales, ref)" value={money(t.device_cost)} />
+            <Stat label="Rebate − cost (ref only, excl. down payment)" value={money(t.device_gp)} warn={t.device_gp < 0} />
+          </div>
+          <div style={{ background: '#eef4ff', color: '#22447a', padding: '10px 12px', borderRadius: 6, marginBottom: 14, fontSize: 12, lineHeight: 1.5 }}>
+            <b>Gross profit = customer down payment + commission + accessories + rebate − device cost.</b> This report
+            supplies the <b>commission</b> and the <b>rebate</b> only; the <b>down payment</b> and <b>device cost</b>
+            come from the sales/receipt side. So the rebate is booked as a <b>contra-COGS</b> (it reduces the device cost
+            already booked from sales) — “rebate − cost” above is a reference figure, <b>not</b> the gross profit, and a
+            negative value just means the down payment (booked in sales) completes the margin. BYOD lines carry no device
+            cost/rebate (commission only); an upfront purchase is price − cost on the sales side.
+          </div>
 
           {/* families */}
           <h2 style={{ fontSize: 15, fontWeight: 700, margin: '10px 0 6px' }}>Line families</h2>
