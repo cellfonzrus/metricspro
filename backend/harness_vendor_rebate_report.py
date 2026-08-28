@@ -101,8 +101,109 @@ def main():
     ok("family kinds", fam["Device Payment Agreement Rebate Amount"]["kind"] == "device_rebate"
        and fam["Upgrade - ISPU"]["kind"] == "commission")
 
+    # ── write path (stub client — no DB) ───────────────────────────────────────────────────────
+    store = {
+        ("pos", "customers"): [{"id": "c-existing", "phone_primary": "9295493052"}],  # RUTH already exists
+        ("pos", "activations"): [],
+        ("commcalc", "activation_rebate_ledger"): [],
+    }
+    client = _StubClient(store)
+    out = V.import_report(client, "org1", res, store_code="WZ1321")
+    custs = store[("pos", "customers")]
+    ok("existing customer not duplicated (RUTH skipped)", sum(1 for c in custs if c.get("phone_primary") == "9295493052") == 1)
+    ok("new customers created for new phones", out["customers_created"] == 3)  # ALISHER, JODY, A B (RUTH exists, AARON no phone)
+    acts = store[("pos", "activations")]
+    ok("activations created (trade-in excluded)", out["activations_created"] == 4 and len(acts) == 4)
+    ok("activation linked to customer_id", any(a.get("customer_id") == "c-existing" for a in acts))
+    ok("activation carrier + model mapped", all(a.get("carrier") == "Verizon" for a in acts) and any("SAMSUNG" in (a.get("phone_model") or "") for a in acts))
+    led = store[("commcalc", "activation_rebate_ledger")]
+    ok("ledger row per store/period", len(led) == out["ledger_periods"] and len(led) >= 1)
+    ok("ledger commission + rebate populated", any(r["commission_amount"] == 120.0 for r in led) and any(r["device_rebate_amount"] == 818.0 for r in led))
+
+    # idempotent re-run: same file → no new customers/activations, ledger upserts in place
+    out2 = V.import_report(client, "org1", res, store_code="WZ1321")
+    ok("re-run creates no duplicate customers", out2["customers_created"] == 0)
+    ok("re-run creates no duplicate activations", out2["activations_created"] == 0)
+    ok("re-run ledger stays one row per store/period", len(store[("commcalc", "activation_rebate_ledger")]) == len(led))
+
     print(f"\n{_p} passed, {_f} failed")
     return 1 if _f else 0
+
+
+# ── Minimal Supabase-style stub (schema().table().select()/.insert()/.upsert()/.eq()/.range()) ────
+class _Result:
+    def __init__(self, data):
+        self.data = data
+
+
+class _Query:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def range(self, lo, hi):
+        self._slice = (lo, hi)
+        return self
+
+    def execute(self):
+        pend = getattr(self, "_pending", None)
+        if pend is not None:
+            self._pending = None
+            return _Result([dict(r) for r in pend])
+        lo, hi = getattr(self, "_slice", (0, 10 ** 9))
+        return _Result([dict(r) for r in self._rows[lo:hi + 1]])
+
+    def insert(self, rows):
+        rows = rows if isinstance(rows, list) else [rows]
+        inserted = []
+        for r in rows:
+            row = dict(r)
+            row.setdefault("id", f"id{len(self._rows)}")
+            self._rows.append(row)
+            inserted.append(row)
+        self._pending = inserted
+        return self
+
+    def upsert(self, rows, on_conflict=None):
+        keys = (on_conflict or "").split(",") if on_conflict else []
+        rows = rows if isinstance(rows, list) else [rows]
+        touched = []
+        for r in rows:
+            match = None
+            if keys:
+                for existing in self._rows:
+                    if all(existing.get(k) == r.get(k) for k in keys):
+                        match = existing
+                        break
+            if match is not None:
+                match.update(r)
+                touched.append(match)
+            else:
+                row = dict(r); row.setdefault("id", f"id{len(self._rows)}")
+                self._rows.append(row); touched.append(row)
+        self._pending = touched
+        return self
+
+
+class _Schema:
+    def __init__(self, store, schema):
+        self._store, self._schema = store, schema
+
+    def table(self, name):
+        return _Query(self._store.setdefault((self._schema, name), []))
+
+
+class _StubClient:
+    def __init__(self, store):
+        self._store = store
+
+    def schema(self, name):
+        return _Schema(self._store, name)
 
 
 if __name__ == "__main__":

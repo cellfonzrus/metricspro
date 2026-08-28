@@ -257,3 +257,113 @@ def read_xlsx(raw: bytes, sheet: str | None = None) -> list[dict]:
 def is_xlsx(raw: bytes) -> bool:
     # xlsx is a zip; magic bytes 'PK\x03\x04'
     return bool(raw) and raw[:4] == b"PK\x03\x04"
+
+
+# ── Write path (customers + activations + P&L ledger) ─────────────────────────────────────────────
+def _page_all(q, page=1000, cap=200000):
+    out, start = [], 0
+    while start < cap:
+        rows = (q.range(start, start + page - 1).execute().data) or []
+        out.extend(rows)
+        if len(rows) < page:
+            break
+        start += page
+    return out
+
+
+def _zip5(z):
+    d = re.sub(r"\D", "", str(z or ""))
+    return d[:5] or None
+
+
+def import_report(client, org_id: str, res: dict, *, store_code: str | None = None,
+                  uploaded_by: str | None = None, source: str = "vendor_rebate_report") -> dict:
+    """Idempotently write the parsed report:
+      • CUSTOMERS  — insert new pos.customers deduped by phone (existing phones are left untouched).
+      • ACTIVATIONS— insert pos.activations deduped by (cell_number, activation_date).
+      • P&L LEDGER — UPSERT one commcalc.activation_rebate_ledger row per (store, period) with the
+        commission + device-rebate totals (feeds coa's carrier_comm / device_rebate). Re-running the
+        same file is a no-op; re-uploading a corrected period replaces that period's aggregate.
+    Returns counts. Safe to re-run."""
+    acts = res.get("activations") or []
+    pos = client.schema("pos")
+
+    # 1) customers — dedupe by phone_primary
+    existing_phones = {_digits(r.get("phone_primary")) for r in
+                       _page_all(pos.table("customers").select("phone_primary").eq("org_id", org_id))
+                       if _digits(r.get("phone_primary"))}
+    seen, new_customers = set(existing_phones), []
+    for a in acts:
+        ph = a.get("phone")
+        if not ph or ph in seen:
+            continue
+        seen.add(ph)
+        new_customers.append({
+            "org_id": org_id, "first_name": a.get("first_name"), "last_name": a.get("last_name"),
+            "phone_primary": ph, "zip": _zip5(a.get("zip")), "account_type": "individual", "is_active": True,
+        })
+    customers_created = 0
+    for i in range(0, len(new_customers), 500):
+        chunk = new_customers[i:i + 500]
+        r = pos.table("customers").insert(chunk).execute()
+        customers_created += len(r.data or [])
+
+    # map phone -> customer_id (for linking activations), fetch after insert
+    phone_to_id = {}
+    for r in _page_all(pos.table("customers").select("id,phone_primary").eq("org_id", org_id)):
+        p = _digits(r.get("phone_primary"))
+        if p and r.get("id"):
+            phone_to_id[p] = r["id"]
+
+    # 2) activations — dedupe by (cell_number, activation_date)
+    existing_keys = {(_digits(r.get("cell_number")), str(r.get("activation_date") or "")[:10])
+                     for r in _page_all(pos.table("activations").select("cell_number,activation_date").eq("org_id", org_id))}
+    new_acts = []
+    for a in acts:
+        if a.get("kind") == KIND_TRADE_IN:
+            continue
+        cell = a.get("cell_number")
+        key = (_digits(cell), a.get("sold_on") or "")
+        if key in existing_keys or not (cell or a.get("imei")):
+            continue
+        existing_keys.add(key)
+        new_acts.append({
+            "org_id": org_id, "store_code": store_code,
+            "customer_id": phone_to_id.get(a.get("phone")),
+            "carrier": a.get("carrier"), "activation_date": a.get("sold_on"),
+            "plan_description": a.get("rate_plan"),
+            "cell_number": cell, "mobile_phone": cell,
+            "phone_serial": a.get("imei"), "phone_model": a.get("device_name"),
+            "account_number": a.get("account_number"),
+            "memo": " · ".join([x for x in (a.get("invoice_no"), a.get("product_name")) if x]) or None,
+            "description": a.get("device_name"), "status": "active",
+        })
+    activations_created = 0
+    for i in range(0, len(new_acts), 500):
+        chunk = new_acts[i:i + 500]
+        r = pos.table("activations").insert(chunk).execute()
+        activations_created += len(r.data or [])
+
+    # 3) P&L ledger — one aggregated row per (store, period); UPSERT so a re-upload replaces cleanly
+    ledger_rows = []
+    for s in (res.get("summary_by_store_period") or []):
+        if not s.get("period"):
+            continue
+        ledger_rows.append({
+            "org_id": org_id, "business_address": s.get("store_name"), "period": s["period"],
+            "source": source, "commission_amount": s.get("commission_income") or 0,
+            "device_rebate_amount": s.get("device_rebate") or 0, "device_cost": s.get("device_cost") or 0,
+            "activations": s.get("activations") or 0,
+        })
+    ledger_upserted = 0
+    if ledger_rows:
+        r = (client.schema("commcalc").table("activation_rebate_ledger")
+             .upsert(ledger_rows, on_conflict="org_id,business_address,period,source").execute())
+        ledger_upserted = len(r.data or [])
+
+    return {
+        "customers_created": customers_created,
+        "activations_created": activations_created,
+        "ledger_periods": ledger_upserted,
+        "totals": res.get("totals"),
+    }

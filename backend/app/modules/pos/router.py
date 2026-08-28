@@ -2963,3 +2963,26 @@ def activation_report_preview(body: dict, org_id: str = ORG_ID):
         "summary_by_store_period": res["summary_by_store_period"],
         "sample": sample,
     }
+
+
+@router.post("/activation-report/import")
+def activation_report_import(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Import a vendor rebate/commission report: create customers (deduped by phone) + activations
+    (deduped by cell/date) and UPSERT the P&L ledger (commission → carrier_comm, device rebate →
+    device_rebate contra-COGS). Body: {file (base64 .xlsx), store_code?, dry_run?}. dry_run=true
+    returns the same preview WITHOUT writing — the confirm step before anything lands."""
+    raw, _ext = _decode_image(body.get("file") or body.get("image") or "")
+    if not _vrr.is_xlsx(raw):
+        raise HTTPException(400, "an .xlsx vendor rebate report is required")
+    rows = _vrr.read_xlsx(raw)
+    if not rows:
+        raise HTTPException(422, "could not read rows from this workbook")
+    res = _vrr.normalize_report(rows)
+    if body.get("dry_run"):
+        return {"dry_run": True, "totals": res["totals"], "families": res["families"],
+                "summary_by_store_period": res["summary_by_store_period"], "sample": res["activations"][:25]}
+    uploader = _caller_employee(authorization, org_id) or None
+    result = _vrr.import_report(sb(), org_id, res,
+                                store_code=(body.get("store_code") or "").strip() or None,
+                                uploaded_by=uploader)
+    return {"imported": True, **result}
