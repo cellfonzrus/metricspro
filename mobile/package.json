@@ -26,6 +26,7 @@
     "expo": "~52.0.0",
     "expo-constants": "~17.0.0",
     "expo-image": "~2.0.0",
+    "expo-image-picker": "~16.0.6",
     "expo-linking": "~7.0.0",
     "expo-local-authentication": "~15.0.0",
     "expo-location": "~18.0.0",
@@ -48,5 +49,12 @@
     "eslint": "^9.0.0",
     "eslint-config-expo": "~8.0.0",
     "typescript": "~5.3.3"
+  },
+  "overrides": {
+    "ajv": "^8.17.1",
+    "metro": "0.81.0",
+    "metro-config": "0.81.0",
+    "metro-resolver": "0.81.0",
+    "metro-runtime": "0.81.0"
   }
 }

@@ -859,6 +859,27 @@ def _clean_customer(body: dict) -> dict:
     return out
 
 
+# The carrier account PIN (`password`) is the credential behind SIM-swap / account-takeover — the
+# single most damaging field to leak from the customer book. SSN/DL already ride the mig-725 pgcrypto
+# vault; the PIN did not. Seal it as application-layer ciphertext ('enc:v1:') on every write and open
+# it only on the single-record edit fetch. crypto.encrypt is idempotent and a no-op without a key, so
+# this is safe to run before the backfill and on already-sealed values.
+def _seal_customer_pin(d: dict) -> dict:
+    if d.get("password"):
+        from app.core import crypto
+        d = dict(d)
+        d["password"] = crypto.encrypt(d["password"])
+    return d
+
+
+def _open_customer_pin(row):
+    if row and row.get("password"):
+        from app.core import crypto
+        row = dict(row)
+        row["password"] = crypto.decrypt(row["password"])
+    return row
+
+
 def _caller_employee(authorization: str, org_id: str) -> str:
     """The signed-in caller's employee_id ('' when the login isn't linked). Sales, notes and
     drawer sessions are stamped with THIS, never a body field — same anti-spoofing stance as
@@ -1075,7 +1096,7 @@ def get_customer(customer_id: str, org_id: str = ORG_ID,
             .eq("org_id", org_id).eq("id", customer_id).limit(1).execute().data) or []
     if not rows:
         raise HTTPException(404, "not found")
-    return {"customer": rows[0]}
+    return {"customer": _open_customer_pin(rows[0])}
 
 
 @router.post("/customers")
@@ -1084,8 +1105,8 @@ def create_customer(body: dict, org_id: str = ORG_ID):
     if not (ins.get("first_name") or ins.get("last_name") or ins.get("company_name")):
         raise HTTPException(400, "a name is required")
     ins["org_id"] = org_id
-    r = sb().schema("pos").table("customers").insert(ins).execute()
-    return {"customer": (r.data or [{}])[0]}
+    r = sb().schema("pos").table("customers").insert(_seal_customer_pin(ins)).execute()
+    return {"customer": _open_customer_pin((r.data or [{}])[0])}
 
 
 @router.patch("/customers/{customer_id}")
@@ -1093,11 +1114,11 @@ def update_customer(customer_id: str, body: dict, org_id: str = ORG_ID):
     upd = _clean_customer(body)
     if not upd:
         raise HTTPException(400, "nothing to update")
-    r = (sb().schema("pos").table("customers").update(upd)
+    r = (sb().schema("pos").table("customers").update(_seal_customer_pin(upd))
          .eq("org_id", org_id).eq("id", customer_id).execute())
     if not r.data:
         raise HTTPException(404, "not found")
-    return {"customer": r.data[0]}
+    return {"customer": _open_customer_pin(r.data[0])}
 
 
 @router.get("/customers/{customer_id}/notes")
@@ -2504,7 +2525,7 @@ def import_rows(entity: str, body: dict, org_id: str = ORG_ID):
         seen = {k for r in existing for k in
                 (_digits(r.get("phone_primary")), (r.get("email") or "").strip().lower()) if k}
         for i, row in enumerate(rows):
-            p = _clean_customer(row)
+            p = _seal_customer_pin(_clean_customer(row))
             key = _digits(p.get("phone_primary")) or (p.get("email") or "").strip().lower()
             if key and key in seen:
                 skipped.append({"index": i, "message": "duplicate (phone/email already exists)"})
@@ -2724,3 +2745,106 @@ def commcalc_sync(body: dict, authorization: str = Header(default=""), org_id: s
 @router.get("/commcalc/status")
 def commcalc_status(org_id: str = ORG_ID):
     return _feed.feed_status(org_id)
+
+
+# ── Receipt import (secondary-POS: photograph a primary-system receipt → a sale) ──────────────────
+# See app/modules/pos/receipt_import.py + migration 864. Router-level `_require_pos_access` already
+# gates these to a signed-in org member; the sale is attributed to the uploader (never a body field).
+from app.modules.pos import receipt_import as _receipt
+
+
+def _decode_image(image_b64: str) -> tuple[bytes, str]:
+    """Accept a bare base64 string or a data URL ('data:image/png;base64,....'). Returns (bytes, ext)."""
+    import base64 as _b64
+    s = image_b64 or ""
+    ext = "jpg"
+    if s.startswith("data:"):
+        header, _, s = s.partition(",")
+        if "png" in header:
+            ext = "png"
+    try:
+        return _b64.b64decode(s), ext
+    except Exception:
+        raise HTTPException(400, "image must be base64-encoded")
+
+
+@router.post("/receipt-import")
+def receipt_import_create(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Photograph → OCR → (optionally) create a sale. Body: {image (base64 or data URL), ext?,
+    store_code?, notes?, dry_run?}. dry_run=true returns the parsed preview WITHOUT writing, so the
+    UI can show the fields for confirmation first; omit / false to actually create the sale."""
+    if not (body.get("image") or "").strip():
+        raise HTTPException(400, "image is required")
+    raw, ext = _decode_image(body["image"])
+    parsed, raw_ocr = _receipt.ocr_receipt(raw, body.get("ext") or ext)
+
+    if body.get("dry_run"):
+        return {"dry_run": True, "parsed": parsed, "raw_ocr": raw_ocr}
+
+    # Nothing usable came back (no vision key, unreadable photo) → don't fabricate a sale; hand the
+    # preview back so the client can fall to manual entry.
+    if not (parsed.get("items") or parsed.get("total") or parsed.get("customer_name")):
+        return {"imported": False, "parsed": parsed, "raw_ocr": raw_ocr,
+                "message": "Couldn't read the receipt automatically — enter it manually."}
+
+    uploader = _caller_employee(authorization, org_id) or None
+    result = _receipt.import_receipt(
+        sb(), org_id=org_id, store_code=(body.get("store_code") or "").strip() or None,
+        uploaded_by=uploader, parsed=parsed, raw_ocr=raw_ocr,
+        notes=(body.get("notes") or "").strip() or None)
+    return {"imported": True, "parsed": parsed, **result}
+
+
+@router.get("/receipt-imports")
+def receipt_imports_list(q: str = "", imei: str = "", phone: str = "", customer: str = "",
+                         store_code: str = "", limit: int = 50, org_id: str = ORG_ID):
+    """Search imported receipts by IMEI / phone / customer name (or a free-text q across all three
+    + device). Powers the 'find that imported sale' lookup on both the app and desktop.
+
+    Name / phone / device are plaintext, so they search by ILIKE (unchanged). The IMEI is encrypted at
+    rest, so it searches against its keyed-HMAC BLIND-INDEX column (imei_bidx, exact match); when no
+    key is configured (or for legacy plaintext rows) we fall back to ILIKE on the imei column."""
+    import re as _re
+    from app.core import crypto
+
+    keyed = crypto.is_enabled()
+
+    def _imei_token(v: str):
+        return crypto.blind_index(v, mode="digits") if keyed else None
+
+    query = (sb().schema("pos").table("receipt_imports")
+             .select("id,store_code,sale_id,customer_id,status,imei,phone,customer_name,"
+                     "device_name,total,sale_date,notes,created_at,imei_bidx")
+             .eq("org_id", org_id))
+    if store_code.strip():
+        query = query.eq("store_code", store_code.strip())
+
+    if imei.strip():
+        tok = _imei_token(imei)
+        query = query.eq("imei_bidx", tok) if tok else query.ilike("imei", f"%{imei.strip()}%")
+    if phone.strip():
+        digits = _re.sub(r"\D", "", phone)
+        query = query.ilike("phone", f"%{digits}%")
+    if customer.strip():
+        query = query.ilike("customer_name", f"%{customer.strip()}%")
+    if q.strip():
+        s = q.strip().replace(",", " ")
+        # Free text matches the plaintext columns; if it's a full IMEI, also match the blind index
+        # (the imei column itself is ciphertext, so an ILIKE on it can't hit).
+        ors = [f"phone.ilike.%{s}%", f"customer_name.ilike.%{s}%", f"device_name.ilike.%{s}%"]
+        digits = _re.sub(r"\D", "", s)
+        itok = _imei_token(digits) if 14 <= len(digits) <= 16 else None
+        ors.append(f"imei_bidx.eq.{itok}" if itok else f"imei.ilike.%{s}%")
+        query = query.or_(",".join(ors))
+
+    rows = query.order("created_at", desc=True).limit(min(max(limit, 1), 200)).execute().data or []
+    return {"receipt_imports": [_receipt.decrypt_receipt_row(r) for r in rows]}
+
+
+@router.get("/receipt-imports/{import_id}")
+def receipt_imports_get(import_id: str, org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("receipt_imports").select("*")
+            .eq("org_id", org_id).eq("id", import_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "receipt import not found")
+    return {"receipt_import": _receipt.decrypt_receipt_row(rows[0])}

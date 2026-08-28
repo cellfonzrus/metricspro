@@ -35,6 +35,9 @@ export default function Pos() {
           autoCorrect={false}
           returnKeyType="search"
         />
+        <Pressable style={styles.receiptLink} onPress={() => router.push('/pos/receipts')}>
+          <Text style={styles.receiptLinkText}>🧾 Import / find a receipt</Text>
+        </Pressable>
       </View>
 
       {products.isLoading ? (
@@ -48,6 +51,8 @@ export default function Pos() {
           data={rows}
           keyExtractor={(p) => p.id}
           contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           renderItem={({ item }) => <ProductRow product={item} onAdd={() => addToCart(item)} />}
         />
       )}
@@ -86,7 +91,9 @@ function ProductRow({ product, onAdd }: { product: Product; onAdd: () => void })
 }
 
 const styles = StyleSheet.create({
-  searchWrap: { padding: spacing.lg, paddingBottom: spacing.sm },
+  searchWrap: { padding: spacing.lg, paddingBottom: spacing.sm, gap: spacing.sm },
+  receiptLink: { alignSelf: 'flex-start', paddingVertical: spacing.xs },
+  receiptLinkText: { color: colors.primary, fontSize: font.small, fontWeight: '700' },
   list: { paddingHorizontal: spacing.lg, paddingBottom: 120, gap: spacing.sm },
   row: {
     flexDirection: 'row',

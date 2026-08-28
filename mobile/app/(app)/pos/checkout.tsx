@@ -1,9 +1,19 @@
 import React, { useState } from 'react'
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native'
 import { useRouter } from 'expo-router'
 import { useQuery } from '@tanstack/react-query'
 
-import { checkoutDurable, type Payment } from '@/api/pos'
+import { checkoutDurable, type CartLine, type Payment } from '@/api/pos'
 import { getAllowedStores } from '@/api/timeclock'
 import { queryClient } from '@/api/query'
 import {
@@ -11,6 +21,7 @@ import {
   clearCart,
   removeFromCart,
   setQuantity,
+  setUnitPrice,
   useCart,
 } from '@/modules/pos/cart'
 import { Body, Button, Card, EmptyState, H2, Screen } from '@/components/ui'
@@ -72,7 +83,16 @@ export default function Checkout() {
   return (
     <Screen>
       <OfflineBanner />
-      <ScrollView contentContainerStyle={styles.container}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={90}
+      >
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <H2>Items</H2>
         <Card style={{ gap: spacing.sm }}>
           {cart.map((line) => (
@@ -81,12 +101,14 @@ export default function Checkout() {
                 <Text style={styles.lineName} numberOfLines={1}>
                   {line.short_name}
                 </Text>
-                <Body dim>
-                  {money(line.unit_price)} each
-                  {line.list_price != null && line.list_price !== line.unit_price
-                    ? ` (list ${money(line.list_price)})`
-                    : ''}
-                </Body>
+                <View style={styles.priceRow}>
+                  <Text style={styles.priceLabel}>$</Text>
+                  <PriceInput line={line} />
+                  <Text style={styles.priceEach}>each</Text>
+                  {line.list_price != null && line.list_price !== line.unit_price ? (
+                    <Text style={styles.listStrike}>{money(line.list_price)}</Text>
+                  ) : null}
+                </View>
               </View>
               <View style={styles.qty}>
                 <Stepper onPress={() => setQuantity(line.product_id, line.quantity - 1)} label="−" />
@@ -136,6 +158,7 @@ export default function Checkout() {
 
         <Button title={`Charge ${money(subtotal)}`} variant="success" loading={busy} onPress={submit} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </Screen>
   )
 }
@@ -148,10 +171,48 @@ function Stepper({ label, onPress }: { label: string; onPress: () => void }) {
   )
 }
 
+// Editable per-line price. Holds LOCAL text while editing (so the cursor doesn't jump) and commits
+// the parsed number to the cart on blur / "Done".
+function PriceInput({ line }: { line: CartLine }) {
+  const [text, setText] = useState(String(line.unit_price ?? ''))
+  const commit = () => {
+    const n = parseFloat(text.replace(/[^0-9.]/g, ''))
+    const price = Number.isFinite(n) ? n : 0
+    setUnitPrice(line.product_id, price)
+    setText(String(price))
+  }
+  return (
+    <TextInput
+      value={text}
+      onChangeText={setText}
+      onBlur={commit}
+      onSubmitEditing={commit}
+      keyboardType="decimal-pad"
+      returnKeyType="done"
+      selectTextOnFocus
+      style={styles.priceInput}
+    />
+  )
+}
+
 const styles = StyleSheet.create({
   container: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xxl },
   line: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   lineName: { color: colors.text, fontSize: font.body, fontWeight: '600' },
+  priceRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  priceLabel: { color: colors.textDim, fontSize: font.small },
+  priceInput: {
+    color: colors.text,
+    fontSize: font.body,
+    fontWeight: '600',
+    minWidth: 56,
+    paddingVertical: 2,
+    paddingHorizontal: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  priceEach: { color: colors.textDim, fontSize: font.small },
+  listStrike: { color: colors.textDim, fontSize: font.tiny, textDecorationLine: 'line-through', marginLeft: spacing.xs },
   qty: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   qtyText: { color: colors.text, fontSize: font.body, fontWeight: '700', minWidth: 20, textAlign: 'center' },
   stepper: {

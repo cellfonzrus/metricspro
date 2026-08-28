@@ -13,12 +13,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'MetricsPro',
   slug: 'metricspro',
+  owner: 'cellfonzrus',
   scheme: 'metricspro',
   version: '0.1.0',
   orientation: 'portrait',
   icon: './assets/icon.png',
   userInterfaceStyle: 'automatic',
-  newArchEnabled: true,
+  // Disabled for now: the React Native "new architecture" is the most common cause of a first EAS
+  // Android build failing on this stack. Off = a more forgiving build; can be re-enabled later once
+  // the app is validated on devices. (No app behaviour depends on it.)
+  newArchEnabled: false,
   splash: {
     image: './assets/splash.png',
     resizeMode: 'contain',
@@ -36,7 +40,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       NSLocationWhenInUseUsageDescription:
         'MetricsPro records the store location of a clock-in punch for attendance verification.',
       NSCameraUsageDescription:
-        'MetricsPro uses the camera to capture a verification selfie when you clock in.',
+        'MetricsPro uses the camera to capture a verification selfie when you clock in and to photograph a receipt for import.',
+      NSPhotoLibraryUsageDescription:
+        'MetricsPro lets you choose a receipt photo from your library to import it as a sale.',
       ITSAppUsesNonExemptEncryption: false,
     },
   },
@@ -70,12 +76,21 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       'expo-splash-screen',
       { backgroundColor: '#0B1220', image: './assets/splash.png', imageWidth: 200 },
     ],
+    [
+      'expo-image-picker',
+      {
+        photosPermission:
+          'MetricsPro lets you choose a receipt photo from your library to import it as a sale.',
+        cameraPermission:
+          'MetricsPro uses the camera to photograph a receipt for import.',
+      },
+    ],
   ],
   experiments: { typedRoutes: true },
   extra: {
     supabaseUrl: process.env.EXPO_PUBLIC_SUPABASE_URL ?? '',
     supabaseAnonKey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
     apiUrl: process.env.EXPO_PUBLIC_API_URL ?? '',
-    eas: { projectId: process.env.EAS_PROJECT_ID ?? '' },
+    eas: { projectId: process.env.EAS_PROJECT_ID || 'a3ab84a6-1706-473b-9046-f66dbf2c8b9a' },
   },
 })
