@@ -119,6 +119,8 @@ def main():
     led = store[("commcalc", "activation_rebate_ledger")]
     ok("ledger row per store/period", len(led) == out["ledger_periods"] and len(led) >= 1)
     ok("ledger commission + rebate populated", any(r["commission_amount"] == 120.0 for r in led) and any(r["device_rebate_amount"] == 818.0 for r in led))
+    ok("ledger device_cost populated (posted to device_cost COGS so GP = rebate − cost)",
+       any(r["device_cost"] == 768.0 for r in led))
 
     # idempotent re-run: same file → no new customers/activations, ledger upserts in place
     out2 = V.import_report(client, "org1", res, store_code="WZ1321")
