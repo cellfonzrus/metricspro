@@ -60,10 +60,22 @@ class GateCounter:
       nothing is decided. A crossing needs the track to have been committed OUTSIDE the band on one
       side and then to become committed OUTSIDE it on the other. Box jitter is a fraction of a body
       width and never spans the corridor, so it counts nothing.
-    * THE BAND SCALES WITH THE PERSON. `band_frac` of the detection box's HEIGHT, clamped. On an
-      angled camera someone at the far end of the frame is a third the size of someone at the near
-      end, and their jitter is a third the size too; a fixed band is either useless up close or
-      impassable far away. Tying it to the body means one setting works across the whole frame.
+    * THE BAND SCALES WITH THE PERSON, AT THE MOMENT THEY CROSS. `band_frac` of the detection
+      box's HEIGHT, clamped. On an angled camera someone at the far end of the frame is a third
+      the size of someone at the near end, and their jitter is a third the size too; a fixed band
+      is either useless up close or impassable far away. Tying it to the body means one setting
+      works across the whole frame. 0.20 is the measured optimum on the day total; anything from
+      0.15 to 0.35 behaves the same on the failure cases and only trades a little more undercount
+      for a little more margin, so it is a comfortable dial rather than a knife edge.
+
+      The size is LATCHED at the crossing rather than read live, and that detail is load-bearing.
+      Where a camera looks along the walking direction — the whole back-of-store class of mount —
+      a person walking towards it doubles in height in a couple of metres. A band read live then
+      grows faster than the person advances, so it outruns them and the far side is never
+      committed: the counter goes quiet at exactly the mounts that need it most. Measured at a
+      camera 7 m back with the line 2 m inside the shop, a live band counted 2% of the traffic.
+      Latching the band to the body size observed where the track actually passed through the line
+      makes the corridor symmetric about the crossing, which is what it was always meant to be.
     * CONFIRMATION. A side has to hold for `confirm_frames` consecutive observations before it is
       committed. One outlier box — the classic half-body detection when a shoulder is occluded —
       cannot arm or fire the gate on its own.
@@ -80,7 +92,7 @@ class GateCounter:
       counts 'out' — and a person hovering has to traverse the whole corridor again to count again.
     """
 
-    def __init__(self, zone, aspect=DEFAULT_ASPECT, band_frac=0.35, min_band=0.025,
+    def __init__(self, zone, aspect=DEFAULT_ASPECT, band_frac=0.20, min_band=0.025,
                  max_band=0.20, confirm_frames=2, span_margin=0.15, ttl_seconds=30.0):
         self.zone = zone or {}
         self.aspect = float(aspect or DEFAULT_ASPECT)
@@ -130,8 +142,8 @@ class GateCounter:
         t = ((px - ax) * dx + (py - ay) * dy) / (length * length)
         return cross / length, t
 
-    def _band_for(self, box):
-        h = float((box or {}).get("h") or 0.0)
+    def _band_for(self, box, h_ref=None):
+        h = float(h_ref if h_ref else ((box or {}).get("h") or 0.0))
         return max(self.min_band, min(self.max_band, self.band_frac * h))
 
     # ── the state machine ──────────────────────────────────────────────────────────────────
@@ -144,7 +156,8 @@ class GateCounter:
         if sd is None:
             return None
         st = self._state.setdefault(track_key, {"side": 0, "cand": 0, "n": 0, "t_cross": None,
-                                                "prev_sd": None, "prev_t": None, "last": now})
+                                                "prev_sd": None, "prev_t": None, "h_ref": None,
+                                                "last": now})
         st["last"] = now
 
         # Where did this track pass THROUGH the line? Interpolate the point at which the signed
@@ -154,9 +167,10 @@ class GateCounter:
         if psd is not None and ((psd > 0) != (sd > 0)) and abs(sd - psd) > EPS:
             f = psd / (psd - sd)
             st["t_cross"] = pt + f * (t - pt)
+            st["h_ref"] = float((box or {}).get("h") or 0.0) or None
         st["prev_sd"], st["prev_t"] = sd, t
 
-        band = self._band_for(box)
+        band = self._band_for(box, st.get("h_ref"))
         side = 1 if sd > band else (-1 if sd < -band else 0)
 
         if side == 0:                       # inside the corridor: decide nothing, forget nothing
@@ -174,10 +188,10 @@ class GateCounter:
             return None
         st["side"] = side
         if prev_side == 0:                  # first commitment only ARMS the gate
-            st["t_cross"] = None
+            st["t_cross"], st["h_ref"] = None, None
             return None
         tc = st["t_cross"]
-        st["t_cross"] = None                # consumed: the next count needs its own crossing
+        st["t_cross"], st["h_ref"] = None, None   # consumed: the next count needs its own crossing
         if tc is None or not ((-self.span_margin) <= tc <= (1.0 + self.span_margin)):
             return None                     # crossed the line's extension, not the doorway
         return "in" if side == self._inward_side else "out"

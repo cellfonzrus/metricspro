@@ -138,16 +138,23 @@ class Camera:
         return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
 
 
-def door_line(cam, door_w=1.0, z=0.0, inside_probe=(0.0, -1.5)):
+def door_line(cam, door_w=1.0, z=0.0, inside_probe=None):
     """The counting line an installer SHOULD draw: across the floor at the threshold, jamb to jamb,
-    with `inward` picked by clicking a spot inside the store. Returned in the stored zone shape."""
+    with `inward` picked by clicking a spot inside the store. Returned in the stored zone shape.
+
+    The probe defaults to 1.5 m FURTHER IN THAN THE LINE ITSELF, not to a fixed spot. That matters
+    for any test that moves the line away from the threshold: a probe at a fixed depth ends up on
+    the wrong side of a line drawn deeper than it, and the zone comes back with `inward` reversed —
+    which reads as "this placement counts nothing" when what it actually is, is inside-out. It is
+    also exactly the mistake an operator makes on a real camera, so it is worth naming."""
     a = cam.project((-door_w / 2.0, 0.0, z))
     b = cam.project((door_w / 2.0, 0.0, z))
     if a is None or b is None:
         return None
     zone = {"kind": "line", "is_active": True,
             "geometry": {"x1": a[0], "y1": a[1], "x2": b[0], "y2": b[1]}, "inward": "left"}
-    probe = cam.project((inside_probe[0], 0.0, inside_probe[1]))
+    pr = inside_probe if inside_probe is not None else (0.0, z - 1.5)
+    probe = cam.project((pr[0], 0.0, pr[1]))
     if probe and GEO.side_of(zone["geometry"], probe) < 0:
         zone["inward"] = "right"
     return zone
@@ -561,7 +568,8 @@ def error_budget(cam, zone, seeds=(71, 72, 73), aspect=16 / 9):
     check("with single-file traffic the prototype is within 10% of truth", True)
 
 
-def crowd(seed, n_people=120, passerby_ratio=0.5, group_rate=0.35, loiter_rate=0.25):
+def crowd(seed, n_people=120, passerby_ratio=0.5, group_rate=0.35, loiter_rate=0.25,
+          wander_rate=0.0, x_spread=0.32):
     """A stream of arrivals with realistic variety: singles and groups, fast and slow, some who
     stop on the mat, and a stream of people who only walk past outside."""
     rng = random.Random(seed)
@@ -580,16 +588,45 @@ def crowd(seed, n_people=120, passerby_ratio=0.5, group_rate=0.35, loiter_rate=0
         if rng.random() < group_rate:
             size = 2 if rng.random() < 0.75 else 3
         for k in range(size):
-            x = rng.uniform(-0.32, 0.32) if size == 1 else -0.30 + 0.30 * k + rng.gauss(0, 0.04)
+            # People fan out across whatever width of doorway they are given, so the entry
+            # positions scale with the door — otherwise a 3.6 m opening would be tested with
+            # everybody politely walking through the middle metre of it.
+            sp_x = float(x_spread)
+            x = (rng.uniform(-sp_x, sp_x) if size == 1
+                 else -sp_x * 0.94 + (sp_x * 0.94) * k + rng.gauss(0, sp_x * 0.13))
             sp = max(0.7, rng.gauss(1.35, 0.30))
             t0 = t + k * rng.uniform(0.1, 0.5)
+            # HOW FAR IN THEY WALK, and it is not a constant. Everybody stopping at the same
+            # depth would be harmless for a line on the threshold and would silently decide the
+            # answer for a line drawn inside the shop, which is one of the questions being asked:
+            # a person who comes in and stops at the front table never crosses an interior line
+            # at all. Somewhere between a metre and a half and six metres, per person.
+            z_in = -rng.uniform(1.5, 6.0)
             if rng.random() < loiter_rate:
+                pause = rng.uniform(1.5, 5.0)
                 walkers.append(Walker(f"c{made}", [
                     (t0, x, 3.0), (t0 + 2.4 / sp, x, 0.05),
-                    (t0 + 2.4 / sp + rng.uniform(1.5, 5.0), x + rng.gauss(0, 0.05), -0.03),
-                    (t0 + 2.4 / sp + rng.uniform(1.5, 5.0) + 2.0, x, -2.5)]))
+                    (t0 + 2.4 / sp + pause, x + rng.gauss(0, 0.05), -0.03),
+                    (t0 + 2.4 / sp + pause + abs(z_in) / sp, x, z_in)]))
             else:
-                walkers.append(Walker(f"c{made}", [(t0, x, 3.0), (t0 + 5.5 / sp, x, -2.5)]))
+                walkers.append(Walker(f"c{made}", [(t0, x, 3.0),
+                                                   (t0 + (3.0 - z_in) / sp, x, z_in)]))
+            # SHOPPERS WHO THEN MOVE AROUND NEAR THE FRONT OF THE STORE.
+            # Off by default, because it changes nothing for a line drawn on the threshold — a
+            # person browsing three metres inside never re-crosses the doorway. It is switched on
+            # for the back-of-store test, where it is the whole question: a line drawn INSIDE the
+            # store to make people bigger in frame is a line that browsing customers walk over.
+            if wander_rate and rng.random() < wander_rate:
+                w0 = walkers[-1]
+                tw = w0.wp[-1][0]
+                xw, zw = w0.wp[-1][1], w0.wp[-1][2]
+                extra = []
+                for _ in range(rng.randint(3, 7)):
+                    tw += rng.uniform(3.0, 9.0)
+                    xw = max(-2.5, min(2.5, xw + rng.gauss(0, 1.1)))
+                    zw = max(-6.0, min(-0.7, zw + rng.gauss(0, 1.2)))
+                    extra.append((tw, xw, zw))
+                walkers[-1] = Walker(w0.pid, w0.wp + extra)
             made += 1
     return walkers
 
@@ -824,9 +861,299 @@ def sweep_band(cam, zone, aspect=16 / 9):
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+# 8. THE INSTALLATION ENVELOPE — the numbers that go up a ladder
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Everything in this section runs at the LENS OF THE HARDWARE LUXELINK OWNS, not the generous lens
+# used earlier: Nest Cam (indoor, wired, 2nd gen) is published as 135 degrees DIAGONAL at 1080p,
+# which on a 16:9 frame is about 129 degrees horizontal. That conversion is arithmetic, not a
+# Google figure; the wider outdoor model is checked separately in (E6).
+NEST_HFOV = 129.0
+NEST_ROWS = 1080
+
+
+def mount(d, h, bearing_deg, aim=(0.0, 1.0, 0.0), hfov=NEST_HFOV):
+    """A camera `d` metres from the door measured along the floor, `h` metres up, `bearing_deg`
+    round from the door's centreline, aimed at `aim`. Bearing 0 is directly in front of the door
+    inside the shop; 90 would be flat against the shop front, which is why the sweeps stop short."""
+    a = math.radians(bearing_deg)
+    return Camera(pos=(d * math.sin(a), h, -d * math.cos(a)), target=aim, hfov_deg=hfov)
+
+
+def crossing_angle(cam, zone, aspect=16 / 9):
+    """How squarely the walking direction meets the drawn line IN THE IMAGE, in degrees.
+
+    This is the quantity that actually governs whether 'in' can be told from 'out', and it is
+    neither the camera's yaw nor its tilt — it is what those two produce after projection. 90
+    degrees means a step through the door moves the foot point straight across the line; near 0
+    means a step through the door slides it ALONG the line and barely moves it at all."""
+    g = zone["geometry"]
+    p_out, p_in = cam.project((0.0, 0.0, 0.6)), cam.project((0.0, 0.0, -0.6))
+    if p_out is None or p_in is None:
+        return 0.0
+    lv = ((g["x2"] - g["x1"]) * aspect, g["y2"] - g["y1"])
+    mv = ((p_in[0] - p_out[0]) * aspect, p_in[1] - p_out[1])
+    den = (math.hypot(*lv) * math.hypot(*mv)) or 1e-9
+    c = abs(lv[0] * mv[0] + lv[1] * mv[1]) / den
+    return math.degrees(math.acos(max(0.0, min(1.0, c))))
+
+
+def sightline(cam, door_w=1.0, fps=6.0):
+    """Everything about a mount that can be read off one still, before any traffic is simulated."""
+    box = cam.person_box(0.0, 0.0)
+    jl, jr = cam.project((-door_w / 2, 0.0, 0.0)), cam.project((door_w / 2, 0.0, 0.0))
+    thr = cam.project((0.0, 0.0, 0.0))
+    in_frame = all(q is not None and -0.02 <= q[0] <= 1.02 and -0.02 <= q[1] <= 1.02
+                   for q in (jl, jr))
+    # How many looks does the counter get at this person once they are INSIDE? Below about four,
+    # the confirmation rules cannot commit a side before the person walks out of frame or under
+    # the camera — which is what "mounted too close" actually means, mechanically.
+    seen_in = 0
+    walker = straight_walk("probe", speed=1.3, from_z=3.0, to_z=-4.0)
+    t, tend = walker.wp[0][0], walker.wp[-1][0]
+    while t <= tend:
+        pos = walker.at(t)
+        if pos and pos[1] < 0.0 and cam.person_box(pos[0], pos[1]) is not None:
+            seen_in += 1
+        t += 1.0 / fps
+    return {"px": (box["h"] * NEST_ROWS) if box else 0.0,
+            "door_in_frame": in_frame,
+            "threshold_ny": thr[1] if thr else None,
+            "depression": cam.pitch_deg,
+            "looks_inside": seen_in}
+
+
+def envelope_score(cam, zone, seeds=(21, 22), n=80, door_w=1.0, **ckw):
+    """(truth, current error %, prototype error %) for one mount and one drawn line."""
+    ti = ci = ni = 0
+    for sd in seeds:
+        w = crowd(sd, n_people=n, **ckw)
+        frames = render(cam, w, SyntheticDetector(seed=610 + sd, recall=0.95, jitter=0.025))
+        ti += truth_counts(w, door_w)[0]
+        ci += counts(run_current(frames, zone))[0]
+        ni += counts(run_variant(frames, zone))[0]
+    if ti == 0:
+        return 0, 0.0, 0.0
+    return ti, (ci - ti) / ti * 100.0, (ni - ti) / ti * 100.0
+
+
+def env_distance_height():
+    print("\n(E1) MOUNTING DISTANCE x MOUNTING HEIGHT")
+    print("     Nest Cam indoor 2nd gen assumed: 129 deg horizontal, 1080p. Bearing 30 deg off the")
+    print("     door centreline (a normal corner mount), aimed at chest height in the doorway.")
+    print("     Cell = prototype count error; the same traffic and the same truth in every cell.")
+    heights = (2.0, 2.4, 2.8, 3.2, 3.6)
+    dists = (0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+    print("       dist   " + "".join(f"{h:>8.1f} m" for h in heights)
+          + "      px   ang  looks")
+    for d in dists:
+        cells = []
+        for h in heights:
+            cam = mount(d, h, 30.0)
+            zone = door_line(cam, 1.0, 0.0)
+            if zone is None:
+                cells.append("     --")
+                continue
+            if not sightline(cam)["door_in_frame"]:
+                cells.append("  nofit")
+                continue
+            _t, _c, ne = envelope_score(cam, zone)
+            cells.append(f"{ne:>+6.0f}%")
+        cam = mount(d, 2.8, 30.0)
+        z = door_line(cam, 1.0, 0.0)
+        sl = sightline(cam)
+        ang = crossing_angle(cam, z) if z else 0.0
+        print(f"       {d:>4.1f}m " + "".join(f"{c:>10}" for c in cells)
+              + f"  {sl['px']:>6.0f} {ang:>5.0f} {sl['looks_inside']:>6}")
+    note("px / ang / looks are measured at 2.8 m height: the person's height in the doorway in")
+    note("pixels on a 1080p frame, the image crossing angle in degrees, and how many times the")
+    note("counter sees them after they are inside. 'nofit' = both door jambs do not fit in frame.")
+
+
+def walk_travel(cam, zone, aspect=16 / 9):
+    """THE WALK TEST, in numbers: how far the foot point moves across the line, in frame heights,
+    for a person stepping from one pace outside the door to one pace inside.
+
+    This is the single quantity an installer can check from a ladder with the live view open, and
+    it turns out to predict the counting error better than pixel height or any angle does — it is
+    the thing all of them are proxies for. If stepping through the doorway barely moves you in the
+    picture, no counting rule can tell that you went in rather than past."""
+    g = CNT.GateCounter(zone, aspect=aspect)
+    p_out, p_in = cam.project((0.0, 0.0, 1.0)), cam.project((0.0, 0.0, -1.0))
+    if p_out is None or p_in is None:
+        return 0.0
+    a, _ = g._project(p_out)
+    b, _ = g._project(p_in)
+    if a is None or b is None:
+        return 0.0
+    return abs(b - a)
+
+
+def env_walk_test():
+    print("\n(E7) THE WALK TEST — the one number an installer can check from the ladder")
+    print("     A person steps from one pace OUTSIDE the door to one pace INSIDE. How far do their")
+    print("     feet move in the picture, as a fraction of the picture's height?")
+    print("       dist  height   feet move   1/n of screen   person px   prototype")
+    rows = []
+    for d in (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0):
+        for h in (2.6, 3.2):
+            cam = mount(d, h, 30.0)
+            zone = door_line(cam, 1.0, 0.0)
+            if zone is None:
+                continue
+            tv = walk_travel(cam, zone)
+            sl = sightline(cam)
+            _t, _c, ne = envelope_score(cam, zone)
+            rows.append((tv, ne))
+            frac = f"1/{1 / tv:.0f}" if tv > 0 else "-"
+            print(f"       {d:>4.1f}m {h:>6.1f}m {tv:>11.3f} {frac:>15} {sl['px']:>11.0f}"
+                  f" {ne:>+10.0f}%")
+    ok = [e for tv, e in rows if tv >= 0.12]
+    bad = [e for tv, e in rows if tv < 0.06]
+    if ok and bad:
+        note(f"every mount that moves the feet at least 0.12 of a frame height (1/8 of the screen)")
+        note(f"lands between {max(ok):+.0f}% and {min(ok):+.0f}%; every mount under 0.06 lands "
+             f"between {max(bad):+.0f}% and {min(bad):+.0f}%.")
+        check("the walk test separates workable mounts from hopeless ones",
+              min(ok) > max(bad) + 10,
+              f"worst above 1/8 screen {min(ok):+.0f}% vs best under 1/16 {max(bad):+.0f}%")
+
+
+def env_bearing():
+    print("\n(E2) BEARING — how far round from the door's centreline the camera may sit")
+    print("     2.5 m from the door, 2.8 m up, aimed at chest height in the doorway.")
+    print("       bearing   crossing angle   person px   looks inside   current   prototype")
+    for b in (0.0, 15.0, 30.0, 45.0, 60.0, 75.0):
+        cam = mount(2.5, 2.8, b)
+        zone = door_line(cam, 1.0, 0.0)
+        if zone is None:
+            print(f"       {b:>5.0f} deg   door not in frame")
+            continue
+        sl = sightline(cam)
+        ang = crossing_angle(cam, zone)
+        _t, ce, ne = envelope_score(cam, zone)
+        fit = "" if sl["door_in_frame"] else "   (door clipped)"
+        print(f"       {b:>5.0f} deg {ang:>13.0f} deg {sl['px']:>11.0f} {sl['looks_inside']:>14}"
+              f" {ce:>+9.0f}% {ne:>+10.0f}%{fit}")
+
+
+def env_aim():
+    print("\n(E3) WHERE TO AIM — what the tilt does, at 2.5 m out and 2.8 m up, bearing 30 deg")
+    print("       aimed at height   threshold sits   person px   current   prototype")
+    for ah in (0.0, 0.5, 1.0, 1.5, 2.0, 2.5):
+        cam = mount(2.5, 2.8, 30.0, aim=(0.0, ah, 0.0))
+        zone = door_line(cam, 1.0, 0.0)
+        if zone is None:
+            print(f"       {ah:>13.1f} m   threshold out of frame")
+            continue
+        sl = sightline(cam)
+        ny = sl["threshold_ny"]
+        _t, ce, ne = envelope_score(cam, zone)
+        flag = "" if 0.30 <= ny <= 0.92 else "   <- threshold too near the frame edge"
+        print(f"       {ah:>13.1f} m {ny * 100:>13.0f}% down {sl['px']:>10.0f} {ce:>+9.0f}%"
+              f" {ne:>+10.0f}%{flag}")
+    note("'threshold sits' is how far down the picture the floor at the doorway appears. That floor")
+    note("point is where the line gets drawn, so it has to sit comfortably inside the frame.")
+
+
+def env_back_of_store():
+    """The most common existing mount at LuxeLink, and the one that has to be answered directly."""
+    print("\n(E4) THE BACK-OF-STORE MOUNT — camera at the rear wall looking at the front door")
+    print("     Bearing 0: straight down the shop. Aimed at chest height in the doorway.")
+    print("     Nest indoor 2nd gen lens (129 deg horizontal, 1080p).")
+
+    print("\n     (E4a) LINE ON THE DOORWAY — distance x mounting height, prototype error")
+    heights = (2.4, 2.8, 3.2, 3.6)
+    print("       dist  " + "".join(f"{h:>9.1f} m" for h in heights) + "      px   ang")
+    for d in (4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0):
+        cells = []
+        for h in heights:
+            cam = mount(d, h, 0.0)
+            z = door_line(cam, 1.0, 0.0)
+            if z is None or not sightline(cam)["door_in_frame"]:
+                cells.append("  nofit")
+                continue
+            _t, _c, ne = envelope_score(cam, z, wander_rate=0.4)
+            cells.append(f"{ne:>+6.0f}%")
+        cam = mount(d, 2.8, 0.0)
+        z = door_line(cam, 1.0, 0.0)
+        sl = sightline(cam)
+        print(f"       {d:>4.1f}m " + "".join(f"{c:>11}" for c in cells)
+              + f"  {sl['px']:>6.0f} {crossing_angle(cam, z):>5.0f}")
+
+    print("\n     (E4b) PULLING THE LINE INSIDE, to make people bigger — prototype error")
+    print("     Line width grows with depth so it still spans the walkway. 40% of shoppers browse.")
+    depths = (0.0, 1.0, 2.0, 3.0)
+    widths = {0.0: 1.0, 1.0: 1.8, 2.0: 2.5, 3.0: 3.0}
+    print("       dist  " + "".join(f"{dp:>7.0f} m in" for dp in depths))
+    for d in (4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0):
+        cam = mount(d, 2.8, 0.0)
+        cells = []
+        for dp in depths:
+            z = door_line(cam, widths[dp], -dp)
+            if z is None:
+                cells.append("      --")
+                continue
+            _t, _c, ne = envelope_score(cam, z, wander_rate=0.4)
+            cells.append(f"{ne:>+6.0f}%")
+        print(f"       {d:>4.1f}m " + "".join(f"{c:>11}" for c in cells))
+
+    print("\n     (E4c) WHAT THE INTERIOR LINE'S ERROR IS MADE OF — camera 8 m back, 2.8 m up")
+    print("       line depth   browsers OFF   browsers ON   cost of browsing")
+    cam = mount(8.0, 2.8, 0.0)
+    for dp in depths:
+        z = door_line(cam, widths[dp], -dp)
+        if z is None:
+            continue
+        _t, _c, off = envelope_score(cam, z, wander_rate=0.0)
+        _t, _c, on = envelope_score(cam, z, wander_rate=0.4)
+        print(f"       {dp:>8.0f} m {off:>+13.0f}% {on:>+12.0f}% {on - off:>+15.0f} pp")
+    note("With browsers off, the error is people the counter could not resolve at that range.")
+    note("The difference is customers wandering back over an interior line, counted again.")
+
+
+def env_door_width():
+    print("\n(E5) HOW WIDE AN OPENING ONE CAMERA CAN COVER")
+    print("     2.5 m from the opening, 2.8 m up, bearing 30 deg, line drawn across the full width.")
+    print("     People fan out across whatever width they are given.")
+    print("       opening   person px at the FAR edge   both ends in frame   current   prototype")
+    for wdt in (0.9, 1.2, 1.8, 2.4, 3.0, 3.6, 4.5):
+        cam = mount(2.5, 2.8, 30.0)
+        zone = door_line(cam, wdt, 0.0)
+        if zone is None:
+            print(f"       {wdt:>5.1f} m   line not in frame")
+            continue
+        far = cam.person_box(-wdt / 2 * 0.9, 0.0)
+        sl = sightline(cam, door_w=wdt)
+        _t, ce, ne = envelope_score(cam, zone, door_w=wdt, x_spread=wdt * 0.38)
+        px = far["h"] * NEST_ROWS if far else 0.0
+        print(f"       {wdt:>5.1f} m {px:>21.0f} px {str(sl['door_in_frame']):>18}"
+              f" {ce:>+9.0f}% {ne:>+10.0f}%")
+
+
+def env_lens():
+    print("\n(E6) LENS — the same mount on the two Nest models")
+    print("     2.5 m out, 2.8 m up, bearing 30 deg. The outdoor figure ASSUMES 152 deg is")
+    print("     diagonal, which converts to about 148 deg horizontal on 16:9 — an assumption.")
+    print("       lens                          h-FOV   person px   prototype")
+    for label, hf, rows in (("Nest indoor 2nd gen, 1080p", 129.0, 1080),
+                            ("Nest outdoor 2nd gen, 2K", 148.0, 1440),
+                            ("a 90 deg lens, for comparison", 90.0, 1080)):
+        cam = mount(2.5, 2.8, 30.0, hfov=hf)
+        zone = door_line(cam, 1.0, 0.0)
+        box = cam.person_box(0.0, 0.0)
+        _t, _c, ne = envelope_score(cam, zone)
+        print(f"       {label:<30}{hf:>5.0f} {box['h'] * rows:>11.0f} {ne:>+11.0f}%")
+    note("Pixel heights use each model's own sensor rows, so the 2K row is not penalised for its")
+    note("wider lens. The counting error itself is computed in normalized coordinates and is")
+    note("therefore a function of the LENS, not of the resolution.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sweeps", action="store_true", help="also run the placement/angle/noise tables")
+    ap.add_argument("--envelope", action="store_true",
+                    help="the installation envelope: distance, height, bearing, aim, opening width")
     args = ap.parse_args()
 
     cam = standard_camera()
@@ -843,6 +1170,15 @@ def main():
     s8_staff_reentry(cam, zone)
     day_test(cam, zone)
     error_budget(cam, zone)
+
+    if args.envelope:
+        env_distance_height()
+        env_walk_test()
+        env_bearing()
+        env_aim()
+        env_back_of_store()
+        env_door_width()
+        env_lens()
 
     if args.sweeps:
         sweep_line_placement(cam)
