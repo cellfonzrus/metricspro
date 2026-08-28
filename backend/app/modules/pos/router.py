@@ -2934,3 +2934,55 @@ def receipt_import_print(import_id: str, editable: bool = False, org_id: str = O
     if not rows or not rows[0].get("document"):
         raise HTTPException(404, "no printable document for this import")
     return HTMLResponse(content=_rrender.render_html(rows[0]["document"], editable=bool(editable)))
+
+
+# ── Vendor rebate / activation report (carrier commission + rebate history XLSX) ───────────────────
+# Upload the carrier's rebate/commission export → classify each line (device rebate vs commission),
+# compute device gross profit (Unit Rebate − Related Cost), and summarize per store/period. This
+# PREVIEW endpoint is READ-ONLY: it writes nothing, so the numbers can be verified before any
+# customer/activation/P&L write is enabled. See app/modules/pos/vendor_rebate_report.py.
+from app.modules.pos import vendor_rebate_report as _vrr
+
+
+@router.post("/activation-report/preview")
+def activation_report_preview(body: dict, org_id: str = ORG_ID):
+    """Parse a vendor rebate/commission history workbook and return the classification + totals +
+    per-store/period P&L summary WITHOUT writing anything. Body: {file (base64 .xlsx or data URL)}."""
+    raw, _ext = _decode_image(body.get("file") or body.get("image") or "")
+    if not _vrr.is_xlsx(raw):
+        raise HTTPException(400, "an .xlsx vendor rebate report is required")
+    rows = _vrr.read_xlsx(raw)
+    if not rows:
+        raise HTTPException(422, "could not read rows from this workbook")
+    res = _vrr.normalize_report(rows)
+    # cap the row-level sample so the preview payload stays small; totals/summary cover everything
+    sample = res["activations"][:25]
+    return {
+        "totals": res["totals"],
+        "families": res["families"],
+        "summary_by_store_period": res["summary_by_store_period"],
+        "sample": sample,
+    }
+
+
+@router.post("/activation-report/import")
+def activation_report_import(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Import a vendor rebate/commission report: create customers (deduped by phone) + activations
+    (deduped by cell/date) and UPSERT the P&L ledger (commission → carrier_comm, device rebate →
+    device_rebate contra-COGS). Body: {file (base64 .xlsx), store_code?, dry_run?}. dry_run=true
+    returns the same preview WITHOUT writing — the confirm step before anything lands."""
+    raw, _ext = _decode_image(body.get("file") or body.get("image") or "")
+    if not _vrr.is_xlsx(raw):
+        raise HTTPException(400, "an .xlsx vendor rebate report is required")
+    rows = _vrr.read_xlsx(raw)
+    if not rows:
+        raise HTTPException(422, "could not read rows from this workbook")
+    res = _vrr.normalize_report(rows)
+    if body.get("dry_run"):
+        return {"dry_run": True, "totals": res["totals"], "families": res["families"],
+                "summary_by_store_period": res["summary_by_store_period"], "sample": res["activations"][:25]}
+    uploader = _caller_employee(authorization, org_id) or None
+    result = _vrr.import_report(sb(), org_id, res,
+                                store_code=(body.get("store_code") or "").strip() or None,
+                                uploaded_by=uploader)
+    return {"imported": True, **result}
