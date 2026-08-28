@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { api, ORG_ID, localToday, supabase } from '@/lib/client'
+import { createPunchQueue, runPunchWithRetry, optimisticMessage, syncingMessage, type PunchItem } from '@/lib/punchQueue'
 import { useAuth } from '@/lib/auth-context'
 import EmployeeWidgets from '@/components/EmployeeWidgets'
 import ClosingSubmitForm from '@/components/ClosingSubmitForm'
@@ -41,7 +42,12 @@ export default function PortalPage() {
   const [stores, setStores] = useState<string[]>([])     // stores this employee may clock in at today (no override)
   const [allStores, setAllStores] = useState<{ code: string; label: string }[]>([])  // every store (for the picker)
   const [selStore, setSelStore] = useState('')           // the store they're clocking in at
-  const [ovr, setOvr] = useState<{ store_code: string; selfie: string; g: any } | null>(null)  // pending override
+  const [ovr, setOvr] = useState<{ store_code: string; selfie: string; g: any; client_request_id?: string } | null>(null)  // pending override
+  // Block-and-hold (mig 915): an unscheduled tap is HELD, not clocked in. This carries the waiting
+  // state (message + store + tap time) so the kiosk shows "waiting for your manager" instead of the
+  // scary error, and — reconciled from /timeclock/status — survives a refresh until the manager's
+  // schedule activates the punch (then status.clockedIn flips and this clears).
+  const [pendingSched, setPendingSched] = useState<{ store_code: string; message: string; requested_at?: string } | null>(null)
   const [prio, setPrio] = useState<any | null>(null)          // pending priority-sell ack (module 095)
   const [prioChecked, setPrioChecked] = useState(false)
   const [mgr, setMgr] = useState({ email: '', pw: '', busy: false, err: '' })
@@ -147,12 +153,151 @@ export default function PortalPage() {
   }, [empId, token, authed])
   useEffect(() => { refreshStatus() }, [refreshStatus])
 
+  // Reconcile the block-and-hold waiting state (mig 915) with /timeclock/status on every poll:
+  //  * clockedIn -> the manager scheduled them and the held punch activated: clear the waiting banner
+  //    and announce it (once), so the kiosk flips from "waiting" to "on the clock" with no re-tap.
+  //  * a pending request the server still holds -> (re)surface the waiting banner, so a hard refresh
+  //    mid-wait resumes it instead of showing a blank screen.
+  useEffect(() => {
+    if (!status) return
+    if (status.clockedIn) {
+      if (pendingSched) {
+        setPendingSched(null)
+        const t = status?.entry?.clock_in ? new Date(status.entry.clock_in).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: PORTAL_TZ }) : ''
+        setMsg(`✅ Your manager added you to the schedule — you're clocked in${t ? ` from ${t}` : ''}.`)
+      }
+      return
+    }
+    const reqs = status.pending_schedule_requests
+    if (Array.isArray(reqs) && reqs.length > 0) {
+      const p = reqs[0]
+      setPendingSched(prev => prev || { store_code: p.store_code || '', message: '', requested_at: p.requested_at })
+    } else if (pendingSched) {
+      // the server no longer holds it (denied/expired) and they're not clocked in — stop waiting.
+      setPendingSched(null)
+    }
+  }, [status])   // eslint-disable-line react-hooks/exhaustive-deps
+
   // Self-heal while the backend is unreachable — keep re-checking instead of sitting on a dead screen.
   useEffect(() => {
     if (!connErr) return
     const t = setInterval(() => refreshStatus(), 15000)
     return () => clearInterval(t)
   }, [connErr, refreshStatus])
+
+  // ── Durable punch queue (Part B) ────────────────────────────────────────────────────────────────
+  // A tap is saved to localStorage BEFORE the network call and shown as optimistic ("syncing…"), then
+  // sent with a STABLE client_request_id and retried with exponential backoff until the server
+  // confirms — the backend dedupes on that id, so a retry is one row, not a double punch. The status
+  // poll reconciles (clears an item the server already applied) as the safety net for a lost response.
+  const punchQueueRef = useRef<ReturnType<typeof createPunchQueue> | null>(null)
+  function pq() {
+    if (!punchQueueRef.current) {
+      const storage = typeof window !== 'undefined' ? window.localStorage
+        : { getItem: () => null, setItem: () => {}, removeItem: () => {} }
+      punchQueueRef.current = createPunchQueue({
+        storage,
+        uuid: () => { try { return crypto.randomUUID() } catch { return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` } },
+        now: () => Date.now(),
+      })
+    }
+    return punchQueueRef.current
+  }
+  const drivingRef = useRef<Set<string>>(new Set())
+
+  // Apply a confirmed clock-in response — the SAME branch logic clock-in always had (override / ack /
+  // DM-permission / success). The held-punch flows (override, priority-ack) carry the SAME id forward.
+  function applyClockInResponse(res: any, item: PunchItem) {
+    const selfie = (item.body.selfie as string) || ''
+    const g = { lat: item.body.gps_lat as number | undefined, lng: item.body.gps_lng as number | undefined, acc: item.body.gps_accuracy_m as number | undefined }
+    const store = (item.body.store_code as string) || selStore
+    if (res?.status === 'pending_schedule_approval') {
+      // BLOCKED-AND-HELD (mig 915): no punch was opened. Show the professional pending message and the
+      // waiting state; the status poll flips this to "Clocked in" once the manager schedules them.
+      setPendingSched({ store_code: res.store_code || store, message: res.message || '', requested_at: res.requested_at })
+      setMsg('⏳ ' + (res.message || "You're not scheduled here yet — your manager has been notified. You'll be clocked in automatically once they add you to the schedule."))
+    } else if (res?.needs_override) {
+      setOvr({ store_code: res.store_code || store, selfie, g, client_request_id: item.client_request_id })
+      setMsg(res.message || `You're not scheduled at ${res.store_code || store} today — manager approval needed.`)
+    } else if (res?.needs_priority_ack) {
+      setPrio({ store_code: res.store_code || store, priority: res.priority || [], selfie, g, matchPct: item.body.face_match_pct, client_request_id: item.client_request_id })
+      setPrioChecked(false)
+      setMsg(res.message || 'Acknowledge the priority phones to clock in.')
+    } else if (res?.needs_dm_permission) {
+      setMsg(res.message || '⏳ Clocked in — this second session is pending your DM’s permission and won’t count until they approve it.')
+      setMissedClosing(res?.missed_closing_notice || null)
+    } else {
+      setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
+      setMissedClosing(res?.missed_closing_notice || null)
+    }
+  }
+
+  function applyClockOutResponse(res: any) {
+    if (res?.success === false || res?.needs_closing) {
+      // blocked (e.g. closing gate) — the server answered definitively; the punch is still OPEN by design
+      setMsg('⛔ ' + (res?.message || 'Clock-out blocked — you are still clocked in.'))
+    } else if (res?.extra_pending || res?.permission_status === 'pending') {
+      setMsg('⏳ ' + (res?.message || `Clocked out at ${res?.data?.time || ''} — extra time is pending your DM’s permission.`))
+      setMissedClosing(res?.missed_closing_notice || null)
+    } else {
+      setMsg(`✅ Clocked out at ${res?.data?.time || ''} — ${res?.data?.hours ?? '?'} hrs.`)
+      setMissedClosing(res?.missed_closing_notice || null)
+    }
+  }
+
+  // Send one queued punch with its stable id, retrying on timeout/network until confirmed or a
+  // definitive non-retryable error. Guarded so the tap-driver and the resume-poll never double-send.
+  async function drivePunch(item: PunchItem) {
+    if (drivingRef.current.has(item.client_request_id)) return
+    drivingRef.current.add(item.client_request_id)
+    try {
+      const outcome = await runPunchWithRetry(item, {
+        send: (body) => authed(item.path, { method: 'POST', signal: tsig(45000), body: JSON.stringify(body) }),
+        sleep: async (ms) => { await wait(ms) },
+        onSyncing: () => setMsg(syncingMessage(item.kind)),
+      })
+      if (outcome.status === 'confirmed') {
+        pq().remove(item.client_request_id)
+        if (item.kind === 'clock-out') applyClockOutResponse(outcome.res)
+        else applyClockInResponse(outcome.res, item)
+      } else if (outcome.status === 'failed') {
+        // definitive, non-retryable — surface it and drop the item (a retry can't change the answer)
+        pq().remove(item.client_request_id)
+        setMsg(punchErr(outcome.error, item.kind))
+      } else {
+        // exhausted the active retries but the punch is STILL queued — the status poll resumes it, and
+        // the message stays "saved, syncing…" (never the old "may NOT have gone through").
+        setMsg(syncingMessage(item.kind))
+      }
+    } finally {
+      drivingRef.current.delete(item.client_request_id)
+      setBusy(false)
+      refreshStatus()
+    }
+  }
+
+  function resumePunchQueue() {
+    for (const item of pq().list()) {
+      if (!drivingRef.current.has(item.client_request_id)) void drivePunch(item)
+    }
+  }
+
+  // Resume + reconcile: on mount (so a hard refresh mid-sync picks the punch back up) and every 15s
+  // while anything is still pending, re-check status (clears items the server already applied) and
+  // re-drive the rest.
+  useEffect(() => {
+    if (!empId || !token) return
+    let alive = true
+    const tick = () => {
+      if (!alive || pq().list().length === 0) return
+      authed('/api/v1/storeops/timeclock/status', { signal: tsig(30000) })
+        .then((s: any) => { if (!alive) return; setStatus(s); pq().reconcile(s); resumePunchQueue() })
+        .catch(() => { if (alive) resumePunchQueue() })
+    }
+    tick()
+    const t = setInterval(tick, 15000)
+    return () => { alive = false; clearInterval(t) }
+  }, [empId, token, authed])
 
   // Explain a slow sign-in (auth/profile still loading after 10s) instead of a bare spinner.
   useEffect(() => {
@@ -357,66 +502,43 @@ export default function PortalPage() {
   }
 
   async function finalizeClockIn(matchPct?: number) {
-    try {
-      const selfie = captureSelfie()
-      const g = gpsRef.current
-      const res: any = await authed('/api/v1/storeops/timeclock/clock-in', { method: 'POST', signal: tsig(45000), body: JSON.stringify({
-        selfie, device: 'kiosk', face_match_pct: matchPct, store_code: selStore || undefined,
-        gps_lat: g.lat, gps_lng: g.lng, gps_accuracy_m: g.acc }) })
-      if (res?.needs_override) {
-        // not home/scheduled/floater → hold the punch for a manager to approve (keeps the selfie/GPS)
-        setOvr({ store_code: res.store_code || selStore, selfie, g })
-        setMsg(res.message || `You're not scheduled at ${res.store_code || selStore} today — manager approval needed.`)
-      } else if (res?.needs_priority_ack) {
-        // store has phones in the final % of their pay window → rep must acknowledge before clocking in
-        setPrio({ store_code: res.store_code || selStore, priority: res.priority || [], selfie, g, matchPct })
-        setPrioChecked(false)
-        setMsg(res.message || 'Acknowledge the priority phones to clock in.')
-      } else if (res?.needs_dm_permission) {
-        // second session after an auto-clock-out earlier today → recorded, but held pending the DM
-        setMsg(res.message || '⏳ Clocked in — this second session is pending your DM’s permission and won’t count until they approve it.')
-        setMissedClosing(res?.missed_closing_notice || null)
-      } else {
-        setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
-        setMissedClosing(res?.missed_closing_notice || null)
-      }
-    } catch (e: any) { setMsg(punchErr(e, 'clock-in')) }
-    finally { setBusy(false); closeCamera(); refreshStatus() }
+    // Capture the selfie/GPS NOW (while the camera is live) and stash them in the queued punch so a
+    // retry re-sends the exact same evidence. The punch is saved + shown as syncing BEFORE the network
+    // call, so a timeout or a mid-flight refresh can never lose it. drivePunch sends it with a stable
+    // client_request_id and retries until the server confirms; the camera closes right away.
+    const selfie = captureSelfie()
+    const g = gpsRef.current
+    const body: Record<string, unknown> = {
+      selfie, device: 'kiosk', face_match_pct: matchPct, store_code: selStore || undefined,
+      gps_lat: g.lat, gps_lng: g.lng, gps_accuracy_m: g.acc,
+    }
+    const item = pq().enqueue('clock-in', '/api/v1/storeops/timeclock/clock-in', body)
+    setMsg(optimisticMessage('clock-in'))
+    closeCamera()
+    await drivePunch(item)
   }
 
   async function confirmPriorityAck() {
     if (!prio || !prioChecked) return
     setBusy(true)
-    try {
-      const res: any = await authed('/api/v1/storeops/timeclock/clock-in', { method: 'POST', signal: tsig(45000), body: JSON.stringify({
-        selfie: prio.selfie, device: 'kiosk', face_match_pct: prio.matchPct, store_code: prio.store_code || undefined,
-        gps_lat: prio.g?.lat, gps_lng: prio.g?.lng, gps_accuracy_m: prio.g?.acc,
-        priority_ack: true, priority_ack_count: (prio.priority || []).length }) })
-      setMsg(`✅ Clocked in at ${res?.data?.time || ''}${res?.data?.store_code ? ` · ${res.data.store_code}` : ''}.`)
-      setMissedClosing(res?.missed_closing_notice || null)
-      setPrio(null)
-    } catch (e: any) { setMsg(punchErr(e, 'clock-in')) }
-    finally { setBusy(false); refreshStatus() }
+    const body: Record<string, unknown> = {
+      selfie: prio.selfie, device: 'kiosk', face_match_pct: prio.matchPct, store_code: prio.store_code || undefined,
+      gps_lat: prio.g?.lat, gps_lng: prio.g?.lng, gps_accuracy_m: prio.g?.acc,
+      priority_ack: true, priority_ack_count: (prio.priority || []).length,
+    }
+    // Same logical punch → REUSE the id from the held clock-in so the ack is idempotent with it.
+    const item = pq().enqueue('clock-in', '/api/v1/storeops/timeclock/clock-in', body, prio.client_request_id)
+    setPrio(null)
+    setMsg(optimisticMessage('clock-in'))
+    await drivePunch(item)
   }
 
   async function clockOut() {
     setBusy(true)
-    try {
-      const res: any = await authed('/api/v1/storeops/timeclock/clock-out', { method: 'POST', signal: tsig(45000), body: JSON.stringify({}) })
-      if (res?.success === false || res?.needs_closing) {
-        // blocked (e.g. closing gate) — the punch is still OPEN; never show a fake "clocked out"
-        setMsg('⛔ ' + (res?.message || 'Clock-out blocked — you are still clocked in.'))
-      } else if (res?.extra_pending || res?.permission_status === 'pending') {
-        // worked past the scheduled end + grace, or closed a pending second session → part is pending the DM
-        setMsg('⏳ ' + (res?.message || `Clocked out at ${res?.data?.time || ''} — extra time is pending your DM’s permission.`))
-        setMissedClosing(res?.missed_closing_notice || null)
-      } else {
-        setMsg(`✅ Clocked out at ${res?.data?.time || ''} — ${res?.data?.hours ?? '?'} hrs.`)
-        setMissedClosing(res?.missed_closing_notice || null)
-      }
-    }
-    catch (e: any) { setMsg(punchErr(e, 'clock-out')) }
-    finally { setBusy(false); refreshStatus() }
+    // Save + go optimistic BEFORE the network call; drivePunch retries with a stable id until confirmed.
+    const item = pq().enqueue('clock-out', '/api/v1/storeops/timeclock/clock-out', {})
+    setMsg(optimisticMessage('clock-out'))
+    await drivePunch(item)
   }
 
   async function doLogin(e: React.FormEvent) {
@@ -606,6 +728,23 @@ export default function PortalPage() {
 
         {msg && <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: msg.startsWith('✅') ? '#e7f6ec' : msg.startsWith('⏳') ? '#fff7e6' : '#fdeaea', fontSize: 14, textAlign: 'center' }}>{msg}</div>}
 
+        {/* ⏳ Block-and-hold waiting state (mig 915): the rep tapped in somewhere they're not scheduled.
+            No time is accruing — their manager was notified to add them to the schedule, and the status
+            poll flips this to "Clocked in" automatically once they do. Never the scary error. */}
+        {pendingSched && !status?.clockedIn && (
+          <div style={{ marginTop: 12, padding: 14, borderRadius: 10, background: '#fff7e6', border: '1px solid #f5a623' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e' }}>
+              ⏳ Waiting for your manager{pendingSched.store_code ? ` · ${pendingSched.store_code}` : ''}
+            </div>
+            <div style={{ fontSize: 12.5, color: '#78350f', marginTop: 6 }}>
+              {pendingSched.message || "You're not scheduled at this location right now. Your manager has been notified to add you to the schedule — once they approve, you'll be clocked in automatically from the time you tapped in."}
+            </div>
+            {pendingSched.requested_at && (
+              <div style={{ fontSize: 11, color: '#92400e', marginTop: 6 }}>You tapped in at {pendingSched.requested_at}. This screen updates by itself — no need to tap again.</div>
+            )}
+          </div>
+        )}
+
         {/* ⏳ persistent banner: this employee's own time-clock requests awaiting the DM's permission
             (second session after an auto-clock-out, or extra time worked past the scheduled end + grace).
             Shows on BOTH the kiosk here AND the DM's approval board; counts toward hours only once approved. */}
@@ -752,11 +891,11 @@ function tsig(ms: number): AbortSignal | undefined {
   try { return (AbortSignal as any).timeout?.(ms) } catch { return undefined }
 }
 
-// Punch-failure message: a timeout/network drop means the punch MAY have landed server-side, so the
-// user must re-check status rather than blind-retry (a blind retry can 409 on an already-open punch).
+// Punch-failure message — reached ONLY for a genuinely non-retryable error (a definitive server
+// rejection), because a timeout/network drop is now handled by the durable queue: it's saved locally,
+// shown as "syncing…", and retried with a stable client_request_id until the server confirms. So the
+// old scary "may NOT have gone through" is gone — if we're here, the server gave a real answer.
 function punchErr(e: any, what: string): string {
   const m = String(e?.message || e || '')
-  if (e?.name === 'TimeoutError' || e?.name === 'AbortError' || /failed to fetch|network|load failed/i.test(m))
-    return `⚠️ The server didn't respond — your ${what} may NOT have gone through. Wait for your status above to refresh before trying again.`
   return '❌ ' + (m || `${what} failed`)
 }

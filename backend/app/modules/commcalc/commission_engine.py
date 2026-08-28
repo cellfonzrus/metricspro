@@ -168,7 +168,8 @@ def _assignment_miss_reason(scope, val, rn_canon, rr, sv_store, sv_mkt, scope_va
     return f"scope '{scope}' did not match"
 
 
-def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=False, store_keys=None):
+def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=False, store_keys=None,
+                      identity_map=None):
     """Most-specific assignment wins: employee > role > store > market > default. Returns the plan or None.
 
     EMPLOYEE scope_value is matched to the rep's name name-order-insensitively via `_canon_person`
@@ -195,9 +196,28 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=Fal
     assignment may also match — the alias-resolved store_code and canonical store_address for the rep's
     raw POS store string. It is passed ONLY when the tenant set store_resolution='alias'. The default
     None makes `skeys` empty, so `val in skeys` is always False and the predicate — and therefore every
-    payout — is BYTE-IDENTICAL to before."""
+    payout — is BYTE-IDENTICAL to before.
+
+    `identity_map` (luxelink money-path name-bridge) is an OPTIONAL deterministic POS->roster identity map
+    {POS salesperson name (UPPER) -> roster name} — the SAME map the calc already loads from
+    commcalc.name_map / rep_aliases. EMPLOYEE-scope assignments store the ROSTER name, but `rep_name` here
+    is the rep's POS salesperson string; when they differ the exact-canon compare silently misses and the
+    rep is skipped ($0). With a map supplied, an assignment pinned under the rep's roster name ALSO matches
+    their POS sales via a 1:1, explicit bridge — never fuzzy. The default None/empty makes the bridge inert
+    so the employee compare — and every payout — is BYTE-IDENTICAL to before. SAFETY: the bridge only ever
+    matches the roster name the map EXPLICITLY connects this POS name to; it can never attach a plan to a
+    rep the map does not connect, and a no-bridge case falls straight back to today's exact compare."""
     SCOPE_RANK = {"employee": 4, "role": 3, "store": 2, "market": 1, "default": 0}
     rn_canon = _canon_person(rep_name)
+    # Deterministic POS->roster bridge (see `identity_map` above). None when no map is supplied or the map
+    # has no entry for this POS name (or it maps back to the same canon) → the employee compare is unchanged.
+    rn_bridged_canon = None
+    if identity_map:
+        _bridged = identity_map.get(str(rep_name or "").strip().upper())
+        if _bridged:
+            _bc = _canon_person(_bridged)
+            if _bc and _bc != rn_canon:
+                rn_bridged_canon = _bc
     rr = (rep_role or "").strip().lower()
     sv_store, sv_mkt = (store or "").strip().lower(), (market or "").strip().lower()
     skeys = {str(k).strip().lower() for k in (store_keys or ()) if str(k or "").strip()}
@@ -216,7 +236,9 @@ def _resolve_plan_for(rep_name, store, market, plans, rep_role=None, explain=Fal
             scope = (a.get("scope") or "default").strip().lower()
             val = (a.get("scope_value") or "").strip().lower()
             if scope == "employee":
-                ok = bool(val) and _canon_person(a.get("scope_value")) == rn_canon
+                _a_canon = _canon_person(a.get("scope_value"))
+                ok = bool(val) and (_a_canon == rn_canon
+                                    or (rn_bridged_canon is not None and _a_canon == rn_bridged_canon))
             elif scope == "role":
                 ok = bool(val) and bool(rr) and val == rr
             else:
@@ -466,15 +488,18 @@ def _plan_pay_config(client, org_id):
     """Per-tenant PAY-path options. Today:
       • plan_ct_resolution (mig 232) 'raw' (default, byte-identical) | 'mapped'
       • store_resolution   (mig 249) 'exact' (default, byte-identical) | 'alias'
+      • activation_source  (mig 296) 'raw_sales' (default/NULL, byte-identical) | 'activation_details'
 
     Degrades to the defaults when the table/row is absent — never raises. The column list is tried
-    WIDEST-FIRST and falls back to the narrow one: a single combined select would make the whole read
-    fail on a pre-mig-249 database and silently revert a tenant's plan_ct_resolution='mapped' back to
-    'raw' — i.e. a MONEY change caused by an unrelated missing column. The fallback keeps mig 232's
-    setting readable on its own."""
-    out = {"plan_ct_resolution": "raw", "store_resolution": "exact"}
+    WIDEST-FIRST and falls back to the narrow ones: a single combined select would make the whole read
+    fail on a pre-mig-296/249 database and silently revert a tenant's plan_ct_resolution='mapped' back to
+    'raw' — i.e. a MONEY change caused by an unrelated missing column. Each fallback keeps the earlier
+    migration's setting readable on its own, so a missing activation_source column degrades to
+    'raw_sales' (today's behaviour) without disturbing the mig-232 / mig-249 reads."""
+    out = {"plan_ct_resolution": "raw", "store_resolution": "exact", "activation_source": "raw_sales"}
     rows = None
-    for cols in ("plan_ct_resolution,store_resolution", "plan_ct_resolution"):
+    for cols in ("plan_ct_resolution,store_resolution,activation_source",
+                 "plan_ct_resolution,store_resolution", "plan_ct_resolution"):
         try:
             rows = (client.schema("commcalc").table("commission_org_config")
                     .select(cols).eq("org_id", org_id).limit(1).execute().data) or []
@@ -487,6 +512,8 @@ def _plan_pay_config(client, org_id):
         out["plan_ct_resolution"] = v if v in ("raw", "mapped") else "raw"
         s = str(rows[0].get("store_resolution") or "exact").strip().lower()
         out["store_resolution"] = s if s in ("exact", "alias") else "exact"
+        a = str(rows[0].get("activation_source") or "raw_sales").strip().lower()
+        out["activation_source"] = a if a in ("raw_sales", "activation_details") else "raw_sales"
     return out
 
 
@@ -821,12 +848,125 @@ def _activation_buckets(client, org_id, rows):
     return out
 
 
+# ── ACTIVATION DETAILS as a PAY SOURCE (mig 296) — per-tenant opt-in, DEFAULT OFF ────────────────
+# Maps the b2b "Activation Details" report's activation-TYPE families (New Activation / Port / BYOD /
+# Tablet / Home Internet / Edge / Upgrade / Other — router._activation_details_bucket) onto the engine's
+# activation_bucket vocabulary ('premium' | 'byod'). This is the SAME split calculator.classify_contract_type
+# uses: a bring-your-own-device line is 'byod'; every other new-line activation family (incl. Port and the
+# non-phone device categories) is 'premium'. UPGRADE and OTHER are NOT payable here — they return None and
+# the line is dropped, exactly the population /activation-counts calls Total Activation (Upgrade excluded).
+_AD_ENGINE_BUCKET = {
+    "New Activation": "premium", "Port": "premium", "Tablet": "premium",
+    "Home Internet": "premium", "Edge": "premium", "BYOD": "byod",
+    "Upgrade": None, "Other": None,
+}
+
+
+def _activation_detail_lines(client, org_id, period, id_map=None):
+    """Synthetic sale LINES built from the ingested "Activation Details" custom report, for a tenant whose
+    commission_org_config.activation_source == 'activation_details' (mig 296). Reached ONLY from that
+    opted-in branch of preview(); the default 'raw_sales' path never calls this, so an opted-out tenant is
+    byte-identical.
+
+    ONE LINE PER DISTINCT ACTIVATION — the resolver (router._cr_resolve_activation_details) has already
+    deduped by device Serial# (else Activation#/Trans ID), collapsed each device's insurance/Plan-Option
+    lines into its strongest bucket, and dropped Returns/cancelled. Here we additionally DROP Upgrade and
+    Other (not payable — matching /activation-counts' Total Activation population) and map the survivors to
+    activation_bucket 'premium'/'byod'.
+
+    Each line carries ONLY the fields an activation_bucket rule needs plus identity:
+      • salesperson  — canonicalised through the SAME name bridge the money path uses (id_map:
+                       alias(UPPER)->roster) so a report salesperson name that differs from the roster
+                       still lands under the rep's roster identity (the Luxelink $0 class) instead of a
+                       new orphan group.
+      • store / trans_date / trans_id(=activation key) — for grouping, market resolution and drill-down.
+      • activation_bucket ('premium'|'byod') — the classifier-resolved match_field these lines expose.
+      • department — the report's own "Department" column (its value is the SERVICE PLAN; falls back to the
+        SP/PO service-plan name). Carried so the owner can pick those service plans in the plan editor's
+        `department` picker and pay $10 per activation on the checked ones (owner 2026-08-28) — the SAME
+        values `plan_options._custom_report_values` surfaces in that dropdown from the report's Department
+        column, so a selected value matches the line it pays. It is SAFE to expose: the accessory stamp
+        runs over `valid` BEFORE these lines are appended, so an `accessory equals yes` rule never matches
+        a Detail line; and a POS department string never collides with a b2b service-plan name.
+      • mrc — the report-carried monthly recurring charge, for pct_mrc.
+      • _actsrc='activation_details' — the marker _line_payout uses to (a) price pct_mrc off the row's own
+        mrc and (b) refuse pct_gp/pct_price/pct_price_over_cost (no cost/price columns on this report).
+    category / product_desc / contract_type are deliberately left BLANK so no category/product/contract-type
+    rule can match a Detail line — those dimensions come exclusively from raw_sales, and activations come
+    exclusively from here. `service_plan`, `carrier`, the original report bucket and contract_type are also
+    carried under private keys for transparency.
+    Never raises: any failure returns ([], meta with an error note) and the caller falls back to raw_sales."""
+    meta = {"source": "activation_details", "resolver_rows": 0, "lines": 0, "distinct_activations": 0,
+            "by_bucket": {"premium": 0, "byod": 0}, "dropped_upgrade_other": 0, "error": None}
+    try:
+        from app.modules.commcalc.router import _cr_resolve_activation_details, _market_for_fn
+    except Exception as _ie:
+        meta["error"] = f"resolver import failed: {_ie}"
+        return [], meta
+    try:
+        try:
+            mfor = _market_for_fn(client, org_id)
+        except Exception:
+            mfor = (lambda s: "")
+        rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": mfor}) or []
+    except Exception as _re:
+        meta["error"] = f"resolver failed: {_re}"
+        return [], meta
+    meta["resolver_rows"] = len(rows)
+    id_map = id_map or {}
+    out, seen = [], set()
+    for r in rows:
+        eng = _AD_ENGINE_BUCKET.get(r.get("bucket") or "Other")
+        if eng not in ("premium", "byod"):
+            meta["dropped_upgrade_other"] += 1
+            continue
+        rep_raw = str(r.get("salesperson") or "").strip()
+        rep = id_map.get(rep_raw.upper(), rep_raw) if rep_raw else rep_raw
+        act_key = (str(r.get("serial") or "").strip() or str(r.get("activation_no") or "").strip()
+                   or str(r.get("trans_id") or "").strip())
+        line = {
+            "salesperson": rep,
+            "store": str(r.get("store") or "").strip(),
+            "trans_date": str(r.get("trans_date") or "").strip(),
+            "trans_id": act_key,
+            "activation_bucket": eng,
+            "mrc": safe_float(r.get("mrc")),
+            "ext_price": 0.0, "gp": 0.0,
+            "voided": "", "trans_type": "Sale",
+            # department carries the report's Department (= service plan) so a `department in <plans>`
+            # $10-per-unit rule pays these activations; category/product/contract_type stay blank.
+            "department": str(r.get("department") or r.get("service_plan") or "").strip(),
+            "category": "", "product_desc": "", "contract_type": "",
+            "_actsrc": "activation_details",
+            "_ad_bucket": r.get("bucket"),
+            "_ad_contract_type": r.get("contract_type"),
+            "_ad_service_plan": r.get("service_plan"),
+            "_ad_carrier": r.get("carrier"),
+            "_ad_salesperson_raw": rep_raw,
+        }
+        out.append(line)
+        meta["by_bucket"][eng] += 1
+        if act_key:
+            seen.add(act_key)
+    meta["lines"] = len(out)
+    meta["distinct_activations"] = len(seen) if seen else len(out)
+    return out, meta
+
+
 # ── per-line payout ─────────────────────────────────────────────────────────────────────────────
 def _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid):
     """Dollar payout this rule produces for ONE matching qualifying line (before tier multiplier).
     flat is handled by the caller (once per rep), so here flat returns 0."""
     kind = (rule.get("payout_kind") or "flat_per_unit").strip().lower()
     amt, pct = safe_float(rule.get("amount")), safe_float(rule.get("pct"))
+    # ACTIVATION-DETAIL LINE GUARD (mig 296). A line sourced from the Activation Details report carries NO
+    # cost or sale-price columns, so a %-of-GP / %-of-price / %-of-price-over-cost rule cannot be priced on
+    # it. Refuse it (pay $0) rather than silently compute a wrong number off a 0 basis — the caller records
+    # the per-line note. flat_per_unit (the $10) and pct_mrc (priced off the report's own mrc) ARE
+    # supported. Raw_sales rows never carry _actsrc, so this branch is inert for every non-opted-in caller.
+    if row.get("_actsrc") == "activation_details" and kind in (
+            "pct_gp", "pct_price", "pct_price_over_cost"):
+        return 0.0
     if kind == "flat_per_unit":
         return round(amt, 2)
     if kind == "pct_gp":
@@ -844,6 +984,11 @@ def _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid):
             cost = 0.0
         return round(pct * max(0.0, safe_float(row.get("ext_price")) - cost), 2)
     if kind == "pct_mrc":
+        # ACTIVATION-DETAIL line (mig 296): the report carries the MRC on the row itself — there is no
+        # raw_mi to join to — so price straight off the row's own mrc. Guarded on the _actsrc marker so a
+        # raw_sales row (which never carries that marker) still routes through the historic mdn/sub join.
+        if row.get("_actsrc") == "activation_details":
+            return round(pct * safe_float(row.get("mrc")), 2)
         # join raw_mi by mdn (raw_mi.phone_number) — the reliable per-subscriber key in raw_sales.
         # subscriber_id is a defensive secondary in case a tenant maps it into raw_sales later.
         mrc = mrc_by_mdn.get(_norm_mdn(row.get("mdn")))
@@ -1122,7 +1267,7 @@ def _unmatched_record(row, why, rep, store, market, plan_name=None):
 def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
             rule_overrides=None, unmatched_detail=False, gate_override=None,
             setup_fee_override=None, sales_override=None, mrc_override=None,
-            definition_pay_override=None):
+            definition_pay_override=None, identity_map=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -1153,6 +1298,12 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     match_field" switch instead of reading `accessory_config.definition_drives_pay`. It is how the impact
     endpoint quotes an honest before/after — by driving the REAL engine twice rather than arithmetically
     guessing. None (every other caller, always) reads the tenant's stored switch, which defaults FALSE.
+
+    identity_map (luxelink money-path name-bridge) is a deterministic POS->roster identity map
+    {POS salesperson (UPPER) -> roster name} threaded straight into `_resolve_plan_for` so an
+    employee-scope plan pinned under a rep's ROSTER name still attaches to their POS sales. It is the
+    SAME map the calc loads from commcalc.name_map / rep_aliases; the default None makes the bridge inert,
+    so the money output is BYTE-IDENTICAL for every caller that does not pass it. Never fuzzy.
 
     coverage=True (diagnostics only; mig 232) additionally returns a top-level "coverage" block: every
     seller with sales but NO plan attached (today they are silently skipped → a legit-looking $0), the
@@ -1274,19 +1425,80 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     # until an owner writes such a rule / flips the setting AND runs a recalc.
     _pay_cfg = _plan_pay_config(client, org_id)
     _ct_mapped = (_pay_cfg.get("plan_ct_resolution") == "mapped")
+    # ── ACTIVATION SOURCE (mig 296 org-level + mig 297 PER-PLAN) — opt-in, DEFAULT byte-identical ──────
+    # The activation source is decided PER REP, from the rep's EFFECTIVE (paying) plan, NOT org-wide:
+    #   resolution per rep = their paying plan's activation_source, unless 'inherit', then the org-level
+    #   commission_org_config.activation_source (mig 296), then 'raw_sales'.
+    # This is the whole point of mig 297: the Chicago/Luxelink org holds BOTH the NY reps and 13 Chicago
+    # stores in ONE org. The org-wide mig-296 switch would zero Chicago's activations (Chicago is not in
+    # the NY-only report). Moving the control to the plan lets the NY plan pay activations from the report
+    # while every Chicago rep (on an 'inherit'/'raw_sales' plan) is BYTE-IDENTICAL to today.
+    #
+    # 'raw_sales' / 'inherit'->org 'raw_sales' — TODAY'S BEHAVIOUR for that rep. activations classified from
+    #                        raw_sales exactly as before.
+    # 'activation_details' — for a rep whose effective plan resolves here, activations are PAID from the
+    #                        ingested "Activation Details" custom report:
+    #   • Detail lines (deduped per activation by the resolver, Upgrade/Other/Returns excluded, mapped to
+    #     premium/byod) are APPENDED to the line set and attached (by the name bridge) to the rep who owns
+    #     them, carrying ONLY the activation_bucket match_field.
+    #   • THAT REP'S raw_sales activation_bucket is SUPPRESSED (per-rep, in the payout loop) so an
+    #     activation_bucket rule matches ONLY the Detail lines — SINGLE SOURCE per rep, no double-count.
+    #   • A Detail line whose owning rep's effective plan is NOT activation_details is DROPPED (report
+    #     activations only ever pay a rep who is on the opted-in plan).
+    #   • Accessories and every non-activation rule keep reading raw_sales UNCHANGED (Detail lines have
+    #     blank department/category/product/contract_type, so no non-activation rule ever matches them).
+    # Never on the pay-simulator's sales_override path (that substitutes the whole raw_sales set on purpose).
+    # The WHOLE branch is guarded behind `_ad_any`; when no plan resolves to activation_details it is a
+    # complete no-op and the result is byte-identical to the pre-296/297 engine.
+    _org_act_src = _pay_cfg.get("activation_source", "raw_sales")
+
+    def _plan_activation_source(p):
+        """Resolve one plan's activation source: its own value, 'inherit' -> the org-level setting.
+        Reads defensively (mig 297 column may be absent) — a missing/blank/unknown value = 'inherit'."""
+        v = str(p.get("activation_source") or "inherit").strip().lower()
+        if v not in ("inherit", "raw_sales", "activation_details"):
+            v = "inherit"
+        return _org_act_src if v == "inherit" else v
+
+    # Plan ids whose reps are paid activations from the Activation Details report.
+    _ad_plan_ids = {p.get("id") for p in plans
+                    if p.get("is_active", True) and _plan_activation_source(p) == "activation_details"}
+    _ad_any = bool(_ad_plan_ids) and (sales_override is None)
+    _ad_meta, _ad_idmap = None, {}
+    _ad_unsupported = {}   # (rule_id) -> {label, kind, lines} — pct_gp/pct_price on a Detail line, refused
+    _ad_suppressed_reps, _ad_paid_reps = set(), set()   # per-rep bookkeeping for the result block
+    _ad_dropped_non_ad_lines = 0   # Detail lines that resolved to a rep NOT on an activation_details plan
+    if _ad_any:
+        _ad_idmap = dict(identity_map or {})
+        if not _ad_idmap:
+            try:
+                from app.modules.commcalc.router import _rep_canon_map as _rcm
+                _ad_idmap = _rcm(client, org_id) or {}
+            except Exception:
+                _ad_idmap = {}
+        _ad_lines, _ad_meta = _activation_detail_lines(client, org_id, period, id_map=_ad_idmap)
+        valid.extend(_ad_lines)
     _uses_bucket = any(
         (rule.get("match_field") or "").strip().lower() == "activation_bucket"
         for p in plans for rule in (p.get("rules") or [])) or any(
         (p.get("tier_match_field") or "").strip().lower() == "activation_bucket" for p in plans)
     _bucket_lines = 0
-    if _uses_bucket or _ct_mapped:
+    if _uses_bucket or _ct_mapped or _ad_any:
         _buckets = _activation_buckets(client, org_id, valid)
         for r, b in zip(valid, _buckets):
-            if b:
+            _is_ad = r.get("_actsrc") == "activation_details"
+            if b and not _is_ad:
                 _bucket_lines += 1
             if _uses_bucket:
-                r["activation_bucket"] = b or ""
-            if _ct_mapped and b:
+                if _is_ad:
+                    pass                                   # keep the Detail line's own premium/byod bucket
+                else:
+                    # raw_sales activation bucket. Under per-plan AD, the SUPPRESSION is deferred to the
+                    # per-rep loop (only a rep whose effective plan is activation_details has its raw_sales
+                    # activations suppressed), so here the normal bucket is set for everyone — byte-identical
+                    # to the pre-296 path when no rep is AD-sourced.
+                    r["activation_bucket"] = b or ""
+            if _ct_mapped and b and not _is_ad:
                 r["_ct_resolved"] = b
 
     mrc_by_mdn, mrc_by_sub = _read_mi_mrc(client, org_id, period)
@@ -1425,7 +1637,12 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
 
     # group lines per rep
     reps = {}  # key (upper rep name) -> {name, store, lines:[...]}
+    # PASS 1 — group the RAW_SALES lines by their POS name key, exactly as the pre-296 engine did. NO name
+    # bridge is applied here, so a raw_sales rep's grouping key is BYTE-IDENTICAL to today even when the org
+    # has an activation_details plan (this is what keeps every Chicago/non-AD rep unaffected).
     for r in valid:
+        if r.get("_actsrc") == "activation_details":
+            continue                                       # Detail lines are attached in PASS 2
         rep = str(r.get("salesperson", "") or "").strip()
         if not rep or rep.lower() == "admin":
             continue
@@ -1434,6 +1651,36 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         if not e:
             e = reps[key] = {"name": rep, "store": str(r.get("store", "") or "").strip(), "lines": []}
         e["lines"].append(r)
+
+    # PASS 2 (mig 297) — attach each Activation Details line to the rep who owns it, by IDENTITY, without
+    # disturbing any raw_sales grouping key. The Detail line's salesperson is already canonicalised to the
+    # roster name in _activation_detail_lines; a raw_sales group's roster identity is its POS name bridged
+    # through the SAME alias map. So a rep's raw_sales lines (POS name) and their Detail activations (roster
+    # name) land in ONE group — but the raw group's KEY stays the POS key, so non-AD reps are byte-identical.
+    # The per-rep payout loop DROPS these Detail lines again for any rep whose effective plan is not
+    # activation_details, so a report activation can only ever pay a rep on the opted-in plan.
+    if _ad_any:
+        _raw_bridge_index = {}   # bridged-roster-key(UPPER) -> raw group key
+        for _k, _e in reps.items():
+            _bridged = _ad_idmap.get(_e["name"].upper(), _e["name"]).upper() if _ad_idmap else _k
+            _raw_bridge_index.setdefault(_bridged, _k)
+        for r in valid:
+            if r.get("_actsrc") != "activation_details":
+                continue
+            rep = str(r.get("salesperson", "") or "").strip()
+            if not rep or rep.lower() == "admin":
+                continue
+            rkey = rep.upper()
+            tgt = _raw_bridge_index.get(rkey)
+            if tgt is not None:
+                reps[tgt]["lines"].append(r)               # merge into the rep's existing raw group
+            else:
+                e = reps.get(rkey)
+                if not e:                                  # Detail-only rep (no raw_sales this period)
+                    e = reps[rkey] = {"name": rep,
+                                      "store": str(r.get("store", "") or "").strip(), "lines": []}
+                    _raw_bridge_index.setdefault(rkey, rkey)
+                e["lines"].append(r)
 
     # only_rep (drill-down): restrict the rep grouping to the one rep — canon match, else token subset
     # (mirrors the tolerant match the commission-drill endpoint uses). Default None → no filter.
@@ -1467,14 +1714,60 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
         resolution = None
         if detail:
             resolution = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
-                                           explain=True, store_keys=_skeys)
+                                           explain=True, store_keys=_skeys, identity_map=identity_map)
             plan = forced_plan or resolution.get("plan")
         else:
             # money path: EXACTLY the original lazy short-circuit — when plan_id forces a plan,
             # _resolve_plan_for is never called (so the delta vs the pre-drill engine is exactly zero,
             # incl. the case where a non-numeric assignment field would make the resolver raise).
             plan = forced_plan or _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
-                                                    store_keys=_skeys)
+                                                    store_keys=_skeys, identity_map=identity_map)
+        # ── PER-REP ACTIVATION SOURCE GATE (mig 297) ──────────────────────────────────────────────────
+        # Decide THIS rep's activation source from their EFFECTIVE (paying) plan. A rep pays under exactly
+        # ONE plan (most-specific assignment wins), so the effective plan is unambiguous — that is the
+        # multi-assignment rule: the plan that actually PAYS the rep governs. If the base resolution did not
+        # land the activation_details plan but this group carries Detail lines and the org has an AD plan,
+        # try the AD name bridge (roster identity) and adopt it ONLY when it yields an AD plan — this never
+        # disturbs a non-AD resolution (a rep who resolves to a raw_sales/inherit plan keeps that plan).
+        if _ad_any and not forced_plan:
+            _has_detail = any(r.get("_actsrc") == "activation_details" for r in e["lines"])
+            _plan_is_ad = bool(plan) and plan.get("id") in _ad_plan_ids
+            if _has_detail and not _plan_is_ad and _ad_idmap:
+                _pb = _resolve_plan_for(e["name"], store, market, plans, rep_role=rep_role,
+                                        store_keys=_skeys, identity_map=_ad_idmap)
+                if _pb is not None and _pb.get("id") in _ad_plan_ids:
+                    plan = _pb
+                    if detail:
+                        resolution = _resolve_plan_for(
+                            e["name"], store, market, plans, rep_role=rep_role, explain=True,
+                            store_keys=_skeys, identity_map=_ad_idmap)
+        _rep_ad = bool(plan) and (plan.get("id") in _ad_plan_ids)
+        if _ad_any:
+            if _rep_ad:
+                # SINGLE SOURCE for this rep: suppress its raw_sales activations so only the Detail lines
+                # (which keep their own premium/byod bucket) can satisfy an activation_bucket rule.
+                _sup = 0
+                for r in e["lines"]:
+                    if r.get("_actsrc") != "activation_details" and r.get("activation_bucket"):
+                        r["activation_bucket"] = ""
+                        _sup += 1
+                if any(r.get("_actsrc") == "activation_details" for r in e["lines"]):
+                    _ad_paid_reps.add(e["name"])
+                if _sup:
+                    _ad_suppressed_reps.add(e["name"])
+            else:
+                # A report activation resolved to a rep whose effective plan is NOT activation_details —
+                # drop those Detail lines so they can never pay a non-opted-in rep, and keep the rep
+                # byte-identical to today (raw_sales activations untouched). Counted for the result block.
+                _keep, _drop = [], 0
+                for r in e["lines"]:
+                    if r.get("_actsrc") == "activation_details":
+                        _drop += 1
+                    else:
+                        _keep.append(r)
+                if _drop:
+                    e["lines"] = _keep
+                    _ad_dropped_non_ad_lines += _drop
         if not plan:
             # COVERAGE (mig 232): a seller with real sales and NO plan attached is skipped here — which is
             # exactly how a carrier_mode='plan' tenant ends up with a legitimate-looking $0 for that rep.
@@ -1640,6 +1933,21 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
                         ldet["flat_once"] = True
                     continue
                 pay = _line_payout(row, rule, mrc_by_mdn, mrc_by_sub, cost_by_pid)
+                # ACTIVATION-DETAIL PAYOUT-KIND GUARD (mig 296): a %-of-GP / %-of-price rule cannot be
+                # priced on an Activation Details line (no cost/price columns). _line_payout already
+                # returned $0 for it; record the refusal as a plain-language note so the $0 is explained
+                # instead of silent. Never mis-prices; flat_per_unit and pct_mrc are unaffected.
+                if (row.get("_actsrc") == "activation_details"
+                        and kind in ("pct_gp", "pct_price", "pct_price_over_cost")):
+                    _un = _ad_unsupported.setdefault(str(rid), {
+                        "rule_id": rid, "label": rb.get("label"), "payout_kind": kind, "lines": 0,
+                        "note": (f"Rule '{rb.get('label')}' uses {kind}, which the Activation Details "
+                                 f"report cannot price (it carries no cost or sale-price column). These "
+                                 f"activation lines are refused ($0); use flat_per_unit or pct_mrc.")})
+                    _un["lines"] += 1
+                    if ldet is not None:
+                        ldet["activation_source_unsupported"] = kind
+                        ldet["suppressed_reason"] = _un["note"]
                 # ACCESSORY BASIS GUARD (default OFF fleet-wide)
                 if _accg_on and kind == "pct_gp":
                     _g_amt, _g_basis, _g_flags, _g_note = _gate.guarded_pct_gp(
@@ -1855,6 +2163,30 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
              "source": r.get("source")} for r in (_excl_rules or [])]
         _guard["accessory_definition_loaded"] = bool(_acc_fn)
         out["pay_gate"] = _guard
+    # ACTIVATION SOURCE REPORT (mig 296 org-level + mig 297 per-plan) — emitted ONLY when at least one plan
+    # in this org resolves to activation_details, so an org with no such plan is byte-identical. Makes the
+    # single-source substitution visible AND per-rep scoped: which plans are AD-sourced, which reps were paid
+    # from the report and had their raw_sales activations suppressed, how many report activations were dropped
+    # because they belonged to a rep NOT on an AD plan (the Chicago-safety count), plus the bucket split and
+    # any rule refused for an unsupported payout kind.
+    if _ad_any:
+        out["activation_source"] = {
+            "source": "activation_details",
+            "scope": "per_plan",
+            "org_activation_source": _org_act_src,
+            "activation_details_plan_ids": sorted(str(p) for p in _ad_plan_ids),
+            "raw_sales_activation_bucket_suppressed": True,   # policy: AD reps' raw activations are suppressed
+            "reps_paid_from_report": sorted(_ad_paid_reps),
+            "reps_raw_sales_suppressed": sorted(_ad_suppressed_reps),
+            "detail_lines_dropped_non_ad_rep": _ad_dropped_non_ad_lines,
+            "detail": _ad_meta or {},
+            "unsupported_payout_kinds": list(_ad_unsupported.values()),
+            "basis": ("Activations are paid from the ingested Activation Details report (deduped per "
+                      "activation; Upgrade/Other/Returns excluded) ONLY for reps whose effective plan is "
+                      "activation_details; those reps' raw_sales activations are suppressed so nothing is "
+                      "counted twice. Every other rep (inherit/raw_sales plan) is unchanged. Accessories "
+                      "and every non-activation rule still read raw_sales. Per-plan opt-in, mig 296+297."),
+        }
     if _acc_stamp is not None and (detail or coverage):
         # DIAGNOSTICS ONLY — attached for the drill-down / coverage callers, never on the money path,
         # so `_apply_new_engines` receives a byte-identical dict. This is the block that answers

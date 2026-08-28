@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 
 // Staffing heat map: store-local weekday × hour demand → staff required, vs scheduled & actual heads.
@@ -25,7 +26,7 @@ export default function StaffingHeatmapPage() {
   const [msg, setMsg] = useState('')
 
   useEffect(() => {
-    api('/api/v1/storeops/stores').then((r: any) => {
+    apiCached('/api/v1/storeops/stores', LOOKUP).then((r: any) => {
       const list = Array.isArray(r) ? r : []
       setStores(list)
       if (!storeCode && list[0]?.store_code) setStoreCode(list[0].store_code)

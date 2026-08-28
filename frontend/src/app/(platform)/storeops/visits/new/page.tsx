@@ -2,8 +2,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, apiUpload, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import EntityPicker from '@/components/EntityPicker'
+import VisitCoachingPanel from '@/components/VisitCoachingPanel'
 
 const VACCESSORIZE_URL = 'https://www.vaccessorize.com'
 const sel: React.CSSProperties = { padding: '7px 10px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
@@ -52,7 +54,7 @@ export default function NewVisitPage() {
       api('/api/v1/storevisit/checklist-items').catch(() => []),
       // full company roster (not just the visiting DM's span) — a floater can be working a store
       // outside the DM's own scope; same all_company pattern the schedule picker uses.
-      api('/api/v1/storeops/employees?all_company=true').catch(() => []),
+      apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).catch(() => []),
     ]).then(([s, it, e]) => { setStores(s || []); setItems(it || []); setEmps(e || []) }).catch(console.error)
   }, [])
 
@@ -64,6 +66,14 @@ export default function NewVisitPage() {
   const repOptions = useMemo(
     () => emps.filter((e: any) => e.name).map((e: any) => ({ id: e.name, label: e.name, sublabel: e.email || undefined })),
     [emps],
+  )
+
+  // Resolve the picked rep NAME (actual_rep is stored as a name string) back to a roster employee_id
+  // so the in-store coaching panel can pull that person's current-period KPIs. Names are normally
+  // unique; the first roster match with an employee_id wins.
+  const actualRepEmp = useMemo(
+    () => emps.find((e: any) => e.name === actualRep && e.employee_id) || null,
+    [emps, actualRep],
   )
 
   // Auto-load the scheduled rep when store + date are set.
@@ -251,6 +261,18 @@ export default function NewVisitPage() {
               </div>
             ))}
           </div>
+
+          {/* ── In-store coaching: the rep on duty's current KPIs (actual vs target) ─────────────
+              Appears once the DM picks the rep on duty, so they can coach from the numbers on the
+              spot. Read-only; renders a friendly note when the period has no KPI data yet. */}
+          {actualRepEmp && (
+            <VisitCoachingPanel
+              employeeId={String(actualRepEmp.employee_id)}
+              employeeName={actualRepEmp.name}
+              storeCode={storeCode}
+              visitDate={visitDate}
+            />
+          )}
 
           {/* ── Accessories to order ────────────────────────────── */}
           <div className="card" style={{ padding: 18, marginBottom: 18 }}>

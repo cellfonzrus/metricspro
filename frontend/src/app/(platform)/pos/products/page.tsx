@@ -63,12 +63,16 @@ export default function PosProductsPage() {
     : categories
 
   async function loadCatalog() {
-    const c = await api('/api/v1/pos/catalog')
+    // The two reads are independent — kick both off together (parallel, not a waterfall). system-categories
+    // keeps its own try/catch so its seed-on-first-read fallback behaviour is unchanged.
+    const pCatalog = api('/api/v1/pos/catalog')
+    const pSys = api('/api/v1/pos/system-categories')
+    const c = await pCatalog
     setDepartments(c.departments || []); setCategories(c.categories || [])
     // Separate call: the endpoint SEEDS the four builtins on first read, so a tenant that has
     // never opened this page still gets a working dropdown rather than an empty one.
     try {
-      const s = await api('/api/v1/pos/system-categories')
+      const s = await pSys
       setSysCats(s.system_categories || [])
     } catch { setSysCats([]) }
   }

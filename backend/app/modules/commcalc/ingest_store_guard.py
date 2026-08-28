@@ -243,11 +243,39 @@ def record(client, org_id: str, result: dict) -> int:
             "status": "pending", "mode_at_flag": f.get("mode_at_flag"),
         })
     try:
-        _sb(client).schema(SCHEMA).table(QUARANTINE_TABLE).insert(rows).execute()
+        saved = (_sb(client).schema(SCHEMA).table(QUARANTINE_TABLE).insert(rows).execute().data) or rows
+        _intimate_quarantine(org_id, saved)
         return len(rows)
     except Exception as e:
         print(f"WARN ingest_store_guard.record failed (migration 280 unrun?): {e}")
         return 0
+
+
+def _intimate_quarantine(org_id, rows):
+    """Intimation-only bridge to the unified approvals inbox for each flagged cross-tenant store.
+
+    The guard decision (allow/reject) is binary, but 'allow' requires the reviewer to PICK which of our
+    stores the foreign string maps to (create the alias) and it RELEASES withheld cross-tenant rows into
+    the ledger — a store-code pick the generic inbox cannot supply and a data effect that must stay a
+    deliberate human action. So the decision stays on the guard board (which has the store picker); we
+    only MIRROR each pending flag into the inbox as an intimation. Best-effort; never raises."""
+    try:
+        from app.modules.approvals import engine as _approvals
+        for r in rows:
+            rid = r.get("id")
+            if not rid or (r.get("status") or "pending") != "pending":
+                continue
+            _approvals.create_request(
+                org_id, type="ingest_guard", source_table=QUARANTINE_TABLE, source_id=rid,
+                title=f"Cross-tenant store flagged: {r.get('store_raw')} ({r.get('target_table')})",
+                summary=(f"{r.get('rows_withheld')} row(s) withheld, "
+                         f"${float(r.get('amount_seen') or 0):,.2f} seen — review on the ingest guard board."),
+                payload={"store_raw": r.get("store_raw"), "target_table": r.get("target_table"),
+                         "rows_withheld": r.get("rows_withheld"), "amount_seen": r.get("amount_seen"),
+                         "period": r.get("period")},
+                priority="high", notify=False)
+    except Exception:
+        pass
 
 
 def screen_and_record(client, org_id: str, rows: list, target_table: str, **kw) -> list:

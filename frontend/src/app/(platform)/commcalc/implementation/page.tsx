@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { api, apiUpload, apiDownload, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { readUploadOutcome, UploadGuardBanner, type UploadOutcome } from '../_lib/uploadGuard'
 import EntityPicker from '@/components/EntityPicker'
 
@@ -12,18 +13,20 @@ import EntityPicker from '@/components/EntityPicker'
 const REPORT_LABELS: Record<string, string> = {
   sales: 'Sales Transactions', payment_detail: 'Commission Payment Detail',
   mi_report: 'MI & ATU Subscriber Detail', comp_report: 'Comprehensive Compensation',
-  carrier_commission: 'Carrier Commission Statement (Total/VidaPay, any carrier)',
+  carrier_commission: 'Carrier Commission Statement (any carrier)',
 }
 const sel: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 13 }
 
 export default function ImplementationWizard() {
+  // Carrier-neutral: the carrier-layout hint never names a carrier like "Cricket vs Boost", which
+  // would leak Boost to a non-Boost tenant.
   const [carriers, setCarriers] = useState<any[]>([])
   const [carrierId, setCarrierId] = useState('')
   const [readiness, setReadiness] = useState<any>(null)
   const [msg, setMsg] = useState('')
 
-  useEffect(() => { api('/api/v1/commcalc/carriers').then((c: any) => setCarriers(c || [])).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => setCarriers(c || [])).catch(() => {}) }, [])
   const loadReadiness = useCallback(() => {
     api(`/api/v1/commcalc/column-mapping/readiness?org_id=${ORG_ID}${carrierId ? `&carrier_id=${carrierId}` : ''}`)
       .then(setReadiness).catch(() => setReadiness(null))
@@ -53,7 +56,7 @@ export default function ImplementationWizard() {
           <option value="">Default (all carriers)</option>
           {carriers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Pick a carrier to keep a separate column layout for it (e.g. Cricket vs Boost).</span>
+        <span style={{ fontSize: 12, color: 'var(--text3)' }}>Pick a carrier to keep a separate column layout for it (one layout per carrier).</span>
         <span style={{ flex: 1 }} />
         {/* Employee-facing Payout Structure PDF — "how commission is earned", from the tenant's plan config.
             Hand it to new staff before they start selling. Read-only server-rendered document. */}

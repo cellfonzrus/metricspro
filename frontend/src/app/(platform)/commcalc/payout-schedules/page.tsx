@@ -1,8 +1,11 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, apiUpload, fmt } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
 import RunCommissionButton from '../_lib/RunCommissionButton'
+import { useActiveCarrier } from '@/lib/auth-context'
+import { carrierRowIds } from '@/lib/carrier-scope'
 
 // Multi-month payout schedules (migration 057). A schedule spreads one activation's commission over
 // N months (flat or %MRC); months 2..N pay only if the bill was paid + residual received that month.
@@ -23,6 +26,9 @@ const blankSched = (): Sched => ({ carrier_id: '', activation_type: '*', num_mon
 const blankMrc = () => ({ plan_pattern: '', match_op: 'equals', mrc: '', carrier_id: '', priority: 100, is_active: true })
 
 export default function PayoutSchedulesPage() {
+  // Active-carrier lens: for a dual-carrier tenant the schedule + MRC lists show only the active
+  // carrier's rows (carrier-neutral "Any carrier" rows always show). Single-carrier tenants unchanged.
+  const { activeCarrier, multi } = useActiveCarrier()
   const [carriers, setCarriers] = useState<any[]>([])
   const [scheds, setScheds] = useState<Sched[]>([])
   const [ready, setReady] = useState(true)
@@ -46,8 +52,12 @@ export default function PayoutSchedulesPage() {
 
   async function load() {
     try {
-      setCarriers(await api('/api/v1/commcalc/carriers').catch(() => []))
-      const r = await api('/api/v1/commcalc/payout-schedule')
+      // Independent reads → one round trip. carriers is a cache-served reference list (LOOKUP).
+      const [carr, r] = await Promise.all([
+        apiCached('/api/v1/commcalc/carriers', LOOKUP).catch(() => []),
+        api('/api/v1/commcalc/payout-schedule'),
+      ])
+      setCarriers(carr)
       setScheds(r.schedules || []); setReady(r.ready !== false)
       if (r.ready === false) setMsg(r.note || 'Run migration 057 to enable.')
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
@@ -162,6 +172,11 @@ export default function PayoutSchedulesPage() {
   // 2026-08-05 so the confirm, the 409 handling and the never-re-fire rule are identical on every
   // commission-structure page instead of being re-implemented per page.
   const carrierName = (id?: string | null) => carriers.find(c => c.id === id)?.name || (id ? 'carrier' : 'Any carrier')
+  // Active-carrier row filter: keep carrier-neutral rows (no carrier_id) + rows for the active carrier.
+  const activeCarrierIds = carrierRowIds(carriers, activeCarrier)
+  const rowInActiveCarrier = (carrierId?: string | null) => !multi || !carrierId || activeCarrierIds.has(carrierId)
+  const shownScheds = scheds.filter(s => rowInActiveCarrier(s.carrier_id))
+  const shownMrc = mrcItems.filter(m => rowInActiveCarrier(m.carrier_id))
 
   return (
     <div style={{ maxWidth: 980 }}>
@@ -304,10 +319,10 @@ export default function PayoutSchedulesPage() {
       </div>
 
       {/* existing schedules */}
-      {scheds.length > 0 && (
+      {shownScheds.length > 0 && (
         <div className="card" style={{ padding: 0, marginBottom: 16 }}>
-          <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>Configured schedules ({scheds.length})</div>
-          {scheds.map(s => (
+          <div style={{ padding: '10px 14px', fontWeight: 700, fontSize: 13, borderBottom: '1px solid var(--border)' }}>Configured schedules ({shownScheds.length})</div>
+          {shownScheds.map(s => (
             <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderTop: '1px solid var(--border)', fontSize: 13 }}>
               <span style={{ fontWeight: 600 }}>{carrierName(s.carrier_id)}</span>
               <span style={{ color: 'var(--text3)' }}>· {s.activation_type === '*' ? 'all activations' : s.activation_type} · {s.num_months} mo · {(s.lines || []).map(l => l.payout_kind === 'pct_mrc' ? `${Math.round((l.mrc_pct || 0) * 100)}%MRC` : `$${l.flat_amount}`).join(' → ')}</span>
@@ -326,8 +341,8 @@ export default function PayoutSchedulesPage() {
         <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 12px' }}>
           Maps a subscriber&apos;s plan (the raw_mi <strong>Customer Plan</strong>) → its monthly recurring charge.
           A <strong>% of MRC</strong> line uses this directly when its basis is <strong>Per-product MRC</strong>, and as
-          a fallback whenever the carrier statement reports $0 MRC (e.g. Total Wireless) — so residual installments
-          compute real amounts instead of $0. Carriers that report a real MRC (Boost) are unaffected.
+          a fallback whenever the carrier statement reports $0 MRC — so residual installments
+          compute real amounts instead of $0.{!multi && ' Some carrier statements report $0 MRC; those that report a real MRC are unaffected.'}
         </p>
         {!mrcReady && <div style={{ padding: 12, marginBottom: 12, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13 }}>⚠️ Run migration 074_product_mrc.sql in Supabase to enable this catalog.</div>}
 
@@ -417,11 +432,11 @@ export default function PayoutSchedulesPage() {
           )}
         </div>
 
-        {mrcItems.length > 0 && (
+        {shownMrc.length > 0 && (
           <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: 760, marginBottom: 6 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>{['Plan', 'Match', 'MRC', 'Carrier', 'Prio', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
             <tbody>
-              {mrcItems.map(m => (
+              {shownMrc.map(m => (
                 <tr key={m.id} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
                   <td style={{ padding: '6px 8px', fontWeight: 600 }}>{m.plan_pattern}{!m.is_active && <span style={{ fontSize: 11, color: '#b45309' }}> (inactive)</span>}</td>
                   <td style={{ padding: '6px 8px', color: 'var(--text3)' }}>{m.match_op}</td>

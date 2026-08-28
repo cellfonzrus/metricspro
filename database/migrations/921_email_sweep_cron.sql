@@ -1,0 +1,51 @@
+-- 921_email_sweep_cron.sql — schedule the EMAIL auto-ingest (owner 2026-08-26)
+--
+-- WHY: the email sweep has a config table (mig 049), a multi-account model (mig 075), the pipeline
+-- (_run_email_sweep → match_upload_type → upload_file, which already routes a CUSTOM report_key to the
+-- generic JSONB capture), and the secret-gated entrypoint POST /commcalc/email-sweep/run-due — but unlike
+-- the dlar (012) / epay (020) / vip (011) sweeps, NO pg_cron job was ever documented to CALL that
+-- entrypoint. So an enabled mailbox never swept on its own; the reports (e.g. the b2b Activation Details /
+-- Bill Payment / Sales by Product exports emailed to luxelink@metricspro.tech) only ingested on a manual
+-- "Run now" or a manual upload. This migration fills that gap.
+--
+-- The pipeline is already correct end-to-end (verified in router.py):
+--   • email_run_due() runs every email_sweep_config WHERE enabled AND next_run_at <= now(), then advances
+--     next_run_at by the mailbox's frequency.
+--   • _run_email_sweep() fetches attachments matching the mailbox's filename PATTERNS, and for each calls
+--     upload_file(<matched upload_type>, ...). When the matched upload_type is a CUSTOM report_key (a sheet
+--     registered under Data Imports → Custom Reports / Email Imports), _upload_file_impl dispatches it to
+--     _ingest_custom_report → raw_custom_import. The report's dataset then detects it by column signature.
+--   • period for a custom report = the current month (_ftp_current_period()), i.e. a cumulative MTD capture
+--     that REPLACES the month on each sweep — correct for the b2b MTD exports.
+-- So the only thing missing is the scheduler tick. Nothing in code changes here.
+--
+-- NO TABLE CHANGES. This migration is documentation + the operator STEP to run in Supabase once the
+-- backend's APP_PUBLIC_URL and NOTIFY_RUN_SECRET are known (same shape + secret as the epay/dlar/vip cron
+-- steps in migrations 020 / 012 / 011). Idempotent: cron.schedule with the same job name replaces it.
+
+NOTIFY pgrst, 'reload schema';
+SELECT 'Migration 921 — email-sweep cron documented; run STEP below in Supabase to activate' AS status;
+
+
+-- ── STEP (run in the Supabase SQL editor AFTER NOTIFY_RUN_SECRET + APP_PUBLIC_URL are set on Railway) ──
+-- Requires pg_cron + pg_net (already enabled for the epay/dlar/vip crons). Substitute the two placeholders:
+--   <APP_PUBLIC_URL>     e.g. https://metricspro-production.up.railway.app   (the metricspro service URL)
+--   <NOTIFY_RUN_SECRET>  the value of the backend's NOTIFY_RUN_SECRET env var (verify_notify_secret checks it)
+--
+-- Every-15-minutes tick keeps MTD/daily reports fresh; the mailbox's own `frequency` (hourly/daily) still
+-- gates how often each mailbox actually sweeps (run-due only runs configs whose next_run_at has passed).
+-- For prompt ingestion of the b2b reports, set the mailbox frequency to 'hourly' on the Email Imports page.
+--
+-- create extension if not exists pg_cron;
+-- create extension if not exists pg_net;
+-- select cron.schedule('email-sweep-run-due', '*/15 * * * *', $$
+--   select net.http_post(
+--     url := '<APP_PUBLIC_URL>/api/v1/commcalc/email-sweep/run-due',
+--     headers := jsonb_build_object('Content-Type','application/json',
+--                                   'X-Notify-Secret','<NOTIFY_RUN_SECRET>')
+--   );
+-- $$);
+--
+-- To confirm it is scheduled:   select jobname, schedule, active from cron.job where jobname = 'email-sweep-run-due';
+-- To see recent runs:           select * from cron.job_run_details where jobid = (select jobid from cron.job where jobname='email-sweep-run-due') order by start_time desc limit 10;
+-- To remove it:                 select cron.unschedule('email-sweep-run-due');

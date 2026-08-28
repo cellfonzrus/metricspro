@@ -8,6 +8,7 @@ import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-fi
 import type { StoreOpt } from '@/lib/market-store-cascade'
 import { SortableTh, useTableSort } from '@/components/SortableTh'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // Super-admin org-resolution mitigation (same as the Sales Report page): reads carry the active tenant
 // so a super-admin (whom the tenant middleware does NOT rewrite) reads the selected tenant, not the house
@@ -32,11 +33,15 @@ const int = (n: number) => String(Math.round(n || 0))
 
 export default function ExecMtdPage() {
   const { period } = usePeriod()
+  // Active-carrier lens: the dealer-share tooltip's example names only the active carrier for a
+  // dual-carrier tenant (single-carrier tenants keep the original "Boost 100%, Total 50%" example).
+  const { activeCarrier } = useActiveCarrier()
   const [data, setData] = useState<any>(null)
   const [tab, setTab] = useState<'location' | 'employee'>('location')
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [showCfg, setShowCfg] = useState(false)
+  const [fresh, setFresh] = useState<any>(null)   // per-feed data freshness — surfaces a stalled ingest
   // RULE FIVE standardized filters — one StandardFilterValue (store(s) / market(s) / rep(s)), applied
   // SERVER-SIDE. `period` is NOT part of it here: this page follows the global period selector in the
   // app header (usePeriod), and a second month control in the bar would give the user two competing
@@ -66,6 +71,13 @@ export default function ExecMtdPage() {
       .then(setData).catch((e) => setErr(String(e?.message || e))).finally(() => setLoading(false))
   }, [period, selStores, selMarkets, selReps, dFrom, dTo])
   useEffect(() => { load() }, [load])
+
+  // Data freshness — a stalled feed is why report numbers "freeze" on a date. Fetch once; show a banner
+  // only when something is actually stale, so a healthy tenant sees nothing.
+  useEffect(() => {
+    api(`/api/v1/commcalc/ingest-freshness${orgParam() ? '?' + orgParam().slice(1) : ''}`)
+      .then(setFresh).catch(() => setFresh(null))
+  }, [])
 
   // Switching the MONTH in the app header drops a stale day-range. Without this, moving from July to
   // August while a July range is set would show an empty report whose emptiness is real but reads as a
@@ -121,6 +133,9 @@ export default function ExecMtdPage() {
     { header: 'Activation', field: 'activation', type: 'number', get: (r) => r.activation },
     { header: 'Port', field: 'port', type: 'number', get: (r) => r.port },
     { header: 'BYOD', field: 'byod', type: 'number', get: (r) => r.byod },
+    { header: 'Tablet', field: 'tablet', type: 'number', get: (r) => r.tablet },
+    { header: 'Home Internet', field: 'home_internet', type: 'number', get: (r) => r.home_internet },
+    { header: 'Edge', field: 'edge', type: 'number', get: (r) => r.edge },
     { header: 'Upgrade', field: 'upgrade', type: 'number', get: (r) => r.upgrade },
     { header: 'Total Phones', field: 'total_phones', type: 'number', get: (r) => r.total_phones },
     { header: 'Trending Box', field: 'trending_box', type: 'number', get: (r) => r.trending_box },
@@ -154,7 +169,7 @@ export default function ExecMtdPage() {
     { name: 'By employee', columns: cols('employee'), rows: withTotal(data?.by_employee?.rows || [], data?.by_employee?.total || {}, 'employee') },
   ]
 
-  const HEADERS = ['Total Activation', 'Activation', 'Port', 'BYOD', 'Upgrade', 'Total Phones', 'Trending Box',
+  const HEADERS = ['Total Activation', 'Activation', 'Port', 'BYOD', 'Tablet', 'Home Internet', 'Edge', 'Upgrade', 'Total Phones', 'Trending Box',
     'Bill Payment Qty', '$', 'Conv.', 'Acc. Sales', 'APB', 'Trending Acc. Sales', 'Activation Fee', 'Total Protect',
     'Set-up Fee', 'Dealer share', 'Employee pay', 'Acc.+Set-up']
   // Tooltips only on the two appended reconciliation columns (the b2bsoft 15 are unchanged).
@@ -162,7 +177,9 @@ export default function ExecMtdPage() {
     'Acc. Sales': 'Accessory sales revenue ONLY — the device set-up fee is excluded (it is a separate pay item). Same number as the Sales Report.',
     'Set-up Fee': 'Device set-up fee sold. A separate pay item, so it is NOT in Acc. Sales — but it DOES count toward the accessory target.',
     'Acc.+Set-up': 'Accessory sales + device set-up fee = the basis the Accessory Targets page measures achieved vs target on. THIS is the number to compare with that page.',
-    'Dealer share': 'What the CARRIER pays the dealer of the set-up / activation fee collected (e.g. Boost 100%, Total 50%). Informational — no employee payout reads it. “—” means nobody has entered the percentage yet.',
+    'Dealer share': 'What the CARRIER pays the dealer of the set-up / activation fee collected'
+      + (activeCarrier === 'total' ? ' (e.g. 50%)' : ' (e.g. 100%)')
+      + '. Informational — no employee payout reads it. “—” means nobody has entered the percentage yet.',
     'Employee pay': 'The employee’s share of the set-up / activation fee collected, at the percentage configured for this tenant. “—” means the fee is not part of employee commission here, or no percentage has been entered.',
   }
 
@@ -170,7 +187,7 @@ export default function ExecMtdPage() {
   // cannot be read as "the dealer gets nothing".
   const dash = (v: any) => (v === null || v === undefined ? '—' : fmt(v))
   const cellVals = (r: any) => [
-    int(r.total_activation), int(r.activation), int(r.port), int(r.byod), int(r.upgrade), int(r.total_phones),
+    int(r.total_activation), int(r.activation), int(r.port), int(r.byod), int(r.tablet), int(r.home_internet), int(r.edge), int(r.upgrade), int(r.total_phones),
     int(r.trending_box), int(r.bill_payment_qty), fmt(r.amount), pct(r.conv), fmt(r.acc_sales), n2(r.apb),
     fmt(r.trending_acc_sales), fmt(r.activation_fee), int(r.total_protect),
     fmt(r.setup_fee), dash(r.setup_fee_dealer_share), dash(r.setup_fee_employee_pay), fmt(r.acc_plus_setup),
@@ -195,6 +212,29 @@ export default function ExecMtdPage() {
             : ''}
         </p>
       </div>
+
+      {/* DATA-FRESHNESS banner (owner 2026-08-27). A stalled feed is why report numbers "freeze" on a date —
+          the report reads live, so if a feed stops ingesting, the numbers stop moving. Show which feed is
+          stale, when it last ingested and the latest transaction date it carries, and link to fix it. Only
+          renders when something is actually stale. */}
+      {fresh?.any_stale && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8,
+          padding: '10px 12px', fontSize: 12.5, marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠️ Some data hasn’t updated — numbers below may be stale</div>
+          {(fresh.feeds || []).filter((f: any) => f.stale && f.rows).map((f: any) => (
+            <div key={f.key} style={{ marginTop: 2 }}>
+              <b>{f.label}</b>: latest data {f.latest_data_date || '—'}
+              {typeof f.days_stale === 'number' ? ` (${f.days_stale} day${f.days_stale === 1 ? '' : 's'} behind)` : ''}
+              {f.last_ingest_at ? ` · last ingested ${String(f.last_ingest_at).slice(0, 10)}` : ''}
+              {f.source === 'raw_custom_import' && f.recent_files?.length ? ` · last file: ${f.recent_files[0]}` : ''}
+            </div>
+          ))}
+          <div style={{ marginTop: 6 }}>
+            New files aren’t being ingested. Open <Link href="/commcalc/email-imports" style={{ color: '#92400e', textDecoration: 'underline' }}>Data Imports → Email Imports</Link>,
+            check the processed history, and click <b>Run now</b>. If the latest file isn’t in the inbox, the report email stopped arriving for those days.
+          </div>
+        </div>
+      )}
 
       {/* RULE FIVE standardized filter bar — market -> store cascade (checkbox dropdowns) + employees,
           pick-don't-type over the org's real data, applied SERVER-SIDE so the tables, the trending math
@@ -277,6 +317,22 @@ export default function ExecMtdPage() {
             </Link>{' '}
             and this total will reconcile to b2bsoft. This changes reporting only — no commission pay is affected.
           </div>
+        </div>
+      )}
+
+      {/* SOURCE OF TRUTH (mig 923). When the tenant names Activation Details the activation basis, Total
+          Activation on this page comes from that report (distinct Serial#) and EXCLUDES Upgrade — the
+          b2b-consistent definition that matches /activation-counts. Says so plainly so the number is never
+          silently redefined. Hidden on the default sales basis (active:false). */}
+      {data?.activation_source?.active && (
+        <div style={{ fontSize: 12.5, marginBottom: 10, background: '#ecfdf5', border: '1px solid #6ee7b7',
+          color: '#065f46', borderRadius: 8, padding: '9px 12px' }}>
+          <span style={{ fontWeight: 700 }}>✓ Activations from the Activation Details report (basis of truth).</span>{' '}
+          Total Activation counts distinct devices and <b>excludes Upgrade</b> (b2b-consistent); Upgrade is shown
+          in its own column. {int(data.activation_source.ad_rows || 0)} activation rows for this window.{' '}
+          <Link href="/commcalc/activations" style={{ color: '#065f46', fontWeight: 700, textDecoration: 'underline' }}>
+            Open the Activations report &amp; reconciliation →
+          </Link>
         </div>
       )}
 

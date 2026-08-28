@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, localToday, apiUpload, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -81,8 +82,8 @@ export default function TenderRecon3WayPage() {
   }
   useEffect(() => { load() }, [from, to])
   useEffect(() => {
-    api('/api/v1/closing/stores').then((d: any) => setStoreMeta(Array.isArray(d) ? d : (d?.stores || d?.data || []))).catch(() => {})
-    api('/api/v1/asset/filter-options').then((d: any) => setAssetStores(d?.stores || [])).catch(() => {})
+    apiCached('/api/v1/closing/stores', LOOKUP).then((d: any) => setStoreMeta(Array.isArray(d) ? d : (d?.stores || d?.data || []))).catch(() => {})
+    apiCached('/api/v1/asset/filter-options', LOOKUP).then((d: any) => setAssetStores(d?.stores || [])).catch(() => {})
   }, [])
 
   const tenders: { key: string; label: string }[] = data?.tenders || []

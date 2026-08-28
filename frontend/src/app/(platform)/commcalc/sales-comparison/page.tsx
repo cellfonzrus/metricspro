@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import { useActiveCarrier } from '@/lib/auth-context'
 import { MultiSelect } from '@/lib/multiselect'
 
 // Sales Comparison — period-over-period % change per item sold (Phones, BYOD, Accessories, Tablets,
@@ -44,6 +45,11 @@ const WEEKS = [
 ]
 
 export default function SalesComparisonPage() {
+  // Active-carrier lens (compliance-critical). The Financing line is ONE carrier-scoped row: the active
+  // carrier's code is sent to the backend, which returns ONLY that carrier's financing — the report can
+  // never show both Boost's and Total's financing vendors together. The vendor brand (ACIMA/TW/Edge) is
+  // never named here or in the payload.
+  const { activeCarrier } = useActiveCarrier()
   const [period, setPeriod] = useState(thisMonth())
   const [mode, setMode] = useState('mom')
   const [comparePeriod, setComparePeriod] = useState('')   // custom mode only
@@ -61,11 +67,12 @@ export default function SalesComparisonPage() {
     if (asOf !== '') qs.set('as_of_day', asOf)   // '' → backend auto; else explicit (0 = full month)
     if (selStores.length) qs.set('stores', selStores.join(','))
     if (selMarkets.length) qs.set('markets', selMarkets.join(','))
+    if (activeCarrier) qs.set('carrier', activeCarrier)   // carrier-scoped Financing line (compliance)
     api(`/api/v1/commcalc/sales-comparison?${qs.toString()}${orgParam()}`)
       .then(setData)
       .catch(e => setData({ error: String(e?.message || e) }))
       .finally(() => setLoading(false))
-  }, [period, mode, comparePeriod, week, asOf, selStores, selMarkets])
+  }, [period, mode, comparePeriod, week, asOf, selStores, selMarkets, activeCarrier])
   useEffect(() => { load() }, [load])
 
   const cats: any[] = data?.totals_by_category || []
@@ -89,22 +96,41 @@ export default function SalesComparisonPage() {
   const marketOpts: string[] = data?.markets || []
   const filtered = selStores.length > 0 || selMarkets.length > 0
 
-  const Tile = ({ c }: { c: any }) => (
-    <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
-      <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center' }}>
-        {c.label}
-        {c.financing && c.detection_status && c.detection_status !== 'configured' &&
-          <span title="Financing detection is not fully mapped — see the Financing report settings" style={{ color: '#b45309' }}>⚠︎</span>}
+  const Tile = ({ c }: { c: any }) => {
+    // Metric-aware per the owner spec: units rows headline the count; Accessories headlines $; Financing
+    // shows BOTH the financed-unit count and the financed $.
+    const metric: string = c.metric || 'units'
+    const isDollars = metric === 'dollars'
+    const isBoth = metric === 'both'
+    const bigVal = isDollars ? fmt(c.current_rev || 0) : c.current
+    const bigPct = isDollars ? c.rev_pct : c.pct
+    const bigCur = isDollars ? (c.current_rev || 0) : c.current
+    return (
+      <div className="card" style={{ padding: '12px 16px', minWidth: 150 }}>
+        <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600, display: 'flex', gap: 6, alignItems: 'center' }}>
+          {c.label}
+          {c.financing && c.detection_status && c.detection_status !== 'configured' &&
+            <span title="Financing detection is not fully mapped — see the Financing report settings" style={{ color: '#b45309' }}>⚠︎</span>}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
+          <div style={{ fontSize: 22, fontWeight: 700 }}>{bigVal}</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(bigPct, bigCur) }}>{pctLabel(bigPct, bigCur)}</div>
+        </div>
+        {isBoth &&
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 1 }}>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{fmt(c.current_rev || 0)}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: pctColor(c.rev_pct, c.current_rev || 0) }}>{pctLabel(c.rev_pct, c.current_rev || 0)}</div>
+          </div>}
+        <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
+          {isDollars
+            ? <>was {fmt(c.previous_rev || 0)} · {c.current} units</>
+            : isBoth
+              ? <>was {c.previous} units · {fmt(c.previous_rev || 0)}</>
+              : <>was {c.previous} · {fmt(c.current_rev || 0)}</>}
+        </div>
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
-        <div style={{ fontSize: 22, fontWeight: 700 }}>{c.current}</div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(c.pct, c.current) }}>{pctLabel(c.pct, c.current)}</div>
-      </div>
-      <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 2 }}>
-        was {c.previous} · {fmt(c.current_rev || 0)}
-      </div>
-    </div>
-  )
+    )
+  }
 
   const OverTile = ({ label, cur, prev, pct, money }: { label: string; cur: number; prev: number; pct: number | null; money?: boolean }) => (
     <div className="card" style={{ padding: '12px 16px', minWidth: 150, background: 'var(--surface2)' }}>
@@ -122,9 +148,10 @@ export default function SalesComparisonPage() {
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📈 Sales Comparison</h1>
         <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Period-over-period change per item sold — <b>Phones, BYOD, Accessories, Tablets</b> and each
-          <b> Financing</b> vendor (ACIMA / TW / Edge) — across all stores. Compare month-over-month,
-          year-over-year, or week-1-over-week-1, and align both periods to the same day of the month.
+          Period-over-period change per item sold — <b>Phones, BYOD, Activation, Tablets</b> (units),
+          <b> Accessories</b> ($) and <b>Financing</b> (units &amp; $) — across all stores. Compare
+          month-over-month, year-over-year, or week-1-over-week-1, aligned to the same day of the month.
+          The Financing line reflects only the active carrier’s financing.
         </p>
       </div>
 

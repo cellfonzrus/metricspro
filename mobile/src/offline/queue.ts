@@ -94,6 +94,15 @@ function uid(): string {
 }
 
 /**
+ * A fresh client id for an attendance/money mutation, minted BEFORE the online attempt so the very
+ * first send and every durable replay carry the SAME `client_request_id` — the backend dedupes on it,
+ * so a saturation timeout that actually landed server-side can't become a double punch.
+ */
+export function newClientId(): string {
+  return uid()
+}
+
+/**
  * Enqueue a mutation for guaranteed eventual delivery. Returns the queued item. If online, a flush
  * is kicked off immediately (so the common case is "sends right away, just via the durable path").
  */
@@ -103,14 +112,19 @@ export async function enqueue(input: {
   method: QueuedMethod
   path: string
   body?: unknown
+  // Optional stable id. When the caller already attempted the mutation online with a client_request_id
+  // (see clockInDurable), it passes that same id here so the durable retry stays idempotent with the
+  // online attempt. Omitted → a fresh id is minted.
+  clientId?: string
 }): Promise<QueuedMutation> {
   await loadQueue()
+  const { clientId, ...rest } = input
   const item: QueuedMutation = {
     id: uid(),
-    clientId: uid(),
+    clientId: clientId || uid(),
     attempts: 0,
     createdAt: Date.now(),
-    ...input,
+    ...rest,
   }
   state.pending.push(item)
   await persist()
@@ -119,14 +133,25 @@ export async function enqueue(input: {
   return item
 }
 
+// Forward the item's stable `clientId` to the server as `client_request_id` on the attendance/money
+// paths that dedupe on it (timeclock). It was generated per item but never sent — sending it is what
+// makes a FIFO replay (or a saturation-timeout retry) idempotent: one punch, not two. Other kinds'
+// bodies are sent unchanged so a stray field can't 422 an endpoint that doesn't expect it.
+function replayBody(item: QueuedMutation): unknown {
+  if (!item.kind.startsWith('timeclock.')) return item.body
+  const b = item.body && typeof item.body === 'object' ? (item.body as Record<string, unknown>) : {}
+  return { ...b, client_request_id: item.clientId }
+}
+
 async function replay(item: QueuedMutation): Promise<unknown> {
+  const body = replayBody(item)
   switch (item.method) {
     case 'POST':
-      return api.post(item.path, item.body)
+      return api.post(item.path, body)
     case 'PUT':
-      return api.put(item.path, item.body)
+      return api.put(item.path, body)
     case 'PATCH':
-      return api.patch(item.path, item.body)
+      return api.patch(item.path, body)
     case 'DELETE':
       return api.del(item.path)
   }

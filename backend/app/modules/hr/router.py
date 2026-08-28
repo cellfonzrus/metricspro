@@ -159,7 +159,6 @@ async def hr_create_employee(body: dict, org_id: str = ORG_ID,
         try:
             invite = await _send_invite(org_id, emp, method,
                                         dob=(body.get("dob") or "").strip() or None,
-                                        ssn4=(body.get("ssn4") or "").strip() or None,
                                         role_name=role or None, send_email_flag=True, actor="HR",
                                         authorization=authorization, x_active_org=x_active_org)
         except Exception as e:
@@ -604,13 +603,13 @@ def onboarding_template(include_inactive: bool = False, org_id: str = ORG_ID):
             "owner_labels": OWNER_ROLE_LABELS, "states": SEED_STATES}
 
 
-@router.post("/onboarding/categories")
 class OnboardingSaveCategoryIn(LaxModel):
     label: str = ""
     key: str = ""
     sort_order: Any = None
 
 
+@router.post("/onboarding/categories")
 def onboarding_save_category(body: OnboardingSaveCategoryIn, org_id: str = ORG_ID):
     label = (body.label or "").strip()
     if not label:
@@ -1002,7 +1001,7 @@ def _require_hr_or_admin(authorization: str):
 
 @router.get("/onboarding/employee/{employee_id}/sensitive")
 def onboarding_reveal_sensitive(employee_id: str, authorization: str = Header(default="")):
-    """Decrypted sensitive intake values (bank / SSN / A-Number) for an authorized HR manager or
+    """Decrypted sensitive intake values (bank / A-Number / any field a tenant marked private) for an authorized HR manager or
     admin — the ONLY path that returns these values; everyone else sees just 'on file' labels. The
     access is written to the onboarding_event audit trail (who viewed which fields, when)."""
     org_id, email, role = _require_hr_or_admin(authorization)
@@ -1102,18 +1101,16 @@ def onboarding_encrypt_existing(authorization: str = Header(default="")):
 #     up automatically. Routing + account are masked by default (`_dd_field_is_masked`); bank name
 #     and account type (Checking/Savings) are not — see that helper's docstring; OWNER-OVERRIDABLE,
 #     flagged in the handoff.
-#   • SSN — NOT COLLECTED ANYWHERE in this product today. Confirmed: migration 079's own comment
-#     states "full SSN is intentionally NOT captured" (kept only in the uploaded W-4/I-9 PDF files,
-#     never a structured value); the only SSN-shaped value in the schema is
-#     employee_onboarding_profile.verify_ssn4 — a last-4-only IDENTITY-GATE value for the
-#     credential-less onboarding portal link, not a stored SSN, and not tied to a specific field
-#     concept that could double as "the employee's SSN". Per the work order ("if SSN isn't
-#     collected... build the table over what EXISTS... with the missing field designed but clearly
-#     marked absent, rather than inventing storage"), the SSN column is present in the field
-#     catalog/picker and its value is ALWAYS the literal string "(not collected)" — no new storage
-#     was invented here. `_mask_ssn` below is written + unit-proven so the masking format is ready
-#     the day real SSN capture is approved and migrated (this agent's band, 400-499, Fernet-
-#     encrypted exactly like intake_data) — that is an explicit owner call, not built in this pass.
+#   • SSN — NOT HELD ANYWHERE in this product. Full SSN was never captured (migration 079's own
+#     comment: "full SSN is intentionally NOT captured", kept only inside the uploaded W-4/I-9 PDFs,
+#     which payroll and tax filing genuinely need). The one SSN-shaped value that did exist —
+#     employee_onboarding_profile.verify_ssn4, a last-4 used only as an identity gate on the
+#     credential-less onboarding link — was REMOVED by migration 909 on the owner's instruction to
+#     take this data category out of the system. The onboarding gate is date-of-birth only now.
+#     There is deliberately no SSN column in the field catalog below: a column that renders
+#     "(not collected)" still tells every reader the product expects to hold one, and the point of
+#     the removal is that it does not. Do not reintroduce SSN storage without an explicit owner
+#     decision — not holding it is what keeps a breach here out of notification territory.
 #   • Document status — reuses `onboarding_doc_status()` (the SAME Documents-board computation, same
 #     scope: ACTIVE roster only) rather than re-deriving it. An inactive employee (only reachable via
 #     include_inactive=true) shows an honest "(inactive — not on Documents board)" rather than a
@@ -1134,15 +1131,6 @@ def _mask_last4(raw) -> str:
     return ("x" * (len(s) - 4)) + s[-4:]
 
 
-def _mask_ssn(raw) -> str:
-    """Standard SSN grouping xxx-xx-1234 (last 4 real) for a 9-digit value; anything else falls back
-    to the generic last-4 mask. Not wired to any real data today (see module docstring above) — kept
-    ready + unit-proven for when SSN capture is actually built."""
-    digits = re.sub(r"\D", "", raw or "")
-    if len(digits) == 9:
-        return f"xxx-xx-{digits[-4:]}"
-    return _mask_last4(raw)
-
 
 def _dd_field_is_masked(key: str) -> bool:
     """Which direct-deposit intake fields get last-4 masking by default: account + routing numbers
@@ -1161,7 +1149,7 @@ def _dd_field_is_masked(key: str) -> bool:
 def _require_admin_reveal(authorization: str):
     """STRICTER than `_require_hr_or_admin` above: admin / super_admin ONLY — no generic 'hr'-titled
     role, no custom permissions.hr grant. Used only for the Employee Database report's 'show full
-    SSN / direct-deposit numbers' reveal (owner directive 2026-07-29: 'only show the full number to
+    direct-deposit numbers' reveal (owner directive 2026-07-29: 'only show the full number to
     the admin'). Same resolution mechanics + same open-app parity fallback as `_require_hr_or_admin`
     (this file, above) so both gates log/behave identically apart from the stricter `ok` predicate."""
     from app.modules.core.router import _uid_from_token
@@ -1176,7 +1164,7 @@ def _require_admin_reveal(authorization: str):
         raise HTTPException(403, "Your login isn't recognized for the company you are working in.")
     role = (u.get("role") or "").lower()
     if not (bool(u.get("super_admin")) or role == "admin"):
-        raise HTTPException(403, "Only admins/super-admins can reveal full sensitive values (SSN, direct-deposit numbers).")
+        raise HTTPException(403, "Only admins/super-admins can reveal full sensitive values (direct-deposit numbers and any field this company marked private).")
     return (u.get("org_id") or ORG_ID, u.get("email"), role)
 
 
@@ -1198,8 +1186,6 @@ _EMPDB_BASE_FIELDS = [
     {"key": "state",           "label": "State",                     "section": "address"},
     {"key": "zip",             "label": "ZIP",                        "section": "address"},
     {"key": "date_of_birth",   "label": "Date of Birth",             "section": "personal"},
-    {"key": "ssn",             "label": "SSN", "section": "sensitive", "sensitive": True, "masked": True,
-     "designed_absent": True, "note": "Not collected anywhere in this product today — see backend docstring."},
     {"key": "doc_status",      "label": "Document Status",           "section": "onboarding"},
     {"key": "workflow_status", "label": "Onboarding Stage",          "section": "onboarding"},
     {"key": "docs_sent_at",    "label": "Packet Sent",               "section": "onboarding"},
@@ -1325,8 +1311,6 @@ def hr_employee_database(employee_ids: str = "", fields: str = "", include_inact
             row["zip"] = e.get("zip")
         if want("date_of_birth"):
             row["date_of_birth"] = e.get("date_of_birth")
-        if want("ssn"):
-            row["ssn"] = "(not collected)"
 
         prof = profs.get(eid) or {}
         intake = dict(prof.get("intake_data") or {})
@@ -1659,21 +1643,21 @@ class OnboardingMintTokenIn(LaxModel):
 
 @router.post("/onboarding/employee/{employee_id}/token")
 def onboarding_mint_token(employee_id: str, body: OnboardingMintTokenIn, org_id: str = ORG_ID):
-    """Issue (or rotate) the QR access token + identity gate. Body: verify_kind ('dob'|'ssn4'),
-    verify_value, expires_days? Returns the token + the portal path the QR should encode."""
+    """Issue (or rotate) the QR access token + identity gate. Body: verify_kind ('dob'),
+    verify_value, expires_days? Returns the token + the portal path the QR should encode.
+
+    Date of birth is the ONLY gate. The last-4-SSN alternative was removed with the rest of the
+    SSN data (mig 909); `verify_kind` is kept in the body so an older client sending 'dob'
+    explicitly still works, and anything else is rejected rather than silently downgraded."""
     kind = (body.verify_kind or "dob").strip()
     val = (body.verify_value or "").strip()
-    if kind not in ("dob", "ssn4"):
-        raise HTTPException(400, "verify_kind must be 'dob' or 'ssn4'")
+    if kind != "dob":
+        raise HTTPException(400, "verify_kind must be 'dob' — last-4 SSN verification was removed")
     if not val:
-        raise HTTPException(400, "verify_value required (the employee's DOB or last-4 SSN)")
+        raise HTTPException(400, "verify_value required (the employee's date of birth)")
     token = secrets.token_urlsafe(24)
     row = {"org_id": org_id, "employee_id": employee_id, "access_token": token, "verify_kind": kind,
-           "token_active": True, "verify_dob": None, "verify_ssn4": None, "token_expires_at": None}
-    if kind == "dob":
-        row["verify_dob"] = val[:10]
-    else:
-        row["verify_ssn4"] = re.sub(r"\D", "", val)[-4:]
+           "token_active": True, "verify_dob": val[:10], "token_expires_at": None}
     days = body.expires_days
     if days:
         try:
@@ -1719,8 +1703,10 @@ def _check_gate(prof, value):
     value = (value or "").strip()
     if not value:
         return False
-    if prof.get("verify_kind") == "ssn4":
-        return re.sub(r"\D", "", value)[-4:] == (prof.get("verify_ssn4") or "")
+    # Date of birth only. A profile still carrying verify_kind='ssn4' cannot match here — mig 909
+    # deactivates those tokens rather than leaving a door whose key no longer exists.
+    if prof.get("verify_kind") not in (None, "", "dob"):
+        return False
     return value[:10] == str(prof.get("verify_dob") or "")[:10]
 
 
@@ -1848,7 +1834,6 @@ def intake_fields_list(include_inactive: bool = False, org_id: str = ORG_ID):
             "propagatable": sorted(_PROPAGATABLE)}
 
 
-@router.post("/onboarding/intake-fields")
 class IntakeFieldIn(LaxModel):
     key: Any = None
     label: Any = None
@@ -1863,6 +1848,7 @@ class IntakeFieldIn(LaxModel):
     is_active: Any = None
 
 
+@router.post("/onboarding/intake-fields")
 def intake_field_save(body: IntakeFieldIn, org_id: str = ORG_ID):
     label = (body.label or "").strip()
     if not label:
@@ -2170,11 +2156,11 @@ def _invite_email_html(first_name, method, url, email=None, temp_pw=None, task_l
             f"<p style='font-size:12px;color:#888'>If the button doesn't work, copy this link:<br>{url}</p></div>")
 
 
-async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, role_name=None,
+async def _send_invite(org_id, employee, method="link", *, dob=None, role_name=None,
                        expires_days=30, actor="HR", send_email_flag=True,
                        authorization="", x_active_org=""):
     """Prepare + (optionally) email an onboarding invite. Returns a per-employee result dict.
-    method='link' → mint a token portal (needs a DOB or last-4 gate).
+    method='link' → mint a token portal (needs a DOB gate).
     method='login' → ensure an app_users role + a Supabase login, email the temp credentials.
 
     `authorization`/`x_active_org` are the CALLER's own request headers, threaded through to the
@@ -2216,18 +2202,12 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, 
         result["temp_password"] = login.get("temp_password")
         result["portal_url"] = url
     else:  # link
-        gate_kind = "dob" if dob else ("ssn4" if ssn4 else None)
-        gate_val = dob or ssn4
-        if not gate_kind:
+        if not dob:
             return {**result, "ok": False,
-                    "error": "a date of birth (or last-4 SSN) is required for a link invite — use the login method instead"}
+                    "error": "a date of birth is required for a link invite — use the login method instead"}
         token = secrets.token_urlsafe(24)
-        row = {**base, "access_token": token, "verify_kind": gate_kind, "token_active": True,
-               "verify_dob": None, "verify_ssn4": None, "token_expires_at": None}
-        if gate_kind == "dob":
-            row["verify_dob"] = str(gate_val)[:10]
-        else:
-            row["verify_ssn4"] = re.sub(r"\D", "", str(gate_val))[-4:]
+        row = {**base, "access_token": token, "verify_kind": "dob", "token_active": True,
+               "verify_dob": str(dob)[:10], "token_expires_at": None}
         if expires_days:
             try:
                 row["token_expires_at"] = (datetime.utcnow() + timedelta(days=int(expires_days))).isoformat()
@@ -2275,7 +2255,6 @@ async def _send_invite(org_id, employee, method="link", *, dob=None, ssn4=None, 
 class OnboardingInviteOneIn(LaxModel):
     method: Any = None
     dob: Any = None
-    ssn4: Any = None
     role_name: Any = None
     expires_days: Any = 30
     actor: Any = None
@@ -2286,7 +2265,7 @@ class OnboardingInviteOneIn(LaxModel):
 async def onboarding_invite_one(employee_id: str, body: OnboardingInviteOneIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default=""),
                                 x_active_org: str = Header(default="")):
-    """Invite/re-invite ONE hire. Body: method('link'|'login'), dob?/ssn4? (link gate), role_name?,
+    """Invite/re-invite ONE hire. Body: method('link'|'login'), dob? (link gate), role_name?,
     expires_days?, send_email? (default true). Returns the link or temp credentials."""
     so = _so()
     emp = (so.table("employees").select("employee_id,name,email")
@@ -2295,7 +2274,6 @@ async def onboarding_invite_one(employee_id: str, body: OnboardingInviteOneIn, o
         raise HTTPException(404, "employee not found")
     res = await _send_invite(org_id, emp[0], (body.method or "link").strip(),
                              dob=(body.dob or "").strip() or None,
-                             ssn4=(body.ssn4 or "").strip() or None,
                              role_name=(body.role_name or "").strip() or None,
                              expires_days=body.expires_days,
                              actor=(body.actor or "HR"),
@@ -3101,16 +3079,14 @@ async def onboarding_send_documents(body: OnboardingSendDocumentsIn, org_id: str
             results.append({"employee_id": eid, "ok": False, "error": "not on the roster"})
             continue
         prof = _get_profile(so, org_id, eid) or {}
-        method, dob, ssn4 = "login", None, None
+        method, dob = "login", None
         if prof.get("verify_dob"):
             method, dob = "link", str(prof.get("verify_dob"))[:10]
-        elif prof.get("verify_ssn4"):
-            method, ssn4 = "link", prof.get("verify_ssn4")
         elif not (emp.get("email") or "").strip():
             results.append({"employee_id": eid, "name": emp.get("name"), "ok": False,
                             "error": "no email on file and no identity gate — add an email, or invite them one-on-one with a DOB"})
             continue
-        res = await _send_invite(org_id, emp, method, dob=dob, ssn4=ssn4,
+        res = await _send_invite(org_id, emp, method, dob=dob,
                                  send_email_flag=body.send_email,
                                  actor=body.actor or "HR",
                                  authorization=authorization, x_active_org=x_active_org)
@@ -3192,7 +3168,6 @@ def onboarding_get_accounting_settings(org_id: str = ORG_ID):
             "include_portal_link": s.get("include_portal_link", True)}
 
 
-@router.put("/onboarding/accounting-settings")
 class OnboardingSetAccountingSettingsIn(LaxModel):
     emails: Any = None
     whatsapps: Any = None
@@ -3201,6 +3176,7 @@ class OnboardingSetAccountingSettingsIn(LaxModel):
     include_portal_link: Any = True
 
 
+@router.put("/onboarding/accounting-settings")
 def onboarding_set_accounting_settings(body: OnboardingSetAccountingSettingsIn, org_id: str = ORG_ID):
     """Save the accounting-forward destination. emails/whatsapps accept a list or a comma-separated string."""
     row = {"org_id": org_id,
@@ -3676,11 +3652,11 @@ def onboarding_attention_config(org_id: str = ORG_ID):
     return {"stuck_invite_days": _hr_attention.onboarding_stuck_days(get_supabase(), org_id)}
 
 
-@router.put("/onboarding/attention-config")
 class PutOnboardingAttentionConfigIn(LaxModel):
     stuck_invite_days: Any = None
 
 
+@router.put("/onboarding/attention-config")
 def put_onboarding_attention_config(body: PutOnboardingAttentionConfigIn, org_id: str = ORG_ID,
                                     authorization: str = Header(default="")):
     """Set the tenant's 'stuck onboarding invite' alert threshold (days, clamped 1-90). HR/admin-only

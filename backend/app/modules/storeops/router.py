@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
 from app.core import scope as _cscope
+from app.core import identity as _identity
 from app.modules.storeops import google_reviews as _gr
 from app.modules.storeops.pto_accrual import (
     DEFAULT_CONFIG as PTO_DEFAULT_CONFIG,
@@ -319,6 +320,86 @@ def get_shifts(store_code: str = None, week_start: str = None, week_end: str = N
         rows = [s for s in rows if in_keyset(ks, s.get("store_code"))]
     return rows
 
+
+@router.get("/schedule/hours-trend")
+def schedule_hours_trend(
+    anchor: str = None,
+    weeks: int = 8,
+    months: int = 6,
+    week_start_dow: int = 0,
+    markets: str = None,
+    store_code: str = None,
+    employees: str = None,
+    authorization: str = Header(default=""),
+    org_id: str = ORG_ID,
+):
+    """Scheduled-hours WEEK-over-week & MONTH-over-month trend for the selected scope, with the
+    per-store / per-employee breakdown + period-over-period deltas that power the report's drill-down
+    (WHY hours moved, WHO drove it) and the "who's increasing" analysis summary.
+
+    SCOPE / FILTER contract — mirrors GET /shifts:
+      • ALWAYS org-filtered + is_deleted excluded + RBAC store keyset (a DM never sees hours outside
+        their own span — same scope_keyset/in_keyset gate every other storeops read uses).
+      • `markets` (comma list) and `store_code` narrow further, matching the schedule page's own
+        market multi-select + store dropdown. `employees` (comma list of names) narrows to a set of
+        reps. Empty = the caller's whole span (subject to the RBAC keyset).
+    Hours math (overnight wrap, zero-length guard, deleted excluded) lives in the pure
+    schedule_hours module so it is harness-proven offline."""
+    from app.modules.storeops import schedule_hours as _sh
+    from datetime import date as _dd
+
+    anchor = (anchor or _dd.today().isoformat())[:10]
+    try:
+        weeks = max(2, min(int(weeks), 26))
+        months = max(2, min(int(months), 18))
+        week_start_dow = int(week_start_dow) if 0 <= int(week_start_dow) <= 6 else 0
+    except Exception:
+        weeks, months, week_start_dow = 8, 6, 0
+
+    # Full window: from the first week-start we will report on, through the anchor.
+    a = _sh._d(anchor)
+    lo = (_sh.week_start_of(a, week_start_dow) - timedelta(days=7 * (weeks - 1))).isoformat()
+    # Months can reach further back than weeks — take the earliest of the two lower bounds.
+    ym, mm = a.year, a.month
+    for _ in range(months - 1):
+        mm -= 1
+        if mm == 0:
+            mm, ym = 12, ym - 1
+    month_lo = _date(ym, mm, 1).isoformat()
+    lo = min(lo, month_lo)
+
+    q = (sb().table("shifts").select("store_code,employee_id,employee_name,shift_date,start_time,end_time,scheduled_hours,is_deleted")
+         .eq("org_id", org_id).eq("is_deleted", False)
+         .gte("shift_date", lo).lte("shift_date", anchor))
+    if store_code:
+        q = q.eq("store_code", store_code)
+    rows = q.limit(200000).execute().data or []
+
+    # RBAC store keyset — the non-negotiable span gate (identical to GET /shifts).
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [s for s in rows if in_keyset(ks, s.get("store_code"))]
+
+    # Optional market filter — resolve each selected market to its store keys and keep only shifts in
+    # those stores (intersected with the RBAC keyset above, so this can only ever NARROW).
+    mkts = [m.strip() for m in (markets or "").split(",") if m.strip()]
+    if mkts:
+        allowed = set()
+        for m in mkts:
+            allowed |= _cscope.market_store_keys(get_supabase(), org_id, m)
+        rows = [s for s in rows if str(s.get("store_code") or "").strip().upper() in allowed]
+
+    # Optional employee-name filter.
+    emps = {e.strip() for e in (employees or "").split(",") if e.strip()}
+    if emps:
+        rows = [s for s in rows if (s.get("employee_name") or "").strip() in emps]
+
+    out = _sh.hours_trend(rows, anchor=anchor, weeks=weeks, months=months, week_start_dow=week_start_dow)
+    out["scope"] = {"markets": mkts, "store_code": store_code or None,
+                    "employees": sorted(emps) if emps else None,
+                    "rbac_restricted": ks is not None}
+    return out
+
 # ── Scheduling-over-approved-time-off policy (owner directive 2026-07-26, ALL tenants) ─────────
 # Managers reported they could NOT reschedule an employee with approved/requested time off — the
 # old create_shift hard-blocked with a 409 and no override. Default policy is now WARN (schedule
@@ -441,6 +522,15 @@ def create_shift(shift: dict, org_id: str = ORG_ID):
     out = r.data[0] if r.data else shift
     if timeoff_warning:
         out = {**out, "timeoff_warning": timeoff_warning}
+    # AUTO CLOCK-IN (migration 915): if this new schedule covers a HELD unscheduled clock-in for the
+    # same (employee, store, day), activate it now — open the timelog punch back-dated to the original
+    # tap time and resolve the manager notification. Idempotent + one-open-safe; never blocks the save.
+    try:
+        activated = _activate_pending_clockins_for_shift(out.get("org_id") or org_id, out)
+        if activated:
+            out = {**out, "activated_clockins": activated}
+    except Exception:
+        pass
     return out
 
 @router.patch("/shifts/{shift_id}")
@@ -751,6 +841,96 @@ def _inactive_ids_from(employees_rows):
             if e.get("employee_id") and e.get("is_active") is False}
 
 
+def _shift_contributes_hours(s) -> bool:
+    """True iff a shift row carries ANY hours — scheduled_hours>0 OR actual_hours>0.
+
+    $0-clocked-day fix (2026-08-24, payroll investigation): only such a shift may SHADOW a same-day
+    closed punch out of payroll (the no-double-count rule). A pure ZERO-HOUR shell — the row
+    `clock_in_override` inserts to put an unscheduled store "on record" (status='scheduled', NO
+    scheduled_hours/actual_hours) — contributes nothing to pay, so letting it suppress the rep's real
+    6.5h punch paid them $0 for a full worked day. This is the SAME distinction the inactive-employee
+    path already draws with `real_shifts` (actual_hours>0), widened here to `scheduled_hours>0 OR
+    actual_hours>0` so a genuine SCHEDULED shift (sched>0, act not yet reconciled) still suppresses
+    its punch exactly as before — the schedule-vs-punch policy on real scheduled days is UNCHANGED;
+    only the never-paying zero shell stops hiding a punch. Never double-counts: a shell adds 0 hours,
+    so counting its punch is the only contribution that day."""
+    return float(s.get("scheduled_hours") or 0) > 0 or float(s.get("actual_hours") or 0) > 0
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PUNCH-DRIVEN PAY (owner directive 2026-08-24 — approved change to the pay model)
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# When a rep has a CLOSED punch (timelog.hours NOT NULL) on a (employee_id, work_date), the PUNCH
+# hours are AUTHORITATIVE for pay on that day — overriding scheduled_hours. A 6.6h punch pays 6.6h,
+# not the scheduled 6.3h. With NO closed punch that day, pay stays schedule-driven (scheduled_hours),
+# exactly as before. Open / forgot-to-clock-out punches (hours IS NULL) are NOT a punch here.
+#
+# PRECEDENCE (owner constraint, money-critical):  manual correction  >  closed punch  >  scheduled.
+# A MANUAL correction is a human-set `shifts.actual_hours` (> 0). The ONLY writer of
+# shifts.actual_hours anywhere in the codebase is PATCH /storeops/shifts (update_shift, the DM edit
+# path), which logs the change to storeops.payroll_change_log — nothing auto-reconciles a punch into
+# shifts.actual_hours (clock_out and the force-clockout sweep write ONLY storeops.timelog). So
+# `actual_hours > 0` is, by construction, a manual correction, and it must WIN over the raw punch (a
+# DM who fixed a forgotten punch must not be overwritten by a partial/again-forgotten punch). This is
+# a READ-TIME preference (design A): no mutation of shifts, no backfill — historical months fix
+# themselves. Applied IDENTICALLY across get_payroll (legacy), get_payroll_by_store (legacy), the
+# payroll_month_rows RPC (migration 914), and the actual-hours drill-down, so all four reconcile.
+#
+# Keys are the RAW employee_id (shifts may carry a numeric id, kiosk punches the business id) — the
+# SAME raw-id grain the mig-407 anti-join and the legacy shift_days set already used, so the existing
+# identity-merge / double-count behavior is preserved unchanged; only the hours DECISION changes.
+def _punch_driven_day_maps(shifts, timelog):
+    """(manual_shift_days, closed_punch_days), each: raw employee_id -> set of 'YYYY-MM-DD'.
+
+    manual_shift_days: days the employee has a shift with actual_hours>0 (a human correction — see
+    module note above; actual_hours>0 == manual). closed_punch_days: days with >=1 CLOSED punch
+    (clock_out set AND hours NOT NULL). Open punches are excluded (they are not a punch for pay)."""
+    manual_days: dict = {}
+    punch_days: dict = {}
+    for s in shifts or []:
+        if float(s.get("actual_hours") or 0) > 0:
+            eid = s.get("employee_id")
+            if eid is not None:
+                manual_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
+    for t in timelog or []:
+        if t.get("clock_out") and t.get("hours") is not None:
+            eid = t.get("employee_id")
+            if eid:
+                punch_days.setdefault(eid, set()).add(str(t.get("work_date") or "")[:10])
+    return manual_days, punch_days
+
+
+def _shift_actual_contribution(s, manual_days, punch_days):
+    """Effective ACTUAL hours a shift row contributes to PAY under the punch-driven model:
+      * actual_hours            if actual_hours > 0        — a manual DM correction ALWAYS wins.
+      * 0                       elif a CLOSED punch exists that day AND no manual correction that day
+                                — the punch drives pay; the schedule is REPLACED (the punch is counted
+                                  separately, so this avoids double-counting), incl. the PR #74
+                                  zero-hour override shell (sched 0/act 0) whose punch already won.
+      * scheduled_hours         else                       — no punch that day: scheduled fallback,
+                                                              the pre-existing behavior, unchanged."""
+    act = float(s.get("actual_hours") or 0)
+    if act > 0:
+        return act
+    eid = s.get("employee_id")
+    d = str(s.get("shift_date") or "")[:10]
+    if d in punch_days.get(eid, ()) and d not in manual_days.get(eid, ()):
+        return 0.0
+    return float(s.get("scheduled_hours") or 0)
+
+
+def _punch_counts_for_pay(t, manual_days):
+    """True iff this CLOSED punch contributes its hours to pay: it counts UNLESS a manual correction
+    (a shift with actual_hours>0) exists that day for the SAME raw employee_id (manual wins). This
+    REPLACES PR #74's 'any hours-carrying shift blocks the punch' rule — a merely-SCHEDULED shift no
+    longer blocks its day's punch (that is the punch-driven change); only a manual correction does."""
+    if not (t.get("clock_out") and t.get("hours") is not None):
+        return False
+    eid = t.get("employee_id")
+    d = str(t.get("work_date") or "")[:10]
+    return d not in manual_days.get(eid, ())
+
+
 def _inactive_activity_rows(org_id, lo, hi, inactive_ids):
     """(real_shifts, timelog_rows) for INACTIVE employees only. real_shifts = storeops.shifts rows
     (is_deleted=false, in [lo,hi) when given) with actual_hours GENUINELY > 0 — a schedule-only row
@@ -1037,9 +1217,14 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
         if lo and hi:
             q = q.gte("shift_date", lo).lt("shift_date", hi)
         shifts = q.execute().data or []
-        # employee_id -> {shift_date already represented by a shift row}, so the timelog fallback
-        # below never double-counts a day that's already schedule-tracked.
-        shift_days: dict = {}
+        # Fetch the period's CLOSED punches up-front so the shift loop below already knows which days
+        # are punch-driven (PUNCH-DRIVEN PAY, 2026-08-24). Open range (month=None) has no timelog
+        # basis -> empty, so the shift loop degrades to the pre-existing act>0?act:sched behavior.
+        tl = []
+        if lo and hi:
+            tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
+                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+        manual_days, punch_days = _punch_driven_day_maps(shifts, tl)
         for s in shifts:
             eid = s.get("employee_id")
             if eid in inactive_ids:
@@ -1056,9 +1241,10 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                     "shifts": 0,
                 }
             sched = float(s.get("scheduled_hours") or 0)
-            act = float(s.get("actual_hours") or 0)
-            if act == 0:
-                act = sched  # actual not recorded yet -> fall back to scheduled hours
+            # PUNCH-DRIVEN PAY: actual_hours>0 (manual) wins; else the punch drives (shift -> 0) on a
+            # day with a closed punch and no manual correction; else the scheduled fallback. The punch
+            # itself is added by the timelog loop below, so a punch-driven day counts its hours ONCE.
+            act = _shift_actual_contribution(s, manual_days, punch_days)
             summary[eid]["scheduled_hours"] += sched
             summary[eid]["actual_hours"]    += act
             summary[eid]["shifts"] += 1
@@ -1066,20 +1252,15 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
             if st:
                 sh = store_hours.setdefault(eid, {})
                 sh[st] = sh.get(st, 0.0) + sched + act
-            if eid:
-                shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
 
         # UNIVERSAL FALLBACK (2026-07-18, payroll data-flow audit — luxelink showed employees+shifts+rates
         # but an empty Payroll Report for periods where reps clock in via the kiosk without a formal
         # schedule entered): a real clock-in/out is "existing platform data" this report was silently
-        # dropping whenever no shifts row existed for that employee/day. ADDITIVE ONLY — a day already
-        # covered by a shift row is untouched (byte-identical for any tenant whose hours are already
-        # schedule-tracked, which is the house/Boost pattern today); only days with a clock punch and NO
-        # matching shift gain a row, using clocked hours as actual (no schedule existed, so
-        # scheduled_hours/scheduled_pay correctly stay 0 for that portion).
+        # dropping whenever no shifts row existed for that employee/day. Under PUNCH-DRIVEN PAY a punch
+        # counts UNLESS a manual correction (shift.actual_hours>0) covers its day — a merely-scheduled
+        # shift no longer suppresses it (the schedule contributed 0 above, so the punch is what's paid,
+        # never both). scheduled_hours stays 0 for a punch with no schedule of its own.
         if lo and hi:
-            tl = (sb().table("timelog").select("employee_id,employee_name,hours,clock_out,work_date,store_code")
-                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
             for t in tl:
                 if not (t.get("clock_out") and t.get("hours") is not None):
                     continue   # only CLOSED punches count (matches /payroll-raw's own rule)
@@ -1087,8 +1268,8 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
                 if eid in inactive_ids:
                     continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
                 wd = str(t.get("work_date") or "")[:10]
-                if not eid or not wd or wd in shift_days.get(eid, set()):
-                    continue   # already represented by a shift that day -> never double-count
+                if not eid or not wd or not _punch_counts_for_pay(t, manual_days):
+                    continue   # manual correction that day wins -> punch excluded (never double-count)
                 emp = emp_map.get(eid, {})
                 if eid not in summary:
                     summary[eid] = {
@@ -1314,19 +1495,24 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
         if lo and hi:
             q = q.gte("shift_date", lo).lt("shift_date", hi)
         shifts = q.execute().data or []
-        shift_days: dict = {}   # employee_id -> {shift_date} already represented by a shift row
+        # PUNCH-DRIVEN PAY (2026-08-24): fetch the period's punches up-front so the shift loop already
+        # knows which (emp, day) is punch-driven, EXACTLY as /payroll does above — the two reconcile.
+        tl = []
+        if lo and hi:
+            tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
+                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
+        manual_days, punch_days = _punch_driven_day_maps(shifts, tl)
         for s in shifts:
             eid = s.get("employee_id")
             if eid in inactive_ids:
                 continue   # handled by _inactive_activity_rows below (phantom-schedule-only excluded there)
             store = (s.get("store_code") or "").strip()
-            if eid:
-                shift_days.setdefault(eid, set()).add(str(s.get("shift_date") or "")[:10])
             if not store:
                 continue
             sched = float(s.get("scheduled_hours") or 0)
-            act = float(s.get("actual_hours") or 0)
-            hrs = act if act > 0 else sched
+            # actual_hours>0 (manual) wins; else 0 on a punch-driven day (punch replaces the schedule,
+            # attributed to the punch's own store below); else scheduled fallback.
+            hrs = _shift_actual_contribution(s, manual_days, punch_days)
             rate = rate_map.get(eid, 0.0)
             d = by_store.setdefault(store, {"store_code": store, "hours": 0.0, "amount": 0.0})
             d["hours"] += hrs
@@ -1335,12 +1521,11 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                 payroll_salary.accumulate(emp_store_hours, eid, store, hrs)
                 payroll_salary.accumulate(emp_store_dollars, eid, store, hrs * rate)
 
-        # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch with no matching shift
-        # row is real existing platform data this store auto-fill was dropping. ADDITIVE ONLY: a day
-        # already covered by a shift is skipped (byte-identical for a schedule-tracked tenant).
+        # UNIVERSAL FALLBACK (2026-07-18, same audit as /payroll) — a clock punch is real existing
+        # platform data this store auto-fill was dropping. Under PUNCH-DRIVEN PAY it counts (at the
+        # punch's own store) UNLESS a manual correction covers its day; the schedule contributed 0 for
+        # a punch-driven day above, so the punch's hours land ONCE, never on top of the schedule.
         if lo and hi:
-            tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
-                  .eq("org_id", org_id).gte("work_date", lo).lt("work_date", hi).limit(20000).execute().data) or []
             for t in tl:
                 if not (t.get("clock_out") and t.get("hours") is not None):
                     continue
@@ -1349,7 +1534,7 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                     continue   # handled by _inactive_activity_rows below (always real activity, no fallback needed)
                 wd = str(t.get("work_date") or "")[:10]
                 store = (t.get("store_code") or "").strip()
-                if not eid or not wd or not store or wd in shift_days.get(eid, set()):
+                if not eid or not wd or not store or not _punch_counts_for_pay(t, manual_days):
                     continue
                 hrs = float(t.get("hours") or 0)
                 rate = rate_map.get(eid, 0.0)
@@ -1551,13 +1736,27 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
             row["store_code"] = store
         return row
 
-    # Shift contribution — a day covered by a shift ALWAYS gets the shift's own eff value added to
-    # `/payroll`'s bucket for whichever raw id that shift row carries. `matches_business_id` is
-    # exactly the test that determines whether THIS shift lands in the SAME aggregation bucket as
-    # the employee's timelog rows (both `/payroll`'s legacy Python `shift_days` set and mig-407's SQL
-    # anti-join key off raw employee_id equality) — reproducing it here is what makes the dedup below
-    # match `/payroll` instead of silently being "more correct" than the number it's explaining.
-    shift_days_same_bucket = set()
+    # PUNCH-DRIVEN PAY (2026-08-24) reconciliation: reproduce /payroll's exact per-day decision so
+    # this drill-down explains the paid number rather than a prettier one. Precedence is
+    # manual > punch > scheduled, keyed on the SAME raw-id grain /payroll uses. Two same-bucket sets:
+    #   manual_days_bucket — days with a shift in THIS employee's business-id bucket carrying a manual
+    #     correction (actual_hours>0). A manual correction WINS: it counts, and it suppresses the day's
+    #     punch (never double-counted).
+    #   punch_days_bucket — days with a closed punch (timelog always carries the business id, so every
+    #     closed punch is in the business-id bucket). On such a day, absent a manual correction, the
+    #     punch DRIVES pay and a same-bucket scheduled shift contributes 0 (its hours are replaced).
+    manual_days_bucket = set()
+    punch_days_bucket = set()
+    for t in timelog:
+        if t.get("clock_out") and t.get("hours") is not None:
+            _dd = str(t.get("work_date") or "")[:10]
+            if _dd:
+                punch_days_bucket.add(_dd)
+    for s in shifts:
+        if float(s.get("actual_hours") or 0) > 0 and str(s.get("employee_id")) == str(employee_id):
+            _dd = str(s.get("shift_date") or "")[:10]
+            if _dd:
+                manual_days_bucket.add(_dd)
     for s in shifts:
         d = str(s.get("shift_date") or "")[:10]
         if not d:
@@ -1568,10 +1767,16 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         matches_business_id = str(s.get("employee_id")) == str(employee_id)
         if is_inactive:
             eff = act if act > 0 else 0.0       # phantom (act==0) shift never counts for an inactive rep
-            counted = act > 0
+        elif act > 0:
+            eff = act                           # manual correction ALWAYS wins (manual > punch > sched)
+        elif matches_business_id and d in punch_days_bucket and d not in manual_days_bucket:
+            eff = 0.0                           # PUNCH-DRIVEN: the same-bucket closed punch replaces the
+                                                # schedule (the punch is added below) -> no double count.
+                                                # Also subsumes the PR #74 zero-hour override shell.
         else:
-            eff = act if act > 0 else sched      # active-path act==0->scheduled fallback
-            counted = True
+            eff = sched                         # no punch that day -> scheduled fallback (unchanged)
+        counted = eff > 0                        # a shift whose hours are in the total (manual/scheduled);
+                                                 # a punch-driven or zero-shell shift contributes 0 -> False
         row["scheduled_hours"] += sched if (not is_inactive or act > 0) else 0.0
         row["actual_hours"] += eff
         row["shift"] = {"id": s.get("id"), "start_time": s.get("start_time"), "end_time": s.get("end_time"),
@@ -1580,8 +1785,6 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
                         "edited": ("shifts", str(s.get("id"))) in edited_source_ids}
         if row["shift"]["edited"]:
             row["edited"] = True
-        if matches_business_id and counted:
-            shift_days_same_bucket.add(d)
 
     for t in timelog:
         d = str(t.get("work_date") or "")[:10]
@@ -1590,7 +1793,7 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
         row = day(d, t.get("store_code"))
         closed = bool(t.get("clock_out") and t.get("hours") is not None)
         hrs = float(t.get("hours") or 0) if closed else 0.0
-        counted = closed and d not in shift_days_same_bucket
+        counted = closed and d not in manual_days_bucket   # punch counts unless a manual correction wins
         edited = ("timelog", str(t.get("id"))) in edited_source_ids
         row["punches"].append({"id": t.get("id"), "clock_in": t.get("clock_in"), "clock_out": t.get("clock_out"),
                                "hours": t.get("hours"), "store_code": t.get("store_code"),
@@ -1600,9 +1803,11 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
             row["edited"] = True
         if counted:
             row["actual_hours"] += hrs
-        if closed and row.get("shift") is not None and row["shift"].get("counted") and d not in shift_days_same_bucket:
-            # the shift exists but landed in a DIFFERENT raw-id bucket than this punch (the common,
-            # buggy case) -> both counted -> flag it plainly.
+        if counted and row.get("shift") is not None and row["shift"].get("counted"):
+            # a shift's OWN hours counted this day AND a punch also counted -> the shift landed in a
+            # DIFFERENT raw-id bucket than the punch (the identity-mismatch double-count) -> flag it. A
+            # same-bucket punch-driven day never trips this: that shift's effective_hours is 0 (counted
+            # False), so only the punch counts.
             row["double_counted"] = True
             row["note"] = (f"{row['shift']['effective_hours']:.1f}h from the schedule AND "
                             f"{hrs:.1f}h from a separate clock punch both counted this day — see "
@@ -2182,8 +2387,12 @@ def _collect_markets(org_id: str):
 def _canonicalize_market(value, canonical_markets):
     """btrim + case-insensitive match to an existing market -> saves the canonical casing.
     A genuinely new (non-matching) value is kept as-typed (btrimmed) — that's the "create new"
-    path. Empty stays empty (Unassigned is explicit and allowed)."""
-    s = str(value or "").strip()
+    path. Empty stays empty (Unassigned is explicit and allowed).
+
+    HTML/angle-bracket junk (e.g. a pasted "<li>") is stripped FIRST (scope.sanitize_market_label) so
+    the free-text create path can never persist markup as a market — the defect that put "<li>" into
+    the vocabulary (migration 740). An all-markup value collapses to "" = unassigned."""
+    s = _cscope.sanitize_market_label(value)
     if not s:
         return ""
     for m in canonical_markets:
@@ -2302,6 +2511,8 @@ def bulk_create_stores(body: BulkCreateStoresIn, org_id: str = ORG_ID):
         r = sb().table("stores").insert(to_insert[i:i + 500]).execute()
         inserted += len(r.data or to_insert[i:i + 500])
     _sync_store_mapping(org_id, to_insert)   # propagate new stores to commcalc.store_mapping
+    for _s in to_insert:                      # register each store's entity + code/address aliases (SSOT)
+        _register_store_entity(org_id, _s.get("store_code"), _s.get("address"))
     if to_insert:
         _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return {"inserted": inserted, "skipped": skipped}
@@ -2322,13 +2533,15 @@ def create_store(store: dict, org_id: str = ORG_ID):
     r = sb().table("stores").insert(row).execute()
     _STORE_TZ_CACHE.clear()   # a new store's zone must be visible to the clock immediately
     _sync_store_mapping(org_id, [row])   # propagate the new store to commcalc.store_mapping
+    _register_store_entity(org_id, row.get("store_code"), row.get("address"),   # SSOT: entity + aliases
+                           (r.data[0].get("entity_id") if r.data else None))
     _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0] if r.data else row
 
 
 def _sync_store_mapping_update(org_id, store_code, patch):
     """Propagate an EXISTING store's is_active/address/market change into commcalc.store_mapping —
-    UPDATE only (creation-time propagation stays _sync_store_mapping's job, insert-if-absent).
+    now an APP-SIDE UPSERT (insert-if-absent), not update-only.
 
     2026-07-25 fix: `commcalc.store_mapping` has its OWN `is_active` column, and migration 003
     defines a `storeops.sync_to_commcalc()` trigger FUNCTION meant to keep it in sync — but that
@@ -2336,11 +2549,18 @@ def _sync_store_mapping_update(org_id, store_code, patch):
     `CREATE TRIGGER ... ON storeops.stores` exists for it), and the app-side `_sync_store_mapping`
     only INSERTS a mapping row for a brand-new store, never updates an existing one. So toggling a
     store inactive in StoreOps Admin correctly saved `storeops.stores.is_active` but never reached
-    `commcalc.store_mapping.is_active` at all — plausibly part of "stores not going inactive"
-    wherever a downstream surface reads store_mapping's own flag instead of storeops.stores'. This
-    closes that gap going forward from the PATCH path (the toggle's actual write path) without
-    touching the dormant SQL trigger. Best-effort: a sync failure must never break the store update
-    itself (same posture as _sync_store_mapping)."""
+    `commcalc.store_mapping.is_active` at all.
+
+    2026-08-24 SSOT guard fix (blueprint Part 3d.1 — the 1115-Liberty orphan class): the previous
+    version of this function was UPDATE-ONLY (`.update(...).eq(store_code)`). A store that has NO
+    store_mapping row yet (e.g. `1115 Liberty` / B-1115: a storeops.stores row exists but no mapping
+    row) matched nothing, so its market NEVER reached store_mapping → never reached asset_ledger.market
+    → it dropped from every market-filtered reader. FIX: SELECT the (org_id, store_code) mapping row;
+    if it exists, UPDATE exactly as before (byte-identical to the old path for the common case); if it
+    does NOT, INSERT a full mapping row via `_sync_store_mapping` (the SAME fields, the SAME
+    address-dedupe guard), then apply the toggled is_active. This only ever ADDS a missing mapping row
+    or updates one already targeted — it never deletes, never rewrites money. Best-effort: a sync
+    failure must never break the store update itself (same posture as _sync_store_mapping)."""
     upd = {}
     if "is_active" in patch:
         upd["is_active"] = bool(patch["is_active"])
@@ -2351,10 +2571,81 @@ def _sync_store_mapping_update(org_id, store_code, patch):
     if not upd or not store_code:
         return
     try:
-        (get_supabase().schema("commcalc").table("store_mapping").update(upd)
-         .eq("org_id", org_id).eq("store_code", store_code).execute())
+        c = get_supabase()
+        existing = (c.schema("commcalc").table("store_mapping").select("store_code")
+                    .eq("org_id", org_id).eq("store_code", store_code).execute().data) or []
+        if existing:
+            (c.schema("commcalc").table("store_mapping").update(upd)
+             .eq("org_id", org_id).eq("store_code", store_code).execute())
+            return
+        # No mapping row yet — INSERT a full one instead of a no-op UPDATE (the orphan-class fix).
+        # Build it from the patch, filling address/market from the live storeops.stores row when the
+        # patch did not carry them, then delegate to _sync_store_mapping so the INSERT uses the exact
+        # same fields + address-dedupe guard.
+        store_row = {"store_code": store_code,
+                     "address": patch.get("address"),
+                     "market": patch.get("market")}
+        if store_row["address"] is None or store_row["market"] is None:
+            live = (c.schema("storeops").table("stores").select("address,market")
+                    .eq("org_id", org_id).eq("store_code", store_code).execute().data) or []
+            if live:
+                if store_row["address"] is None:
+                    store_row["address"] = live[0].get("address")
+                if store_row["market"] is None:
+                    store_row["market"] = live[0].get("market")
+        _sync_store_mapping(org_id, [store_row])
+        # _sync_store_mapping inserts with store_mapping's own is_active default (true); apply the
+        # explicitly-toggled value so deactivating a mapping-less store still lands inactive.
+        if "is_active" in upd:
+            (c.schema("commcalc").table("store_mapping").update({"is_active": upd["is_active"]})
+             .eq("org_id", org_id).eq("store_code", store_code).execute())
     except Exception as e:
-        print(f"WARN store_mapping update-sync failed: {e}")
+        print(f"WARN store_mapping upsert-sync failed: {e}")
+
+
+def _register_store_entity(org_id, store_code, address, entity_id=None):
+    """Resolve-or-register a store's stable `entity_id` and write its `code`/`address` aliases into
+    storeops.store_alias (SSOT guard fix, blueprint Part 3d.2). Called on every store write so a store
+    can no longer exist without an entity + alias set.
+
+    Backend-only and PURELY ADDITIVE in Phase 1: nothing READS store_alias / entity_id on a money path
+    yet (app.core.identity is wired into no reader), so this changes no payout or market-filtered
+    dollar. Idempotent — an alias already present (compared on lower(trim(value)), the unique index)
+    is never re-inserted. Best-effort: a failure here NEVER breaks the store write and NEVER touches
+    money. Validation (blueprint 3d.3 / flag_store_resolver pri-2): an alias is written only against a
+    REAL store entity — the entity_id is confirmed to belong to a live storeops.stores row first."""
+    code = str(store_code or "").strip()
+    if not code:
+        return
+    try:
+        c = get_supabase()
+        if not entity_id:
+            rows = (c.schema("storeops").table("stores").select("entity_id")
+                    .eq("org_id", org_id).eq("store_code", code).execute().data) or []
+            entity_id = rows[0].get("entity_id") if rows else None
+        if not entity_id:                 # no real entity (registry migration not yet run) → no-op
+            return
+        want = [("code", code)]
+        addr = str(address or "").strip()
+        if addr:
+            want.append(("address", addr))
+        existing = (c.schema("storeops").table("store_alias").select("alias_kind,alias_value")
+                    .eq("org_id", org_id).execute().data) or []
+        have = {(str(r.get("alias_kind") or "").lower(),
+                 str(r.get("alias_value") or "").strip().lower()) for r in existing}
+        new = []
+        for kind, val in want:
+            key = (kind, val.strip().lower())
+            if key in have:
+                continue
+            new.append({"org_id": org_id, "alias_kind": kind, "alias_value": val,
+                        "entity_id": entity_id, "source": "store_write", "confidence": "seeded"})
+            have.add(key)
+        if new:
+            c.schema("storeops").table("store_alias").insert(new).execute()
+        _identity.invalidate(org_id)
+    except Exception as e:
+        print(f"WARN store entity register failed: {e}")
 
 
 @router.patch("/stores/{store_id}")
@@ -2373,6 +2664,8 @@ def update_store(store_id: int, updates: dict, org_id: str = ORG_ID):
     if "timezone" in row:
         _STORE_TZ_CACHE.clear()   # zone change must take effect without a restart
     _sync_store_mapping_update(org_id, r.data[0].get("store_code"), row)
+    _register_store_entity(org_id, r.data[0].get("store_code"), r.data[0].get("address"),  # SSOT
+                           r.data[0].get("entity_id"))
     _cscope.invalidate_market_index(org_id)   # new store/market visible in the picker instantly
     return r.data[0]
 
@@ -2394,11 +2687,11 @@ def get_shift_templates(authorization: str = Header(default=""), org_id: str = O
     return rows
 
 
-@router.post("/shift-templates/save-week")
 class WeekStartIn(LaxModel):
     week_start: str = ""
 
 
+@router.post("/shift-templates/save-week")
 def save_week_as_template(body: WeekStartIn, org_id: str = ORG_ID):
     """Save a week's shifts as the recurring template (replaces existing templates for those employees)."""
     week_start = (body.week_start or "").strip()
@@ -2717,6 +3010,40 @@ def _allowed_clock_stores(org_id, employee_id, home_store, work_date_local):
     return codes
 
 
+def _require_member(authorization, org_id=ORG_ID):
+    """Resolve the signed-in caller and confirm they are a MEMBER of the tenant this request acts on.
+    Returns their app_users row ({org_id, email, role, employee_id}); 401 if not signed in, 403 if the
+    login has no membership here, 409 if the login belongs to several tenants and named none.
+
+    WHY THIS EXISTS (2026-08-21). The Unified Approvals router (mig 867) and the Chat router (mig 868)
+    both mount a router-wide `Depends(_require_member)` whose body does
+    `from app.modules.storeops.router import _require_member` — and this name had never been defined
+    here. A router dependency runs on EVERY request before the endpoint body, and the import lives
+    INSIDE the function, so nothing failed at boot: each request instead raised ImportError, which is
+    not an HTTPException, so it fell through to main.HardeningMiddleware and came back as the masked
+    "A system error occurred. Reference: <id>" 500. Every Approvals and Chat call answered that way,
+    for every caller including the owner. Defining the shared gate HERE (rather than a private copy in
+    each module) is what both call sites already assumed, and keeps the two from drifting.
+
+    Membership is read through `caller_app_user_http`, the platform's canonical resolver, so this gate
+    inherits its posture exactly: the row is looked up for the tenant the middleware VALIDATED (never
+    whichever membership happened to come back first), a platform SUPER-ADMIN passes on any org they
+    are administering, and an ambiguous multi-tenant login is asked to choose instead of being guessed
+    at. `_require_manager` below is this same shape plus a role test — deliberately identical, since a
+    manager is a member first.
+
+    FAILS CLOSED: no token or no membership row is a refusal, never a pass-through."""
+    from app.modules.core.router import _uid_from_token  # local import avoids a circular import
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "Sign in to continue.")
+    from app.core.tenant_middleware import caller_app_user_http
+    u = caller_app_user_http(uid, "org_id,email,role,employee_id")
+    if not u:
+        raise HTTPException(403, "That login isn't recognized for the company you are working in.")
+    return u
+
+
 def _require_manager(authorization, org_id=ORG_ID):
     """Resolve the signed-in caller and confirm they're a manager (not a plain rep) so they can
     authorize a clock-in override. Resolves the manager's OWN tenant from their token (auth_id is
@@ -2811,6 +3138,27 @@ def _caller_identity(authorization: str):
 
 
 _TC432_PRESENT = None   # cached tri-state: None=unprobed, True/False after the first probe
+_PENDING_CLOCKIN_PRESENT = None   # cached tri-state for migration 915 (storeops.pending_clockin)
+
+
+def _pending_clockin_present():
+    """True once migration 915 has been applied — i.e. storeops.pending_clockin exists. Cached after
+    the first successful probe (a migration is never un-run, so True is permanent); a False answer is
+    NOT cached so the process self-heals the moment 915 lands without a restart.
+
+    DEPLOY-ORDER SAFETY (same posture _timeclock_432_present takes for 432): this code can go live
+    BEFORE the migration runs. When 915 is absent, the block-and-hold path is skipped entirely and an
+    unscheduled clock-in falls back to the pre-existing needs_override response — byte-identical to
+    today — instead of throwing 'relation does not exist'."""
+    global _PENDING_CLOCKIN_PRESENT
+    if _PENDING_CLOCKIN_PRESENT:
+        return True
+    try:
+        sb().table("pending_clockin").select("id").limit(1).execute()
+        _PENDING_CLOCKIN_PRESENT = True
+    except Exception:
+        _PENDING_CLOCKIN_PRESENT = False
+    return _PENDING_CLOCKIN_PRESENT
 
 
 def _timeclock_432_present():
@@ -2850,6 +3198,270 @@ def _pending_permissions_for(org_id, employee_id):
         return []
 
 
+def _pending_schedule_requests_for(org_id, employee_id):
+    """This employee's own PENDING block-and-hold clock-in requests (migration 915), so the kiosk can
+    keep showing the 'waiting for your manager to schedule you' state — and, crucially, RESUME it after
+    a hard refresh (the durable punch queue drops the tap on the 200 pending response, so /status is the
+    only thing that remembers it). Empty when 915 hasn't run yet (never break /timeclock/status)."""
+    if not _pending_clockin_present():
+        return []
+    try:
+        return (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                .eq("employee_id", employee_id).eq("status", "pending")
+                .order("requested_at", desc=True).limit(20).execute().data) or []
+    except Exception:
+        return []
+
+
+# The professional message the kiosk shows a rep whose unscheduled tap is HELD (owner decision 3 —
+# no "override" wording, because there is no override; their tap is captured and will auto-activate).
+_PENDING_SCHEDULE_MESSAGE = (
+    "You're not scheduled at this location right now. Your manager has been notified to add you to the "
+    "schedule — once they approve, you'll be clocked in automatically from the time you tapped in.")
+
+
+def _schedule_deeplink(org_id, *, employee_name, store_code, work_date, start_hhmm, pending_id):
+    """The manager's deep-link into the schedule editor, PRE-FILLED (employee, store, date, START = the
+    store-local tap time) so they only enter the END time and save. Save creates the schedule AND
+    activates the held clock-in. Best-effort; returns '' if the app base URL isn't configured."""
+    try:
+        from urllib.parse import urlencode
+        from app.core.config import settings
+        base = (settings.APP_PUBLIC_URL or "").rstrip("/")
+        if not base:
+            return ""
+        qs = urlencode({"prefill": "1", "emp": employee_name or "", "store": store_code or "",
+                        "date": str(work_date or "")[:10], "start": start_hhmm or "",
+                        "pending": str(pending_id or "")})
+        return f"{base}/storeops/schedule?{qs}"
+    except Exception:
+        return ""
+
+
+def _notify_pending_clockin_managers(org_id, pending: dict, start_hhmm, deeplink):
+    """FIRE-AND-FORGET manager notification for a held unscheduled clock-in: (a) an intimation into the
+    unified approvals inbox (mig 867) carrying the deep-link payload, and (b) an email to the store's
+    approvers (the SAME DM + managers-above + admin-fallback resolver every timeclock approval uses).
+    Runs in a daemon thread so it never delays the tap, and NEVER raises. Returns the approval_request
+    id synchronously (best-effort) so the pending row can link it for later resolution."""
+    who = pending.get("employee_name") or pending.get("employee_id") or "An employee"
+    store_code = pending.get("store_code")
+    work_date = str(pending.get("work_date") or "")[:10]
+    # (a) unified approvals inbox — created SYNCHRONOUSLY (idempotent on source id) so we can link its id
+    # back onto the pending row; notify=False here because we send the email ourselves just below.
+    req_id = None
+    try:
+        from app.modules.approvals import engine as _approvals
+        dm_eid, dm_email, _dm_name = _dm_for_store(org_id, store_code)
+        saved = _approvals.create_request(
+            org_id, type="pending_clockin_schedule",
+            source_table="pending_clockin", source_id=pending.get("id"),
+            title=f"{who} tapped in at {store_code or 'a store'} but isn't scheduled — add them to the schedule",
+            summary=f"Clock-in held since {start_hhmm or ''} (store time){(' on ' + work_date) if work_date else ''}. "
+                    f"Saving the schedule clocks them in automatically from that time.",
+            payload={"employee_name": pending.get("employee_name"), "employee_id": pending.get("employee_id"),
+                     "store_code": store_code, "work_date": work_date, "start": start_hhmm,
+                     "pending_id": pending.get("id"), "deeplink": deeplink},
+            requested_by=pending.get("employee_id"), requested_by_name=pending.get("employee_name"),
+            store_code=store_code, assignee_employee_id=dm_eid, assignee_email=dm_email,
+            assignee_kind="dm", notify=False)
+        req_id = (saved or {}).get("id")
+    except Exception:
+        dm_email = None
+
+    import threading
+
+    def _run():
+        try:
+            recips = set(_permission_approver_emails(org_id, pending, dm_email))
+            if not recips:
+                return
+            biz = _tenant_display_name(org_id)
+            subject = f"Add {who} to the schedule at {store_code or 'their store'} — they're clocked out waiting"
+            lines = [f"{who} tapped in at {store_code or 'a store'}"
+                     + (f" on {work_date}" if work_date else "") + f" at {start_hhmm or 'their tap time'} (store time), "
+                     "but they aren't scheduled there.", "",
+                     "They are NOT accruing any time — their clock-in is HELD until you add them to the "
+                     "schedule. When you save the shift, they are clocked in AUTOMATICALLY from the time "
+                     "they tapped in; they do not tap again.", ""]
+            if deeplink:
+                lines += [f"Add them to the schedule (pre-filled — you only enter the end time): {deeplink}", ""]
+            else:
+                lines += [f"Add them to the schedule in {biz}: Store Ops → Schedule.", ""]
+            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines))
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="pending-clockin-notify").start()
+    except Exception:
+        pass
+    return req_id
+
+
+def _create_pending_clockin(org_id, *, employee_id, employee_name, store_code, requested_at,
+                            work_date, client_request_id=None, reason=None):
+    """Capture an unscheduled tap as a HELD pending clock-in (migration 915) — NO timelog punch, NO
+    zero-hour shell. Idempotent: a retap with the same client_request_id, or any retap while a pending
+    row for this (employee, store, day) is still open, returns the EXISTING row (no stacking). Notifies
+    the store's manager(s) with the pre-filled deep-link. NEVER raises — returns None only if migration
+    915 is absent (the caller then degrades to the pre-existing needs_override response)."""
+    if not _pending_clockin_present():
+        return None
+    norm_store = _norm_store(store_code)
+    wd = str(work_date or "")[:10] or None
+    # store-local tap time as HH:MM, for the manager's prefilled schedule START (mig 851 zone).
+    try:
+        start_hhmm = requested_at.astimezone(_biz_tz_for_store(org_id, store_code)).strftime("%H:%M")
+    except Exception:
+        start_hhmm = ""
+    cri = _clean_cri(client_request_id)
+    # IDEMPOTENCY — check first (mirrors clock_in): same client_request_id, else any open pending for
+    # this (emp, store, day). Either way, return the existing row unchanged (no 2nd insert, no 2nd notify).
+    try:
+        if cri:
+            prior = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                     .eq("employee_id", employee_id).eq("client_request_id", cri)
+                     .order("requested_at", desc=True).limit(1).execute().data) or []
+            if prior:
+                return {**prior[0], "start_hhmm": start_hhmm, "idempotent_replay": True}
+        openp = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                 .eq("employee_id", employee_id).eq("store_code", norm_store)
+                 .eq("work_date", wd).eq("status", "pending")
+                 .order("requested_at", desc=True).limit(1).execute().data) or []
+        if openp:
+            return {**openp[0], "start_hhmm": start_hhmm, "idempotent_replay": True}
+    except Exception:
+        pass
+    row = {"org_id": org_id, "employee_id": employee_id, "employee_name": employee_name,
+           "store_code": norm_store, "requested_at": requested_at.isoformat(), "work_date": wd,
+           "status": "pending", "client_request_id": cri, "reason": reason,
+           "requested_by": employee_id}
+    try:
+        r = sb().table("pending_clockin").insert(row).execute()
+        saved = (r.data or [row])[0]
+    except Exception as e:
+        # A unique-index rejection (the one-open-pending or client_request_id guard) means a concurrent
+        # retap already won — re-select and return that existing row as the (replayed) pending request.
+        if _is_unique_violation(e):
+            try:
+                if cri:
+                    dup = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                           .eq("employee_id", employee_id).eq("client_request_id", cri)
+                           .order("requested_at", desc=True).limit(1).execute().data) or []
+                    if dup:
+                        return {**dup[0], "start_hhmm": start_hhmm, "idempotent_replay": True}
+                dup2 = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                        .eq("employee_id", employee_id).eq("store_code", norm_store)
+                        .eq("work_date", wd).eq("status", "pending")
+                        .order("requested_at", desc=True).limit(1).execute().data) or []
+                if dup2:
+                    return {**dup2[0], "start_hhmm": start_hhmm, "idempotent_replay": True}
+            except Exception:
+                pass
+        return None
+    # Notify the manager(s) with the pre-filled deep-link, and link the approvals row back on.
+    deeplink = _schedule_deeplink(org_id, employee_name=employee_name, store_code=norm_store,
+                                  work_date=wd, start_hhmm=start_hhmm, pending_id=saved.get("id"))
+    try:
+        req_id = _notify_pending_clockin_managers(org_id, saved, start_hhmm, deeplink)
+        if req_id and saved.get("id"):
+            sb().table("pending_clockin").update({"approval_request_id": str(req_id)}).eq("id", saved["id"]).execute()
+            saved["approval_request_id"] = str(req_id)
+    except Exception:
+        pass
+    return {**saved, "start_hhmm": start_hhmm, "deeplink": deeplink}
+
+
+def _activate_pending_clockins_for_shift(org_id, shift):
+    """AUTO CLOCK-IN (owner decision 2): a manager just saved `shift`; if it covers any HELD pending
+    clock-in for the same (employee, store, work_date), activate each — create the OPEN timelog punch
+    back-dated to the ORIGINAL tap time (requested_at), mark the pending row 'activated', and resolve
+    its approval. IDEMPOTENT and one-open-safe: a pending already activated is skipped, and if the
+    employee somehow already has an OPEN punch, we do NOT open a second (the mig-912 one-open index
+    would reject it anyway) — we just link/mark. NEVER raises — an activation miss must not fail the
+    schedule save the manager just made."""
+    if not _pending_clockin_present():
+        return []
+    try:
+        emp_id = shift.get("employee_id")
+        store = shift.get("store_code")
+        wd = str(shift.get("shift_date") or "")[:10]
+        if not (emp_id and store and wd):
+            return []
+        # Match by the employee's id variants (the schedule may carry the numeric id, the pending row the
+        # business id — the same reconciliation the clock-in gate does).
+        ids, _name = _emp_id_variants(org_id, emp_id)
+        pend = (sb().table("pending_clockin").select("*").eq("org_id", org_id)
+                .eq("work_date", wd).eq("status", "pending")
+                .in_("employee_id", list(ids)).execute().data) or []
+        pend = [p for p in pend if _norm_store(p.get("store_code")) == _norm_store(store)]
+        activated = []
+        for p in pend:
+            emp_business_id = p.get("employee_id")   # activate the punch under the pending row's own id
+            # one-open safety: never open a 2nd punch if this employee already has one open.
+            already_open = (sb().table("timelog").select("id").eq("org_id", org_id)
+                            .eq("employee_id", emp_business_id).is_("clock_out", "null")
+                            .limit(1).execute().data) or []
+            if already_open:
+                sb().table("pending_clockin").update(
+                    {"status": "activated", "timelog_id": already_open[0].get("id"),
+                     "shift_id": shift.get("id"), "activated_at": datetime.now(timezone.utc).isoformat(),
+                     "decided_by": "schedule_save"}).eq("id", p["id"]).eq("status", "pending").execute()
+                _resolve_pending_clockin_approval(org_id, p)
+                continue
+            punch = {"org_id": org_id, "employee_id": emp_business_id,
+                     "employee_name": p.get("employee_name") or shift.get("employee_name"),
+                     "store_code": p.get("store_code"), "clock_in": p.get("requested_at"),
+                     "work_date": wd, "device": "auto-activated (manager scheduled)",
+                     "notes": "auto clock-in on manager schedule approval (held unscheduled tap, migration 915)"}
+            if p.get("client_request_id"):
+                punch["client_request_id"] = p["client_request_id"]
+            try:
+                ins = sb().table("timelog").insert(punch).execute()
+                tl = (ins.data or [punch])[0]
+            except Exception as e:
+                # a concurrent activation / retap already opened the punch — link it instead of a 2nd row.
+                if _is_unique_violation(e):
+                    ex = (sb().table("timelog").select("*").eq("org_id", org_id)
+                          .eq("employee_id", emp_business_id).is_("clock_out", "null")
+                          .order("clock_in", desc=True).limit(1).execute().data) or []
+                    tl = ex[0] if ex else None
+                else:
+                    continue
+            if not tl:
+                continue
+            r = sb().table("pending_clockin").update(
+                {"status": "activated", "timelog_id": tl.get("id"), "shift_id": shift.get("id"),
+                 "activated_at": datetime.now(timezone.utc).isoformat(), "decided_by": "schedule_save"}
+            ).eq("id", p["id"]).eq("status", "pending").execute()
+            # Only resolve/announce when THIS call won the pending→activated transition (r.data non-empty),
+            # so two concurrent saves don't double-announce.
+            if r.data:
+                _resolve_pending_clockin_approval(org_id, p)
+                activated.append({"pending_id": p["id"], "timelog_id": tl.get("id"),
+                                  "employee_name": p.get("employee_name"),
+                                  "clock_in": _fmt_time(tl.get("clock_in"), org_id)})
+        return activated
+    except Exception:
+        return []
+
+
+def _resolve_pending_clockin_approval(org_id, pending):
+    """Mark the manager-notification approvals row (mig 867) resolved once its pending clock-in is
+    activated, so it drops off the approval board. Best-effort; never raises."""
+    try:
+        rid = pending.get("approval_request_id")
+        if not rid:
+            return
+        from app.modules.approvals import engine as _approvals
+        _approvals.decide(org_id, rid, decision="approve", actor="schedule_save",
+                          actor_name="Schedule save (auto clock-in)",
+                          note="Employee added to the schedule; held clock-in activated automatically.")
+    except Exception:
+        pass
+
+
 @router.get("/timeclock/status")
 def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Is the SIGNED-IN employee currently clocked in? Identity AND tenant come from the auth token.
@@ -2857,12 +3469,15 @@ def timeclock_status(authorization: str = Header(default=""), org_id: str = ORG_
     show a '⏳ Pending your DM's permission' banner whether or not they're currently on the clock."""
     org_id, employee_id = _caller_identity(authorization)
     pending = _pending_permissions_for(org_id, employee_id)
+    pending_schedule = _pending_schedule_requests_for(org_id, employee_id)
     rows = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
             .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
     if rows:
         e = rows[0]; e["selfie_url"] = _signed_selfie(e.get("selfie_path"))
-        return {"clockedIn": True, "entry": e, "pending_permissions": pending}
-    return {"clockedIn": False, "entry": None, "pending_permissions": pending}
+        return {"clockedIn": True, "entry": e, "pending_permissions": pending,
+                "pending_schedule_requests": pending_schedule}
+    return {"clockedIn": False, "entry": None, "pending_permissions": pending,
+            "pending_schedule_requests": pending_schedule}
 
 
 # A rep may clock in no earlier than this many minutes before their scheduled shift start (owner
@@ -2902,6 +3517,40 @@ class ClockInIn(LaxModel):
     gps_accuracy_m: Any = None
     face_match_pct: Any = None
     reason: Any = None
+    client_request_id: Any = None   # client-generated UUID, STABLE across retries of the SAME punch
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    """A Postgres unique-index rejection (23505), however PostgREST spells it this version. Checked
+    structurally (`code`) first, then by message — a miss here would turn a safe dedupe into a 500."""
+    code = getattr(exc, "code", None) or (exc.args[0].get("code") if exc.args and isinstance(exc.args[0], dict) else None)
+    if str(code) == "23505":
+        return True
+    msg = str(getattr(exc, "message", "") or exc).lower()
+    return "23505" in msg or "duplicate key" in msg
+
+
+def _clean_cri(v):
+    """Normalize an optional client_request_id: a trimmed non-empty string, else None (no dedupe)."""
+    s = ("" if v is None else str(v)).strip()
+    return s or None
+
+
+def _clockin_ok(saved, org_id, replay=False):
+    """The clock-in SUCCESS response built from a timelog row — identical shape whether the row was
+    just inserted or is being replayed/collapsed, so a retry sees the same outcome. Adds
+    `idempotent_replay` only on a replay/collapse (a fresh insert never carries it)."""
+    resp = {"success": True, "data": {"time": _fmt_time(saved.get("clock_in"), org_id),
+                                      "entry_id": saved.get("id"),
+                                      "store_code": saved.get("store_code")}}
+    if str(saved.get("permission_status") or "") == "pending":
+        resp["needs_dm_permission"] = True
+        resp["permission_status"] = "pending"
+        resp["message"] = ("You're clocked in, but this second session is pending your DM's permission "
+                           "and won't count toward your hours until they approve it.")
+    if replay:
+        resp["idempotent_replay"] = True
+    return resp
 
 
 @router.post("/timeclock/clock-in")
@@ -2910,11 +3559,26 @@ def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: s
     body employee_id is ignored, so you can only punch yourself. Selfie (base64) + GPS + face-match%
     are still stored for audit (defense in depth)."""
     org_id, employee_id = _caller_identity(authorization)
-    # guard: don't open a second concurrent entry
-    open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
-                 .is_("clock_out", "null").limit(1).execute().data) or []
-    if open_rows:
-        raise HTTPException(409, "Already clocked in — clock out first.")
+    cri = _clean_cri(body.client_request_id)
+    # IDEMPOTENCY (mig 912): a retry of the SAME punch (same client_request_id) returns the existing
+    # row — never a second punch. Check this BEFORE any gate/insert.
+    if cri:
+        try:
+            prior = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+                     .eq("client_request_id", cri).order("clock_in", desc=True).limit(1).execute().data) or []
+        except Exception:
+            prior = []
+        if prior:
+            return _clockin_ok(prior[0], org_id, replay=True)
+    # guard: don't open a second concurrent entry. With NO client_request_id this is today's behavior
+    # (409). WITH a client_request_id we skip the pre-check and rely on the one-open unique index +
+    # 23505 handling below, so a concurrent double clock-in collapses to a single row (both callers get
+    # success for the same open punch) instead of a confusing error or a duplicate open row.
+    if not cri:
+        open_rows = (sb().table("timelog").select("id").eq("org_id", org_id).eq("employee_id", employee_id)
+                     .is_("clock_out", "null").limit(1).execute().data) or []
+        if open_rows:
+            raise HTTPException(409, "Already clocked in — clock out first.")
     name, home_store = _emp_name(org_id, employee_id)
     now = datetime.now(timezone.utc)
     # Which store is this punch for? The kiosk sends the selected store; fall back to home store.
@@ -2923,10 +3587,28 @@ def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: s
     # punch lands on the correct calendar day, not the Eastern one. Falls back to the tenant zone when
     # the store has no own zone set.
     work_date = now.astimezone(_biz_tz_for_store(org_id, req_store)).date().isoformat()
-    # Gate: home OR scheduled-today OR floater store. Anything else needs a manager override.
+    # Gate: home OR scheduled-today OR floater store. Anything else is BLOCKED-AND-HELD (owner
+    # 2026-08-24): the rep is NOT scheduled at this store today, so they CANNOT accrue time and NO
+    # punch is opened. Their tap is captured as a PENDING request (migration 915) that notifies the
+    # store's manager to add them to the schedule; saving that schedule auto-activates the held punch
+    # back-dated to this tap time. There is NO unpaid-override path (the manager /timeclock/override
+    # endpoint still exists for a manager acting directly, but the kiosk no longer routes there).
     if req_store:
         allowed = _allowed_clock_stores(org_id, employee_id, home_store, work_date)
         if allowed and _norm_store(req_store) not in allowed:
+            pending = _create_pending_clockin(
+                org_id, employee_id=employee_id, employee_name=name, store_code=req_store,
+                requested_at=now, work_date=work_date, client_request_id=cri,
+                reason=(body.reason or "Unscheduled tap-in — awaiting manager schedule"))
+            if pending is not None:
+                # Held: zero time accrued, no punch, no zero-hour shell. The kiosk shows the pending
+                # message and polls /timeclock/status until the manager's schedule activates the punch.
+                return {"success": False, "status": "pending_schedule_approval", "store_code": req_store,
+                        "home_store": home_store, "pending_request": pending,
+                        "requested_at": _fmt_time(now.isoformat(), org_id),
+                        "message": _PENDING_SCHEDULE_MESSAGE}
+            # Migration 915 not applied yet (deploy-order safety) — degrade to the pre-existing
+            # needs_override response so an old DB never breaks clock-in.
             return {"success": False, "needs_override": True, "store_code": req_store,
                     "allowed_stores": sorted(allowed), "home_store": home_store,
                     "message": f"You're not scheduled at {req_store} today. A manager can approve it."}
@@ -2975,9 +3657,26 @@ def clock_in(body: ClockInIn, authorization: str = Header(default=""), org_id: s
            "device": body.device, "selfie_path": selfie_path,
            "gps_lat": body.gps_lat, "gps_lng": body.gps_lng,
            "gps_accuracy_m": body.gps_accuracy_m, "face_match_pct": body.face_match_pct}
+    if cri:
+        row["client_request_id"] = cri
     if is_reclock_pending:
         row["permission_status"] = "pending"
-    r = sb().table("timelog").insert(row).execute()
+    try:
+        r = sb().table("timelog").insert(row).execute()
+    except Exception as e:
+        # A unique-index rejection (mig 912) means another request already won the race. Re-select and
+        # return the existing row as SUCCESS so a concurrent double clock-in collapses to one row.
+        if _is_unique_violation(e):
+            if cri:   # idempotency-key collision: the same punch id already inserted
+                dup = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+                       .eq("client_request_id", cri).order("clock_in", desc=True).limit(1).execute().data) or []
+                if dup:
+                    return _clockin_ok(dup[0], org_id, replay=True)
+            openr = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+                     .is_("clock_out", "null").order("clock_in", desc=True).limit(1).execute().data) or []
+            if openr:   # one-open-index collision: return the already-open punch
+                return _clockin_ok(openr[0], org_id, replay=True)
+        raise
     saved = r.data[0] if r.data else row
     if body.priority_ack:   # record the "I will prioritize these phones" acknowledgment (module 095)
         try:
@@ -3222,13 +3921,41 @@ class ClockOutIn(LaxModel):
     entry_id: Any = None
     override: Any = None
     reason: Any = None
+    client_request_id: Any = None   # client-generated UUID, STABLE across retries of the SAME punch
+
+
+def _clockout_ok(row, org_id, replay=False):
+    """The clock-out SUCCESS response built from a finalized (closed) timelog row — identical shape and
+    values to the live close, so a retry after a successful close sees the same outcome. Adds
+    `idempotent_replay` only on a replay (the live close never carries it)."""
+    resp = {"success": True, "data": {"time": _fmt_time(row.get("clock_out"), org_id),
+                                      "hours": row.get("hours"),
+                                      "clock_in": _fmt_time(row.get("clock_in"), org_id)}}
+    if str(row.get("permission_status") or "") == "pending":
+        resp["permission_status"] = "pending"
+        resp["message"] = ("Clocked out — this second session is pending your DM's permission and won't "
+                           "count toward your hours until they approve it.")
+    if replay:
+        resp["idempotent_replay"] = True
+    return resp
 
 
 @router.post("/timeclock/clock-out")
-def clock_out(body: ClockOutIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def clock_out(body: ClockOutIn, background_tasks: BackgroundTasks = None, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Close the SIGNED-IN employee's open entry (updates the SAME row) and compute hours. Always
     scoped to the caller's own employee_id so one employee can't close another's punch."""
     org_id, employee_id = _caller_identity(authorization)
+    cri = _clean_cri(body.client_request_id)
+    # IDEMPOTENCY (mig 912): a retry of the SAME clock-out (same client_request_id) that already closed
+    # a row returns that closed row as SUCCESS — never a 404, never a re-close. Check BEFORE the gate.
+    if cri:
+        try:
+            prior = (sb().table("timelog").select("*").eq("org_id", org_id).eq("employee_id", employee_id)
+                     .eq("client_request_id", cri).order("clock_in", desc=True).limit(1).execute().data) or []
+        except Exception:
+            prior = []
+        if prior and prior[0].get("clock_out") is not None:
+            return _clockout_ok(prior[0], org_id, replay=True)
     entry_id = body.entry_id
     q = (sb().table("timelog").select("*").eq("org_id", org_id).is_("clock_out", "null")
          .eq("employee_id", employee_id))
@@ -3295,6 +4022,8 @@ def clock_out(body: ClockOutIn, authorization: str = Header(default=""), org_id:
         except Exception:
             hours = None
     upd = {"clock_out": out_at.isoformat(), "hours": hours}
+    if cri:   # stamp the clock-out's idempotency id so a retry after this close replays (mig 912)
+        upd["client_request_id"] = cri
     if auto_stamped and has432:   # only write the new column when migration 432 has added it
         upd["auto_clocked_out"] = True
     if note_add:
@@ -3332,9 +4061,12 @@ def clock_out(body: ClockOutIn, authorization: str = Header(default=""), org_id:
         resp["pending_permission"] = extra_permission
         resp["message"] = ("Clocked out. You were auto-clocked-out at your scheduled end + grace; the "
                            "extra time you worked is pending your DM's permission before it counts.")
-    notice = _missed_closing_notice(org_id, employee_id)
-    if notice:
-        resp["missed_closing_notice"] = notice
+    # Fast ack: the missed-closing detection is a cross-module read that must NOT hold the punch
+    # response. Run it AFTER the response is sent (FastAPI BackgroundTasks). It no longer contributes a
+    # `missed_closing_notice` field to the clock-out response — the kiosk surfaces missed closings via
+    # its /timeclock/status poll instead.
+    if background_tasks is not None:
+        background_tasks.add_task(_missed_closing_notice, org_id, employee_id)
     return resp
 
 
@@ -3422,17 +4154,12 @@ def timeclock_list(start: str = "", end: str = "", employee_id: str = "", author
 # default), call the pure engine, then apply the SAME RBAC store-span narrowing every sibling
 # timeclock endpoint already applies.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-@router.get("/timeclock/attendance-exceptions")
-def attendance_exceptions(start: str = "", end: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Attendance Exceptions for [start, end] (inclusive both ends, matching /timeclock/list's own
-    convention — `shift_date`/`work_date` are already business-local, per BUSINESS_TZ at write time).
-
-    RULE FIVE: only the date range triggers this fetch — store/market/rep/exception-type filtering is
-    client-side over this already org+span-scoped response, the SAME established pattern the Time
-    Clock page itself already uses (see that page's own 2026-07-27 race-fix writeup)."""
-    if not (start and end):
-        raise HTTPException(400, "start and end are required")
-    client = sb()
+def _attendance_rows_for_range(org_id, start, end, client=None):
+    """Fetch shifts/punches/approved-time-off for [start, end], canonicalize employee ids, and run the
+    pure attendance engine. Returns (rows, cfg, available, limit_hit) with NO RBAC narrowing — HTTP
+    callers apply scope_keyset themselves; the system lateness-alert job wants the whole org. Shared by
+    GET /timeclock/attendance-exceptions and the accountability alert job so the two never diverge."""
+    client = client or sb()
     FETCH_LIMIT = 20000
     shifts = (client.table("shifts").select(
         "id,employee_id,employee_name,store_code,shift_date,start_time,end_time,is_deleted")
@@ -3444,7 +4171,6 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
     # HONESTY (no-silent-caps doctrine, same convention as lunch_deduction.period_lunch_deduction):
     # hitting the cap is a strong signal (not proof — PostgREST gives no total count without a
     # separate query) that the range/tenant is too big for this window to be a complete picture.
-    # Surfaced to the frontend rather than silently under-reporting exceptions for a huge range.
     limit_hit = len(shifts) >= FETCH_LIMIT or len(punches) >= FETCH_LIMIT
     try:
         timeoff = (client.table("time_off_requests").select(
@@ -3454,10 +4180,8 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
     except Exception:
         timeoff = []
 
-    # Canonicalize employee_id -> the BUSINESS id across all three sources before joining (see banner
-    # comment above). `employees` is fetched once; a lookup failure just means no aliasing happens
-    # (rows pass through with their raw ids) rather than a 500 — the classifier still runs, it just
-    # may under-match a numeric-vs-business mismatch until the employees read succeeds again.
+    # Canonicalize employee_id -> the BUSINESS id across all three sources before joining. A lookup
+    # failure just means no aliasing (rows pass through with raw ids) rather than a 500.
     try:
         employees = (client.table("employees").select("id,employee_id").eq("org_id", org_id).execute().data) or []
     except Exception:
@@ -3476,11 +4200,37 @@ def attendance_exceptions(start: str = "", end: str = "", authorization: str = H
         return out
 
     shifts, punches, timeoff = _canon(shifts), _canon(punches), _canon(timeoff)
-
     cfg, available = _attn.get_tenant_attendance_config(org_id, client)
     tz = _biz_tz_for(org_id)
     now = datetime.now(timezone.utc)
-    rows = _attn.compute_attendance_exceptions(shifts, punches, timeoff, cfg, now, tz)
+    # Resolve EACH store's own timezone (migration 851) so a multi-timezone tenant's shifts are
+    # evaluated + displayed in the STORE's local time (a Chicago store's 09:45 is Central), not the
+    # tenant default. `tz` remains the per-store fallback. Fixes the Accountability review showing
+    # cross-timezone stores' clock-ins in the wrong zone (owner-reported 2026-08-20).
+    _stores = {s.get("store_code") for s in shifts if s.get("store_code")}
+    _stores |= {p.get("store_code") for p in punches if p.get("store_code")}
+    store_tz = {}
+    for _sc in _stores:
+        try:
+            store_tz[_sc] = _biz_tz_for_store(org_id, _sc)
+        except Exception:
+            pass
+    rows = _attn.compute_attendance_exceptions(shifts, punches, timeoff, cfg, now, tz, store_tz=store_tz)
+    return rows, cfg, available, limit_hit
+
+
+@router.get("/timeclock/attendance-exceptions")
+def attendance_exceptions(start: str = "", end: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Attendance Exceptions for [start, end] (inclusive both ends, matching /timeclock/list's own
+    convention — `shift_date`/`work_date` are already business-local, per BUSINESS_TZ at write time).
+
+    RULE FIVE: only the date range triggers this fetch — store/market/rep/exception-type filtering is
+    client-side over this already org+span-scoped response, the SAME established pattern the Time
+    Clock page itself already uses (see that page's own 2026-07-27 race-fix writeup)."""
+    if not (start and end):
+        raise HTTPException(400, "start and end are required")
+    client = sb()
+    rows, cfg, available, limit_hit = _attendance_rows_for_range(org_id, start, end, client)
 
     # RBAC store-span narrowing — same posture/keyset as GET /shifts, GET /stores, GET /timeclock/list.
     ks = scope_keyset(authorization, org_id)
@@ -3549,6 +4299,221 @@ def set_attendance_config(body: dict, authorization: str = Header(default=""), o
     except Exception:
         raise HTTPException(400, "Couldn't save the setting — is migration 421 applied?")
     return {"ok": True, "config": cfg}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ACCOUNTABILITY — morning lateness alerts (owner directive 2026-08-18). Every morning at the tenant's
+# configured time (default 10:30 tenant-local), email every manager ABOVE the DM a lateness digest for
+# the CURRENT PAY PERIOD, and email the immediate DM a corrective-action-plan (CAP) email for every
+# employee late THAT DAY (with their pay-period late count). Config lives on storeops.tenants
+# (migration 433), default OFF. The pure planning/HTML lives in accountability_alerts.py.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _lateness_alert_config(org_id, client=None):
+    """(enabled, send_time 'HH:MM') for the tenant — graceful defaults when migration 433 hasn't run."""
+    client = client or sb()
+    try:
+        rows = (client.table("tenants").select("lateness_alerts_enabled,lateness_alert_time")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        r = rows[0] if rows else {}
+        return bool(r.get("lateness_alerts_enabled")), (r.get("lateness_alert_time") or "10:30")
+    except Exception:
+        return False, "10:30"
+
+
+def _current_pay_period_bounds(tenant_row, ref_date):
+    """[start_iso, end_iso] of the pay period containing ref_date, from the SAME core helper the
+    tenant-settings / payroll boards use (core.router.pay_period_for over storeops.tenants config) —
+    never a new pay-period definition."""
+    from app.modules.core.router import pay_period_for, _pp_settings
+    pp = pay_period_for(_pp_settings(tenant_row or {}), ref_date)
+    return pp["start"], pp["end"]
+
+
+def _period_label(start_iso, end_iso):
+    from datetime import date as _d
+    try:
+        s, e = _d.fromisoformat(start_iso), _d.fromisoformat(end_iso)
+        if (s.year, s.month) == (e.year, e.month):
+            return f"{s.strftime('%b')} {s.day}–{e.day}, {e.year}"
+        return f"{s.strftime('%b')} {s.day} – {e.strftime('%b')} {e.day}, {e.year}"
+    except Exception:
+        return f"{start_iso} – {end_iso}"
+
+
+def _lateness_already_sent(client, org_id, scope, ref_key):
+    try:
+        return bool((client.table("alert_log").select("id").eq("org_id", org_id)
+                     .eq("scope", scope).eq("ref_key", ref_key).limit(1).execute().data) or [])
+    except Exception:
+        return False
+
+
+def _lateness_record_sent(client, org_id, scope, ref_key, recipients):
+    try:
+        client.table("alert_log").insert({"org_id": org_id, "scope": scope, "ref_key": ref_key,
+                                          "recipients": recipients, "detail": {"kind": scope}}).execute()
+    except Exception:
+        pass
+
+
+def _lateness_late_records(client, org_id, start, end, today):
+    """Per-store late records for [start, end] (the pay period, capped at today): one per (employee,
+    store) with the employee's pay-period late count, their late incidents, and whether they were late
+    TODAY. Reuses the shared attendance engine + accountability.aggregate — no new lateness logic."""
+    from app.modules.storeops import accountability as _acc
+    rows, _cfg, _av, _lh = _attendance_rows_for_range(org_id, start, end, client)
+    agg = _acc.aggregate(rows, {})
+    out = []
+    for e in agg["employees"]:
+        if (e.get("late") or 0) <= 0:
+            continue
+        by_store = {}
+        for it in (e.get("incidents") or []):
+            if it.get("late"):
+                by_store.setdefault(it.get("store_code"), []).append(it)
+        for store, inc in by_store.items():
+            today_inc = next((x for x in inc if str(x.get("work_date"))[:10] == today), None)
+            out.append({"store_code": store, "employee": e.get("employee"), "employee_id": e.get("employee_id"),
+                        "late_count": e.get("late"), "incidents": inc,
+                        "late_today": today_inc is not None, "today_incident": today_inc})
+    return out
+
+
+async def _run_lateness_alerts(org_id_filter=None, respect_time=True, respect_enabled=True, dry_run=False):
+    """The morning lateness sweep. Iterates tenants; for each enabled tenant at/after its send time,
+    computes current-pay-period lateness, resolves the org hierarchy per store, plans the manager
+    summaries + DM CAP emails, and sends them (deduped via storeops.alert_log). NEVER raises."""
+    from app.modules.storeops import accountability_alerts as _ala
+    from app.modules.notify.channels import email_resend
+    client = sb()
+    try:
+        tenants = (client.table("tenants").select("*").execute().data) or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if respect_enabled and not bool(t.get("lateness_alerts_enabled")):
+            continue
+        send_time = (t.get("lateness_alert_time") or "10:30")
+        now_local = datetime.now(timezone.utc).astimezone(_biz_tz_for(oid))
+        today = now_local.date().isoformat()
+        if respect_time and now_local.strftime("%H:%M") < send_time:
+            continue   # not yet due this tick (HH:MM compare — see migration 433)
+        start, end = _current_pay_period_bounds(t, now_local.date())
+        rng_end = today if today < end else end
+        recs = _lateness_late_records(client, oid, start, rng_end, today)
+        if not recs:
+            if not dry_run:
+                _lateness_mark_run(client, oid, today, "no lateness")
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "late_employees": 0})
+            continue
+        stores = {r["store_code"] for r in recs if r.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        plan = _ala.plan_emails(recs, hierarchy, today, _period_label(start, end))
+        sent = skipped = 0
+        planned = []
+        for spec in plan["summaries"] + plan["caps"]:
+            scope = "lateness_am" if spec["kind"] == "manager_summary" else "lateness_cap"
+            already = _lateness_already_sent(client, oid, scope, spec["dedupe_key"])
+            planned.append({"kind": spec["kind"], "to": spec["to"], "to_name": spec.get("to_name"),
+                            "subject": spec["subject"], "already_sent": already})
+            if already:
+                skipped += 1
+                continue
+            if dry_run:
+                continue
+            if email_ok:
+                try:
+                    await email_resend.send_email(to=spec["to"], subject=spec["subject"], html=spec["html"])
+                    _lateness_record_sent(client, oid, scope, spec["dedupe_key"], spec["to"])
+                    sent += 1
+                except Exception:
+                    pass
+        if not dry_run:
+            _lateness_mark_run(client, oid, today, f"sent {sent}, skipped {skipped}, {len(recs)} late record(s)")
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped, "late_employees": len(recs),
+                        "email_configured": email_ok, "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+def _lateness_mark_run(client, org_id, today, detail):
+    try:
+        client.table("tenants").update({"lateness_alert_last_run": datetime.now(timezone.utc).isoformat(),
+                                        "lateness_alert_last_detail": f"{today}: {detail}"}).eq("org_id", org_id).execute()
+    except Exception:
+        pass
+
+
+@router.get("/accountability/alert-config")
+def get_lateness_alert_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Morning lateness-alert config for the tenant (enabled + send time), plus last-run bookkeeping.
+    Any manager may view; the PUT is manager/admin only."""
+    client = sb()
+    try:
+        rows = (client.table("tenants").select(
+            "lateness_alerts_enabled,lateness_alert_time,lateness_alert_last_run,lateness_alert_last_detail")
+            .eq("org_id", org_id).limit(1).execute().data) or []
+        r = rows[0] if rows else {}
+        return {"enabled": bool(r.get("lateness_alerts_enabled")),
+                "send_time": r.get("lateness_alert_time") or "10:30",
+                "last_run": r.get("lateness_alert_last_run"), "last_detail": r.get("lateness_alert_last_detail"),
+                "available": True}
+    except Exception:
+        return {"enabled": False, "send_time": "10:30", "last_run": None, "last_detail": None, "available": False}
+
+
+class LatenessAlertConfigIn(LaxModel):
+    enabled: Any = None
+    send_time: Any = None
+
+
+@router.put("/accountability/alert-config")
+def put_lateness_alert_config(body: LatenessAlertConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only. Turn the morning lateness alerts on/off and set the send time (HH:MM,
+    tenant-local; default 10:30)."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    upd = {}
+    sent = body.model_fields_set
+    if "enabled" in sent:
+        upd["lateness_alerts_enabled"] = bool(body.enabled)
+    if "send_time" in sent:
+        st = str(body.send_time or "").strip()
+        import re as _re
+        if not _re.match(r"^([01]\d|2[0-3]):[0-5]\d$", st):
+            raise HTTPException(400, "send_time must be HH:MM (24-hour), e.g. 10:30")
+        upd["lateness_alert_time"] = st
+    if not upd:
+        raise HTTPException(400, "Nothing to update — send `enabled` and/or `send_time`.")
+    try:
+        sb().table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save — is migration 433 applied?")
+    return get_lateness_alert_config(authorization=authorization, org_id=org_id)
+
+
+@router.post("/accountability/alerts/run-due")
+async def lateness_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated pg_cron entrypoint (hourly). Fires the morning lateness alerts for every enabled
+    tenant at/after its send time; deduped so it sends once per day. See migration 433 for the cron."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_lateness_alerts(respect_time=True, respect_enabled=True, dry_run=False)
+
+
+@router.post("/accountability/alerts/run-now")
+async def lateness_alerts_run_now(send: bool = False, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the time gate. Defaults to a DRY RUN
+    (returns exactly who WOULD be emailed and what, sending nothing) — pass ?send=true to actually
+    send. Dedupe is always honored, so a real send won't duplicate the morning run."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_lateness_alerts(org_id_filter=org_id, respect_time=False, respect_enabled=False,
+                                      dry_run=(not send))
 
 
 _CHARGEBACK_REASON_LABELS = {
@@ -4107,8 +5072,15 @@ def save_face(body: SaveFaceIn, authorization: str = Header(default=""), org_id:
 # BEYOND end+grace needs a rep-initiated DM permission (migration 432) before it counts.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # The grace window (minutes) added to the scheduled end for BOTH the trigger (fire only once now is past
-# end+grace) AND the stamp (clock_out recorded at end+grace). Owner set this to 20 minutes (2026-08-16).
-FORCE_CLOCKOUT_GRACE_MIN = 20
+# end+grace) AND the stamp (clock_out recorded at end+grace).
+# Owner directive 2026-08-20 (helpdesk cluster TKT-1023/1026/1028/1031/1032/1036 — reps who "work until
+# close" were being capped at scheduled_end+20m and having the extra time held DM-pending, read as
+# "CLOCK OUT ISSUE"): widen to 3 hours. Within this window a rep's own clock-out now counts their FULL
+# actual hours (the same-day cap at line ~3275 only fires PAST end+grace), and the unattended sweep
+# becomes a rare last-resort cleanup instead of a daily event. TRADEOFF: when the sweep DOES fire on a
+# genuinely forgotten punch, it still stamps at scheduled_end+grace, so a forgotten punch is credited up
+# to 3h past schedule (was 20m) — accepted per the "widen the grace window" directive.
+FORCE_CLOCKOUT_GRACE_MIN = 180
 
 
 def _emp_id_variants(org_id, employee_id):
@@ -4181,7 +5153,7 @@ def _scheduled_end_for_punch(org_id, punch):
         return None
     ids, _ = _emp_id_variants(org_id, eid)
     try:
-        shifts = (sb().table("shifts").select("store_code,end_time")
+        shifts = (sb().table("shifts").select("store_code,start_time,end_time")
                   .eq("org_id", org_id).eq("shift_date", str(wdate)[:10]).eq("is_deleted", False)
                   .in_("employee_id", list(ids)).execute().data) or []
     except Exception:
@@ -4196,7 +5168,19 @@ def _scheduled_end_for_punch(org_id, punch):
         return None
     # Read the shift end in THIS STORE's zone (migration 851) — the fix for the multi-zone sweep bug.
     # Prefer the shift's own store_code, falling back to the punch's, then the tenant default.
-    return _biz_dt_utc(wdate, end_hhmm, org_id, store_code=(s.get("store_code") or store))
+    st = s.get("store_code") or store
+    end_dt = _biz_dt_utc(wdate, end_hhmm, org_id, store_code=st)
+    # Overnight shift (helpdesk clock-out cluster, 2026-08-20): a scheduled end at/before the shift's own
+    # start crosses midnight (e.g. 18:00→00:30). _biz_dt_utc anchors BOTH to `wdate`, so the end lands ~a
+    # day in the PAST — the sweep then force-closes the punch the instant it opens and clamps hours to 0
+    # (out_at < clock_in). Roll the end forward one day so a wrap shift closes at its real end. A normal
+    # daytime shift (end > start) is never touched.
+    start_hhmm = s.get("start_time")
+    if end_dt is not None and start_hhmm:
+        start_dt = _biz_dt_utc(wdate, start_hhmm, org_id, store_code=st)
+        if start_dt is not None and end_dt <= start_dt:
+            end_dt = end_dt + timedelta(days=1)
+    return end_dt
 
 
 def _do_force_clockout(org_id=None, grace_min=FORCE_CLOCKOUT_GRACE_MIN, actor=None):
@@ -4333,7 +5317,86 @@ def _dm_for_store(org_id, store_code):
         return (None, None, None)
 
 
-@router.post("/shift-extensions")
+def _managers_above_dm(org_id, store_code):
+    """For a store, resolve (a) the immediate District Manager(s) at the store's district node and
+    (b) EVERY manager ABOVE the district up the org tree to the root — each as
+    {employee_id, name, email, unit, level}. Mirrors _dm_for_store's district resolution, then climbs
+    org_units.parent_id collecting ALL org_managers at each ancestor (a node may have several).
+    Returns {"dm": [...], "above": [...]}; empty lists when the tree isn't wired (callers skip those
+    emails). Used by the accountability morning lateness alert (managers above the DM) + the DM CAP."""
+    c = sb()
+    unit_id, market = None, None
+    try:
+        st = (c.table("stores").select("org_unit_id,market").eq("org_id", org_id)
+              .eq("store_code", store_code).limit(1).execute().data) or []
+        if st:
+            unit_id, market = st[0].get("org_unit_id"), st[0].get("market")
+    except Exception:
+        pass
+    try:
+        levels = {l["id"]: (l.get("name") or "") for l in
+                  (c.table("org_levels").select("id,name").eq("org_id", org_id).execute().data or [])}
+        units = {u["id"]: u for u in
+                 (c.table("org_units").select("id,name,level_id,parent_id,code").eq("org_id", org_id).execute().data or [])}
+    except Exception:
+        levels, units = {}, {}
+    # locate the district node — identical rule to _dm_for_store (climb to a 'district'-level node,
+    # else match a district unit by the store's market).
+    district = None
+    cur = units.get(unit_id) if unit_id else None
+    guard = 0
+    while cur and guard < 20:
+        if "district" in (levels.get(cur.get("level_id")) or "").lower():
+            district = cur
+            break
+        cur = units.get(cur.get("parent_id"))
+        guard += 1
+    if not district and market:
+        mk = str(market).strip().lower()
+        for u in units.values():
+            if "district" in (levels.get(u.get("level_id")) or "").lower() and (
+                    mk and (mk in (u.get("name") or "").lower() or (u.get("code") or "").lower() == f"district:{mk}")):
+                district = u
+                break
+    if not district:
+        return {"dm": [], "above": []}
+
+    def _mgrs(unit):
+        try:
+            rows = (c.table("org_managers").select("employee_id").eq("org_id", org_id)
+                    .eq("unit_id", unit["id"]).execute().data) or []
+        except Exception:
+            rows = []
+        out = []
+        for r in rows:
+            eid = r.get("employee_id")
+            if not eid:
+                continue
+            try:
+                emp = (c.table("employees").select("name,email").eq("org_id", org_id)
+                       .eq("employee_id", eid).limit(1).execute().data) or []
+            except Exception:
+                emp = []
+            out.append({"employee_id": eid, "name": (emp[0].get("name") if emp else None),
+                        "email": (emp[0].get("email") if emp else None),
+                        "unit": unit.get("name"), "level": levels.get(unit.get("level_id"))})
+        return out
+
+    dm = _mgrs(district)
+    above, seen = [], set()
+    cur = units.get(district.get("parent_id"))
+    guard = 0
+    while cur and guard < 20:                     # climb PARENTS above the district to the root
+        for m in _mgrs(cur):
+            key = str(m.get("employee_id"))
+            if key and key not in seen:
+                seen.add(key)
+                above.append(m)
+        cur = units.get(cur.get("parent_id"))
+        guard += 1
+    return {"dm": dm, "above": above}
+
+
 class ShiftExtensionRequestIn(LaxModel):
     employee_id: str = ""
     employee_name: str = ""
@@ -4345,6 +5408,7 @@ class ShiftExtensionRequestIn(LaxModel):
     original_end: Any = None
 
 
+@router.post("/shift-extensions")
 async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """A manager files a request to extend an employee's shift past its scheduled end. Resolves the
     District Manager, saves it 'pending', and emails the DM an FYI (the approval itself is the DM's
@@ -4387,6 +5451,22 @@ async def request_shift_extension(body: ShiftExtensionRequestIn, authorization: 
                           f"<p>Reason: {body.reason or '—'}</p>"
                           f"<p>Approve or deny it in MetricsPro → Workforce → Shift Extensions.</p>"))
                 emailed = True
+        except Exception:
+            pass
+    # Intimation into the UNIFIED approvals inbox (migration 867). notify only when THIS endpoint did
+    # not email a DM (no DM configured) — then the engine's admin fallback covers the gap; otherwise
+    # notify=False avoids a second email to the DM the endpoint already messaged.
+    if ext_id:
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.create_request(
+                org_id, type="shift_extension", source_table="shift_extension", source_id=ext_id,
+                title=f"{row['employee_name'] or employee_id}: shift extension to {requested_end} at {store_code or 'store'}",
+                summary=(body.reason or None),
+                payload={"shift_date": shift_date, "requested_end": requested_end},
+                requested_by=mgr.get("employee_id"), requested_by_name=mgr.get("email"),
+                store_code=store_code, assignee_employee_id=dm_eid, assignee_email=dm_email,
+                assignee_kind="dm", notify=(not emailed))
         except Exception:
             pass
     return {"ok": True, "id": ext_id, "status": "pending",
@@ -4432,6 +5512,13 @@ def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str
            "decided_at": datetime.now(timezone.utc).isoformat(),
            "decision_note": body.note or None}
     sb().table("shift_extension").update(upd).eq("id", ext_id).eq("org_id", org_id).execute()
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="shift_extension", source_table="shift_extension",
+                                        source_id=ext_id, decision=decision, actor=mgr.get("email"),
+                                        note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
 
@@ -4443,6 +5530,122 @@ def decide_shift_extension(ext_id: str, body: DecisionNoteIn, authorization: str
 # Reuses _dm_for_store (the SAME DM resolver the shift-extension workflow uses). Approving is what
 # makes the held time COUNT; until then it stays out of every payroll reader (hours held NULL for a
 # pending/denied second session; the extra simply not yet on the punch for a late_clockout).
+
+
+def _tenant_display_name(org_id) -> str:
+    try:
+        t = (sb().table("tenants").select("name").eq("org_id", org_id).limit(1).execute().data) or []
+        return ((t[0].get("name") if t else None) or "").strip() or "MetricsPro"
+    except Exception:
+        return "MetricsPro"
+
+
+def _admin_fallback_emails(org_id):
+    """Emails of the tenant's org-wide admins (role scope 'all', or the 'admin' role) — the last-resort
+    approver list when a store has NO District Manager configured, so a pending request is never
+    stranded on a board nobody is pointed at. Best-effort; [] on any miss."""
+    try:
+        roles = (sb().table("roles").select("name,permissions").eq("org_id", org_id).execute().data) or []
+        admin_names = {(r.get("name") or "") for r in roles
+                       if ((r.get("permissions") or {}).get("scope") or "") == "all"}
+        admin_names.add("admin")
+        aus = (sb().table("app_users").select("email,role").eq("org_id", org_id).execute().data) or []
+        return sorted({(a.get("email") or "").strip() for a in aus
+                       if (a.get("role") or "") in admin_names and (a.get("email") or "").strip()})
+    except Exception:
+        return []
+
+
+def _send_plain_email(*, emails, subject: str, body: str) -> bool:
+    """Send a plain-text email through the notify module's Resend channel. Async send driven from a
+    context with NO running loop (our notifier runs in its own daemon thread), so asyncio.run is safe —
+    the same rule crm/router._notify documents. Returns True if any address was accepted; never raises."""
+    addrs = [a for a in (emails or []) if a]
+    if not addrs:
+        return False
+    try:
+        import asyncio
+        import html as _h
+        from app.modules.notify.channels import email_resend
+        if not email_resend.is_configured():
+            return False
+        html = ("<pre style='font-family:system-ui,-apple-system,sans-serif;white-space:pre-wrap'>"
+                + _h.escape(body or "") + "</pre>")
+
+        async def _send_all():
+            ok = False
+            for addr in addrs:
+                try:
+                    await email_resend.send_email(addr, subject, html, [])
+                    ok = True
+                except Exception:
+                    pass
+            return ok
+        return bool(asyncio.run(_send_all()))
+    except Exception:
+        return False
+
+
+_PERM_KIND_LABEL = {
+    "reclock_in": "a second clock-in session (after being auto-clocked-out earlier today)",
+    "late_clockout": "extra time worked past their scheduled shift end",
+}
+
+
+def _permission_approver_emails(org_id, perm: dict, dm_email):
+    """Who should be emailed to approve a rep-initiated time-clock permission, as a sorted email list:
+    the store's DM + every manager above them; and ONLY when that store has no DM/managers wired, the
+    tenant admins (so a request is never stranded). PURE-ish (reads only) and NEVER raises."""
+    store_code = perm.get("store_code")
+    recips = set()
+    if dm_email and str(dm_email).strip():
+        recips.add(str(dm_email).strip())
+    try:
+        roster = _managers_above_dm(org_id, store_code)
+        for grp in ("dm", "above"):
+            for m in (roster.get(grp) or []):
+                if m.get("email"):
+                    recips.add(str(m["email"]).strip())
+    except Exception:
+        pass
+    if not recips:   # no DM/managers wired for this store — fall back to tenant admins
+        try:
+            recips.update(_admin_fallback_emails(org_id))
+        except Exception:
+            pass
+    return sorted({e for e in recips if e})
+
+
+def _notify_permission_approvers(org_id, perm: dict, dm_email):
+    """FIRE-AND-FORGET email to whoever can approve a rep-initiated time-clock permission (see
+    _permission_approver_emails). Runs in a daemon thread so it never delays the punch, and NEVER raises."""
+    import threading
+
+    def _run():
+        try:
+            store_code = perm.get("store_code")
+            recips = set(_permission_approver_emails(org_id, perm, dm_email))
+            if not recips:
+                return
+            who = perm.get("employee_name") or perm.get("employee_id") or "An employee"
+            what = _PERM_KIND_LABEL.get(perm.get("kind"), "a time-clock permission")
+            when = str(perm.get("work_date") or "")[:10]
+            biz = _tenant_display_name(org_id)
+            subject = f"Approval needed: {who} at {store_code or 'their store'}"
+            lines = [f"{who} needs your approval for {what} at {store_code or 'their store'}"
+                     + (f" on {when}" if when else "") + ".", ""]
+            if perm.get("reason"):
+                lines += [f"Reason given: {perm['reason']}", ""]
+            lines += ["Until you approve it, this time does NOT count toward their hours.", "",
+                      f"Approve or deny it in {biz}: Store Ops → Time-clock Permissions."]
+            _send_plain_email(emails=sorted(recips), subject=subject, body="\n".join(lines))
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="tc-perm-notify").start()
+    except Exception:
+        pass
 def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, requested_clock_out=None,
                                  reason=None, requested_by=None):
     """Insert a pending timeclock_permission linked to `punch`, resolving the store's District Manager.
@@ -4477,6 +5680,28 @@ def _create_timeclock_permission(org_id, *, kind, punch, anchor_at=None, request
                 sb().table("timelog").update({"permission_id": pid}).eq("id", punch.get("id")).execute()
             except Exception:
                 pass
+        # Push the approval request so the DM actually learns about it — the board is passive, and a DM
+        # who never opens it would otherwise leave the rep's held time uncounted with no signal at all.
+        _notify_permission_approvers(org_id, saved, dm_email)
+        # Intimation into the UNIFIED approvals inbox (migration 867). Best-effort; notify=False because
+        # the timeclock path already emailed the approvers just above (no double email).
+        if pid:
+            try:
+                from app.modules.approvals import engine as _approvals
+                _kl = {"reclock_in": "second clock-in session",
+                       "late_clockout": "extra time past scheduled end"}.get(kind, "time-clock permission")
+                _who = saved.get("employee_name") or saved.get("employee_id") or "An employee"
+                _approvals.create_request(
+                    org_id, type="timeclock_permission",
+                    source_table="timeclock_permission", source_id=pid,
+                    title=f"{_who}: {_kl} at {saved.get('store_code') or 'store'}",
+                    summary=(saved.get("reason") or None),
+                    payload={"kind": kind, "work_date": saved.get("work_date")},
+                    requested_by=saved.get("employee_id"), requested_by_name=saved.get("employee_name"),
+                    store_code=saved.get("store_code"), assignee_employee_id=dm_eid,
+                    assignee_email=dm_email, assignee_kind="dm", notify=False)
+            except Exception:
+                pass
         return {"id": pid, "kind": kind, "status": "pending",
                 "dm": {"employee_id": dm_eid, "email": dm_email},
                 "note": None if dm_eid else "No District Manager is configured for this store — an admin or DM can still approve it."}
@@ -4502,33 +5727,19 @@ def list_timeclock_permissions(status: str = "", authorization: str = Header(def
     return {"permissions": rows}
 
 
-@router.post("/timeclock/permissions/{perm_id}/decision")
-def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
-    approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
-    held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
-    stamped if it already closed while pending); a late_clockout punch's clock_out is extended to the
-    approved actual departure and its hours recomputed. Denying leaves the held time uncounted."""
-    mgr = _require_manager(authorization, org_id)
-    org_id = mgr.get("org_id") or org_id
-    if not _timeclock_432_present():
-        raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
-    decision = (body.decision or "").strip().lower()
-    if decision not in ("approve", "deny"):
-        raise HTTPException(400, "decision must be 'approve' or 'deny'")
-    rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
-            .limit(1).execute().data) or []
-    if not rows:
-        raise HTTPException(404, "unknown request")
-    perm = rows[0]
-    if perm.get("status") != "pending":
-        raise HTTPException(409, f"already {perm.get('status')}")
+def _apply_timeclock_permission_decision(org_id, perm, new_status, who, note=None):
+    """Apply an approve/deny to a rep-initiated time-clock permission and make the held time COUNT.
+    Stamps the perm row, then: reclock_in → flip the punch permission_status (stamping its held hours if
+    it already closed while pending); late_clockout → extend the capped clock-out to the approved
+    departure and recompute hours. SHARED by the /timeclock/permissions decision endpoint AND the unified
+    approvals engine adapter, so both routes have byte-identical effects. Caller guards perm is pending.
+    `who` is the decider's {email,...} dict (for audit attribution)."""
+    decided_by = (who or {}).get("email")
     now = datetime.now(timezone.utc)
-    new_status = "approved" if decision == "approve" else "denied"
     sb().table("timeclock_permission").update(
-        {"status": new_status, "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
-         "decided_at": now.isoformat(), "decision_note": body.note or None}
-    ).eq("id", perm_id).eq("org_id", org_id).execute()
+        {"status": new_status, "decided_by": decided_by, "decided_by_name": decided_by,
+         "decided_at": now.isoformat(), "decision_note": note}
+    ).eq("id", perm.get("id")).eq("org_id", org_id).execute()
 
     tlid = perm.get("timelog_id")
     punch = None
@@ -4551,7 +5762,7 @@ def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorizatio
                                     employee_id=punch.get("employee_id"), employee_name=punch.get("employee_name"),
                                     store_code=punch.get("store_code"), work_date=str(punch.get("work_date") or "")[:10],
                                     before="pending (second session)", after=f"approved ({p_upd.get('hours')}h counts)",
-                                    source_table="timelog", source_id=tlid, who=mgr)
+                                    source_table="timelog", source_id=tlid, who=who)
             except Exception:
                 pass
         else:
@@ -4569,9 +5780,44 @@ def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorizatio
                                     employee_id=punch.get("employee_id"), employee_name=punch.get("employee_name"),
                                     store_code=punch.get("store_code"), work_date=str(punch.get("work_date") or "")[:10],
                                     before="capped at scheduled end + grace", after=f"{co.isoformat()} ({h}h, DM-approved extra)",
-                                    source_table="timelog", source_id=tlid, who=mgr)
+                                    source_table="timelog", source_id=tlid, who=who)
             except Exception:
                 pass
+
+
+@router.post("/timeclock/permissions/{perm_id}/decision")
+def decide_timeclock_permission(perm_id: str, body: DecisionNoteIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The DM (or an admin) approves/denies a rep-initiated permission IN-APP — the tick IS the
+    approval, recorded with who + when. Body: {decision:'approve'|'deny', note?}. APPROVING makes the
+    held time COUNT: a reclock_in punch's permission_status flips to 'approved' (and its hours are
+    stamped if it already closed while pending); a late_clockout punch's clock_out is extended to the
+    approved actual departure and its hours recomputed. Denying leaves the held time uncounted.
+
+    Also syncs the linked unified approval_request (migration 867) so the central Approvals inbox
+    reflects a decision made on this legacy board."""
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    if not _timeclock_432_present():
+        raise HTTPException(404, "unknown request")   # feature not available until migration 432 runs
+    decision = (body.decision or "").strip().lower()
+    if decision not in ("approve", "deny"):
+        raise HTTPException(400, "decision must be 'approve' or 'deny'")
+    rows = (sb().table("timeclock_permission").select("*").eq("id", perm_id).eq("org_id", org_id)
+            .limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "unknown request")
+    perm = rows[0]
+    if perm.get("status") != "pending":
+        raise HTTPException(409, f"already {perm.get('status')}")
+    new_status = "approved" if decision == "approve" else "denied"
+    _apply_timeclock_permission_decision(org_id, perm, new_status, mgr, note=body.note or None)
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="timeclock_permission",
+                                        source_table="timeclock_permission", source_id=perm_id,
+                                        decision=decision, actor=mgr.get("email"), note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": new_status, "decided_by": mgr.get("email")}
 
 
@@ -4810,6 +6056,18 @@ async def request_budget_override(body: BudgetOverrideRequestIn, authorization: 
                 emailed = True
         except Exception:
             pass
+    if oid:
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.create_request(
+                org_id, type="budget_override", source_table="budget_override", source_id=oid,
+                title=f"{store}: hours-budget override for week of {week_start}",
+                summary=(body.reason or None), payload={"week_start": week_start, "approved_hours": body.approved_hours},
+                requested_by=mgr.get("employee_id"), requested_by_name=mgr.get("email"),
+                store_code=store, assignee_employee_id=dm_eid, assignee_email=dm_email,
+                assignee_kind="dm", notify=(not emailed))
+        except Exception:
+            pass
     return {"ok": True, "id": oid, "status": "pending",
             "dm": {"employee_id": dm_eid, "name": dm_name, "email": dm_email, "emailed": emailed},
             "note": None if dm_eid else "No District Manager configured for this store — an admin or DM can still approve."}
@@ -4847,6 +6105,13 @@ def decide_budget_override(ov_id: str, body: DecisionNoteIn, authorization: str 
            "decided_by": mgr.get("email"), "decided_by_name": mgr.get("email"),
            "decided_at": datetime.now(timezone.utc).isoformat(), "decision_note": body.note or None}
     sb().table("budget_override").update(upd).eq("id", ov_id).eq("org_id", org_id).execute()
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="budget_override", source_table="budget_override",
+                                        source_id=ov_id, decision=decision, actor=mgr.get("email"),
+                                        note=body.note or None)
+    except Exception:
+        pass
     return {"ok": True, "status": upd["status"], "decided_by": mgr.get("email")}
 
 
@@ -5095,19 +6360,31 @@ def _rbac_scope_failclosed() -> bool:
     return os.environ.get("RBAC_SCOPE_FAILCLOSED", "1").lower() not in ("0", "false", "no", "off")
 
 
+# Canonical top-level roles are org-wide by DEFAULT — the same precedent _can_edit_setting already
+# applies (an 'admin' role edits every setting even with no explicit roles-table grant). Without this,
+# RBAC fail-closed collapses an admin/owner/super_admin whose tenant never seeded a roles row to 'self'
+# scope, silently hiding almost all data from a full admin (observed 2026-08-18: a Luxelink admin saw
+# only his own ~2 stores on the Time Clock report). An EXPLICIT roles-table scope still wins over this.
+_ELEVATED_ROLES = {"admin", "owner", "super_admin"}
+
+
 def _role_scope(org_id: str, role: str) -> str:
     # An unresolved role must not silently grant org-wide reach. Fail CLOSED to 'self' (break-glass
-    # RBAC_SCOPE_FAILCLOSED=0 → old 'all'). A role that exists WITH an explicit scope is always honored.
-    fallback = "self" if _rbac_scope_failclosed() else "all"
-    if not role:
+    # RBAC_SCOPE_FAILCLOSED=0 → old 'all') — EXCEPT the canonical top-level roles, which default to
+    # 'all' so a tenant that hasn't seeded its roles table doesn't lock its own admins down to one
+    # store. A role that exists WITH an explicit scope is always honored over this default.
+    r = (role or "").strip()
+    elevated = r.lower() in _ELEVATED_ROLES
+    fallback = "all" if elevated else ("self" if _rbac_scope_failclosed() else "all")
+    if not r:
         return fallback
     try:
         rr = sb().table("roles").select("permissions").eq("org_id", org_id).eq("name", role).limit(1).execute().data or []
         if not rr:
-            return fallback                                    # unknown role → restrictive
+            return fallback                                    # unknown role → restrictive (elevated → 'all')
         return ((rr[0].get("permissions") or {}).get("scope")) or fallback
     except Exception:
-        return fallback                                        # roles read failed → restrictive
+        return fallback                                        # roles read failed → restrictive (elevated → 'all')
 
 
 def _role_permissions(org_id: str, role: str) -> dict:
@@ -7690,7 +8967,6 @@ def list_action_plans(status: str = "", store_code: str = "", authorization: str
     return {"items": rows}
 
 
-@router.post("/action-plans/{plan_id}/submit")
 class ActionPlanSubmitIn(LaxModel):
     plan_text: str = ""
 
@@ -7700,6 +8976,7 @@ class ActionPlanReviewIn(LaxModel):
     dm_comments: str = ""
 
 
+@router.post("/action-plans/{plan_id}/submit")
 def submit_action_plan(plan_id: str, body: ActionPlanSubmitIn, authorization: str = Header(default="")):
     """Self-service: an employee submits their OWN required action plan. identity from token."""
     org_id, employee_id = _caller_identity(authorization)
@@ -7831,6 +9108,52 @@ def dm_confirm_action_plan(plan_id: str, body: Optional[ActionPlanReviewIn] = No
     (sb().table("action_plan").update(upd).eq("id", plan_id).eq("org_id", org_id).execute())
     return {"ok": True, **row, **upd}
 
+
+# ── Store payment-processor merchant IDs (owner directive 2026-08-20, migration 902) ──────────────
+# Per store, per processor (Boost→ePay ID, Total→Vidapay ID, …). Set at store setup, mandatory per
+# active processor unless the operator ticks "not required". The ingest of a processor report resolves
+# each transaction's terminal/merchant id back to OUR store through this registry.
+from app.modules.storeops import merchant_ids as _merchant_ids  # noqa: E402
+
+
+@router.get("/merchant-ids/processors")
+def merchant_id_processors():
+    """The known processors + their id labels — powers the store-setup panel's rows."""
+    return {"processors": _merchant_ids.PROCESSORS}
+
+
+@router.get("/merchant-ids")
+def list_merchant_ids(store_code: str = "", org_id: str = ORG_ID):
+    """Every merchant-id row for the tenant, or just one store's when ?store_code= is given."""
+    rows = (_merchant_ids.list_for_store(org_id, store_code) if store_code
+            else _merchant_ids.list_all(org_id))
+    return {"merchant_ids": rows, "processors": _merchant_ids.PROCESSORS}
+
+
+@router.put("/merchant-ids")
+def upsert_merchant_id(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Set one store's id for one processor. Body: {store_code, processor, merchant_id?, not_required?, note?}.
+    Manager-gated (store setup is a management action)."""
+    _require_manager(authorization, org_id)
+    try:
+        data = _merchant_ids.upsert(
+            org_id, body.get("store_code"), body.get("processor"),
+            merchant_id=body.get("merchant_id"), not_required=bool(body.get("not_required")),
+            note=body.get("note"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "row": (data or [None])[0]}
+
+
+@router.get("/merchant-ids/coverage")
+def merchant_id_coverage(processor: str = "epay", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Store-setup audit: which stores still have no id AND no 'not required' opt-out for a processor —
+    so an admin can see who is unconfigured before an ingest silently drops their rows."""
+    codes = _caller_span_codes(authorization, org_id) or [
+        s.get("store_code") for s in (sb().table("stores").select("store_code").eq("org_id", org_id).execute().data or [])
+        if s.get("store_code")]
+    missing = sorted(_merchant_ids.coverage(org_id, codes, processor))
+    return {"processor": processor, "unconfigured": missing, "unconfigured_count": len(missing)}
 
 
 # ── Admin-attention providers (settings-audit package, 2026-07-26) ────────────────────────────────

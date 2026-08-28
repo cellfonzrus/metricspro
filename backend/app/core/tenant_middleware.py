@@ -97,12 +97,24 @@ _PUBLIC_EXACT = frozenset({
     "/api/v1/core/auth-config",           # login-enforcement flag read by the login/layout BEFORE sign-in
     "/api/v1/core/signup",                # self-serve tenant signup (env-gated SIGNUPS_OPEN; anonymous)
     "/api/v1/core/signup-status",         # /signup page checks whether signups are open, pre-login
+    "/api/v1/billing/public-pricing",     # PUBLIC price list + trial terms read by the marketing
+                                          # site BEFORE any login exists (mig 908). METHOD-SCOPED to
+                                          # GET below — every price-EDITING sibling under
+                                          # /billing/pricing/* stays super-admin-gated and is not
+                                          # matched here (exact path, no prefix semantics).
     "/api/v1/core/tenants/sync",          # dual-auth: NOTIFY_RUN_SECRET header OR super-admin; cron has no JWT
     "/api/v1/core/password-policy/public",  # PUBLIC: owner DEFAULT policy for pre-login strength hints
     "/api/v1/core/auth/forgot-password",  # PUBLIC self-serve reset request (anti-enumeration; anonymous)
     "/api/v1/core/auth/reset-password",   # PUBLIC self-serve reset completion (code-gated; anonymous)
     "/api/v1/core/auth/login-precheck",   # PUBLIC pre-login soft-lockout check (mig 859; anonymous)
     "/api/v1/core/auth/login-record",     # PUBLIC pre-login attempt ledger write (mig 859; anonymous)
+    "/api/v1/vision/google/events",        # Google Cloud Pub/Sub PUSH of SDM camera events (mig 907).
+                                          # EXACT path, METHOD-SCOPED to POST below. Google carries no
+                                          # JWT of ours, so the tenant gate must not fire before the
+                                          # handler — the handler self-verifies the OIDC token Pub/Sub
+                                          # attaches and fails closed when VISION_PUBSUB_AUDIENCE or
+                                          # VISION_PUBSUB_SA_EMAIL is unset. Tenancy is resolved from
+                                          # OUR vision_camera table by device name, never from the body.
     "/api/v1/remediation/whatsapp-webhook",  # Meta webhook. EXACT path + METHOD-SCOPED below to
                                           # {GET, POST} only (2026-08-05: it was a PREFIX, so any future
                                           # sibling path under it would have been public too, and every
@@ -151,6 +163,20 @@ _PUBLIC_PREFIXES = (
                                            # pre-existing /api/v1/core/fix-requests endpoints (mig 716
                                            # support pipeline) do NOT match and keep full middleware
                                            # protection.
+    "/api/v1/vision/edge",                  # Vision edge analyzer (mig 900): DUAL-AUTH, same shape as
+                                           # /core/fix-pipeline above. The analyzer is a machine on a
+                                           # store network with NO login, so the JWT requirement would
+                                           # fire before the handler could check the credential it DOES
+                                           # carry: a per-agent HMAC-SHA256 over `timestamp.body` with a
+                                           # bounded clock skew. EVERY route under this prefix
+                                           # self-gates in vision/router.py::_authenticate_agent
+                                           # (default DENY; unknown agent / disabled agent / bad
+                                           # signature / stale timestamp all return an identical 401 so
+                                           # a probe learns nothing) and resolves its own org FROM THE
+                                           # AGENT RECORD, because allowlisting also skips the org_id
+                                           # rewrite. Boundary-matched, so ONLY /api/v1/vision/edge[/…]
+                                           # is affected — every other /vision/* route keeps full auth
+                                           # + org_id rewrite.
 )
 
 # Self-authenticating background sweeps: EVERY route ending in "/run-due" is invoked by pg_cron with
@@ -443,8 +469,15 @@ def _is_public(path: str) -> bool:
 #     global enforce-login flag must never be anonymous (2026-08-05 security hardening).
 #   · /api/v1/remediation/whatsapp-webhook — Meta only ever calls GET (verify handshake) and POST
 #     (inbound + delivery-status callback); nothing else on that path should skip authentication.
+#   · /api/v1/billing/public-pricing — GET is the anonymous price list + trial terms the marketing
+#     site renders pre-login. It is READ-ONLY by construction (the handler has no write path), and
+#     scoping it here means any future method on that same path authenticates normally.
 _PUBLIC_METHODS = {
     "/api/v1/core/auth-config": ("GET",),
+    "/api/v1/billing/public-pricing": ("GET",),
+    # Pub/Sub only ever POSTs. Scoping it stops a future GET on the same path being public by
+    # inheritance — the exact mistake the whatsapp entry below was widened by until 2026-08-05.
+    "/api/v1/vision/google/events": ("POST",),
     "/api/v1/remediation/whatsapp-webhook": ("GET", "POST"),
 }
 

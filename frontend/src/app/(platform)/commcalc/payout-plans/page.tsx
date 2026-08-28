@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import RunCommissionButton from '../_lib/RunCommissionButton'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // Commission Payout Plans — the ONE place that answers "how does each carrier's rep get paid?".
 // It reads /payout-plans/overview, which uses the SAME carrier gate as the live calculator, so what
@@ -42,6 +43,13 @@ type Diag = {
 
 export default function PayoutPlansHub() {
   const { period, setPeriod } = usePeriod()
+  // Active-carrier lens: a dual-carrier tenant sees only the active carrier's card + rule, and the
+  // Boost-rates shortcut/row only under the Boost lens. Single-carrier tenants are unchanged.
+  const { activeCarrier, multi } = useActiveCarrier()
+  const carrierMatchesActive = (c: CarrierRow) => {
+    const t = (c.code || c.name || '').toLowerCase()
+    return !!t && (t.includes(activeCarrier) || activeCarrier.includes(t))
+  }
   const [ov, setOv] = useState<Overview | null>(null)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(true)
@@ -83,7 +91,7 @@ export default function PayoutPlansHub() {
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
         <Link href="/commcalc/commission-plans" className="btn btn-sm">🧮 Incentive Plans</Link>
         <Link href="/commcalc/payout-schedules" className="btn btn-sm">📆 Payout Schedules</Link>
-        <Link href="/commcalc/settings" className="btn btn-sm">⚙️ Boost Rates</Link>
+        {activeCarrier === 'boost' && <Link href="/commcalc/settings" className="btn btn-sm">⚙️ Boost Rates</Link>}
         <Link href="/commcalc/carrier-mapping" className="btn btn-sm">📡 Carrier Mapping</Link>
         <Link href="/commcalc/commission-category-map" className="btn btn-sm">🗺️ Category → Bucket Map</Link>
         <Link href="/commcalc/commission-import" className="btn btn-sm">🪄 Import Wizard</Link>
@@ -111,7 +119,7 @@ export default function PayoutPlansHub() {
           )}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
-            {ov.carriers.map(c => {
+            {(multi ? ov.carriers.filter(carrierMatchesActive) : ov.carriers).map(c => {
               const p = PAYS[c.pays_via]
               return (
                 <div key={c.id} className="card" style={{ padding: 16, borderLeft: `4px solid ${p.tone}` }}>
@@ -149,13 +157,20 @@ export default function PayoutPlansHub() {
           </div>
 
           <div className="card" style={{ padding: 14, marginTop: 16, fontSize: 12, color: 'var(--text2)', lineHeight: 1.6 }}>
-            <b>How pay is decided:</b> the calculator looks at this company’s <b>default carrier</b>
-            {ov.default_carrier ? <> (<b>{ov.default_carrier.name}</b>)</> : ''}. If it’s Boost, reps are paid
-            by the built‑in KPI‑tier rates. If it’s any other carrier, the Boost tiers are <b>skipped entirely</b>
-            {' '}and each rep is paid from the Incentive Plan / Payout Schedule assigned to them. Current mode:{' '}
-            <span style={chip(ov.org_carrier_mode === 'boost' ? 'var(--accent)' : '#16a34a')}>
-              {ov.org_carrier_mode === 'boost' ? 'BOOST ENGINE' : 'CONFIGURABLE PLANS'}
-            </span>
+            {multi
+              ? <><b>How pay is decided:</b> {activeCarrier === 'boost'
+                  ? 'reps are paid by the built‑in KPI‑tier rates.'
+                  : 'reps are paid from the Incentive Plan / Payout Schedule assigned to them.'} Current mode:{' '}
+                  <span style={chip(activeCarrier === 'boost' ? 'var(--accent)' : '#16a34a')}>
+                    {activeCarrier === 'boost' ? 'BOOST ENGINE' : 'CONFIGURABLE PLANS'}
+                  </span></>
+              : <><b>How pay is decided:</b> the calculator looks at this company’s <b>default carrier</b>
+                  {ov.default_carrier ? <> (<b>{ov.default_carrier.name}</b>)</> : ''}. {ov.org_carrier_mode === 'boost'
+                    ? 'Reps are paid by the built‑in KPI‑tier rates.'
+                    : 'Each rep is paid from the Incentive Plan / Payout Schedule assigned to them.'} Current mode:{' '}
+                  <span style={chip(ov.org_carrier_mode === 'boost' ? 'var(--accent)' : '#16a34a')}>
+                    {ov.org_carrier_mode === 'boost' ? 'BOOST ENGINE' : 'CONFIGURABLE PLANS'}
+                  </span></>}
           </div>
 
           {/* Diagnostic — why aren't reps captured in the report? */}

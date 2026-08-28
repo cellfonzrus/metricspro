@@ -104,8 +104,26 @@ def _epoch(iso):
 
 
 def simulate_payroll_month_rows(store, p_org_id, p_lo, p_hi):
-    """Python mirror of storeops.payroll_month_rows() (migration 407) — the SQL's exact
-    filters/grouping/expressions, so the FAST path is fed what Postgres would return."""
+    """Python mirror of storeops.payroll_month_rows() (migrations 407 -> 913 -> 914) — the SQL's exact
+    filters/grouping/expressions, so the FAST path is fed what Postgres would return.
+
+    PUNCH-DRIVEN PAY (migration 914): a shift contributes actual_hours if >0 (manual wins), else 0 on a
+    punch-driven day (a closed punch that (emp, day) with no manual correction), else scheduled_hours;
+    and a punch is suppressed ONLY by a manual correction (actual_hours>0) that day, never by a
+    merely-scheduled shift. Mirrors storeops._payroll_day_is_punch_driven + the anti-join."""
+    # (emp, day) grain sets used by BOTH legs, matching the SQL EXISTS/NOT EXISTS predicates.
+    manual_days = {(s.get("employee_id"), str(s.get("shift_date") or ""))
+                   for s in store.get("shifts", [])
+                   if s.get("org_id") == p_org_id and s.get("is_deleted") is False
+                   and float(s.get("actual_hours") or 0) > 0}
+    punch_days = {(t.get("employee_id"), str(t.get("work_date") or ""))
+                  for t in store.get("timelog", [])
+                  if t.get("org_id") == p_org_id
+                  and t.get("clock_out") is not None and t.get("hours") is not None}
+
+    def _is_punch_driven(eid, day):
+        return (eid, day) in punch_days and (eid, day) not in manual_days
+
     out = []
     # ── shift branch ────────────────────────────────────────────────────────────────────────────
     groups = {}
@@ -123,8 +141,15 @@ def simulate_payroll_month_rows(store, p_org_id, p_lo, p_hi):
             sched = float(r.get("scheduled_hours") or 0)
             act = float(r.get("actual_hours") or 0)
             sched_sum += sched
-            act_eff += sched if act == 0 else act      # /payroll basis
-            hrs_eff += act if act > 0 else sched       # /payroll-by-store basis
+            # PUNCH-DRIVEN: manual(act>0) -> act ; punch-driven day -> 0 ; else scheduled fallback.
+            if act > 0:
+                contrib = act
+            elif _is_punch_driven(r.get("employee_id"), str(r.get("shift_date") or "")):
+                contrib = 0.0
+            else:
+                contrib = sched
+            act_eff += contrib                         # /payroll basis
+            hrs_eff += contrib                         # /payroll-by-store basis (identical since mig 914)
         out.append({"kind": "shift", "employee_id": eid, "store_code": st,
                     "employee_name": by_id[0].get("employee_name"),
                     "first_ord": float(by_id[0]["id"]),
@@ -132,10 +157,6 @@ def simulate_payroll_month_rows(store, p_org_id, p_lo, p_hi):
                     "hours_eff_sum": hrs_eff, "shift_count": len(rows_),
                     "timelog_hours_sum": 0.0})
     # ── timelog branch ──────────────────────────────────────────────────────────────────────────
-    live_shift_days = {(s.get("employee_id"), str(s.get("shift_date") or ""))
-                       for s in store.get("shifts", [])
-                       if s.get("org_id") == p_org_id and s.get("is_deleted") is False
-                       and s.get("employee_id") is not None}
     tgroups = {}
     for t in store.get("timelog", []):
         if t.get("org_id") != p_org_id:
@@ -148,8 +169,8 @@ def simulate_payroll_month_rows(store, p_org_id, p_lo, p_hi):
         eid = t.get("employee_id")
         if eid is None or eid == "":
             continue
-        if (eid, wd) in live_shift_days:
-            continue                                   # NOT EXISTS live shift same emp/day
+        if (eid, wd) in manual_days:
+            continue                                   # NOT EXISTS manual correction same emp/day (mig 914)
         tgroups.setdefault((eid, _btrim(t.get("store_code"))), []).append(t)
     for (eid, st), rows_ in tgroups.items():
         ordered = sorted(rows_, key=lambda r: (r.get("created_at") is None,
@@ -362,10 +383,11 @@ FAKE_CLIENT.rpc_enabled = False
 check("4: E1 row-level act==0->sched fallback (8) + sched0/act3 row => sched 8 / act 11",
       pay["E1"]["scheduled_hours"] == 8 and pay["E1"]["actual_hours"] == 11 and pay["E1"]["shifts"] == 2,
       pay.get("E1"))
-check("5: E2 dominant-store TIE (Store1 8 vs Store2 8) -> first-seen Store1; blocked 07-13 punch "
-      "excluded; blank-store shift hours still count (sched 10 / act 10, 3 shifts)",
-      pay["E2"]["store"] == "Store1" and pay["E2"]["scheduled_hours"] == 10
-      and pay["E2"]["actual_hours"] == 10 and pay["E2"]["shifts"] == 3, pay.get("E2"))
+check("5: E2 PUNCH-DRIVEN 07-13 — the blank-store scheduled shift (sched2/act0) no longer suppresses "
+      "its 6h punch; the punch drives pay (shift contributes 0, punch counts 6h at Store2), so "
+      "actual=4+4+0+6+0=14 (sched still 10, 3 shifts). Store2 now dominant (14>8) so store=Store2",
+      pay["E2"]["store"] == "Store2" and pay["E2"]["scheduled_hours"] == 10
+      and pay["E2"]["actual_hours"] == 14 and pay["E2"]["shifts"] == 3, pay.get("E2"))
 check("6: E4 kiosk-only appears: act 9 / sched 0 / 0 shifts, store Store2, name from timelog",
       pay["E4"]["actual_hours"] == 9 and pay["E4"]["scheduled_hours"] == 0 and pay["E4"]["shifts"] == 0
       and pay["E4"]["store"] == "Store2" and pay["E4"]["name"] == "Dana Kiosk", pay.get("E4"))
@@ -379,7 +401,8 @@ check("9: INACTIVE E9 (REAL activity, act=6>0) appears in /payroll AND /payroll-
       "their REAL 15/hr rate (2026-07-25 money-adjacent fix: 'must still appear and be paid', "
       "reversing the old $0-in-/payroll behavior for an inactive employee with genuine worked hours)",
       pay["E9"]["pay_rate"] == 15.0 and pay["E9"]["actual_pay"] == 90.0
-      and bys["Store2"]["hours"] == 23 and bys["Store2"]["amount"] == 432.0,
+      # Store2 now also carries E2's punch-driven 07-13 punch (6h*$25=$150): was 23h/$432, now 29h/$582.
+      and bys["Store2"]["hours"] == 29 and bys["Store2"]["amount"] == 582.0,
       (pay.get("E9"), bys.get("Store2")))
 check("10: E12's punch on the soft-DELETED shift's day COUNTS (deleted shift blocks nothing)",
       pay["E12"]["actual_hours"] == 4 and pay["E12"]["shifts"] == 0 and pay["E12"]["scheduled_hours"] == 0,
@@ -412,9 +435,11 @@ try:
     kbys = json.loads(kouts["fast"][1])["stores"]
 finally:
     router_mod.scope_keyset = _real_scope_keyset
-check("13: keyset {STORE1}: byte-identical on both paths AND actually filters (5 emp rows, 1 store)",
+check("13: keyset {STORE1}: byte-identical on both paths AND actually filters (4 emp rows, 1 store). "
+      "Was 5 pre-PUNCH-DRIVEN: E2's dominant store flipped to Store2 (it genuinely worked more hours "
+      "there once its 07-13 punch counts), so E2's single row now labels Store2 and drops from {STORE1}",
       kouts["legacy"][0] == kouts["fast"][0] and kouts["legacy"][1] == kouts["fast"][1]
-      and len(kpay) == 5 and [s["store_code"] for s in kbys] == ["Store1"],
+      and len(kpay) == 4 and [s["store_code"] for s in kbys] == ["Store1"],
       (kouts["legacy"][0] == kouts["fast"][0], kouts["legacy"][1] == kouts["fast"][1],
        len(kpay), [s["store_code"] for s in kbys]))
 
@@ -497,10 +522,11 @@ check("24: multi-week per-employee hand-computed hours/store (E1 sched0/act3, E6
       and wk_pay["E9"]["actual_hours"] == 6 and wk_pay["E9"]["store"] == "Store2" and wk_pay["E9"]["pay_rate"] == 15.0
       and wk_pay["E4"]["actual_hours"] == 9 and wk_pay["E4"]["store"] == "Store2",
       wk_pay)
-check("25: multi-week /payroll-by-store hand-computed (Store1 14.5h/$257.50, Store2 19h/$332.00 — "
-      "E2's blank-store shift on 07-13 correctly contributes to NEITHER store)",
+check("25: multi-week /payroll-by-store hand-computed (Store1 14.5h/$257.50 unchanged; Store2 now "
+      "25h/$482.00 — E2's blank-store shift on 07-13 still contributes to NEITHER store, but under "
+      "PUNCH-DRIVEN PAY its 6h punch is no longer suppressed and now lands at Store2: 19+6=25h)",
       wk_bys["Store1"]["hours"] == 14.5 and wk_bys["Store1"]["amount"] == 257.5
-      and wk_bys["Store2"]["hours"] == 19 and wk_bys["Store2"]["amount"] == 332.0,
+      and wk_bys["Store2"]["hours"] == 25 and wk_bys["Store2"]["amount"] == 482.0,
       wk_bys)
 
 # ══ 26: org isolation holds in range mode too (the required multi-tenant proof for a new param) ═══

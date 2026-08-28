@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
@@ -9,6 +10,7 @@ import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { EntityPickerChips } from '../_lib/EntityPickerChips'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 import { resolveStoreCodes } from '../_lib/market-store-cascade'
+import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 
 // DM cash pickup — see the day's cash envelopes, check off the ones collected with a note, confirm.
 // On confirm, the assigned recipient gets an email + WhatsApp summary.
@@ -132,8 +134,8 @@ export default function CashPickupPage() {
   // rosters ClosingSubmitForm/cash-config already fetch elsewhere in this module — not derived from
   // the day's (possibly already-filtered) envelope rows, so the pickers stay full even on a slow day.
   useEffect(() => {
-    api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
-    api('/api/v1/storeops/employees?all_company=true').then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
+    apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
+    apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
   }, [])
 
   // Store roster shaped for the cascade widget (needs `.market` per store) — declared before `load`
@@ -377,7 +379,7 @@ export default function CashPickupPage() {
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{fmt(e.cash)}</td>
-                      <td style={cell}>{(e.envelope_url || e.envelope_picture) ? <a href={e.envelope_url || e.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷 view</a> : '—'}</td>
+                      <td style={cell}><EnvelopeViewLink row={e} label="📷 view" /></td>
                       <td style={cell}>
                         {done
                           ? <span style={{ fontSize: 12, color: 'var(--text3)' }}>by {e.picked_up_by} · {e.picked_up_at ? new Date(e.picked_up_at).toLocaleString() : ''}{e.note ? ` · ${e.note}` : ''}</span>
@@ -431,8 +433,16 @@ export default function CashPickupPage() {
             </div>
             {dep.disposition === 'deposited' ? (
               <>
-                <label style={{ fontSize: 12, fontWeight: 600 }}>Deposit slip photo (OCR reads the amount)<br />
-                  <input type="file" accept="image/*" style={{ marginTop: 4, fontSize: 12 }} onChange={async e => { const f = e.target.files?.[0]; if (f) setDep({ ...dep, slip: await fileToDataUrl(f) }) }} /></label>
+                <div style={{ fontSize: 12, fontWeight: 600 }}>Deposit slip photo (OCR reads the amount)
+                  <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {/* Camera (capture) + file picker (no capture) — owner directive 2026-08-19. */}
+                    <label className="btn btn-secondary" style={{ fontSize: 12, cursor: 'pointer' }}>📷 Take photo
+                      <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={async e => { const f = e.target.files?.[0]; if (f) setDep({ ...dep, slip: await fileToDataUrl(f) }); e.currentTarget.value = '' }} /></label>
+                    <label className="btn btn-secondary" style={{ fontSize: 12, cursor: 'pointer' }}>🖼️ Upload from files
+                      <input type="file" accept="image/*" style={{ display: 'none' }} onChange={async e => { const f = e.target.files?.[0]; if (f) setDep({ ...dep, slip: await fileToDataUrl(f) }); e.currentTarget.value = '' }} /></label>
+                    {dep.slip && <span style={{ fontSize: 12, color: 'var(--green)', fontWeight: 600 }}>✓ attached</span>}
+                  </div>
+                </div>
                 <label style={{ fontSize: 12, fontWeight: 600, display: 'block', marginTop: 10 }}>Deposit amount {dep.slip ? '(leave blank to auto-read)' : '(enter manually)'}<br />
                   <input type="number" style={{ ...inp, marginTop: 4 }} placeholder={String(dep.e.cash)} value={dep.deposit_amount} onChange={e => setDep({ ...dep, deposit_amount: e.target.value })} /></label>
               </>

@@ -1,6 +1,7 @@
 """MetricsPro Platform API — FastAPI main entry point"""
 import os
 import secrets
+import sys
 import traceback
 
 from fastapi import FastAPI
@@ -21,12 +22,17 @@ from app.modules.closing.router import router as closing_router
 from app.modules.helpdesk.router import router as helpdesk_router
 from app.modules.hr.router import router as hr_router
 from app.modules.billing.router import router as billing_router
+from app.modules.billing.pricing import router as pricing_router
 from app.modules.payables.router import router as payables_router
 from app.modules.remediation.router import router as remediation_router
 from app.modules.recovery.router import router as recovery_router
 from app.modules.pos.router import router as pos_router
+from app.modules.pos.vendor_api import router as pos_vendor_api_router
+from app.modules.approvals.router import router as approvals_router
+from app.modules.chat.router import router as chat_router
 from app.modules.crm.router import router as crm_router
 from app.modules.referral.router import router as referral_router
+from app.modules.vision.router import router as vision_router
 
 app = FastAPI(
     title="MetricsPro Platform API",
@@ -45,6 +51,18 @@ app = FastAPI(
 # untouched (directive item 5c). Best-effort logging never itself raises.
 def _log_system_error(request, exc) -> str:
     ref = secrets.token_hex(4)
+    # STDERR FIRST (2026-08-21). The failure_log insert below is best-effort and its `except` is silent,
+    # so until now a ref handed to a user was only recoverable IF that insert had succeeded — when the DB
+    # was the thing that was broken (the most likely cause of a 500) the reference led nowhere, forever,
+    # and the incident could not be diagnosed at all. The ref is minted here and printed nowhere else, so
+    # this line is the only thing that makes it recoverable unconditionally. Written to stderr, which the
+    # container platform captures, BEFORE the DB is touched; costs one write on a path that only runs
+    # when the request has already failed. Never raises (a logging fault must not replace the real error).
+    try:
+        print(f"[system-error {ref}] {request.method} {request.url.path} "
+              f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
     try:
         from app.core.database import get_supabase
         org_id = request.query_params.get("org_id") or "00000000-0000-0000-0000-000000000001"
@@ -152,7 +170,15 @@ app.add_middleware(HardeningMiddleware)
 # branch deploy, which is exactly the kind of breakage that gets "fixed" by putting `*` back.
 _cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 CORS_ORIGINS = _cors_origins or [
-    "https://metricspro-five.vercel.app",   # the ONLY production app URL (metricspro.tech is email-only)
+    "https://metricspro-five.vercel.app",   # the production app
+    # The marketing site on shared hosting. It is a DIFFERENT origin from the app and reads exactly
+    # one endpoint here — GET /billing/public-pricing — to render the published price list. Without
+    # these two entries the browser blocks that call and the page silently falls back to its
+    # "priced against your operation" card, which looks identical to having published nothing.
+    # NOTE: setting CORS_ORIGINS in the environment REPLACES this whole list. If you set it, the
+    # marketing origins must be in it too, or pricing stops appearing on the website.
+    "https://metricspro.tech",
+    "https://www.metricspro.tech",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
@@ -178,12 +204,19 @@ app.include_router(closing_router, prefix="/api/v1")     # router carries its ow
 app.include_router(helpdesk_router, prefix="/api/v1")    # router carries its own /helpdesk prefix
 app.include_router(hr_router, prefix="/api/v1")          # router carries its own /hr prefix
 app.include_router(billing_router, prefix="/api/v1")     # router carries its own /billing prefix (super-admin)
+# Pricing & trial (mig 908) — shares the /billing prefix. Super-admin except ONE anonymous endpoint,
+# GET /billing/public-pricing, which the marketing site reads (allowlisted GET-only in tenant_middleware).
+app.include_router(pricing_router, prefix="/api/v1")
 app.include_router(payables_router, prefix="/api/v1/payables")  # Device Forecasting & Vendor Payables (mig 095)
 app.include_router(remediation_router, prefix="/api/v1")  # router carries its own /remediation prefix (mig 097)
 app.include_router(recovery_router, prefix="/api/v1")     # Denied-Appeal Commission Recovery (mig 098)
 app.include_router(pos_router, prefix="/api/v1")          # POS module — Phase 0 product catalog (mig 724)
+app.include_router(pos_vendor_api_router, prefix="/api/v1")  # POS special-order vendor-facing API (token-authed, mig 866)
 app.include_router(crm_router, prefix="/api/v1")          # CRM — sales pipeline + Customer 360 (mig 800)
 app.include_router(referral_router, prefix="/api/v1")     # Referral — QR referrals + gated commission (mig 850)
+app.include_router(approvals_router, prefix="/api/v1")    # Unified Approvals Engine (mig 867)
+app.include_router(chat_router, prefix="/api/v1")         # Internal Chat — Phase 1 (mig 868)
+app.include_router(vision_router, prefix="/api/v1")       # Vision — Nest live view + heat map + behavior (mig 900)
 
 # Security posture check (Spec §2/§5): log the enforcement posture and warn on missing secrets /
 # break-glass states at boot. Best-effort; STARTUP_STRICT=1 makes prod findings fail the boot.
@@ -227,6 +260,63 @@ def _encryption_backfill_startup():
     threading.Thread(target=_work, name="encryption-backfill", daemon=True).start()
 
 
+@app.on_event("startup")
+def _service_role_startup():
+    # Announce which service this process is: the API service (SERVICE_ROLE=api/web) blocks
+    # Chromium/Playwright portal sweeps; unset or any other value (sweeps/worker) allows them.
+    try:
+        from app.core.service_role import role_banner
+        print("[service-role] " + role_banner(), flush=True)
+    except Exception:
+        pass
+
+
+# ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────
+# The modules list here used to be a hardcoded literal, and it went stale the moment a module was
+# added without someone editing it — by 2026-08 it was missing pos, crm, referral, payables, billing,
+# recovery, remediation, asset, approvals, chat and vision. That is worse than useless: it is a
+# health endpoint that CONFIDENTLY MISREPORTS the deployment.
+#
+# It cost a real support round trip. After the vision module merged, the frontend deployed and the
+# backend had not; every /api/v1/vision/* call 404'd, and there was no cheap way to confirm "does the
+# running API have this module" — /health said nothing about it either way, so the answer had to come
+# from reading the OpenAPI page by eye.
+#
+# Now the list is DERIVED from the routes mounted on this app, so it cannot drift, and the deployed
+# commit is surfaced from the platform's own build env (Railway sets RAILWAY_GIT_COMMIT_SHA). Between
+# them, "is my change live?" is one request with an unambiguous answer.
+_MOUNTED_MODULES = None
+
+
+def _mounted_modules():
+    """Module prefixes under /api/v1 on this running image. Computed once; never raises — a health
+    check that can fail is not a health check."""
+    global _MOUNTED_MODULES
+    if _MOUNTED_MODULES is None:
+        try:
+            mods = set()
+            for path in (app.openapi().get("paths") or {}):
+                parts = path.strip("/").split("/")
+                if len(parts) >= 3 and parts[0] == "api" and parts[1] == "v1":
+                    mods.add(parts[2])
+            _MOUNTED_MODULES = sorted(mods)
+        except Exception:
+            return []
+    return _MOUNTED_MODULES
+
+
+def _deployed_commit():
+    """Short sha of the commit this image was built from, when the platform tells us. Railway sets
+    RAILWAY_GIT_COMMIT_SHA; the generic names cover other hosts and local runs."""
+    for var in ("RAILWAY_GIT_COMMIT_SHA", "SOURCE_COMMIT", "GIT_COMMIT", "VERCEL_GIT_COMMIT_SHA"):
+        sha = (os.environ.get(var) or "").strip()
+        if sha:
+            return sha[:7]
+    return None
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "1.0.0", "modules": ["commcalc", "storeops", "notify", "core", "account", "storevisit", "closing", "helpdesk", "hr"]}
+    return {"status": "ok", "version": "1.0.0",
+            "commit": _deployed_commit(),
+            "modules": _mounted_modules()}

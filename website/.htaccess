@@ -1,0 +1,105 @@
+# MetricsPro website — Apache configuration for shared hosting (Bluehost and equivalents).
+# Upload this file alongside index.html. If your host ignores it, ask support to enable
+# AllowOverride for the account; everything here is standard and safe to run on cPanel hosting.
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# THIS FILE SHIPS IN SAFE MODE. Everything below that can take the site down is commented out.
+# Turn each one on deliberately, one at a time, reloading the site after each. That ordering is
+# the whole point: three directives enabled at once give you a dead site and no idea which did it.
+#
+# If the site is broken and you suspect this file, rename it to .htaccess.off and reload. Apache
+# stops reading it immediately — no restart, no cache. If the site returns, the cause is in here.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── Pretty URLs ────────────────────────────────────────────────────────────────────────────────
+# /legal/terms serves /legal/terms.html. Safe to leave on: it only rewrites a path that does not
+# already exist as a real file or directory, so it cannot shadow anything you upload.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^([^.]+)$ $1.html [NC,L]
+</IfModule>
+
+# ── (1) No directory listings ──────────────────────────────────────────────────────────────────
+# A folder with no index file is otherwise served as a browsable listing — /assets/ and /legal/
+# would hand any visitor a complete file inventory. Worth having.
+#
+# ENABLE FIRST, and reload the site immediately. If you get a 500 Internal Server Error, this
+# account's AllowOverride does not permit `Options`; comment the line back out and ask Bluehost
+# support to allow it. Nothing else here can produce a 500, so this is the one to test alone.
+#
+# Options -Indexes
+
+# ── (2) Force HTTPS ────────────────────────────────────────────────────────────────────────────
+# ENABLE ONLY once https:// already loads by itself. Enabling it before the certificate exists
+# redirects every visitor to a page the server cannot serve, and the browser shows a security
+# warning on your own homepage rather than a site.
+#
+# <IfModule mod_rewrite.c>
+#   RewriteEngine On
+#   RewriteCond %{HTTPS} !=on
+#   RewriteCond %{HTTP:X-Forwarded-Proto} !https
+#   RewriteRule ^(.*)$ https://%{HTTP_HOST}/$1 [R=301,L]
+# </IfModule>
+
+# ── (3) Canonical host ─────────────────────────────────────────────────────────────────────────
+# Sends the bare domain to www. ENABLE ONLY once BOTH hostnames resolve in DNS and BOTH are on the
+# certificate — check in Security → SSL/TLS Status that metricspro.tech and www.metricspro.tech
+# are each listed. A redirect to a hostname that does not resolve, or is not on the certificate,
+# takes the whole site down for anyone typing the bare domain.
+#
+# Whichever you pick, make it match the <link rel="canonical"> in the pages: they currently say
+# www.metricspro.tech. To prefer the bare domain instead, reverse this rule AND tell me, so I
+# change the canonical links, robots.txt and sitemap.xml to agree — disagreeing on this splits
+# your search ranking between two addresses.
+#
+# <IfModule mod_rewrite.c>
+#   RewriteEngine On
+#   RewriteCond %{HTTP_HOST} ^metricspro\.tech$ [NC]
+#   RewriteRule ^(.*)$ https://www.metricspro.tech/$1 [R=301,L]
+# </IfModule>
+
+# ── Security headers ───────────────────────────────────────────────────────────────────────────
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "geolocation=(), microphone=(), camera=(), interest-cohort=()"
+  # HSTS — enable only once you are certain HTTPS works on every hostname you serve. A browser that
+  # sees this header will REFUSE plain http for this domain for the stated period, and that cannot be
+  # undone quickly. Start with a short max-age, raise it after a week of clean HTTPS.
+  # Header always set Strict-Transport-Security "max-age=86400"
+  #
+  # Content-Security-Policy. This site loads: its own CSS/JS, the Google Fonts stylesheet and font
+  # files, and one JSON request to the platform API. If you change apiBase in assets/config.js,
+  # change the connect-src host here to match, or the price list will be blocked.
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://metricspro-production.up.railway.app; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+</IfModule>
+
+# ── Caching ────────────────────────────────────────────────────────────────────────────────────
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/css "access plus 7 days"
+  ExpiresByType application/javascript "access plus 7 days"
+  ExpiresByType image/svg+xml "access plus 30 days"
+  # HTML stays short so a legal-page edit goes live promptly.
+  ExpiresByType text/html "access plus 1 hour"
+</IfModule>
+
+# ── Compression ────────────────────────────────────────────────────────────────────────────────
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css application/javascript text/plain application/json image/svg+xml
+</IfModule>
+
+ErrorDocument 404 /404.html
+
+# Do not serve the repository's own working files if they ever get uploaded by mistake.
+# `Require` comes from mod_authz_core and needs an AllowOverride that permits it. Guarding the
+# block means a host without the module ignores it rather than returning 500 for the whole site.
+# These files are excluded from the upload anyway; this is the belt to that braces.
+<IfModule mod_authz_core.c>
+  <FilesMatch "\.(md|sh|yml|yaml|json|lock)$">
+    Require all denied
+  </FilesMatch>
+</IfModule>

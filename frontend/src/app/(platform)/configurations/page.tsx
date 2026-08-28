@@ -103,6 +103,7 @@ const GROUPS: Group[] = [
     items: [
       { href: '/admin/tenants', icon: '🏢', label: 'Companies & Platform Admins', desc: 'Create/manage tenants; platform super-admins.', adminOnly: true },
       { href: '/admin/billing', icon: '💳', label: 'Billing & Platform Costs', desc: 'Price each tenant, invoices, MRR/ARR + your run-cost and break-even cost per tenant.', adminOnly: true },
+      { href: '/admin/pricing', icon: '🏷️', label: 'Pricing & Free Trial', desc: 'The public price list the website shows, and how long a new company gets for free.', adminOnly: true },
     ],
   },
 ]

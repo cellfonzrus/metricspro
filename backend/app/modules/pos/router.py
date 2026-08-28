@@ -8,7 +8,7 @@ storeops.stores.store_code, RBAC is the roles JSONB `modules.pos` key. This rout
 pos.* schema. Later phases add activations, vendors/POs, transfers, reports, import.
 
 Gated actions (PII reveal, void, settings/tax writes) use fine-grained keys in the caller role's
-permissions JSONB — `pos_view_pii`, `pos_void`, `pos_settings` — with role scope 'all' (org-wide
+permissions JSONB — `pos_void`, `pos_settings` — with role scope 'all' (org-wide
 admin) implying all three, so existing admin roles work before the roles UI grows checkboxes.
 
 NOT YET ENFORCED: a `modules.pos` entitlement gate. Earlier revisions of this docstring claimed
@@ -300,11 +300,540 @@ def update_product(product_id: str, body: dict, org_id: str = ORG_ID):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# Customer Special Order — Phase 1: the HIDDEN vendor catalog (mig 864).
+#   • The store/customer-facing catalog (GET /special-orders/catalog) returns ONLY customer-facing
+#     product fields — it never reads pos.special_order_vendor, so the vendor (Amazon) is invisible at
+#     the API boundary, not merely hidden in the UI.
+#   • The HQ admin surface (pos_special_order_admin) manages the item + its vendor linkage. Store staff
+#     don't hold that permission, so they can neither see the vendor nor self-order from it.
+# See docs/POS_SPECIAL_ORDER_PLAN.md.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+SPECIAL_ORDER_VENDOR_FIELDS = ("vendor", "vendor_sku", "vendor_url", "vendor_cost", "lead_time_days",
+                               "notes", "is_active")
+
+
+def _special_order_products(org_id, search="", active_only=True):
+    q = (sb().schema("pos").table("products").select("*")
+         .eq("org_id", org_id).eq("is_special_order", True))
+    if active_only:
+        q = q.eq("is_active", True)
+    if (search or "").strip():
+        s = search.strip().replace("%", "").replace(",", " ")
+        q = q.or_(f"short_name.ilike.%{s}%,full_name.ilike.%{s}%,upc.ilike.%{s}%")
+    return q.order("short_name").limit(500).execute().data or []
+
+
+@router.get("/special-orders/catalog")
+def special_order_catalog(search: str = "", org_id: str = ORG_ID):
+    """NEUTRAL store/customer-facing special-order catalog. Returns ONLY the customer-facing product
+    fields — never the vendor linkage (Amazon ASIN / URL / cost) and never the raw cost. This endpoint
+    does not read pos.special_order_vendor at all, so source-hiding holds even if a UI bug tried to
+    show it. Powers the POS 'Customer special order' picker."""
+    rows = _special_order_products(org_id, search)
+    cat = catalog(org_id)
+    cname = {c["id"]: c["name"] for c in cat["categories"]}
+    items = [{"id": r["id"], "product_code": r.get("product_code"), "short_name": r.get("short_name"),
+              "full_name": r.get("full_name"), "category": cname.get(r.get("category_id")),
+              "retail_price": r.get("retail_price"), "is_taxable": r.get("is_taxable"),
+              "system_category": r.get("system_category")}
+             for r in rows]
+    return {"items": items}
+
+
+@router.get("/special-orders/catalog/admin")
+def special_order_catalog_admin(search: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ-only catalog WITH the vendor linkage (Amazon ASIN / URL / cost). Gated by
+    pos_special_order_admin, which store staff do not hold — so they can neither see the vendor nor
+    self-order from it."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    rows = _special_order_products(org_id, search, active_only=False)
+    ids = [r["id"] for r in rows if r.get("id")]
+    vend = {}
+    if ids:
+        vrows = (sb().schema("pos").table("special_order_vendor").select("*")
+                 .eq("org_id", org_id).in_("product_id", ids).execute().data) or []
+        vend = {v.get("product_id"): v for v in vrows}
+    for r in rows:
+        r["vendor"] = vend.get(r["id"])
+    return {"items": rows}
+
+
+@router.post("/special-orders/catalog")
+def create_special_order_item(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ: create a special-order catalog item — a pos.products row (customer-facing) flagged
+    is_special_order, plus its hidden vendor linkage (optional at create). Gated pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    ins = _clean(body)
+    if not (ins.get("short_name") or "").strip():
+        raise HTTPException(400, "short_name required")
+    _valid_system_category(org_id, ins.get("system_category"))
+    ins["org_id"] = org_id
+    ins["is_special_order"] = True
+    prod = (sb().schema("pos").table("products").insert(ins).execute().data or [{}])[0]
+    v = {k: body[k] for k in SPECIAL_ORDER_VENDOR_FIELDS if k in body}
+    if v and prod.get("id"):
+        v.update({"org_id": org_id, "product_id": prod["id"]})
+        sb().schema("pos").table("special_order_vendor").upsert(v, on_conflict="org_id,product_id").execute()
+    return {"product": prod}
+
+
+@router.patch("/special-orders/catalog/{product_id}")
+def update_special_order_item(product_id: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ: update a special-order item's product fields and/or its vendor linkage. Gated
+    pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    upd = _clean(body)
+    if "system_category" in upd:
+        _valid_system_category(org_id, upd.get("system_category"))
+    upd["is_special_order"] = True
+    r = (sb().schema("pos").table("products").update(upd)
+         .eq("org_id", org_id).eq("id", product_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    v = {k: body[k] for k in SPECIAL_ORDER_VENDOR_FIELDS if k in body}
+    if v:
+        v.update({"org_id": org_id, "product_id": product_id})
+        sb().schema("pos").table("special_order_vendor").upsert(v, on_conflict="org_id,product_id").execute()
+    return {"product": r.data[0]}
+
+
+# ── Customer Special Order — Phase 2: place the order + book the sale (mig 865) ──────────────────────
+SPECIAL_ORDER_MIN_MARGIN_PCT = 15.0   # default price floor; owner-configurable later (plan TODO #6)
+
+
+def _so_num(v, d=0.0):
+    try:
+        return float(v)
+    except Exception:
+        return d
+
+
+# Vendor-internal fields on a special order. Store staff see the order's status/tracking, but NOT the
+# vendor cost or the vendor's identity — same source-hiding line the catalog draws. Only a caller with
+# pos_special_order_admin (HQ) sees these.
+_SO_HQ_ONLY = ("captured_cost", "actual_cost", "vendor", "vendor_order_ref", "po_id")
+
+
+def _has_pos_perm(authorization: str, org_id: str, key: str) -> bool:
+    """Non-raising permission check (for redaction decisions). Fails closed to False."""
+    try:
+        return _pos_grant(_caller_ctx(authorization, org_id), key)
+    except Exception:
+        return False
+
+
+def _redact_so(row: dict, is_admin: bool) -> dict:
+    return row if is_admin else {k: v for k, v in (row or {}).items() if k not in _SO_HQ_ONLY}
+
+
+@router.post("/special-orders")
+def create_special_order(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Place a customer special order: enforce the margin floor, BOOK the sale (declared price →
+    revenue, vendor cost → COGS; profit derives automatically), and record the order for fulfillment.
+    Store-facing — the caller never sees the vendor cost; the server reads it only to book COGS and
+    guard the margin, so the vendor (Amazon) stays hidden."""
+    store_code = (body.get("store_code") or "").strip()
+    product_id = (body.get("product_id") or "").strip()
+    if not store_code or not product_id:
+        raise HTTPException(400, "store_code and product_id are required")
+    qty = _so_num(body.get("qty"), 1) or 1
+    sale_price = _so_num(body.get("declared_sale_price") or body.get("sale_price"))
+    if sale_price <= 0:
+        raise HTTPException(400, "declared_sale_price is required")
+    eid = _caller_employee(authorization, org_id)
+    if not eid:
+        raise HTTPException(403, "your login isn't linked to an employee record — ask an admin to set "
+                                 "your Employee ID in Roles & Access")
+    ks = _caller_store_keyset(authorization, org_id)
+    if ks is not None and store_code.upper() not in {str(k).upper() for k in ks}:
+        raise HTTPException(403, "this store is outside your scope")
+    prows = (sb().schema("pos").table("products").select("*")
+             .eq("org_id", org_id).eq("id", product_id).limit(1).execute().data) or []
+    if not prows or not prows[0].get("is_special_order"):
+        raise HTTPException(404, "not a special-order catalog item")
+    prod = prows[0]
+    vrows = (sb().schema("pos").table("special_order_vendor")
+             .select("vendor_cost,vendor,vendor_sku")
+             .eq("org_id", org_id).eq("product_id", product_id).limit(1).execute().data) or []
+    vrow = vrows[0] if vrows else {}
+    cost = _so_num(vrow.get("vendor_cost") or prod.get("cost"))
+    if cost > 0:
+        floor = cost * (1 + SPECIAL_ORDER_MIN_MARGIN_PCT / 100.0)
+        if sale_price < floor - 0.005:
+            raise HTTPException(400, f"Price too low for this item — the minimum is {floor:.2f} "
+                                     f"(at least a {int(SPECIAL_ORDER_MIN_MARGIN_PCT)}% margin).")
+    tax_total = _so_num(body.get("tax_total"))
+    subtotal = round(sale_price * qty, 2)
+    total = round(subtotal + tax_total, 2)
+    tax_rate = round(tax_total / subtotal, 6) if subtotal else 0.0
+    customer_id = (body.get("customer_id") or "").strip() or None
+    desc = prod.get("full_name") or prod.get("short_name") or "Special order"
+    sale = {"store_code": store_code, "customer_id": customer_id, "receipt_type": "sale",
+            "subtotal": subtotal, "discount_total": 0, "tax_total": tax_total, "total": total,
+            "balance": 0, "is_activation_sale": False, "notes": "Customer special order",
+            "employee_id": eid}
+    items = [{"product_id": product_id, "product_type": prod.get("system_category") or "Regular",
+              "description": desc, "qty": qty, "unit_price": sale_price,
+              "list_price": prod.get("retail_price") or sale_price, "cost": cost, "discount": 0,
+              "tax_rate": tax_rate, "tax_value": tax_total, "extended_price": subtotal}]
+    pay = body.get("payment") or {}
+    payments = ([{"payment_method": pay["payment_method"], "amount": _so_num(pay.get("amount"))}]
+                if pay.get("payment_method") and _so_num(pay.get("amount")) > 0 else [])
+    try:
+        r = sb().schema("pos").rpc("checkout", {"p_org": org_id, "p_sale": sale, "p_items": items,
+                                                "p_payments": payments}).execute()
+    except Exception as e:
+        raise HTTPException(400, f"could not book the sale: {e}")
+    srow = r.data[0] if isinstance(r.data, list) else r.data
+    sale_id = srow.get("id") if isinstance(srow, dict) else None
+    ship_to = (body.get("ship_to_store") or store_code)
+    vendor_key = vrow.get("vendor") or "amazon"
+    so = {"org_id": org_id, "store_code": store_code,
+          "ship_to_store": ship_to, "customer_id": customer_id,
+          "customer_name": body.get("customer_name"), "employee_id": eid, "product_id": product_id,
+          "description": desc, "qty": qty, "sale_price": sale_price, "captured_cost": cost,
+          "sale_id": sale_id, "status": "requested",
+          "vendor": vendor_key, "notes": body.get("notes")}
+    # Plug-and-play placement: resolve the product's vendor connector and let its adapter try to place
+    # the order (outbound API), leave it queued (manual / inbound), etc. The sale is already booked, so
+    # placement NEVER blocks the sale — a failure just leaves the order in the fulfillment queue.
+    conn = _vendor_connector(org_id, vendor_key)
+    try:
+        from app.modules.pos.vendor_adapters import get_adapter
+        placement = get_adapter(conn).place_order({
+            "vendor_sku": vrow.get("vendor_sku"), "qty": qty, "ship_to": ship_to,
+            "reference": (srow.get("receipt_no") if isinstance(srow, dict) else None) or sale_id})
+    except Exception:
+        placement = {}
+    for k in ("status", "vendor_order_ref", "tracking"):
+        if placement.get(k):
+            so[k] = placement[k]
+    if placement.get("notes"):
+        so["notes"] = " ".join(x for x in (so.get("notes"), placement["notes"]) if x)
+    ins = (sb().schema("pos").table("special_orders").insert(so).execute().data or [{}])[0]
+    is_admin = _has_pos_perm(authorization, org_id, "pos_special_order_admin")
+    return {"special_order": _redact_so(ins, is_admin), "sale": srow}
+
+
+_SO_STATUSES = ("requested", "ordered", "shipped", "received", "delivered", "cancelled")
+
+
+@router.get("/special-orders")
+def list_special_orders(status: str = "", store_code: str = "", authorization: str = Header(default=""),
+                        org_id: str = ORG_ID):
+    """The caller's in-scope special orders (store-scoped for a store manager; org-wide for admin/HQ).
+    The vendor linkage is NOT included here — the HQ fulfillment queue reads it separately."""
+    q = sb().schema("pos").table("special_orders").select("*").eq("org_id", org_id)
+    if status in _SO_STATUSES:
+        q = q.eq("status", status)
+    if store_code:
+        q = q.eq("store_code", store_code)
+    rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    ks = _caller_store_keyset(authorization, org_id)
+    rows = _span_filter(rows, ks, field="store_code")
+    is_admin = _has_pos_perm(authorization, org_id, "pos_special_order_admin")
+    return {"special_orders": [_redact_so(r, is_admin) for r in rows]}
+
+
+@router.get("/special-orders/{order_id}")
+def get_special_order(order_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    rows = (sb().schema("pos").table("special_orders").select("*")
+            .eq("org_id", org_id).eq("id", order_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    so = rows[0]
+    ks = _caller_store_keyset(authorization, org_id)
+    if ks is not None and str(so.get("store_code") or "").upper() not in {str(k).upper() for k in ks}:
+        # a store-scoped caller may only see their own store's orders (HQ/admin has ks=None)
+        raise HTTPException(403, "outside your scope")
+    is_admin = _has_pos_perm(authorization, org_id, "pos_special_order_admin")
+    return {"special_order": _redact_so(so, is_admin)}
+
+
+@router.patch("/special-orders/{order_id}")
+def update_special_order(order_id: str, body: dict, authorization: str = Header(default=""),
+                         org_id: str = ORG_ID):
+    """HQ/ops fulfillment update — status, vendor order ref, tracking, and the actual-cost true-up.
+    Gated by pos_special_order_admin (the vendor order ref names the vendor, so it's HQ-only)."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    upd = {}
+    if "status" in body:
+        st = str(body.get("status") or "").strip()
+        if st not in _SO_STATUSES:
+            raise HTTPException(400, f"status must be one of {', '.join(_SO_STATUSES)}")
+        upd["status"] = st
+    for k in ("vendor_order_ref", "tracking", "ship_to_store", "notes", "po_id"):
+        if k in body:
+            upd[k] = body[k]
+    if "actual_cost" in body:
+        upd["actual_cost"] = _so_num(body.get("actual_cost"))
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (sb().schema("pos").table("special_orders").update(upd)
+         .eq("org_id", org_id).eq("id", order_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    return {"special_order": r.data[0]}
+
+
+# ── Phase 4 — HQ ops fulfillment queue (gated pos_special_order_admin; vendor linkage exposed here) ──
+def _so_admin_row(org_id: str, so: dict) -> dict:
+    """A special-order row enriched for the HQ fulfillment queue: the product's hidden vendor linkage
+    (ASIN/sku/cost) + the resolved vendor connector (mode, whether auto-order is wired). HQ-only — this
+    is the ONE place the vendor is shown, exactly as the plan intends."""
+    out = dict(so or {})
+    vkey = so.get("vendor")
+    try:
+        vrows = (sb().schema("pos").table("special_order_vendor")
+                 .select("vendor,vendor_sku,vendor_cost,vendor_url")
+                 .eq("org_id", org_id).eq("product_id", so.get("product_id")).limit(1)
+                 .execute().data) or []
+        out["vendor_linkage"] = vrows[0] if vrows else None
+        if vrows and not vkey:
+            vkey = vrows[0].get("vendor")
+    except Exception:
+        out["vendor_linkage"] = None
+    conn = _vendor_connector(org_id, vkey) if vkey else None
+    if conn:
+        mode = (conn.get("integration_mode") or "manual").strip()
+        auto = (mode == "outbound_api" and bool((conn.get("api_base_url") or "").strip())
+                and bool((conn.get("credential_ref") or "").strip()))
+        out["connector"] = {"vendor_key": conn.get("vendor_key"),
+                            "display_name": conn.get("display_name"),
+                            "integration_mode": mode, "auto_order": auto}
+    else:
+        out["connector"] = None
+    return out
+
+
+@router.get("/special-orders/fulfillment")
+def special_orders_fulfillment(status: str = "", store_code: str = "",
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The HQ ops fulfillment queue: every special order WITH its vendor linkage + connector, so ops can
+    place/refresh and advance status. HQ-only (pos_special_order_admin) — this is where the vendor lives."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    q = sb().schema("pos").table("special_orders").select("*").eq("org_id", org_id)
+    if status in _SO_STATUSES:
+        q = q.eq("status", status)
+    if store_code:
+        q = q.eq("store_code", store_code)
+    rows = q.order("created_at", desc=True).limit(500).execute().data or []
+    return {"special_orders": [_so_admin_row(org_id, r) for r in rows]}
+
+
+def _apply_placement(org_id: str, so: dict, placement: dict) -> dict:
+    """Persist an adapter placement/refresh result onto a special_orders row. Only the keys the adapter
+    returned are touched; notes are appended, never clobbered. Returns the updated row."""
+    upd = {}
+    for k in ("status", "vendor_order_ref", "tracking"):
+        if placement.get(k):
+            upd[k] = placement[k]
+    if placement.get("notes"):
+        upd["notes"] = " ".join(x for x in (so.get("notes"), placement["notes"]) if x)
+    if not upd:
+        return so
+    r = (sb().schema("pos").table("special_orders").update(upd)
+         .eq("org_id", org_id).eq("id", so.get("id")).execute())
+    return (r.data[0] if r.data else {**so, **upd})
+
+
+@router.post("/special-orders/{order_id}/place")
+def place_special_order(order_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ ops: (re)place a queued special order with its vendor via the connector's adapter. For an
+    outbound-API vendor this calls the vendor API; for manual/inbound it just confirms the queue state.
+    A vendor/transport failure never raises — the order stays queued for manual placement with a note."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    rows = (sb().schema("pos").table("special_orders").select("*")
+            .eq("org_id", org_id).eq("id", order_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    so = rows[0]
+    if so.get("status") not in ("requested", "ordered"):
+        raise HTTPException(409, f"order is '{so.get('status')}' — placement only applies before shipping")
+    vkey = so.get("vendor") or "amazon"
+    conn = _vendor_connector(org_id, vkey)
+    vrows = (sb().schema("pos").table("special_order_vendor").select("vendor_sku")
+             .eq("org_id", org_id).eq("product_id", so.get("product_id")).limit(1).execute().data) or []
+    try:
+        from app.modules.pos.vendor_adapters import get_adapter
+        placement = get_adapter(conn).place_order({
+            "vendor_sku": (vrows[0].get("vendor_sku") if vrows else None), "qty": so.get("qty"),
+            "ship_to": so.get("ship_to_store") or so.get("store_code"),
+            "reference": so.get("sale_id") or order_id})
+    except Exception as e:
+        placement = {"status": "requested", "notes": f"placement error — queued for manual ({e})"}
+    updated = _apply_placement(org_id, so, placement)
+    return {"special_order": _so_admin_row(org_id, updated), "placement": placement}
+
+
+@router.post("/special-orders/{order_id}/refresh")
+def refresh_special_order(order_id: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ ops: re-poll the vendor for status/tracking via the connector's adapter (outbound-API vendors;
+    a documented no-op for manual/inbound). Never raises on a vendor failure."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    rows = (sb().schema("pos").table("special_orders").select("*")
+            .eq("org_id", org_id).eq("id", order_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    so = rows[0]
+    conn = _vendor_connector(org_id, so.get("vendor") or "amazon")
+    try:
+        from app.modules.pos.vendor_adapters import get_adapter
+        placement = get_adapter(conn).refresh({
+            "vendor_order_ref": so.get("vendor_order_ref"), "qty": so.get("qty")})
+    except Exception as e:
+        placement = {"notes": f"refresh error ({e})"}
+    updated = _apply_placement(org_id, so, placement)
+    return {"special_order": _so_admin_row(org_id, updated), "placement": placement}
+
+
+@router.post("/special-orders/{order_id}/true-up")
+def true_up_special_order(order_id: str, body: dict, authorization: str = Header(default=""),
+                          org_id: str = ORG_ID):
+    """HQ ops: reconcile the ACTUAL vendor (Amazon) cost at fulfillment onto the booked sale line so COGS
+    — and the derived profit — is exact. Body: {actual_cost} (per unit, matching captured_cost). Updates
+    the sale item's cost, stamps actual_cost on the order, and best-effort re-runs the built-in POS feed
+    for the sale's period so the P&L reflects the corrected cost. HQ-only."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    actual_cost = _so_num(body.get("actual_cost"), None) if body.get("actual_cost") not in (None, "") else None
+    if actual_cost is None or actual_cost < 0:
+        raise HTTPException(400, "actual_cost (a number >= 0, per unit) is required")
+    rows = (sb().schema("pos").table("special_orders").select("*")
+            .eq("org_id", org_id).eq("id", order_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "not found")
+    so = rows[0]
+    sale_id, product_id = so.get("sale_id"), so.get("product_id")
+    cost_synced = False
+    if sale_id and product_id:
+        try:
+            sb().schema("pos").table("sale_items").update({"cost": actual_cost}) \
+                .eq("org_id", org_id).eq("sale_id", sale_id).eq("product_id", product_id).execute()
+            cost_synced = True
+        except Exception as e:
+            raise HTTPException(400, f"could not reconcile the sale line cost: {e}")
+    note = f"actual vendor cost reconciled to {actual_cost:.2f}/unit"
+    upd = {"actual_cost": actual_cost, "notes": " ".join(x for x in (so.get("notes"), note) if x)}
+    r = (sb().schema("pos").table("special_orders").update(upd)
+         .eq("org_id", org_id).eq("id", order_id).execute())
+    # Propagate the corrected COGS to commcalc (built-in POS feed). Best-effort + idempotent (the feed
+    # replaces the whole period), and only when the built-in POS is on — never fails the true-up.
+    refeed = None
+    try:
+        from app.modules.pos import commcalc_feed as _feed
+        setup = _feed.get_pos_setup(org_id)
+        if (setup.get("builtin_role") or "off") != "off":
+            srows = (sb().schema("pos").table("sales").select("created_at")
+                     .eq("org_id", org_id).eq("id", sale_id).limit(1).execute().data) or []
+            when = str((srows[0].get("created_at") if srows else "") or "")
+            if when:
+                dt = _feed.datetime.fromisoformat(when.replace("Z", "+00:00")).astimezone(_feed.BUSINESS_TZ)
+                period = dt.strftime("%B %Y")
+                # 'monthly' is the raw_sales grain that carries COGS into the P&L / commission basis
+                # (see the plan's "the insight") — the stream the corrected cost must reach.
+                _feed.sync_period(org_id, "monthly", period)
+                refeed = {"period": period, "mode": "monthly", "resynced": True}
+    except Exception as e:
+        refeed = {"resynced": False, "note": f"period not re-synced ({e}) — run the POS feed for the period"}
+    return {"special_order": _so_admin_row(org_id, (r.data[0] if r.data else {**so, **upd})),
+            "cost_synced": cost_synced, "refeed": refeed}
+
+
+# ── Plug-and-play vendor connectors (mig 866) — HQ-only registry of dropship vendors ─────────────────
+# A connector row makes a vendor pluggable in one of three modes: 'manual' (HQ fulfills from the queue),
+# 'inbound_api' (the vendor pulls our queue + posts status, via vendor_api.py), or 'outbound_api' (we
+# call the vendor's API, via pos/vendor_adapters.py). See docs/POS_SPECIAL_ORDER_PLAN.md.
+VENDOR_CONNECTOR_FIELDS = ("vendor_key", "display_name", "integration_mode", "api_base_url",
+                           "credential_ref", "config", "is_active")
+_VENDOR_MODES = ("manual", "outbound_api", "inbound_api")
+
+
+def _vendor_connector(org_id: str, vendor_key: str):
+    """The active connector for (org, vendor_key), or None. Used server-side only — the connector
+    (and the vendor it names) is never returned to a store/customer response."""
+    if not vendor_key:
+        return None
+    rows = (sb().schema("pos").table("vendor_connector").select("*")
+            .eq("org_id", org_id).eq("vendor_key", vendor_key).eq("is_active", True)
+            .limit(1).execute().data) or []
+    return rows[0] if rows else None
+
+
+def _redact_connector(row: dict) -> dict:
+    """Never surface the inbound token hash to the admin UI — it's an auth secret, not display data."""
+    return {k: v for k, v in (row or {}).items() if k != "inbound_token_hash"}
+
+
+@router.get("/vendor-connectors")
+def list_vendor_connectors(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ-only: the org's dropship-vendor connectors. Gated pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    rows = (sb().schema("pos").table("vendor_connector").select("*")
+            .eq("org_id", org_id).order("vendor_key").execute().data) or []
+    return {"connectors": [_redact_connector(r) for r in rows]}
+
+
+@router.post("/vendor-connectors")
+def create_vendor_connector(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HQ-only: register a dropship vendor. For 'inbound_api', pass an `inbound_token` (the vendor's
+    access token) — we store only its SHA-256 hash and RETURN THE TOKEN ONCE so you can hand it to the
+    vendor; it can't be retrieved again. Gated pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    ins = {k: body[k] for k in VENDOR_CONNECTOR_FIELDS if k in body}
+    if not (ins.get("vendor_key") or "").strip():
+        raise HTTPException(400, "vendor_key required")
+    ins["vendor_key"] = ins["vendor_key"].strip()
+    mode = (ins.get("integration_mode") or "manual").strip()
+    if mode not in _VENDOR_MODES:
+        raise HTTPException(400, f"integration_mode must be one of {', '.join(_VENDOR_MODES)}")
+    ins["integration_mode"] = mode
+    ins["org_id"] = org_id
+    token = (body.get("inbound_token") or "").strip()
+    if token:
+        from app.modules.pos.vendor_adapters import token_hash
+        ins["inbound_token_hash"] = token_hash(token)
+    try:
+        row = (sb().schema("pos").table("vendor_connector")
+               .upsert(ins, on_conflict="org_id,vendor_key").execute().data or [{}])[0]
+    except Exception as e:
+        raise HTTPException(400, f"could not save connector: {e}")
+    out = {"connector": _redact_connector(row)}
+    if token:
+        out["inbound_token"] = token   # shown once — hand it to the vendor now
+    return out
+
+
+@router.patch("/vendor-connectors/{connector_id}")
+def update_vendor_connector(connector_id: str, body: dict, authorization: str = Header(default=""),
+                            org_id: str = ORG_ID):
+    """HQ-only: update a connector. Passing a new `inbound_token` rotates it (returned once). Gated
+    pos_special_order_admin."""
+    _require_pos_perm(authorization, org_id, "pos_special_order_admin")
+    upd = {k: body[k] for k in VENDOR_CONNECTOR_FIELDS if k in body}
+    if "integration_mode" in upd and upd["integration_mode"] not in _VENDOR_MODES:
+        raise HTTPException(400, f"integration_mode must be one of {', '.join(_VENDOR_MODES)}")
+    token = (body.get("inbound_token") or "").strip()
+    if token:
+        from app.modules.pos.vendor_adapters import token_hash
+        upd["inbound_token_hash"] = token_hash(token)
+    if not upd:
+        raise HTTPException(400, "nothing to update")
+    r = (sb().schema("pos").table("vendor_connector").update(upd)
+         .eq("org_id", org_id).eq("id", connector_id).execute())
+    if not r.data:
+        raise HTTPException(404, "not found")
+    out = {"connector": _redact_connector(r.data[0])}
+    if token:
+        out["inbound_token"] = token
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # Phase 1 — customers, inventory, sales/checkout, register, settings (mig 725)
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 
 CUSTOMER_FIELDS = ("account_type", "company_name", "first_name", "last_name", "middle_initial",
-                   "dob", "driver_license_state", "primary_account_no", "password", "email",
+                   "dob", "primary_account_no", "password", "email",
                    "phone_primary", "phone_secondary", "address_1", "address_2", "city", "state",
                    "zip", "referral_source", "credit_limit", "accept_checks", "is_active")
 SERIAL_FIELDS = ("product_id", "store_code", "serial_number", "imei", "sim_card", "color",
@@ -322,7 +851,7 @@ RECEIPT_TEMPLATE_FIELDS = ("name", "header_text", "footer_text", "show_store_nam
 
 def _clean_customer(body: dict) -> dict:
     out = {k: body[k] for k in CUSTOMER_FIELDS if k in body}
-    for k in ("dob", "company_name", "middle_initial", "driver_license_state",
+    for k in ("dob", "company_name", "middle_initial",
               "primary_account_no", "password", "email", "phone_secondary",
               "address_2", "referral_source"):
         if k in out and out[k] == "":
@@ -519,17 +1048,17 @@ def _span_filter(rows, keyset, field="store_code", allow_null=False):
 
 
 # ── Customers ──────────────────────────────────────────────────────────────────────────────────────
-# Explicit column lists, never select('*'). pos.customers carries two things that must not ride
-# along on a bulk read: `password` — the carrier ACCOUNT PIN, i.e. the credential used for
-# SIM-swap and account takeover — and the ssn/driver-licence CIPHERTEXT. select('*') handed all
-# three back for up to 300 customers at a time, which contradicted this module's own threat model
-# ("a compromised cashier session cannot exfiltrate the customer book"). The ciphertext columns are
-# read by nothing — plaintext access goes through pos.customer_pii_get, which is separately gated
-# on pos_view_pii — so they are dropped from both reads. `password` survives only on the
-# single-record fetch, where the edit form genuinely needs it.
+# Explicit column lists, never select('*'). `password` — the carrier ACCOUNT PIN, i.e. the
+# credential used for SIM-swap and account takeover — must not ride along on a bulk read, which
+# would contradict this module's own threat model ("a compromised cashier session cannot exfiltrate
+# the customer book"). It survives only on the single-record fetch, where the edit form needs it.
+#
+# SSN and driver's licence are GONE from this table entirely (mig 909, owner directive): the
+# platform no longer collects, stores or displays them. Do not add them back — the cheapest defence
+# against a breach-notification obligation is not holding the data that triggers one.
 CUSTOMER_READ_COLS = (
     "id,org_id,cust_number,account_type,company_name,first_name,last_name,middle_initial,dob,"
-    "driver_license_state,primary_account_no,email,phone_primary,phone_secondary,address_1,"
+    "primary_account_no,email,phone_primary,phone_secondary,address_1,"
     "address_2,city,state,zip,referral_source,credit_limit,accept_checks,is_active,"
     "created_at,updated_at"
 )
@@ -614,47 +1143,6 @@ def add_customer_note(customer_id: str, body: dict,
         "employee_id": _caller_employee(authorization, org_id) or None,
     }).execute()
     return {"note": (r.data or [{}])[0]}
-
-
-# PII: ciphertext lives in pos.customers; all access via the mig-725 definer functions. Any
-# signed-in employee may WRITE (front-desk data entry) and see last-4; full readback needs the
-# pos_view_pii permission — same asymmetry as the standalone app (a compromised cashier session
-# can overwrite one customer's SSN but cannot exfiltrate the customer book).
-@router.get("/customers/{customer_id}/pii-last4")
-def customer_pii_last4(customer_id: str, authorization: str = Header(default=""),
-                       org_id: str = ORG_ID):
-    _require_member(authorization, org_id)
-    rows = sb().schema("pos").rpc("customer_pii_last4",
-                                  {"p_org": org_id, "p_customer": customer_id}).execute().data or []
-    return rows[0] if rows else {"ssn_last4": None, "dl_last4": None}
-
-
-@router.get("/customers/{customer_id}/pii")
-def customer_pii_get(customer_id: str, authorization: str = Header(default=""),
-                     org_id: str = ORG_ID):
-    _require_pos_perm(authorization, org_id, "pos_view_pii")
-    rows = sb().schema("pos").rpc("customer_pii_get",
-                                  {"p_org": org_id, "p_customer": customer_id}).execute().data or []
-    return rows[0] if rows else {"ssn": None, "driver_license_num": None}
-
-
-@router.post("/customers/{customer_id}/pii")
-def customer_pii_set(customer_id: str, body: dict, authorization: str = Header(default=""),
-                     org_id: str = ORG_ID):
-    _require_member(authorization, org_id)
-    # An ABSENT key must not erase a stored value: it maps to SQL NULL, which the RPC reads as
-    # "leave this column alone". Only an explicitly supplied empty string clears a field. The
-    # old `body.get(k) or None` collapsed omitted and cleared into the same NULL, so saving one
-    # field destroyed the other's ciphertext irreversibly.
-    def _pii_arg(key: str):
-        v = body.get(key)
-        return None if v is None else str(v)
-    sb().schema("pos").rpc("customer_pii_set", {
-        "p_org": org_id, "p_customer": customer_id,
-        "p_ssn": _pii_arg("ssn"),
-        "p_driver_license": _pii_arg("driver_license"),
-    }).execute()
-    return {"ok": True}
 
 
 # ── Inventory ──────────────────────────────────────────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/client'
+import { useActiveCarrier } from '@/lib/auth-context'
+import { carrierDisplayName } from '@/lib/carrier-scope'
 
 // Commission Category Map (SAP-style) — the per-template rules that classify a carrier's commission labels
 // into the five canonical buckets. Rules match on product_name OR order_type (contains/equals), in ascending
@@ -22,6 +24,12 @@ const inp: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: 
 const money = (n: number) => (n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
 export default function CommissionCategoryMapPage() {
+  // Active-carrier lens: name only the active carrier in template copy for a dual-carrier tenant.
+  const { activeCarrier } = useActiveCarrier()
+  // Carrier-neutral: name only THIS tenant's active carrier (single- or multi-carrier), never a
+  // hardcoded "Total / Boost" pair that would leak Boost to a non-Boost tenant.
+  const carrierNames = carrierDisplayName(activeCarrier)
+  const carrierNames2 = carrierDisplayName(activeCarrier)
   const [tmpls, setTmpls] = useState<Tmpl[]>([])
   const [src, setSrc] = useState('ma_daily_tx')
   const [rules, setRules] = useState<Rule[]>([])
@@ -92,7 +100,7 @@ export default function CommissionCategoryMapPage() {
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗺️ Category → Bucket Map (Commission Ledger)</h1>
       <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 8 }}>
         Rules that classify a carrier's labels into the five canonical buckets. First match by ascending
-        priority wins; payouts are <b>negative</b> amounts. Pick a template (Total / Boost / your own) — a
+        priority wins; payouts are <b>negative</b> amounts. Pick a template ({carrierNames} / your own) — a
         new tenant can adopt a preconfigured one or fork it. See results on{' '}
         <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger →</a>
       </p>
@@ -132,7 +140,7 @@ export default function CommissionCategoryMapPage() {
       <details style={{ border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface)', padding: 12, marginBottom: 14 }}>
         <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>📘 How to use this page (step by step)</summary>
         <ol style={{ margin: '10px 0 6px 18px', fontSize: 13, lineHeight: 1.7, color: 'var(--text2)' }}>
-          <li>Pick the <b>Template</b> for the carrier/file you're mapping (Total, Boost, or <b>＋ New template</b> for your own).</li>
+          <li>Pick the <b>Template</b> for the carrier/file you're mapping ({carrierNames2} or <b>＋ New template</b> for your own).</li>
           <li><b>Import that carrier's commission file</b> on the{' '}
             <a href="/commcalc/commission-ledger" style={{ color: 'var(--accent,#2563eb)' }}>Commission Ledger</a> page,
             so its real labels appear in the table at the bottom of this page.</li>

@@ -45,6 +45,10 @@ from app.core import scope as _scope
 # `_uid_from_token` and the "am I impersonating?" checks. app/core/impersonation.py imports nothing
 # from this module (only app.core.database, lazily), so there is no cycle.
 from app.core import impersonation as _impersonation
+# Free-trial primitives (mig 908). trial.py deliberately imports NOTHING from this module, so
+# this is not a cycle — billing/pricing.py imports _require_super_admin from here, and both it
+# and this file share trial.py as the single source of how a trial is stamped and read.
+from app.modules.billing import trial as _trial
 
 router = APIRouter(prefix="/core", tags=["Core / RBAC"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -406,7 +410,11 @@ def _me_payload(client, uid, x_active_org="", x_2fa_token="", rows=None,
         if t:
             tenant = {"org_id": t.get("org_id"), "name": t.get("name"),
                       "setup_complete": bool(t.get("setup_complete")),
-                      "pay_period": _pp_settings(t)}
+                      "pay_period": _pp_settings(t),
+                      # Free-trial state (mig 908) — powers the in-app countdown banner. None for a
+                      # tenant carrying no plan stamp (every pre-908 row), which the client reads as
+                      # "say nothing", so this is invisible until a trial actually exists.
+                      "trial": _trial.trial_view(t)}
     except Exception:
         pass
     # Tenant carriers (mig 038) — drive carrier-scoped nav gating (a Boost tenant shouldn't see Total
@@ -820,7 +828,23 @@ def _provision_tenant(client, name, admin_email, admin_name=None, password=None,
     when one was auto-generated (super-admin flow), not when the caller chose it (signup)."""
     new_org = str(uuid.uuid4())
     slug = (slug or re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-"))[:60]
-    client.schema("storeops").table("tenants").insert({"org_id": new_org, "name": name, "slug": slug}).execute()
+    tenant_row = {"org_id": new_org, "name": name, "slug": slug}
+    # Free trial (mig 908): a BRAND-NEW company starts on the trial the operator configured (default
+    # 30 days). Best-effort by design — start_trial_fields() returns {} when trials are switched off
+    # OR when mig 908 has not been applied, and the insert then carries exactly the columns it did
+    # before, so provisioning can never fail because of the trial. Existing tenants are untouched:
+    # this only ever runs on an org_id being created right now.
+    try:
+        tenant_row.update(_trial.start_trial_fields(client))
+    except Exception:
+        pass
+    try:
+        client.schema("storeops").table("tenants").insert(tenant_row).execute()
+    except Exception:
+        # A pre-908 database rejects the trial columns — retry with the original three so an un-run
+        # migration degrades to "no trial" instead of blocking signup entirely.
+        client.schema("storeops").table("tenants").insert(
+            {"org_id": new_org, "name": name, "slug": slug}).execute()
     client.schema("storeops").table("roles").insert(
         [{"org_id": new_org, "name": n, "display_name": d, "permissions": p} for (n, d, p) in _BASE_ROLES]).execute()
     # Entitlement + tenant-safe default content in one shot: enables modules per the (all-access
@@ -1690,7 +1714,6 @@ def failure_types(authorization: str = Header(default="")):
                        "remediation": v["remediation"]} for k, v in FAILURE_TYPES.items()]}
 
 
-@router.post("/failures")
 class RecordFailureIn(LaxModel):
     org_id: Any = None
     category: Any = None
@@ -1704,6 +1727,7 @@ class RecordFailureIn(LaxModel):
     remediation: Any = None
 
 
+@router.post("/failures")
 def record_failure(body: RecordFailureIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Record a failure (best-effort — never raises). Any authed surface may call it; org comes from the
     caller (falls back to body/house org for system callers). Remediation is auto-filled by category, and a
@@ -1764,12 +1788,12 @@ def list_failures(authorization: str = Header(default=""), x_active_org: str = H
             "can_configure": _can_edit_setting(caller, "failures")}
 
 
-@router.patch("/failures/{fid}")
 class UpdateFailureIn(LaxModel):
     status: Any = None
     resolved_note: Any = None
 
 
+@router.patch("/failures/{fid}")
 def update_failure(fid: str, body: UpdateFailureIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
@@ -1810,12 +1834,12 @@ def get_failures_config(authorization: str = Header(default=""), x_active_org: s
     }
 
 
-@router.put("/failures/config")
 class PutFailuresConfigIn(LaxModel):
     face_match_threshold: Any = None
     disabled_categories: Any = None
 
 
+@router.put("/failures/config")
 def put_failures_config(body: PutFailuresConfigIn, authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     uid = _uid_from_token(authorization)
     if not uid:
@@ -1852,7 +1876,6 @@ def failure_kind_docs(authorization: str = Header(default=""), x_active_org: str
     return {"kinds": list(merged.values()), "can_edit": _support_gate(authorization, x_active_org)}
 
 
-@router.post("/failure-kind-docs")
 class UpsertFailureKindDocIn(LaxModel):
     kind: Any = None
     updated_by: Any = None
@@ -1866,6 +1889,7 @@ class UpsertFailureKindDocIn(LaxModel):
     is_active: Any = None
 
 
+@router.post("/failure-kind-docs")
 def upsert_failure_kind_doc(body: UpsertFailureKindDocIn, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Create/update one plain-English kind doc in the HOUSE global registry. Support-gated (the SAME gate
@@ -1912,12 +1936,12 @@ def failures_grouped(authorization: str = Header(default=""), x_active_org: str 
             "can_configure": _can_edit_setting(caller, "failures")}
 
 
-@router.post("/failures/bulk-review")
 class FailuresBulkReviewIn(LaxModel):
     ids: Any = None
     reviewed: Any = True
 
 
+@router.post("/failures/bulk-review")
 def failures_bulk_review(body: FailuresBulkReviewIn, authorization: str = Header(default=""),
                                x_active_org: str = Header(default="")):
     """The CLEAR action: mark selected failure rows reviewed (or un-reviewed) — keeps the rows for the audit
@@ -2247,7 +2271,7 @@ def _ensure_employee(client, org_id, email, full_name=None, store_code=None, emp
 
 
 @router.get("/employees")
-async def list_employees(org_id: str = ORG_ID):
+def list_employees(org_id: str = ORG_ID):
     """The storeops.employees roster + whether each already has an app login + assigned role.
     Drives the assignment grid (assign a role, then create logins)."""
     client = sb()
@@ -2585,7 +2609,7 @@ def _normalize_grant_write(client, org_id: str, body: dict, *, strict: bool = Tr
 
 
 @router.post("/users/assign")
-async def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
+def assign_role(body: dict, org_id: str = ORG_ID, authorization: str = Header(default=""),
                       x_active_org: str = Header(default="")):
     """Upsert a core.users row (assign role + scope). Keyed on (org_id, email). Does NOT create
     the auth login — call /users/create-login (or bulk-provision) for that.
@@ -3080,13 +3104,13 @@ def _pending_connections_payload(client, uid, email=None):
     return {"pending": out}
 
 
-@router.post("/connect-tenant")
 class ConnectTenantIn(LaxModel):
     org_id: Any = None
     code: Any = None
     connect_token: Any = None
 
 
+@router.post("/connect-tenant")
 async def connect_tenant(body: ConnectTenantIn, authorization: str = Header(default="")):
     """The authenticated user ACCEPTS a pending invite: attach the inviting tenant as a membership on
     their EXISTING login (mig 706 shared model → the top-bar tenant switcher then applies). Requires
@@ -3128,7 +3152,7 @@ async def connect_tenant(body: ConnectTenantIn, authorization: str = Header(defa
 
 
 @router.post("/disable-and-switch")
-async def disable_and_switch(body: ConnectTenantIn, authorization: str = Header(default="")):
+def disable_and_switch(body: ConnectTenantIn, authorization: str = Header(default="")):
     """The authenticated user chooses to DISABLE their existing/old login and take a FRESH, isolated
     login for the inviting tenant instead (the stale-old-account case). Requires the access code.
     Mints the new tenant-aliased login FIRST, then bans the old auth account (Supabase ban → its token
@@ -3181,7 +3205,7 @@ class ReinstateLoginIn(LaxModel):
 
 
 @router.post("/reinstate-login")
-async def reinstate_login(body: ReinstateLoginIn, authorization: str = Header(default="")):
+def reinstate_login(body: ReinstateLoginIn, authorization: str = Header(default="")):
     """Super-admin ONLY: reinstate a login disabled via disable-and-switch (un-ban the auth account +
     re-activate its app_users rows). This is the sole reinstatement path — no tenant-admin or
     self-service (policy). Identify the login by {email} (its real email) or {auth_id}."""
@@ -3401,7 +3425,7 @@ class ResetPasswordIn(LaxModel):
 
 
 @router.post("/auth/forgot-password")
-async def forgot_password(body: ForgotPasswordIn, request: Request, background: BackgroundTasks):
+def forgot_password(body: ForgotPasswordIn, request: Request, background: BackgroundTasks):
     """PUBLIC: request a reset code. ANTI-ENUMERATION — the response is ALWAYS the same generic message
     (and same code path/timing) whether or not the account exists; existence, tenant membership and
     disabled status are NEVER revealed. Sends over email (+ verified WhatsApp phone if on file). The
@@ -4018,11 +4042,11 @@ def reset_tenant_admin_password(org_id: str, body: ResetTenantAdminPasswordIn = 
             "email": target_email, "temp_password": temp_pw, "auth_id": existing}
 
 
-@router.post("/users/bulk-provision")
 class BulkProvisionIn(LaxModel):
     emails: Any = None
 
 
+@router.post("/users/bulk-provision")
 def bulk_provision(body: BulkProvisionIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                    x_active_org: str = Header(default="")):
     """Create logins for every assigned core.users row that has an email and no auth_id yet
@@ -4465,13 +4489,13 @@ def employee_dashboard(employee_id: str = "", period: str = "",
     return out
 
 
-@router.put("/employee-widgets")
 class SetEmployeeWidgetOverridesIn(LaxModel):
     employee_id: Any = None
     email: Any = None
     widget_overrides: Any = None
 
 
+@router.put("/employee-widgets")
 def set_employee_widget_overrides(body: SetEmployeeWidgetOverridesIn, org_id: str = ORG_ID, authorization: str = Header(default=""),
                                   x_active_org: str = Header(default="")):
     """Per-employee Employee-Dashboard widget overrides (#1b). Body:

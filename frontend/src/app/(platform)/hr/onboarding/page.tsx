@@ -46,16 +46,21 @@ export default function OnboardingAdminPage() {
   const [savingStuck, setSavingStuck] = useState(false)
 
   async function load() {
+    // These three reads are independent — kick them off together so they run in parallel instead of a
+    // 3-deep waterfall, then await each inside its own try/catch so the per-call fallbacks are unchanged.
+    const pTemplate = api('/api/v1/hr/onboarding/template?include_inactive=true')
+    const pAttention = api('/api/v1/hr/onboarding/attention-config')
+    const pIntake = api('/api/v1/hr/onboarding/intake-fields?include_inactive=true')
     try {
-      const d = await api('/api/v1/hr/onboarding/template?include_inactive=true')
+      const d = await pTemplate
       setReady(d?.ready !== false); setCats(d?.categories || []); setStates(d?.states || [])
     } catch (e: any) { setMsg(e?.message || 'Load failed') }
     try {
-      const ac = await api('/api/v1/hr/onboarding/attention-config')
+      const ac = await pAttention
       setStuckDays(ac?.stuck_invite_days ?? 7)
     } catch { setStuckDays(7) }   // pre-migration-410 / any load error → the code default, never blank
     try {
-      const f = await api('/api/v1/hr/onboarding/intake-fields?include_inactive=true')
+      const f = await pIntake
       setIfields(f?.fields || []); setPropagatable(f?.propagatable || [])
     } catch { /* intake config optional (pre-077) */ }
   }
@@ -322,7 +327,7 @@ export default function OnboardingAdminPage() {
                 </select></label>
               <div style={{ display: 'flex', gap: 16, fontSize: 13 }}>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!fedit.required} onChange={e => fupd({ required: e.target.checked })} /> Required</label>
-                <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!fedit.sensitive} onChange={e => fupd({ sensitive: e.target.checked })} /> Private (bank/SSN — never shown back)</label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="checkbox" checked={!!fedit.sensitive} onChange={e => fupd({ sensitive: e.target.checked })} /> Private (bank details — never shown back)</label>
               </div>
               {fedit.id && <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13 }}><input type="checkbox" checked={fedit.is_active !== false} onChange={e => fupd({ is_active: e.target.checked })} /> Active</label>}
             </div>

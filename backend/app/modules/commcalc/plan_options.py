@@ -59,6 +59,39 @@ SYNTHETIC_VALUES = {
 FACET_COLUMNS = ("department", "category", "contract_type", "tender_type",
                  "trans_type", "product_desc", "sku")
 
+# ── custom-report vocabulary (owner 2026-08-26) ────────────────────────────────────────────────────
+# A self-serve CUSTOM REPORT (mig 099: Activation Details, Sales by Product, Bill Payments, or any future
+# sheet) lands EVERY source row verbatim as JSONB in commcalc.raw_custom_import, keyed by its ORIGINAL
+# column header. The commission ENGINE keys a rule on a match field (department / category / contract_type /
+# product_desc / …). This map names which raw headers ARE each engine match field, so a custom report's
+# department/category/type VALUES become SELECTABLE in the plan editor the moment the report is ingested —
+# by ANY path (manual upload, email/FTP sweep, API) — because all paths write to raw_custom_import and this
+# module reads it live. DATA-DRIVEN: any future custom report contributes automatically (no per-report
+# code); a new header alias is the only edit ever needed. ADDITIVE + SAFE: it only ADDS options, never
+# removes one, and never changes a payout — the pay path never calls this module.
+#
+# MONEY HONESTY: the engine still reads raw_sales / daily_sales_feed only (commission_engine._read_sales),
+# so a custom-report row is NOT in the engine's line set. A rule keyed on a value that exists ONLY in a
+# custom report is therefore SELECTABLE but pays $0 today. Such values are flagged `custom_only` and the
+# field carries a note saying so — see field_options(). Wiring the engine to pay custom lines is a separate,
+# deliberately-deferred money decision (double-count / grain / no-rep-dimension risk — see the report).
+_CUSTOM_IMPORT_TABLE = "raw_custom_import"
+
+# engine match field  ->  the raw custom-report column headers (normalised, lower-cased) that ARE it.
+# Keys are a subset of FACET_COLUMNS (the engine fields that are real columns). Aliases are matched against
+# each captured row's header after strip().lower(), so 'Contract Type', 'contract_type' and 'CONTRACT TYPE'
+# all resolve. Deliberately NOT mapping a bare 'type' (it would swallow Customer Type / Tender Type / …).
+CUSTOM_FIELD_ALIASES = {
+    "department":    ("department", "dept"),
+    "category":      ("category", "product category"),
+    "contract_type": ("contract type", "contract_type", "activation type", "action type"),
+    "product_desc":  ("product desc", "product description", "product", "product_desc",
+                      "item description", "item"),
+    "tender_type":   ("tender type", "tender_type", "tender"),
+    "sku":           ("sku", "sku#", "item sku"),
+    "trans_type":    ("trans type", "transaction type", "trans_type"),
+}
+
 FIELD_HELP = {
     "any": "matches every line (a blanket rule) — no value needed",
     "contract_type": "the POS Contract Type as written on the line (blank on ~most non-phone lines)",
@@ -159,8 +192,17 @@ def vocabulary():
             {"value": "contains", "label": "contains", "help": "substring pattern — the only op that may need free text"},
             {"value": "in", "label": "in", "help": "any of a comma-separated list"},
         ],
+        # 'pct_price' (% of the SALE PRICE / ext_price) was defined in PAYOUT_KIND_LABELS and fully
+        # supported by commission_engine._line_payout, but was DROPPED from this served list — so the plan
+        # editor's payout-kind dropdown never offered it, while the frontend FALLBACK_VOCAB (used only when
+        # this endpoint fails) DID. That left an owner unable to build "10% of accessory SALES $" from the
+        # editor: %-of-GP and %-of-(price-cost) both depend on the B2B catalog cost, which is untrustworthy
+        # for accessories (see _line_payout, owner 2026-08-04), and %-of-MRC does not apply to accessories.
+        # Surfacing it changes NO payout math (the kind already computed identically wherever a saved rule
+        # used it); it only lets the editor SELECT the already-correct kind. Ordered to match the fallback.
         "payout_kinds": [{"value": k, "label": PAYOUT_KIND_LABELS[k][0], "uses": PAYOUT_KIND_LABELS[k][1]}
-                         for k in ("flat_per_unit", "pct_mrc", "pct_gp", "pct_price_over_cost", "flat")
+                         for k in ("flat_per_unit", "pct_mrc", "pct_gp", "pct_price",
+                                   "pct_price_over_cost", "flat")
                          if k in commission_engine.PAYOUT_KINDS],
         "tier_bases": [dict(b) for b in TIER_BASES],
         "tier_metrics": list(TIER_METRIC_SUGGESTIONS),
@@ -250,6 +292,59 @@ def _load_facets(client, org_id, spellings, limit):
         "lines_covered": covered, "lines_total": total_lines,
         "combos_total": int((totals or {}).get("combos") or len(rows)),
     }
+
+
+# ── custom-report value harvest (data-driven; NO per-report hardcoding) ───────────────────────────
+def _custom_report_values(client, org_id, max_rows=20000):
+    """Distinct values per engine match field observed in THIS org's custom-report captures
+    (commcalc.raw_custom_import, mig 099), harvested by mapping each captured row's ORIGINAL column header
+    to an engine match field via CUSTOM_FIELD_ALIASES.
+
+    DATA-DRIVEN: every custom report (whatever report_key) contributes its department / category /
+    contract_type / product / … values automatically — no per-report code. BOUNDED: a hard-capped page
+    scan (`max_rows`) so a large tenant can never turn an options lookup into a giant pull; the cap is
+    reported. Org-scoped on every read. NEVER raises — degrades to ({}, set(), False).
+
+    Returns (values_by_field, report_keys, bounded):
+      values_by_field: {engine_field: {display_value: custom_line_count}}
+      report_keys:     the distinct report_key(s) seen (for the summary / transparency)
+      bounded:         True when the scan hit the row cap (values may be incomplete)."""
+    alias_to_field = {}
+    for field, aliases in CUSTOM_FIELD_ALIASES.items():
+        for a in aliases:
+            alias_to_field[str(a).strip().lower()] = field
+    values: dict = {}
+    report_keys: set = set()
+    start, page, bounded = 0, 1000, False
+    while True:
+        try:
+            rows = (client.schema("commcalc").table(_CUSTOM_IMPORT_TABLE).select("data,report_key")
+                    .eq("org_id", org_id).range(start, start + page - 1).execute().data) or []
+        except Exception:
+            break                              # table absent (pre-mig-099) / unreadable → no custom options
+        for r in rows:
+            data = r.get("data")
+            if not isinstance(data, dict):
+                continue
+            rk = str(r.get("report_key") or "").strip()
+            if rk:
+                report_keys.add(rk)
+            for k, v in data.items():
+                field = alias_to_field.get(str(k or "").strip().lower())
+                if not field:
+                    continue
+                val = str(v if v is not None else "").strip()
+                if not val or val.lower() in ("nan", "none", "null"):
+                    continue
+                d = values.setdefault(field, {})
+                d[val] = d.get(val, 0) + 1
+        if len(rows) < page:
+            break
+        start += page
+        if start >= max_rows:
+            bounded = True
+            break
+    return values, report_keys, bounded
 
 
 # ── contract-type / activation-bucket config (REUSED, never re-implemented) ───────────────────────
@@ -425,6 +520,49 @@ def field_options(client, org_id, months=3, period="", limit=4000, value_limit=4
         enc.append(int(r.get("lines") or 0))
         enc_rows.append(enc)
 
+    # CUSTOM-REPORT VALUES (owner 2026-08-26). A self-serve custom report (Activation Details / Sales by
+    # Product / any future sheet) lands in raw_custom_import with its own department / category / type /
+    # product columns. Surface those distinct values into the SAME field pickers so the plan editor can
+    # ASSIGN them to a commission rule. DATA-DRIVEN (CUSTOM_FIELD_ALIASES maps headers → engine fields; no
+    # per-report code) and reached by EVERY ingest path (all write raw_custom_import; this reads it live).
+    # ADDITIVE: never drops a value, never changes a payout. HONEST: a custom-only value is flagged
+    # `custom_only` with lines=0 (it is NOT in raw_sales) and the field carries a note that a rule on it is
+    # selectable but pays $0 until the custom-report money path is wired (the engine reads raw_sales today).
+    cr_values, cr_reports, cr_bounded = _custom_report_values(client, org_id)
+    custom_field_summary = {}
+    for f, valcounts in cr_values.items():
+        entry = fields.get(f)
+        if not entry:
+            continue
+        have = {str(v.get("value")).strip().lower() for v in entry["values"]}
+        added = 0
+        for val, cnt in sorted(valcounts.items(), key=lambda kv: (-kv[1], kv[0].lower())):
+            if val.lower() in have:
+                continue                       # already a live raw_sales value — don't duplicate or reflag
+            entry["values"].append({"value": val, "lines": 0, "custom_only": True,
+                                    "source": "custom_report", "custom_lines": cnt})
+            have.add(val.lower())
+            added += 1
+        if added:
+            entry["custom_report_values"] = added
+            entry["truncated"] = True          # a custom-sourced list is never a closed picker → allow typing
+            if f == "department":
+                # The Activation Details report's Department column (= service plan) IS wired to pay: a
+                # `department in <these>` flat-per-unit rule pays $1/activation on a plan whose activation
+                # source is "Activation Details report" (the engine stamps department onto the bridged
+                # activation lines). Values from OTHER custom reports (e.g. Sales by Product) still don't pay.
+                _cr_note = (f"{added} department value(s) come from custom reports. The Activation Details "
+                            "service-plan values PAY when the plan's activation source is 'Activation Details "
+                            "report' — build a department rule on them to pay per activation. Department "
+                            "values from other reports are selectable but do not pay yet.")
+            else:
+                _cr_note = (f"{added} value(s) come from custom reports (e.g. Activation Details / Sales by "
+                            "Product) and are not in this tenant's raw_sales. A rule on a custom-only value is "
+                            "SELECTABLE but will not pay until the custom-report money path is wired — the "
+                            "commission engine reads raw_sales / the daily feed today.")
+            entry["note"] = (entry["note"] + " " + _cr_note) if entry.get("note") else _cr_note
+            custom_field_summary[f] = added
+
     # the tenant's own stored plan values, so an option list never drops a value already in use
     for f, vals in (plan_values or {}).items():
         entry = fields.get(f)
@@ -456,6 +594,18 @@ def field_options(client, org_id, months=3, period="", limit=4000, value_limit=4
             "combos_total": facets["combos_total"],
         },
         "contract_type_resolution": ctx["resolution"],
+        # Which custom reports contributed selectable values, and to which fields. A rule on any of these
+        # custom-only values is SELECTABLE but pays $0 until the custom-report money path is wired — the
+        # engine reads raw_sales today (see the per-field note). Present (possibly empty) whenever the read
+        # succeeded, so a consumer can tell "no custom reports" from "custom reads failed".
+        "custom_reports": {
+            "report_keys": sorted(cr_reports),
+            "fields": custom_field_summary,
+            "bounded": cr_bounded,
+            "note": ("Values from custom reports are offered for assignment but do not pay yet — the "
+                     "commission engine computes against raw_sales / the daily feed, not custom-report "
+                     "lines.") if custom_field_summary else None,
+        },
         "note": None if enc_rows else (
             "This tenant's sales could not be read right now, so the value pickers are empty — you can "
             "still type a value, and it will be checked the next time this loads."

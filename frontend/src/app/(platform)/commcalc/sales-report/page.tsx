@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import Link from 'next/link'
 import { api, fmt, getActiveOrg } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
@@ -8,6 +9,7 @@ import { MultiSelect } from '@/lib/multiselect'
 import EntityPicker from '@/components/EntityPicker'
 import { optionsFromRows } from '@/lib/standard-filters'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // Targeted super-admin org-resolution mitigation (see NEEDS CORE): the sales-report reads carry NO org_id
 // in the URL, so for a super-admin (whom the tenant middleware does NOT rewrite) the backend defaults to
@@ -41,6 +43,12 @@ const hasCI = (arr: string[], v: string) => arr.some(x => x.toLowerCase() === v.
 const toggleCI = (arr: string[], v: string) => hasCI(arr, v) ? arr.filter(x => x.toLowerCase() !== v.toLowerCase()) : [...arr, v]
 
 export default function SalesReportPage() {
+  // Active-carrier lens: department/bill-payment help copy is neutralized (no carrier names) for a
+  // dual-carrier tenant AND for any non-Boost tenant. Boost-branded default wording ("Boost XP",
+  // "Boost RTR") is shown ONLY to a single-carrier Boost tenant (showBoost), so a non-Boost store
+  // never sees Boost language.
+  const { multi, isBoost } = useActiveCarrier()
+  const showBoost = !multi && isBoost
   const [period, setPeriod] = useState(thisMonth())
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -91,7 +99,24 @@ export default function SalesReportPage() {
   }
   function openAccCfg() {
     setAccOpen(true); setAccFields(null); setAccMsg(''); setKwInput(''); setSetupInput('')
-    api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}${orgParam()}`).then((f: any) => {
+    // Owner 2026-08-26: the accessory departments must NOT be hard-coded — they are an OPTION pulled from the
+    // b2b "Sales by Product" report (that is where 'Accessories' / 'C2Wireless' live, not the sales upload).
+    // Fetch that report's observed departments alongside the sales-field distincts and MERGE them into the
+    // Department pick-list, so the tenant ticks them here and they save to the SAME accessory-config the
+    // Sales Report + the Sales-by-Product resolver both read. Non-fatal: if the report isn't present the
+    // sales-field departments still show.
+    const _pq = orgParam() ? `?${orgParam().slice(1)}` : ''
+    Promise.all([
+      api(`/api/v1/commcalc/sales-fields?period=${encodeURIComponent(period)}${orgParam()}`),
+      api(`/api/v1/commcalc/product-sales-departments/${encodeURIComponent(period)}${_pq}`).catch(() => null),
+    ]).then(([f, pd]: any[]) => {
+      // Union the Sales-by-Product departments into f.departments (dedup, case-insensitive), keeping the
+      // sales-field order first so nothing that showed before moves.
+      const extra = ((pd && pd.departments) || []).map((d: any) => d.department).filter(Boolean)
+      if (extra.length) {
+        const have = new Set((f.departments || []).map((s: string) => String(s).toLowerCase()))
+        f.departments = [...(f.departments || []), ...extra.filter((d: string) => !have.has(String(d).toLowerCase()))]
+      }
       setAccFields(f)
       setAccSel({ d: f.accessory_departments || [], c: f.accessory_categories || [], p: f.accessory_product_keywords || [],
         a: f.acima_tenders || [], box: f.box_departments || [], setup: f.setup_fee_keywords || [], billpay: f.billpay_products || [] })
@@ -262,6 +287,19 @@ export default function SalesReportPage() {
             {(data.source_meta.completeness_rows ?? 0) > 0 && <> · recovered <b>{data.source_meta.completeness_rows}</b> sale line(s) present in raw_sales that the feed missed on a shared store-day</>}
           </span>
           {data.org_id && <span style={{ color: 'var(--text3)' }}>org <code style={{ fontSize: 11 }}>{String(data.org_id).slice(0, 8)}…</code></span>}
+        </div>
+      )}
+
+      {/* SOURCE OF TRUTH (mig 923): activations/BYOD/upgrades on this report come from the Activation Details
+          basis (matches Exec MTD + the b2b figure), not the sales feed. Shown only when that basis is active. */}
+      {data?.activation_source?.active && (
+        <div style={{ fontSize: 12.5, background: '#ecfdf5', color: '#065f46', border: '1px solid #6ee7b7',
+                      borderRadius: 8, padding: '8px 12px', marginBottom: 14 }}>
+          ✓ Activations, BYOD and Upgrades on this report come from the <b>Activation Details</b> basis of truth
+          (matches Executive MTD &amp; the b2b figure). Other columns come from the sales feed.{' '}
+          <Link href="/commcalc/activations" style={{ color: '#065f46', fontWeight: 700, textDecoration: 'underline' }}>
+            Activations report &amp; reconciliation →
+          </Link>
         </div>
       )}
 
@@ -616,7 +654,7 @@ export default function SalesReportPage() {
                     are a device "box". Multi-carrier orgs (e.g. Total Wireless IN the house org) must tick
                     the NON-Boost device departments too, or those device sales don't count as boxes. */}
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Box (device-unit) departments <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(which Department values count as a device &ldquo;box&rdquo; — for productivity boxes/hr, stack ranking, review &amp; conversion. Default = the Boost XP departments; a multi-carrier org must ALSO tick its Total/other device departments.)</span></div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Box (device-unit) departments <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(which Department values count as a device &ldquo;box&rdquo; — for productivity boxes/hr, stack ranking, review &amp; conversion. Default = the {showBoost ? 'Boost XP' : 'built-in device'} departments; a multi-carrier org must ALSO tick its other device departments.)</span></div>
                   <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
                     {(accFields.departments || []).length === 0 ? <div style={{ fontSize: 12, color: 'var(--text3)' }}>no departments in this period</div> : (accFields.departments || []).map((v: string) => (
                       <label key={v} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, padding: '2px 0' }}>
@@ -633,10 +671,12 @@ export default function SalesReportPage() {
                     empty to fall back to the built-in Boost defaults (Boost RTR / Xfinity Prepaid Refill).
                     DISPLAY only — drives conversion, never a payout. */}
                 <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bill-payment items <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(tick the product/item values that = a bill payment / walk-in recharge — drives the Daily-Targets conversion rate, boxes &divide; bill-payments. Leave empty to use the built-in Boost defaults. Display only, no pay change.)</span></div>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>Bill-payment items <span style={{ fontWeight: 400, color: 'var(--text3)' }}>(tick the product/item values that = a bill payment / walk-in recharge — drives the Daily-Targets conversion rate, boxes &divide; bill-payments. Leave empty to use the {showBoost ? 'built-in Boost defaults' : 'built-in defaults'}. Display only, no pay change.)</span></div>
                   <div style={{ fontSize: 11, marginBottom: 4, color: accSel.billpay.length === 0 ? 'var(--accent)' : 'var(--text3)' }}>
                     {accSel.billpay.length === 0
-                      ? <>Currently using <b>Boost defaults</b> (product name contains &ldquo;Boost RTR&rdquo; or &ldquo;Xfinity Prepaid Refill&rdquo;).</>
+                      ? (showBoost
+                          ? <>Currently using <b>Boost defaults</b> (product name contains &ldquo;Boost RTR&rdquo; or &ldquo;Xfinity Prepaid Refill&rdquo;).</>
+                          : <>Currently using <b>built-in defaults</b>.</>)
                       : <><b>{accSel.billpay.length}</b> item(s) active — only these count as bill payments.</>}
                   </div>
                   <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>
@@ -739,7 +779,7 @@ export default function SalesReportPage() {
                     Use these rules for the Gross-Profit report buckets
                   </label>
                   <div style={{ fontSize: 11, color: 'var(--text3)', margin: '4px 0 8px' }}>
-                    When on, the <a href="/commcalc/gp" style={{ color: 'var(--accent)' }}>GP report</a> counts a line as <b>Acc GP</b> using the accessory rules above (department, category, keyword, catalog) and as <b>Phone Sales</b> using the box departments — instead of the built-in Boost department labels. Turn this on when your POS departments don&apos;t match the Boost names (e.g. a Total feed where the same department holds both phones and accessories). Display-only: rep pay never reads it.
+                    When on, the <a href="/commcalc/gp" style={{ color: 'var(--accent)' }}>GP report</a> counts a line as <b>Acc GP</b> using the accessory rules above (department, category, keyword, catalog) and as <b>Phone Sales</b> using the box departments — instead of the built-in default department labels. Turn this on when your POS departments don&apos;t match the built-in names (e.g. a feed where the same department holds both phones and accessories). Display-only: rep pay never reads it.
                   </div>
                 </div>
                 {/* CATALOG-driven accessory classification (migs 230/231). A product-catalog upload's category

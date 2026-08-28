@@ -362,7 +362,7 @@ def calc_gp_report(
         num = street_num(store)
         sm = store_by_num.get(num, {})
         sfid = str(sm.get('salesforce_id') or '').strip()
-        market = str(sm.get('market') or 'Boost').strip()
+        market = str(sm.get('market') or '').strip()
         store_code = str(sm.get('store_code') or '').strip()
 
         acc_gp    = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'accessory')

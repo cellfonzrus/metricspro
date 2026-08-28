@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker from '@/components/EntityPicker'
 
 // Generic column mapping (A2): map a carrier's spreadsheet column headers to our canonical DB
@@ -30,7 +31,7 @@ export default function ColumnMappingPage() {
       setReportKeys(d?.report_keys || []); setTransforms(d?.transforms || [])
       if (d?.report_keys?.length) setRk(prev => prev || d.report_keys[0])
     }).catch(() => {})
-    api('/api/v1/commcalc/carriers').then((c: any) => setCarriers(c || [])).catch(() => {})
+    apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => setCarriers(c || [])).catch(() => {})
   }, [])
 
   const load = useCallback(() => {

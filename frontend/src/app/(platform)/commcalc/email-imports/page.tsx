@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { api } from '@/lib/client'
+import { api, apiUpload } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { WhereAreMyRowsButton } from '../_lib/UploadTracePanel'
 import { SweepStatusCell, summarizeSweepRun } from '../_lib/sweepOutcome'
 import EntityPicker from '@/components/EntityPicker'
@@ -44,6 +45,8 @@ export default function EmailImportsPage() {
   const [health, setHealth] = useState<any>(null)   // per-day ingest health (mig 200)
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [upPeriod, setUpPeriod] = useState('')   // period for a manual custom-sheet upload (e.g. "August 2026")
+  const [upBusy, setUpBusy] = useState('')        // report_key currently uploading
   const [sources, setSources] = useState<any[]>([])
   const [srcReady, setSrcReady] = useState(true)
   const [srcDraft, setSrcDraft] = useState<any>(null)   // add/edit form for a data-source login
@@ -81,6 +84,9 @@ export default function EmailImportsPage() {
   const [newSheet, setNewSheet] = useState('')
   const [viewer, setViewer] = useState<any>(null)             // { report_key, label } while viewing data
   const [viewData, setViewData] = useState<any>(null)
+  const [mapper, setMapper] = useState<any>(null)             // { report_key, label } while mapping to a dataset
+  const [mapData, setMapData] = useState<any>(null)           // binding + detected columns + suggestions + datasets
+  const [mapBusy, setMapBusy] = useState('')
 
   // Load all of the tenant's mailboxes (multi-mailbox = mig 075); keep or select one in the editor.
   const refresh = useCallback((keepAccount?: string) => {
@@ -97,7 +103,7 @@ export default function EmailImportsPage() {
     })
     api('/api/v1/commcalc/email-sweep/processed').then((p: any) => setProcessed(p || [])).catch(() => {})
     api('/api/v1/commcalc/data-sources').then((r: any) => { setSources(r.sources || []); setSrcReady(r.ready !== false) }).catch(() => {})
-    api('/api/v1/commcalc/carriers').then((r: any) => setCarriers(r || [])).catch(() => {})
+    apiCached('/api/v1/commcalc/carriers', LOOKUP).then((r: any) => setCarriers(r || [])).catch(() => {})
     api('/api/v1/commcalc/distributors').then((r: any) => setDistributors(Array.isArray(r) ? r : (r?.distributors || []))).catch(() => {})
     api('/api/v1/commcalc/custom-import-types').then((r: any) => setCustomTypes(Array.isArray(r) ? r : [])).catch(() => {})
   }, [])
@@ -271,7 +277,7 @@ export default function EmailImportsPage() {
     try {
       const r: any = await api('/api/v1/commcalc/custom-import-types', { method: 'POST', body: JSON.stringify({ label }) })
       setNewSheet(''); await reloadCustom()
-      setMsg(`✅ Added custom sheet "${r.label}" (key: ${r.report_key}). Now add a filename pattern above that routes to it.`)
+      setMsg(`✅ Added custom sheet "${r.label}" (key: ${r.report_key}). It will auto-import on the next sweep — then click 🔗 Map to report to wire it into a standard report.`)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   async function delCustomSheet(rk: string, label: string) {
@@ -286,6 +292,78 @@ export default function EmailImportsPage() {
     setViewer(c); setViewData(null)
     try { const r: any = await api(`/api/v1/commcalc/custom-import/${encodeURIComponent(c.report_key)}`); setViewData(r) }
     catch (e: any) { setViewData({ error: e?.message || String(e) }) }
+  }
+  // Map a custom sheet to a standard dataset — reads the header (captured or auto-read from the mailbox) and
+  // pre-fills a source-column → canonical-field mapping. Saving wires the backend with NO developer/resolver.
+  async function openMapper(c: any, ds = '') {
+    setMapper(c); if (!ds) setMapData(null); setMapBusy('load')
+    try {
+      const q = ds ? `?target_dataset=${encodeURIComponent(ds)}` : ''
+      const r: any = await api(`/api/v1/commcalc/custom-import-types/${encodeURIComponent(c.report_key)}/binding${q}`)
+      // Seed the editable rule map from existing rules, else from the suggestions (highest-confidence first).
+      const rules: Record<string, string> = {}
+      for (const rr of (r.rules || [])) rules[rr.target_field] = rr.source_header
+      for (const s of (r.suggestions || [])) if (s.suggested_source && !rules[s.target_field]) rules[s.target_field] = s.suggested_source
+      setMapData({ ...r, _sel: r.selected_dataset || r.target_dataset || '', _rules: rules })
+    } catch (e: any) { setMapData({ error: e?.message || String(e) }) }
+    finally { setMapBusy('') }
+  }
+  function mapSetSource(tf: string, src: string) {
+    setMapData((d: any) => ({ ...d, _rules: { ...(d?._rules || {}), [tf]: src } }))
+  }
+  // Ask for the sample report: read a header + sample rows from an uploaded file (NOT ingested) so the mapping
+  // pre-fills from real columns/values even before the file is in the mailbox.
+  async function uploadSample(file: File | null | undefined) {
+    if (!file || !mapper) return
+    setMapBusy('sample')
+    try {
+      const form = new FormData(); form.append('file', file)
+      const ds = (mapData?._sel || '').trim(); if (ds) form.append('target_dataset', ds)
+      const r: any = await apiUpload(`/api/v1/commcalc/custom-import-types/${encodeURIComponent(mapper.report_key)}/sample`, form)
+      const rules: Record<string, string> = {}
+      for (const rr of (r.rules || [])) rules[rr.target_field] = rr.source_header
+      for (const s of (r.suggestions || [])) if (s.suggested_source && !rules[s.target_field]) rules[s.target_field] = s.suggested_source
+      setMapData({ ...r, _sel: r.selected_dataset || r.target_dataset || '', _rules: rules })
+      setMsg(`✅ Read sample "${file.name}" — ${(r.columns || []).length} column(s) detected.`)
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setMapBusy('') }
+  }
+  async function saveMapping() {
+    if (!mapper || !mapData) return
+    const ds = (mapData._sel || '').trim()
+    const rules = Object.entries(mapData._rules || {})
+      .filter(([tf, sh]) => tf && sh)
+      .map(([target_field, source_header]) => {
+        const f = (mapData.fields || []).find((x: any) => x.target_field === target_field)
+        return { target_field, source_header, transform: f?.transform || 'text' }
+      })
+    setMapBusy('save')
+    try {
+      const r: any = await api(`/api/v1/commcalc/custom-import-types/${encodeURIComponent(mapper.report_key)}/binding`,
+        { method: 'PUT', body: JSON.stringify({ target_dataset: ds, rules }) })
+      setMsg(ds
+        ? `✅ Mapped "${mapper.label}" → ${ds} (${r.rules_saved} column(s)). Captured rows are flowing into the standard report now.`
+        : `✅ Unbound "${mapper.label}" — it stays captured only.`)
+      setMapper(null); setMapData(null); await reloadCustom()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setMapBusy('') }
+  }
+  // Manual upload for a custom sheet — for the MTD file (and daily files) when you don't want to wait for
+  // the email sweep. POSTs straight to /upload/<report_key>, the SAME capture the sweep uses, so the row
+  // lands in raw_custom_import and the report's dataset (Activations / Bill Payments / Sales by Product)
+  // lights up. `period` scopes the capture: a re-upload of the same period REPLACES it (the b2b MTD export
+  // is cumulative, so re-uploading the latest MTD file is correct); leave it blank to capture by filename.
+  async function uploadCustom(rk: string, label: string, file: File | null | undefined) {
+    if (!file) return
+    const per = (upPeriod || '').trim()
+    setUpBusy(rk)
+    try {
+      const form = new FormData(); form.append('file', file)
+      const path = `/api/v1/commcalc/upload/${encodeURIComponent(rk)}${per ? `?period=${encodeURIComponent(per)}` : ''}`
+      const r: any = await apiUpload(path, form)
+      setMsg(`✅ Uploaded "${file.name}" to ${label} — ${r?.saved ?? 0} rows captured${per ? ` for ${per}` : ''}.`)
+      await reloadCustom()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) } finally { setUpBusy('') }
   }
 
   async function saveSource() {
@@ -655,16 +733,33 @@ export default function EmailImportsPage() {
             onChange={e => setNewSheet(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') addCustomSheet() }} />
           <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={addCustomSheet}>＋ Add sheet</button>
         </div>
+        {/* Manual upload — for the MTD file (and daily files) when you don't want to wait for the email sweep.
+            Set the period this file is FOR, then Upload on the sheet's row. Re-uploading the same period
+            replaces it (the b2b MTD export is cumulative, so re-uploading the latest MTD is correct). */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <span style={{ fontSize: 12, color: 'var(--text2)' }}>Manual upload period:</span>
+          <input style={{ ...sel, minWidth: 160 }} placeholder="e.g. August 2026" value={upPeriod}
+            onChange={e => setUpPeriod(e.target.value)} />
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>then click <b>Upload</b> on a sheet below (leave blank to capture by filename).</span>
+        </div>
         {customTypes.length > 0 ? (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr style={{ background: 'var(--surface2)' }}>{['Sheet', 'Key (use in a pattern)', 'Captured rows', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
+            <thead><tr style={{ background: 'var(--surface2)' }}>{['Sheet', 'Key (use in a pattern)', 'Captured rows', 'Manual upload', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
             <tbody>
               {customTypes.map((c: any) => (
                 <tr key={c.report_key} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
                   <td style={{ padding: '6px 8px', fontWeight: 600 }}>{c.label}</td>
                   <td style={{ padding: '6px 8px' }}><code>{c.report_key}</code></td>
                   <td style={{ padding: '6px 8px' }}>{c.rows || 0}</td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                    <label className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', cursor: 'pointer', opacity: upBusy === c.report_key ? 0.6 : 1 }}>
+                      {upBusy === c.report_key ? 'Uploading…' : '⬆ Upload file'}
+                      <input type="file" accept=".csv,.txt,.xlsx,.xls" style={{ display: 'none' }} disabled={upBusy === c.report_key}
+                        onChange={e => { const inp = e.target as HTMLInputElement; const f = inp.files?.[0]; if (f) uploadCustom(c.report_key, c.label, f); inp.value = '' }} />
+                    </label>
+                  </td>
                   <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openMapper(c)}>🔗 Map to report</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px' }} onClick={() => openViewer(c)}>👁 View data</button>{' '}
                     <button className="btn btn-secondary" style={{ fontSize: 12, padding: '3px 9px', color: '#dc2626' }} onClick={() => delCustomSheet(c.report_key, c.label)}>✕</button>
                   </td>
@@ -921,6 +1016,96 @@ export default function EmailImportsPage() {
           </div>
         )}
       </div>
+
+      {/* ── Custom-sheet → standard-report mapper (header-at-setup wiring) ── */}
+      {mapper && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }} onClick={() => { setMapper(null); setMapData(null) }}>
+          <div className="card" style={{ padding: 18, width: 820, maxWidth: '94vw', maxHeight: '88vh', overflow: 'auto' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>🔗 Map “{mapper.label}” to a standard report</div>
+              <div style={{ flex: 1 }} />
+              <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => { setMapper(null); setMapData(null) }}>Close</button>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
+              Pick the standard report this sheet feeds, then confirm which incoming column maps to each field. Saving wires
+              the backend — captured rows flow into that report automatically, no developer needed.
+            </div>
+            {!mapData ? <div style={{ color: 'var(--text3)', fontSize: 13 }}>Reading the report header…</div>
+              : mapData.error ? <div style={{ color: '#dc2626', fontSize: 13 }}>❌ {mapData.error}</div>
+              : (
+                <div>
+                  {/* detected header */}
+                  <div style={{ fontSize: 12, marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <b>Detected columns</b>
+                      <span style={{ color: 'var(--text3)' }}>
+                        ({mapData.source === 'captured' ? 'from captured data'
+                          : String(mapData.source || '').startsWith('email') ? 'auto-read from the mailbox'
+                          : String(mapData.source || '').startsWith('sample') ? 'from your uploaded sample'
+                          : 'none yet'})
+                      </span>
+                      <div style={{ flex: 1 }} />
+                      <label className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer', opacity: mapBusy === 'sample' ? 0.6 : 1 }}>
+                        {mapBusy === 'sample' ? 'Reading…' : '⬆ Upload a sample'}
+                        <input type="file" accept=".csv,.txt,.xlsx,.xls" style={{ display: 'none' }} disabled={mapBusy === 'sample'}
+                          onChange={e => { const inp = e.target as HTMLInputElement; const f = inp.files?.[0]; if (f) uploadSample(f); inp.value = '' }} />
+                      </label>
+                    </div>
+                    <div style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {(mapData.columns || []).length === 0
+                        ? <span style={{ color: 'var(--text3)' }}>No header found yet — <b>upload a sample</b> of this report (right), or run a sweep so the file arrives from email, then reopen this.</span>
+                        : (mapData.columns || []).map((c: string) => <code key={c} style={{ background: 'var(--surface2)', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>{c}</code>)}
+                    </div>
+                  </div>
+                  {/* dataset picker */}
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, marginRight: 8 }}>Standard report / dataset</label>
+                    <select value={mapData._sel || ''} disabled={mapBusy === 'load'}
+                      onChange={e => { const ds = e.target.value; if (ds) openMapper(mapper, ds); else setMapData((d: any) => ({ ...d, _sel: '', fields: [], suggestions: [] })) }}
+                      style={{ ...sel, minWidth: 260 }}>
+                      <option value="">— capture only (no mapping) —</option>
+                      {(mapData.datasets || []).map((d: any) => <option key={d.dataset} value={d.dataset}>{d.dataset} → {d.table} ({d.fields} fields)</option>)}
+                    </select>
+                    {mapBusy === 'load' && <span style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 8 }}>loading…</span>}
+                  </div>
+                  {/* field mapping */}
+                  {mapData._sel && (mapData.fields || []).length > 0 && (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead><tr style={{ background: 'var(--surface2)' }}>{['Standard field', 'Incoming column', ''].map(h => <th key={h} style={{ textAlign: 'left', padding: '5px 8px', color: 'var(--text2)', fontSize: 11 }}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {(mapData.fields || []).map((f: any) => {
+                          const sug = (mapData.suggestions || []).find((s: any) => s.target_field === f.target_field)
+                          const src = (mapData._rules || {})[f.target_field] || ''
+                          const sampleVal = src ? String(((mapData.sample || [])[0] || {})[src] ?? '') : ''
+                          return (
+                            <tr key={f.target_field} style={{ borderTop: '1px solid var(--border)' }}>
+                              <td style={{ padding: '4px 8px' }}>{f.label}{f.required ? <span style={{ color: '#dc2626' }}> *</span> : ''} <span style={{ color: 'var(--text3)' }}>({f.target_field})</span></td>
+                              <td style={{ padding: '4px 8px' }}>
+                                <select value={src} onChange={e => mapSetSource(f.target_field, e.target.value)} style={{ ...sel, minWidth: 200 }}>
+                                  <option value="">— none —</option>
+                                  {(mapData.columns || []).map((c: string) => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              </td>
+                              <td style={{ padding: '4px 8px', color: 'var(--text3)', fontSize: 11 }}>
+                                {sampleVal ? <span title="first sample value">e.g. “{sampleVal.length > 24 ? sampleVal.slice(0, 24) + '…' : sampleVal}”</span> : (sug?.confidence ? `auto: ${sug.confidence}` : '')}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                  <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button className="btn btn-primary" disabled={mapBusy === 'save'} onClick={saveMapping} style={{ fontSize: 13 }}>
+                      {mapBusy === 'save' ? 'Saving…' : (mapData._sel ? 'Save mapping & wire it' : 'Save (capture only)')}
+                    </button>
+                    <span style={{ fontSize: 11, color: 'var(--text3)' }}>Required fields marked <span style={{ color: '#dc2626' }}>*</span>. Unmapped fields stay empty.</span>
+                  </div>
+                </div>
+              )}
+          </div>
+        </div>
+      )}
 
       {/* ── Custom-sheet data viewer ── */}
       {viewer && (

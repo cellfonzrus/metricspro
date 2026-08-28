@@ -49,7 +49,8 @@ def evaluate() -> dict:
     findings = []
     if posture["prod"]:
         if not posture["field_key_set"]:
-            findings.append("FIELD_ENCRYPTION_KEY is NOT set — SSN/bank fields are stored in PLAINTEXT "
+            findings.append("FIELD_ENCRYPTION_KEY is NOT set — bank details and any field a tenant "
+                            "marked private are stored in PLAINTEXT "
                             "(field encryption fails open). Set the key; then enable "
                             "FIELD_ENCRYPTION_STRICT=1.")
         if not posture["notify_secret_set"]:

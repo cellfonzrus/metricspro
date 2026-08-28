@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { api, parseLocalDate } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 
@@ -40,7 +41,7 @@ export default function TimeOffPage() {
   useEffect(() => {
     Promise.all([
       api('/api/v1/storeops/time-off'),
-      api('/api/v1/storeops/employees'),
+      apiCached('/api/v1/storeops/employees', LOOKUP),
     ]).then(([reqs, emps]) => {
       setRequests(reqs || [])
       setEmployees(emps || [])

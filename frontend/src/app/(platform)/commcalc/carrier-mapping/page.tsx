@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api, fmt } from '@/lib/client'
+import { apiCached, LOOKUP, invalidateApiCache } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 import EntityPicker, { type EntityOption } from '@/components/EntityPicker'
 
@@ -48,7 +49,7 @@ export default function CarrierMappingPage() {
   useEffect(() => { loadOptions() }, [loadOptions])
 
   const loadCarriers = useCallback((selectId?: string) => {
-    api('/api/v1/commcalc/carriers').then((c: any) => {
+    apiCached('/api/v1/commcalc/carriers', LOOKUP).then((c: any) => {
       setCarriers(c || [])
       setCid(prev => selectId || prev || (c?.[0]?.id ?? ''))
     }).catch(() => {})
@@ -60,16 +61,17 @@ export default function CarrierMappingPage() {
     if (!name) { setMsg('Enter a carrier name.'); return }
     try {
       const r: any = await api('/api/v1/commcalc/carriers', { method: 'POST', body: JSON.stringify({ name, code: cAdd.code.trim() || undefined, is_default: cAdd.is_default }) })
+      invalidateApiCache('/api/v1/commcalc/carriers')   // cached read must self-heal after this write
       setMsg('✅ Carrier added.'); setCAdd({ name: '', code: '', is_default: false }); loadCarriers(r?.id)
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   async function saveCarrier(c: any) {
-    try { await api(`/api/v1/commcalc/carriers/${c.id}`, { method: 'PATCH', body: JSON.stringify({ name: c.name, code: c.code || '', is_default: !!c.is_default }) }); setMsg('✅ Saved.'); loadCarriers(c.id) }
+    try { await api(`/api/v1/commcalc/carriers/${c.id}`, { method: 'PATCH', body: JSON.stringify({ name: c.name, code: c.code || '', is_default: !!c.is_default }) }); invalidateApiCache('/api/v1/commcalc/carriers'); setMsg('✅ Saved.'); loadCarriers(c.id) }
     catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   async function delCarrier(c: any) {
     if (!window.confirm(`Delete carrier "${c.name}"? Its category rules are kept but will no longer be carrier-scoped.`)) return
-    try { await api(`/api/v1/commcalc/carriers/${c.id}`, { method: 'DELETE' }); loadCarriers() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    try { await api(`/api/v1/commcalc/carriers/${c.id}`, { method: 'DELETE' }); invalidateApiCache('/api/v1/commcalc/carriers'); loadCarriers() } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
   const setCarrier = (i: number, patch: any) => setCarriers(cs => cs.map((c, j) => j === i ? { ...c, ...patch } : c))
 

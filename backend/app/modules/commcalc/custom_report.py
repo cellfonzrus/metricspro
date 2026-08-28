@@ -219,6 +219,127 @@ DATASETS = [
             _col("retail_cost", "Retail Cost $", "money", gate="carrier_residual"),
         ],
     },
+    {
+        # Bill Payments — the b2b "Bill Payment Transactions Processed" report (owner 2026-08-26). Ingested
+        # via the self-serve CUSTOM IMPORT path (raw_custom_import JSONB — no per-report table/migration);
+        # the resolver detects it by column signature, so it works whatever report_key the tenant registered
+        # it under. Group by Store and read the summed `discount` column for the "discounts on bill payments"
+        # report the owner asked for; every money column subtotals correctly. Voided lines are excluded by
+        # the resolver so the sums reconcile. DISPLAY-ONLY.
+        "key": "bill_payments", "name": "Bill Payments", "resolver": "bill_payments", "sort_order": 100,
+        "field_map": {"store": "store", "rep": "salesperson", "market": "market", "day": "trans_date"},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("store", "Store", "text", group=True),
+            _col("market", "Market", "text", group=True),
+            _col("salesperson", "Processed by", "text", group=True),
+            _col("trans_date", "Date", "date", group=True),
+            _col("trans_id", "Trans ID", "text"),
+            _col("bill_pay_system", "Bill Pay System", "text", group=True),
+            _col("carrier_id", "Carrier", "text", group=True),
+            _col("customer_type", "Customer Type", "text", group=True),
+            _col("tender_type", "Tender", "text", group=True),
+            _col("txns", "Bill Payments", "count"),
+            _col("payment", "Payment $", "money"),
+            _col("fee", "Fee $", "money"),
+            _col("total_amt", "Total $", "money"),
+            _col("discount", "Discount $", "money"),
+            _col("tax", "Tax $", "money"),
+        ],
+    },
+    {
+        # Activations — the b2b "Activation Details" report (owner 2026-08-26). Ingested via the self-serve
+        # CUSTOM IMPORT path (raw_custom_import JSONB — no per-report table/migration); the resolver returns
+        # ONE ROW PER DISTINCT DEVICE (deduped by Serial#; insurance/Plan-Option lines share the serial and
+        # count once), so `activations` summed per Store/Market/Division reconciles to the b2b MTD figure
+        # (LuxeLink 687 new activations, Nova 250). The export carries NO "Store" column — its geography is
+        # Dealer Code / Division / Region / District (LuxeLink vs Nova are Division/Region values), all exposed
+        # here so you can group by any level; `store` derives to the most granular non-empty. Group by Type
+        # (derived) or Contract Type for the new/port/byod/tablet/upgrade breakdown; Upgrade is excluded from
+        # Total Activation (b2b's own definition) but shown in its own row. DISPLAY + reconciliation basis.
+        "key": "activation_details", "name": "Activations", "resolver": "activation_details",
+        "sort_order": 15,
+        "field_map": {"store": "store", "rep": "salesperson", "market": "market", "day": "trans_date"},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("store", "Store", "text", group=True),
+            _col("market", "Market", "text", group=True),
+            _col("division", "Division", "text", group=True),
+            _col("region", "Region", "text", group=True),
+            _col("district", "District", "text", group=True),
+            _col("dealer_code", "Dealer Code", "text", group=True),
+            _col("salesperson", "Salesperson", "text", group=True),
+            _col("trans_date", "Date", "date", group=True),
+            _col("trans_id", "Trans ID", "text"),
+            _col("serial", "Serial #", "text"),
+            _col("activation_no", "Activation #", "text"),
+            _col("bucket", "Type (derived)", "text", group=True),
+            _col("contract_type", "Contract Type", "text", group=True),
+            _col("action_type", "Action Type", "text", group=True),
+            _col("service_plan", "Service Plan", "text"),
+            _col("product_desc", "Product", "text"),
+            _col("category", "Category", "text", group=True),
+            _col("carrier", "Carrier", "text", group=True),
+            _col("activation_status", "Status", "text", group=True),
+            _col("activations", "Activations", "count"),
+            _col("mrc", "MRC $", "money"),
+        ],
+    },
+    {
+        # Sales by Product — the b2b "Sales by Product" report (owner 2026-08-26), for accessory sales by
+        # department. Ingested via the self-serve CUSTOM IMPORT path (raw_custom_import JSONB — no per-report
+        # table/migration). The resolver walks the report's Department: header / product / subtotal structure
+        # and carries the Department onto each product row, flagging Accessories & C2wireless as accessory
+        # departments. Group by Department (or filter is_accessory = Yes) and read accessory_sales /
+        # accessory_gp for the accessory-sales totals. NB: the report carries no Store/Rep/Date column, so
+        # this dataset aggregates at the report's own scope, not per store. DISPLAY-ONLY.
+        "key": "product_sales", "name": "Sales by Product", "resolver": "product_sales", "sort_order": 55,
+        "field_map": {"store": None, "rep": None, "market": None, "day": None},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("department", "Department", "text", group=True),
+            _col("category", "Category", "text", group=True),
+            _col("product_desc", "Product", "text", group=True),
+            _col("is_accessory", "Accessory dept?", "text", group=True),
+            _col("qty", "Qty", "count"),
+            _col("ext_price", "Ext Price $", "money"),
+            _col("ext_cost", "Ext Cost $", "money"),
+            _col("gp", "GP $", "money"),
+            _col("product_gp", "Product GP $", "money"),
+            _col("total_exp_comm", "Total Exp Comm $", "money"),
+            _col("accessory_sales", "Accessory Sales $", "money"),
+            _col("accessory_gp", "Accessory GP $", "money"),
+        ],
+    },
+    {
+        # Store Performance — the b2b per-store scorecard (owner 2026-08-26). Unlike Sales by Product this is
+        # already PER STORE, so it gives the accessory store breakup (Acc Ext Price / Acc GP) the owner wanted,
+        # plus Activations and Bill Payments (qty + $) per store, with Division / Region / District. Ingested
+        # via the self-serve CUSTOM IMPORT path (raw_custom_import JSONB). Detected by signature (Acc Ext Price
+        # + Bill Payment Qty). Group by Division / Region to split multi-brand exports (LuxeLink vs Nova).
+        "key": "store_performance", "name": "Store Performance", "resolver": "store_performance", "sort_order": 18,
+        "field_map": {"store": "store", "rep": None, "market": "market", "day": None},
+        "backing_tables": ["raw_custom_import"], "gate": None,
+        "columns": [
+            _col("store", "Store", "text", group=True),
+            _col("market", "Market", "text", group=True),
+            _col("division", "Division", "text", group=True),
+            _col("region", "Region", "text", group=True),
+            _col("district", "District", "text", group=True),
+            _col("activations", "Activations", "count"),
+            _col("renewals", "Renewals", "count"),
+            _col("prepaid", "Prepaid", "count"),
+            _col("bill_payment_qty", "Bill Payment Qty", "count"),
+            _col("bill_payments", "Bill Payments $", "money"),
+            _col("acc_ext_price", "Acc Ext Price $", "money"),
+            _col("acc_gp", "Acc GP $", "money"),
+            _col("acc_gp_on_billpay", "Acc GP on Bill Pay $", "money"),
+            _col("discounts", "Discounts $", "money"),
+            _col("gp", "GP $", "money"),
+            _col("trade_in_credits", "Trade-in Credits $", "money"),
+            _col("third_party_insurance", "3rd Party Insurance $", "money"),
+        ],
+    },
 ]
 
 _BY_KEY = {d["key"]: d for d in DATASETS}

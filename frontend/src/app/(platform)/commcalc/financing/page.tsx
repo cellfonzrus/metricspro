@@ -8,6 +8,8 @@ import type { ExportColumn } from '@/lib/export'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import EntityPicker from '@/components/EntityPicker'
 import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
+import { useActiveCarrier } from '@/lib/auth-context'
+import { financingVendorLabel, vendorServesCarrier } from '@/lib/carrier-scope'
 
 // FINANCING REPORT — owner directive 2026-08-04: "need another report for tracking the financing, edge in
 // case of total and acima in case of boost … should have assignable target for each store in target area".
@@ -84,6 +86,11 @@ const STORE_COLS: ExportColumn[] = [
 
 export default function FinancingReportPage() {
   const { period } = usePeriod()
+  // Active-carrier lens: for a dual-carrier tenant, show only the active carrier's vendors, relabelled
+  // generically (never ACIMA/TW/Edge), and drop the carrier-naming "Carriers" column. Single-carrier
+  // tenants are unchanged.
+  const { activeCarrier, multi } = useActiveCarrier()
+  const vlabel = (key: string, raw: string) => (multi ? financingVendorLabel(key, raw) : raw)
   const [d, setD] = useState<Data | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -101,12 +108,20 @@ export default function FinancingReportPage() {
   }, [period])
   useEffect(() => { load() }, [load])
 
-  const rows = d?.rows || []
+  // Vendors visible under the active carrier (carrier-neutral vendors always show); the set of their
+  // keys gates the detail rows + vendor tiles so nothing off-carrier is displayed.
+  const shownVendors = useMemo(
+    () => (d?.vendors || []).filter(v => !multi || vendorServesCarrier(v.carriers, activeCarrier)),
+    [d, multi, activeCarrier])
+  const allowedKeys = useMemo(() => new Set(shownVendors.map(v => v.vendor_key)), [shownVendors])
+  const rows = useMemo(
+    () => (multi ? (d?.rows || []).filter(r => allowedKeys.has(r.vendor_key)) : (d?.rows || [])),
+    [d, multi, allowedKeys])
   const opts = useMemo(() => optionsFromRows(rows, {
     store: r => r.store || r.store_code, market: r => r.market, rep: r => r.rep,
   }), [rows])
   const vendorOpts = useMemo(
-    () => (d?.vendors || []).map(v => ({ id: v.vendor_key, label: v.label })), [d])
+    () => shownVendors.map(v => ({ id: v.vendor_key, label: vlabel(v.vendor_key, v.label) })), [shownVendors, multi])
 
   // RULE FIVE: the core bar drives the tables AND the exports (what you see is what exports).
   const shown = useMemo(() => {
@@ -119,7 +134,9 @@ export default function FinancingReportPage() {
   // The store table follows the same filter set, and its per-store numbers are recomputed from the
   // FILTERED detail rows so a rep/vendor filter cannot leave a total that disagrees with its own rows.
   const shownStores = useMemo(() => {
-    const narrowed = filt.reps.length > 0 || vendorSel.length > 0
+    // Under the active-carrier lens, recompute per-store totals from the filtered (active-carrier) rows
+    // so the store table never sums in the other carrier's financing.
+    const narrowed = filt.reps.length > 0 || vendorSel.length > 0 || multi
     const agg: Record<string, { units: number; amount: number }> = {}
     for (const r of shown) {
       const a = agg[r.store_code] || (agg[r.store_code] = { units: 0, amount: 0 })
@@ -138,7 +155,7 @@ export default function FinancingReportPage() {
           need_units: s.target_units ? Math.max(0, s.target_units - a.units) : null,
         }
       })
-  }, [d, shown, filt, vendorSel])
+  }, [d, shown, filt, vendorSel, multi])
 
   const t = useMemo(() => shown.reduce((a, r) => ({
     units: a.units + r.units, amount: a.amount + r.amount,
@@ -146,7 +163,7 @@ export default function FinancingReportPage() {
 
   const withTarget = shownStores.filter(s => (s.target_units || 0) > 0)
   const hitting = withTarget.filter(s => (s.attainment_pct || 0) >= 100).length
-  const unconfigured = (d?.vendors || []).filter(v => v.enabled && v.detection_status !== 'configured')
+  const unconfigured = shownVendors.filter(v => v.enabled && v.detection_status !== 'configured')
 
   return (
     <div style={{ maxWidth: 1320 }}>
@@ -186,7 +203,7 @@ export default function FinancingReportPage() {
         <div className="card" style={{ padding: '11px 15px', marginBottom: 14, fontSize: 13,
           background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
           <b>⚠️ {unconfigured.length} vendor{unconfigured.length > 1 ? 's are' : ' is'} not mapped yet.</b>{' '}
-          {unconfigured.map(v => `${v.label}: ${v.detection_note}`).join(' · ')}{' '}
+          {unconfigured.map(v => (multi ? vlabel(v.vendor_key, v.label) : `${v.label}: ${v.detection_note}`)).join(' · ')}{' '}
           <Link href="/commcalc/financing/vendors" style={{ textDecoration: 'underline' }}>Map it now</Link>
           {' '}— until then it counts nothing, and a zero below is “not configured”, not “no financing”.
         </div>
@@ -211,9 +228,9 @@ export default function FinancingReportPage() {
               {withTarget.length ? 'monthly attainment' : 'no financing targets set yet'}
             </div>
           </div>
-          {(d.by_vendor || []).slice(0, 2).map(v => (
+          {(d.by_vendor || []).filter(v => !multi || allowedKeys.has(v.vendor_key)).slice(0, 2).map(v => (
             <div key={v.vendor_key} style={tile}>
-              <div style={tileCap}>{v.vendor}</div>
+              <div style={tileCap}>{vlabel(v.vendor_key, v.vendor)}</div>
               <div style={{ fontSize: 24, fontWeight: 800 }}>{v.units}</div>
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>{fmt(v.amount)} · {v.stores} store(s)</div>
             </div>
@@ -243,7 +260,8 @@ export default function FinancingReportPage() {
       {d?.ready && tab === 'detail' && (
         <ReportShell
           title="Financing by vendor · store · rep" subtitle={`${period} · ${d.amount_note}`}
-          filename={`financing-detail-${period}`} columns={DETAIL_COLS} rows={shown} totals
+          filename={`financing-detail-${period}`} columns={DETAIL_COLS}
+          rows={multi ? shown.map(r => ({ ...r, vendor: financingVendorLabel(r.vendor_key, r.vendor) })) : shown} totals
           stickyHeader defaultGroupBy="Store" collapsibleGroups
         />
       )}
@@ -253,28 +271,38 @@ export default function FinancingReportPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface2)' }}>
-                {['Vendor', 'Carriers', 'How a financed sale is recognised', 'Units', 'Amount'].map(h =>
+                {/* The "Carriers" column names carriers, so it is dropped under a dual-carrier lens. */}
+                {['Vendor', ...(multi ? [] : ['Carriers']), 'How a financed sale is recognised', 'Units', 'Amount'].map(h =>
                   <th key={h} style={th}>{h}</th>)}
               </tr>
             </thead>
             <tbody>
-              {(d.vendors || []).map(v => {
+              {shownVendors.map(v => {
                 const agg = (d.by_vendor || []).find(x => x.vendor_key === v.vendor_key)
                 return (
                   <tr key={v.vendor_key} style={{ borderBottom: '1px solid var(--border)' }}>
                     <td style={td}>
-                      <div style={{ fontWeight: 600 }}>{v.label}</div>
+                      <div style={{ fontWeight: 600 }}>{vlabel(v.vendor_key, v.label)}</div>
                       <div style={{ fontSize: 11, color: 'var(--text3)' }}>
-                        {v.vendor_key}{v.enabled ? '' : ' · disabled'}
+                        {multi ? (v.enabled ? '' : 'disabled') : `${v.vendor_key}${v.enabled ? '' : ' · disabled'}`}
                       </div>
                     </td>
+                    {!multi && (
                     <td style={td}>
                       {(v.carriers || []).length
                         ? (v.carriers || []).map((c, i) => <span key={i} style={{ marginRight: 6 }}>{c.carrier_name || c.carrier_id}</span>)
                         : <span style={{ color: 'var(--text3)' }}>any carrier</span>}
                     </td>
+                    )}
                     <td style={td}>
-                      {(v.matchers || []).length === 0
+                      {/* Under a dual-carrier lens the raw detection rules / notes can name the vendor
+                          brand or the other carrier (tender strings like "TW FINANCING", seed notes that
+                          mention ACIMA/Boost), so show only a neutral status there. */}
+                      {multi
+                        ? (v.detection_status === 'configured'
+                            ? <span style={{ color: 'var(--text3)' }}>✓ configured</span>
+                            : <span style={{ color: '#b45309' }}>⚠️ not configured yet</span>)
+                        : (v.matchers || []).length === 0
                         ? <span style={{ color: '#b45309' }}>⚠️ {v.detection_note}</span>
                         : <>
                           {(v.matchers || []).map((m, i) => (
@@ -294,7 +322,8 @@ export default function FinancingReportPage() {
               })}
             </tbody>
           </table>
-          {(d.tender_values || []).length > 0 && (
+          {/* Raw tender strings can name a vendor brand / carrier ("TW FINANCING") — hide under the lens. */}
+          {!multi && (d.tender_values || []).length > 0 && (
             <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', fontSize: 12.5, color: 'var(--text2)' }}>
               <b>Tender values actually present in {period}</b> — map a vendor by picking one of these
               rather than typing a guess:{' '}

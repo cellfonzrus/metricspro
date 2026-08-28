@@ -168,6 +168,28 @@ def _up(v) -> str:
     return _norm(v).upper()
 
 
+# A market LABEL is a short human place-name ("LI", "NYC", "PA", "North") — it can never legitimately
+# contain an HTML/angle-bracket fragment. Junk like "<li>" (a literal list-tag) reached
+# commcalc.store_mapping.market once via the free-text "➕ New market" box / bulk-import market column,
+# which store the submitted string VERBATIM when it matches no existing market (see
+# storeops._canonicalize_market and commcalc._canonical_market) — nothing on either write path rejected
+# markup, so once saved it became a permanent selectable option in every market dropdown (migration
+# 740 documents the resulting `<li>` on store `<2022>`). This strips any `<...>` tag fragments (and any
+# stray angle brackets) BEFORE a value is stored, so that class of junk can never be persisted as a
+# market again. Real market names are untouched (they contain no angle brackets); a value that is
+# ENTIRELY markup collapses to "" = explicitly unassigned, which every caller already handles.
+_MARKET_MARKUP_RE = re.compile(r"<[^>]*>")
+
+
+def sanitize_market_label(value) -> str:
+    """Drop HTML/angle-bracket junk from a market label before it is stored. Trims, removes any
+    `<...>` tag fragments and any leftover stray `<`/`>`, and collapses inner whitespace. Returns ""
+    when nothing legitimate remains (an all-markup value like "<li>"). Idempotent; never raises."""
+    s = _MARKET_MARKUP_RE.sub(" ", str(value or ""))
+    s = s.replace("<", " ").replace(">", " ")
+    return " ".join(s.split())
+
+
 _SQUASH_RE = re.compile(r"[^A-Z0-9]")
 
 

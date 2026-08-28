@@ -57,6 +57,12 @@ import queue
 import time
 from datetime import datetime, timezone, timedelta
 
+try:
+    from app.core.service_role import assert_browser_allowed   # SERVICE_ROLE=api guard
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    def assert_browser_allowed():                        # no-op fallback for path-loaded proof scripts
+        return None
+
 # Registry of live sessions, keyed by data_source id. Guarded by _SESSIONS_LOCK.
 _SESSIONS = {}
 _SESSIONS_LOCK = threading.Lock()
@@ -525,6 +531,7 @@ class LiveLoginSession:
             try:
                 # ONE sync_playwright for the whole session life — the browser/context/page stay OPEN across
                 # the command loop (do NOT use a per-call `with` that closes it between calls).
+                assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
                 with sync_playwright() as p:
                     self._drive(p)
             except Exception as e:

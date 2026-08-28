@@ -8,6 +8,7 @@
 //     {inserted, skipped, errors} response into the per-row results.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { parseCsv, serializeCsv, type CsvCell } from '@/lib/pos-csv'
 
 // ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ const ENTITIES: EntityDef[] = [
     title: 'Customers',
     icon: '👥',
     blurb: 'Customer address book: names, contact info, addresses, credit settings.',
-    note: 'SSN and driver-license NUMBERS cannot be imported via CSV — they live in an encrypted store. Add them per customer on the Customers page after import. (Driver-license STATE is importable.)',
+    note: 'The carrier account PIN cannot be imported — enter it per customer in the app. SSN and driver-licence details are not held by the platform at all, so there is nothing to import.',
     fields: [
       { key: 'account_type', type: 'string', oneOf: ['Personal', 'Business'], blank: 'Personal', synonyms: ['type', 'customer_type'] },
       { key: 'company_name', type: 'string', synonyms: ['company', 'business_name'] },
@@ -52,7 +53,6 @@ const ENTITIES: EntityDef[] = [
       { key: 'last_name', type: 'string', synonyms: ['lastname', 'last', 'surname', 'family_name'] },
       { key: 'middle_initial', type: 'string', synonyms: ['mi', 'middle'] },
       { key: 'dob', type: 'date', synonyms: ['date_of_birth', 'birthdate', 'birth_date'] },
-      { key: 'driver_license_state', type: 'string', synonyms: ['dl_state', 'license_state'] },
       { key: 'email', type: 'string', synonyms: ['e_mail', 'email_address'] },
       { key: 'phone_primary', type: 'string', synonyms: ['phone', 'phone_number', 'primary_phone', 'mobile', 'cell'] },
       { key: 'phone_secondary', type: 'string', synonyms: ['phone_2', 'phone2', 'secondary_phone', 'alt_phone'] },
@@ -397,7 +397,7 @@ export default function PosImportPage() {
   // Store codes come from MetricsPro storeops — shown in the inventory hint so
   // users know what store_code values are valid.
   useEffect(() => {
-    api('/api/v1/storeops/stores')
+    apiCached('/api/v1/storeops/stores', LOOKUP)
       .then((stores: { store_code?: string | number | null }[]) => {
         const codes = (stores || []).map(s => String(s.store_code ?? '').trim()).filter(Boolean)
         setStoreCodes(codes)

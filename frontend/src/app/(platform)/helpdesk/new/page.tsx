@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
@@ -41,7 +42,7 @@ export default function NewTicket() {
   }, [])
 
   useEffect(() => {
-    api(`/api/v1/storeops/stores`).then((rows: any) => {
+    apiCached(`/api/v1/storeops/stores`, LOOKUP).then((rows: any) => {
       const opts = ((rows || []) as any[])
         .map(s => ({ id: String(s.store_code || '').trim(),
           label: `${s.store_code}${s.address ? ' — ' + String(s.address).substring(0, 32) : ''}` }))

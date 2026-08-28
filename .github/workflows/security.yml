@@ -26,8 +26,8 @@ jobs:
     name: Python SAST (bandit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install bandit
       - name: bandit
@@ -38,8 +38,8 @@ jobs:
     name: Python deps (pip-audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install pip-audit
       - name: pip-audit
@@ -50,8 +50,8 @@ jobs:
     name: Frontend deps (npm audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with: { node-version: "20" }
       - name: npm audit
         continue-on-error: true
@@ -62,8 +62,8 @@ jobs:
     name: SAST (semgrep)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.11" }
       - run: pip install semgrep
       - name: semgrep
@@ -74,7 +74,7 @@ jobs:
     name: Secret scan (trufflehog)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { fetch-depth: 0 }
       - name: trufflehog
         continue-on-error: true

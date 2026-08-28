@@ -12,6 +12,9 @@ from app.core import tenant_middleware as _tm
 
 _SKIP_PREFIXES = ("/health", "/favicon", "/static", "/_next", "/openapi", "/docs", "/redoc")
 
+# Strong refs to detached background writes so the event loop doesn't GC a pending task mid-flight.
+_BG_WRITES = set()
+
 
 def _num(v):
     try:
@@ -69,6 +72,11 @@ class AccessLogMiddleware:
                     "gps_lng": _num(headers.get("x-geo-lng")),
                     "gps_accuracy_m": _num(headers.get("x-geo-acc")),
                 }
-                await asyncio.to_thread(_insert, row)
+                # Fire-and-forget: the audit write must never hold the response on the request path.
+                # Detach it (to_thread, NOT awaited) so the response returns immediately; a strong ref
+                # keeps the task alive until the write finishes.
+                task = asyncio.ensure_future(asyncio.to_thread(_insert, row))
+                _BG_WRITES.add(task)
+                task.add_done_callback(_BG_WRITES.discard)
             except Exception:
                 pass

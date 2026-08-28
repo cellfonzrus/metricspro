@@ -44,6 +44,11 @@ except ImportError:                                     # loaded by path, not as
         _osmod2.path.join(_osmod2.path.dirname(_osmod2.path.abspath(__file__)), "url_guard.py"))
     _url_guard = _ilu2.module_from_spec(_ug_spec)
     _ug_spec.loader.exec_module(_url_guard)
+try:
+    from app.core.service_role import assert_browser_allowed   # SERVICE_ROLE=api guard
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    def assert_browser_allowed():                        # no-op fallback for path-loaded proof scripts
+        return None
 
 DEFAULT_URL = "https://ownerportal.epayworldwide.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -244,12 +249,48 @@ DEFAULT_REFRESH_DAYS = 1
 REPLACE_MIN_ROWS = 50
 REPLACE_MIN_RETAIN = 0.5
 
+# ── Daily Transaction Detail (#P1) → commcalc.raw_epay_daily_tx (via epay_ingest) ─────────────
+# Unlike the comp/MI/payment reports above (which map+REPLACE via _process_report/_store_day_grain),
+# the Daily Transaction Detail feeds the P1 ingest verbatim: epay_ingest owns the parse, the
+# PAYMENT-vs-FEE split ("…FEE" title match) and the TerminalID→store resolution, and UPSERTS
+# idempotently on (org_id, transaction_id, transaction_source_id) — so an hourly re-pull is safe and
+# never double-counts. This hook is the sweep's bridge into that path; it re-uses epay_ingest whole
+# and reimplements none of the DTD parse.
+def ingest_daily_tx(client, org_id, xlsx_path, source_batch=None):
+    """Route a downloaded Daily Transaction Detail workbook through epay_ingest (parse + payment/fee
+    split + terminal→store resolution + idempotent upsert). Returns a sweep-shaped result dict.
+
+    A zero-row DTD is a legitimately quiet window (no transactions), NOT a failure — it is reported
+    as mode 'no_data' rather than raising, exactly like the comp report's empty_ok path."""
+    from app.modules.commcalc import epay_ingest as _ei
+    try:
+        records, _cols = _read_report_records(xlsx_path, "Daily Transaction Detail")
+    except EpayEmptyReport:
+        return {"report": "epay_daily_tx", "label": "Daily Transaction Detail", "grain": "day",
+                "rows": 0, "mode": "no_data",
+                "note": "no transactions in the DTD window — nothing to store (not an error)"}
+    res = _ei.ingest(org_id, records, source_batch=source_batch, client=client) or {}
+    out = {"report": "epay_daily_tx", "label": "Daily Transaction Detail", "grain": "day",
+           "rows": res.get("saved", 0), "parsed": res.get("rows", 0), "mode": "upsert",
+           "unresolved_terminals": res.get("unresolved_terminals", []),
+           "source_batch": source_batch}
+    return out
+
+
 # Report registry: key → how to download, filter, map and store it.
 #   registry_key  the commcalc.report_definitions.report_key this report is configured by
+#   report_id     the portal Commissions-menu id; None means RESOLVE it at run time (label_match /
+#                 a report_definitions override) because it cannot be hardcoded from a dev box
+#   label_match   when report_id is None: the case-insensitive substring of the menu row's visible
+#                 text that identifies this report (resolved from the live Commissions menu)
 #   grain         "month" (refetch N months, one run each) | "day" (refetch a date RANGE in ONE
 #                 run and store per day) | "none" (single default pull)
 #   filter        which portal control the sweep drives: "month" dropdown | "daily_range"
 #                 (Summarize by = Daily + Start/End Date) | None
+#   ingest        optional hook (client, org_id, xlsx_path, source_batch) -> result dict, used
+#                 INSTEAD of _process_report/_store_day_grain to route the workbook through a
+#                 dedicated ingest (DTD → epay_ingest). When present the sweep loop downloads the
+#                 file and hands it to this hook.
 #   period        how the stored period is derived: the file's "Report Month" column, the rows'
 #                 own dates ("data"), or the current month
 #   day_key       for grain "day": the mapped column that carries the row's day
@@ -269,6 +310,14 @@ REPORTS = {
                     "empty_ok": True,
                     "period": "data", "label": "Comprehensive Comp",
                     "map": lambda recs, base: _map_filtered(recs, base, map_comp_report_row)},
+    # Daily Transaction Detail (P1). report_id is RESOLVED at run time from the Commissions menu by
+    # label (or a report_definitions override) — see run_epay_sweep. Same day_range Start/End flow as
+    # comp, but stored via the `ingest` hook (epay_ingest) instead of the map/REPLACE path.
+    "epay_daily_tx": {"report_id": None, "label_match": "daily transaction detail",
+                      "table": "commcalc.raw_epay_daily_tx", "file_type": "epay_daily_tx",
+                      "registry_key": "epay_daily_tx", "grain": "day", "filter": "daily_range",
+                      "empty_ok": True, "label": "Daily Transaction Detail",
+                      "ingest": ingest_daily_tx},
 }
 
 
@@ -680,10 +729,50 @@ def _safe_base(url):
         raise EpayLoginError(e.message)
 
 
+# The Commissions-menu enumeration JS — shared by discover_reports and the run-time label resolver
+# (both need the exact same [{id,label}] view of the menu so a label match in the sweep behaves
+# identically to what the operator sees on the discover-reports page).
+_MENU_ENUM_JS = (
+    "() => {"
+    "  const out = [];"
+    "  document.querySelectorAll('[id]').forEach(el => {"
+    "    const id = (el.getAttribute('id')||'').trim();"
+    "    const txt = (el.textContent||'').trim();"
+    "    if (/^[0-9]{4,}$/.test(id) && txt && txt.length < 120) out.push({id, label: txt});"
+    "  });"
+    "  return out;"
+    "}")
+
+
+def _enumerate_commissions_menu(page):
+    """Hover the Commissions menu on an already-logged-in page and return [{id, label}] (deduped by
+    id). Shared by discover_reports and the run-time report-id resolver."""
+    page.hover("span.k-link:has-text('Commissions')", timeout=20000)
+    page.wait_for_timeout(2000)
+    items = page.evaluate(_MENU_ENUM_JS) or []
+    seen = {}
+    for it in items:
+        seen.setdefault(it["id"], it["label"])
+    return [{"id": k, "label": v} for k, v in seen.items()]
+
+
+def _resolve_report_id(label_match, menu_items):
+    """First menu id whose visible label contains `label_match` (case-insensitive substring), or
+    None. Pure — the sweep passes the live [{id,label}] set, the harness passes a fake one."""
+    lm = (label_match or "").strip().lower()
+    if not lm:
+        return None
+    for it in (menu_items or []):
+        if lm in str(it.get("label") or "").lower():
+            return str(it.get("id"))
+    return None
+
+
 def discover_reports(url, user, pw):
     """Log in and enumerate the Commissions report menu → [{id, label}]. MUST run server-side
     (the portal WAF only allows the Railway egress IP). Used to find the report ids of the
-    Commission Payment Detail + Comprehensive Compensation reports so they can be swept too."""
+    Commission Payment Detail + Comprehensive Compensation + Daily Transaction Detail reports so they
+    can be swept too."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
@@ -691,6 +780,7 @@ def discover_reports(url, user, pw):
             "Playwright is not installed in the backend image (add it to backend/Dockerfile).")
     base_url = _safe_base(url)
     items = []
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         ctx = browser.new_context(user_agent=UA)
@@ -699,24 +789,10 @@ def discover_reports(url, user, pw):
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
             _login(page, user, pw)
-            page.hover("span.k-link:has-text('Commissions')", timeout=20000)
-            page.wait_for_timeout(2000)
-            items = page.evaluate(
-                "() => {"
-                "  const out = [];"
-                "  document.querySelectorAll('[id]').forEach(el => {"
-                "    const id = (el.getAttribute('id')||'').trim();"
-                "    const txt = (el.textContent||'').trim();"
-                "    if (/^[0-9]{4,}$/.test(id) && txt && txt.length < 120) out.push({id, label: txt});"
-                "  });"
-                "  return out;"
-                "}")
+            items = _enumerate_commissions_menu(page)
         finally:
             browser.close()
-    seen = {}
-    for it in (items or []):
-        seen.setdefault(it["id"], it["label"])
-    return [{"id": k, "label": v} for k, v in seen.items()]
+    return items
 
 
 def _period_row_count(client, table, org_id, period):
@@ -850,7 +926,7 @@ def _day_row_count(client, table, org_id, day_key, iso):
         return 0
 
 
-def _process_report(client, org_id, page, key, xlsx_path, target=None):
+def _process_report(client, org_id, page, key, xlsx_path, target=None, report_id=None):
     """Download one report by key, parse, derive its period, and store it. Every report REPLACES its
     period (delete that period + insert the fresh pull). For comp the period comes from the rows'
     own Begin Date (mode 'data'), so the pull lands under the month it belongs to even if the portal
@@ -861,7 +937,7 @@ def _process_report(client, org_id, page, key, xlsx_path, target=None):
     raises before any write, and the PARTIAL-COLLAPSE guard refuses to overwrite a period that holds
     >= REPLACE_MIN_ROWS rows with a pull < REPLACE_MIN_RETAIN of that count."""
     spec = REPORTS[key]
-    _open_and_download(page, spec["report_id"], xlsx_path, target=target)
+    _open_and_download(page, report_id or spec["report_id"], xlsx_path, target=target)
     try:
         records, _cols = _read_report_records(xlsx_path, spec["label"])
     except EpayEmptyReport as empty:
@@ -1010,6 +1086,7 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
     base_url = _safe_base(url)
     results, errors = [], []
 
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         ctx = browser.new_context(user_agent=UA, accept_downloads=True)
@@ -1018,7 +1095,37 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
         try:
             page.goto(base_url, timeout=60000, wait_until="domcontentloaded")
             _login(page, user, pw)
-            jobs = _expand_jobs(keys, report_cfg)
+            # Resolve any report whose menu id is NOT hardcoded (Daily Transaction Detail carries
+            # report_id=None). Order: a commcalc.report_definitions override
+            # (registry_key.portal_report_id, surfaced via report_cfg) so the operator can pin the
+            # exact id without a code change, then a case-insensitive label match against the LIVE
+            # Commissions menu (the same enumeration discover_reports uses). A report that cannot be
+            # resolved errors CLEARLY and is skipped — it never crashes the rest of the sweep.
+            resolved_ids, menu_items = {}, None
+            for k in keys:
+                spec = REPORTS[k]
+                if spec.get("report_id"):
+                    resolved_ids[k] = spec["report_id"]
+                    continue
+                pinned = ((report_cfg or {}).get(spec.get("registry_key") or k) or {}).get("portal_report_id")
+                if pinned:
+                    resolved_ids[k] = str(pinned)
+                    continue
+                if menu_items is None:
+                    try:
+                        menu_items = _enumerate_commissions_menu(page)
+                    except Exception as e:
+                        menu_items = []
+                        errors.append(f"{spec['label']}: could not read the Commissions menu to "
+                                      f"resolve its report id ({type(e).__name__}: {e})")
+                rid = _resolve_report_id(spec.get("label_match"), menu_items)
+                if rid:
+                    resolved_ids[k] = rid
+                else:
+                    errors.append(f"{spec['label']}: could not resolve a report id — no live menu row "
+                                  f"matched label {spec.get('label_match')!r} and no "
+                                  f"report_definitions override (portal_report_id) was set")
+            jobs = _expand_jobs([k for k in keys if k in resolved_ids], report_cfg)
             for idx, (key, target) in enumerate(jobs):
                 if idx > 0:
                     # Reload to a clean app shell between every report run so each opens on a fresh
@@ -1040,8 +1147,18 @@ def run_epay_sweep(client, org_id, url, user, pw, reports=None, report_cfg=None)
                 elif target and target.get("period"):
                     tgt = f" [{target['period']}]"
 
+                spec = REPORTS[key]
                 try:
-                    results.append(_process_report(client, org_id, page, key, tmp.name, target=target))
+                    if spec.get("ingest"):
+                        # DTD path: download the workbook, then hand it to the report's own ingest
+                        # hook (epay_ingest) — parse + payment/fee split + terminal→store resolution +
+                        # idempotent upsert — instead of the map/REPLACE path in _process_report.
+                        _open_and_download(page, resolved_ids[key], tmp.name, target=target)
+                        source_batch = f"epay-sweep {key}{tgt}".strip()
+                        results.append(spec["ingest"](client, org_id, tmp.name, source_batch))
+                    else:
+                        results.append(_process_report(client, org_id, page, key, tmp.name,
+                                                       target=target, report_id=resolved_ids[key]))
                 except Exception as e:
                     errors.append(f"{REPORTS[key]['label']}{tgt}: {type(e).__name__}: {e}")
                 finally:

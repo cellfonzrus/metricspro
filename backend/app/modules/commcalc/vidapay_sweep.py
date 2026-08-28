@@ -59,6 +59,11 @@ except ImportError:                                     # loaded by path, not as
         _osmod2.path.join(_osmod2.path.dirname(_osmod2.path.abspath(__file__)), "url_guard.py"))
     _url_guard = _ilu2.module_from_spec(_ug_spec)
     _ug_spec.loader.exec_module(_url_guard)
+try:
+    from app.core.service_role import assert_browser_allowed   # SERVICE_ROLE=api guard
+except ImportError:                                     # loaded by path, not as app.modules.commcalc.*
+    def assert_browser_allowed():                        # no-op fallback for path-loaded proof scripts
+        return None
 
 DEFAULT_URL = "https://www.vidapaycrm.com/Main%20Panel.aspx"
 # The observed login host the portal redirects to. Used as a fallback if the configured URL lands
@@ -105,6 +110,7 @@ def _launch(p):
     bot-management passes genuine Chrome far more often than bundled Chromium, whose build fingerprints as
     automation — and falls back to bundled Chromium when Chrome isn't in the image (so this is zero-regression
     if `playwright install chrome` hasn't run). Same args either way."""
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     try:
         return p.chromium.launch(headless=True, channel="chrome", args=_LAUNCH_ARGS)
     except Exception:
@@ -1650,6 +1656,7 @@ def begin_login(url, account_id, user, pw, proxy_url=None):
             "`RUN playwright install --with-deps chromium` to backend/Dockerfile.")
     base_url = _norm_url(url, DEFAULT_URL)
     proxy = _proxy_arg(proxy_url)
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, proxy=proxy)
@@ -1731,6 +1738,7 @@ def begin_login_b2bsoft(url, access_code, user, pw, proxy_url=None):
     except Exception:
         raise VidaPayLoginError("Playwright/Chromium is not available in the backend image.")
     base_url = _norm_url(url, B2BSOFT_URL)
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, proxy=_proxy_arg(proxy_url))
@@ -1914,6 +1922,7 @@ def complete_2fa(url, pending_state, code, proxy_url=None):
     # Prefer the CODE-ENTRY url captured at begin_login (_twofa_result) — going straight there skips
     # the "New Sign In → Next" resend. Fall back to base_url if it wasn't captured.
     nav_url = pending_state.get("_2fa_url") if isinstance(pending_state, dict) else None
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
@@ -2003,6 +2012,7 @@ def complete_2fa_b2bsoft(url, pending_state, code, proxy_url=None):
         raise VidaPayAuthError("No pending login to verify — start the login again.")
     base_url = _norm_url(url, B2BSOFT_URL)
     nav_url = pending_state.get("_2fa_url") if isinstance(pending_state, dict) else None
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, storage_state=pending_state, proxy=_proxy_arg(proxy_url))
@@ -3434,6 +3444,7 @@ def run_vidapay_sweep(client, org_id, url, session_state, source_id=None, carrie
     src = dict(source_row or {})
     if account_id and not src.get("account_id"):
         src["account_id"] = account_id
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))
@@ -3535,6 +3546,7 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
     if not session_state:
         raise VidaPayAuthError("Not authenticated yet — click “Log in” and complete 2FA first.")
     base_url = _norm_url(url, B2BSOFT_URL)
+    assert_browser_allowed()   # SERVICE_ROLE=api → no Chromium on the user-facing API service
     with sync_playwright() as p:
         browser = _launch(p)
         ctx = _new_context(browser, storage_state=session_state, proxy=_proxy_arg(proxy_url))

@@ -1,11 +1,13 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { api, apiUpload, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import type { EntityOption } from '@/components/EntityPicker'
 import type { StandardFilterValue } from '@/lib/standard-filters'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import EnvelopeViewLink from '@/components/EnvelopeViewLink'
 
 // DM evening verification view — per-store totals, missing-rep check, B2B reconciliation, and
 // the DM's confirm/adjust+sign-off. Shared by /closing/verify (Daily Closing module) and the
@@ -239,8 +241,8 @@ export default function DailyClosingVerify() {
   const [pStores, setPStores] = useState<any[]>([])
   const [pEmps, setPEmps] = useState<any[]>([])
   useEffect(() => {
-    api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
-    api('/api/v1/storeops/employees?all_company=true').then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
+    apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : [])).catch(() => {})
+    apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then((r: any) => setPEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {})
   }, [])
   const storeOptions: EntityOption[] = useMemo(
     () => pStores.filter((s: any) => s.store_code).map((s: any) => ({ id: s.store_code, label: s.store_address || s.store_code, sublabel: s.market || undefined })),
@@ -577,6 +579,12 @@ export default function DailyClosingVerify() {
                 {ver
                   ? <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--green, #16794a)' }}>✅ Verified by {s.verification.verified_by}</span>
                   : <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text3)' }}>Unverified</span>}
+                {s.dm_corrected && (
+                  <span title="Store-day totals, reconciliation, deposits and the incentive gate all reflect the DM's verified corrections. Per-rep rows below stay as submitted."
+                    style={{ fontSize: 11, fontWeight: 700, color: '#1d4ed8', background: '#e0e7ff', padding: '2px 7px', borderRadius: 6 }}>
+                    ✎ DM-corrected
+                  </span>
+                )}
               </div>
             </div>
 
@@ -647,6 +655,52 @@ export default function DailyClosingVerify() {
               </div>
             )}
 
+            {/* Money reconciliation vs the POS X-report (owner 2026-08-20: "make sure the X-report data
+                is also pulling in"). money_recon.cash/credit.b2b is the X-report tender when
+                tender_source==='x_report' (else the sales feed). `closing` already reflects any DM
+                verified correction — the server overlays it before this recon runs (TKT-1030). */}
+            {s.money_recon && (s.money_recon.cash || s.money_recon.credit) && (
+              <div style={{ marginTop: 10, padding: '8px 12px', borderRadius: 8, background: 'var(--surface2)', fontSize: 13 }}>
+                <strong>Money reconciliation</strong>
+                <span style={{ color: 'var(--text3)', fontSize: 11, marginLeft: 6 }}>
+                  declared{s.dm_corrected ? ' (DM-corrected)' : ''} vs {s.money_recon.tender_source === 'x_report' ? 'POS X-report' : 'sales feed'}
+                  {s.money_recon.tenders_available === false ? ' — no X-report tender data for this day (recon pending)' : ''}
+                </span>
+                <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 6 }}>
+                  {(['cash', 'credit'] as const).map((leg) => {
+                    const m = s.money_recon[leg]; if (!m) return null
+                    return (
+                      <div key={leg} style={{ fontSize: 12 }}>
+                        <span style={{ textTransform: 'capitalize', fontWeight: 600 }}>{leg}</span>{': '}
+                        closing {fmt(m.closing)}
+                        {m.pending
+                          ? <span style={{ color: 'var(--text3)' }}> · X-report pending</span>
+                          : <> vs {s.money_recon.tender_source === 'x_report' ? 'X-report' : 'sales'} {fmt(m.b2b)}{' '}
+                              <b style={{ color: m.flag ? 'var(--amber, #b45309)' : 'var(--green, #16794a)' }}>
+                                {m.flag ? `Δ${(m.var ?? 0) > 0 ? '+' : ''}${fmt(m.var)}` : '✓'}</b></>}
+                      </div>
+                    )
+                  })}
+                  {/* ePay: declared (rep ePay-on-cash + on-credit, DM-corrected) vs the Boost portal
+                      (Daily Transaction Detail ingest). Fee is shown for context; it reconciles on the
+                      fee-recon report, not here. */}
+                  {s.money_recon.epay && (
+                    <div style={{ fontSize: 12 }}>
+                      <span style={{ fontWeight: 600 }}>ePay</span>{': '}
+                      declared {fmt(s.money_recon.epay.declared)}
+                      {s.money_recon.epay.portal_pending
+                        ? <span style={{ color: 'var(--text3)' }}> · portal pending</span>
+                        : <> vs portal {fmt(s.money_recon.epay.portal)}{' '}
+                            <b style={{ color: s.money_recon.epay.flag ? 'var(--amber, #b45309)' : 'var(--green, #16794a)' }}>
+                              {s.money_recon.epay.flag ? `Δ${(s.money_recon.epay.var ?? 0) > 0 ? '+' : ''}${fmt(s.money_recon.epay.var)}` : '✓'}</b>
+                            {typeof s.money_recon.epay.portal_fee === 'number' && s.money_recon.epay.portal_fee > 0
+                              ? <span style={{ color: 'var(--text3)' }}> · fee {fmt(s.money_recon.epay.portal_fee)}</span> : null}</>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Reps */}
             {(s.reps?.length || 0) > 0 && <button className="btn btn-secondary" style={{ fontSize: 12, marginTop: 12 }} onClick={() => setOpen(o => ({ ...o, [k]: !o[k] }))}>
               {open[k] ? '▾' : '▸'} {s.reps.length} rep row{s.reps.length === 1 ? '' : 's'}
@@ -679,7 +733,7 @@ export default function DailyClosingVerify() {
                           {r.auto_accepted && <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }} title="3rd-try auto-accept — see Management Review">·3rd try</span>}
                           {r.released_at && <span style={{ fontSize: 10, color: 'var(--text3)', marginLeft: 4 }} title={`Released for correction by ${r.released_by || 'management'}`}>·released</span>}
                         </td>
-                        <td style={cell}>{(r.envelope_url || r.envelope_picture) ? <a href={r.envelope_url || r.envelope_picture} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>📷</a> : '—'}</td>
+                        <td style={cell}><EnvelopeViewLink row={r} /></td>
                         <td style={cell}>
                           {(Number(r.expense_amount) || 0) > 0
                             ? <span><b>{fmt(r.expense_amount)}</b>{r.expense_description ? <span style={{ color: 'var(--text3)' }}> · {r.expense_description}</span> : null}</span>

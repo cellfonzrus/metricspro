@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '@/lib/client'
+import { invalidateApiCache } from '@/lib/cache'
 import CarrierPicker from '@/components/CarrierPicker'
 
 // Per-tenant pay period / work-week (mig 085). The tenant admin defines the work-week start, the
@@ -44,6 +45,7 @@ export default function TenantSettingsPage() {
     setBusy(true); setMsg('')
     try {
       const r: any = await api('/api/v1/core/tenant-settings', { method: 'PUT', body: JSON.stringify(s) })
+      invalidateApiCache('/api/v1/core/tenant-settings')   // other pages cache this read (CONFIG) → refresh them
       setS(r.settings); setPreview(r.preview || []); setComplete(true)
       setMsg('✅ Saved — schedules and payroll now use this work-week.')
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }

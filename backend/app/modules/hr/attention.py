@@ -131,7 +131,8 @@ def register(register_provider):
         if has_ciphertext and not enabled:
             out.append(_item(
                 "other", "pii_key_missing", "error", "PII encryption key is not configured",
-                "Encrypted employee PII (SSN / bank / A-Number, etc.) exists in this tenant's intake "
+                "Encrypted employee PII (bank details / A-Number, or any sensitive field this tenant "
+                "defined itself) exists in this tenant's intake "
                 "data, but the backend has no FIELD_ENCRYPTION_KEY configured right now — that data "
                 "can no longer be decrypted (Reveal will show '(unavailable)'). If a key was ever "
                 "removed or rotated by mistake, restore it immediately from your secrets backup — "

@@ -666,6 +666,40 @@ def list_approvals(start: str = "", end: str = "", store_code: str = "", market:
                        for p in payers if p.get("is_active") is not False]}
 
 
+def _intimate_payroll_decision(org_id, s, e, eid, name, store, rid, stage, action):
+    """Intimation-only bridge to the unified approvals inbox for the two-stage payroll-hours board.
+
+    payroll_hours is NOT a single binary approve/deny: it runs DM stage -> HR stage with per-employee
+    corrections, adjustments, and send-back/reset — a multi-actor, multi-state, batch workflow. It
+    therefore has NO acting on_decide on the engine (the adapter blocks any inbox decision); the decision
+    stays on THIS board and we only MIRROR its state into the unified inbox:
+        DM approve  -> open the HR-release request (pending, one per employee-period)
+        HR approve  -> sync the request to approved
+        HR send_back-> sync the request to denied
+    Best-effort; never raises (an approvals miss must never affect a real payroll decision)."""
+    if not rid:
+        return
+    try:
+        from app.modules.approvals import engine as _approvals
+        period = f"{s.isoformat()} – {e.isoformat()}"
+        if stage == "dm" and action == "approve":
+            _approvals.create_request(
+                org_id, type="payroll_hours", source_table="payroll_approval", source_id=rid,
+                title=f"Payroll hours — {name or eid} ({period}): awaiting HR",
+                summary="DM-approved; HR to release these hours for payment.",
+                store_code=store, assignee_kind="role", priority="normal", notify=False)
+        elif stage == "hr" and action == "approve":
+            _approvals.sync_source_decision(org_id, type="payroll_hours",
+                                            source_table="payroll_approval", source_id=rid,
+                                            decision="approve")
+        elif stage == "hr" and action == "send_back":
+            _approvals.sync_source_decision(org_id, type="payroll_hours",
+                                            source_table="payroll_approval", source_id=rid,
+                                            decision="deny")
+    except Exception:
+        pass
+
+
 # ── decisions ─────────────────────────────────────────────────────────────────────────────────────
 def _base_row(org_id, s, e, eid, store, src):
     return {"org_id": org_id, "period_start": s.isoformat(), "period_end": e.isoformat(),
@@ -801,11 +835,16 @@ def decide(body: PayrollDecideIn, authorization: str = Header(default=""), org_i
                         "hr_note": "reset — the DM withdrew their approval"})
 
         try:
-            sb().table("payroll_approval").upsert(
+            res = sb().table("payroll_approval").upsert(
                 row, on_conflict="org_id,period_start,period_end,employee_id").execute()
-            applied.append({"employee_id": eid, "stage": stage, "status": stamp})
         except Exception as ex:
             errors.append({"employee_id": eid, "error": str(ex)[:200]})
+            continue
+        applied.append({"employee_id": eid, "stage": stage, "status": stamp})
+        # Intimation-only mirror into the unified inbox (never affects this decision — see the helper).
+        _intimate_payroll_decision(org_id, s, e, eid, h.get("name"), h.get("store"),
+                                   ((res.data or [{}])[0].get("id") if res else None) or cur.get("id"),
+                                   stage, action)
 
     return {"period_start": s.isoformat(), "period_end": e.isoformat(),
             "applied": len(applied), "results": applied, "errors": errors}

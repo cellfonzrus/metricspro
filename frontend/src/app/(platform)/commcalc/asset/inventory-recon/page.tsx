@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { api, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
@@ -31,7 +32,7 @@ export default function InventoryReconPage() {
     try {
       const qs = `store=${encodeURIComponent(fStore)}&market=${encodeURIComponent(fMarket)}&as_of=${asOf}`
       const [opt, recon] = await Promise.all([
-        api('/api/v1/asset/filter-options').catch(() => ({ stores: [], markets: [] })),
+        apiCached('/api/v1/asset/filter-options', LOOKUP).catch(() => ({ stores: [], markets: [] })),
         api(`/api/v1/asset/inventory-recon?${qs}`),
       ])
       setStores(opt.stores || []); setMarkets(opt.markets || [])

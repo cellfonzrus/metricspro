@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useMemo } from 'react'
 import { api, fmt, apiDownload, apiFetchBase64, ORG_ID, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import EntityPicker from '@/components/EntityPicker'
@@ -12,6 +13,8 @@ import {
   UnassignedRow, UnmatchedExplorer, OrphanAssignments, StoreBridgePanel, ExcludedSellers,
 } from '../_lib/coverageDiagnosis'
 import RunCommissionButton from '../_lib/RunCommissionButton'
+import CoverageWizard from '../_lib/CoverageWizard'
+import { useActiveCarrier } from '@/lib/auth-context'
 
 // Configurable commission PLAN engine (migration 059). A PLAN is a set of RULES the user creates — each
 // rule matches sale lines on any sales-transaction field (contract_type/tender_type/department/category/
@@ -33,7 +36,11 @@ type Plan = { id?: string; name: string; carrier_id?: string | null; base_tier_m
   // mig 232 — how the tier metric is COUNTED. Null/'rule_units' = the legacy count (every qualifying
   // rule-matched LINE, summed across rules). 'transactions' counts DISTINCT matched trans_ids.
   tier_count_basis?: string | null; tier_match_field?: string | null; tier_match_op?: string | null
-  tier_match_value?: string | null; tier_below_min_multiplier?: number | string | null }
+  tier_match_value?: string | null; tier_below_min_multiplier?: number | string | null
+  // mig 297 — where THIS plan's reps get their activations classified from. 'inherit' (default) defers to
+  // the org-level setting → today's POS raw_sales. 'raw_sales' pins POS even if the org flips. 'activation_details'
+  // pays activations from the uploaded Activation Details report and suppresses POS activations for this plan.
+  activation_source?: string | null }
 // bulk-assignment roster (people-centric surface)
 type CurPlan = { plan_id: string; plan_name: string }
 type Person = { id?: string; name: string; value: string; role: string; market: string; email: string
@@ -88,9 +95,16 @@ const UNIT_BASES: { value: string; label: string; help: string }[] = [
   { value: 'per_device', label: 'per device', help: 'Pay once per distinct device serial on the sale. The payment lands on the line carrying the serial, so accessory / rate-plan / fee lines never carry it.' },
   { value: 'per_transaction', label: 'per sale', help: 'Pay exactly once per transaction, however many devices or lines it has.' },
 ]
-const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', rules: [], tiers: [], assignments: [] })
+const blankPlan = (): Plan => ({ name: '', carrier_id: '', base_tier_metric: 'none', is_active: true, notes: '', activation_source: 'inherit', rules: [], tiers: [], assignments: [] })
 
 export default function CommissionPlansPage() {
+  // Active-carrier lens: the set-up-fee reference copy names only the active carrier for a dual-carrier
+  // tenant (single-carrier tenants keep the original Boost/Total reference text).
+  const { activeCarrier, multi } = useActiveCarrier()
+  const isTotalCarrier = activeCarrier === 'total'
+  // Show Boost-branded default wording ONLY to a single-carrier Boost tenant; a non-Boost tenant
+  // never sees "Boost" language.
+  const showBoost = !multi && activeCarrier === 'boost'
   const [plans, setPlans] = useState<Plan[]>([])
   const [carriers, setCarriers] = useState<any[]>([])
   const [employees, setEmployees] = useState<any[]>([])
@@ -109,6 +123,8 @@ export default function CommissionPlansPage() {
   // plan-coverage diagnostic (mig 232): uncovered sellers · unmatched lines · tier/CT warnings · stale snapshot
   const [cov, setCov] = useState<any>(null)
   const [covBusy, setCovBusy] = useState(false)
+  // Coverage Wizard (guided fix for "lines not paying") — opens a modal, writes nothing until its Apply.
+  const [wizOpen, setWizOpen] = useState(false)
   // Part D — the tenant's "not a commissionable seller" list (mig 248). Diagnostics only: it moves a $0
   // seller out of the uncovered list into a visible collapsed note; it can never change a payout.
   const [exclBusy, setExclBusy] = useState(false)
@@ -244,14 +260,21 @@ export default function CommissionPlansPage() {
 
   async function load() {
     try {
-      const r = await api('/api/v1/commcalc/commission-plans')
-      setPlans(r.plans || []); setReady(r.ready !== false)
-      if (r.ready === false) setMsg(r.note || 'Run migration 059 to enable.')
-      setCarriers(await api('/api/v1/commcalc/carriers').catch(() => []))
+      // These four reads are independent — one round trip instead of a 4-deep waterfall. The three
+      // reference lists (carriers, roster, stores) are cache-served (LOOKUP); plans is live data.
       // include_inactive: the role-count preview must agree with the engine, which matches INACTIVE reps
       // too (a mid-month-terminated rep's sales still pay under their role). We show active/inactive split.
-      setEmployees(await api('/api/v1/storeops/employees?all_company=true&include_inactive=true').catch(() => []))
-      setStores(await api('/api/v1/storeops/stores').catch(() => []))
+      const [r, carr, emps, sts] = await Promise.all([
+        api('/api/v1/commcalc/commission-plans'),
+        apiCached('/api/v1/commcalc/carriers', LOOKUP).catch(() => []),
+        apiCached('/api/v1/storeops/employees?all_company=true&include_inactive=true', LOOKUP).catch(() => []),
+        apiCached('/api/v1/storeops/stores', LOOKUP).catch(() => []),
+      ])
+      setPlans(r.plans || []); setReady(r.ready !== false)
+      if (r.ready === false) setMsg(r.note || 'Run migration 059 to enable.')
+      setCarriers(carr)
+      setEmployees(emps)
+      setStores(sts)
       // (the value options load in their own effect below — they depend on the previewed period)
     } catch (e: any) { setMsg('Load failed: ' + (e?.message || e)) }
   }
@@ -686,11 +709,26 @@ export default function CommissionPlansPage() {
                 {tierMetrics.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
             </label>
+            <label style={lbl}>Activation source
+              <select style={sel} value={draft.activation_source || 'inherit'}
+                onChange={e => upd({ activation_source: e.target.value })}>
+                <option value="inherit">Inherit (default)</option>
+                <option value="raw_sales">POS sales</option>
+                <option value="activation_details">Activation Details report</option>
+              </select>
+            </label>
             <label style={{ ...lbl, justifyContent: 'flex-end' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
                 <input type="checkbox" checked={draft.is_active} onChange={e => upd({ is_active: e.target.checked })} /> Active
               </span>
             </label>
+          </div>
+          {/* mig 297 — one-line explainer for the Activation source dropdown above. */}
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: -8, marginBottom: 16 }}>
+            <b>Activation source</b> controls where this plan's reps get their activations counted from.
+            {' '}<b>Inherit</b> uses the org default (POS sales). <b>POS sales</b> always counts POS activations.
+            {' '}<b>Activation Details report</b> pays activations from the uploaded report and suppresses POS
+            activations for this plan's reps (single source, no double-count). Changes nothing until you recalculate.
           </div>
 
           {/* RULES */}
@@ -1239,7 +1277,7 @@ export default function CommissionPlansPage() {
             {(sf.keywords || []).map((k: string) => (
               <code key={k} style={{ background: 'var(--bg2)', padding: '1px 5px', borderRadius: 4, marginRight: 4 }}>{k}</code>
             ))}
-            {sf.keywords_are_default && <span style={{ marginLeft: 6, color: '#b45309' }}>← the built-in default (Boost wording). Map your own below if your POS calls it something else.</span>}
+            {sf.keywords_are_default && <span style={{ marginLeft: 6, color: '#b45309' }}>← the built-in default ({showBoost ? 'Boost' : 'default'} wording). Map your own below if your POS calls it something else.</span>}
           </div>
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 8 }}>
@@ -1268,14 +1306,17 @@ export default function CommissionPlansPage() {
 
           {sf.owner_reference && (
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
-              For reference (owner, 2026-08-01, <b>not applied</b>): Boost pays the dealer 100% of the set-up fee and the employee 10%;
-              Total pays the dealer 50% of the activation fee and the employee 0% today.
+              <>For reference (owner, 2026-08-01, <b>not applied</b>): {isTotalCarrier
+                ? 'the carrier pays the dealer 50% of the activation fee and the employee 0% today.'
+                : 'the carrier pays the dealer 100% of the set-up fee and the employee 10%.'}</>
             </div>
           )}
 
           {!!(sf.carriers || []).length && (
             <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
-              Per-carrier overrides available for: {(sf.carriers || []).map((c: any) => c.name).join(', ')} — a plan’s carrier picks its own numbers, so one tenant can run Boost and Cricket side by side.
+              {multi
+                ? <>A plan’s carrier picks its own numbers, so each carrier can carry its own set-up-fee split.</>
+                : <>Per-carrier overrides available for: {(sf.carriers || []).map((c: any) => c.name).join(', ')} — a plan’s carrier picks its own numbers, so each carrier can carry its own set-up-fee split.</>}
             </div>
           )}
 
@@ -1360,6 +1401,7 @@ export default function CommissionPlansPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
           <div style={{ fontWeight: 700, fontSize: 14 }}>🩺 Plan coverage <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text3)' }}>(read-only — who is uncovered, which lines no rule matched, why a tier didn’t move pay)</span></div>
           <span style={{ flex: 1 }} />
+          <button className="btn btn-primary" onClick={() => setWizOpen(true)} title="Guided step-by-step fix: attach plans + add owner-authored rules so unpaid lines pay. Writes nothing until you Apply.">▶ Fix coverage (wizard)</button>
           <button className="btn btn-secondary" disabled={covBusy} onClick={runCoverage}>{covBusy ? '…' : `Check ${period}`}</button>
           {cov?.coverage && <><ExportButtons payload={coveragePayload} /><SendReportButton exportPayload={coveragePayload} compact /></>}
         </div>
@@ -1431,10 +1473,19 @@ export default function CommissionPlansPage() {
               </div>
             </div>
           )}
-          {/* Part C — every line NOT considered for commission, from the pay engine itself */}
-          <UnmatchedExplorer period={cov.period || period} />
+          {/* Part C — every line NOT considered for commission, from the pay engine itself. The guided
+              "Fix coverage (wizard)" button above is now the primary way to act on this; the full detailed
+              table is kept here, collapsed, as the advanced view. */}
+          <details style={{ marginTop: 12 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 13 }}>Advanced: full “lines not paying” table</summary>
+            <div style={{ marginTop: 8 }}>
+              <UnmatchedExplorer period={cov.period || period} />
+            </div>
+          </details>
         </>)}
       </div>
+      <CoverageWizard open={wizOpen} onClose={() => setWizOpen(false)} period={cov?.period || period}
+        plans={plans} onApplied={() => { runCoverage(); load() }} />
       </>)}
 
       {tab === 'bulk' && (

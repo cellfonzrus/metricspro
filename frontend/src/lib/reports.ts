@@ -10,10 +10,14 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
   { category: 'Commissions', reports: [
     { href: '/commcalc', label: 'Commissions Dashboard', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/activations', label: 'Activations', module: 'commissions', scopes: ['all', 'market'], desc: 'b2b Activation Details basis of truth — distinct devices by market/store, Upgrade toggle, and automatic reconciliation against the sales feed' },
+    { href: '/commcalc/schematic', label: 'System Schematic', module: 'commissions', scopes: ['all'], desc: 'Data-lineage map: how ingested data and metrics feed each other, with code references and plain-English effects' },
+    { href: '/commcalc/onboarding', label: 'Setup Wizard', module: 'commissions', scopes: ['all'], desc: 'Guided onboarding: every data feed & config the platform needs, whether it is set up for you, and where to complete each one' },
+    { href: '/commcalc/integrations', label: 'Integrations', module: 'commissions', scopes: ['all'], desc: 'One page for every data connection & import — plain-English purpose, live connected/not-set-up status, and a 2-step setup wizard for each' },
     { href: '/commcalc/gp', label: 'Gross Profit', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', module: 'commissions' },
     { href: '/commcalc/coaching', label: 'Rep Coaching', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', module: 'commissions', scopes: ['all', 'market', 'store'] },
+    { href: '/commcalc/sales-analyzer', label: 'Retention Analysis', module: 'commissions', scopes: ['all', 'market', 'store'], desc: '3-month retention by rep/store — cohort retained vs churned, driven by whether the month-3 residual was paid' },
     { href: '/commcalc/sales-comparison', label: 'Sales Comparison', module: 'commissions', desc: 'Month-over-month / year-over-year % change per item sold (phones, BYOD, accessories, tablets, financing) across all stores' },
     { href: '/commcalc/comp-trend', label: 'Total Compensation', module: 'commissions', scopes: ['all', 'market'] },
     // DM GATE — mirrors the rbac.ts NAV row 1:1 (owner directive 2026-08-07). This catalog is the

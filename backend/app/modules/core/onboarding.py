@@ -471,12 +471,14 @@ def build_status(org_id: str, module_key: str) -> dict:
 TEMPLATE_SPECS = {
     "customers": dict(
         schema="pos", table="customers", title="Customers",
-        exclude=["id", "org_id", "cust_number", "created_at", "updated_at",
-                 "ssn_enc", "driver_license_enc", "password"],
+        exclude=["id", "org_id", "cust_number", "created_at", "updated_at", "password",
+                 # Retired by mig 909 — the columns still exist but the application neither reads
+                 # nor writes them, so offering them in a template would import into a dead end.
+                 "ssn_enc", "driver_license_enc", "driver_license_state"],
         alias=[], import_entity="customers",
-        note="SSN, driver-licence number and the carrier account PIN are NOT importable — they are "
-             "encrypted or credential-grade and are entered per customer in the app. Driver-licence "
-             "STATE is importable. Customer # is assigned by the system."),
+        note="The carrier account PIN is NOT importable — it is credential-grade and is entered per "
+             "customer in the app. Customer # is assigned by the system. SSN and driver-licence "
+             "fields are retired: the platform no longer collects them (mig 909)."),
     "vendors": dict(
         schema="pos", table="vendors", title="Vendors / Manufacturers / Dealers",
         exclude=["id", "org_id", "created_at", "updated_at"], alias=[], import_entity="vendors",

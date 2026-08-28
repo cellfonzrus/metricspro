@@ -29,18 +29,33 @@ def aggregate(exception_rows, shift_counts, thresholds=None):
         k = _key(r.get("employee_name"), r.get("employee_id"))
         if not k:
             continue
-        e = emp.setdefault(k, {"employee": r.get("employee_name") or k, "late": 0, "no_show": 0,
-                               "left_early": 0, "excused": 0})
+        e = emp.setdefault(k, {"employee": r.get("employee_name") or k, "employee_id": r.get("employee_id"),
+                               "late": 0, "no_show": 0, "left_early": 0, "excused": 0, "incidents": []})
         if r.get("excused"):
             e["excused"] += 1
             continue
         t = r.get("exception_type")
-        if t == "late":
+        # Use the is_late/is_left_early flags so a combined 'late_and_left_early' row counts toward
+        # BOTH (the old exact-string match on 'late'/'left_early' silently dropped it from either).
+        is_late = bool(r.get("is_late")) or t == "late"
+        is_early = bool(r.get("is_left_early")) or t == "left_early"
+        if is_late:
             e["late"] += 1
-        elif t == "no_show":
-            e["no_show"] += 1
-        elif t == "left_early":
+        if is_early:
             e["left_early"] += 1
+        if t == "no_show":
+            e["no_show"] += 1
+        # Per-incident detail so the report/email can name the DATES an employee was late and the TIME
+        # they actually clocked in (or clocked out early). Only late/left-early incidents are captured.
+        if is_late or is_early:
+            e["incidents"].append({
+                "work_date": r.get("work_date"), "store_code": r.get("store_code"),
+                "late": is_late, "left_early": is_early,
+                "actual_clock_in": r.get("actual_clock_in"), "actual_clock_out": r.get("actual_clock_out"),
+                "actual_clock_in_local": r.get("actual_clock_in_local"),
+                "actual_clock_out_local": r.get("actual_clock_out_local"),
+                "minutes_late": r.get("minutes_late") or 0, "minutes_early": r.get("minutes_early") or 0,
+            })
 
     rows = []
     for k, e in emp.items():
@@ -55,9 +70,11 @@ def aggregate(exception_rows, shift_counts, thresholds=None):
                 flags.append("attendance")
             if le_rate >= th["left_early_rate_flag"]:
                 flags.append("early_departure")
-        rows.append({"employee": e["employee"], "total_shifts": total, "late": e["late"],
+        incidents = sorted(e["incidents"], key=lambda x: str(x.get("work_date") or ""))
+        rows.append({"employee": e["employee"], "employee_id": e.get("employee_id"),
+                     "total_shifts": total, "late": e["late"],
                      "no_show": e["no_show"], "left_early": e["left_early"], "excused": e["excused"],
-                     "late_rate": round(late_rate, 2), "flags": flags})
+                     "late_rate": round(late_rate, 2), "flags": flags, "incidents": incidents})
     rows.sort(key=lambda x: (-len(x["flags"]), -x["late_rate"], -x["no_show"]))
 
     recs = []
@@ -94,4 +111,18 @@ if __name__ == "__main__":
     assert by["Evan"]["flags"] == []                                    # 1/20 late → below threshold
     assert res["employees"][0]["employee"] in ("Dana", "Finn")          # flagged first
     assert any(rc["employee"] == "Dana" for rc in res["recommendations"])
+
+    # combined late_and_left_early counts toward BOTH late and left_early (was dropped from either),
+    # and per-incident dates/times are captured for the report/email.
+    exc2 = [
+        {"exception_type": "late_and_left_early", "is_late": True, "is_left_early": True, "employee_name": "Gia",
+         "work_date": "2026-08-03", "actual_clock_in": "2026-08-03T13:20:00+00:00",
+         "actual_clock_out": "2026-08-03T21:40:00+00:00", "minutes_late": 20, "minutes_early": 20},
+        {"exception_type": "late", "is_late": True, "employee_name": "Gia",
+         "work_date": "2026-08-01", "actual_clock_in": "2026-08-01T13:10:00+00:00", "minutes_late": 10},
+    ]
+    r2 = {x["employee"]: x for x in aggregate(exc2, {"GIA": 8})["employees"]}["Gia"]
+    assert r2["late"] == 2 and r2["left_early"] == 1, (r2["late"], r2["left_early"])
+    assert len(r2["incidents"]) == 2 and r2["incidents"][0]["work_date"] == "2026-08-01"  # sorted by date
+    assert r2["incidents"][0]["minutes_late"] == 10 and r2["incidents"][1]["left_early"] is True
     print("accountability self-test OK:", [(r["employee"], r["flags"]) for r in res["employees"]])

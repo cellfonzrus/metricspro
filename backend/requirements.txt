@@ -1,5 +1,6 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
+gunicorn>=22.0.0
 supabase>=2.9.0
 python-multipart>=0.0.12
 pandas>=2.2.0
@@ -19,4 +20,13 @@ cryptography>=42.0.0
 google-auth>=2.30.0
 google-api-python-client>=2.130.0
 segno>=1.6.0
+PyJWT>=2.8.0
+h2>=4.1.0
+pywebpush>=2.0.0
 
+# Vision edge analyzer only (backend/vision_edge_analyzer.py) — NOT imported by the API process.
+# Installed on the in-store analyzer box, where it reads WebRTC camera streams. Listed here so the
+# version is pinned in one place; the API image does not need it and nothing in app/ imports it.
+# aiortc>=1.9.0
+# opencv-python>=4.10.0
+# ultralytics>=8.3.0

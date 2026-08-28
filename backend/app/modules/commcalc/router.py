@@ -6,6 +6,7 @@ import pandas as pd
 import io
 import re
 from app.core.database import get_supabase
+from app.core.service_role import require_browser_service   # SERVICE_ROLE=api → clean 503 on browser endpoints
 from app.core.schemas import LaxModel
 from pydantic import Field as _Field
 from app.core import import_batches as _import_batches   # DDIA Phase 1 idempotency guard
@@ -53,6 +54,7 @@ from app.modules.commcalc import ma_class_wiring
 from app.modules.commcalc import accessory_definition
 from app.modules.commcalc import expected_commission
 from app.modules.commcalc import device_history
+from app.modules.commcalc import carrier_recon   # carrier reconciliation (upload & reconcile) parser
 from app.modules.commcalc import template_clone
 from app.modules.commcalc import custom_report
 from app.modules.commcalc import atu_opportunity as _atu
@@ -769,6 +771,12 @@ BUILTIN_UPLOAD_TYPES = ["sales", "daily_sales", "payment_detail", "mi_report", "
 # wants one captured can register it under Data Imports → Custom Reports (report_definitions).
 KNOWN_IGNORED_TYPES = {"sales_trend"}
 CUSTOM_IMPORT_TABLE = "raw_custom_import"
+# A custom sheet may be BOUND to a canonical dataset so its rows also flow into the standard report (no
+# per-report resolver code). The binding lives IN the existing commcalc.column_mapping table under the custom
+# report_key: one sentinel row (target_field=__dataset__, source_header=<dataset>) names the target dataset,
+# the rest are ordinary source_header→canonical-field rules. Reusing column_mapping means NO new table/migration
+# and the same mapping editor — the single-source rule (migs 208/923), not a parallel store.
+CUSTOM_BINDING_SENTINEL = "__dataset__"
 
 
 def _custom_report_def(client, org_id, report_key):
@@ -801,6 +809,15 @@ async def _ingest_custom_report(report_key, file, period, org_id, rdef=None):
         df = _read_upload_df(contents, fname)
     except Exception as e:
         raise HTTPException(400, f"Could not read file for '{report_key}': {e}")
+    # BACK-COMPAT SAFETY NET: if a B2B Soft export arrives in the GROUPED layout (Store / Trans ID as
+    # section-HEADER rows in the first column rather than as columns — the older Activation Details shape),
+    # flatten it so the section header carries down onto every detail line and the header/subtotal rows are
+    # dropped. NO-OP on the current flat exports (owner removed the store-header rows 2026-08-26) and on
+    # every non-grouped custom sheet (Bill Payments / Sales by Product), so there is zero regression.
+    try:
+        df = _flatten_grouped_sales(df)
+    except Exception as _fe:
+        print(f"WARN grouped-flatten skipped for '{report_key}': {_fe}")
     # Honor the report's period_mode: 'none' → capture periodless (ignore any month the sweep supplied).
     if (rdef or {}).get("period_mode") == "none":
         period = ""
@@ -839,8 +856,23 @@ async def _ingest_custom_report(report_key, file, period, org_id, rdef=None):
              "filename": fname or None, "rows_saved": saved}).execute()
     except Exception as e:
         print(f"WARN upload_log insert failed: {e}")
-    return {"saved": saved, "report_key": report_key, "target_table": CUSTOM_IMPORT_TABLE,
-            "period": period, "rows_read": len(records)}
+    res = {"saved": saved, "report_key": report_key, "target_table": CUSTOM_IMPORT_TABLE,
+           "period": period, "rows_read": len(records)}
+    # OPT-IN dataset binding (set at setup via PUT /custom-import-types/{key}/binding): ALSO map the rows we
+    # just captured through the shared column_mapping engine into the bound canonical dataset's table, so a
+    # report the user set up flows into the standard report with NO per-report resolver code. Additive +
+    # best-effort — capture already succeeded above, a binding failure can never fail the capture, and NO
+    # binding reproduces today's behaviour byte-for-byte.
+    try:
+        binding = _custom_report_binding(client, org_id, report_key)
+        ds, brules = binding.get("target_dataset"), binding.get("rules") or []
+        table = column_mapping.TABLE_MAP.get(ds) if ds else None
+        if ds and brules and table:
+            res["mapped"] = _ingest_mapped_df(org_id, ds, table, brules, df, period=period,
+                                              fname=fname or None, trace_source="custom-binding")
+    except Exception as _be:
+        print(f"WARN custom-import binding apply for '{report_key}' failed: {_be}")
+    return res
 
 
 # ── Upload endpoints ─────────────────────────────────────────
@@ -1986,13 +2018,13 @@ def pay_simulator_context(period: str = "", rep: str = "",
                                 requested_org=org_id)
 
 
-@router.post("/pay-simulator/simulate")
 class PaySimulatorSimulateIn(LaxModel):
     period: Any = None
     inputs: Any = None
     rep: Any = None
 
 
+@router.post("/pay-simulator/simulate")
 def pay_simulator_simulate(body: Optional[PaySimulatorSimulateIn] = None, authorization: str = Header(default=""),
                            org_id: str = ORG_ID):
     """Projected pay for the caller's OWN levers. POST because the input is a lever map, NOT because
@@ -2069,7 +2101,6 @@ def whatif_get_source_config(carrier_id: str = "", authorization: str = Header(d
     }
 
 
-@router.put("/whatif/source-config")
 class WhatifPutSourceConfigIn(LaxModel):
     carrier_id: str = ""
     carrier_mode: str = ""
@@ -2084,6 +2115,7 @@ class WhatifPutSourceConfigIn(LaxModel):
     is_active: Any = None
 
 
+@router.put("/whatif/source-config")
 def whatif_put_source_config(body: WhatifPutSourceConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Upsert a PER-CARRIER What-If source override (or the org's mode-default row when
     carrier_id is the nil UUID). Config, not code (RULE TWO). Degrades with an ok=false hint before mig
@@ -2208,7 +2240,7 @@ def tax_collected(period: str, start: str = "", end: str = "", org_id: str = ORG
 
 
 @router.get("/upload/history")
-async def upload_history(org_id: str = ORG_ID, period: str = "", limit: int = 100):
+def upload_history(org_id: str = ORG_ID, period: str = "", limit: int = 100):
     """Recent uploads, newest first. Powers the Upload page's 'already
     uploaded' badges and the collapsible history menu. Optionally filter to a
     single period. Degrades to [] if 007_upload_log.sql hasn't been run yet."""
@@ -2615,7 +2647,7 @@ def _vip_fetch(client, org_id, period=None, location=None, status=None, cols="*"
 
 
 @router.get("/vip/filter-options")
-async def vip_filter_options(org_id: str = ORG_ID):
+def vip_filter_options(org_id: str = ORG_ID):
     """Distinct stores / periods / statuses for the VIP page filter bar."""
     require_org(org_id)
     rows = _vip_fetch(sb(), org_id, cols="location,period,period_year,period_month,status")
@@ -2686,7 +2718,7 @@ async def vip_invoices_list(org_id: str = ORG_ID, period: str = "", location: st
 
 
 @router.get("/vip/invoice/{vip_id}")
-async def vip_invoice_detail(vip_id: int, org_id: str = ORG_ID):
+def vip_invoice_detail(vip_id: int, org_id: str = ORG_ID):
     """One invoice's full contents for the click-through preview: header + line items + devices."""
     require_org(org_id)
     client = sb()
@@ -2942,7 +2974,20 @@ def _registry_report_cfg(client, org_id):
                     .select('report_key,auto,refresh_months').eq('org_id', org_id).execute().data) or []
         except Exception:
             return {}
-    return {r['report_key']: r for r in rows if r.get('report_key')}
+    out = {r['report_key']: r for r in rows if r.get('report_key')}
+    # Optional operator override: a pinned portal report id (e.g. the Daily Transaction Detail menu id)
+    # so the sweep need not resolve it by label. Read in isolation so a database without the column
+    # never disturbs the main select above.
+    try:
+        pin = (client.schema('commcalc').table('report_definitions')
+               .select('report_key,portal_report_id').eq('org_id', org_id).execute().data) or []
+        for p in pin:
+            rk = p.get('report_key')
+            if rk in out and p.get('portal_report_id'):
+                out[rk]['portal_report_id'] = p['portal_report_id']
+    except Exception:
+        pass
+    return out
 
 
 def _epay_sub_schedule(client, org_id, now_iso):
@@ -2976,6 +3021,14 @@ def _epay_sub_schedule(client, org_id, now_iso):
     due, shared = [], []
     for key, rkey in _EPAY_REGISTRY_KEYS.items():
         d = by_report.get(rkey)
+        # Daily Transaction Detail: idempotent upsert makes an hourly re-pull safe and cheap, and the
+        # recon wants the freshest portal data EVERY tick — so it is due on every run-due (not just on
+        # the connector's daily slot), unless the registry explicitly disables it (auto=False).
+        if key == 'epay_daily_tx':
+            if d is not None and d.get('auto') is False:
+                continue
+            due.append(key)
+            continue
         if not d or d.get('sweep_hour') is None:
             shared.append(key)          # no slot of its own -> rides the connector
             continue
@@ -3074,12 +3127,11 @@ def _do_vip_sweep(org_id):
 
 
 @router.get("/vip/sweep/config")
-async def vip_sweep_get_config(org_id: str = ORG_ID):
+def vip_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
     return _vip_public_cfg(_vip_cfg(sb(), org_id))
 
 
-@router.put("/vip/sweep/config")
 class VipSweepPutConfigIn(LaxModel):
     frequency: Any = None
     day_of_week: Any = None
@@ -3097,6 +3149,7 @@ class VipSweepPutConfigIn(LaxModel):
     portal_pass: Any = None
 
 
+@router.put("/vip/sweep/config")
 async def vip_sweep_put_config(body: VipSweepPutConfigIn, org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
@@ -3124,7 +3177,7 @@ async def vip_sweep_put_config(body: VipSweepPutConfigIn, org_id: str = ORG_ID,
 
 
 @router.post("/vip/sweep/run-now")
-async def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Run now' from the admin page (background task)."""
     require_org(org_id)
     cfg = _vip_cfg(sb(), org_id)
@@ -3135,7 +3188,7 @@ async def vip_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG
 
 
 @router.post("/vip/sweep/run-due")
-async def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+def vip_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
@@ -3710,48 +3763,14 @@ def _restore_rows(client, table, rows, chunk=500):
     return restored, None
 
 
-@router.post("/upload-mapped")
-async def upload_mapped(
-    report_key: str = Form(...),
-    target_table: str = Form(""),
-    carrier_id: str = Form(""),
-    period: str = Form(""),
-    file: UploadFile = File(...),
-    org_id: str = ORG_ID,
-):
-    """Generic, config-driven ingest for a NEW carrier's report. Maps the sheet via
-    commcalc.column_mapping into the report's target_table, applying the SAME safety guards as the
-    legacy upload (defer-delete, never-wipe-on-empty, batched insert, upload_log). The legacy
-    /upload/{file_type} path is untouched — this is the additive any-carrier path."""
-    require_org(org_id)
-    table = (target_table or column_mapping.TABLE_MAP.get(report_key) or "").strip()
-    if not table:
-        # resolve from report_definitions if the caller didn't pass it
-        rd = (sb().schema("commcalc").table("report_definitions").select("target_table")
-              .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute().data) or []
-        table = (rd[0].get("target_table") if rd else "") or ""
-    if not table:
-        raise HTTPException(400, f"No target_table for report_key '{report_key}'. Pass target_table or set it on the report definition.")
-
-    rules = column_mapping.load_rules(sb(), org_id, report_key, carrier_id or None)
-    used_defaults = False
-    if not rules:
-        # No SAVED column_mapping rows → fall back to the code-default seed layout (report_pull-derived for
-        # the MA reports, TARGET_FIELDS for the Boost layouts) so the onboarding import works out of the box
-        # without a manual "Seed default layout" click. Previously this raised 400 → the MA reports (which
-        # had NO seed at all) could never import from onboarding. A genuinely-unmapped key still 400s below.
-        rules = column_mapping.default_mapping(report_key, sb(), org_id)
-        used_defaults = bool(rules)
-    if not rules:
-        raise HTTPException(400, f"No column mapping configured for '{report_key}' and no default layout "
-                                 f"exists to seed. Map its columns first on the Column Mapping page.")
-
-    contents = await file.read()
-    try:
-        df = _read_upload_df(contents, getattr(file, "filename", ""))
-    except Exception as e:
-        raise HTTPException(400, f"Could not read file: {e}")
-
+def _ingest_mapped_df(org_id, report_key, table, rules, df, *, period="", carrier_id="",
+                      fname=None, used_defaults=False, trace_source="onboarding-import"):
+    """Config-driven mapper CORE — shared by /upload-mapped and the custom-report→dataset binding.
+    Given already-loaded `rules` and a read `df`, maps rows into `table` with the FULL safety guard set
+    (column pre-validation so a stray field can't 42703 the insert; partition-scoped + source-aware
+    replace; snapshot/restore so a failed insert never leaves the period emptier than before; upload_log;
+    upload_trace). Extracted verbatim from upload_mapped so BOTH callers apply byte-identical invariants —
+    the single-source rule (migs 208/923), not a second copy that can drift."""
     pm = parse_period(period) if period else {"month": 0, "year": 0}
     base = {"org_id": org_id}
     if period:
@@ -3775,14 +3794,13 @@ async def upload_mapped(
 
     client = sb()
     started = _datetime.now(timezone.utc)
-    fname = getattr(file, "filename", None)
     parsed_n = len(df)
 
     def _trace(status, rows_saved, note, error=None):
         # mig-202 upload_trace (source='onboarding-import') so 🩺 Ingest health sees these imports too.
         guard = {"dropped_columns": dropped_columns} if dropped_columns else None
         _write_upload_trace(
-            org_id, source="onboarding-import", filename=fname, upload_type=report_key, period=period,
+            org_id, source=trace_source, filename=fname, upload_type=report_key, period=period,
             result={"saved": rows_saved, "note": note, "guard": guard,
                     "_trace": {"rows_in": parsed_n, "target_table": table}},
             duration_ms=int((_datetime.now(timezone.utc) - started).total_seconds() * 1000),
@@ -3898,6 +3916,53 @@ async def upload_mapped(
             "replace_scope": ({"column": scope["partition_col"], "values": len(scope["values"]),
                                "from": scope["lo"], "to": scope["hi"]} if scope and period else None),
             "note": note}
+
+
+@router.post("/upload-mapped")
+async def upload_mapped(
+    report_key: str = Form(...),
+    target_table: str = Form(""),
+    carrier_id: str = Form(""),
+    period: str = Form(""),
+    file: UploadFile = File(...),
+    org_id: str = ORG_ID,
+):
+    """Generic, config-driven ingest for a NEW carrier's report. Maps the sheet via
+    commcalc.column_mapping into the report's target_table, applying the SAME safety guards as the
+    legacy upload (defer-delete, never-wipe-on-empty, batched insert, upload_log). The legacy
+    /upload/{file_type} path is untouched — this is the additive any-carrier path."""
+    require_org(org_id)
+    table = (target_table or column_mapping.TABLE_MAP.get(report_key) or "").strip()
+    if not table:
+        # resolve from report_definitions if the caller didn't pass it
+        rd = (sb().schema("commcalc").table("report_definitions").select("target_table")
+              .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute().data) or []
+        table = (rd[0].get("target_table") if rd else "") or ""
+    if not table:
+        raise HTTPException(400, f"No target_table for report_key '{report_key}'. Pass target_table or set it on the report definition.")
+
+    rules = column_mapping.load_rules(sb(), org_id, report_key, carrier_id or None)
+    used_defaults = False
+    if not rules:
+        # No SAVED column_mapping rows → fall back to the code-default seed layout (report_pull-derived for
+        # the MA reports, TARGET_FIELDS for the Boost layouts) so the onboarding import works out of the box
+        # without a manual "Seed default layout" click. Previously this raised 400 → the MA reports (which
+        # had NO seed at all) could never import from onboarding. A genuinely-unmapped key still 400s below.
+        rules = column_mapping.default_mapping(report_key, sb(), org_id)
+        used_defaults = bool(rules)
+    if not rules:
+        raise HTTPException(400, f"No column mapping configured for '{report_key}' and no default layout "
+                                 f"exists to seed. Map its columns first on the Column Mapping page.")
+
+    contents = await file.read()
+    try:
+        df = _read_upload_df(contents, getattr(file, "filename", ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file: {e}")
+
+    return _ingest_mapped_df(org_id, report_key, table, rules, df, period=period,
+                             carrier_id=carrier_id, fname=getattr(file, "filename", None),
+                             used_defaults=used_defaults, trace_source="onboarding-import")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
@@ -6460,13 +6525,38 @@ def x_tender_recon(date: str = "", period: str = "", tolerance: float = 1.0, org
         cls = (r.get('tender_class') or 'other')
         p[cls if cls in p else 'other'] += safe_float(r.get('amount'))
     clo = {}
+    _xsd = {}   # (address key, store_code, day) -> {cash, card} rep-sum, for the TKT-1030 overlay
     for r in drows:
         s = (r.get('store_address') or r.get('store_name') or r.get('store_code') or '').strip()
         if not s:
             continue
+        _cash = safe_float(r.get('store_cash')) + safe_float(r.get('epay_cash'))
+        _card = safe_float(r.get('store_cc')) + safe_float(r.get('epay_cc'))
         c = clo.setdefault(s, {'cash': 0.0, 'card': 0.0})
-        c['cash'] += safe_float(r.get('store_cash')) + safe_float(r.get('epay_cash'))
-        c['card'] += safe_float(r.get('store_cc')) + safe_float(r.get('epay_cc'))
+        c['cash'] += _cash
+        c['card'] += _card
+        _xk = (s, (r.get('store_code') or '').strip(), str(r.get('close_date') or '')[:10])
+        _xa = _xsd.setdefault(_xk, {'cash': 0.0, 'card': 0.0})
+        _xa['cash'] += _cash
+        _xa['card'] += _card
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): a verified DM cash/credit correction is
+    # the authoritative CLOSING figure this recon compares against the X-report. Applied as a per-store-day
+    # delta on the closing side only (the X-report is the actual — never overridden). No-op without a
+    # correction. store keys here are addresses, so we look the override up by each row's store_code.
+    try:
+        from app.modules.closing import verified_overlay as _vo
+        _xov = _vo.build_overlay_map(client, org_id, {d for (_s, _c, d) in _xsd.keys()})
+        if _xov:
+            for (s, sc, d), _raw in _xsd.items():
+                _dm = _xov.get((_vo._norm(sc), d))
+                if not _dm or s not in clo:
+                    continue
+                if _dm.get('dm_store_cash') is not None:
+                    clo[s]['cash'] = round(clo[s]['cash'] - _raw['cash'] + _vo._f(_dm['dm_store_cash']), 2)
+                if _dm.get('dm_store_cc') is not None:
+                    clo[s]['card'] = round(clo[s]['card'] - _raw['card'] + _vo._f(_dm['dm_store_cc']), 2)
+    except Exception:
+        pass
 
     rows_out, t = [], {'pos_cash': 0.0, 'closing_cash': 0.0, 'pos_card': 0.0, 'closing_card': 0.0}
     for s in sorted(set(pos) | set(clo)):
@@ -6501,7 +6591,6 @@ def list_category_map(carrier_id: str = "", org_id: str = ORG_ID):
     return q.order("priority").execute().data or []
 
 
-@router.post("/carrier-category-map")
 class UpsertCategoryRuleIn(LaxModel):
     component: str = ""
     raw_category: str = ""
@@ -6513,6 +6602,7 @@ class UpsertCategoryRuleIn(LaxModel):
     id: Any = None
 
 
+@router.post("/carrier-category-map")
 def upsert_category_rule(body: UpsertCategoryRuleIn, org_id: str = ORG_ID):
     require_org(org_id)
     comp = (body.component or "").strip().upper()
@@ -7068,11 +7158,18 @@ class CustomImportTypeIn(LaxModel):
 
 
 @router.post("/custom-import-types")
-def create_custom_import_type(body: CustomImportTypeIn, org_id: str = ORG_ID):
+def create_custom_import_type(body: CustomImportTypeIn, background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Register a self-serve custom sheet. body: {label, report_key?, period_mode?, note?}. Auto-slugs a
     report_key from the label, rejects a collision with a built-in type, and marks it as a generic JSONB
     capture (target_table=raw_custom_import). Returns the report_key to use in a filename pattern.
-    Idempotent (upsert by report_key)."""
+    Idempotent (upsert by report_key).
+
+    Per the hands-off design (owner: "the user will not upload anything to the backend"): registering a
+    report is itself the trigger — we fire an immediate background email sweep so the just-added sheet
+    ingests on the next moment, not on the next 15-min cron tick. The sweep's auto-match
+    (`_auto_custom_report_patterns`) derives the filename glob from this label + report_key, so NO manual
+    filename rule is needed. The pg_cron every-15-min sweep and the "Run now" button remain as the
+    scheduled and on-demand paths; this is the on-registration path."""
     require_org(org_id)
     label = (body.label or '').strip()
     if not label:
@@ -7086,6 +7183,12 @@ def create_custom_import_type(body: CustomImportTypeIn, org_id: str = ORG_ID):
            'auto': True, 'note': (body.note or None),
            'updated_at': _datetime.now(_timezone.utc).isoformat()}
     r = sb().schema('commcalc').table('report_definitions').upsert(row, on_conflict='org_id,report_key').execute()
+    # Fire-and-forget: pull any already-arrived email for this new sheet right away. Defensive — a tenant
+    # with no configured mailbox just gets a no-op run; never blocks or fails the registration response.
+    try:
+        background_tasks.add_task(_run_email_sweep_all, org_id)
+    except Exception:
+        pass
     return (r.data[0] if r.data else row)
 
 
@@ -7130,6 +7233,577 @@ def view_custom_import(report_key: str, limit: int = 200, period: str = "", org_
              '_period': r.get('period'), '_file': r.get('source_filename')} for r in rows]
     periods = sorted({r.get('period') for r in rows if r.get('period')})
     return {"report_key": report_key, "columns": cols, "rows": flat, "count": len(flat), "periods": periods}
+
+
+# ── Custom report → canonical dataset binding (header-at-setup wiring) ──────────────────────────
+# Owner design (2026-08-27): at setup, capture the report's HEADER and let the user map its columns to a
+# standard dataset, so the backend is wired WITHOUT a developer writing a per-report resolver. The mapping
+# reuses the proven column_mapping engine + _ingest_mapped_df; the binding is stored in column_mapping under
+# the custom report_key (sentinel row names the dataset). Header is AUTO-READ from the mailbox when possible
+# (the backend holds the tenant's IMAP creds even when no dev can see the inbox), with a paste fallback.
+def _custom_report_binding(client, org_id, report_key):
+    """The optional canonical-dataset binding for a custom sheet, read from column_mapping under the custom
+    report_key. Returns {'target_dataset', 'rules'} where rules are in the shape column_mapping.map_records
+    expects. Degrades to {'target_dataset': None, 'rules': []} — so an unbound sheet stays capture-only."""
+    try:
+        rows = (client.schema("commcalc").table("column_mapping").select("*")
+                .eq("org_id", org_id).eq("report_key", report_key).eq("is_active", True).execute().data) or []
+    except Exception:
+        return {"target_dataset": None, "rules": []}
+    ds, rules = None, []
+    for r in rows:
+        if r.get("target_field") == CUSTOM_BINDING_SENTINEL:
+            ds = (r.get("source_header") or "").strip() or None
+        elif r.get("source_header") and r.get("target_field"):
+            rules.append({"target_field": r["target_field"], "source_header": r["source_header"],
+                          "transform": r.get("transform") or "text"})
+    return {"target_dataset": ds, "rules": rules}
+
+
+def _custom_binding_datasets(client, org_id):
+    """Canonical datasets a custom sheet may be bound to — ONLY those with a real target table (so the
+    mapping actually flows into a standard report). Each: dataset key, target table, and field count."""
+    out = []
+    for k in column_mapping.known_report_keys(client, org_id):
+        tbl = column_mapping.TABLE_MAP.get(k)
+        if not tbl:
+            continue
+        out.append({"dataset": k, "table": tbl, "fields": len(column_mapping.target_fields(k, client, org_id))})
+    return out
+
+
+def _autoread_custom_header(client, org_id, report_key, sample_rows=3):
+    """Connect to the tenant's mailbox(es) and read ONLY the header (+ a few sample rows) of the first
+    attachment matching THIS custom report — without ingesting. Scopes the IMAP match to this report's own
+    auto-derived pattern so it downloads just its file. Returns {'columns','sample','source'} or None."""
+    pats = [p for p in _auto_custom_report_patterns(client, org_id) if p.get("upload_type") == report_key]
+    if not pats:
+        return None
+    for acct in _email_accounts(client, org_id):
+        cfg = dict(acct or {})
+        if not (cfg.get("imap_host") or "").strip():
+            continue
+        cfg = {**cfg, "patterns": pats}   # match ONLY this report's file, not the whole inbox
+        try:
+            files = _email.fetch_new_attachments(cfg, set())
+        except Exception:
+            continue
+        for f in files:
+            if f.get("upload_type") != report_key:
+                continue
+            try:
+                df = _flatten_grouped_sales(_read_upload_df(f["bytes"], f.get("name") or ""))
+            except Exception:
+                continue
+            cols = [str(c).strip() for c in df.columns if str(c).strip()]
+            if not cols:
+                continue
+            sample = [{str(k).strip(): ("" if v is None else str(v)) for k, v in rec.items() if str(k).strip()}
+                      for rec in df.head(sample_rows).to_dict("records")]
+            return {"columns": cols, "sample": sample, "source": "email:" + (cfg.get("account") or "default")}
+    return None
+
+
+def _custom_report_columns(client, org_id, report_key, auto_email=True, sample_rows=3):
+    """Detected header columns for a custom sheet — captured-first (raw_custom_import), else AUTO-READ from
+    the mailbox so a report can be mapped BEFORE its first sweep. {'columns','sample','source'}; never raises."""
+    try:
+        rows = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE).select("data,created_at,row_index")
+                .eq("org_id", org_id).eq("report_key", report_key)
+                .order("created_at", desc=True).order("row_index").limit(50).execute().data) or []
+    except Exception:
+        rows = []
+    if rows:
+        cols, seen = [], set()
+        for r in rows:
+            for k in (r.get("data") or {}).keys():
+                if k not in seen:
+                    seen.add(k); cols.append(k)
+        return {"columns": cols, "sample": [r.get("data") or {} for r in rows[:sample_rows]], "source": "captured"}
+    if auto_email:
+        try:
+            hdr = _autoread_custom_header(client, org_id, report_key, sample_rows=sample_rows)
+            if hdr and hdr.get("columns"):
+                return hdr
+        except Exception as e:
+            print(f"WARN auto-read header for '{report_key}' failed: {e}")
+    return {"columns": [], "sample": [], "source": "none"}
+
+
+def _reingest_custom_binding(org_id, report_key):
+    """Apply a custom sheet's dataset binding to its ALREADY-CAPTURED rows (raw_custom_import), per period, so
+    binding an existing report flows its history into the canonical dataset without waiting for the next email.
+    Best-effort — a mapping failure is logged, never raised."""
+    client = sb()
+    binding = _custom_report_binding(client, org_id, report_key)
+    ds, rules = binding.get("target_dataset"), binding.get("rules") or []
+    table = column_mapping.TABLE_MAP.get(ds) if ds else None
+    if not (ds and rules and table):
+        return
+    try:
+        rows = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+                .select("period,source_filename,row_index,data")
+                .eq("org_id", org_id).eq("report_key", report_key).limit(100000).execute().data) or []
+    except Exception:
+        return
+    by_period = {}
+    for r in rows:
+        by_period.setdefault(r.get("period") or "", []).append(r)
+    for period, prows in by_period.items():
+        prows.sort(key=lambda x: (x.get("row_index") or 0))
+        df = pd.DataFrame([(p.get("data") or {}) for p in prows], dtype=str)
+        if df.empty:
+            continue
+        try:
+            _ingest_mapped_df(org_id, ds, table, rules, df, period=period,
+                              fname=(prows[0].get("source_filename") or f"{report_key}.captured"),
+                              trace_source="custom-binding")
+        except Exception as e:
+            print(f"WARN reingest binding {report_key}->{ds} period {period!r}: {e}")
+
+
+@router.get("/custom-import-types/{report_key}/columns")
+def custom_import_columns(report_key: str, auto: bool = True, org_id: str = ORG_ID):
+    """Detected header columns for a custom sheet (captured-first, else auto-read from the mailbox). Drives the
+    setup-time 'map your columns' step so a new report can be wired the moment it is registered."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    return {"report_key": report_key, **_custom_report_columns(client, org_id, report_key, auto_email=auto)}
+
+
+def _binding_payload(client, org_id, report_key, cols, target_dataset=""):
+    """Shared mapper-modal payload: the saved binding, the detected header (`cols` = {columns, sample,
+    source} from EITHER the captured/auto-read probe OR an uploaded sample), the pre-filled per-field
+    suggestions for the selected dataset, and the mappable dataset list. One builder so the GET-binding
+    and POST-sample paths return an identical shape the frontend can drop in."""
+    binding = _custom_report_binding(client, org_id, report_key)
+    ds = (target_dataset or "").strip() or binding.get("target_dataset") or ""
+    headers = cols.get("columns") or []
+    suggestions, fields = [], []
+    if ds:
+        existing = [{"target_field": r["target_field"], "source_header": r["source_header"]}
+                    for r in binding.get("rules", [])]
+        suggestions = column_mapping.suggest(headers, ds, existing, client, org_id)
+        fields = column_mapping.target_fields(ds, client, org_id)
+    return {"report_key": report_key, "target_dataset": binding.get("target_dataset"),
+            "selected_dataset": ds or None, "rules": binding.get("rules", []),
+            "columns": headers, "sample": cols.get("sample", []), "source": cols.get("source"),
+            "suggestions": suggestions, "fields": fields, "datasets": _custom_binding_datasets(client, org_id)}
+
+
+@router.get("/custom-import-types/{report_key}/binding")
+def get_custom_import_binding(report_key: str, target_dataset: str = "", org_id: str = ORG_ID):
+    """The custom sheet's dataset binding + a PRE-FILLED column mapping. When a dataset is selected (or already
+    bound), returns suggestions (source header→canonical field) from the detected header so the mapping opens
+    mostly done. `datasets` lists the mappable canonical datasets."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    cols = _custom_report_columns(client, org_id, report_key, auto_email=True)
+    return _binding_payload(client, org_id, report_key, cols, target_dataset)
+
+
+@router.post("/custom-import-types/{report_key}/sample")
+async def custom_import_sample(report_key: str, target_dataset: str = Form(""),
+                               file: UploadFile = File(...), org_id: str = ORG_ID):
+    """Read a SAMPLE of this report (uploaded, NOT ingested) to drive the mapping when the file isn't in the
+    mailbox yet — the owner's "ask for the sample report" at setup. Returns the same shape as GET binding, but
+    the header + sample rows come from the uploaded file, so the per-field mapping opens pre-filled from real
+    columns and values. Nothing is captured or changed."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    contents = await file.read()
+    try:
+        df = _flatten_grouped_sales(_read_upload_df(contents, getattr(file, "filename", "") or ""))
+    except Exception as e:
+        raise HTTPException(400, f"Could not read the sample file: {e}")
+    columns = [str(c).strip() for c in df.columns if str(c).strip()]
+    if not columns:
+        raise HTTPException(400, "No columns found in the sample file — is it the right sheet?")
+    sample = [{str(k).strip(): ("" if v is None else str(v)) for k, v in rec.items() if str(k).strip()}
+              for rec in df.head(5).to_dict("records")]
+    cols = {"columns": columns, "sample": sample, "source": "sample:" + (getattr(file, "filename", "") or "upload")}
+    return _binding_payload(client, org_id, report_key, cols, target_dataset)
+
+
+class CustomBindingIn(LaxModel):
+    target_dataset: str = ""
+    rules: Any = None   # [{target_field, source_header, transform?}]
+
+
+@router.put("/custom-import-types/{report_key}/binding")
+def put_custom_import_binding(report_key: str, body: CustomBindingIn, background_tasks: BackgroundTasks,
+                              org_id: str = ORG_ID):
+    """Bind a custom sheet to a canonical dataset + save its column mapping (stored in column_mapping under the
+    custom report_key). Replaces the prior binding wholesale. Empty target_dataset UNBINDS (capture-only). On a
+    non-empty binding, kicks a background re-ingest so the mapping applies to already-captured data at once."""
+    require_org(org_id)
+    client = sb()
+    if not _custom_report_def(client, org_id, report_key):
+        raise HTTPException(404, f"no custom sheet '{report_key}'")
+    ds = (body.target_dataset or "").strip()
+    if ds and not column_mapping.TABLE_MAP.get(ds):
+        raise HTTPException(400, f"dataset '{ds}' has no target table to map into — pick a mappable dataset")
+    try:
+        client.schema("commcalc").table("column_mapping").delete() \
+            .eq("org_id", org_id).eq("report_key", report_key).execute()
+    except Exception as e:
+        raise HTTPException(500, f"could not clear prior binding: {e}")
+    saved = 0
+    if ds:
+        rowset = [{"org_id": org_id, "report_key": report_key, "carrier_id": None,
+                   "target_field": CUSTOM_BINDING_SENTINEL, "source_header": ds, "transform": "text",
+                   "priority": 0, "is_active": True, "updated_at": column_mapping.now_iso()}]
+        for r in (body.rules or []):
+            tf = str((r or {}).get("target_field") or "").strip()
+            sh = str((r or {}).get("source_header") or "").strip()
+            if not tf or not sh:
+                continue
+            tr = str((r or {}).get("transform") or "text").strip()
+            if tr not in column_mapping.TRANSFORMS:
+                tr = "text"
+            rowset.append({"org_id": org_id, "report_key": report_key, "carrier_id": None,
+                           "target_field": tf, "source_header": sh, "transform": tr,
+                           "priority": 100, "is_active": True, "updated_at": column_mapping.now_iso()})
+        try:
+            client.schema("commcalc").table("column_mapping").insert(rowset).execute()
+        except Exception as e:
+            raise HTTPException(500, f"could not save binding: {e}")
+        saved = len(rowset) - 1
+        try:
+            background_tasks.add_task(_reingest_custom_binding, org_id, report_key)
+        except Exception:
+            pass
+    return {"ok": True, "report_key": report_key, "target_dataset": ds or None, "rules_saved": saved}
+
+
+# ── Integrations hub (owner 2026-08-27: "all integrations on ONE page, clear carrier-neutral purpose,
+#    a 2-step wizard even for a 2-step job, best in class") ───────────────────────────────────────────
+# This is a COMPOSITION + NAVIGATOR layer, never a config store — every card deep-links to the page that
+# already owns that config (single-source, migs 208/923). Titles are carrier-NEUTRAL; `badge` marks the
+# few that are genuinely bound to a processor / carrier / distributor. `status` is a best-effort live probe
+# of each integration's own config table (degrades to 'unknown', never 500s the page). Each item carries a
+# uniform 2-step wizard so setup feels the same everywhere.
+def _integration_probe(client, org_id, spec):
+    """Best-effort status for one integration from its own config table. Returns connected | action_needed
+    (configured but not enabled) | not_started | unknown. Never raises."""
+    if not spec:
+        return "info"
+    try:
+        q = client.schema(spec.get("schema") or "commcalc").table(spec["table"]).select("*").eq("org_id", org_id)
+        for col, val in (spec.get("filter") or {}).items():
+            q = q.eq(col, val)
+        rows = q.limit(50).execute().data or []
+    except Exception:
+        return "unknown"
+    if not rows:
+        return "not_started"
+    ec = spec.get("enabled_col")
+    if ec:
+        return "connected" if any(r.get(ec) for r in rows) else "action_needed"
+    return "connected"
+
+
+_STEP_VERIFY = {"title": "Turn it on & verify",
+                "body": "Save your details, run Test connection, then Run now. When the first data lands, "
+                        "this integration shows Connected. You can change it any time — nothing is locked in."}
+
+_INTEGRATIONS_CATALOG = [
+    {"category": "Automatic data feeds", "blurb": "Connect a source once; it brings your data in on a schedule.", "items": [
+        {"key": "email", "title": "Email Inbox Import", "icon": "📨",
+         "purpose": "Pull report attachments straight from an email inbox on a schedule — no uploading.",
+         "carrier_specific": False, "deep_link": "/commcalc/email-imports",
+         "probe": {"table": "email_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the inbox", "body": "Add the mailbox (host, address, app password) and a rule for which attachments to grab. A one-click standard is offered for common POS exports."}, _STEP_VERIFY]},
+        {"key": "portal_login", "title": "Portal Auto-Login", "icon": "🔐",
+         "purpose": "Sign in to a vendor or carrier portal (including 2-factor) and pull reports automatically.",
+         "carrier_specific": False, "deep_link": "/commcalc/email-imports",
+         "probe": {"table": "data_source"},
+         "steps": [{"title": "Add the login", "body": "Enter the portal URL and credentials. For 2-factor or tricky sites, use the guided live-login once to establish the session."}, _STEP_VERIFY]},
+        {"key": "connectors", "title": "Connectors Registry", "icon": "🔌",
+         "purpose": "One place to store portal credentials, set each one's schedule, and choose what it pulls.",
+         "carrier_specific": False, "deep_link": "/commcalc/connectors",
+         "probe": {"table": "connector_instances", "enabled_col": "enabled"},
+         "steps": [{"title": "Register a connector", "body": "Pick the source type, store its credentials, and map which reports it should fetch."}, _STEP_VERIFY]},
+        {"key": "ftp", "title": "FTP / SFTP Import", "icon": "🔁",
+         "purpose": "Automatically fetch files a vendor drops on an FTP/SFTP server.",
+         "carrier_specific": False, "deep_link": "/commcalc/ftp-imports",
+         "probe": {"table": "ftp_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the server", "body": "Enter host and credentials, and a rule that routes each filename to the right report."}, _STEP_VERIFY]},
+        {"key": "processor_sync", "title": "Payment Processor Sync", "icon": "🏦", "badge": "Processor",
+         "purpose": "Pull subscriber activity (MI + ATU) from your payment-processor portal.",
+         "carrier_specific": False, "deep_link": "/commcalc/epay/sweep",
+         "probe": {"table": "epay_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the processor", "body": "Enter the processor portal login and the accounts to pull."}, _STEP_VERIFY]},
+        {"key": "metrics_sync", "title": "Rep / Store Metrics Sync", "icon": "📈", "badge": "Carrier",
+         "purpose": "Pull daily rep and store performance metrics from the carrier portal.",
+         "carrier_specific": False, "deep_link": "/commcalc/dlar/sweep",
+         "probe": {"table": "dlar_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the portal", "body": "Enter the carrier portal login for the metrics report."}, _STEP_VERIFY]},
+        {"key": "distributor_sweep", "title": "Distributor Invoice Sweep", "icon": "🚚", "badge": "Distributor",
+         "purpose": "Pull distributor / dealer invoices from the distributor portal automatically.",
+         "carrier_specific": True, "deep_link": "/commcalc/vip/sweep",
+         "probe": {"table": "vip_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Connect the distributor", "body": "Enter the distributor portal login and the account to pull invoices for."}, _STEP_VERIFY]},
+        {"key": "closing_sheet", "title": "Daily Closing Sheet Import", "icon": "📋",
+         "purpose": "Import daily store-closing numbers from a shared Google Sheet.",
+         "carrier_specific": False, "deep_link": "/closing/imports",
+         "probe": {"table": "closing_sweep_config", "enabled_col": "enabled"},
+         "steps": [{"title": "Link the sheet", "body": "Share the sheet with the service account, then paste its ID and tab."}, _STEP_VERIFY]},
+    ]},
+    {"category": "Manual imports", "blurb": "Bring a file in by hand whenever you have it.", "items": [
+        {"key": "upload", "title": "Upload a Report File", "icon": "📁",
+         "purpose": "Drop in any report file by hand — the same pipeline the automatic feeds use.",
+         "carrier_specific": False, "deep_link": "/commcalc/upload", "probe": None,
+         "steps": [{"title": "Pick the report", "body": "Choose which report you're uploading and select the file."}, {"title": "Confirm the import", "body": "Review the row count and period, then import. Re-uploading the same period replaces it."}]},
+        {"key": "custom_report", "title": "Custom Report Capture", "icon": "🧾",
+         "purpose": "Add any report the vendor sends, capture it, and map it to a standard report — no code.",
+         "carrier_specific": False, "deep_link": "/commcalc/email-imports",
+         "probe": {"table": "report_definitions", "filter": {"target_table": "raw_custom_import"}},
+         "steps": [{"title": "Register the report", "body": "Name the report; it auto-imports on the next sweep (or upload a sample now)."}, {"title": "Map it to a report", "body": "Confirm which incoming column feeds each standard field, and save — it flows automatically from then on."}]},
+        {"key": "carrier_file", "title": "Commission Statement Extract", "icon": "📑",
+         "purpose": "Turn a commission / compensation statement file into a clean table.",
+         "carrier_specific": False, "deep_link": "/commcalc/carrier-comm-file", "probe": None,
+         "steps": [{"title": "Upload the statement", "body": "Select the statement file the carrier or processor sent."}, {"title": "Confirm the table", "body": "Review the extracted rows and commit them."}]},
+    ]},
+    {"category": "Make the data make sense", "blurb": "Tell the system what incoming columns, stores and report names mean.", "items": [
+        {"key": "column_mapping", "title": "Column Mapping", "icon": "🧩",
+         "purpose": "Tell the system which spreadsheet column means which field, for any source.",
+         "carrier_specific": False, "deep_link": "/commcalc/column-mapping",
+         "probe": {"table": "column_mapping"},
+         "steps": [{"title": "Load a sample", "body": "Detect a report's headers so the mapping pre-fills from best-guess matches."}, {"title": "Confirm & save", "body": "Adjust any column, then save. Required fields are flagged."}]},
+        {"key": "store_match", "title": "Store Matching", "icon": "🏬",
+         "purpose": "Match store names that appear in feeds to your canonical stores.",
+         "carrier_specific": False, "deep_link": "/commcalc/store-match",
+         "probe": {"table": "store_aliases"},
+         "steps": [{"title": "Review unmatched", "body": "See which store names from the data don't yet map to a store."}, {"title": "Link them", "body": "Point each alias at the right store; future imports resolve automatically."}]},
+        {"key": "report_mapping", "title": "Report Name Mapping", "icon": "🗂️",
+         "purpose": "Map a portal's report names to the right importer so pulls route correctly.",
+         "carrier_specific": False, "deep_link": "/commcalc/report-mappings",
+         "probe": {"table": "report_pull_map"},
+         "steps": [{"title": "See the portal reports", "body": "List the report names the portal exposes."}, {"title": "Route each one", "body": "Map each to the matching standard report, then save."}]},
+    ]},
+    {"category": "Point of sale & cameras", "blurb": "Bring in data from your in-store systems and devices.", "items": [
+        {"key": "pos_import", "title": "Point-of-Sale Data", "icon": "🛒",
+         "purpose": "Pull customers, inventory and sales activity from your point-of-sale system.",
+         "carrier_specific": False, "deep_link": "/pos/import",
+         "probe": {"schema": "core", "table": "import_feed"},
+         "steps": [{"title": "Connect the POS feed", "body": "Register the point-of-sale data feed and choose what to bring in (customers, inventory, sales)."}, {"title": "Import & confirm", "body": "Run the import and confirm the records landed against your stores."}]},
+        {"key": "cameras", "title": "Camera Feeds", "icon": "📹",
+         "purpose": "Connect store cameras to bring in foot-traffic and in-store activity data.",
+         "carrier_specific": False, "deep_link": "/vision/onboarding",
+         "probe": {"schema": "core", "table": "vision_config"},
+         "steps": [{"title": "Connect the cameras", "body": "Link your camera account and grant access to the store cameras."}, {"title": "Verify & watch", "body": "Verify a camera, then turn on watching so activity data flows in."}]},
+    ]},
+    {"category": "Guided setup", "blurb": "Step-by-step help to get everything connected.", "items": [
+        {"key": "onboarding", "title": "Setup Wizard", "icon": "🚀",
+         "purpose": "Full guided setup: every data feed and config the platform needs, and where to complete each.",
+         "carrier_specific": False, "deep_link": "/commcalc/onboarding", "probe": None,
+         "steps": [{"title": "Answer a few questions", "body": "Tell us your carrier, POS and processor; the wizard tailors the rest."}, {"title": "Complete each step", "body": "Work the checklist — green means done."}]},
+        {"key": "implementation", "title": "Implementation Wizard", "icon": "🧭",
+         "purpose": "Map a new carrier's columns and run the first end-to-end ingest.",
+         "carrier_specific": False, "deep_link": "/commcalc/implementation", "probe": None,
+         "steps": [{"title": "Map the columns", "body": "Match the new carrier's export columns to standard fields."}, {"title": "Run the first ingest", "body": "Import a file and confirm the data lands where expected."}]},
+    ]},
+]
+
+
+@router.get("/integrations")
+def list_integrations(org_id: str = ORG_ID):
+    """The single Integrations hub: every connection/import surface with a carrier-neutral purpose, a live
+    status probe, a deep-link to where it's configured, and a uniform 2-step wizard. Composition only —
+    never stores config. Status probes are best-effort (degrade to 'unknown'); the page never 500s."""
+    require_org(org_id)
+    client = sb()
+    cats = []
+    counts = {"connected": 0, "action_needed": 0, "not_started": 0}
+    for cat in _INTEGRATIONS_CATALOG:
+        items = []
+        for it in cat["items"]:
+            st = _integration_probe(client, org_id, it.get("probe"))
+            if st in counts:
+                counts[st] += 1
+            items.append({k: v for k, v in it.items() if k != "probe"} | {"status": st})
+        cats.append({"category": cat["category"], "blurb": cat.get("blurb"), "items": items})
+    total = sum(len(c["items"]) for c in _INTEGRATIONS_CATALOG)
+    return {"categories": cats, "summary": {"total": total, **counts}}
+
+
+# ── Data freshness probe (owner 2026-08-27: "the data has not updated after the 25th … see what is going
+#    on") — makes a stalled feed VISIBLE. The report pages read live, so frozen numbers mean the underlying
+#    feed stopped ingesting. This reports, per feed, when it last ingested and the LATEST transaction date in
+#    the data, so a gap ("latest data Aug 25, 2 days stale") is obvious and self-diagnosing. Read-only. ────
+_FRESHNESS_DATE_FIELDS = ["Trans Date", "Trans Date Time", "Service Date", "Transaction Date",
+                          "Bill Payment Date", "Payment Date", "Date"]
+
+
+def _custom_feed_freshness(client, org_id, report_key, label):
+    """Freshness for one custom-import feed (raw_custom_import): row count, last INGEST time (max created_at),
+    and the LATEST DATA date found in a bounded recent slice — so 'file stopped arriving' (last_ingest_at old)
+    is distinguishable from 'file arrives but its data is stale' (last_ingest_at recent, latest_data_date old).
+    Best-effort; never raises."""
+    out = {"key": report_key, "label": label, "source": "raw_custom_import", "rows": 0,
+           "last_ingest_at": None, "latest_data_date": None, "recent_data_dates": [], "recent_files": []}
+    try:
+        out["rows"] = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE).select("id", count="exact")
+                       .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute()).count or 0
+    except Exception:
+        return out
+    if not out["rows"]:
+        return out
+    try:
+        recent = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+                  .select("data,created_at,source_filename").eq("org_id", org_id).eq("report_key", report_key)
+                  .order("created_at", desc=True).limit(3000).execute().data) or []
+    except Exception:
+        recent = []
+    if not recent:
+        return out
+    out["last_ingest_at"] = recent[0].get("created_at")
+    files, dates = [], set()
+    for r in recent:
+        f = r.get("source_filename")
+        if f and f not in files and len(files) < 5:
+            files.append(f)
+        dl = {(k or "").strip().lower(): v for k, v in (r.get("data") or {}).items()}
+        for fld in _FRESHNESS_DATE_FIELDS:
+            v = dl.get(fld.lower())
+            if v not in (None, ""):
+                nd = _norm_report_date(v)
+                if nd:
+                    dates.add(nd)
+                break
+    sd = sorted(dates, reverse=True)
+    out["recent_files"] = files
+    out["latest_data_date"] = sd[0] if sd else None
+    out["recent_data_dates"] = sd[:10]
+    return out
+
+
+def _table_feed_freshness(client, org_id, table, date_col, label):
+    """Freshness for a real table (e.g. raw_sales): row count + the latest value of its date column."""
+    out = {"key": table, "label": label, "source": table, "rows": 0,
+           "last_ingest_at": None, "latest_data_date": None, "recent_data_dates": [], "recent_files": []}
+    try:
+        out["rows"] = (client.schema("commcalc").table(table).select("id", count="exact")
+                       .eq("org_id", org_id).limit(1).execute()).count or 0
+    except Exception:
+        return out
+    if not out["rows"]:
+        return out
+    try:
+        latest = (client.schema("commcalc").table(table).select(date_col)
+                  .eq("org_id", org_id).order(date_col, desc=True).limit(1).execute().data) or []
+        if latest:
+            out["latest_data_date"] = str(latest[0].get(date_col) or "")[:10] or None
+    except Exception:
+        pass
+    return out
+
+
+def _data_freshness_report(client, org_id):
+    """Per-feed freshness for a tenant: when each data source last ingested and the latest transaction date it
+    carries, with `days_stale` and a `stale` flag (no data for yesterday/today). The shared core behind the
+    GET endpoint, the auto-monitor, and the run-now button. Read-only; degrades gracefully."""
+    today = _date.today()
+    feeds = [
+        _custom_feed_freshness(client, org_id, "activation_details", "Activation Details (activation basis)"),
+        _custom_feed_freshness(client, org_id, "bill_payment_transactions", "Bill Payment Transactions"),
+        _table_feed_freshness(client, org_id, "raw_sales", "trans_date", "Sales feed (transactions)"),
+    ]
+    for f in feeds:
+        ld = f.get("latest_data_date")
+        d = None
+        if ld:
+            try:
+                d = (today - _datetime.strptime(ld[:10], "%Y-%m-%d").date()).days
+            except Exception:
+                d = None
+        f["days_stale"] = d
+        f["stale"] = bool(f.get("rows")) and (d is None or d >= 2)
+    return {"as_of": today.isoformat(), "feeds": feeds,
+            "any_stale": any(f.get("stale") for f in feeds if f.get("rows"))}
+
+
+async def _data_freshness_monitor(client, org_id):
+    """AUTO self-heal check (owner 2026-08-28: "an auto check and an auto fix … before users complain"). Run
+    right AFTER a sweep — the sweep IS the auto re-pull — and if a feed is STILL behind, escalate a
+    once-a-day-deduped alert with the diagnosis, distinguishing 'the report email stopped arriving' (last
+    ingest old) from 'the file arrives but its content is stale' (last ingest recent, data old). Because the
+    re-pull already ran, an alert means a human touch is genuinely needed. Best-effort; never raises, never
+    affects the sweep."""
+    try:
+        rep = _data_freshness_report(client, org_id)
+    except Exception as e:
+        print(f"WARN freshness monitor compute failed for {org_id}: {e}")
+        return {"any_stale": False, "feeds": []}
+    stale = [f for f in rep["feeds"] if f.get("stale") and f.get("rows")]
+    if not stale:
+        return rep
+    try:
+        from app.modules.closing.router import _send_alert   # lazy: avoids a commcalc<->closing cycle
+        today_s = _date.today().isoformat()
+        for f in stale:
+            ld = f.get("latest_data_date") or "unknown"
+            li_full = f.get("last_ingest_at")
+            li = str(li_full or "")[:10] or "unknown"
+            # Arrival vs stale-content, keyed on the LAST INGEST's OWN age (not the data date): if no new file
+            # has ingested for ~2+ days, files aren't arriving; if a file DID ingest in the last day but its
+            # data is still old, the file arrives with stale content. (An as-of-last-night export ingested
+            # today legitimately carries yesterday's data, so the data date alone can't tell these apart.)
+            ingest_age = None
+            if li != "unknown":
+                try:
+                    ingest_age = (_date.today() - _datetime.strptime(li, "%Y-%m-%d").date()).days
+                except Exception:
+                    ingest_age = None
+            arrival_stopped = (not li_full) or (ingest_age is None) or (ingest_age >= 2)
+            why = ("the report email appears to have STOPPED ARRIVING — no new file has ingested in "
+                   f"{ingest_age if ingest_age is not None else 'several'} day(s) and an automatic re-pull "
+                   "just ran and found nothing newer" if arrival_stopped else
+                   "the file is still arriving but its CONTENT is stale (the same data is being re-sent)")
+            subject = f"⚠️ Data not updating: {f['label']} is {f.get('days_stale', '?')} day(s) behind"
+            text = (f"MetricsPro auto-check — {f['label']} has not updated for this tenant.\n\n"
+                    f"Latest transaction date in the data: {ld}\n"
+                    f"Last successful ingest: {li}\n"
+                    f"Days behind: {f.get('days_stale')}\n\n"
+                    f"An automatic re-pull just ran and the feed is still behind, so {why}.\n\n"
+                    f"What to do: open Data Imports → Email Imports, check the processed history and click "
+                    f"Run now; if the latest report file is not in the inbox, have the source re-send it. "
+                    f"Reports that read this feed (Executive MTD, Activations) show stale numbers until it "
+                    f"catches up.")
+            ref = f"freshness:{org_id}:{f['key']}:{today_s}"   # once per feed per day
+            await _send_alert(client, org_id, "connector", subject, text, ref)
+    except Exception as e:
+        print(f"WARN freshness alert failed for {org_id}: {e}")
+    return rep
+
+
+@router.get("/ingest-freshness")
+def ingest_freshness(org_id: str = ORG_ID):
+    """Per-feed freshness: when each data source last ingested and the latest transaction date it carries, so a
+    stalled feed (frozen report numbers) is visible and self-diagnosing. `days_stale` = today − latest_data_date;
+    `stale` when there is no data for yesterday or today. Read-only; degrades gracefully, never 500s."""
+    require_org(org_id)
+    return _data_freshness_report(sb(), org_id)
+
+
+@router.post("/data-freshness/run-now")
+async def data_freshness_run_now(org_id: str = ORG_ID):
+    """Manual 'check & fix now': run the auto re-pull (every configured mailbox) then the freshness monitor,
+    and return the fresh report. The same two-step the platform runs automatically after each daily sweep."""
+    require_org(org_id)
+    try:
+        swept = await _run_email_sweep_all(org_id)
+    except Exception as e:
+        swept = {"ok": False, "error": str(e)}
+    rep = await _data_freshness_monitor(sb(), org_id)
+    return {"ok": True, "swept": swept, "freshness": rep}
 
 
 # ── Connector sweep registry (B-phase2 de-hardcode) ────────────────────────────────────────────
@@ -7951,13 +8625,13 @@ def get_flag_rules(org_id: str = ORG_ID):
     return _flag_rules(sb(), org_id)
 
 
-@router.put("/flag-rules")
 class PutFlagRulesIn(LaxModel):
     accessory_threshold: Any = None
     accessory_chargeback_amount: Any = None
     accessory_min_threshold: Any = None
 
 
+@router.put("/flag-rules")
 def put_flag_rules(body: PutFlagRulesIn, org_id: str = ORG_ID):
     require_org(org_id)
     row = {"id": 1, "org_id": org_id, "updated_at": _cb_now()}
@@ -8627,7 +9301,7 @@ def accessory_flags_push(body: AccessoryFlagsPushIn, org_id: str = ORG_ID):
 
 # ── VIP PayGo / asset-lending ledger (read endpoints; data from the sweep, migration 014) ──
 @router.get("/vip/paygo/summary")
-async def vip_paygo_summary(org_id: str = ORG_ID):
+def vip_paygo_summary(org_id: str = ORG_ID):
     """Current week owed + weekly history of the VIP asset-lending (PayGo) billing.
     Degrades to empty if migration 014 hasn't been run yet."""
     require_org(org_id)
@@ -8656,7 +9330,7 @@ async def vip_paygo_summary(org_id: str = ORG_ID):
 
 
 @router.get("/vip/paygo/payment/{vip_payment_id}")
-async def vip_paygo_payment_detail(vip_payment_id: int, org_id: str = ORG_ID):
+def vip_paygo_payment_detail(vip_payment_id: int, org_id: str = ORG_ID):
     """One PayGo batch + its invoice numbers (which join vip_invoices.invoice_number)."""
     require_org(org_id)
     client = sb()
@@ -8738,12 +9412,11 @@ def _do_dlar_sweep(org_id):
 
 
 @router.get("/dlar/sweep/config")
-async def dlar_sweep_get_config(org_id: str = ORG_ID):
+def dlar_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
     return _dlar_public_cfg(_dlar_cfg(sb(), org_id))
 
 
-@router.put("/dlar/sweep/config")
 class DlarSweepPutConfigIn(LaxModel):
     frequency: Any = None
     day_of_week: Any = None
@@ -8755,6 +9428,7 @@ class DlarSweepPutConfigIn(LaxModel):
     portal_pass: Any = None
 
 
+@router.put("/dlar/sweep/config")
 async def dlar_sweep_put_config(body: DlarSweepPutConfigIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
@@ -8781,7 +9455,7 @@ async def dlar_sweep_put_config(body: DlarSweepPutConfigIn, org_id: str = ORG_ID
 
 
 @router.post("/dlar/sweep/run-now")
-async def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Run now' / 'Import DLAR now' (background task)."""
     require_org(org_id)
     cfg = _dlar_cfg(sb(), org_id)
@@ -8792,7 +9466,7 @@ async def dlar_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = OR
 
 
 @router.post("/dlar/sweep/run-due")
-async def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+def dlar_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
@@ -8877,13 +9551,13 @@ def _do_b2b_sweep(org_id):
 
 
 @router.get("/b2b/sweep/config")
-async def b2b_sweep_get_config(org_id: str = ORG_ID):
+def b2b_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
     return _b2b_public_cfg(_b2b_cfg(sb(), org_id))
 
 
 @router.put("/b2b/sweep/config")
-async def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
+def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
                                authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
     omit/blank to keep the existing one. Never returns the password."""
@@ -8909,7 +9583,7 @@ async def b2b_sweep_put_config(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/b2b/sweep/run-now")
-async def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Fetch inventory now' (background task)."""
     require_org(org_id)
     cfg = _b2b_cfg(sb(), org_id)
@@ -8920,7 +9594,7 @@ async def b2b_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG
 
 
 @router.post("/b2b/sweep/run-due")
-async def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
@@ -8944,12 +9618,13 @@ async def b2b_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: 
 # (see epay_sweep.py). Creds live in the backend-only table commcalc.epay_sweep_config.
 # epay_sweep report key -> commcalc.report_definitions.report_key
 _EPAY_REGISTRY_KEYS = {'mi': 'mi_report', 'comp_report': 'comp_report',
-                       'payment_detail': 'payment_detail'}
+                       'payment_detail': 'payment_detail', 'epay_daily_tx': 'epay_daily_tx'}
 
 _EPAY_CFG_DEFAULTS = {'enabled': False, 'frequency': 'daily', 'day_of_week': 0,
                       'day_of_month': 1, 'hour': 6, 'timezone': 'America/New_York',
                       'portal_url': epay_sweep.DEFAULT_URL,
-                      'sweep_mi': True, 'sweep_comp': False, 'sweep_payment': False}
+                      'sweep_mi': True, 'sweep_comp': False, 'sweep_payment': False,
+                      'sweep_daily_tx': True}
 
 
 def _epay_cfg(client, org_id):
@@ -9007,6 +9682,10 @@ def _do_epay_sweep(org_id, only=None):
         reports.append('comp_report')
     if _en('payment_detail', bool(cfg.get('sweep_payment'))):
         reports.append('payment_detail')
+    # Daily Transaction Detail (P1) — on by default; its idempotent upsert makes an hourly re-pull
+    # safe, so it rides every tick (see _epay_sub_schedule) unless the registry disables it.
+    if _en('epay_daily_tx', cfg.get('sweep_daily_tx') is not False):
+        reports.append('epay_daily_tx')
     if only:
         reports = [r for r in reports if r in set(only)]
         if not reports:
@@ -9032,12 +9711,11 @@ def _do_epay_sweep(org_id, only=None):
 
 
 @router.get("/epay/sweep/config")
-async def epay_sweep_get_config(org_id: str = ORG_ID):
+def epay_sweep_get_config(org_id: str = ORG_ID):
     require_org(org_id)
     return _epay_public_cfg(_epay_cfg(sb(), org_id))
 
 
-@router.put("/epay/sweep/config")
 class EpaySweepPutConfigIn(LaxModel):
     frequency: Any = None
     day_of_week: Any = None
@@ -9053,6 +9731,7 @@ class EpaySweepPutConfigIn(LaxModel):
     portal_pass: Any = None
 
 
+@router.put("/epay/sweep/config")
 async def epay_sweep_put_config(body: EpaySweepPutConfigIn, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Update creds + schedule. Password is WRITE-ONLY: send portal_pass to change it,
@@ -9098,8 +9777,9 @@ async def epay_sweep_put_config(body: EpaySweepPutConfigIn, org_id: str = ORG_ID
 
 
 @router.post("/epay/sweep/run-now")
-async def epay_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
+def epay_sweep_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID):
     """Manual 'Run now' (background task)."""
+    require_browser_service()   # SERVICE_ROLE=api → this launches Chromium; run it on the sweeps worker
     require_org(org_id)
     cfg = _epay_cfg(sb(), org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
@@ -9113,6 +9793,7 @@ async def epay_discover_reports(org_id: str = ORG_ID):
     """Enumerate the epay Commissions report menu (id → label) so the Commission Payment Detail
     and Comprehensive Compensation report ids can be wired into the multi-report sweep. Runs the
     headless browser server-side (the portal WAF only allows Railway's egress), synchronously."""
+    require_browser_service()   # SERVICE_ROLE=api → this launches Chromium; run it on the sweeps worker
     require_org(org_id)
     cfg = _epay_cfg(sb(), org_id)
     if not cfg or not cfg.get('portal_user') or not cfg.get('portal_pass'):
@@ -9128,11 +9809,12 @@ async def epay_discover_reports(org_id: str = ORG_ID):
 
 
 @router.post("/epay/sweep/run-due")
-async def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+def epay_sweep_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint: run every enabled config whose next_run_at has passed.
     Reuses NOTIFY_RUN_SECRET so no new env var is needed."""
     if not verify_notify_secret(x_notify_secret):
         raise HTTPException(403, "forbidden")
+    require_browser_service()   # SERVICE_ROLE=api → this launches Chromium; repoint this cron to the sweeps worker
     client = sb()
     now_iso = _datetime.now(_timezone.utc).isoformat()
     triggered = 0
@@ -9499,6 +10181,68 @@ def _has_any_pay_source(client, org_id, period):
     return False
 
 
+def _rep_comm_row_keys(row):
+    """The rep-identity keys a rep_commissions row is matched on (UPPER, blanks dropped) — its
+    storeops_name and epay_salesperson. SHARED by the full run and the single-rep recompute so both
+    resolve a row's engine components against the exact same key set."""
+    return {str(row.get("storeops_name") or "").strip().upper(),
+            str(row.get("epay_salesperson") or "").strip().upper()} - {""}
+
+
+def _probe_rep_comm_engine_cols(client, org_id):
+    """Which OPTIONAL engine columns actually exist on rep_commissions (probed, so an un-applied
+    migration can never break the insert). SHARED by the full run and the single-rep recompute so both
+    write exactly the same column set. Returns {col_name: bool}."""
+    cols = {}
+    for c in ("residual_installment_comm", "installment_comm_sale", "plan_comm", "plan_name",
+              "carrier_statement_comm", "setup_fee_comm"):
+        try:
+            client.schema('commcalc').table('rep_commissions').select(c).limit(1).execute()
+            cols[c] = True
+        except Exception:
+            cols[c] = False
+    return cols
+
+
+def _apply_engine_components_to_row(row, ks, inst_by_rep, sale_inst_by_rep, stmt_by_rep,
+                                    plan_by_rep, cols):
+    """Enrich ONE rep_commissions row IN PLACE with the installment / plan / carrier-statement components
+    and recompute total_payout, using the EXACT per-row column logic the full run has always used. This
+    is the single source of truth for that arithmetic (extracted verbatim from _apply_new_engines' loop),
+    so a single-rep recompute is byte-identical to what the full run writes for that rep — the math is
+    never forked. Returns the set of plan_by_rep keys this row matched (for the caller's plan_matched
+    bookkeeping)."""
+    inst = next((inst_by_rep[k] for k in ks if k in inst_by_rep), 0.0)
+    sale_inst = next((sale_inst_by_rep[k] for k in ks if k in sale_inst_by_rep), 0.0)
+    stmt = next((stmt_by_rep[k] for k in ks if k in stmt_by_rep), 0.0)
+    pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
+    matched = set()
+    if cols["residual_installment_comm"]:
+        row["residual_installment_comm"] = inst
+    if cols["installment_comm_sale"]:
+        row["installment_comm_sale"] = sale_inst
+    # carrier_statement_comm = what the CARRIER paid the dealer for this rep (dealer revenue).
+    # Recorded for VISIBILITY / recon — NOT auto-added to rep pay. The rep's commission comes from
+    # the configured plan / multi-month %MRC schedule, not the dealer-level statement totals.
+    if cols["carrier_statement_comm"]:
+        row["carrier_statement_comm"] = stmt
+    if pv is not None:
+        matched = ks & set(plan_by_rep)
+        if cols["plan_comm"]:
+            row["plan_comm"] = pv["amount"]
+        if cols["plan_name"]:
+            row["plan_name"] = pv.get("plan_name")
+        if cols["setup_fee_comm"] and pv.get("setup_fee_comm"):
+            # only written when the plan engine actually produced one, so a Boost row (pv is
+            # None) and an unconfigured plan tenant are both untouched.
+            row["setup_fee_comm"] = pv["setup_fee_comm"]
+        base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
+    else:
+        base = safe_float(row.get("total_payout"))            # keep the standard calc
+    row["total_payout"] = round(base + inst + sale_inst, 2)   # plan + raw_mi + sale installments
+    return matched
+
+
 def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', notices=None):
     """ADDITIVE layer of the new configurable payout engines on top of the standard (Boost) calc.
 
@@ -9575,7 +10319,12 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
             sale_inst_by_rep = {}
         plan_by_rep = {}
         try:
-            pr = commission_engine.preview(client, org_id, period)
+            # DURABLE NAME-BRIDGE (luxelink money-path): thread the SAME deterministic POS->roster identity
+            # map the calc already loads (commcalc.name_map / rep_aliases) into the plan resolver so an
+            # employee-scope plan pinned under a rep's ROSTER name still attaches to their POS sales. Empty
+            # map (no name_map rows) => byte-identical to before.
+            _id_map = _rep_canon_map(client, org_id)
+            pr = commission_engine.preview(client, org_id, period, identity_map=_id_map)
             for r in (pr.get("by_rep") or []):
                 rn = str(r.get("rep") or "").strip().upper()
                 if rn:
@@ -9618,49 +10367,16 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
         if not inst_by_rep and not plan_by_rep and not stmt_by_rep and not sale_inst_by_rep:
             return comms
 
-        cols = {}
-        for c in ("residual_installment_comm", "installment_comm_sale", "plan_comm", "plan_name",
-                  "carrier_statement_comm", "setup_fee_comm"):
-            try:
-                client.schema('commcalc').table('rep_commissions').select(c).limit(1).execute()
-                cols[c] = True
-            except Exception:
-                cols[c] = False
-
-        def _keys(row):
-            return {str(row.get("storeops_name") or "").strip().upper(),
-                    str(row.get("epay_salesperson") or "").strip().upper()} - {""}
+        cols = _probe_rep_comm_engine_cols(client, org_id)
+        _keys = _rep_comm_row_keys
 
         plan_matched = set()
         for row in comms:
             ks = _keys(row)
-            inst = next((inst_by_rep[k] for k in ks if k in inst_by_rep), 0.0)
-            sale_inst = next((sale_inst_by_rep[k] for k in ks if k in sale_inst_by_rep), 0.0)
-            stmt = next((stmt_by_rep[k] for k in ks if k in stmt_by_rep), 0.0)
-            pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
-            if cols["residual_installment_comm"]:
-                row["residual_installment_comm"] = inst
-            if cols["installment_comm_sale"]:
-                row["installment_comm_sale"] = sale_inst
-            # carrier_statement_comm = what the CARRIER paid the dealer for this rep (dealer revenue).
-            # Recorded for VISIBILITY / recon — NOT auto-added to rep pay. The rep's commission comes from
-            # the configured plan / multi-month %MRC schedule, not the dealer-level statement totals.
-            if cols["carrier_statement_comm"]:
-                row["carrier_statement_comm"] = stmt
-            if pv is not None:
-                plan_matched |= (ks & set(plan_by_rep))
-                if cols["plan_comm"]:
-                    row["plan_comm"] = pv["amount"]
-                if cols["plan_name"]:
-                    row["plan_name"] = pv.get("plan_name")
-                if cols["setup_fee_comm"] and pv.get("setup_fee_comm"):
-                    # only written when the plan engine actually produced one, so a Boost row (pv is
-                    # None) and an unconfigured plan tenant are both untouched.
-                    row["setup_fee_comm"] = pv["setup_fee_comm"]
-                base = safe_float(pv["amount"])                       # a plan REPLACES the spiff subtotal
-            else:
-                base = safe_float(row.get("total_payout"))            # keep the standard calc
-            row["total_payout"] = round(base + inst + sale_inst, 2)   # plan + raw_mi + sale installments
+            # SHARED per-row arithmetic (see _apply_engine_components_to_row) — the single source of truth
+            # the single-rep /recompute-rep endpoint also drives, so both paths write identical values.
+            plan_matched |= _apply_engine_components_to_row(
+                row, ks, inst_by_rep, sale_inst_by_rep, stmt_by_rep, plan_by_rep, cols)
 
         # reps with a PLAN but no standard row → add them (statement-only reps are captured in
         # commcalc.carrier_commission for recon, not paid here)
@@ -9911,10 +10627,10 @@ def _run_calculation(period: str, org_id: str, force: bool = False, guard_token:
             if prior_paid:
                 raise Exception(
                     f"REFUSED to overwrite {period}: plan-mode calc produced $0 for all {len(comms)} reps "
-                    f"while {prior_paid} stored rows currently pay non-zero — the 2026-07-13 zero-wipe "
-                    f"signature (non-Boost default carrier with nothing configured to pay from). Kept the "
-                    f"existing snapshot. Fix the default carrier on the Carriers page or configure "
-                    f"Commission Plan assignments, then recalculate; or POST /calculate/{period}"
+                    f"while {prior_paid} stored rows currently pay non-zero — a zero-wipe "
+                    f"signature (the store's default carrier resolved to plan mode with nothing configured "
+                    f"to pay from). Kept the existing snapshot. Fix the default carrier on the Carriers page "
+                    f"or configure Commission Plan assignments, then recalculate; or POST /calculate/{period}"
                     f"?force=true to overwrite deliberately.")
 
         try:
@@ -10595,7 +11311,7 @@ async def get_commissions(period: str, authorization: str = Header(default=""), 
     return [c for c in comms if in_keyset(ks, c.get('store'), c.get('store_code'))]
 
 @router.get("/dlar-store/{period}")
-async def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def get_dlar_store_kpis(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Store-level KPIs straight from the Elevate Go Store DLAR (raw_dlar_store) for the
     Store view of the KPI Metrics page. Values are whole-number percents (e.g. 55.0).
 
@@ -10645,7 +11361,7 @@ async def get_flags(period: str, authorization: str = Header(default=""),
 
 
 @router.get("/flags-unrouted/{period}")
-async def get_flags_unrouted(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def get_flags_unrouted(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Flags that reach NOBODY — the ones no district manager's span can match.
 
     A flag with no resolvable store must never be silently dropped, so it lands here instead: an
@@ -10784,14 +11500,14 @@ async def flags_key_health(period: str, authorization: str = Header(default=""),
 
 
 @router.get("/config/{period}")
-async def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
+def get_config(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('payout_config').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute()
     if r.data: return r.data[0]
     return {}
 
 @router.put("/config/{period}")
-async def save_config(period: str, config: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
+def save_config(period: str, config: dict, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     config.update({'period': period, 'org_id': org_id})
     r = client.schema('commcalc').table('payout_config').upsert(config, on_conflict='org_id,period').execute()
@@ -10826,7 +11542,7 @@ def _require_commission_admin(authorization, org_id):
 
 
 @router.get("/commission-settings")
-async def get_commission_settings(org_id: str = ORG_ID):
+def get_commission_settings(org_id: str = ORG_ID):
     """Per-tenant commission posture (mig 201): pay_disabled (the R1 refuse-to-pay override) +
     residual_visibility ('all' | 'permissioned'). Code default before mig 201 runs."""
     require_org(org_id)
@@ -10844,7 +11560,7 @@ class PutCommissionSettingsIn(LaxModel):
 
 
 @router.put("/commission-settings")
-async def put_commission_settings(body: PutCommissionSettingsIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_commission_settings(body: PutCommissionSettingsIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Sets pay_disabled and/or residual_visibility for the tenant. pay_disabled=true means
     'this tenant INTENTIONALLY pays no commissions' → silences the R1 unconfigured-tenant refusal."""
     require_org(org_id)
@@ -11053,7 +11769,7 @@ def _write_installment_schedule(client, org_id, body, sid, changed_by):
 
 # ── SALE-TRIGGERED installment SCHEDULES (mig 201) — attach to a Commission Plan, triggered by the sale line
 @router.get("/plan-installments")
-async def list_plan_installments(org_id: str = ORG_ID):
+def list_plan_installments(org_id: str = ORG_ID):
     """All sale-triggered installment schedules + their month lines, grouped by plan. [] (not 500) if
     migration 201 isn't applied yet."""
     require_org(org_id)
@@ -11074,7 +11790,7 @@ async def list_plan_installments(org_id: str = ORG_ID):
 
 
 @router.post("/plan-installments")
-async def save_plan_installment(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def save_plan_installment(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """CREATE a sale-triggered schedule + its month lines (money config → admin-only). Body:
     {id?, plan_id (required), name?, num_months, trigger_match_field?, trigger_match_op?, trigger_match_value?,
      gate_mode?, gate_from_month?, m1_gate?('inherit'|'activation_payment'), clawback_enabled?, effective_from?,
@@ -11096,7 +11812,7 @@ async def save_plan_installment(body: dict, authorization: str = Header(default=
 
 
 @router.get("/plan-installments/{sid}/audit")
-async def plan_installment_audit(sid: str, org_id: str = ORG_ID):
+def plan_installment_audit(sid: str, org_id: str = ORG_ID):
     """Edit trail for one schedule (mig 210). [] if the audit table isn't applied yet."""
     require_org(org_id)
     try:
@@ -11108,7 +11824,7 @@ async def plan_installment_audit(sid: str, org_id: str = ORG_ID):
 
 
 @router.get("/plan-installments/preview/{period}")
-async def preview_plan_installments(period: str, org_id: str = ORG_ID):
+def preview_plan_installments(period: str, org_id: str = ORG_ID):
     """READ-ONLY preview of what the sale-triggered installment engine WOULD pay for a pay period,
     incl. the paid-gate outcome per line and the two-flag list for sold-but-unpaid lines. Writes nothing."""
     require_org(org_id)
@@ -11119,7 +11835,7 @@ async def preview_plan_installments(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/plan-installments/gate-impact/{period}")
-async def preview_installment_gate_impact(period: str, org_id: str = ORG_ID):
+def preview_installment_gate_impact(period: str, org_id: str = ORG_ID):
     """READ-ONLY impact preview for the mig-223 config-driven paid gate (Gate-2 review artifact). Lists every
     installment row that FLIPS withheld_unpaid → payable under the new master-agent gate (vs the legacy
     raw_mi-only gate), with per-rep + total dollars. For a Boost-mode org it returns zero flips (boost_safe=
@@ -11133,7 +11849,7 @@ async def preview_installment_gate_impact(period: str, org_id: str = ORG_ID):
 
 # ── ACTIVATION-PAYMENT MATCHER (mig 210): what counts as "payment received at activation" (per-tenant) ─
 @router.get("/plan-installments/activation-matcher")
-async def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
+def get_activation_matcher(period: str = "", org_id: str = ORG_ID):
     """The tenant's 'payment received at activation' matcher used by the month-1 'activation_payment' gate,
     PLUS the distinct raw_sales departments/categories present (pick-don't-type editor). Falls back to the
     engine's seeded default when unset (is_default=true). Read-only."""
@@ -11181,7 +11897,7 @@ class PutActivationMatcherIn(LaxModel):
 
 
 @router.put("/plan-installments/activation-matcher")
-async def put_activation_matcher(body: PutActivationMatcherIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_activation_matcher(body: PutActivationMatcherIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Save the tenant's activation-payment matcher (mig 210). body: {departments[], categories[],
     product_keywords[], value_field('ext_price'|'gp'), min_amount} — OR {reset:true} to revert to the engine
     default (stored NULL). 500 with a 'run migration 210' hint if the column is absent."""
@@ -11210,7 +11926,7 @@ async def put_activation_matcher(body: PutActivationMatcherIn, authorization: st
 
 # ── RATE-PLAN LINE MATCHER (mig 233): which sale line carries the activation's monthly charge ───────
 @router.get("/plan-installments/plan-line-matcher")
-async def get_plan_line_matcher(period: str = "", org_id: str = ORG_ID):
+def get_plan_line_matcher(period: str = "", org_id: str = ORG_ID):
     """The tenant's RATE-PLAN LINE matcher — the money-path answer to "which line of this sale carries the
     monthly charge?" — plus the distinct raw_sales departments/categories present (pick-don't-type editor,
     §3b) and the current installment_mrc_basis. Falls back to the engine's seeded default when unset
@@ -11256,7 +11972,7 @@ class PutPlanLineMatcherIn(LaxModel):
 
 
 @router.put("/plan-installments/plan-line-matcher")
-async def put_plan_line_matcher(body: PutPlanLineMatcherIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def put_plan_line_matcher(body: PutPlanLineMatcherIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Save the tenant's rate-plan line matcher (mig 233). body: {departments[], categories[],
     product_keywords[]} — OR {reset:true} to revert to the engine default (stored NULL).
 
@@ -11284,7 +12000,7 @@ async def put_plan_line_matcher(body: PutPlanLineMatcherIn, authorization: str =
 
 # ── DEVICE-CATEGORY QUALIFICATION (mig 245): which activations qualify for multi-month pay ────────
 @router.get("/plan-installments/category-qualification")
-async def get_category_qualification(period: str = "", org_id: str = ORG_ID):
+def get_category_qualification(period: str = "", org_id: str = ORG_ID):
     """The tenant's multi-month device-category include/exclude set + the classification rules behind it.
 
     Returns the ORG-level qualification (falling back to the engine defaults — everything ON except
@@ -11348,7 +12064,7 @@ async def get_category_qualification(period: str = "", org_id: str = ORG_ID):
 
 
 @router.put("/plan-installments/category-qualification")
-async def put_category_qualification(body: dict, authorization: str = Header(default=""),
+def put_category_qualification(body: dict, authorization: str = Header(default=""),
                                      org_id: str = ORG_ID):
     """Admin-only. Save the tenant's multi-month device-category include/exclude set (mig 245).
     body: {qualification:{phone:true,tablet:false,...}} — OR {reset:true} to revert to the engine
@@ -11386,7 +12102,7 @@ class SaveCategoryRuleIn(LaxModel):
 
 
 @router.post("/plan-installments/category-rules")
-async def save_category_rule(body: SaveCategoryRuleIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def save_category_rule(body: SaveCategoryRuleIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Add/replace ONE tenant classification rule (mig 245).
     body: {id?, category_key, match_field, match_op, match_value, priority?, is_active?, note?}.
     Tenant rules are evaluated BEFORE the built-ins; the built-ins remain as the fallback tail."""
@@ -11423,7 +12139,7 @@ async def save_category_rule(body: SaveCategoryRuleIn, authorization: str = Head
 
 
 @router.delete("/plan-installments/category-rules/{rid}")
-async def delete_category_rule(rid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def delete_category_rule(rid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Admin-only. Delete ONE tenant classification rule (the built-in rules cannot be deleted — they are
     the fallback tail; override one with a higher-priority tenant rule instead)."""
     require_org(org_id)
@@ -11437,7 +12153,7 @@ async def delete_category_rule(rid: str, authorization: str = Header(default="")
 
 
 @router.get("/plan-installments/category-impact/{period}")
-async def category_impact(period: str, org_id: str = ORG_ID):
+def category_impact(period: str, org_id: str = ORG_ID):
     """READ-ONLY BLAST RADIUS for a pay period: what the current include/exclude set + the device-price
     MRC guard change, per rep, WITHOUT recomputing anything.
 
@@ -11523,7 +12239,7 @@ async def category_impact(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/plan-installments/category-payout")
-async def get_category_payout(org_id: str = ORG_ID):
+def get_category_payout(org_id: str = ORG_ID):
     """The tenant's per-category payout MODE (monthly installments vs a one-time flat amount).
 
     Returns the ORG-level config (falling back to the code default — every category on monthly
@@ -11576,7 +12292,7 @@ async def get_category_payout(org_id: str = ORG_ID):
 
 
 @router.put("/plan-installments/category-payout")
-async def put_category_payout(body: dict, authorization: str = Header(default=""),
+def put_category_payout(body: dict, authorization: str = Header(default=""),
                               org_id: str = ORG_ID):
     """Admin-only. Save the tenant's per-category payout mode + flat amount (mig 256).
     body: {payout: {home_internet: {mode:'flat_once', amount: 25, pay_month: 1}, ...}}
@@ -11627,7 +12343,7 @@ async def put_category_payout(body: dict, authorization: str = Header(default=""
 
 
 @router.get("/plan-installments/category-payout-impact/{period}")
-async def category_payout_impact(period: str, category: str = "", amount: str = "",
+def category_payout_impact(period: str, category: str = "", amount: str = "",
                                  pay_month: int = 1, org_id: str = ORG_ID):
     """READ-ONLY per-rep delta for the flat-payout switch. Writes nothing; recomputes nothing.
 
@@ -11751,7 +12467,7 @@ def _xc_rows(client, org_id, period):
 
 
 @router.get("/expected-commission/config")
-async def get_expected_commission_config(org_id: str = ORG_ID, authorization: str = Header(default="")):
+def get_expected_commission_config(org_id: str = ORG_ID, authorization: str = Header(default="")):
     """The tenant's expected-commission window + posture, and whether THIS caller may promote.
     Read-only. Degrades to the code defaults (months 2..6) with migration 258 unapplied."""
     require_org(org_id)
@@ -11774,7 +12490,7 @@ async def get_expected_commission_config(org_id: str = ORG_ID, authorization: st
 
 
 @router.put("/expected-commission/config")
-async def put_expected_commission_config(body: dict, authorization: str = Header(default=""),
+def put_expected_commission_config(body: dict, authorization: str = Header(default=""),
                                          org_id: str = ORG_ID):
     """Admin-only. Save the expected-commission window + posture (mig 258).
     body: {config:{enabled,from_month,to_month,on_expected_change,promote_allow_unidentified}}
@@ -11807,7 +12523,7 @@ async def put_expected_commission_config(body: dict, authorization: str = Header
 
 
 @router.get("/expected-commission/promotes")
-async def list_expected_commission_promotes(period: str = "", status: str = "",
+def list_expected_commission_promotes(period: str = "", status: str = "",
                                             org_id: str = ORG_ID):
     """The AUDIT LIST: every promote for the tenant (optionally one period / one status), newest first.
     Revoked rows are KEPT and returned — the audit trail is the point. Read-only."""
@@ -11839,7 +12555,7 @@ class PromoteExpectedCommissionIn(LaxModel):
 
 
 @router.post("/expected-commission/promote")
-async def promote_expected_commission(body: PromoteExpectedCommissionIn, authorization: str = Header(default=""),
+def promote_expected_commission(body: PromoteExpectedCommissionIn, authorization: str = Header(default=""),
                                       org_id: str = ORG_ID):
     """💰 MONEY WRITE — move ONE chain-month's EXPECTED amount into EARNED.
     body: {period, trans_id, mdn, month_index, reason} (`reason` is REQUIRED — this is an audit row).
@@ -11920,7 +12636,7 @@ class RevokeExpectedCommissionIn(LaxModel):
 
 
 @router.post("/expected-commission/revoke")
-async def revoke_expected_commission(body: RevokeExpectedCommissionIn, authorization: str = Header(default=""),
+def revoke_expected_commission(body: RevokeExpectedCommissionIn, authorization: str = Header(default=""),
                                      org_id: str = ORG_ID):
     """💰 MONEY WRITE — revoke a promote. body: {id, reason?}. The row is KEPT with status='revoked'
     (an audit trail you can delete is not an audit trail); the month reverts to the normal gate on the
@@ -11946,7 +12662,7 @@ async def revoke_expected_commission(body: RevokeExpectedCommissionIn, authoriza
 
 
 @router.get("/expected-commission/{period}")
-async def expected_commission_report(period: str, rep: str = "", store: str = "",
+def expected_commission_report(period: str, rep: str = "", store: str = "",
                                      org_id: str = ORG_ID, authorization: str = Header(default="")):
     """READ-ONLY: EXPECTED vs EARNED per chain-month for one pay period. Writes nothing, recomputes
     nothing, persists nothing.
@@ -12032,7 +12748,7 @@ async def expected_commission_report(period: str, rep: str = "", store: str = ""
 # "plan_id is required" — i.e. the mig-210 and mig-233 matcher editors could never be saved from the
 # UI. Every literal /plan-installments/... route must stay ABOVE this block.
 @router.put("/plan-installments/{sid}")
-async def update_plan_installment(sid: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def update_plan_installment(sid: str, body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """EDIT an existing sale-triggered schedule + its month lines (money config → admin-only). Same body
     shape as POST (minus id). RECOMPUTE SEMANTICS: the edit takes effect from the NEXT POST /calculate
     onward — it does NOT retroactively rewrite pay. sale_installment_ledger rows already written for PAST
@@ -12057,7 +12773,7 @@ async def update_plan_installment(sid: str, body: dict, authorization: str = Hea
 
 
 @router.delete("/plan-installments/{sid}")
-async def delete_plan_installment(sid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def delete_plan_installment(sid: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
     client = sb()
@@ -12072,7 +12788,7 @@ async def delete_plan_installment(sid: str, authorization: str = Header(default=
 
 # ── Classification-first MRC MAPPING (§7b decision 1): classify imported plan lines + prefill $ MRC ──
 @router.get("/mrc-mapping/candidates")
-async def mrc_mapping_candidates(period: str, org_id: str = ORG_ID):
+def mrc_mapping_candidates(period: str, org_id: str = ORG_ID):
     """Scan a period's sale lines for distinct PLAN/product descriptions, AUTO-CLASSIFY each (reusing the
     existing accessory/carrier-category config), AUTO-PREFILL the $ MRC from the description text, and
     cross-reference the product_mrc catalog to show which are already CONFIRMED. Read-only — the user
@@ -12122,7 +12838,7 @@ class MrcMappingConfirmIn(LaxModel):
 
 
 @router.post("/mrc-mapping/confirm")
-async def mrc_mapping_confirm(body: MrcMappingConfirmIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def mrc_mapping_confirm(body: MrcMappingConfirmIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert user-confirmed product_mrc rows (money config → admin-only). Body: {carrier_id?, match_op?,
     items:[{plan, mrc, classification?}]}. Marks each row confirmed=true. Reuses the existing product_mrc
     table (mig 074) — never a new mapping table."""
@@ -12226,7 +12942,7 @@ class MrcMappingBulkClassifyIn(LaxModel):
 
 
 @router.post("/mrc-mapping/bulk-classify")
-async def mrc_mapping_bulk_classify(body: MrcMappingBulkClassifyIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+def mrc_mapping_bulk_classify(body: MrcMappingBulkClassifyIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Assign ONE classification to MANY product_mrc mappings in a single round trip (bulk companion to
     /mrc-mapping/confirm). Body: {items:[{plan, mrc?, source_desc?, prefill_mrc?} | str], classification,
     carrier_id?, match_op?, dry_run?}. CROSS-MENU GUARD: every plan is checked against the Item / Model
@@ -12329,7 +13045,7 @@ async def mrc_mapping_bulk_classify(body: MrcMappingBulkClassifyIn, authorizatio
 # (unchanged). The engine is READ-ONLY/PREVIEW here — not yet summed into the live calc (see HANDOFF).
 
 @router.get("/payout-schedule")
-async def list_payout_schedules(org_id: str = ORG_ID):
+def list_payout_schedules(org_id: str = ORG_ID):
     """All schedules + their installment lines. [] (not 500) if migration 057 isn't applied yet."""
     client = sb()
     try:
@@ -12358,7 +13074,7 @@ class SavePayoutScheduleIn(LaxModel):
 
 
 @router.post("/payout-schedule")
-async def save_payout_schedule(body: SavePayoutScheduleIn, org_id: str = ORG_ID):
+def save_payout_schedule(body: SavePayoutScheduleIn, org_id: str = ORG_ID):
     """Create/replace a schedule + its lines. Body: {id?, company_id?, carrier_id?, activation_type?,
     num_months, gate_signal?, bypass_tier?, is_active?, lines:[{month_index, payout_kind, flat_amount?,
     mrc_pct?, mrc_basis?, requires_paid}]}. Replaces the lines for the schedule (delete-then-insert)."""
@@ -12405,7 +13121,7 @@ async def save_payout_schedule(body: SavePayoutScheduleIn, org_id: str = ORG_ID)
 
 
 @router.delete("/payout-schedule/{schedule_id}")
-async def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
+def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('payout_schedule_line').delete().eq('org_id', org_id).eq('schedule_id', schedule_id).execute()
     client.schema('commcalc').table('payout_schedule').delete().eq('org_id', org_id).eq('id', schedule_id).execute()
@@ -12413,7 +13129,7 @@ async def delete_payout_schedule(schedule_id: str, org_id: str = ORG_ID):
 
 
 @router.get("/payout-schedule/preview")
-async def preview_payout_installments(period: str, org_id: str = ORG_ID):
+def preview_payout_installments(period: str, org_id: str = ORG_ID):
     """READ-ONLY preview: what the configured schedules WOULD pay for `period` (per rep + per-subscriber
     ledger), computed from raw_mi. Writes nothing and does NOT affect the live commission calc — it's
     the safe way to validate a schedule before wiring installments into the payout."""
@@ -12428,7 +13144,7 @@ async def preview_payout_installments(period: str, org_id: str = ORG_ID):
 # statement carries no per-subscriber MRC (e.g. Total Wireless). Keyed on raw_mi.customer_plan. Additive:
 # with no rows, the installment engine reads the raw_mi MRC column exactly as before (Boost unaffected).
 @router.get("/product-mrc")
-async def list_product_mrc(org_id: str = ORG_ID):
+def list_product_mrc(org_id: str = ORG_ID):
     """All catalog entries (specific-first). [] (not 500) if migration 074 isn't applied yet."""
     client = sb()
     try:
@@ -12451,7 +13167,7 @@ class SaveProductMrcIn(LaxModel):
 
 
 @router.post("/product-mrc")
-async def save_product_mrc(body: SaveProductMrcIn, org_id: str = ORG_ID):
+def save_product_mrc(body: SaveProductMrcIn, org_id: str = ORG_ID):
     """Create/update one catalog entry. Body: {id?, carrier_id?, plan_pattern, match_op?, mrc, priority?,
     is_active?, note?}. plan_pattern is matched (case-insensitive) against raw_mi.customer_plan."""
     client = sb()
@@ -12482,7 +13198,7 @@ async def save_product_mrc(body: SaveProductMrcIn, org_id: str = ORG_ID):
 
 
 @router.delete("/product-mrc/{item_id}")
-async def delete_product_mrc(item_id: str, org_id: str = ORG_ID):
+def delete_product_mrc(item_id: str, org_id: str = ORG_ID):
     sb().schema('commcalc').table('product_mrc').delete().eq('id', item_id).eq('org_id', org_id).execute()
     return {"deleted": item_id}
 
@@ -12577,7 +13293,7 @@ async def import_product_mrc(
 
 
 @router.get("/product-mrc/coverage")
-async def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
+def product_mrc_coverage(period: str = "", org_id: str = ORG_ID):
     """Distinct raw_mi.customer_plan values (optionally for one period) with row counts + whether the
     catalog resolves an MRC for each — so the user can see which plans still need one. Read-only.
     Unmatched plans sort first, then by count desc."""
@@ -12888,7 +13604,7 @@ def set_nav_layout(body: NavLayoutIn, org_id: str = ORG_ID):
 
 
 @router.get("/distributors")
-async def list_distributors(org_id: str = ORG_ID):
+def list_distributors(org_id: str = ORG_ID):
     client = sb()
     try:
         rows = client.schema('commcalc').table('distributors').select('*').eq('org_id', org_id).order('name').execute().data or []
@@ -12912,7 +13628,7 @@ class SaveDistributorIn(LaxModel):
 
 
 @router.post("/distributors")
-async def save_distributor(body: SaveDistributorIn, org_id: str = ORG_ID):
+def save_distributor(body: SaveDistributorIn, org_id: str = ORG_ID):
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(400, "name required")
@@ -12940,14 +13656,14 @@ async def save_distributor(body: SaveDistributorIn, org_id: str = ORG_ID):
 
 
 @router.delete("/distributors/{distributor_id}")
-async def delete_distributor(distributor_id: str, org_id: str = ORG_ID):
+def delete_distributor(distributor_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('distributors').delete().eq('org_id', org_id).eq('id', distributor_id).execute()
     return {"deleted": distributor_id}
 
 
 @router.get("/distributor-payments")
-async def list_distributor_payments(distributor_id: str = "", org_id: str = ORG_ID):
+def list_distributor_payments(distributor_id: str = "", org_id: str = ORG_ID):
     """Payment ledger for a distributor (or all), with own-vs-borrowed funding totals."""
     client = sb()
     try:
@@ -12975,7 +13691,7 @@ class AddDistributorPaymentIn(LaxModel):
 
 
 @router.post("/distributor-payments")
-async def add_distributor_payment(body: AddDistributorPaymentIn, org_id: str = ORG_ID):
+def add_distributor_payment(body: AddDistributorPaymentIn, org_id: str = ORG_ID):
     row = {
         "org_id": org_id, "distributor_id": body.distributor_id or None,
         "pay_date": body.pay_date or None, "period": body.period or None,
@@ -12993,7 +13709,7 @@ async def add_distributor_payment(body: AddDistributorPaymentIn, org_id: str = O
 
 
 @router.delete("/distributor-payments/{payment_id}")
-async def delete_distributor_payment(payment_id: str, org_id: str = ORG_ID):
+def delete_distributor_payment(payment_id: str, org_id: str = ORG_ID):
     client = sb()
     client.schema('commcalc').table('distributor_payments').delete().eq('org_id', org_id).eq('id', payment_id).execute()
     return {"deleted": payment_id}
@@ -13007,7 +13723,7 @@ async def delete_distributor_payment(payment_id: str, org_id: str = ORG_ID):
 # (the new system built ALONGSIDE calculator.py; wiring it live is a later, explicit step).
 
 @router.get("/commission-plans")
-async def list_commission_plans(org_id: str = ORG_ID):
+def list_commission_plans(org_id: str = ORG_ID):
     """Plans with nested rules + tiers + assignments. {ready:false} if migration 059 isn't applied."""
     client = sb()
     plans, ready = commission_engine._load_plans(client, org_id)
@@ -13281,13 +13997,14 @@ class SaveCommissionPlanIn(LaxModel):
     tier_match_op: Any = None
     tier_match_value: Any = None
     tier_below_min_multiplier: Any = None
+    activation_source: Any = None
     rules: Any = None
     tiers: Any = None
     assignments: Any = None
 
 
 @router.post("/commission-plans")
-async def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
+def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
     """Upsert a plan + REPLACE its rules / tiers / assignments (delete-then-insert children)."""
     name = (body.name or "").strip()
     if not name:
@@ -13318,6 +14035,16 @@ async def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID)
             _m = body.tier_below_min_multiplier
             plan_row["tier_below_min_multiplier"] = (
                 None if _m is None or str(_m).strip() == "" else safe_float(_m))
+    # PER-PLAN ACTIVATION SOURCE (mig 297) — money-safe: this only persists the flag the engine already
+    # reads (commission_engine._plan_activation_source, p.get("activation_source") default 'inherit'); it
+    # moves no money by itself. Written only when the caller sent the field AND the column exists, so a
+    # pre-297 database saves exactly as before. Unknown values collapse to 'inherit' (the safe default that
+    # defers to the org-level mig-296 setting -> today's raw_sales behaviour).
+    if "activation_source" in body.model_fields_set and _plan_activation_source_col_present(client):
+        _as = str(body.activation_source or "inherit").strip().lower()
+        if _as not in ("inherit", "raw_sales", "activation_details"):
+            _as = "inherit"
+        plan_row["activation_source"] = _as
     try:
         if body.id:
             r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body.id).eq('org_id', org_id).execute()
@@ -13410,7 +14137,7 @@ async def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID)
 
 
 @router.delete("/commission-plans/{plan_id}")
-async def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
+def delete_commission_plan(plan_id: str, org_id: str = ORG_ID):
     """Delete a plan (children cascade via FK ON DELETE CASCADE)."""
     client = sb()
     client.schema('commcalc').table('commission_plan').delete().eq('org_id', org_id).eq('id', plan_id).execute()
@@ -13478,7 +14205,7 @@ def _rule_scope_cols_present(client):
 
 
 @router.get("/setup-fee/config")
-async def get_setup_fee_config(org_id: str = ORG_ID):
+def get_setup_fee_config(org_id: str = ORG_ID):
     """The tenant's set-up-fee mapping + per-carrier economics. READ-ONLY."""
     require_org(org_id)
     from app.modules.commcalc import setup_fee_pay as sfp
@@ -13508,7 +14235,7 @@ async def get_setup_fee_config(org_id: str = ORG_ID):
 
 
 @router.put("/setup-fee/config")
-async def save_setup_fee_config(body: dict, org_id: str = ORG_ID):
+def save_setup_fee_config(body: dict, org_id: str = ORG_ID):
     """Save the per-carrier economics. MONEY-TOUCHING: applies on the next Calculate."""
     require_org(org_id)
     from app.modules.commcalc import setup_fee_pay as sfp
@@ -13538,7 +14265,7 @@ async def save_setup_fee_config(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/setup-fee/candidates/{period}")
-async def setup_fee_candidates(period: str, org_id: str = ORG_ID):
+def setup_fee_candidates(period: str, org_id: str = ORG_ID):
     """PICK-DON'T-TYPE (contract RULE THREE): the tenant's own product descriptions that could BE the
     set-up / activation fee, ranked by the money they carry, each flagged with whether the current
     mapping already catches it. READ-ONLY; proposes nothing and auto-selects nothing — naming the fee
@@ -13561,7 +14288,7 @@ async def setup_fee_candidates(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/setup-fee/recognition-divergence/{period}")
-async def setup_fee_recognition_divergence(period: str, org_id: str = ORG_ID):
+def setup_fee_recognition_divergence(period: str, org_id: str = ORG_ID):
     """The two historic set-up-fee matchers, MEASURED against each other on this tenant's real data.
 
     The PAY path was a case-SENSITIVE literal; the REPORT path lower-cases both sides. Unifying them is
@@ -13586,7 +14313,7 @@ async def setup_fee_recognition_divergence(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/setup-fee/impact/{period}")
-async def setup_fee_impact(period: str, employee_pct: str = "", org_id: str = ORG_ID):
+def setup_fee_impact(period: str, employee_pct: str = "", org_id: str = ORG_ID):
     """READ-ONLY per-rep dollars for the set-up-fee pay item, at a hypothetical percentage.
 
     Drives the REAL `commission_engine.preview` twice — as configured, and with the hypothesis — so a
@@ -13639,7 +14366,7 @@ async def setup_fee_impact(period: str, employee_pct: str = "", org_id: str = OR
 
 
 @router.get("/commission-plans/accessory-basis-impact/{period}")
-async def accessory_basis_impact(period: str, enabled: str = "", assumed_margin_pct: str = "",
+def accessory_basis_impact(period: str, enabled: str = "", assumed_margin_pct: str = "",
                                  clamp_negative: str = "", org_id: str = ORG_ID):
     """READ-ONLY per-rep BEFORE / AFTER for the ACCESSORY %-of-GP BASIS GUARD (mig 260). Writes nothing.
 
@@ -13701,7 +14428,7 @@ async def accessory_basis_impact(period: str, enabled: str = "", assumed_margin_
 
 
 @router.get("/commission-plans/rule-scope-impact/{period}")
-async def rule_scope_impact(period: str, rule_id: str = "", scope_kind: str = "",
+def rule_scope_impact(period: str, rule_id: str = "", scope_kind: str = "",
                             scope_value: str = "", org_id: str = ORG_ID):
     """READ-ONLY: who is collecting a rule TODAY, and who would still collect it if it were scoped.
 
@@ -13767,7 +14494,7 @@ async def rule_scope_impact(period: str, rule_id: str = "", scope_kind: str = ""
 
 
 @router.get("/commission-plans/pay-gate")
-async def get_pay_gate(org_id: str = ORG_ID):
+def get_pay_gate(org_id: str = ORG_ID):
     """The tenant's pay-gate configuration + what each setting means. READ-ONLY."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -13786,7 +14513,7 @@ async def get_pay_gate(org_id: str = ORG_ID):
 
 
 @router.put("/commission-plans/pay-gate")
-async def save_pay_gate(body: dict, org_id: str = ORG_ID):
+def save_pay_gate(body: dict, org_id: str = ORG_ID):
     """Save the tenant's pay-gate configuration. MONEY-TOUCHING: takes effect on the next Calculate."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -13810,7 +14537,7 @@ async def save_pay_gate(body: dict, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/unit-dedup-impact/{period}")
-async def unit_dedup_impact(period: str, org_id: str = ORG_ID):
+def unit_dedup_impact(period: str, org_id: str = ORG_ID):
     """READ-ONLY per-rep BEFORE / AFTER / DELTA for the pay gate. Writes nothing, recomputes nothing.
 
     Drives the REAL `commission_engine.preview` TWICE in memory: once with `gate_override='off'`
@@ -13845,7 +14572,7 @@ async def unit_dedup_impact(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/unit-multiplication-audit/{period}")
-async def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
+def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
     """WHICH $/unit rules pay more than once inside a single transaction — the CLASS question.
 
     Field-agnostic on purpose: it reports every `flat_per_unit` rule that pays two or more times on
@@ -13924,7 +14651,7 @@ async def unit_multiplication_audit(period: str, org_id: str = ORG_ID):
 # the schema. Hence a new mapping table, editable per tenant, with ONE code-seeded row.
 
 @router.get("/commission-plans/payout-exclusions")
-async def list_payout_exclusions(include_proposed: bool = True, org_id: str = ORG_ID):
+def list_payout_exclusions(include_proposed: bool = True, org_id: str = ORG_ID):
     """The tenant's exclusion map, with the code seed layered in and labelled `source='seed'`."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -13946,7 +14673,7 @@ async def list_payout_exclusions(include_proposed: bool = True, org_id: str = OR
 
 
 @router.post("/commission-plans/payout-exclusions")
-async def save_payout_exclusion(body: dict, org_id: str = ORG_ID):
+def save_payout_exclusion(body: dict, org_id: str = ORG_ID):
     """Add or update ONE exclusion mapping. MONEY-TOUCHING: applies on the next Calculate."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -13982,7 +14709,7 @@ async def save_payout_exclusion(body: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/commission-plans/payout-exclusions/{row_id}")
-async def delete_payout_exclusion(row_id: str, org_id: str = ORG_ID):
+def delete_payout_exclusion(row_id: str, org_id: str = ORG_ID):
     """Delete ONE tenant exclusion row. Deleting a row that overrode the code seed restores the seed."""
     require_org(org_id)
     from app.modules.commcalc import plan_pay_gate as ppg
@@ -13997,7 +14724,7 @@ async def delete_payout_exclusion(row_id: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/exclusion-impact/{period}")
-async def exclusion_impact(period: str, org_id: str = ORG_ID):
+def exclusion_impact(period: str, org_id: str = ORG_ID):
     """READ-ONLY per-rep BEFORE / AFTER for the exclusion map alone, plus every excluded line.
 
     Runs the REAL engine twice: once with the whole gate off, once with ONLY the exclusions on (the
@@ -14033,6 +14760,22 @@ async def exclusion_impact(period: str, org_id: str = ORG_ID):
 
 
 _PLAN_TIER_COLS_OK = {}
+_PLAN_ACTIVATION_SOURCE_COL_OK = {}
+
+
+def _plan_activation_source_col_present(client):
+    """True when commcalc.commission_plan carries the mig-297 activation_source column. Probed ONCE per
+    process (the schema cannot change under us mid-run) so a pre-297 deployment keeps saving plans exactly
+    as before instead of failing on an unknown column. The engine already reads this column defensively
+    (select("*") + p.get default 'inherit'), so a missing column degrades every plan to 'inherit'."""
+    if "ok" not in _PLAN_ACTIVATION_SOURCE_COL_OK:
+        try:
+            (client.schema('commcalc').table('commission_plan')
+             .select('activation_source').limit(1).execute())
+            _PLAN_ACTIVATION_SOURCE_COL_OK["ok"] = True
+        except Exception:
+            _PLAN_ACTIVATION_SOURCE_COL_OK["ok"] = False
+    return _PLAN_ACTIVATION_SOURCE_COL_OK["ok"]
 
 
 def _plan_tier_cols_present(client):
@@ -14051,7 +14794,7 @@ def _plan_tier_cols_present(client):
 
 
 @router.get("/commission-plans/coverage")
-async def commission_plan_coverage(period: str, org_id: str = ORG_ID):
+def commission_plan_coverage(period: str, org_id: str = ORG_ID):
     """READ-ONLY "is my plan actually paying what I configured?" diagnostic for one period. Writes nothing,
     never triggers a calc, and returns the SAME per-rep numbers the money path computes.
 
@@ -14066,7 +14809,12 @@ async def commission_plan_coverage(period: str, org_id: str = ORG_ID):
         raise HTTPException(400, "period required")
     require_org(org_id)
     client = sb()
-    prev = commission_engine.preview(client, org_id, period, coverage=True)
+    # Thread the SAME POS->roster identity map the money path uses (recompute-rep / _apply_new_engines
+    # both pass it) so a name_map / rep_aliases-bridged rep is reported COVERED here instead of wrongly
+    # landing in the "no plan attached" list — closing the coverage/money divergence. Deterministic,
+    # never fuzzy; None kept the diagnostic blind to bridges the pay path already honours.
+    prev = commission_engine.preview(client, org_id, period, coverage=True,
+                                     identity_map=_rep_canon_map(client, org_id))
     cov = prev.get("coverage") or {}
     try:
         carriers = (client.schema('commcalc').table('carrier').select('*')
@@ -14107,7 +14855,7 @@ async def commission_plan_coverage(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/coverage-unmatched")
-async def commission_plan_coverage_unmatched(
+def commission_plan_coverage_unmatched(
         period: str, group_by: str = "category", limit: int = 500,
         rep: list = Query(default=[]), store: list = Query(default=[]),
         market: list = Query(default=[]), department: list = Query(default=[]),
@@ -14146,7 +14894,7 @@ async def commission_plan_coverage_unmatched(
 
 
 @router.get("/commission-plans/coverage-excluded")
-async def get_coverage_excluded_sellers(org_id: str = ORG_ID):
+def get_coverage_excluded_sellers(org_id: str = ORG_ID):
     """The tenant's POS-artifact seller list (mig 248) — "sellers" like 'Office, Back' that are a till or
     a back-office login rather than a commissionable person. Read-only, org-scoped.
 
@@ -14163,12 +14911,12 @@ async def get_coverage_excluded_sellers(org_id: str = ORG_ID):
             "Run migration 248_commission_coverage_excluded_sellers.sql to persist this list."}
 
 
-@router.put("/commission-plans/coverage-excluded")
 class PutCoverageExcludedSellersIn(LaxModel):
     sellers: Any = None
     artifact_hints: Any = None
 
 
+@router.put("/commission-plans/coverage-excluded")
 async def put_coverage_excluded_sellers(body: PutCoverageExcludedSellersIn, authorization: str = Header(default=""),
                                         org_id: str = ORG_ID):
     """Admin-only. Sets the tenant's excluded-seller list (and optionally the artifact word list).
@@ -14205,7 +14953,7 @@ async def put_coverage_excluded_sellers(body: PutCoverageExcludedSellersIn, auth
 
 
 @router.get("/plan-field-options")
-async def plan_field_options(months: int = 3, period: str = "", limit: int = 4000,
+def plan_field_options(months: int = 3, period: str = "", limit: int = 4000,
                              value_limit: int = 400, org_id: str = ORG_ID):
     """PICK-DON'T-TYPE options for the Commission-Plan + installment-schedule editors (RULE THREE §3b).
 
@@ -14312,7 +15060,7 @@ class CommissionRuleImpactIn(LaxModel):
 
 
 @router.post("/commission-plans/rule-impact")
-async def commission_rule_impact(body: CommissionRuleImpactIn, org_id: str = ORG_ID):
+def commission_rule_impact(body: CommissionRuleImpactIn, org_id: str = ORG_ID):
     """READ-ONLY BLAST RADIUS for a proposed commission-rule matcher change. Writes NOTHING and triggers
     no calculation — it runs the real engine twice (as configured, and with the proposed matchers applied
     to an in-memory copy) and returns the difference.
@@ -14349,7 +15097,7 @@ async def commission_rule_impact(body: CommissionRuleImpactIn, org_id: str = ORG
 
 
 @router.get("/commission-plans/keyword-collisions")
-async def commission_keyword_collisions(period: str, org_id: str = ORG_ID):
+def commission_keyword_collisions(period: str, org_id: str = ORG_ID):
     """READ-ONLY audit of the "a pay-program keyword is also a device MODEL name" bug class.
 
     Lists every rule / installment trigger that matches an item description (or SKU) with `contains`, the
@@ -14367,7 +15115,7 @@ async def commission_keyword_collisions(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/pay-warnings")
-async def commission_pay_warnings(period: str, org_id: str = ORG_ID):
+def commission_pay_warnings(period: str, org_id: str = ORG_ID):
     """READ-ONLY: the activations that no commission-plan rule and no multi-month schedule trigger pays,
     computed LIVE (the same payload a calculation stores in calc_status.calc_warnings)."""
     if not str(period or "").strip():
@@ -14383,7 +15131,7 @@ async def commission_pay_warnings(period: str, org_id: str = ORG_ID):
 
 
 @router.get("/commission-plans/preview")
-async def preview_commission_plan(period: str, plan_id: str = "", org_id: str = ORG_ID):
+def preview_commission_plan(period: str, plan_id: str = "", org_id: str = ORG_ID):
     """READ-ONLY preview: apply plan rules to a period's raw_sales → per-rep payout + breakdown.
     Writes nothing; does not touch rep_commissions or the live calc. plan_id optional (else per-rep
     via assignment precedence)."""
@@ -14408,7 +15156,7 @@ def _norm_assign(v):
 
 
 @router.get("/commission-plans/roster")
-async def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = True):
+def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = True):
     """People roster for the bulk plan-assignment surface. Returns every org employee with the fields
     the UI needs: display name, ROLE + MARKET (for role-next-to-name + the role/market filter facets),
     the disambiguation email, and the assignment VALUE (epay_salesperson || name) that IS the
@@ -14482,7 +15230,7 @@ async def commission_plan_roster(org_id: str = ORG_ID, include_inactive: bool = 
 
 
 @router.get("/commission-plans/assignment-audit")
-async def commission_plan_assignment_audit(org_id: str = ORG_ID, include_inactive: bool = True):
+def commission_plan_assignment_audit(org_id: str = ORG_ID, include_inactive: bool = True):
     """READ-ONLY audit: for EVERY roster employee, which commission plan they resolve to and WHY —
     flagging the dangerous by-name pin that silently overrides a rep's store/market plan.
 
@@ -14579,13 +15327,13 @@ async def commission_plan_assignment_audit(org_id: str = ORG_ID, include_inactiv
             "markets": known_markets}
 
 
-@router.post("/commission-plans/bulk-assign")
 class BulkAssignCommissionPlanIn(LaxModel):
     plan_id: str = ""
     people: Any = None
     replace_existing: Any = None
 
 
+@router.post("/commission-plans/bulk-assign")
 async def bulk_assign_commission_plan(body: BulkAssignCommissionPlanIn, org_id: str = ORG_ID):
     """Assign ONE commission plan to MANY employees in a single action (owner directive 2026-07-23).
 
@@ -14675,6 +15423,141 @@ async def bulk_assign_commission_plan(body: BulkAssignCommissionPlanIn, org_id: 
             "replace_existing": replace_existing, "results": results, "summary": summary}
 
 
+# ── SINGLE-REP RECOMPUTE (owner directive 2026-08-22, luxelink) ────────────────────────────────────
+# After an incentive plan is attached to ONE rep (Incentive Explain page), recompute JUST that rep's
+# rep_commissions row so the page can show the new number immediately — WITHOUT a full-company Run
+# Calculation. It drives the SAME engines and the SAME per-row write helper (_apply_engine_components_
+# to_row) the full run uses, so this rep's row is byte-identical to what the next full run would write
+# for them. It NEVER touches any other rep's row (no period-wide delete; a single scoped update/insert).
+class RecomputeRepIn(LaxModel):
+    period: Any = None
+    rep: Any = None
+
+
+@router.post("/recompute-rep")
+def recompute_rep(body: RecomputeRepIn, org_id: str = ORG_ID):
+    """Recompute + UPSERT ONE rep's rep_commissions row (plan_comm / plan_name / total_payout) after a
+    plan attach, using commission_engine.preview(only_rep=rep) + that rep's installment amounts and the
+    SHARED write helper the full run uses. Org/period scoped; never rewrites other reps."""
+    require_org(org_id)
+    period = str(body.period or "").strip()
+    rep = str(body.rep or "").strip()
+    if not period or not rep:
+        raise HTTPException(400, "period and rep are required")
+    client = sb()
+
+    # SAME deterministic POS->roster identity map + plan resolver the full run (_apply_new_engines) uses,
+    # restricted to this ONE rep. only_rep filters the rep grouping AFTER the (org-wide) sales read and
+    # store/financing context are built, so this rep's plan amount is identical to the full-run slice.
+    _id_map = _rep_canon_map(client, org_id)
+    plan_by_rep = {}
+    try:
+        pr = commission_engine.preview(client, org_id, period, only_rep=rep, identity_map=_id_map)
+        for r in (pr.get("by_rep") or []):
+            rn = str(r.get("rep") or "").strip().upper()
+            if rn:
+                plan_by_rep[rn] = {"amount": safe_float(r.get("total_payout")),
+                                   "plan_name": r.get("plan_name"),
+                                   "setup_fee_comm": safe_float(r.get("setup_fee_comm"))}
+    except Exception as e:
+        raise HTTPException(500, f"recompute-rep preview failed: {e}")
+
+    # this rep's installment / statement components — computed exactly as _apply_new_engines does (the
+    # engines are org-wide; we only WRITE this rep's row, so we just index by this rep's keys below).
+    inst_by_rep, sale_inst_by_rep, stmt_by_rep = {}, {}, {}
+    try:
+        ir = installment_engine.compute_installments(client, org_id, period, persist=True)
+        for r, amt in (ir.get("by_rep") or {}).items():
+            if r:
+                inst_by_rep[str(r).strip().upper()] = safe_float(amt)
+    except Exception:
+        inst_by_rep = {}
+    try:
+        sr = sale_installment_engine.compute_sale_installments(client, org_id, period, persist=True)
+        for r, amt in (sr.get("by_rep") or {}).items():
+            if r:
+                sale_inst_by_rep[str(r).strip().upper()] = safe_float(amt)
+    except Exception:
+        sale_inst_by_rep = {}
+    try:
+        srows, _s, _pg = [], 0, 1000
+        while True:
+            chunk = (client.schema('commcalc').table('carrier_commission')
+                     .select('rep_name,total_commission').eq('org_id', org_id)
+                     .in_('period', _pvariants(period)).range(_s, _s + _pg - 1).execute().data) or []
+            srows.extend(chunk)
+            if len(chunk) < _pg:
+                break
+            _s += _pg
+        for r in srows:
+            rn = str(r.get('rep_name') or '').strip().upper()
+            if rn:
+                stmt_by_rep[rn] = round(stmt_by_rep.get(rn, 0.0) + safe_float(r.get('total_commission')), 2)
+    except Exception:
+        stmt_by_rep = {}
+
+    cols = _probe_rep_comm_engine_cols(client, org_id)
+
+    # find this rep's existing stored row (org+period scoped). Match on either name key AND the roster
+    # bridge, so a POS/roster spelling difference still finds the row to update in place.
+    rep_up = rep.upper()
+    keyset = {rep_up}
+    _bridged = _id_map.get(rep_up)
+    if _bridged:
+        keyset.add(_bridged.strip().upper())
+    try:
+        stored = (client.schema('commcalc').table('rep_commissions').select('*')
+                  .eq('org_id', org_id).in_('period', _pvariants(period)).execute().data) or []
+    except Exception:
+        stored = []
+    row, existing_id = None, None
+    for s in stored:
+        if _rep_comm_row_keys(s) & keyset:
+            row, existing_id = dict(s), s.get('id')
+            break
+
+    pm = parse_period(period)
+    if row is None:
+        # no standard row yet → build one exactly as the full run's plan-only branch does.
+        row = {"org_id": org_id, "period": period,
+               "period_month": pm.get("month"), "period_year": pm.get("year"),
+               "storeops_name": rep, "epay_salesperson": rep,
+               "subtotal": 0.0, "tier": 1, "total_payout": 0.0}
+    else:
+        # recover the standard-calc base (strip the previously-folded installment components) so the
+        # shared helper recomputes total_payout the same way the full run does from a FRESH calc row.
+        # For a plan-covered rep the helper overwrites `base` with the plan amount, so this only affects
+        # the (non-plan) fallback branch — keeping it consistent with the full run's non-plan formula.
+        row["total_payout"] = round(
+            safe_float(row.get("total_payout"))
+            - safe_float(row.get("residual_installment_comm"))
+            - safe_float(row.get("installment_comm_sale")), 2)
+
+    ks = _rep_comm_row_keys(row) or keyset
+    _apply_engine_components_to_row(
+        row, ks, inst_by_rep, sale_inst_by_rep, stmt_by_rep, plan_by_rep, cols)
+
+    # UPSERT ONLY this rep's row: update in place when it existed, else insert. No period-wide delete,
+    # so no other rep's row is ever touched.
+    row["org_id"] = org_id
+    try:
+        if existing_id is not None:
+            payload = {k: v for k, v in row.items() if k != "id"}
+            (client.schema('commcalc').table('rep_commissions').update(payload)
+             .eq('org_id', org_id).eq('id', existing_id).execute())
+        else:
+            client.schema('commcalc').table('rep_commissions').insert(row).execute()
+    except Exception as e:
+        raise HTTPException(500, f"recompute-rep write failed: {e}")
+
+    pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
+    return {"ok": True, "rep": rep, "period": period,
+            "matched_plan": pv is not None,
+            "plan_name": (pv or {}).get("plan_name"),
+            "plan_comm": safe_float((pv or {}).get("amount")) if pv else 0.0,
+            "total_payout": safe_float(row.get("total_payout"))}
+
+
 # ── MARKETS (pick-don't-type options for the Store Markets editor — AGENT_CONTRACT §3b/RULE THREE) ──
 # A market is a free-form label the org invents once and then reuses; typing it per store is how "LI",
 # "li" and "L I" become three different markets and a store silently drops out of its market filter.
@@ -14718,8 +15601,14 @@ def _canonical_market(client, org_id: str, value) -> str:
     case-insensitively — picking/typing "li" where "LI" already exists stores "LI", so the two can never
     become separate market buckets. A value matching nothing is kept verbatim (that IS how a genuinely
     new market is created — the UI makes that an explicit choice). Blank stays blank: no market is a
-    legitimate, explicit state."""
-    name = " ".join((value or "").split())
+    legitimate, explicit state.
+
+    HTML/angle-bracket junk (e.g. a pasted "<li>") is stripped FIRST (scope.sanitize_market_label) so
+    this verbatim create-new path can never persist markup as a market — the defect that put "<li>"
+    into commcalc.store_mapping.market (migration 740). An all-markup value collapses to "" =
+    unassigned."""
+    from app.core.scope import sanitize_market_label
+    name = sanitize_market_label(value)
     if not name:
         return ""
     key = _market_key(name)
@@ -14730,7 +15619,7 @@ def _canonical_market(client, org_id: str, value) -> str:
 
 
 @router.get("/markets")
-async def list_markets(org_id: str = ORG_ID):
+def list_markets(org_id: str = ORG_ID):
     """Options list for the market dropdown: the org's existing markets, distinct + sorted, blanks
     excluded. Read-only, org-scoped; degrades to [] rather than erroring so the editor still renders."""
     require_org(org_id)
@@ -14738,12 +15627,11 @@ async def list_markets(org_id: str = ORG_ID):
 
 
 @router.get("/stores")
-async def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
+def get_stores(org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('store_mapping').select('*').eq('org_id', org_id).order('store_address').execute()
     return r.data or []
 
-@router.put("/stores/{store_id}")
 class UpdateStoreIn(LaxModel):
     market: Any = None
     store_code: Any = None
@@ -14752,6 +15640,7 @@ class UpdateStoreIn(LaxModel):
     salesforce_id: Any = None
 
 
+@router.put("/stores/{store_id}")
 async def update_store(store_id: str, body: UpdateStoreIn, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     allowed = {k: getattr(body, k) for k in ('market', 'store_code', 'store_address', 'is_active', 'salesforce_id')
@@ -14771,7 +15660,7 @@ async def update_store(store_id: str, body: UpdateStoreIn, org_id: str = "000000
 # file to a canonical store_code, so Daily Targets actuals attach correctly. Additive — does
 # NOT touch store_mapping (which the asset market join depends on). Mirrors rep name aliases.
 @router.get("/store-aliases")
-async def list_store_aliases(org_id: str = ORG_ID):
+def list_store_aliases(org_id: str = ORG_ID):
     require_org(org_id)
     client = sb()
     try:
@@ -14789,7 +15678,7 @@ async def list_store_aliases(org_id: str = ORG_ID):
 
 
 @router.get("/store-resolution")
-async def store_resolution(period: str = "", org_id: str = ORG_ID):
+def store_resolution(period: str = "", org_id: str = ORG_ID):
     """Store-Matching UI data: every observed POS/sales store string × its current resolution status
     (explicit / store_mapping / exact-fallback / unresolved) + ranked smart suggestions. Optional `period`
     narrows the observed strings to that month; empty = all of the org's sales/feed data."""
@@ -14803,7 +15692,7 @@ class AddStoreAliasIn(LaxModel):
 
 
 @router.post("/store-aliases")
-async def add_store_alias(body: AddStoreAliasIn, org_id: str = ORG_ID):
+def add_store_alias(body: AddStoreAliasIn, org_id: str = ORG_ID):
     require_org(org_id)
     alias = (body.alias or '').strip()
     code = (body.store_code or '').strip()
@@ -14837,7 +15726,7 @@ async def add_store_alias(body: AddStoreAliasIn, org_id: str = ORG_ID):
 
 
 @router.delete("/store-aliases/{alias_id}")
-async def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
+def delete_store_alias(alias_id: str, org_id: str = ORG_ID):
     require_org(org_id)
     sb().schema('commcalc').table('store_aliases').delete() \
         .eq('org_id', org_id).eq('id', alias_id).execute()
@@ -14898,7 +15787,6 @@ def get_ingest_guard_config(org_id: str = ORG_ID):
     return cfg
 
 
-@router.put("/ingest-guard/config")
 class PutIngestGuardConfigIn(LaxModel):
     mode: str = ""
     block_min_rows: Any = None
@@ -14907,6 +15795,7 @@ class PutIngestGuardConfigIn(LaxModel):
     updated_by: Any = None
 
 
+@router.put("/ingest-guard/config")
 def put_ingest_guard_config(body: PutIngestGuardConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Set the enforcement mode / thresholds. Permission-gated; org-scoped (org_id is the query
     param the tenant middleware rewrites from the caller's JWT — never a body field)."""
@@ -15026,12 +15915,22 @@ def decide_ingest_guard_item(item_id: str, body: Optional[DecideIngestGuardItemI
         }).eq("org_id", org_id).eq("id", item_id).execute()
     except Exception as e:
         print(f"WARN guard decision not recorded: {e}")
+    # Intimation-only mirror: reflect the guard decision into the inbox request (allow->approve,
+    # reject->deny). The board owns the effect (alias pick + row release); never affects it.
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="ingest_guard",
+                                        source_table="ingest_store_quarantine", source_id=item_id,
+                                        decision=("approve" if decision == "allow" else "deny"),
+                                        actor=(body.decided_by or None), note=(body.note or None))
+    except Exception:
+        pass
     return {"ok": True, "item_id": item_id, "decision": decision,
             "rows_released": released, "alias_created": alias}
 
 
 @router.get("/store-unmatched")
-async def store_unmatched(period: str = "", org_id: str = ORG_ID):
+def store_unmatched(period: str = "", org_id: str = ORG_ID):
     """Diagnose store mismatches for the Store-Matching UI: distinct raw store strings across the
     data sources that do NOT resolve to a canonical commcalc.store_mapping address (after the
     alias / store_code / leading-number chain). These are the stores to map (add an alias) so the
@@ -15304,7 +16203,7 @@ def _trend_shape(kept, by_store, comp, mkt, value_keys):
     stores = []
     for code, per in by_store.items():
         series = [{'period': p, **{k: round((per.get(p) or {}).get(k, 0.0), 2) for k in value_keys}} for p in kept]
-        stores.append({'store': code, 'store_code': code, 'market': mkt.get(code, 'Boost'), 'series': series})
+        stores.append({'store': code, 'store_code': code, 'market': mkt.get(code, ''), 'series': series})
     sort_key = value_keys[0]
     stores.sort(key=lambda x: -sum(s[sort_key] for s in x['series']))
     company = [{'period': p, **{k: round(comp[p].get(k, 0.0), 2) for k in value_keys}} for p in kept]
@@ -15312,13 +16211,13 @@ def _trend_shape(kept, by_store, comp, mkt, value_keys):
 
 
 @router.get("/expenses-trend")
-async def expenses_trend(months: int = 6, org_id: str = ORG_ID):
+def expenses_trend(months: int = 6, org_id: str = ORG_ID):
     """Total store expenses per month, per store (+ company total). Cheap (store_expenses only)."""
     require_org(org_id)
     sc = sb().schema('commcalc')
     rows = sc.table('store_expenses').select('period,store_code,amount').eq('org_id', org_id).limit(200000).execute().data or []
     sm = sc.table('store_mapping').select('store_code,market').eq('org_id', org_id).execute().data or []
-    mkt = {str(s.get('store_code') or '').strip(): (s.get('market') or 'Boost') for s in sm}
+    mkt = {str(s.get('store_code') or '').strip(): (s.get('market') or '') for s in sm}
     kept = _tperiods({r.get('period') for r in rows}, months); ks = set(kept)
     by, comp = {}, {p: {'total': 0.0} for p in kept}
     for r in rows:
@@ -15336,7 +16235,7 @@ async def expenses_trend(months: int = 6, org_id: str = ORG_ID):
 
 
 @router.get("/commission-trend")
-async def commission_trend(months: int = 6, org_id: str = ORG_ID):
+def commission_trend(months: int = 6, org_id: str = ORG_ID):
     """Commission WE PAY (Σ rep_commissions.total_payout) per month, per store (+ company total)."""
     require_org(org_id)
     import re as _re
@@ -15352,7 +16251,7 @@ async def commission_trend(months: int = 6, org_id: str = ORG_ID):
     for s in sm:
         code = str(s.get('store_code') or '').strip()
         if code:
-            codes.add(code); mkt[code] = s.get('market') or 'Boost'
+            codes.add(code); mkt[code] = s.get('market') or ''
         n = _num(s.get('store_address'))
         if n and code:
             code_by_num.setdefault(n, code)
@@ -15375,7 +16274,7 @@ async def commission_trend(months: int = 6, org_id: str = ORG_ID):
 
 
 @router.get("/gp-trend")
-async def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
+def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_ID):
     """Revenue + Net Profit per month, per store (+ company total), from the gp_snapshot cache. Computes
     up to `compute_missing` newest un-cached months inline (then caches them) so the hub fills in over a
     few loads without recomputing 40k rows every time; older un-cached months are reported in pending_months."""
@@ -15406,7 +16305,7 @@ async def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_
             code = str(r.get('store_code') or r.get('store') or '').strip()
             if not code:
                 continue
-            mkt.setdefault(code, r.get('market') or 'Boost')
+            mkt.setdefault(code, r.get('market') or '')
             by.setdefault(code, {})[p] = {'total_rev': safe_float(r.get('total_rev')),
                                           'net_profit': safe_float(r.get('net_profit'))}
             comp[p]['total_rev'] += safe_float(r.get('total_rev'))
@@ -15421,7 +16320,7 @@ async def gp_trend(months: int = 6, compute_missing: int = 3, org_id: str = ORG_
 
 # ═══ GP / P&L department → category map (de-hardcode Gross Profit, mig 069) ══════════════════════
 @router.get("/gp-category-map")
-async def get_gp_category_map(org_id: str = ORG_ID):
+def get_gp_category_map(org_id: str = ORG_ID):
     """The tenant's POS department → GP-category overrides. Empty/un-migrated = built-in Boost buckets
     (device = Android/IPHONE/TABLET-XP at ext_price, accessory = Ondigo, blank = plan, else = other)."""
     from app.modules.commcalc.gp_report import DEVICE_DEPTS, ONDIGO_DEPT, GP_CATEGORIES
@@ -15440,7 +16339,7 @@ class SetGpCategoryMapIn(LaxModel):
 
 
 @router.post("/gp-category-map")
-async def set_gp_category_map(body: SetGpCategoryMapIn, org_id: str = ORG_ID):
+def set_gp_category_map(body: SetGpCategoryMapIn, org_id: str = ORG_ID):
     """Upsert ONE department→category override. body: {department, category}. An empty category REMOVES
     the override (reverts to the built-in default). 400 (not 500) if migration 069 isn't applied."""
     if 'department' not in body.model_fields_set:
@@ -15467,7 +16366,7 @@ async def set_gp_category_map(body: SetGpCategoryMapIn, org_id: str = ORG_ID):
 
 
 @router.get("/gp-departments")
-async def get_gp_departments(period: str = "", org_id: str = ORG_ID):
+def get_gp_departments(period: str = "", org_id: str = ORG_ID):
     """Distinct POS department labels in raw_sales (optionally for a period) with their line count and
     CURRENT GP category — so the tenant can see + map every real label. Drives the GP Category Map UI."""
     from collections import Counter
@@ -15626,7 +16525,7 @@ def _leg_blank_period(label):
 
 
 @router.get("/commission-leg-trend")
-async def commission_leg_trend(period: str = "", months: int = 12, market: str = "", store: str = "",
+def commission_leg_trend(period: str = "", months: int = 12, market: str = "", store: str = "",
                                org_id: str = ORG_ID):
     """Month-over-month decomposition of RECEIVED commission into the 1st-month leg vs the M2–M12
     trailing legs, plus the per-month-of-life LADDER that makes the owner's 3MR/6MR question answerable.
@@ -15814,7 +16713,7 @@ async def commission_leg_trend(period: str = "", months: int = 12, market: str =
 
 
 @router.get("/commission-leg-labels")
-async def commission_leg_labels(period: str = "", months: int = 6, org_id: str = ORG_ID):
+def commission_leg_labels(period: str = "", months: int = 6, org_id: str = ORG_ID):
     """Every carrier payment/compensation label the org's data actually contains, with the $ behind it,
     how it is CURRENTLY attributed and why — the pick-don't-type source for the Commission Legs admin
     page (§3b: you map a label that exists, you never type one)."""
@@ -15892,7 +16791,7 @@ class SetCommissionLegLabelIn(LaxModel):
 
 
 @router.post("/commission-leg-labels")
-async def set_commission_leg_label(body: SetCommissionLegLabelIn, org_id: str = ORG_ID):
+def set_commission_leg_label(body: SetCommissionLegLabelIn, org_id: str = ORG_ID):
     """Map ONE exact carrier label to a leg bucket. bucket '' REMOVES the override (back to the regex).
     Reporting only — this moves a dollar between two REPORT columns, never between two people."""
     require_org(org_id)
@@ -15921,7 +16820,7 @@ async def set_commission_leg_label(body: SetCommissionLegLabelIn, org_id: str = 
 
 
 @router.get("/commission-leg-config")
-async def get_commission_leg_config(org_id: str = ORG_ID):
+def get_commission_leg_config(org_id: str = ORG_ID):
     """The org's resolved leg-attribution rules + the raw config rows behind them."""
     require_org(org_id)
     client = sb(); sc = client.schema('commcalc')
@@ -15955,7 +16854,7 @@ class SetCommissionLegConfigIn(LaxModel):
 
 
 @router.post("/commission-leg-config")
-async def set_commission_leg_config(body: SetCommissionLegConfigIn, org_id: str = ORG_ID):
+def set_commission_leg_config(body: SetCommissionLegConfigIn, org_id: str = ORG_ID):
     """Upsert THIS org's mode-default leg-attribution row (carrier_id = nil). Reporting config only."""
     require_org(org_id)
     sc = sb().schema('commcalc')
@@ -16041,7 +16940,7 @@ def _breakout_tx_rows(client, sc, org_id, variants, labels, pattern, sign, out_n
 
 
 @router.get("/commission-received-breakout")
-async def commission_received_breakout(period: str = "", months: int = 12, market: str = "",
+def commission_received_breakout(period: str = "", months: int = 12, market: str = "",
                                        store: str = "", org_id: str = ORG_ID):
     """WHAT DID WE MAKE — 1st Month, M2…M6 individually, ATU, MI/residual, and the unsplit margin
     block — per money stream, per month, over the last `months` months ending at `period`.
@@ -16228,7 +17127,7 @@ async def commission_received_breakout(period: str = "", months: int = 12, marke
 
 
 @router.get("/chargebacks/{period}")
-async def get_chargebacks(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
+def get_chargebacks(period: str, authorization: str = Header(default=""), org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('chargeback_items').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).order('epay_salesperson').execute()
     rows = r.data or []
@@ -16240,12 +17139,12 @@ async def get_chargebacks(period: str, authorization: str = Header(default=""), 
     # super-admins (ks is None) saw all of it. Match `store`, which holds the POS store string.
     return [c for c in rows if in_keyset(ks, c.get('store'))]
 
-@router.put("/chargebacks/{item_id}")
 class UpdateChargebackIn(LaxModel):
     deduct: Any = False
     decided_by: Any = None
 
 
+@router.put("/chargebacks/{item_id}")
 async def update_chargeback(item_id: str, body: UpdateChargebackIn, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     update = {'deduct': bool(body.deduct), 'decided_at': 'now()'}
@@ -16255,7 +17154,7 @@ async def update_chargeback(item_id: str, body: UpdateChargebackIn, org_id: str 
     return r.data[0] if r.data else {}
 
 @router.get("/calc-status/{period}")
-async def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
+def get_calc_status(period: str, org_id: str = "00000000-0000-0000-0000-000000000001"):
     client = sb()
     r = client.schema('commcalc').table('calc_status').select('*').eq('org_id', org_id).in_('period', _pvariants(period)).limit(1).execute()
     return r.data[0] if r.data else {'calc_status': 'not_run'}
@@ -16302,7 +17201,7 @@ async def upload_hotsheet(
 
 
 @router.get("/hotsheet")
-async def get_hotsheet(org_id: str = ORG_ID):
+def get_hotsheet(org_id: str = ORG_ID):
     """List all hotsheet uploads grouped by effective_date."""
     client = sb()
     resp = client.schema("commcalc").table("hotsheet")        .select("effective_date,device_model,srp,promo_port_in,promo_non_port,promo_upgrade,promo_aal,boost_protect_fee,notes")        .eq("org_id", org_id)        .order("effective_date", desc=True)        .execute()
@@ -16310,7 +17209,7 @@ async def get_hotsheet(org_id: str = ORG_ID):
 
 
 @router.delete("/hotsheet/{effective_date}")
-async def delete_hotsheet(effective_date: str, org_id: str = ORG_ID):
+def delete_hotsheet(effective_date: str, org_id: str = ORG_ID):
     """Delete all hotsheet rows for a given effective_date."""
     client = sb()
     client.schema("commcalc").table("hotsheet")        .delete()        .eq("org_id", org_id)        .eq("effective_date", effective_date)        .execute()
@@ -16322,14 +17221,14 @@ async def delete_hotsheet(effective_date: str, org_id: str = ORG_ID):
 # ─────────────────────────────────────────────
 
 @router.get("/comp-rates")
-async def get_comp_rates(org_id: str = ORG_ID):
+def get_comp_rates(org_id: str = ORG_ID):
     client = sb()
     resp = client.schema("commcalc").table("comp_rates")        .select("*")        .eq("org_id", org_id)        .order("comp_type")        .order("effective_date", desc=True)        .execute()
     return resp.data or []
 
 
 @router.post("/comp-rates")
-async def upsert_comp_rate(payload: dict, org_id: str = ORG_ID):
+def upsert_comp_rate(payload: dict, org_id: str = ORG_ID):
     """Add or update a comp rate. Send: comp_type, rate_type, value, effective_date, plan_category, duration_months, notes"""
     client = sb()
     payload["org_id"] = org_id
@@ -16340,7 +17239,7 @@ async def upsert_comp_rate(payload: dict, org_id: str = ORG_ID):
 
 
 @router.delete("/comp-rates/{comp_rate_id}")
-async def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
+def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
     client = sb()
     client.schema("commcalc").table("comp_rates")        .delete().eq("org_id", org_id).eq("id", comp_rate_id).execute()
     return {"status": "ok"}
@@ -16350,7 +17249,7 @@ async def delete_comp_rate(comp_rate_id: int, org_id: str = ORG_ID):
 # SALES REPORT — the actual sales done, all stores, from the imported Sales Transaction Details
 # ─────────────────────────────────────────────
 @router.get("/sales-report")
-async def sales_report(period: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+def sales_report(period: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Sales actually done, per (store, rep, day), from the imported Sales Transaction Details.
     Reads raw_sales (the authoritative monthly upload) for `period`, FALLING BACK to daily_sales_feed
     (the emailed daily feed) when raw_sales has no rows for that period — so the report works even
@@ -16392,7 +17291,12 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
     # cells (rolled up by store/employee with an MTD date-cut) instead of its old per-line/config loop.
     # Canonical store grouping (P0): collapse spelling variants of one store into a single report row,
     # via the shipped store-resolution machinery. Degrades to case/whitespace fold if the resolver errors.
-    agg = _sales_cell_agg(rows, acfg, store_key=_canonical_store_key_fn(client, org_id))
+    _ck_sr = _canonical_store_key_fn(client, org_id)
+    agg = _sales_cell_agg(rows, acfg, store_key=_ck_sr)
+    # SOURCE OF TRUTH (mig 923) — ONE shared applier decides the activation basis for both this report and
+    # Exec MTD (wire once). Sets act_new/act_port/act_byod/act_upg on every cell; on the Activation Details
+    # basis they come from AD (else the sales feed, byte-identical). No filter here → whole org.
+    _sr_src = _apply_activation_basis(client, org_id, period, agg, _ck_sr)
 
     # Resolve each store to its market (store_mapping) so the report can filter by market —
     # keyed by address, store_code, or leading store-number, matching commission-trend's resolver.
@@ -16424,13 +17328,15 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
         return (mkt_by_addr.get(st.lower()) or mkt_by_code.get(st)
                 or mkt_by_num.get(_lead_sr(st)) or "")
 
+    # Activation columns read the shared basis fields (act_new+act_port = the Sales Report's premium sense;
+    # byod/upgrades their own) — set once by _apply_activation_basis, so this report and Exec MTD agree.
     out = []
     for a in agg.values():
         st = a["store"] or "—"
         out.append({
             "store": st, "salesperson": a["salesperson"], "trans_date": a["trans_date"],
-            "txns": len(a["_txn"]), "activations": len(a["_prem"]), "byod": len(a["_byod"]),
-            "upgrades": len(a["_upg"]), "swaps": len(a["_swap"]), "lines": a["lines"],
+            "txns": len(a["_txn"]), "activations": a["act_new"] + a["act_port"], "byod": a["act_byod"],
+            "upgrades": a["act_upg"], "swaps": len(a["_swap"]), "lines": a["lines"],
             "accessory_rev": round(a["accessory_rev"], 2), "revenue": round(a["revenue"], 2),
             "gp": round(a["gp"], 2), "market": _market_for(st),
         })
@@ -16474,6 +17380,10 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
     return {"period": period, "source": source, "org_id": org_id, "rows": out, "totals": totals,
             "periods": sorted(periods, reverse=True), "classification_gaps": _cls_gaps,
             "stores": filter_stores, "markets": filter_markets,
+            # SOURCE OF TRUTH (mig 923): when active, activations/byod/upgrades come from the Activation
+            # Details basis (matches Exec MTD + b2b), set by the shared _apply_activation_basis. Default →
+            # the historical sales-feed columns, byte-identical.
+            "activation_source": {"active": bool(_sr_src.get("active")), "basis": _sr_src.get("basis")},
             # Transparency (owner's debug-first mandate): exactly what this read used, so a truncated or
             # wrong-tenant view is self-evident. `org_id` above surfaces the super-admin org-resolution
             # default (a no-org_id request reads the HOUSE org). `source_meta` explains the union.
@@ -16483,7 +17393,7 @@ async def sales_report(period: str = "", authorization: str = Header(default="")
 
 
 @router.get("/sales-report/classification-unmatched")
-async def sales_report_classification_unmatched(period: str = "", authorization: str = Header(default=""),
+def sales_report_classification_unmatched(period: str = "", authorization: str = Header(default=""),
                                                 org_id: str = ORG_ID):
     """SEE THE UNMATCHED TRANSACTIONS (2026-08-14). The Sales Report's classification banner tells the owner
     "N transaction(s) have no contract type and no activation rule matched — map them" but never says WHICH
@@ -16538,7 +17448,7 @@ async def sales_report_classification_unmatched(period: str = "", authorization:
 
 
 @router.get("/sales-report/detail")
-async def sales_report_detail(period: str = "", store: str = "", salesperson: str = "",
+def sales_report_detail(period: str = "", store: str = "", salesperson: str = "",
                               date: str = "", org_id: str = ORG_ID):
     """Transaction drill-down for one Sales Report cell (store + rep + day): every transaction that
     rolled into that line, each with its line items (product, contract type, price, GP). Same
@@ -16656,16 +17566,21 @@ async def sales_report_detail(period: str = "", store: str = "", salesperson: st
 @router.get("/sales-comparison")
 def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = "",
                      as_of_day: int = -1, week: int = 0, stores: str = "", markets: str = "",
-                     authorization: str = Header(default=""), org_id: str = ORG_ID):
+                     carrier: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Period-over-period sales comparison, ALL stores, % change per item sold — Phones, BYOD,
-    Accessories, Tablets and each Financing vendor (ACIMA / TW / Edge…).
+    Activation, Tablets, Accessories ($) and a single carrier-scoped Financing line (units AND $).
 
     Scenarios (`mode`): `mom` = vs last month · `yoy` = vs the same month last year · `custom` = vs the
     explicit `compare_period`. `week` (1-5) compares one week-of-month across BOTH periods (week-1 over
     week-1). `as_of_day` cuts BOTH windows to day ≤ N (compare a mid-month base to the SAME first-N-days
     of the other period, never a partial month vs a full one); -1 = auto (today's day when the base is
     the current month, else the full month). `stores` / `markets` are comma-separated filters; the read
-    is RBAC store-scoped like every other sales report."""
+    is RBAC store-scoped like every other sales report.
+
+    CARRIER-SCOPED FINANCING (compliance-critical): `carrier` is the active-carrier lens code
+    ('boost'/'total'/…). Only that carrier's financing vendors feed the single Financing line, so the
+    report NEVER shows both Boost's and Total's financing vendors together. Blank → the tenant's resolved
+    single carrier (or the default carrier); the scoping is applied SERVER-SIDE before any math."""
     require_org(org_id)
     if week and not (1 <= week <= 5):
         week = 0
@@ -16741,7 +17656,23 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
 
     from app.modules.commcalc import installment_category as icat
     rules = icat.load_category_rules(client, org_id)
+    # CARRIER-SCOPED FINANCING (compliance-critical): resolve the active carrier, then keep ONLY that
+    # carrier's financing vendors so the single Financing line can never mix Boost + Total. Blank lens →
+    # a safe single carrier (the tenant's only carrier, else its default, else 'boost') — never "all".
+    active_carrier = (carrier or "").strip().lower()
+    if not active_carrier:
+        try:
+            crows = (client.schema('commcalc').table('carrier')
+                     .select('name,code,is_default').eq('org_id', org_id).execute().data) or []
+        except Exception:
+            crows = []
+        if len(crows) == 1:
+            active_carrier = str(crows[0].get('code') or crows[0].get('name') or '').strip().lower()
+        else:
+            dfl = next((c for c in crows if c.get('is_default')), None)
+            active_carrier = str((dfl or {}).get('code') or (dfl or {}).get('name') or 'boost').strip().lower()
     vendors = _finreg.resolve_vendors(client, org_id)
+    vendors = _salescmp.vendors_for_carrier(vendors, active_carrier)
     acfg = _accessory_config(client, org_id)
     is_acc = lambda r: _is_accessory(r.get("department"), r.get("category"), r.get("product_desc"), acfg)  # noqa: E731
 
@@ -16751,10 +17682,11 @@ def sales_comparison(period: str = "", mode: str = "mom", compare_period: str = 
             base_period=base_p, compare_period=cmp_p, mode=mode, window_label=window_label,
             resolve_market=resolve_market,
             params={"period": base_p, "mode": mode, "compare_period": cmp_p,
-                    "as_of_day": eff_as_of, "week": week,
+                    "as_of_day": eff_as_of, "week": week, "carrier": active_carrier,
                     "stores": sorted(sel_stores), "markets": sorted(sel_markets)})
     except Exception as e:
         raise HTTPException(500, f"sales-comparison failed: {type(e).__name__}: {e}")
+    out["active_carrier"] = active_carrier
     out["stores"] = opt_stores
     out["markets"] = opt_markets
     out["source_meta"] = {"base": bmeta, "compare": cmeta,
@@ -16889,7 +17821,6 @@ def get_accessory_config(org_id: str = ORG_ID):
             "definition_drives_pay": c.get("definition_drives_pay", False)}
 
 
-@router.put("/accessory-config")
 class PutAccessoryConfigIn(LaxModel):
     departments: Any = None
     categories: Any = None
@@ -16907,6 +17838,7 @@ class PutAccessoryConfigIn(LaxModel):
     definition_drives_pay: Any = None
 
 
+@router.put("/accessory-config")
 def put_accessory_config(body: PutAccessoryConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Set what counts as accessory sales + which Tender Type = an ACIMA lease. Body: {departments:[...],
     categories:[...], product_keywords:[...], acima_tenders:[...]}. A line is an accessory if its
@@ -17317,7 +18249,12 @@ def commission_explain(period: str, rep: str = "", org_id: str = ORG_ID):
     mode = _resolve_carrier_mode(carriers)
     from app.modules.commcalc import commission_drilldown
     try:
-        return commission_drilldown.explain_rep(client, org_id, period, rep, carrier_mode=mode)
+        # SAME deterministic POS->roster identity map the money path threads (recompute-rep /
+        # _apply_new_engines) so this drill-down resolves the rep's plan — and its no-plan diagnosis —
+        # exactly as pay does. Deterministic; None would leave the explain view blind to a name bridge
+        # the payout already honours.
+        return commission_drilldown.explain_rep(client, org_id, period, rep, carrier_mode=mode,
+                                                identity_map=_rep_canon_map(client, org_id))
     except Exception as e:
         raise HTTPException(500, f"commission-explain failed: {e}")
 
@@ -17369,7 +18306,7 @@ def accessory_cost_audit(period: str, org_id: str = ORG_ID, c_basis: str = "pric
 # ─────────────────────────────────────────────
 
 @router.get("/sales-recon")
-async def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
+def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
     """Reconcile the authoritative monthly sales upload (raw_sales) against the daily B2B feed
     (daily_sales_feed) for a period. `period` accepts 'June 2026' or '2026-06'. Read-only.
     Returns {} structure with summary + by_store + rows (see sales_recon.run_sales_recon)."""
@@ -17383,7 +18320,7 @@ async def sales_feed_recon(period: str = "", org_id: str = ORG_ID):
 
 
 @router.get("/sales-recon/transaction")
-async def sales_feed_recon_transaction(period: str, trans_id: str, org_id: str = ORG_ID):
+def sales_feed_recon_transaction(period: str, trans_id: str, org_id: str = ORG_ID):
     """Line-item drill-down for one transaction — monthly (raw_sales) vs daily (daily_sales_feed)
     lines side by side, so you can see exactly what differs. Powers the recon row click-through."""
     require_org(org_id)
@@ -17428,7 +18365,7 @@ async def sales_recon_sync_flags(period: str = "", notify: bool = False,
 # ─────────────────────────────────────────────
 
 @router.post("/discrepancy/run")
-async def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
+def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
     """Trigger discrepancy detection. Send: { "period": "2026-04" }"""
     period = payload.get("period")
     if not period or len(period) != 7:
@@ -17467,7 +18404,7 @@ async def get_discrepancy_results(period: str, org_id: str = ORG_ID):
 
 
 @router.patch("/discrepancy/{discrepancy_id}")
-async def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: str = ORG_ID):
+def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: str = ORG_ID):
     """Update status of a discrepancy row: open, resolved, disputed"""
     client = sb()
     client.schema("commcalc").table("discrepancy_results")        .update({"status": payload.get("status"), "notes": payload.get("notes")})        .eq("org_id", org_id)        .eq("id", discrepancy_id)        .execute()
@@ -17596,7 +18533,7 @@ async def get_top_sellers(period: str, limit: int = 10, org_id: str = ORG_ID):
 
 
 @router.get("/device-history")
-async def get_device_history(q: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+def get_device_history(q: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
     """DEVICE HISTORY LOOKUP (commission-16) — employee-portal widget backend. Enter an IMEI OR a phone
     number (one box; the shape is auto-detected but BOTH keys are searched). Returns, org-scoped and
     carrier-agnostic:
@@ -17904,7 +18841,7 @@ async def get_device_history(q: str = "", authorization: str = Header(default=""
 
 
 @router.get("/sales-analyzer/{period}")
-async def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
+def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
                             authorization: str = Header(default=""), org_id: str = ORG_ID):
     """3-Month Retention (3MR) behavior per rep: each rep's activations from 3 months before
     `period` and which churned (cancelled/ported/suspended/deactivated) before their 3rd bill
@@ -17920,7 +18857,7 @@ async def get_sales_analyzer(period: str, window_days: int = 90, rep: str = "",
 
 
 @router.get("/comp/residual-trend")
-async def get_comp_residual_trend(months: int = 6, store: str = "", market: str = "",
+def get_comp_residual_trend(months: int = 6, store: str = "", market: str = "",
                                   min_drop_pct: float = 20.0, min_drop_amt: float = 1.0,
                                   authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Month-over-month carrier residual (Comprehensive Comp) trend. Returns total residual per
@@ -17938,7 +18875,7 @@ async def get_comp_residual_trend(months: int = 6, store: str = "", market: str 
 
 
 @router.get("/comp/rep-pay-trend")
-async def get_comp_rep_pay_trend(months: int = 6, store: str = "", org_id: str = ORG_ID):
+def get_comp_rep_pay_trend(months: int = 6, store: str = "", org_id: str = ORG_ID):
     """Per-REP commission trend — the commission WE ACTUALLY PAY each rep (rep_commissions.total_payout)
     month over month. This is the per-rep number the Total Compensation page was missing (its other
     view is account-level carrier comp). One row per rep with each kept month's payout + a total."""
@@ -18291,8 +19228,26 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
             print(f"WARN _sales_rows_union read of {table} failed: {e}")
             return []
 
-    prows = _q(primary)
-    orows = _q(other)
+    # The two source reads are INDEPENDENT and are each the heaviest cost of this call (a full period of
+    # raw_sales / daily_sales_feed lines, up to the 200k cap). They were issued back-to-back, so the page
+    # paid their latency SERIALLY. Run them CONCURRENTLY on the process-wide singleton client — the exact
+    # concurrency FastAPI already serves across simultaneous requests against this one connection pool
+    # (get_supabase() singleton + db_resilience pool; httpx.Client is documented thread-safe for
+    # concurrent requests, and harness_db_singleton proves concurrent .schema() usage keeps headers
+    # isolated). `_q` swallows its own errors and returns [], so a worker thread can never raise; any
+    # unexpected executor failure falls back to the original sequential reads. Byte-identical output —
+    # the SAME rows for each source, only fetched in parallel (prows/orows are assigned by source, not by
+    # completion order). DISPLAY path only (see the docstring: the money calc never calls this).
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as _ex:
+            _fp = _ex.submit(_q, primary)
+            _fo = _ex.submit(_q, other)
+            prows, orows = _fp.result(), _fo.result()
+    except Exception as _pe:
+        print(f"WARN _sales_rows_union parallel read fell back to sequential: {_pe}")
+        prows = _q(primary)
+        orows = _q(other)
 
     def _day(r):
         return str(r.get('trans_date') or '')[:10]
@@ -19586,7 +20541,7 @@ def _require_target_edit(authorization: str, org_id: str, store_code: str = ""):
 
 
 @router.get("/targets/{period}")
-async def get_targets(period: str, include_inactive: bool = False,
+def get_targets(period: str, include_inactive: bool = False,
                       authorization: str = Header(default=""), org_id: str = ORG_ID):
     """List per-store monthly target config. Stores without a row are SEEDED from the prior month —
     each category carried forward, or +10% stretched when last month's target was met (see
@@ -19651,7 +20606,6 @@ async def get_targets(period: str, include_inactive: bool = False,
     return {'period': period, 'byod_pct_default': byod_def, 'targets': out}
 
 
-@router.put("/targets/{period}")
 class SaveTargetIn(LaxModel):
     store_code: Any = None
     activations_monthly: Any = None
@@ -19662,6 +20616,7 @@ class SaveTargetIn(LaxModel):
     updated_by: Any = None
 
 
+@router.put("/targets/{period}")
 async def save_target(period: str, body: SaveTargetIn, authorization: str = Header(default=""),
                       org_id: str = ORG_ID):
     """Upsert one store's monthly target config (Target Settings save, and the DM per-store
@@ -19698,7 +20653,7 @@ class RollForwardTargetsIn(LaxModel):
 
 
 @router.post("/targets/{period}/roll-forward")
-async def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = None,
+def roll_forward_targets(period: str, body: Optional[RollForwardTargetsIn] = None,
                                authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Persist the month-over-month carry-forward into `period`: each store's prior-month target
     carried forward, or +10% where last month's target was met (see _carry_forward_map). By default
@@ -19800,7 +20755,7 @@ def _period_or_400(period, what="period"):
 
 
 @router.get("/targets/{period}/calendar")
-async def get_target_calendar(
+def get_target_calendar(
     period: str, store_code: str, scope: str = "store",
     rep: str = "", today: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID,
 ):
@@ -20990,6 +21945,177 @@ def _exec_metric_config(client, org_id):
     return cfg
 
 
+# ── PER-METRIC SOURCE OF TRUTH (mig 923) ─────────────────────────────────────────────────────────
+# The default authoritative source for each metric when the tenant has no metric_source_of_truth row.
+_METRIC_SOURCE_DEFAULTS = {"activations": "activation_details", "bill_payments": "sales_agg"}
+# Metrics whose basis-of-truth AUTO-ACTIVATES with no config (owner 2026-08-26: "it should be automatic,
+# no need to update or wire it — Activation Details becomes the basis of truth for all b2bsoft tenants").
+# The consumers (Exec MTD / Sales Report) STILL fall back to the sales basis when the report has NO rows
+# for the period, so a tenant that never uploaded Activation Details stays BYTE-IDENTICAL. Auto-on only
+# changes anything for a tenant that actually has the report ingested — exactly the intended set.
+_METRIC_AUTO_ENABLED = {"activations"}
+
+
+def _metric_source(client, org_id, metric):
+    """Resolve the per-metric SOURCE OF TRUTH (mig 923). Returns
+    {'metric','source','enabled','reconcile_with','processor','assigned_user','tolerance','configured'}.
+
+    No config row (every org, pre-923): a metric in _METRIC_AUTO_ENABLED (activations) defaults to its
+    basis-of-truth source ENABLED — but the consumer gates on the report actually having rows, so a tenant
+    without that report is byte-identical. An explicit config row always wins (a tenant can disable it).
+    Never raises."""
+    default = {"metric": metric, "source": _METRIC_SOURCE_DEFAULTS.get(metric, "sales_agg"),
+               "enabled": (metric in _METRIC_AUTO_ENABLED), "reconcile_with": "sales_agg",
+               "processor": None, "assigned_user": None, "tolerance": 0.0, "configured": False}
+    try:
+        rows = (client.schema("commcalc").table("metric_source_of_truth")
+                .select("*").eq("org_id", org_id).eq("metric", metric).limit(1).execute().data) or []
+    except Exception:
+        return default
+    if not rows:
+        return default
+    r = rows[0]
+    return {"metric": metric, "source": (r.get("source") or default["source"]),
+            "enabled": bool(r.get("enabled")),
+            "reconcile_with": r.get("reconcile_with") or None,
+            "processor": r.get("processor") or None,
+            "assigned_user": r.get("assigned_user") or None,
+            "tolerance": float(r.get("tolerance") or 0.0),
+            "configured": True}
+
+
+# Map an Activation Details bucket (New Activation / Port / BYOD / Upgrade / Tablet / Home Internet / Edge /
+# Other) onto the Exec-MTD activation keys. Only Port / BYOD / Upgrade are their own columns; every other
+# activation family folds into the base 'activation' column (Tablet / Home Internet / Edge / plain New all
+# count as activations toward Total Activation, exactly as the b2bsoft MTD report counts them).
+_AD_EXEC_KEY = {"Port": "port", "BYOD": "byod", "Upgrade": "upgrade"}
+
+
+def _ad_activation_buckets(client, org_id, period, ckey_fn=None, cut=None,
+                           rng_from=None, rng_to=None, no_overlap=False):
+    """Aggregate the b2b Activation Details basis into per-canonical-store and per-rep activation buckets
+    {'activation','port','byod','upgrade'} for the Exec-MTD source-of-truth override + reconciliation.
+    Applies the SAME MTD date-cut / date-range window the sales cells use, so the two bases compare on the
+    same window. Stores are keyed by the SAME canonical key Exec MTD groups by (`ckey_fn`), so an override
+    lands on the matching store row. Returns (by_store, by_rep, n_rows); empty maps when Activation Details
+    has no rows for the period. DISPLAY/recon only."""
+    rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": (lambda s: "")})
+    ck = ckey_fn or (lambda s: str(s or "").strip().lower())
+    by_store, by_rep, n = {}, {}, 0
+    for r in rows:
+        d10 = r.get("trans_date") or ""
+        if cut and d10 and d10 > cut:
+            continue
+        if rng_from or rng_to:
+            if no_overlap:
+                continue
+            if not d10:
+                continue            # a windowed report cannot place an undated activation
+            if (rng_from and d10 < rng_from) or (rng_to and d10 > rng_to):
+                continue
+        n += 1
+        fld = _AD_EXEC_KEY.get(r.get("bucket") or "", "activation")
+        st = ck(r.get("store") or "") or "—"
+        rep = (r.get("salesperson") or "").strip() or "—"
+        s_slot = by_store.setdefault(st, {"activation": 0, "port": 0, "byod": 0, "upgrade": 0,
+                                          "_name": (r.get("store") or st)})
+        r_slot = by_rep.setdefault(rep, {"activation": 0, "port": 0, "byod": 0, "upgrade": 0, "_name": rep})
+        s_slot[fld] += 1
+        r_slot[fld] += 1
+    return by_store, by_rep, n
+
+
+def _ad_cells_full(client, org_id, period, ckey_fn=None):
+    """Per-(canonical-store, rep, date) Activation Details counts, split into the SAME columns b2b's Location
+    Sales Report shows: {new, port, byod, tablet, home_internet, edge, upgrade}. `new` = New Activation + Other
+    only (the pure New column); Tablet / Home Internet / Edge are broken out on their own so the Sales Report
+    can reconcile column-by-column with the back-office (owner 2026-08-27: those were previously folded into
+    `new`, inflating the Activation column). Total Activation = new+port+byod+tablet+home_internet+edge,
+    excluding Upgrade. The ONE AD activation source both Exec MTD and the Sales Report read via
+    _apply_activation_basis."""
+    rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": (lambda s: "")})
+    ck = ckey_fn or (lambda s: str(s or "").strip().lower())
+    cells, n = {}, 0
+    _slot0 = {"new": 0, "port": 0, "byod": 0, "tablet": 0, "home_internet": 0, "edge": 0, "upgrade": 0}
+    for r in rows:
+        n += 1
+        b = r.get("bucket") or ""
+        key = (ck(r.get("store") or "") or "—", (r.get("salesperson") or "").strip() or "—",
+               str(r.get("trans_date") or "")[:10])
+        slot = cells.setdefault(key, {**_slot0, "_name": (r.get("store") or key[0])})
+        if b == "Upgrade":
+            slot["upgrade"] += 1
+        elif b == "BYOD":
+            slot["byod"] += 1
+        elif b == "Port":
+            slot["port"] += 1
+        elif b == "Tablet":
+            slot["tablet"] += 1
+        elif b == "Home Internet":
+            slot["home_internet"] += 1
+        elif b == "Edge":
+            slot["edge"] += 1
+        else:
+            slot["new"] += 1          # New Activation + Other
+    return cells, n
+
+
+def _blank_sales_cell(store, rep, date):
+    """An empty _sales_cell_agg-shaped cell (all metrics zero) — used to ADD a store/rep/day that exists in
+    Activation Details but not in the sales feed, so its activations still show (with zero sales columns)."""
+    return {"store": store, "salesperson": rep, "trans_date": date, "login": None,
+            "_txn": set(), "_prem": set(), "_byod": set(), "_upg": set(), "_port": set(),
+            "_swap": set(), "_billpay": set(), "lines": 0, "revenue": 0.0, "gp": 0.0,
+            "accessory_rev": 0.0, "setup_fee_rev": 0.0, "box_count": 0, "total_phones": 0,
+            "bill_qty": 0, "bill_amt": 0.0, "activation_fee": 0.0, "protect": 0,
+            "act_new": 0, "act_port": 0, "act_byod": 0, "act_upg": 0,
+            "act_tablet": 0, "act_home_internet": 0, "act_edge": 0}
+
+
+def _apply_activation_basis(client, org_id, period, cells, ckey_fn, restrict_stores=None):
+    """THE single place that decides the activation BASIS for every display consumer (owner 2026-08-26:
+    "wire once, applies everywhere — no per-surface wiring"). Sets explicit activation COUNT fields
+    (act_new / act_port / act_byod / act_upg) on every shared cell; the Sales Report and Exec MTD both read
+    THESE instead of re-deriving from the trans-id sets, so a basis change moves both at once.
+
+    Defaults exactly reproduce the sales-feed counts (act_new = prem−port, etc.) → an INACTIVE basis is
+    BYTE-IDENTICAL. When the tenant's basis is Activation Details (auto-on when that report has rows), the
+    fields are REPLACED with the AD counts per (canonical store, rep, date): a cell present only in AD is
+    ADDED (respecting `restrict_stores` — the filtered store set — when given), a sales cell absent from AD
+    has its activation counts ZEROED (AD is authoritative). Mutates `cells` in place; returns src_meta
+    {active, basis, ad_rows}."""
+    for a in cells.values():
+        a["act_new"] = len(a["_prem"]) - len(a["_port"])
+        a["act_port"] = len(a["_port"])
+        a["act_byod"] = len(a["_byod"])
+        a["act_upg"] = len(a["_upg"])
+        # The sales feed does not distinguish tablet / home-internet / edge → 0 (they stay folded inside the
+        # feed's own `new` sense). An INACTIVE basis is therefore byte-identical to before this split.
+        a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+    msrc = _metric_source(client, org_id, "activations")
+    if not (msrc.get("enabled") and msrc.get("source") == "activation_details"):
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+    ad_cells, ad_n = _ad_cells_full(client, org_id, period, ckey_fn)
+    if not ad_n:
+        return {"active": False, "basis": "sales_agg", "ad_rows": 0}
+    for a in cells.values():
+        a["act_new"] = a["act_port"] = a["act_byod"] = a["act_upg"] = 0   # AD authoritative
+        a["act_tablet"] = a["act_home_internet"] = a["act_edge"] = 0
+    for key, ad in ad_cells.items():
+        if key not in cells:
+            if restrict_stores is not None and key[0] not in restrict_stores:
+                continue
+            cells[key] = _blank_sales_cell(ad.get("_name") or key[0], key[1], key[2])
+        a = cells[key]
+        # act_new stays FOLDED (new + tablet + home-internet + edge) so every existing consumer — Exec MTD's
+        # act_new+act_port, the Sales Report total — is unchanged; the three sub-counts are ALSO exposed so the
+        # Sales Report can show them as their own columns and display a PURE New column (act_new − the three).
+        a["act_tablet"], a["act_home_internet"], a["act_edge"] = ad["tablet"], ad["home_internet"], ad["edge"]
+        a["act_new"] = ad["new"] + ad["tablet"] + ad["home_internet"] + ad["edge"]
+        a["act_port"], a["act_byod"], a["act_upg"] = ad["port"], ad["byod"], ad["upgrade"]
+    return {"active": True, "basis": "activation_details", "ad_rows": ad_n}
+
+
 def _exec_line_match(rule, dept, cat, pdesc):
     """True if a sale line matches a bucket rule (all case-insensitive; inputs already lowercased).
     category/department = exact membership in a token list; product_desc_contains = substring; exclude_*
@@ -21235,11 +22361,22 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
     # total. Activation = premium−port (Port is a sub-split of premium); Total Activation = prem+byod+upg,
     # which EQUALS the Sales Report's (activations+byod+upgrades) over the same rows.
     cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=_ckey_ex)
+    # ── SOURCE OF TRUTH (mig 923): ACTIVATIONS — the SAME shared applier the Sales Report uses (wire once).
+    # It sets act_new/act_port/act_byod/act_upg on every cell: from the sales feed by default (byte-identical)
+    # or from Activation Details when that is the basis (auto-on with data). When a filter is active we
+    # restrict AD-added cells to the filtered store set so the selection is respected; unfiltered → all AD
+    # stores (incl. AD-only) appear. The MTD cut / date-range below then windows both bases identically.
+    _flt_active = bool(store_sel or rep_sel or market_sel)
+    _restrict = {k[0] for k in cells} if _flt_active else None
+    _act_src = _apply_activation_basis(client, org_id, period, cells, _ckey_ex, restrict_stores=_restrict)
+    _act_override, _ad_n = bool(_act_src.get('active')), _act_src.get('ad_rows') or 0
+    _msrc_act = _metric_source(client, org_id, 'activations')
 
     def _blank():
         # NOTE (n3): by_store dicts also gain a '_name' key (the raw display spelling) set in the loop
         # below — a metric sentinel, NOT a bucket. Any future code iterating these dicts must skip '_name'.
         return {'activation': 0, 'port': 0, 'byod': 0, 'upgrade': 0, 'total_phones': 0,
+                'tablet': 0, 'home_internet': 0, 'edge': 0,
                 'bill_qty': 0, 'bill_amt': 0.0, 'acc_sales': 0.0, 'setup_fee': 0.0,
                 'activation_fee': 0.0, 'protect': 0}
     by_store, by_emp = {}, {}
@@ -21254,29 +22391,34 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
                 continue
             if date < rng_from_s or date > rng_to_s:
                 continue
-        prem, port = len(a['_prem']), len(a['_port'])
-        # by_store is keyed on the CANONICAL store key `st` (so spelling variants collapse to one row),
-        # but LABELLED with the first-seen RAW display spelling `a['store']` (not the lowercased key).
+        # Activation buckets read the SHARED basis fields (set once above), so Exec MTD and the Sales Report
+        # never diverge. On the AD basis these are the Activation Details counts; else the sales-feed counts.
+        # by_store is keyed on the CANONICAL store key `st` (spelling variants collapse), LABELLED with the
+        # first-seen RAW display spelling.
         ds = by_store.setdefault(st or '—', _blank())
         if '_name' not in ds:
             ds['_name'] = a.get('store') or st
         for d in (ds, by_emp.setdefault(rep or '—', _blank())):
-            d['activation'] += prem - port
-            d['port'] += port
-            d['byod'] += len(a['_byod'])
-            d['upgrade'] += len(a['_upg'])
+            d['activation'] += a['act_new']          # FOLDED (new + tablet + home-internet + edge)
+            d['port'] += a['act_port']
+            d['byod'] += a['act_byod']
+            d['upgrade'] += a['act_upg']
+            d['tablet'] += a['act_tablet']
+            d['home_internet'] += a['act_home_internet']
+            d['edge'] += a['act_edge']
             d['total_phones'] += a['total_phones']
             d['bill_qty'] += a['bill_qty']
             d['bill_amt'] += a['bill_amt']
             d['acc_sales'] += a['accessory_rev']
             # DEVICE SET-UP FEE — the SAME `setup_fee_rev` accumulator the accessory TARGET attainment
             # folds in (owner directive 2026-07-17: the set-up fee is a SEPARATE pay item, never blended
-            # into the accessory$ number, but it DOES count toward the accessory target). Carried here so
-            # Executive MTD can state BOTH bases from the ONE shared aggregation instead of silently
-            # showing a different number than the Accessory Targets page. `acc_sales` is UNCHANGED.
+            # into the accessory$ number, but it DOES count toward the accessory target).
             d['setup_fee'] += a['setup_fee_rev']
             d['activation_fee'] += a['activation_fee']
             d['protect'] += a['protect']
+
+    # Total Activation EXCLUDES Upgrade only on the AD basis (b2b-consistent); the sales basis is unchanged.
+    _ta_excl_upgrade = bool(_act_override)
 
     # The tenant's set-up-fee economics, read ONCE (mig 263). Unset -> None -> the two new columns are
     # em-dashes and every pre-existing number is untouched.
@@ -21292,10 +22434,19 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         _sf_emp_pct = _sf_dealer_pct = None
 
     def _row(name, label_key, d):
-        ta = d['activation'] + d['port'] + d['byod'] + d['upgrade']
+        # Total Activation = Activation+Port+BYOD+Upgrade on the sales basis (unchanged); on the Activation
+        # Details basis it EXCLUDES Upgrade (b2b-consistent, matching /activation-counts). Upgrade is still
+        # reported in its own column either way. `d['activation']` is the FOLDED count (New + Tablet + Home
+        # Internet + Edge), so `ta` is unchanged; the displayed Activation column is the PURE New count and
+        # Tablet / Home Internet / Edge are broken out on their own — matching b2b's Location Sales Report
+        # column-for-column (owner 2026-08-27 reconciliation).
+        _tab, _hi, _edge = d['tablet'], d['home_internet'], d['edge']
+        _pure_new = d['activation'] - _tab - _hi - _edge
+        ta = d['activation'] + d['port'] + d['byod'] + (0 if _ta_excl_upgrade else d['upgrade'])
         return {label_key: name,
-                'total_activation': ta, 'activation': d['activation'], 'port': d['port'],
-                'byod': d['byod'], 'upgrade': d['upgrade'], 'total_phones': d['total_phones'],
+                'total_activation': ta, 'activation': _pure_new, 'port': d['port'],
+                'byod': d['byod'], 'tablet': _tab, 'home_internet': _hi, 'edge': _edge,
+                'upgrade': d['upgrade'], 'total_phones': d['total_phones'],
                 'trending_box': round(ta * trend_factor),
                 'bill_payment_qty': d['bill_qty'], 'amount': round(d['bill_amt'], 2),
                 'conv': round(ta / d['bill_qty'], 4) if d['bill_qty'] else 0.0,
@@ -21330,7 +22481,8 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
     def _totals(rowset, label_key):
         t = {label_key: 'TOTAL'}
-        for k in ('total_activation', 'activation', 'port', 'byod', 'upgrade', 'total_phones',
+        for k in ('total_activation', 'activation', 'port', 'byod', 'tablet', 'home_internet', 'edge',
+                  'upgrade', 'total_phones',
                   'trending_box', 'bill_payment_qty', 'amount', 'acc_sales', 'trending_acc_sales',
                   'setup_fee', 'acc_plus_setup', 'trending_acc_plus_setup',
                   'activation_fee', 'total_protect'):
@@ -21371,6 +22523,14 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 
     return {'period': period, 'source': meta,
             'classification_gaps': _cls_gaps_ex,
+            # SOURCE OF TRUTH (mig 923): tells the UI which basis drove Total Activation and whether Upgrade
+            # is excluded from it, so the number is never silently redefined. Sales basis (the default) →
+            # active:false, byte-identical response otherwise.
+            'activation_source': {'source': _msrc_act.get('source'),
+                                  'active': bool(_act_override),
+                                  'basis': 'activation_details' if _act_override else 'sales_agg',
+                                  'ad_rows': (_ad_n if _act_override else 0),
+                                  'total_activation_excludes_upgrade': bool(_act_override)},
             'filters': filters, 'applied': applied,
             'date_range': {'active': rng_on, 'from': rng_from_s, 'to': rng_to_s,
                            'requested_from': (str(date_from)[:10] or None) if date_from else None,
@@ -21421,6 +22581,933 @@ def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
                      date_from=date_from or None, date_to=date_to or None)
 
 
+# Type buckets that make up b2b's "Total Activation" — everything the Activation Details report classifies
+# EXCEPT an Upgrade. Verified against the b2b "Month To Date Location Sales Report" totals row
+# (Activation+Port+BYOD+Tablet+HomeInternet+Edge = Total Activation; Upgrade is a separate column).
+_ACT_TOTAL_BUCKETS = ("New Activation", "Port", "BYOD", "Tablet", "Home Internet", "Edge", "Other")
+_ACT_BUCKET_FIELD = {"New Activation": "activation", "Port": "port", "BYOD": "byod", "Tablet": "tablet",
+                     "Home Internet": "home_internet", "Edge": "edge", "Upgrade": "upgrade", "Other": "other"}
+
+
+def _market_for_fn(client, org_id):
+    """A `market_for(store) -> market` resolver from commcalc.store_mapping (by address / store_code /
+    leading store-number), mirroring the Exec-MTD / Sales-Report market resolvers so every activation
+    surface agrees on which market a store belongs to. Empty ('') when the store has no mapping — never
+    raises (a store_mapping read failure just yields '' for every store)."""
+    import re as _re_mf
+    try:
+        rows = (client.schema("commcalc").table("store_mapping")
+                .select("store_code,store_address,market").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    by_code, by_addr, by_num = {}, {}, {}
+
+    def _lead(s):
+        m = _re_mf.match(r"\s*(\d+)", str(s or ""))
+        return m.group(1) if m else ""
+    for s in rows:
+        mk = (s.get("market") or "").strip()
+        if not mk:
+            continue
+        code = str(s.get("store_code") or "").strip()
+        addr = str(s.get("store_address") or "").strip()
+        if code:
+            by_code[code] = mk
+        if addr:
+            by_addr[addr.lower()] = mk
+        n = _lead(addr)
+        if n:
+            by_num.setdefault(n, mk)
+
+    def market_for(store):
+        st = str(store or "").strip()
+        return by_addr.get(st.lower()) or by_code.get(st) or by_num.get(_lead(st)) or ""
+    return market_for
+
+
+@router.get("/activation-counts/{period}")
+def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = "", include_upgrade: bool = False):
+    """Store + MARKET activation COUNTS from the b2b "Activation Details" report, in the SHAPE of the b2b
+    "Month To Date Location Sales Report" so the two reconcile line-for-line (owner 2026-08-26).
+
+    One row per distinct device (deduped by Serial#; a device's insurance/Plan-Option lines share its serial
+    and count once; Returns/cancelled excluded). Every store row carries its `market`, the per-type breakdown
+    (activation / port / byod / tablet / home_internet / edge / upgrade), and BOTH totals so the UI can toggle
+    without a re-fetch:
+      • `total_activation`     = Activation+Port+BYOD+Tablet+Home Internet+Edge, EXCLUDING Upgrade (b2b's own
+                                 definition — LuxeLink 687, Nova 250).
+      • `total_with_upgrade`   = the above PLUS Upgrade (LuxeLink 726, Nova 261).
+    `include_upgrade=true` makes the store list SORT by (and `default_total` report) the with-Upgrade total;
+    the two numbers are always both present regardless. A `markets` rollup splits multi-market files (e.g.
+    LuxeLink vs Nova in one export) so each market's total stands on its own.
+
+    AS-OF CUTOFF: `as_of` (YYYY-MM-DD, or a b2b M/D/YYYY date) counts only activations dated on/before that
+    day. Undated rows are always included (they cannot be placed).
+
+    Reads the self-serve custom-import capture (raw_custom_import) — EMPTY until the Activation Details report
+    is uploaded/registered as a custom import (or routed via the email import) for `period`. DISPLAY-ONLY."""
+    require_org(org_id)
+    client = sb()
+    mfor = _market_for_fn(client, org_id)
+    rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": mfor})
+    cutoff = _norm_report_date(as_of) if as_of else ""
+    excluded_after = 0
+
+    def _blank(label, key="store"):
+        d = {key: label, "market": "", "total_activation": 0, "total_with_upgrade": 0, "upgrade": 0}
+        for f in _ACT_BUCKET_FIELD.values():
+            d[f] = 0
+        return d
+
+    by_store, by_market, grand = {}, {}, _blank("TOTAL")
+    counted = 0
+    for r in rows:
+        d10 = r.get("trans_date") or ""
+        if cutoff and d10 and d10 > cutoff:
+            excluded_after += 1
+            continue
+        counted += 1
+        st = (r.get("store") or "").strip() or "—"
+        mk = (r.get("market") or "").strip() or "(no market)"
+        bucket = r.get("bucket") or "Other"
+        fld = _ACT_BUCKET_FIELD.get(bucket, "other")
+        s_row = by_store.setdefault(st, _blank(st))
+        s_row["market"] = (r.get("market") or "").strip()
+        m_row = by_market.setdefault(mk, _blank(mk, key="market"))
+        for d in (s_row, m_row, grand):
+            d[fld] += 1
+            d["total_with_upgrade"] += 1
+            if bucket != "Upgrade":       # b2b Total Activation excludes Upgrade
+                d["total_activation"] += 1
+    _sort_key = (lambda x: -x["total_with_upgrade"]) if include_upgrade else (lambda x: -x["total_activation"])
+    stores = sorted(by_store.values(), key=_sort_key)
+    markets = sorted(by_market.values(), key=_sort_key)
+    return {
+        "period": period, "org_id": org_id,
+        "as_of": cutoff or None, "excluded_after_cutoff": excluded_after,
+        "include_upgrade": include_upgrade,
+        "default_total": ("total_with_upgrade" if include_upgrade else "total_activation"),
+        "counted": counted, "stores": stores, "markets": markets, "total": grand,
+        "note": (None if rows else
+                 "No Activation Details rows found for this period. Upload or register the b2b "
+                 "'Activation Details' report as a Custom Import (Data Imports → Custom Reports), or route "
+                 "it to the email import, then re-check."),
+    }
+
+
+@router.get("/dealer-code-map/{period}")
+def dealer_code_map(period: str, org_id: str = ORG_ID):
+    """The b2b Activation Details "Dealer Code" → store mapping status (owner 2026-08-26). The export
+    identifies a store by a numeric Dealer Code; until that code is linked to a store record, its activations
+    show as the numeric ID instead of merging onto the named store row. This lists every Dealer Code observed
+    in the period's Activation Details with its device count and whether it currently resolves to a store,
+    plus the org's store roster for the picker. Map an unmapped code via POST /store-aliases
+    {alias: <dealer_code>, store_code: <chosen>} — the SAME explicit-alias table the resolver reads, so the
+    numbers merge immediately. DISPLAY/config."""
+    require_org(org_id)
+    client = sb()
+    dmap = _dealer_to_store_map(client, org_id)
+    rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": _market_for_fn(client, org_id)})
+    agg = {}
+    for r in rows:
+        dc = (r.get("dealer_code") or "").strip()
+        if not dc:
+            continue
+        slot = agg.setdefault(dc, {"dealer_code": dc, "activations": 0, "mapped": False, "store": None,
+                                   "division": (r.get("division") or ""), "region": (r.get("region") or ""),
+                                   "district": (r.get("district") or "")})
+        slot["activations"] += 1        # resolver rows are already one-per-device (distinct Serial#)
+        addr = dmap.get(dc.upper())
+        slot["mapped"] = bool(addr)
+        slot["store"] = addr or None
+    codes = sorted(agg.values(), key=lambda x: (x["mapped"], -x["activations"]))
+    try:
+        M = _store_maps(client, org_id)
+        stores = [{"store_code": s.get("store_code"), "address": (s.get("address") or s.get("store_code"))}
+                  for s in (M.get("stores") or []) if s.get("store_code")]
+    except Exception:
+        stores = []
+    return {
+        "period": period, "org_id": org_id, "codes": codes, "stores": stores,
+        "unmapped": sum(1 for c in codes if not c["mapped"]),
+        "note": (None if codes else
+                 "No Dealer Codes found in Activation Details for this period. Upload/route the b2b "
+                 "'Activation Details' report, then re-check."),
+    }
+
+
+@router.get("/product-sales-departments/{period}")
+def product_sales_departments(period: str, org_id: str = ORG_ID):
+    """The DISTINCT Departments the b2b "Sales by Product" report actually contains for `period`, each flagged
+    with whether it currently counts as an accessory department (owner 2026-08-26: the accessory departments
+    must NOT be hard-coded — they are an OPTION pulled from this report, then saved to the org's accessory
+    config once). The Sales Report → Accessory settings picker calls this to offer the observed departments as
+    checkboxes instead of a free-text field, so 'Accessories' / 'C2Wireless' (or whatever a tenant's report
+    calls them) come straight from the tenant's own data. Selecting them writes through the existing
+    accessory-config API (put_accessory_config → accessory_config.departments), the SAME single source the
+    Sales Report and this Sales-by-Product resolver both read. DISPLAY-ONLY."""
+    require_org(org_id)
+    client = sb()
+    rows = _cr_resolve_product_sales(client, org_id, period, {"market_for": (lambda s: "")})
+    try:
+        acc = _accessory_config(client, org_id).get("departments") or set()
+    except Exception:
+        acc = set()
+    seen = {}
+    for r in rows:
+        dept = (r.get("department") or "").strip()
+        if not dept:
+            continue
+        d = seen.setdefault(dept, {"department": dept, "is_accessory": dept.lower() in acc,
+                                   "products": 0, "ext_price": 0.0})
+        d["products"] += 1
+        d["ext_price"] += float(r.get("ext_price") or 0.0)
+    departments = sorted(seen.values(), key=lambda x: (not x["is_accessory"], -x["ext_price"], x["department"]))
+    return {
+        "period": period, "org_id": org_id, "departments": departments,
+        "accessory_departments": sorted([d["department"] for d in departments if d["is_accessory"]]),
+        "note": (None if departments else
+                 "No Sales by Product rows found for this period. Upload or route the b2b 'Sales by Product' "
+                 "report (Data Imports → Custom Reports / Email Imports), then re-check."),
+    }
+
+
+def _sales_activation_by_store(client, org_id, period):
+    """Per-canonical-store activation buckets {'activation','port','byod','upgrade','_name'} from the SHARED
+    sales aggregation (_sales_cell_agg) — the SECONDARY activation source for reconciliation, computed the
+    exact way Exec MTD rolls its by_location activations up (so a mismatch is real, not a method artifact).
+    Whole-period (no MTD cut): the recon asks whether the month ingested the same, not a to-date slice."""
+    cfg = _exec_metric_config(client, org_id)
+    acfg = _accessory_config(client, org_id)
+    rows, _meta = _sales_rows_union(client, org_id, period)
+    ckey = _canonical_store_key_fn(client, org_id)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=ckey)
+    by_store = {}
+    for (st, _rep, _date), a in cells.items():
+        prem, port = len(a['_prem']), len(a['_port'])
+        slot = by_store.setdefault(st or '—', {"activation": 0, "port": 0, "byod": 0, "upgrade": 0,
+                                               "_name": (a.get('store') or st or '—')})
+        slot['activation'] += prem - port
+        slot['port'] += port
+        slot['byod'] += len(a['_byod'])
+        slot['upgrade'] += len(a['_upg'])
+    return by_store
+
+
+def _billpay_report_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the b2b "Bill Payment Transactions"
+    report (the BASIS OF TRUTH) — count = txns, amount = payment (fallback total_amt). Returns (map, n_rows)."""
+    rows = _cr_resolve_bill_payments(client, org_id, period, {"market_for": (lambda s: "")})
+    by_store = {}
+    for r in rows:
+        st = (r.get("store") or "").strip() or "—"
+        k = ckey_fn(st) or "—"
+        slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": st})
+        slot["count"] += int(r.get("txns") or 1)
+        slot["amount"] += float(r.get("payment") or r.get("total_amt") or 0.0)
+    return by_store, len(rows)
+
+
+def _billpay_sales_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the shared sales aggregation — the
+    SECONDARY source (the Exec-MTD 'Bill Payment Qty' / '$' basis: _sales_cell_agg bill_qty / bill_amt)."""
+    cfg = _exec_metric_config(client, org_id)
+    acfg = _accessory_config(client, org_id)
+    rows, _meta = _sales_rows_union(client, org_id, period)
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=ckey_fn)
+    by_store = {}
+    for (st, _rep, _date), a in cells.items():
+        slot = by_store.setdefault(st or "—", {"count": 0, "amount": 0.0, "_name": (a.get("store") or st or "—")})
+        slot["count"] += int(a.get("bill_qty") or 0)
+        slot["amount"] += float(a.get("bill_amt") or 0.0)
+    # Drop stores with zero bill payments so they don't dilute the recon's store set.
+    return {k: v for k, v in by_store.items() if v["count"] or v["amount"]}
+
+
+def _billpay_processor_name(client, org_id, msrc):
+    """Which carrier PROCESSOR to reconcile bill payments against: the metric_source_of_truth.processor
+    config wins ('epay'|'vidapay'); else auto-detect from commcalc.data_source (the enabled portal login's
+    processor, 'total_access' → vidapay). '' when unknown → the recon runs two-way (report vs sales)."""
+    p = str((msrc or {}).get("processor") or "").strip().lower()
+    if p in ("epay", "vidapay"):
+        return p
+    try:
+        rows = (client.schema("commcalc").table("data_source").select("processor,enabled")
+                .eq("org_id", org_id).execute().data) or []
+        for r in rows:
+            if not r.get("enabled"):
+                continue
+            pp = str(r.get("processor") or "").strip().lower()
+            if pp in ("epay",):
+                return "epay"
+            if pp in ("vidapay", "total_access"):
+                return "vidapay"
+    except Exception:
+        pass
+    return ""
+
+
+def _billpay_processor_by_store(client, org_id, period, processor, ckey_fn):
+    """Per-canonical-store bill-payment {'count','amount','_name'} from the carrier PROCESSOR feed — ePay
+    (raw_epay_daily_tx via epay_ingest.per_store_day) for Boost, VidaPay (raw_ma_daily_tx, account_id →
+    store_code via storeops.merchant_ids) for Total. Best-effort + defensive: any failure or an unknown
+    processor returns {} so the recon degrades to report-vs-sales rather than 500-ing."""
+    if processor not in ("epay", "vidapay"):
+        return {}
+    mo, yr = _month_year(period)
+    if not (1 <= mo <= 12 and yr):
+        return {}
+    date_from = f"{yr}-{mo:02d}-01"
+    date_to = f"{yr}-{mo:02d}-{_calendar.monthrange(yr, mo)[1]:02d}"
+    by_store = {}
+    try:
+        if processor == "epay":
+            from app.modules.commcalc import epay_ingest as _epi
+            for (sc, _d), v in (_epi.per_store_day(client, org_id, date_from, date_to) or {}).items():
+                k = ckey_fn(str(sc)) or str(sc) or "—"
+                slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": str(sc)})
+                slot["count"] += int(v.get("lines") or 0)
+                slot["amount"] += float(v.get("payment") or 0.0)
+        else:  # vidapay
+            from app.modules.storeops import merchant_ids as _mids
+            amap = _mids.resolve_map(org_id, "vidapay") or {}
+            q = (client.schema("commcalc").table("raw_ma_daily_tx")
+                 .select("account_id,retail_cost").eq("org_id", org_id))
+            rows = q.in_("period", _pvariants(period)).limit(200000).execute().data or []
+            for r in rows:
+                acct = str(r.get("account_id") or "").strip()
+                sc = amap.get(acct) or acct or "—"
+                k = ckey_fn(str(sc)) or str(sc) or "—"
+                slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": str(sc)})
+                slot["count"] += 1
+                slot["amount"] += float(r.get("retail_cost") or 0.0)
+    except Exception as _pe:
+        print(f"WARN bill-payment processor read failed ({processor}): {_pe}")
+        return {}
+    return by_store
+
+
+def _billpay_cash_actual_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store ACTUAL bill-payment CASH {'amount','_name'} — the Bill Payment Transactions report
+    (basis of truth) filtered to a CASH tender. This is what the drawer SHOULD hold from bill payments."""
+    rows = _cr_resolve_bill_payments(client, org_id, period, {"market_for": (lambda s: "")})
+    out = {}
+    for r in rows:
+        if "cash" not in str(r.get("tender_type") or "").lower():
+            continue
+        st = (r.get("store") or "").strip() or "—"
+        k = ckey_fn(st) or "—"
+        slot = out.setdefault(k, {"amount": 0.0, "_name": st})
+        slot["amount"] += float(r.get("payment") or r.get("total_amt") or 0.0)
+    return out
+
+
+def _billpay_cash_declared_by_store(client, org_id, period, ckey_fn):
+    """Per-canonical-store DECLARED bill-payment cash {'amount','_name'} — daily_closing.epay_on_cash (the
+    portion of the rep's declared cash they attributed to ePay / bill payments), summed for the period.
+    Defensive: a missing table/column yields {} so the recon degrades rather than 500-ing."""
+    try:
+        rows = (client.schema("commcalc").table("daily_closing")
+                .select("store_code,epay_on_cash,period")
+                .eq("org_id", org_id).in_("period", _pvariants(period)).limit(100000).execute().data) or []
+    except Exception as _ce:
+        print(f"WARN daily_closing read failed for bill-pay cash recon: {_ce}")
+        return {}
+    out = {}
+    for r in rows:
+        sc = str(r.get("store_code") or "").strip() or "—"
+        k = ckey_fn(sc) or "—"
+        slot = out.setdefault(k, {"amount": 0.0, "_name": sc})
+        slot["amount"] += float(r.get("epay_on_cash") or 0.0)
+    return out
+
+
+@router.get("/metric-recon/{period}")
+def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations"):
+    """RECONCILIATION for a metric (owner 2026-08-26): prove the ingest is good when the sources agree, flag +
+    name a remediation when they don't.
+
+    • `activations` — the b2b Activation Details basis (PRIMARY / basis of truth, distinct Serial#, Upgrade
+      excluded) vs the shared sales aggregation, per store, on the b2b-consistent Total Activation.
+    • `bill_payments` — THREE-way: the b2b Bill Payment Transactions report (PRIMARY) vs the sales aggregation
+      vs the carrier PROCESSOR (ePay for Boost / VidaPay for Total, chosen from config or data_source), per
+      store, on amount + count.
+
+    `tolerance`, `reconcile_with`, `processor` and `assigned_user` come from the tenant's
+    metric_source_of_truth config (mig 923); with no config the recon still runs with sensible defaults.
+    Read-only."""
+    require_org(org_id)
+    from app.modules.commcalc import metric_recon as metric_recon_mod
+    client = sb()
+    ckey = _canonical_store_key_fn(client, org_id)
+
+    if metric == "activations":
+        msrc = _metric_source(client, org_id, metric)
+        ad_by_store, _ad_rep, ad_n = _ad_activation_buckets(client, org_id, period, ckey_fn=ckey)
+        sales_by_store = _sales_activation_by_store(client, org_id, period)
+        result = metric_recon_mod.reconcile_activations(
+            ad_by_store, sales_by_store,
+            tolerance=msrc.get("tolerance") or 0,
+            source=(msrc.get("source") if msrc.get("configured") else "activation_details"),
+            reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
+            assigned_user=msrc.get("assigned_user"))
+        result.update({"period": period, "org_id": org_id, "metric": metric,
+                       "config": {"configured": msrc.get("configured"), "enabled": msrc.get("enabled"),
+                                  "source": msrc.get("source"), "processor": msrc.get("processor")},
+                       "primary_rows": ad_n,
+                       "note": (None if ad_n else
+                                "No Activation Details rows for this period — upload or route the b2b "
+                                "'Activation Details' report so the activation basis of truth is present.")})
+        return result
+
+    if metric == "bill_payments":
+        msrc = _metric_source(client, org_id, metric)
+        report_by_store, rep_n = _billpay_report_by_store(client, org_id, period, ckey)
+        sales_by_store = _billpay_sales_by_store(client, org_id, period, ckey)
+        processor = _billpay_processor_name(client, org_id, msrc)
+        proc_by_store = _billpay_processor_by_store(client, org_id, period, processor, ckey)
+        result = metric_recon_mod.reconcile_bill_payments(
+            report_by_store, sales_by_store, proc_by_store,
+            tolerance_amt=float(msrc.get("tolerance") or 0.0), tolerance_cnt=0,
+            processor=processor, reconcile_with=(msrc.get("reconcile_with") or "sales_agg"),
+            assigned_user=msrc.get("assigned_user"))
+        # DAILY-CASH linkage (owner 2026-08-26: "wire the bill-pay reconciliation into the daily cash being
+        # declared by the employees"). Reconcile ACTUAL bill-payment cash (report, tender=cash) against the
+        # cash the reps DECLARED at daily closing (daily_closing.epay_on_cash), per store — over/short.
+        cash_actual = _billpay_cash_actual_by_store(client, org_id, period, ckey)
+        cash_declared = _billpay_cash_declared_by_store(client, org_id, period, ckey)
+        daily_cash = metric_recon_mod.reconcile_billpay_cash(
+            cash_actual, cash_declared,
+            tolerance_amt=float(msrc.get("tolerance") or 1.0), assigned_user=msrc.get("assigned_user"))
+        result.update({"period": period, "org_id": org_id, "metric": metric,
+                       "config": {"configured": msrc.get("configured"), "processor": (processor or None)},
+                       "primary_rows": rep_n,
+                       "daily_cash": daily_cash,
+                       "note": (None if rep_n else
+                                "No Bill Payment Transactions rows for this period — upload or route the b2b "
+                                "'Bill Payment Transactions' report so the bill-payment basis is present.")})
+        return result
+
+    raise HTTPException(400, "unknown metric (allowed: activations, bill_payments)")
+
+
+@router.get("/data-lineage")
+def get_data_lineage(org_id: str = ORG_ID, source_key: str = "", affected_key: str = "", kind: str = ""):
+    """The system DATA-LINEAGE registry (mig 924/925) — the documented schematic of how ingested data and
+    derived metrics feed each other. Each row is a dependency edge (source → affected) with entry_point, a
+    code reference, a plain-English effect, kind, and auto_updated. Optional filters narrow to one source /
+    affected item / kind. Returns rows + an index grouped by source so the UI can render 'if X changes, these
+    update'. Empty until migration 925 (the seed) is applied. DISPLAY/documentation only."""
+    require_org(org_id)
+    try:
+        q = sb().schema("commcalc").table("data_lineage").select("*")
+        if source_key:
+            q = q.eq("source_key", source_key)
+        if affected_key:
+            q = q.eq("affected_key", affected_key)
+        if kind:
+            q = q.eq("kind", kind)
+        rows = q.order("source_key").order("seq").limit(5000).execute().data or []
+    except Exception as e:
+        return {"rows": [], "by_source": {}, "sources": [], "note": f"data_lineage unavailable (run migration 924/925): {str(e)[:160]}"}
+    by_source = {}
+    for r in rows:
+        by_source.setdefault(r.get("source_key") or "?", []).append(r)
+    return {"rows": rows, "by_source": by_source, "sources": sorted(by_source.keys()),
+            "count": len(rows),
+            "note": (None if rows else "data_lineage is empty — apply migration 925 (the seed) to populate the schematic.")}
+
+
+# ── ONBOARDING READINESS CHECKLIST ───────────────────────────────────────────────────────────────
+# One row per DATA ITEM the platform can ingest, with: how it enters, which reports/functions it powers,
+# and — per tenant — whether it is actually present + wired. Derived from data_lineage (the schematic) so
+# the checklist and the schematic never drift. `check` names how presence is verified for THIS tenant.
+#   table      → count rows in schema.table for the org
+#   custom:KEY → the raw_custom_import capture resolves for that dataset (by column signature)
+#   config:X   → a per-org config is set (accessory depts / store mapping / activation basis)
+_ONBOARDING_ITEMS = [
+    ("sales_transactions",       "Sales Transaction Details", "table:commcalc.raw_sales|commcalc.daily_sales_feed"),
+    ("activation_details_report","b2b Activation Details",     "custom:serial#,contract type"),
+    ("bill_payments_report",     "b2b Bill Payment Transactions", "custom:discounts,bill pay system"),
+    ("product_sales_report",     "b2b Sales by Product",       "custom:product gp,total exp comm"),
+    ("store_performance_report", "b2b Store Performance",      "custom:acc ext price,bill payment qty"),
+    ("processor_epay",           "ePay processor feed (Boost)", "table:commcalc.raw_epay_daily_tx"),
+    ("processor_vidapay",        "VidaPay processor feed (Total)", "table:commcalc.raw_ma_daily_tx"),
+    ("residual_report",          "Residual / MA commission (drives Retention Analysis)", "table:commcalc.raw_ma_commission"),
+    ("mi_report",                "MI subscriber status (alt Retention basis)", "table:commcalc.raw_mi"),
+    ("daily_cash",               "Employee daily cash declaration", "table:commcalc.daily_closing"),
+    ("store_identity",           "Store identity / mapping",   "config:store_mapping"),
+    ("accessories",              "Accessory departments",      "config:accessory"),
+    ("activation_basis",         "Activation basis of truth",  "config:metric_source"),
+]
+
+
+def _oc_count(client, spec, org_id):
+    """Presence for a 'table:' spec (one or more schema.table, pipe-separated) → total row count for org."""
+    total = 0
+    for st in spec.split("|"):
+        try:
+            schema, table = st.split(".", 1)
+            r = (client.schema(schema).table(table).select("*", count="exact")
+                 .eq("org_id", org_id).limit(1).execute())
+            total += int(getattr(r, "count", 0) or 0)
+        except Exception:
+            pass
+    return total
+
+
+def _oc_custom_present(client, org_id, req_keys):
+    """Presence for a 'custom:' spec — does raw_custom_import hold a row carrying ALL the signature keys."""
+    req = [k.strip().lower() for k in req_keys.split(",") if k.strip()]
+    try:
+        rows = (client.schema("commcalc").table("raw_custom_import").select("data")
+                .eq("org_id", org_id).limit(2000).execute().data) or []
+    except Exception:
+        return 0
+    n = 0
+    for r in rows:
+        d = r.get("data") or {}
+        if isinstance(d, dict):
+            keys = {(k or "").strip().lower() for k in d.keys()}
+            if all(k in keys for k in req):
+                n += 1
+    return n
+
+
+def _oc_config_present(client, org_id, which):
+    """Presence for a 'config:' spec — is the per-org setup done."""
+    try:
+        if which == "store_mapping":
+            M = _store_maps(client, org_id)
+            return len(M.get("stores") or [])
+        if which == "accessory":
+            depts = (_accessory_config(client, org_id).get("departments") or set())
+            return len([d for d in depts if d and d != "ondigo"])
+        if which == "metric_source":
+            return 1 if _metric_source(client, org_id, "activations").get("configured") else 0
+    except Exception:
+        return 0
+    return 0
+
+
+def _onboarding_checklist(client, org_id):
+    """Per-tenant readiness: for each ingestable data item — how it enters, what it powers (from the lineage
+    schematic), and whether it is present/wired for THIS tenant. The systemic answer to 'this report is blank
+    because nothing was mapped to feed it'."""
+    # Pull the schematic once to describe what each source powers (its non-ingest consumer edges).
+    try:
+        edges = (client.schema("commcalc").table("data_lineage").select("*").limit(5000).execute().data) or []
+    except Exception:
+        edges = []
+    powers = {}
+    for e in edges:
+        if (e.get("kind") or "") != "ingest":
+            powers.setdefault(e.get("source_key") or "", []).append(
+                {"affected": e.get("affected_label") or e.get("affected_key"),
+                 "surface": e.get("surface"), "output": e.get("effect_english"), "kind": e.get("kind")})
+    items = []
+    for key, label, check in _ONBOARDING_ITEMS:
+        how, present = check, 0
+        if check.startswith("table:"):
+            present = _oc_count(client, check[6:], org_id)
+            how = "Uploaded / swept into " + check[6:].replace("|", " or ")
+        elif check.startswith("custom:"):
+            present = _oc_custom_present(client, org_id, check[7:])
+            how = "Custom import (email/upload) → raw_custom_import"
+        elif check.startswith("config:"):
+            present = _oc_config_present(client, org_id, check[7:])
+            how = "Configured in settings"
+        items.append({
+            "key": key, "label": label, "how": how,
+            "present": bool(present), "count": present,
+            "powers": powers.get(key, []),
+            "status": ("ready" if present else "missing"),
+        })
+    ready = sum(1 for i in items if i["present"])
+    return {"org_id": org_id, "items": items, "ready": ready, "total": len(items),
+            "missing": [i["key"] for i in items if not i["present"]]}
+
+
+@router.get("/onboarding-checklist")
+def onboarding_checklist(org_id: str = ORG_ID):
+    """Per-tenant ONBOARDING READINESS (owner 2026-08-26): every data item the platform ingests — how it
+    enters, what platform function/report it powers (from the data-lineage schematic), and whether it is
+    present + wired for this tenant. So a report is never silently blank 'because nothing was mapped to feed
+    it' — the missing feed is named here. DISPLAY/config."""
+    require_org(org_id)
+    return _onboarding_checklist(sb(), org_id)
+
+
+def _data_report_map(client, org_id):
+    """DATA-FIRST reverse map (owner 2026-08-26: "the first check should be what data is being ingested, then
+    reverse-engineer what reports/menus that data runs"). Starts from what THIS tenant actually has ingested,
+    then walks the data_lineage graph forward to every report/menu (surface) each ingested source powers — and
+    conversely lists the reports that are BLOCKED because their feeding data isn't ingested yet, naming what to
+    provide. Reuses the presence engine (_onboarding_checklist) + the lineage graph. DISPLAY/documentation."""
+    checklist = _onboarding_checklist(client, org_id)
+    present = {i["key"]: bool(i["present"]) for i in checklist["items"]}
+    counts = {i["key"]: i.get("count") for i in checklist["items"]}
+    labels = {i["key"]: i["label"] for i in checklist["items"]}
+    try:
+        edges = (client.schema("commcalc").table("data_lineage").select("*").limit(5000).execute().data) or []
+    except Exception:
+        edges = []
+    # forward adjacency + the set of ingest roots
+    adj, ingest_roots, src_label = {}, set(), {}
+    for e in edges:
+        sk = e.get("source_key") or ""
+        adj.setdefault(sk, []).append(e)
+        if e.get("source_label"):
+            src_label.setdefault(sk, e["source_label"])
+        if (e.get("kind") or "") == "ingest":
+            ingest_roots.add(sk)
+
+    def _surfaces_from(root):
+        """Every report/menu (surface) reachable downstream of an ingest root, via the lineage graph."""
+        seen, stack, out = set(), [root], {}
+        while stack:
+            n = stack.pop()
+            for e in adj.get(n, []):
+                surf = (e.get("surface") or "").strip()
+                if surf and (e.get("kind") or "") != "ingest":
+                    out[surf] = e.get("kind") or "display"
+                nxt = e.get("affected_key") or ""
+                if nxt and nxt not in seen:
+                    seen.add(nxt); stack.append(nxt)
+        return out
+
+    ingested, surface_feeders = [], {}
+    for root in sorted(ingest_roots):
+        surfs = _surfaces_from(root)
+        is_present = present.get(root, False)
+        ingested.append({
+            "source_key": root, "source_label": src_label.get(root) or labels.get(root) or root,
+            "present": is_present, "count": counts.get(root),
+            "reports": sorted(surfs.keys()),
+        })
+        for surf in surfs:
+            fed = surface_feeders.setdefault(surf, {"powered_by": [], "needs": []})
+            (fed["powered_by"] if is_present else fed["needs"]).append(src_label.get(root) or root)
+
+    reports = []
+    for surf, fed in sorted(surface_feeders.items()):
+        powered = bool(fed["powered_by"])
+        reports.append({"report": surf, "powered": powered,
+                        "powered_by": sorted(set(fed["powered_by"])),
+                        "needs": sorted(set(fed["needs"])) if not powered else []})
+    return {
+        "org_id": org_id,
+        "ingested": ingested,
+        "reports": reports,
+        "ingested_count": sum(1 for i in ingested if i["present"]),
+        "reports_powered": sum(1 for r in reports if r["powered"]),
+        "reports_total": len(reports),
+        "note": (None if edges else
+                 "The data-lineage schematic is empty — apply migrations 924/925 to populate the data→reports map."),
+    }
+
+
+@router.get("/data-readiness")
+def data_readiness(org_id: str = ORG_ID):
+    """DATA-FIRST readiness (owner 2026-08-26): what data is ingested for this tenant, reverse-engineered to
+    the reports/menus each ingested source powers — and the reports still blocked because their feed is
+    missing (with what to provide). The entry view of the Setup Wizard. DISPLAY/documentation."""
+    require_org(org_id)
+    return _data_report_map(sb(), org_id)
+
+
+# ── ADAPTIVE ONBOARDING WIZARD ────────────────────────────────────────────────────────────────────
+# The step catalog. The wizard ADAPTS: the `profile` step's answers (carrier / company / POS / processor)
+# TAILOR which later steps appear via `applies_when`. Each step writes through its OWN existing config page
+# (cta.href) — the wizard never stores that config; completion is DERIVED from a readiness `check`:
+#   profile            → all required profile answers present
+#   table:schema.table (>=N)  → row count for the org meets N (default 1)
+#   custom:k1,k2       → raw_custom_import carries a row with those signature keys
+#   config:X           → a per-org config is set (store_mapping / accessory / metric_source)
+#   review             → no automatic probe; done when the user marks it reviewed or skipped
+_ONBOARDING_PROFILE = {
+    "key": "profile", "phase": "1. Tell us about your business", "kind": "profile",
+    "title": "Your business", "question": "Who are we setting up, and what do you sell on?",
+    "check": "profile",
+    "questions": [
+        {"key": "company", "label": "Company / entity name", "type": "text"},
+        {"key": "carriers", "label": "Carrier(s) you sell", "type": "multiselect",
+         "options": ["Boost", "Total", "Other"]},
+        {"key": "pos", "label": "Point of sale (POS)", "type": "select",
+         "options": ["B2B Soft", "Other"]},
+        {"key": "processor", "label": "Payment processor", "type": "select",
+         "options": ["ePay (Boost)", "VidaPay (Total)", "Other"]},
+    ],
+}
+# processor answer → normalized token used by applies_when + downstream config.
+_PROC_TOKEN = {"epay (boost)": "epay", "vidapay (total)": "vidapay"}
+
+
+def _onboarding_steps():
+    """The ordered step catalog (adaptive). `applies_when` gates a step on the profile answers."""
+    return [
+        _ONBOARDING_PROFILE,
+        {"key": "users_roles", "phase": "1. Tell us about your business", "kind": "action",
+         "title": "Users & roles", "question": "Who needs a login, and what can each person see?",
+         "check": "review", "cta": {"label": "Add users & roles", "href": "/commcalc/settings"}, "prereqs": ["profile"]},
+        # 2. Stores & team — require at least one of each.
+        {"key": "stores", "phase": "2. Stores & team", "kind": "gate",
+         "title": "Add your stores", "question": "List your stores (code, address, market). Add at least one.",
+         "check": "config:store_mapping", "cta": {"label": "Add stores", "href": "/commcalc/mapping"}, "prereqs": ["profile"]},
+        {"key": "employees", "phase": "2. Stores & team", "kind": "gate",
+         "title": "Add your team", "question": "Add your employees. Add at least one.",
+         "check": "table:storeops.employees", "cta": {"label": "Add employees", "href": "/storeops/team"}, "prereqs": ["stores"]},
+        # 3. Connections & credentials.
+        {"key": "connections", "phase": "3. Connect your data", "kind": "action",
+         "title": "Connect your feeds", "question": "Do your reports arrive by email or a portal? Add the mailbox / credentials, or we'll show you how to get access.",
+         "check": "review", "cta": {"label": "Set up email / FTP imports", "href": "/commcalc/email-imports"}, "prereqs": ["profile"]},
+        # 4. Data feeds — tailored by POS / processor.
+        {"key": "feed_sales", "phase": "4. Load your data", "kind": "action",
+         "title": "Sales transactions", "question": "Upload or route your Sales Transaction Details.",
+         "check": "table:commcalc.raw_sales|commcalc.daily_sales_feed", "cta": {"label": "Upload sales", "href": "/commcalc/upload"}, "prereqs": ["stores"]},
+        {"key": "feed_activation_details", "phase": "4. Load your data", "kind": "action",
+         "title": "Activation Details", "question": "Upload the b2b Activation Details report (the activation basis of truth).",
+         "check": "custom:serial#,contract type", "cta": {"label": "Upload Activation Details", "href": "/commcalc/upload"},
+         "applies_when": {"pos": "b2b soft"}, "prereqs": ["stores"]},
+        {"key": "feed_bill_payments", "phase": "4. Load your data", "kind": "action",
+         "title": "Bill Payment Transactions", "question": "Upload the b2b Bill Payment Transactions report.",
+         "check": "custom:discounts,bill pay system", "cta": {"label": "Upload Bill Payments", "href": "/commcalc/upload"},
+         "applies_when": {"pos": "b2b soft"}, "prereqs": ["stores"]},
+        {"key": "feed_store_performance", "phase": "4. Load your data", "kind": "action",
+         "title": "Store Performance", "question": "Upload the b2b Store Performance scorecard (per-store accessories + activations + bill pays).",
+         "check": "custom:acc ext price,bill payment qty", "cta": {"label": "Upload Store Performance", "href": "/commcalc/upload"},
+         "applies_when": {"pos": "b2b soft"}, "prereqs": ["stores"]},
+        {"key": "feed_epay", "phase": "4. Load your data", "kind": "action",
+         "title": "ePay processor feed", "question": "Connect / upload your ePay daily transactions (Boost bill payments).",
+         "check": "table:commcalc.raw_epay_daily_tx", "cta": {"label": "Set up ePay", "href": "/commcalc/epay"},
+         "applies_when": {"processor": "epay"}, "prereqs": ["stores"]},
+        {"key": "feed_vidapay", "phase": "4. Load your data", "kind": "action",
+         "title": "VidaPay processor feed", "question": "Connect / upload your VidaPay (MA) daily transactions.",
+         "check": "table:commcalc.raw_ma_daily_tx", "cta": {"label": "Set up VidaPay / MA", "href": "/commcalc/ma-upload"},
+         "applies_when": {"processor": "vidapay"}, "prereqs": ["stores"]},
+        {"key": "feed_residual", "phase": "4. Load your data", "kind": "action",
+         "title": "Residual / MA commission", "question": "Upload your residual report (drives Retention Analysis — month-3 residual = retained).",
+         "check": "table:commcalc.raw_ma_commission", "cta": {"label": "Upload residual", "href": "/commcalc/ma-upload"},
+         "applies_when": {"processor": "vidapay"}, "prereqs": ["stores"]},
+        # 5. Mapping.
+        {"key": "dealer_code_map", "phase": "5. Map your data", "kind": "action",
+         "title": "Map Dealer Codes to stores", "question": "Link each Activation Details Dealer Code to a store so activations show under the named store.",
+         "check": "review", "cta": {"label": "Map Dealer Codes", "href": "/commcalc/activations"},
+         "applies_when": {"pos": "b2b soft"}, "prereqs": ["feed_activation_details", "stores"]},
+        {"key": "accessories", "phase": "5. Map your data", "kind": "action",
+         "title": "Accessory departments", "question": "Which POS departments are accessory sales? (pick from your own data)",
+         "check": "config:accessory", "cta": {"label": "Set accessory departments", "href": "/commcalc/sales-report"}, "prereqs": ["feed_sales"]},
+        {"key": "activation_basis", "phase": "5. Map your data", "kind": "action",
+         "title": "Activation basis of truth", "question": "Which report is authoritative for activations, and what does it reconcile against?",
+         "check": "config:metric_source", "cta": {"label": "Choose activation basis", "href": "/commcalc/activations"}, "prereqs": ["feed_sales"]},
+        # 6. Pay & goals.
+        {"key": "commission_plans", "phase": "6. Pay & goals", "kind": "action",
+         "title": "Commission plans", "question": "Define each commission plan and assign every rep.",
+         "check": "table:commcalc.commission_plan", "cta": {"label": "Set up commission plans", "href": "/commcalc/commission-plans"}, "prereqs": ["employees"]},
+        {"key": "targets", "phase": "6. Pay & goals", "kind": "action",
+         "title": "Monthly targets", "question": "Set monthly targets per store / metric.",
+         "check": "table:commcalc.targets", "cta": {"label": "Set targets", "href": "/commcalc/targets"}, "prereqs": ["stores"]},
+    ]
+
+
+def _wiz_profile_answers(state):
+    """Normalized profile answers from onboarding_state (lower-cased; processor mapped to its token)."""
+    ans = ((state.get("profile") or {}).get("answers") or {})
+    out = {}
+    for k, v in ans.items():
+        if isinstance(v, list):
+            out[k] = [str(x).strip().lower() for x in v]
+        else:
+            out[k] = str(v or "").strip().lower()
+    if out.get("processor"):
+        out["processor"] = _PROC_TOKEN.get(out["processor"], out["processor"])
+    return out
+
+
+def _wiz_applies(applies_when, profile):
+    """True if a step applies given the profile answers. Absent condition → always applies."""
+    if not applies_when:
+        return True
+    for k, want in applies_when.items():
+        have = profile.get(k)
+        wants = [w.strip().lower() for w in (want if isinstance(want, list) else [want])]
+        if isinstance(have, list):
+            if not (set(have) & set(wants)):
+                return False
+        else:
+            if (have or "") not in wants:
+                return False
+    return True
+
+
+def _wiz_check(client, org_id, step, profile):
+    """(done, count) for a step's readiness check. Never raises."""
+    chk = step.get("check") or "review"
+    try:
+        if chk == "profile":
+            req = [q["key"] for q in step.get("questions", [])]
+            ok = all(profile.get(k) for k in req)
+            return ok, (len(req) if ok else 0)
+        if chk.startswith("table:"):
+            spec = chk[6:]
+            need = 1
+            if ">=" in spec:
+                spec, n = spec.split(">=", 1)
+                need = int(n)
+            c = _oc_count(client, spec, org_id)
+            return c >= need, c
+        if chk.startswith("custom:"):
+            c = _oc_custom_present(client, org_id, chk[7:])
+            return c > 0, c
+        if chk.startswith("config:"):
+            c = _oc_config_present(client, org_id, chk[7:])
+            return c > 0, c
+    except Exception:
+        return False, 0
+    return None, 0   # 'review' — no automatic probe
+
+
+def _onboarding_wizard(client, org_id):
+    """The adaptive wizard: profile-tailored steps, each with its readiness, unlock (prereqs), CTA, and the
+    reports it powers (from data_lineage). Composes existing config — never a parallel store."""
+    try:
+        rows = (client.schema("commcalc").table("onboarding_state").select("*")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:
+        rows = []
+    state = {r["step_key"]: r for r in rows}
+    profile = _wiz_profile_answers(state)
+    # 'powers' text from the lineage schematic (best-effort).
+    try:
+        edges = (client.schema("commcalc").table("data_lineage").select("source_key,affected_label,surface,kind")
+                 .limit(5000).execute().data) or []
+    except Exception:
+        edges = []
+    powers = {}
+    for e in edges:
+        if (e.get("kind") or "") != "ingest":
+            powers.setdefault(e.get("source_key") or "", []).append(e.get("surface") or e.get("affected_label"))
+
+    steps, done_keys = [], set()
+    for st in _onboarding_steps():
+        if not _wiz_applies(st.get("applies_when"), profile):
+            continue
+        stt = state.get(st["key"]) or {}
+        manual = (stt.get("status") or "")
+        auto_done, count = _wiz_check(client, org_id, st, profile)
+        done = bool(auto_done) if auto_done is not None else (manual in ("reviewed", "skipped"))
+        if done:
+            done_keys.add(st["key"])
+        steps.append({
+            "key": st["key"], "phase": st["phase"], "kind": st["kind"], "title": st["title"],
+            "question": st["question"], "options": st.get("questions"),
+            "cta": st.get("cta"), "prereqs": st.get("prereqs", []),
+            "status": manual or ("done" if done else "not_started"), "done": done, "count": count,
+            "answers": (stt.get("answers") or {}),
+            "auto": auto_done is not None,   # false → completion is by review/skip
+            "powers": [p for p in (powers.get(st["key"].replace("feed_", "").replace("_report", "") + "_report", [])
+                                   or powers.get(st["key"], [])) if p][:5],
+        })
+    # unlocked = all prereqs done
+    for s in steps:
+        s["unlocked"] = all(p in done_keys for p in s["prereqs"])
+    total = len(steps)
+    ready = sum(1 for s in steps if s["done"])
+    return {"org_id": org_id, "profile": profile, "steps": steps, "ready": ready, "total": total,
+            "note": (None if rows or True else None)}
+
+
+@router.get("/onboarding")
+def get_onboarding(org_id: str = ORG_ID):
+    """The ADAPTIVE onboarding wizard (owner 2026-08-26): a profile questionnaire (carrier / company / POS /
+    processor) that TAILORS which later steps + menus appear, then stores/team, connections, data feeds,
+    mapping, and pay/goals — each deep-linking to its existing settings page, with readiness derived from the
+    same probes the pages use. State persists in onboarding_state; config never lives here. DISPLAY/config."""
+    require_org(org_id)
+    return _onboarding_wizard(sb(), org_id)
+
+
+class PutOnboardingIn(LaxModel):
+    status: Any = None
+    answers: Any = None
+
+
+@router.put("/onboarding/{step_key}")
+def put_onboarding(step_key: str, body: PutOnboardingIn, org_id: str = ORG_ID):
+    """Record a wizard step's status and/or answers (upsert onboarding_state on org+step). Used for the
+    profile answers (which tailor the flow), 'skipped'/'reviewed' acknowledgements, and free-text notes —
+    NEVER for carrier/store/plan config, which round-trips its own endpoint. Degrades with a hint if mig 927
+    hasn't run."""
+    require_org(org_id)
+    valid = {s["key"] for s in _onboarding_steps()}
+    if step_key not in valid:
+        raise HTTPException(400, f"unknown step '{step_key}'")
+    row = {"org_id": org_id, "step_key": step_key, "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    if body.status is not None:
+        row["status"] = str(body.status).strip() or "in_progress"
+    if body.answers is not None and isinstance(body.answers, dict):
+        row["answers"] = body.answers
+    try:
+        sb().schema("commcalc").table("onboarding_state").upsert(row, on_conflict="org_id,step_key").execute()
+        return {"ok": True, "step_key": step_key}
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 927 (onboarding_state)", "error": str(e)[:200]}
+
+
+@router.get("/metric-source-config")
+def get_metric_source_config(org_id: str = ORG_ID):
+    """The tenant's per-metric SOURCE-OF-TRUTH config (mig 923). Returns one entry per known metric, falling
+    back to the historical default (sales_agg, disabled) for any metric with no row — so the admin panel
+    always renders every metric with its current basis. DISPLAY/config only."""
+    require_org(org_id)
+    client = sb()
+    return {"org_id": org_id,
+            "metrics": [_metric_source(client, org_id, m) for m in ("activations", "bill_payments")]}
+
+
+class PutMetricSourceIn(LaxModel):
+    metric: str = ""
+    source: str = ""
+    enabled: Any = None
+    reconcile_with: Any = None
+    processor: Any = None
+    assigned_user: Any = None
+    tolerance: Any = None
+
+
+_METRIC_SOURCE_ALLOWED = {"activations": {"sales_agg", "activation_details"},
+                          "bill_payments": {"sales_agg", "bill_payments"}}
+
+
+@router.put("/metric-source-config")
+def put_metric_source_config(body: PutMetricSourceIn, org_id: str = ORG_ID):
+    """Upsert ONE metric's source-of-truth row (mig 923), org-scoped. Only known metrics + their allowed
+    sources are accepted, so a typo can never point a metric at a source that has no reader. Degrades with a
+    clear hint if mig 923 has not run. This is the seam the tenant flips to put Executive MTD / Sales Report
+    activations onto the Activation Details basis — no code change, no re-wiring."""
+    require_org(org_id)
+    metric = str(body.metric or "").strip()
+    source = str(body.source or "").strip()
+    if metric not in _METRIC_SOURCE_ALLOWED:
+        raise HTTPException(400, f"unknown metric (allowed: {', '.join(sorted(_METRIC_SOURCE_ALLOWED))})")
+    if source not in _METRIC_SOURCE_ALLOWED[metric]:
+        raise HTTPException(400, f"source '{source}' not allowed for '{metric}' "
+                                 f"(allowed: {', '.join(sorted(_METRIC_SOURCE_ALLOWED[metric]))})")
+    row = {"org_id": org_id, "metric": metric, "source": source,
+           "enabled": (True if body.enabled is None else bool(body.enabled)),
+           "reconcile_with": (str(body.reconcile_with).strip() or None) if body.reconcile_with is not None else None,
+           "processor": (str(body.processor).strip() or None) if body.processor is not None else None,
+           "assigned_user": (str(body.assigned_user).strip() or None) if body.assigned_user is not None else None,
+           "tolerance": float(body.tolerance) if str(body.tolerance or "").strip() not in ("", "None") else 0.0,
+           "updated_at": _datetime.now(_timezone.utc).isoformat()}
+    try:
+        sb().schema("commcalc").table("metric_source_of_truth").upsert(
+            row, on_conflict="org_id,metric").execute()
+        return {"ok": True, "metric": metric, "source": source, "enabled": row["enabled"]}
+    except Exception as e:
+        return {"ok": False, "hint": "run migration 923 (metric_source_of_truth)", "error": str(e)[:200]}
+
+
 @router.get("/exec-metric-config")
 def get_exec_metric_config(org_id: str = ORG_ID):
     """The tenant's Executive-MTD metric DEFINITIONS (config, falling back to code defaults). Drives the
@@ -21430,13 +23517,13 @@ def get_exec_metric_config(org_id: str = ORG_ID):
     return {"buckets": list(_EXEC_BUCKETS), "config": cfg}
 
 
-@router.put("/exec-metric-config")
 class PutExecMetricConfigIn(LaxModel):
     bucket: str = ""
     rules: Any = None
     basis: Any = None
 
 
+@router.put("/exec-metric-config")
 def put_exec_metric_config(body: PutExecMetricConfigIn, org_id: str = ORG_ID):
     """Upsert one bucket's metric definition (org-scoped). body = {bucket, rules:{...}, basis}. Only the
     six known buckets are accepted. Degrades gracefully if mig 204 hasn't run (returns ok=false hint)."""
@@ -21880,7 +23967,6 @@ def _require_perf_review_edit(authorization, org_id):
         raise HTTPException(403, "You don't have permission to edit performance-review configuration.")
 
 
-@router.put("/productivity/config")
 class PutProductivityConfigIn(LaxModel):
     item_key: str = ""
     label: Any = None
@@ -21895,6 +23981,7 @@ class PutProductivityConfigIn(LaxModel):
     sort: Any = None
 
 
+@router.put("/productivity/config")
 def put_productivity_config(body: PutProductivityConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Upsert ONE registry item (add a custom item or edit/enable/disable a default). item_key required;
     source_key must be in the SOURCE CATALOG (pick-don't-type — no free-form formula). Degrades with a hint
@@ -22444,7 +24531,7 @@ async def get_action_plan(period: str, today: str = "", store_code: str = "", re
 
 # ── Rep name mapping / merge (#4 — dedupe same-person variants) ────────────────
 @router.get("/rep-aliases")
-async def get_rep_aliases(org_id: str = ORG_ID):
+def get_rep_aliases(org_id: str = ORG_ID):
     """Existing alias->canonical merges + all distinct rep name-strings seen (shifts +
     DLAR), to drive the merge UI."""
     client = sb()
@@ -22475,12 +24562,12 @@ async def get_rep_aliases(org_id: str = ORG_ID):
     return {"configured": configured, "aliases": aliases, "names": sorted(names)}
 
 
-@router.post("/rep-aliases")
 class PostRepAliasesIn(LaxModel):
     canonical: str = ""
     aliases: Any = None
 
 
+@router.post("/rep-aliases")
 async def post_rep_aliases(body: PostRepAliasesIn, org_id: str = ORG_ID):
     """Merge rep name-variants into one canonical. Body: {canonical, aliases:[...]}."""
     canonical = (body.canonical or '').strip()
@@ -22504,7 +24591,7 @@ async def post_rep_aliases(body: PostRepAliasesIn, org_id: str = ORG_ID):
 
 
 @router.delete("/rep-aliases/{alias}")
-async def delete_rep_alias(alias: str, org_id: str = ORG_ID):
+def delete_rep_alias(alias: str, org_id: str = ORG_ID):
     client = sb()
     try:
         client.schema('commcalc').table('rep_aliases').delete() \
@@ -22525,7 +24612,7 @@ def _exp_period_key(p):
 
 
 @router.get("/expenses/{period}")
-async def get_expenses(period: str, org_id: str = ORG_ID):
+def get_expenses(period: str, org_id: str = ORG_ID):
     """Store expenses for a period. STICKY: if the period has none yet, carry forward the latest
     prior period's expenses (returned pre-filled with carried_from set) so they persist month-to-month
     until changed — the user reviews and Saves to keep them for this period."""
@@ -22615,11 +24702,11 @@ def _system_line_keys(client, org_id, pv):
         return set()
 
 
-@router.put("/expenses/{period}")
 class PutExpensesIn(LaxModel):
     rows: Any = None
 
 
+@router.put("/expenses/{period}")
 async def put_expenses(period: str, body: PutExpensesIn, org_id: str = ORG_ID):
     """Replace all MANUAL expenses for the period (matrix save + bulk upload). Body:
     {rows:[{store_code, expense_name, expense_type, amount}]}. Zero/blank rows are dropped.
@@ -22683,7 +24770,7 @@ class BulkApplyExpensesIn(LaxModel):
 
 
 @router.post("/expenses/{period}/bulk-apply")
-async def bulk_apply_expenses(period: str, body: BulkApplyExpensesIn, org_id: str = ORG_ID):
+def bulk_apply_expenses(period: str, body: BulkApplyExpensesIn, org_id: str = ORG_ID):
     """Idempotent per-CELL upsert of specific (store, expense) cells for a period — powers the
     'copy one column to many stores' and 'multi-store common expense' bulk actions in ONE request
     (never N sequential saves). Body: {cells:[{store_code, expense_name, expense_type, amount}]}.
@@ -22719,7 +24806,7 @@ class UpsertExpenseSystemLineIn(LaxModel):
 
 
 @router.post("/expenses/{period}/system-line")
-async def upsert_expense_system_line(period: str, body: UpsertExpenseSystemLineIn, org_id: str = ORG_ID):
+def upsert_expense_system_line(period: str, body: UpsertExpenseSystemLineIn, org_id: str = ORG_ID):
     """RECEIVER for an AUTO-COMPUTED ('system') store-expense line. mod-people's payroll run is the CALLER:
     it computes the per-store cost (e.g. 'Paid Leave Accumulated' / PTO accrual) and POSTs it here to be
     inserted into the Store Expenses matrix. The line coexists with manual expenses and rolls into the SAME
@@ -22847,7 +24934,7 @@ def _apply_to_months_expand(source_cells, target_periods, excluded_tokens=None, 
 
 
 @router.get("/expenses/apply-config")
-async def get_expense_apply_config(org_id: str = ORG_ID):
+def get_expense_apply_config(org_id: str = ORG_ID):
     """The expense-name tokens excluded from 'apply to other months' (commission/salary by default).
     `source` = 'config' when the org has saved its own set, else 'default' (the code fallback)."""
     require_org(org_id)
@@ -22869,7 +24956,7 @@ class PutExpenseApplyConfigIn(LaxModel):
 
 
 @router.put("/expenses/apply-config")
-async def put_expense_apply_config(body: PutExpenseApplyConfigIn, org_id: str = ORG_ID):
+def put_expense_apply_config(body: PutExpenseApplyConfigIn, org_id: str = ORG_ID):
     """Replace the org's excluded-expense tokens (the admin-editable protected set). Body {tokens:[...]}.
     Case-insensitively deduped. Degrades gracefully (ok=false + hint) until mig 205 creates the table."""
     require_org(org_id)
@@ -22898,7 +24985,7 @@ class ApplyExpensesToMonthsIn(LaxModel):
 
 
 @router.post("/expenses/apply-to-months")
-async def apply_expenses_to_months(body: ApplyExpensesToMonthsIn, org_id: str = ORG_ID):
+def apply_expenses_to_months(body: ApplyExpensesToMonthsIn, org_id: str = ORG_ID):
     """Copy a SOURCE month's store expenses onto a chosen set of TARGET months — EXCEPT the configured
     protected expenses (commission + salary by default; see GET/PUT /expenses/apply-config). Body:
       { source_period: 'July 2026',
@@ -22960,7 +25047,7 @@ async def apply_expenses_to_months(body: ApplyExpensesToMonthsIn, org_id: str = 
 
 
 @router.get("/commission-by-store/{period}")
-async def commission_by_store(period: str, org_id: str = ORG_ID):
+def commission_by_store(period: str, org_id: str = ORG_ID):
     """Σ rep_commissions.total_payout per STORE CODE for the period — feeds the Store Expenses
     'Employee Commission' auto-fill (the commission we PAY reps, booked as a store expense).
     rep_commissions.store is an address/label, so it's resolved to a store_code via store_mapping by
@@ -23131,7 +25218,6 @@ def get_ftp_config(org_id: str = ORG_ID):
     return cfg
 
 
-@router.put("/ftp-sweep/config")
 class PutFtpConfigIn(LaxModel):
     host: str = ""
     port: Any = None
@@ -23146,6 +25232,7 @@ class PutFtpConfigIn(LaxModel):
     password: Any = None
 
 
+@router.put("/ftp-sweep/config")
 def put_ftp_config(body: PutFtpConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save config. Password only updated when a non-empty value is supplied (so it isn't wiped)."""
     require_org(org_id)
@@ -23346,6 +25433,38 @@ def _email_status_update(client, org_id, account, upd):
             pass
 
 
+def _auto_custom_report_patterns(client, org_id):
+    """Auto-derived filename patterns for every registered CUSTOM report (report_definitions), so a report
+    added for email ingestion is matched WITHOUT the tenant hand-crafting a glob (owner 2026-08-26: adding a
+    custom report should make it ingest automatically — "email has the data but the system did not get them"
+    was exactly a new report with no filename rule). Pattern = the label's words joined by '*'
+    (e.g. 'Activation Details' → '*activation*details*'); the report_key slug is also accepted. Used as a
+    FALLBACK appended AFTER the explicit patterns (first-match wins in match_upload_type), so nothing that
+    already matched changes. Never raises."""
+    import re as _re_ap
+    out, seen = [], set()
+    try:
+        defs = (client.schema("commcalc").table("report_definitions")
+                .select("report_key,label,target_table,upload_endpoint").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        return out
+    for d in defs:
+        if not (d.get("upload_endpoint") == "custom" or d.get("target_table") == CUSTOM_IMPORT_TABLE):
+            continue
+        rk = (d.get("report_key") or "").strip()
+        if not rk:
+            continue
+        for raw in ((d.get("label") or rk), rk):
+            words = [w for w in _re_ap.split(r"[^a-z0-9]+", str(raw).lower()) if w]
+            if not words:
+                continue
+            pat = "*" + "*".join(words) + "*"
+            if pat not in seen:
+                seen.add(pat)
+                out.append({"pattern": pat, "upload_type": rk, "auto": True})
+    return out
+
+
 async def _run_email_sweep(org_id, account='default'):
     """Connect to ONE tenant mailbox (org, account), download every NEW attachment matching a configured
     pattern, route each through the existing upload pipeline, and record what was processed (dedup by
@@ -23356,6 +25475,12 @@ async def _run_email_sweep(org_id, account='default'):
     account = (cfg or {}).get('account') or account
     if not cfg or not (cfg.get('imap_host') or '').strip():
         return {"ok": False, "error": "Email/IMAP not configured", "account": account}
+    # AUTO-MATCH new custom reports: append derived patterns for every registered custom sheet AFTER the
+    # explicit rules (explicit wins first), so a report the tenant just added ingests without a hand-written
+    # glob. This closes the "attachment is in the inbox but never imports because no rule matched it" gap.
+    _auto_pats = _auto_custom_report_patterns(client, org_id)
+    if _auto_pats:
+        cfg = {**cfg, 'patterns': (cfg.get('patterns') or []) + _auto_pats}
     # An empty rules list matches NOTHING — fail loudly instead of a silent "0/0 ingested" while
     # reports sit in the inbox (bit the Total/luxelink mailbox setup 2026-07-02).
     if not any((p.get('pattern') or '').strip() for p in (cfg.get('patterns') or []) if isinstance(p, dict)):
@@ -23767,13 +25892,13 @@ def get_sales_derive_config(org_id: str = ORG_ID):
     }
 
 
-@router.put("/sales/derive-config")
 class PutSalesDeriveConfigIn(LaxModel):
     enabled: Any = None
     days: Any = None
     retain: Any = None
 
 
+@router.put("/sales/derive-config")
 def put_sales_derive_config(body: PutSalesDeriveConfigIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Save the tenant's month-boundary grace window (migration 266). Import-channel setting, so it is
     gated on the SAME 'import_health' settings area as the mailbox/portal editors — not the commission
@@ -23968,14 +26093,21 @@ def get_email_config(org_id: str = ORG_ID, account: str = "default"):
 
 
 class PutEmailConfigIn(LaxModel):
-    account: str = ""
-    label: str = ""
-    imap_host: str = ""
+    # These are Optional[str] (not str) ON PURPOSE: the PUT below persists a blank field as NULL
+    # (`(body.x or "").strip() or None`), the GET returns it as JSON null, and the frontend spreads that
+    # saved config straight back into the next save. A bare `str` field REJECTS an explicit null in
+    # Pydantic v2 ("Input should be a valid string") — the `= ""` default only applies when the key is
+    # ABSENT, not when it is sent as null — so editing any existing mailbox with an empty from_filter/
+    # label/host failed to save. The handler already coerces each with `(x or default)`, so accepting null
+    # here is safe and changes no stored value.
+    account: Optional[str] = ""
+    label: Optional[str] = ""
+    imap_host: Optional[str] = ""
     imap_port: Any = None
-    username: str = ""
+    username: Optional[str] = ""
     use_ssl: Any = True
-    mailbox: str = ""
-    from_filter: str = ""
+    mailbox: Optional[str] = ""
+    from_filter: Optional[str] = ""
     since_days: Any = None
     patterns: Any = None
     enabled: Any = None
@@ -23983,6 +26115,27 @@ class PutEmailConfigIn(LaxModel):
     hour: Any = None
     password: Any = None
     acknowledge_cross_org: Any = None
+
+
+def _ensure_email_sweep_cron():
+    """Self-register the GLOBAL email-sweep pg_cron job so NO ONE runs SQL by hand — the trigger is enabling
+    a mailbox (put_email_config below). Reads the backend's own API URL + notify secret from settings and
+    calls the idempotent commcalc.ensure_email_sweep_cron RPC (mig 922) as service_role.
+
+    NON-FATAL by design: a missing secret, the RPC not present (mig 922 not applied yet), or pg_cron/pg_net
+    not installed just means auto-scheduling is skipped — the mailbox save still succeeds, and manual upload /
+    'Run now' still work. Returns the RPC's status string (or None)."""
+    try:
+        url = (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().schema("commcalc").rpc(
+            "ensure_email_sweep_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_email_sweep_cron skipped: {e}")
+        return None
 
 
 @router.put("/email-sweep/config")
@@ -24026,6 +26179,10 @@ def put_email_config(body: PutEmailConfigIn, org_id: str = ORG_ID, authorization
         row.pop("account", None); row.pop("label", None)
         sb().schema("commcalc").table("email_sweep_config").upsert(row, on_conflict="org_id").execute()
     resp = {"ok": True, "account": account}
+    # Enabling a mailbox self-registers the GLOBAL email-sweep pg_cron job (mig 922) so no one runs SQL by
+    # hand. Best-effort + non-fatal: the save already succeeded above; a skipped schedule never fails it.
+    if row.get("enabled"):
+        resp["cron"] = _ensure_email_sweep_cron()
     if conflicts:
         resp["warning"] = "cross_org_mailbox"
         resp["conflicts"] = conflicts
@@ -24109,7 +26266,6 @@ def list_pos_profiles(org_id: str = ORG_ID, pos_key: str = "b2bsoft"):
     return {"profile": _pos_profile(sb(), org_id, pos_key)}
 
 
-@router.put("/pos-profiles")
 class PutPosProfileIn(LaxModel):
     pos_key: str = ""
     label: str = ""
@@ -24120,6 +26276,7 @@ class PutPosProfileIn(LaxModel):
     is_active: Any = True
 
 
+@router.put("/pos-profiles")
 def put_pos_profile(body: PutPosProfileIn, org_id: str = ORG_ID):
     """Edit this tenant's POS standard profile (SAP-configurable — the standard is a config row, not code).
     Degrades gracefully: if mig 200 isn't applied yet, returns ok=False with a hint instead of 500."""
@@ -24442,6 +26599,15 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
         nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
         _email_status_update(client, oid, acct, {'next_run_at': nxt})
         ran.append({"org_id": oid, "account": acct, "result": res})
+    # AUTO DATA-FRESHNESS CHECK (owner 2026-08-28: "auto check and auto fix … before users complain"). The
+    # sweep above IS the auto re-pull; now verify each feed actually advanced. A feed still behind escalates a
+    # once-a-day-deduped alert with the diagnosis. Runs only for orgs that just swept (a daily mailbox sweeps
+    # once/day, so this fires about once/day/org). Best-effort — never affects the sweep result.
+    for _oid in {r["org_id"] for r in ran}:
+        try:
+            await _data_freshness_monitor(client, _oid)
+        except Exception as _fe:
+            print(f"WARN post-sweep freshness monitor failed for {_oid}: {_fe}")
     return {"ran": len(ran), "detail": ran}
 
 
@@ -24791,7 +26957,6 @@ def list_data_sources(org_id: str = ORG_ID):
             "scrapers_wired": sorted(_SOURCE_SCRAPERS.keys())}
 
 
-@router.put("/data-sources")
 class SaveDataSourceIn(LaxModel):
     id: Any = None
     distributor_id: Any = None
@@ -24811,6 +26976,7 @@ class SaveDataSourceIn(LaxModel):
     auto_pull_after_login: Any = None
 
 
+@router.put("/data-sources")
 def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Create/update one login. Omitting password on an update KEEPS the stored one."""
     require_org(org_id)
@@ -24927,6 +27093,7 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
     COOLDOWN (mig 244): if the portal has temporarily blocked us, this returns blocked/requires_confirm
     instead of pulling. A human MAY override with ?confirm=true — the UI asks first, because another
     attempt during an active block typically extends it."""
+    require_browser_service()   # SERVICE_ROLE=api → portal pull launches Chromium; run it on the sweeps worker
     require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
@@ -25025,7 +27192,6 @@ def list_report_pull_map(processor: str = "", org_id: str = ORG_ID):
             "targets_note": "raw_ma_marketplace_orders is a view over raw_ma_fulfillment (mod-asset)"}
 
 
-@router.put("/report-pull-map")
 class SaveReportPullMapIn(LaxModel):
     report_key: Any = None
     display_name: Any = None
@@ -25038,6 +27204,7 @@ class SaveReportPullMapIn(LaxModel):
     processor: Any = None
 
 
+@router.put("/report-pull-map")
 def save_report_pull_map(body: SaveReportPullMapIn, org_id: str = ORG_ID):
     """Create/update THIS org's override for one report_key (never mutates the house default row — a
     tenant edit becomes a tenant-scoped override). Upserts on (org_id, report_key)."""
@@ -25224,7 +27391,6 @@ async def manual_upload_detect(report_key: str = Form(...), carrier_id: str = Fo
     }
 
 
-@router.post("/manual-upload/mapping")
 class ManualUploadSaveMappingIn(LaxModel):
     report_key: str = ""
     carrier_id: str = ""
@@ -25234,6 +27400,7 @@ class ManualUploadSaveMappingIn(LaxModel):
     saved_by: Any = None
 
 
+@router.post("/manual-upload/mapping")
 def manual_upload_save_mapping(body: ManualUploadSaveMappingIn, org_id: str = ORG_ID):
     """Persist the per-(org,carrier,report_key) manual column mapping. Accepts either a ready column_map
     or a {dest_col: source_header} selection (field_sources) — the latter inherits value TYPES from the
@@ -25492,6 +27659,7 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
     cron = verify_notify_secret(x_notify_secret)
     if not cron:
         require_org(org_id)
+    require_browser_service()   # SERVICE_ROLE=api → portal sweeps launch Chromium; repoint this cron to the sweeps worker
     client = sb()
     now = datetime.now(timezone.utc)
     try:
@@ -25633,7 +27801,7 @@ def _do_portal_login(sid: str, org_id: str):
 
 
 @router.post("/data-sources/{sid}/login/start")
-async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID,
+def data_source_login_start(sid: str, background_tasks: BackgroundTasks, org_id: str = ORG_ID,
                                   confirm: bool = False):
     """Phase 1 of the interactive portal login. The Playwright login (slow through a residential proxy)
     runs in the BACKGROUND, so this returns instantly with auth_status='authenticating'; the UI then polls
@@ -25643,6 +27811,7 @@ async def data_source_login_start(sid: str, background_tasks: BackgroundTasks, o
     COOLDOWN (mig 244): a fresh headless login is the most expensive request this module makes, so it is
     the one thing that must NEVER happen automatically during a portal block. Human override with
     ?confirm=true, exactly like the live login."""
+    require_browser_service()   # SERVICE_ROLE=api → portal login launches Chromium; run it on the sweeps worker
     require_org(org_id)
     client = sb()
     rows = (client.schema("commcalc").table("data_source").select("*")
@@ -25674,6 +27843,7 @@ class LoginCodeIn(LaxModel):
 async def data_source_login_verify(sid: str, body: LoginCodeIn, org_id: str = ORG_ID):
     """Phase 2: submit the 2FA code against the pending session and, on success, store the durable
     authenticated session so scheduled/manual pulls reuse it until the portal invalidates it."""
+    require_browser_service()   # SERVICE_ROLE=api → 2FA verify re-launches Chromium; run it on the sweeps worker
     require_org(org_id)
     from app.modules.commcalc import vidapay_sweep as vp
     from fastapi.concurrency import run_in_threadpool
@@ -25898,6 +28068,7 @@ def live_login_start(sid: str, org_id: str = ORG_ID, confirm: bool = False):
     ~HH:MM — another attempt may extend the block") and take a second, deliberate click. The AUTOMATIC
     post-login pull stays suppressed for the whole cooldown regardless of the confirm (auto_pull_gate),
     so a human look at the login screen never turns into 5 reports x N months of traffic."""
+    require_browser_service()   # SERVICE_ROLE=api → live login launches Chromium; run it on the sweeps worker
     require_org(org_id)
     from app.modules.commcalc import live_login
     client = sb()
@@ -25985,15 +28156,16 @@ def live_login_resend(sid: str, org_id: str = ORG_ID):
     return {"ok": True, "phase": sess.snapshot_phase()}
 
 
-@router.post("/data-sources/{sid}/live-login/click")
 class LiveLoginClickIn(LaxModel):
     x: Any = None
     y: Any = None
 
 
+@router.post("/data-sources/{sid}/live-login/click")
 def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     """'Take control': forward an operator click (NORMALIZED x/y in 0..1 of the streamed image) to the
     live page, so they can press a control the auto-clicker missed (e.g. the portal's Next button)."""
+    require_browser_service()   # SERVICE_ROLE=api → live-login sessions only run on the sweeps worker
     require_org(org_id)
     from app.modules.commcalc import live_login
     sess = live_login.get_session(sid, org_id)
@@ -26007,7 +28179,6 @@ def live_login_click(sid: str, body: LiveLoginClickIn, org_id: str = ORG_ID):
     return {"ok": True, "phase": sess.snapshot_phase()}
 
 
-@router.post("/data-sources/{sid}/live-login/input")
 class LiveLoginInputIn(LaxModel):
     type: Any = None
     x: Any = None
@@ -26017,11 +28188,13 @@ class LiveLoginInputIn(LaxModel):
     deltaY: Any = None
 
 
+@router.post("/data-sources/{sid}/live-login/input")
 def live_login_input(sid: str, body: LiveLoginInputIn, org_id: str = ORG_ID):
     """Forward a raw human input event to the LIVE page with HIGH priority (drained before SUBMIT_CODE /
     RESEND / PULL). type ∈ click|dblclick|type|key|scroll. Click coords are NORMALIZED (0..1 of the
     streamed image) and multiplied by the live viewport size server-side (DPR-proof — the img is rendered
     smaller than the real viewport). The first human input pauses auto-driving for the rest of pre-auth."""
+    require_browser_service()   # SERVICE_ROLE=api → live-login sessions only run on the sweeps worker
     require_org(org_id)
     from app.modules.commcalc import live_login
     sess = live_login.get_session(sid, org_id)
@@ -26393,7 +28566,6 @@ def ma_overview_tiles(org_id: str = ORG_ID):
                      "filter_field/op/value triplet is the simple one-condition form.")}
 
 
-@router.put("/ma-overview-recon/tiles/{tile_key}")
 class MaOverviewPutTileIn(LaxModel):
     label: Any = None
     sort_order: Any = None
@@ -26414,6 +28586,7 @@ class MaOverviewPutTileIn(LaxModel):
     is_active: Any = None
 
 
+@router.put("/ma-overview-recon/tiles/{tile_key}")
 def ma_overview_put_tile(tile_key: str, body: MaOverviewPutTileIn, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """Save ONE tile's mapping for this tenant (upsert on org+tile_key). Validated against the source
@@ -26486,7 +28659,6 @@ def ma_overview_rate_plan(period: str = "", org_id: str = ORG_ID):
                      "the cross-check and nothing else.")}
 
 
-@router.put("/ma-overview-recon/rate-plan/{month_index}")
 class MaOverviewPutRateIn(LaxModel):
     rate_pct: Any = None
     spiff_flat: Any = None
@@ -26494,6 +28666,7 @@ class MaOverviewPutRateIn(LaxModel):
     note: Any = None
 
 
+@router.put("/ma-overview-recon/rate-plan/{month_index}")
 def ma_overview_put_rate(month_index: int, body: MaOverviewPutRateIn, org_id: str = ORG_ID,
                          authorization: str = Header(default="")):
     """Set the carrier's rate for one month leg. body: {rate_pct, spiff_flat?, effective_from?, note?}.
@@ -26843,8 +29016,502 @@ def _cr_resolve_ma_daily_tx(client, org_id, period, ctx):
     return q.limit(100000).execute().data or []
 
 
+def _cr_resolve_bill_payments(client, org_id, period, ctx):
+    """The b2b "Bill Payment Transactions Processed" report (owner 2026-08-26), read from the self-serve
+    CUSTOM IMPORT capture (commcalc.raw_custom_import JSONB — no per-report table/migration needed).
+
+    DETECTED BY COLUMN SIGNATURE, not report_key: a sheet qualifies when its captured columns include a
+    'Discounts' column together with a Bill-Pay identifier ('Bill Pay System' / 'Bill Pay ID'). This means
+    the dataset lights up no matter what report_key the tenant registered the sheet under (the sweep/manual
+    upload only has to land it in raw_custom_import), which removes the one coordination point that would
+    otherwise silently show an empty report.
+
+    Money columns ($ Payment / Fee / Total / Discount / Tax) are coerced from the stringified JSONB values
+    ('$1.50', '1,234.00', '') to numbers so they subtotal. VOIDED lines are excluded so the sums reconcile
+    (a voided bill payment was reversed). One row = one bill payment, so `txns`=1 per row sums to the count.
+    Powers the Bill Payment Discounts report: dataset 'Bill Payments', group by Store, read summed Discount."""
+    market_for = ctx["market_for"]
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report bill_payments read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    out = []
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — only the bill-payment sheet carries a Discounts column alongside a Bill-Pay identifier.
+        if "discounts" not in keys or not ({"bill pay system", "bill pay id", "bill pay id#"} & keys):
+            continue
+        if str(_get(d_low, "Voided")).strip().lower() in _VOID_TOKENS:
+            continue
+        store = str(_get(d_low, "Store")).strip()
+        out.append({
+            "store": store,
+            "market": market_for(store),
+            "salesperson": str(_get(d_low, "Created By", "Salesperson", "User Login")).strip(),
+            "trans_date": str(_get(d_low, "Trans Date", "Trans Date Time", "Service Date"))[:10],
+            "trans_id": str(_get(d_low, "Trans ID")).strip(),
+            "bill_pay_system": str(_get(d_low, "Bill Pay System")).strip(),
+            "carrier_id": str(_get(d_low, "Carrier ID")).strip(),
+            "customer_type": str(_get(d_low, "Customer Type")).strip(),
+            "tender_type": str(_get(d_low, "Tender Type")).strip(),
+            "txns": 1,
+            "payment": _num(_get(d_low, "Payment")),
+            "fee": _num(_get(d_low, "Fee")),
+            "total_amt": _num(_get(d_low, "Total Amt", "Total Amount")),
+            "discount": _num(_get(d_low, "Discounts", "Discount")),
+            "tax": _num(_get(d_low, "Tax")),
+        })
+    return out
+
+
+def _activation_details_bucket(contract_type, sp_name, product, category):
+    """Activation TYPE for the b2b Activation Details report — the SAME columns the b2b "Month To Date
+    Location Sales Report" breaks Total Activation into: New Activation / Port / BYOD / Tablet / Home Internet
+    / Edge / Upgrade. That report's Total Activation = Activation+Port+BYOD+Tablet+HomeInternet+Edge and
+    EXCLUDES Upgrade (verified against its totals row: 148+195+119+162+62+1 = 687), so `activation_counts`
+    sums every bucket EXCEPT 'Upgrade'.
+
+    PRECEDENCE (owner reconciliation 2026-08-26, verified against the real Contract Type distribution):
+    the non-phone DEVICE categories (Home Internet / Edge / Tablet — detected by product/category NAME)
+    are decided FIRST so a tablet/FWA/edge line lands in its own column and is counted the way b2b counts
+    it. Then UPGRADE (any Contract Type containing 'upgrade', incl. 'BYOD Upgrade') — the ONLY family
+    excluded from Total Activation — then BYOD, then Port, then a plain New activation.
+
+    CRITICAL ORDERING: 'upgrade' is tested BEFORE 'byod' so 'BYOD Upgrade' is an Upgrade (excluded), and
+    'port' is matched on the word 'port' ONLY — NOT on 'idv' — because the real Contract Types include
+    'Activation With IDV' and 'Port with IDV': IDV is an insurance attach, not a port signal, so keying
+    Port on 'idv' wrongly tagged every insured Activation as a Port. Distinct-Serial# totals per family
+    (New Activation 497 / Port 287 / BYOD 174, Upgrade 78 excluded) reconcile to the owner's sanity check
+    of 953 non-upgrade activations. If a store's total is off, this precedence is the first knob to turn."""
+    ct = str(contract_type or "").lower()
+    nm = f"{sp_name or ''} {product or ''} {category or ''}".lower()
+    if "home internet" in nm or "fwa" in nm or "fixed wireless" in nm:
+        return "Home Internet"
+    if "edge" in nm or "edge" in ct:
+        return "Edge"
+    if "tablet" in nm or "galaxy tab" in nm:
+        return "Tablet"
+    if "upgrade" in ct:
+        return "Upgrade"
+    if "byod" in ct or "customer phone" in nm:
+        return "BYOD"
+    if "port" in ct:
+        return "Port"
+    if "activation" in ct:
+        return "New Activation"
+    return "Other"
+
+
+def _norm_report_date(v):
+    """Normalize a b2b report date cell to an ISO 'YYYY-MM-DD' string (or '' if unparseable). The Activation
+    Details / Bill Payment exports carry M/D/YYYY ('8/1/2026') and datetime ('8/1/2026 10:39:45 AM'); the
+    date COLUMN and any as-of cutoff need a real, sortable ISO date, not the first 10 characters of
+    '8/1/2026'. Pure; never raises."""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    s = s.split(" ")[0].split("T")[0]   # drop any time part
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y", "%m/%d/%y", "%Y/%m/%d"):
+        try:
+            return _datetime.strptime(s, fmt).date().isoformat()
+        except Exception:
+            continue
+    return s[:10]
+
+
+_ACT_CANCELLED_STATUS = {"cancelled", "canceled", "void", "voided", "deactivated", "reversed"}
+
+
+# Bucket precedence for de-duping a Serial# that appears on more than one line: the STRONGEST
+# classification wins, so a device with both an Upgrade line and an Activation/Port/BYOD line counts as
+# the real activation (never silently dropped to the excluded Upgrade family). Rank order matches
+# _activation_details_bucket's own precedence; Upgrade is lowest so it only wins when nothing else does.
+_ACT_BUCKET_RANK = {"Home Internet": 6, "Edge": 6, "Tablet": 6, "BYOD": 4, "Port": 3,
+                    "New Activation": 2, "Other": 1, "Upgrade": 0}
+
+
+def _dealer_to_store_map(client, org_id):
+    """{dealer/store code (UPPER) -> display store name} so the b2b Activation Details "Dealer Code" (a
+    numeric b2b id like 168872) resolves to the SAME store string the sales feed uses (the address, e.g.
+    '104-08 Lefferts Blvd') — letting the activation numbers MERGE onto the named store row instead of
+    landing as a separate numeric-ID row. Sources, chained: commcalc.store_mapping (store_code ->
+    store_address), storeops.stores (store_code -> address/name), storeops.store_merchant_id (merchant/
+    terminal id -> store_code -> name). Best-effort + defensive: any read failure is skipped, {} at worst."""
+    out = {}
+    try:
+        for r in (client.schema("commcalc").table("store_mapping")
+                  .select("store_code,store_address").eq("org_id", org_id).execute().data) or []:
+            c = str(r.get("store_code") or "").strip()
+            a = str(r.get("store_address") or "").strip()
+            if c and a:
+                out[c.upper()] = a
+    except Exception:
+        pass
+    try:
+        for r in (client.schema("storeops").table("stores")
+                  .select("store_code,address,name").eq("org_id", org_id).execute().data) or []:
+            c = str(r.get("store_code") or "").strip()
+            a = str(r.get("address") or "").strip() or str(r.get("name") or "").strip()
+            if c and a:
+                out.setdefault(c.upper(), a)
+    except Exception:
+        pass
+    try:
+        for r in (client.schema("storeops").table("store_merchant_id")
+                  .select("store_code,merchant_id").eq("org_id", org_id).execute().data) or []:
+            mid = str(r.get("merchant_id") or "").strip()
+            c = str(r.get("store_code") or "").strip()
+            if mid and c:
+                out.setdefault(mid.upper(), out.get(c.upper()) or c)
+    except Exception:
+        pass
+    # EXPLICIT per-org mapping — commcalc.store_aliases (the same table the /store-aliases write API + Store
+    # Matching UI use). A Dealer Code registered here as alias -> store_code resolves to that store's address,
+    # so the owner can map a b2b Dealer Code to a store with the existing tooling (no new table).
+    try:
+        for r in (client.schema("commcalc").table("store_aliases")
+                  .select("alias,store_code").eq("org_id", org_id).execute().data) or []:
+            al = str(r.get("alias") or "").strip()
+            c = str(r.get("store_code") or "").strip()
+            if al and c:
+                out[al.upper()] = out.get(c.upper()) or c
+    except Exception:
+        pass
+    return out
+
+
+def _cr_resolve_activation_details(client, org_id, period, ctx):
+    """The b2b "Activation Details" report (owner 2026-08-26) — the ACTIVATION BASIS OF TRUTH for every
+    b2bsoft tenant — read from the self-serve CUSTOM IMPORT capture (commcalc.raw_custom_import JSONB, no
+    per-report table/migration).
+
+    ONE ROW PER DISTINCT DEVICE, per the owner's rule and verified against the real export's Contract Type
+    distribution: an activation is a distinct `Serial#` (device IMEI). A single device spans several lines
+    (Service Plan + insurance Plan-Option share the serial), and de-duping on Serial# counts it exactly
+    once — the grain the owner's own sanity check used (distinct Serial# excluding Upgrade = 953). When a
+    serial carries lines of different Contract Types, the STRONGEST bucket wins (_ACT_BUCKET_RANK) so a
+    device is never dropped into the excluded Upgrade family by row order. `Trans ID` is carried for
+    drill-down into Sales Transaction Details.
+
+    SIGNATURE — the real export is device-serial shaped: `Serial#` + `Contract Type` (+ SP/PO plan name).
+    The legacy `Activation#`-keyed shape is still accepted for back-compat. Section-header rows from an
+    older grouped export (no Serial#/Contract Type) simply fail the signature and are ignored. Cancelled /
+    voided / return lines are excluded so the count is clean.
+
+    DISPLAY + RECON basis. `activation_counts` sums every bucket EXCEPT Upgrade for Total Activation. No
+    payout path reads this yet — moving commission onto this basis is a separate, explicit config opt-in."""
+    market_for = ctx["market_for"]
+    # Dealer Code -> store name, so the AD numeric Dealer Code merges onto the sales feed's named store row
+    # (built once; empty when nothing maps → falls back to the code, same as before).
+    _dmap = _dealer_to_store_map(client, org_id)
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename,row_index").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report activation_details read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    by_key = {}          # dedup key (serial, else activation#/trans id/row) -> chosen row
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — device-serial export (Serial# + Contract Type), OR the legacy Activation#-keyed shape.
+        _is_serial_shape = "serial#" in keys and "contract type" in keys
+        _is_legacy_shape = "activation#" in keys and ({"sp/po name", "commission item"} & keys)
+        if not (_is_serial_shape or _is_legacy_shape):
+            continue
+        if str(_get(d_low, "Trans Type")).strip().lower() in ("return", "refund"):
+            continue
+        if str(_get(d_low, "Activation Status")).strip().lower() in _ACT_CANCELLED_STATUS:
+            continue
+        serial = str(_get(d_low, "Serial#", "Serial", "IMEI")).strip()
+        act_no = str(_get(d_low, "Activation#")).strip()
+        tid = str(_get(d_low, "Trans ID")).strip()
+        key = serial or act_no or tid or f"_i{r.get('row_index')}_{len(by_key)}"
+        # GEOGRAPHY (owner 2026-08-26): the real Activation Details export carries NO "Store" column — its
+        # hierarchy is Dealer Code / Division / Region / District (LuxeLink vs Nova live at the Division /
+        # Region level). Expose all four so a report can group by any of them, and derive `store` (most
+        # granular non-empty) + `market` (Region/Division, or store_mapping) so the store/market columns and
+        # per-market rollups actually populate instead of collapsing to one blank "—" group.
+        dealer = str(_get(d_low, "Dealer Code", "Dealer")).strip()
+        division = str(_get(d_low, "Division")).strip()
+        region = str(_get(d_low, "Region")).strip()
+        district = str(_get(d_low, "District")).strip()
+        # Prefer an explicit Store/name column; else resolve the Dealer Code to the store's real name (so the
+        # activation numbers merge onto the sales feed's named store row instead of showing as a numeric ID);
+        # else fall back to the raw dealer code / district / division.
+        store = (str(_get(d_low, "Store", "Store Name", "Location", "Site")).strip()
+                 or _dmap.get(dealer.upper()) or _dmap.get(district.upper())
+                 or dealer or district or division)
+        mkt = market_for(store) or region or division
+        ct = str(_get(d_low, "Contract Type")).strip()
+        sp = str(_get(d_low, "SP/PO Name")).strip()
+        prod = str(_get(d_low, "Product Desc")).strip()
+        cat = str(_get(d_low, "Category")).strip()
+        # DEPARTMENT (owner 2026-08-28): the real export groups activations under a "Department" column
+        # whose value is the SERVICE PLAN. The owner wants to pick those service plans in the plan editor's
+        # `department` picker and pay $10 per activation on the checked ones — so carry the column through
+        # (falling back to the SP/PO service-plan name when the sheet has no explicit Department header, so
+        # the payable value matches what `plan_options._custom_report_values` surfaces in that dropdown).
+        dept = str(_get(d_low, "Department", "Dept")).strip() or sp
+        bucket = _activation_details_bucket(ct, sp, prod, cat)
+        row = {
+            "store": store,
+            "market": mkt,
+            "dealer_code": dealer,
+            "division": division,
+            "region": region,
+            "district": district,
+            "salesperson": str(_get(d_low, "Salesperson", "User Login")).strip(),
+            "trans_date": _norm_report_date(_get(d_low, "Trans Date", "Service Date", "Trans Date Time")),
+            "trans_id": tid,
+            "activation_no": act_no,
+            "serial": serial,
+            "contract_type": ct,
+            "action_type": str(_get(d_low, "Action Type")).strip(),
+            "bucket": bucket,
+            "department": dept,
+            "service_plan": sp,
+            "product_desc": prod,
+            "category": cat,
+            "carrier": str(_get(d_low, "Carrier")).strip(),
+            "activation_status": str(_get(d_low, "Activation Status")).strip(),
+            "activations": 1,
+            "mrc": _num(_get(d_low, "MRC")),
+        }
+        prev = by_key.get(key)
+        # First line for this device wins its slot; a later line only replaces it when it classifies to a
+        # STRONGER bucket (so the device counts as its real activation, not an Upgrade line seen first).
+        if prev is None or _ACT_BUCKET_RANK.get(bucket, 1) > _ACT_BUCKET_RANK.get(prev["bucket"], 1):
+            by_key[key] = row
+    return list(by_key.values())
+
+
+def _cr_resolve_product_sales(client, org_id, period, ctx):
+    """The b2b "Sales by Product" report (owner 2026-08-26) — read from the self-serve CUSTOM IMPORT capture
+    (commcalc.raw_custom_import JSONB — no per-report table/migration).
+
+    HIERARCHICAL SHEET: rows come as 'Department: X' HEADER rows, then the product rows under them, then a
+    per-department SUBTOTAL row (blank Product Desc). This resolver walks the rows IN FILE ORDER (row_index),
+    carries the current Department down onto each product row, and DROPS the header + subtotal rows so
+    nothing is double-counted. Per source_filename the department resets, so two files never bleed together.
+
+    Flags each product row `is_accessory` when its Department is in _ACCESSORY_DEPARTMENTS (Accessories /
+    C2wireless), and exposes `accessory_sales` (Ext Price on accessory rows) + `accessory_gp` (GP on
+    accessory rows) so grouping gives the accessory-sales totals the owner asked for. The report carries no
+    Store/Rep/Date column, so this dataset aggregates at the report's own scope (by Department/Category/
+    Product), not per store. DISPLAY-ONLY."""
+    from collections import defaultdict
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,row_index,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report product_sales read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            return float(s)
+        except Exception:
+            return safe_float(s)
+
+    # ACCESSORY DEFINITION — the SAME per-org config the Sales Report uses (_accessory_config, mig 208), so
+    # "accessory sales" means one thing across every page (single source). The tenant edits its accessory
+    # DEPARTMENTS once under Sales Report → Accessory settings; this report reads that set — no second,
+    # divergent hard-coded list. Empty/unconfigured org → the config's own house default (byte-identical).
+    try:
+        _acc_depts = _accessory_config(client, org_id).get("departments") or set()
+    except Exception as _ae:
+        print(f"WARN product_sales accessory config read failed: {_ae}")
+        _acc_depts = set()
+
+    # Only this report's sheets qualify (Product GP + Total Exp Comm columns), grouped per file for ordered
+    # department tracking.
+    byfile = defaultdict(list)
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        keys = {(k or "").strip().lower() for k in d.keys()}
+        if "product gp" not in keys or "total exp comm" not in keys:
+            continue
+        byfile[r.get("source_filename") or ""].append(r)
+
+    out = []
+    for _fname, rrows in byfile.items():
+        rrows.sort(key=lambda x: x.get("row_index") if x.get("row_index") is not None else 0)
+        dept = ""
+        for r in rrows:
+            d_low = {(k or "").strip().lower(): v for k, v in (r.get("data") or {}).items()}
+            cat = str(_get(d_low, "Category")).strip()
+            prod = str(_get(d_low, "Product Desc")).strip()
+            if cat.lower().startswith("department:"):
+                dept = cat.split(":", 1)[1].strip()   # carry this department onto the rows that follow
+                continue
+            if not prod:
+                continue                               # subtotal / blank row — never a product line
+            is_acc = dept.strip().lower() in _acc_depts
+            ext = _num(_get(d_low, "Ext Price"))
+            gp = _num(_get(d_low, "GP"))
+            out.append({
+                "department": dept,
+                "category": cat,
+                "product_desc": prod,
+                "is_accessory": "Yes" if is_acc else "No",
+                "qty": _num(_get(d_low, "Qty")),
+                "ext_price": ext,
+                "ext_cost": _num(_get(d_low, "Ext Cost")),
+                "gp": gp,
+                "product_gp": _num(_get(d_low, "Product GP")),
+                "total_exp_comm": _num(_get(d_low, "Total Exp Comm")),
+                "accessory_sales": ext if is_acc else 0.0,
+                "accessory_gp": gp if is_acc else 0.0,
+            })
+    return out
+
+
+def _cr_resolve_store_performance(client, org_id, period, ctx):
+    """The b2b "Store Performance" scorecard (owner 2026-08-26) — ONE row per store with Activations, Bill
+    Payments (qty + $), and the ACCESSORY store breakup (Acc Ext Price / Acc GP) that Sales-by-Product lacks,
+    plus Discounts / GP / hours / conversion ratios. Read from the self-serve CUSTOM IMPORT capture
+    (raw_custom_import JSONB). DETECTED BY COLUMN SIGNATURE ('Acc Ext Price' + 'Bill Payment Qty'), so it
+    lights up whatever report_key the sheet was registered under.
+
+    Already per-store aggregated, so the resolver just maps columns to numeric fields (money parsed incl.
+    parenthesised negatives like '($5,683.27)') and resolves each store's market. Group by Division/Region to
+    split multi-brand exports (e.g. LuxeLink vs Nova). DISPLAY + the accessory-per-store basis."""
+    market_for = ctx["market_for"]
+    try:
+        q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+             .select("data,period,source_filename").eq("org_id", org_id))
+        if period:
+            q = q.in_("period", _pvariants(period))
+        raw = q.limit(100000).execute().data or []
+    except Exception as _se:
+        print(f"WARN custom-report store_performance read failed: {_se}")
+        raw = []
+
+    def _get(d_low, *names):
+        for n in names:
+            v = d_low.get(n.strip().lower())
+            if v is not None and str(v).strip() != "":
+                return v
+        return ""
+
+    def _num(v):
+        s = str(v or "").strip().replace(",", "").replace("$", "").replace("%", "")
+        neg = s.startswith("(") and s.endswith(")")
+        s = s.strip("()")
+        if s in ("", "-", "nan", "none", "null"):
+            return 0.0
+        try:
+            f = float(s)
+        except Exception:
+            f = safe_float(s)
+        return -f if neg else f
+
+    out = []
+    for r in raw:
+        d = r.get("data") or {}
+        if not isinstance(d, dict):
+            continue
+        d_low = {(k or "").strip().lower(): v for k, v in d.items()}
+        keys = set(d_low.keys())
+        # SIGNATURE — the scorecard's accessory + bill-payment columns, not carried by any other dataset.
+        if "acc ext price" not in keys or "bill payment qty" not in keys:
+            continue
+        store = str(_get(d_low, "Store")).strip()
+        if not store or store.lower() in ("total", "grand total"):
+            continue                                   # skip the totals row
+        division = str(_get(d_low, "Division")).strip()
+        region = str(_get(d_low, "Region")).strip()
+        out.append({
+            "store": store,
+            "market": market_for(store) or region or division,
+            "division": division, "region": region, "district": str(_get(d_low, "District")).strip(),
+            "activations": int(_num(_get(d_low, "Activations", "Act"))),
+            "renewals": int(_num(_get(d_low, "Renewals"))),
+            "prepaid": int(_num(_get(d_low, "Prepaid"))),
+            "bill_payments": _num(_get(d_low, "Bill Payments")),
+            "bill_payment_qty": int(_num(_get(d_low, "Bill Payment Qty"))),
+            "discounts": _num(_get(d_low, "Discounts")),
+            "gp": _num(_get(d_low, "GP")),
+            "acc_ext_price": _num(_get(d_low, "Acc Ext Price")),
+            "acc_gp": _num(_get(d_low, "Acc GP")),
+            "acc_gp_on_billpay": _num(_get(d_low, "Acc GP on Bill Payment Trans")),
+            "trade_in_credits": _num(_get(d_low, "Trade-in Credits")),
+            "third_party_insurance": _num(_get(d_low, "3rd Party Insurance")),
+        })
+    return out
+
+
 _CUSTOM_REPORT_RESOLVERS = {
     "sales_line": _cr_resolve_sales_line,
+    "bill_payments": _cr_resolve_bill_payments,
+    "activation_details": _cr_resolve_activation_details,
+    "product_sales": _cr_resolve_product_sales,
+    "store_performance": _cr_resolve_store_performance,
     "rep_commissions": _cr_resolve_rep_commissions,
     "targets_actuals": _cr_resolve_targets_actuals,
     "kpi_metrics": _cr_resolve_kpi_metrics,
@@ -26913,7 +29580,7 @@ def custom_report_datasets(authorization: str = Header(default=""), org_id: str 
 
 
 @router.get("/custom-report")
-async def custom_report_run(datasets: str = "", period: str = "", date_from: str = "", date_to: str = "",
+def custom_report_run(datasets: str = "", period: str = "", date_from: str = "", date_to: str = "",
                             stores: str = "", markets: str = "", reps: str = "",
                             group_by: str = "", columns: str = "",
                             pivot_rows: str = "", pivot_cols: str = "", pivot_measure: str = "",
@@ -27973,6 +30640,210 @@ def _mhc_undated(client, org_id, cap=5000):
         return []
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# CARRIER RECONCILIATION (upload & reconcile) — v1 Boost/ePay, carrier-generic shape.
+# The owner uploads the back-office "Rebate Reconciliation" workbook; we show, per store, the BOOST /
+# back-office figure beside OUR computed figure and the diff, so the back office can be retired.
+#
+# DISPLAY / ANALYSIS ONLY. Nothing here writes a money table or recomputes pay. OUR side REUSES the
+# existing engines verbatim — the GP engine (`_compute_gp`), the IMEI-rebate engine
+# (`imei_rebate_report.build_report`) and the ePay payment classifier chain the commission-received
+# breakout + imei report already share (`discrepancy_engine.parse_payment_type` →
+# `device_history.categorize_comp`, plus the org's `payment_categories`). No math is reimplemented.
+# Every engine call is wrapped so a missing table / empty period degrades to zeros, never a 500.
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _recon_norm(v):
+    return " ".join(str(v or "").strip().split()).lower()
+
+
+# ── ONE payment-type classifier for the recon's ours-side ────────────────────────────────────────────
+# Every raw_payment_detail row is bucketed into exactly ONE of three buckets, mirroring how the Boost back
+# office splits ePay money across its workbook columns (proven against the sample workbook's Sheet1 —
+# `harness_carrier_recon.py` section (c)):
+#   • 'reimbursement' → Boost "Rebate Paid": promo/offer/PIC/new-act/upgrade/AAL device reimbursements
+#     AND the large Device-Upgrade payments (comp types DEVICE_REIMB, SIMCR, DUPGB). Note Boost books the
+#     "Device Upgrade Bounty" ePay line to Rebate despite the word "Bounty" — Sheet1 confirms 27/27 of its
+#     money rows land in Rebate Paid, so DUPGB is a reimbursement here.
+#   • 'bounty'        → Boost "Comm Paid": one-time activation / SIM-loading / ready bounties Boost books
+#     as commission (~$10.5k/mo) — comp types NAB, SSLB(SSB), BRB, DFB, ISDFB, BYOD_SPIFF, DUB.
+#   • 'other'         → EXCLUDED from BOTH ePay legs: recurring residual / airtime replenishment (Boost
+#     RTR — its own $0 column in this recon) and anything unmapped — comp types MI, ATUMI, UNMAPPED:*.
+# ePay Paid = reimbursement + bounty; RTR/airtime/fee is never counted. The org's `payment_categories`
+# config (description → category — the SAME table the commission-received breakout reads) takes precedence
+# when it explicitly categorizes a payment_type; otherwise the discrepancy-engine comp_type decides. No
+# second classifier is invented — `discrepancy_engine.parse_payment_type` is the one source of comp types.
+_RECON_BOUNTY_COMPS = {"NAB", "SSLB", "BRB", "DFB", "ISDFB", "BYOD_SPIFF", "DUB"}
+_RECON_REIMB_COMPS = {"DEVICE_REIMB", "SIMCR", "DUPGB"}
+
+
+def _recon_cat_bucket(cat):
+    """Map an org `payment_categories.category` label to a recon bucket, or None to defer to comp_type."""
+    c = " ".join(str(cat or "").strip().split()).lower()
+    if not c or c in ("unknown", "other", "uncategorized", "n/a"):
+        return None
+    if any(x in c for x in ("commission", "bounty", "spiff")):
+        return "bounty"
+    if any(x in c for x in ("rebate", "reimburs", "promo", "offer", "discount")):
+        return "reimbursement"
+    if any(x in c for x in ("rtr", "airtime", "replenish", "top up", "top-up", "topup",
+                            "bill", "fee", "residual", "minute")):
+        return "other"
+    return None
+
+
+def _recon_payment_bucketer(client, org_id, notes):
+    """Build `bucket(payment_type) -> 'reimbursement'|'bounty'|'other'` for this org: the org's
+    `payment_categories` config wins when it explicitly categorizes the payment_type; otherwise
+    `discrepancy_engine.parse_payment_type`'s comp_type decides. Never raises (missing config table →
+    comp_type-only classification)."""
+    from app.modules.commcalc.discrepancy_engine import parse_payment_type as _ppt
+    try:
+        cats = (client.schema("commcalc").table("payment_categories")
+                .select("description,category").eq("org_id", org_id).execute().data) or []
+    except Exception:
+        cats = []
+    cat_of = {str(c.get("description") or "").strip(): str(c.get("category") or "").strip()
+              for c in cats if c.get("description")}
+
+    def bucket(payment_type):
+        pt = str(payment_type or "").strip()
+        b = _recon_cat_bucket(cat_of.get(pt))
+        if b:
+            return b
+        try:
+            comp = _ppt(pt)[0]
+        except Exception:
+            comp = ""
+        if comp in _RECON_REIMB_COMPS:
+            return "reimbursement"
+        if comp in _RECON_BOUNTY_COMPS:
+            return "bounty"
+        return "other"
+
+    return bucket
+
+
+def _recon_ours_gp(client, org_id, period, into, notes):
+    """GP comparison is SKIPPED for the carrier recon (owner decision). No-op so the ours side never
+    carries an Estimated-GP figure; the endpoint also drops GP from the built comparison entirely."""
+    notes.append("GP comparison skipped (owner decision) — no ours-side GP is computed or compared.")
+
+
+def _recon_ours_paid(client, org_id, period, store_of, into, notes):
+    """OUR Rebate Paid / Comm Paid / ePay Paid per store, computed CONSISTENTLY from `raw_payment_detail`
+    via the single `_recon_payment_bucketer` classifier so the three figures match Boost's column
+    definitions and can never disagree with each other:
+        rebate_paid = Σ amount where bucket == reimbursement
+        comm_paid   = Σ amount where bucket == bounty
+        epay_paid   = rebate_paid + comm_paid           (RTR / airtime / fee / other EXCLUDED)
+    The per-store `epay_paid == rebate_paid + comm_paid` identity holds BY CONSTRUCTION: each counted row
+    adds its amount to ePay and to exactly one of the two legs; excluded (other/RTR) rows touch neither.
+    Store is resolved through the org's existing /store-match chain (`store_of`). Degrades to leaving the
+    ours side at zero (a note, never a 500) on a missing table / empty period."""
+    bucket = _recon_payment_bucketer(client, org_id, notes)
+    try:
+        rows = (client.schema("commcalc").table("raw_payment_detail")
+                .select("business_address,payment_type,amount")
+                .eq("org_id", org_id).in_("period", _pvariants(period))
+                .limit(120000).execute().data) or []
+    except Exception as e:
+        notes.append(f"raw_payment_detail read failed for ePay split: {e}")
+        return
+    if not rows:
+        notes.append(f"No raw_payment_detail rows for {period} — ours ePay side left at zero.")
+        return
+    for r in rows:
+        addr = str(r.get("business_address") or "").strip()
+        label, _mkt = (store_of(addr) if store_of else (None, None))
+        label = label or addr
+        if not label:
+            continue
+        b = bucket(r.get("payment_type"))
+        if b == "other":                                      # RTR / airtime / fee / unmapped — excluded
+            continue
+        amt = safe_float(r.get("amount"))
+        acc = into.setdefault(_recon_norm(label), {})
+        if b == "reimbursement":
+            acc["rebate_paid"] = round(acc.get("rebate_paid", 0.0) + amt, 2)
+        else:                                                 # bounty
+            acc["comm_paid"] = round(acc.get("comm_paid", 0.0) + amt, 2)
+        acc["epay_paid"] = round(acc.get("epay_paid", 0.0) + amt, 2)
+
+
+@router.post("/carrier-recon/upload")
+async def carrier_recon_upload(file: UploadFile = File(...), period: str = Form(""),
+                               carrier: str = Form("boost"), org_id: str = ORG_ID):
+    """Upload a Carrier Reconciliation workbook and reconcile it against OUR computed figures.
+
+    Multipart: `file` (the .xlsx), `period` (any spelling; blank = current month), `carrier`
+    (default boost — v1 wires Boost/ePay; the shape is carrier-generic for Total/VidaPay later).
+
+    Parses the workbook with the PURE `carrier_recon.parse_workbook`, computes OUR per-store Rebate Paid /
+    Comm Paid / ePay Paid for the period from `raw_payment_detail` via ONE payment-type classifier
+    (`_recon_ours_paid` → `_recon_payment_bucketer`) so the three figures match Boost's column definitions
+    (Rebate = reimbursements, Comm = bounties, ePay = the two summed; RTR/airtime excluded). GP is SKIPPED
+    (owner decision). Resolves the workbook's street-address store names through the org's existing
+    store-match chain (`_ir_store_resolver`), then diffs Boost − Ours per store with the PURE
+    `carrier_recon.build_comparison`. Workbook stores we cannot resolve/match are LISTED, never dropped.
+
+    DISPLAY / ANALYSIS ONLY — no write, no recompute. Every OUR-side engine read degrades to zeros on a
+    missing table / empty period, so an org mid-onboarding still gets the Boost-side view + escalation /
+    unpaid / missing sheets rather than a 500."""
+    require_org(org_id)
+    contents = await file.read()
+    try:
+        parsed = carrier_recon.parse_workbook(contents, period=(period or "").strip() or None)
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse the reconciliation workbook: {e}")
+
+    per = (period or "").strip() or _date.today().strftime("%B %Y")
+    client = sb()
+    notes: list[str] = []
+    try:
+        store_of = _ir_store_resolver(client, org_id)   # raw store string -> (canonical label, market)
+    except Exception:
+        store_of = None
+
+    ours_by_store: dict[str, dict] = {}
+    _recon_ours_gp(client, org_id, per, ours_by_store, notes)          # no-op: GP skipped (owner decision)
+    _recon_ours_paid(client, org_id, per, store_of, ours_by_store, notes)
+
+    # `resolve` maps a workbook store NAME to our canonical label so it keys into `ours_by_store`
+    # (which is keyed on the resolved label). Returns None when nothing resolves — build_comparison then
+    # falls back to the raw name and, failing that, lists the store as unmatched.
+    def _resolve(name):
+        if not store_of:
+            return None
+        try:
+            lbl, _m = store_of(name)
+            return lbl
+        except Exception:
+            return None
+
+    cmp = carrier_recon.build_comparison(parsed, ours_by_store, resolve=_resolve)
+    # GP is skipped (owner decision): drop it from the per-store + totals comparison so it is neither
+    # computed nor shown as a bogus Boost-minus-zero gap. carrier_recon (the pure parser/merge) is left
+    # untouched — GP is stripped here, on the ours side, only.
+    for _r in cmp["per_store"]:
+        for _side in ("boost", "ours", "diff", "match_ok"):
+            (_r.get(_side) or {}).pop("gp", None)
+    for _side in ("boost", "ours", "diff"):
+        (cmp["totals"].get(_side) or {}).pop("gp", None)
+
+    return {
+        "period": per,
+        "carrier": (carrier or "boost").strip().lower(),
+        "per_store": cmp["per_store"],
+        "unmatched_stores": cmp["unmatched_stores"],
+        "escalations": parsed["escalations"],
+        "unpaid_devices": parsed["unpaid_devices"],
+        "missing": parsed["missing"],
+        "totals": {**cmp["totals"], "boost_workbook": parsed["totals"]},
+        "raw_txn_count": parsed["raw_txn_count"],
+        "notes": notes,
+    }
+
+
 @router.get("/ma-handset-cogs")
 def ma_handset_cogs_endpoint(period: str = "", window_months: int = 1, group_by: str = "product",
                              price_basis: str = "unit", products: str = "", ship_to: str = "",
@@ -28895,7 +31766,7 @@ def _accrual_day_param(v, label="date"):
 
 
 @router.get("/payout/accrued")
-async def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: str = None,
+def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: str = None,
                          store_code: str = None, authorization: str = Header(default="")):
     """Per-employee ACCRUED (expected) commission, cash ADVANCED against it, and the unpaid balance.
 
@@ -28926,7 +31797,7 @@ async def payout_accrued(org_id: str = ORG_ID, as_of: str = None, employee_key: 
 
 
 @router.get("/payout/accrual")
-async def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str = None,
+def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str = None,
                               employee_key: str = None, store_code: str = None,
                               authorization: str = Header(default="")):
     """The per-DAY accrual rows behind /payout/accrued — one row per rep per store per day, each with
@@ -28968,7 +31839,7 @@ async def payout_accrual_rows(org_id: str = ORG_ID, start: str = None, end: str 
 
 
 @router.post("/payout/accrual/run")
-async def payout_accrual_run(org_id: str = ORG_ID, date: str = None,
+def payout_accrual_run(org_id: str = ORG_ID, date: str = None,
                              authorization: str = Header(default="")):
     """Recompute ONE date's accrual for this tenant. IDEMPOTENT — a re-run restates that date.
 
@@ -28983,7 +31854,7 @@ async def payout_accrual_run(org_id: str = ORG_ID, date: str = None,
 
 
 @router.get("/payout/accrual/preview")
-async def payout_accrual_preview(org_id: str = ORG_ID, date: str = None):
+def payout_accrual_preview(org_id: str = ORG_ID, date: str = None):
     """What a run for this date WOULD write, without writing it. Pure read — for diagnosing a $0 day
     (usually a missing Commission Plan assignment on a plan-mode tenant, which is correct behaviour,
     or a day whose sales haven't landed yet)."""
@@ -28993,7 +31864,7 @@ async def payout_accrual_preview(org_id: str = ORG_ID, date: str = None):
 
 
 @router.post("/payout/record")
-async def payout_record(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
+def payout_record(body: dict, org_id: str = ORG_ID, authorization: str = Header(default="")):
     """Record a CASH ADVANCE paid to an employee against accrued commission (normally out of a daily
     closing envelope). org_id is a QUERY param and is what gets stamped — a body-supplied org would
     land the row in the wrong tenant (contract §2).
@@ -29020,7 +31891,7 @@ async def payout_record(body: dict, org_id: str = ORG_ID, authorization: str = H
 
 
 @router.get("/payout/ledger")
-async def payout_ledger(org_id: str = ORG_ID, start: str = None, end: str = None,
+def payout_ledger(org_id: str = ORG_ID, start: str = None, end: str = None,
                         employee_key: str = None, store_code: str = None,
                         authorization: str = Header(default="")):
     """Org-scoped list of recorded cash advances (the report surface + the audit trail)."""
@@ -29034,7 +31905,7 @@ async def payout_ledger(org_id: str = ORG_ID, start: str = None, end: str = None
 
 
 @router.get("/payout/over-advance")
-async def payout_over_advance(org_id: str = ORG_ID, as_of: str = None, lookback_months: int = 3,
+def payout_over_advance(org_id: str = ORG_ID, as_of: str = None, lookback_months: int = 3,
                               authorization: str = Header(default="")):
     """Review list: where cash advanced has outrun the accrual. FLAG ONLY — no clawback, no netting.
 
@@ -29048,7 +31919,7 @@ async def payout_over_advance(org_id: str = ORG_ID, as_of: str = None, lookback_
 
 
 @router.get("/payout/settlement")
-async def payout_settlement(org_id: str = ORG_ID, as_of: str = None,
+def payout_settlement(org_id: str = ORG_ID, as_of: str = None,
                             authorization: str = Header(default="")):
     """END-OF-CYCLE SETTLEMENT CHECKLIST (owner 2026-08-04, ledger Q19) — per employee, this cycle's
     accrued vs cash advanced vs the remainder to pay or collect, plus every prior cycle that was never
@@ -29071,7 +31942,7 @@ async def payout_settlement(org_id: str = ORG_ID, as_of: str = None,
 
 
 @router.get("/payout/accrual/config")
-async def get_payout_accrual_config(org_id: str = ORG_ID, as_of: str = None,
+def get_payout_accrual_config(org_id: str = ORG_ID, as_of: str = None,
                                     authorization: str = Header(default="")):
     """This tenant's accrual settings (mig 267 `commission_org_config.accrual_config`). RULE TWO: the
     tier basis, the tier-recognition day, the over-advance mode, the balance CYCLE, who may record a
@@ -29121,7 +31992,7 @@ async def get_payout_accrual_config(org_id: str = ORG_ID, as_of: str = None,
 
 
 @router.put("/payout/accrual/config")
-async def put_payout_accrual_config(body: dict, org_id: str = ORG_ID,
+def put_payout_accrual_config(body: dict, org_id: str = ORG_ID,
                                     authorization: str = Header(default="")):
     """Save this tenant's accrual settings (tier basis, tier recognition, over-advance mode, balance
     cycle, who may record an advance, auto-run window). Admin-only, same gate as the rest of commission
@@ -29138,7 +32009,7 @@ async def put_payout_accrual_config(body: dict, org_id: str = ORG_ID,
 
 
 @router.post("/payout/accrual/run-due")
-async def payout_accrual_run_due(x_notify_secret: str = Header(default="")):
+def payout_accrual_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint for the daily accrual — the SAME NOTIFY_RUN_SECRET pattern as every other
     commcalc sweep (/sales/promote-due, /dlar/sweep/run-due, /email-sweep/run-due …), so no new env
     var and no new cron infrastructure.
@@ -29216,7 +32087,7 @@ def financing_vendors(org_id: str = ORG_ID):
 
 
 @router.put("/financing/vendors")
-async def save_financing_vendor(body: dict, org_id: str = ORG_ID,
+def save_financing_vendor(body: dict, org_id: str = ORG_ID,
                                 authorization: str = Header(default="")):
     """Create or update ONE financing vendor (upsert on vendor_key). Admin-gated: a vendor's detection
     decides what the Financing report counts and which target a tiered rule measures against."""
@@ -29240,7 +32111,7 @@ async def save_financing_vendor(body: dict, org_id: str = ORG_ID,
 
 
 @router.delete("/financing/vendors/{vendor_key}")
-async def delete_financing_vendor(vendor_key: str, org_id: str = ORG_ID,
+def delete_financing_vendor(vendor_key: str, org_id: str = ORG_ID,
                                   authorization: str = Header(default="")):
     """Remove a vendor row and its carrier assignments / detection rules. A CODE-SEEDED vendor (edge,
     acima) reappears as its seed afterwards — to switch one off, save it with enabled=false instead."""
@@ -29266,7 +32137,7 @@ class AddFinancingVendorCarrierIn(LaxModel):
 
 
 @router.post("/financing/vendors/{vendor_key}/carriers")
-async def add_financing_vendor_carrier(vendor_key: str, body: AddFinancingVendorCarrierIn, org_id: str = ORG_ID,
+def add_financing_vendor_carrier(vendor_key: str, body: AddFinancingVendorCarrierIn, org_id: str = ORG_ID,
                                        authorization: str = Header(default="")):
     """Assign a vendor to a carrier. A vendor may serve MANY carriers — this is the whole mechanism
     behind "ACIMA could also be added to Total at a later date": one row, no release."""
@@ -29287,7 +32158,7 @@ async def add_financing_vendor_carrier(vendor_key: str, body: AddFinancingVendor
 
 
 @router.delete("/financing/vendors/{vendor_key}/carriers/{row_id}")
-async def delete_financing_vendor_carrier(vendor_key: str, row_id: str, org_id: str = ORG_ID,
+def delete_financing_vendor_carrier(vendor_key: str, row_id: str, org_id: str = ORG_ID,
                                           authorization: str = Header(default="")):
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
@@ -29301,7 +32172,7 @@ async def delete_financing_vendor_carrier(vendor_key: str, row_id: str, org_id: 
 
 
 @router.post("/financing/vendors/{vendor_key}/detection")
-async def add_financing_detection_rule(vendor_key: str, body: dict, org_id: str = ORG_ID,
+def add_financing_detection_rule(vendor_key: str, body: dict, org_id: str = ORG_ID,
                                        authorization: str = Header(default="")):
     """Add ONE detection rule. The operator picks the field, the operator and — for a tender — the value
     from the tender strings the period's data actually contains (RULE THREE). `word` is the default
@@ -29325,7 +32196,7 @@ async def add_financing_detection_rule(vendor_key: str, body: dict, org_id: str 
 
 
 @router.delete("/financing/detection/{rule_id}")
-async def delete_financing_detection_rule(rule_id: str, org_id: str = ORG_ID,
+def delete_financing_detection_rule(rule_id: str, org_id: str = ORG_ID,
                                           authorization: str = Header(default="")):
     require_org(org_id)
     _require_commission_admin(authorization, org_id)
@@ -29338,7 +32209,7 @@ async def delete_financing_detection_rule(rule_id: str, org_id: str = ORG_ID,
 
 
 @router.get("/financing/targets/{period}")
-async def get_financing_targets(period: str, include_inactive: bool = False,
+def get_financing_targets(period: str, include_inactive: bool = False,
                                 authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """The assignable per-store financing targets for a period, over the org's own store roster (so the
@@ -29399,7 +32270,6 @@ async def get_financing_targets(period: str, include_inactive: bool = False,
                      'Migration 272 has not been run — financing targets cannot be saved yet.')}
 
 
-@router.put("/financing/targets/{period}")
 class SaveFinancingTargetIn(LaxModel):
     store_code: Any = None
     vendor_key: Any = None
@@ -29409,6 +32279,7 @@ class SaveFinancingTargetIn(LaxModel):
     updated_by: Any = None
 
 
+@router.put("/financing/targets/{period}")
 async def save_financing_target(period: str, body: SaveFinancingTargetIn, authorization: str = Header(default=""),
                                 org_id: str = ORG_ID):
     """Set ONE store's monthly financing target (optionally per vendor). Gated on the SAME 'targets'
@@ -29526,7 +32397,6 @@ def atu_config_get(org_id: str = ORG_ID):
     return {"org_id": org_id, "config": cfg, "table_present": present, "defaults": _ATU_DEFAULTS}
 
 
-@router.post("/atu-config")
 class AtuConfigSetIn(LaxModel):
     saving_per_month: Any = None
     boost_rate_pct: Any = None
@@ -29534,6 +32404,7 @@ class AtuConfigSetIn(LaxModel):
     total_recharge_base: Any = None
 
 
+@router.post("/atu-config")
 def atu_config_set(body: AtuConfigSetIn, org_id: str = ORG_ID):
     """Save the assumptions. org_id is STAMPED (RULE ONE). Values are clamped to >= 0 — a negative rate
     would silently flip the sign of the whole report."""
@@ -29838,9 +32709,10 @@ def mi_compute(body: MiComputeIn, org_id: str = ORG_ID):
             "status": "draft", "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         try:
-            client.schema("commcalc").table("management_incentive_payout").upsert(
+            up = client.schema("commcalc").table("management_incentive_payout").upsert(
                 row, on_conflict="org_id,plan_id,employee_id,period").execute()
             saved = True
+            _intimate_mi_payout(org_id, (up.data or [{}])[0], store_codes)
         except Exception as e:
             saved = f"not saved: {e}"
     return {"ok": True, "plan_id": plan.get("id"), "plan_name": plan.get("name"),
@@ -29873,6 +32745,33 @@ class MiPayoutDecisionIn(LaxModel):
     note: Any = None
 
 
+def _intimate_mi_payout(org_id, payout, store_codes=None):
+    """Intimation-only bridge to the unified approvals inbox for a management-incentive payout.
+
+    The payout ledger is multi-state (draft -> approved -> paid) and its decision has THREE actions
+    (approve / deny / pay), where 'deny' reopens to draft rather than terminally rejecting — it is NOT a
+    single binary approve/deny, and 'pay' moves commission money. So it has NO acting on_decide (the
+    adapter blocks inbox decisions); the decision stays on the incentive board and we only MIRROR the
+    payout into the inbox as an intimation. Best-effort; never raises."""
+    try:
+        pid = payout.get("id")
+        if not pid or (payout.get("status") or "draft") != "draft":
+            return
+        from app.modules.approvals import engine as _approvals
+        total = payout.get("total")
+        store = next((s for s in (store_codes or payout.get("store_codes") or []) if s), None)
+        _approvals.create_request(
+            org_id, type="management_incentive", source_table="management_incentive_payout",
+            source_id=pid,
+            title=f"Management incentive ${float(total or 0):,.2f} — {payout.get('employee_name') or payout.get('employee_id')} ({payout.get('period')})",
+            summary="Computed manager-incentive payout awaiting approval on the incentive board.",
+            payload={"total": total, "period": payout.get("period"),
+                     "employee_id": payout.get("employee_id")},
+            store_code=store, priority="normal", notify=False)
+    except Exception:
+        pass
+
+
 @router.post("/management-incentive/payouts/{payout_id}/decision")
 def mi_payout_decision(payout_id: str, body: MiPayoutDecisionIn, org_id: str = ORG_ID):
     """Approve / deny / mark-paid a computed payout — the ledger transition (draft → approved → paid).
@@ -29897,6 +32796,17 @@ def mi_payout_decision(payout_id: str, body: MiPayoutDecisionIn, org_id: str = O
         raise
     except Exception as e:
         raise HTTPException(500, f"decision failed: {e}")
+    # Intimation-only mirror: reflect approve/deny into the inbox request (pay is a later money step the
+    # board owns). Never affects the ledger decision above.
+    if decision in ("approve", "deny"):
+        try:
+            from app.modules.approvals import engine as _approvals
+            _approvals.sync_source_decision(org_id, type="management_incentive",
+                                            source_table="management_incentive_payout",
+                                            source_id=payout_id, decision=decision,
+                                            actor=body.who, note=body.note)
+        except Exception:
+            pass
     return {"ok": True, "status": status}
 
 
@@ -30209,3 +33119,362 @@ def mi_resolve(body: MiResolveIn, org_id: str = ORG_ID):
     if not plan:
         raise HTTPException(404, "plan not found")
     return {"ok": True, **_mi_resolve_numbers(client, org_id, period, employee_id, plan)}
+
+
+# ── ePay (Boost) Daily Transaction Detail ingest + recon (owner directive 2026-08-20, migration 903) ──
+# Boost's owner-portal report. MA/VidaPay (Total) is the sibling with its own report (raw_ma_daily_tx);
+# same logic per carrier. Each line resolves to OUR store via the merchant-ID registry (processor 'epay').
+from app.modules.commcalc import epay_ingest as _epay  # noqa: E402
+
+
+def _epay_require_manager(authorization, org_id):
+    from app.modules.storeops.router import _require_manager
+    _require_manager(authorization, org_id)
+
+
+@router.post("/epay/upload")
+async def epay_upload(file: UploadFile = File(...), authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Upload a Boost ePay 'Daily Transaction Detail' export (xlsx/csv). Parses, resolves each terminal to
+    a store via the merchant registry, and stores the lines idempotently. Returns rows saved + any
+    terminals that still need a store mapping (with a suggested store from the UserName)."""
+    _epay_require_manager(authorization, org_id)
+    contents = await file.read()
+    fname = (getattr(file, "filename", "") or "").lower()
+    try:
+        if fname.endswith((".csv", ".txt")):
+            df = None
+            for enc in ("utf-8-sig", "cp1252", "latin-1"):
+                try:
+                    df = pd.read_csv(io.BytesIO(contents), dtype=str, encoding=enc); break
+                except UnicodeDecodeError:
+                    continue
+        else:
+            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+    except Exception as e:
+        raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
+    if df is None:
+        raise HTTPException(400, "Could not read the file — save it as .xlsx or .csv and retry.")
+    df = df.fillna("")
+    cols = set(str(c).strip() for c in df.columns)
+    if "TransactionID" not in cols or "TerminalID" not in cols:
+        raise HTTPException(400, "This doesn't look like the ePay Daily Transaction Detail report "
+                                 "(missing TransactionID / TerminalID columns).")
+    batch = (fname or "epay") + ":" + str(len(contents))
+    res = _epay.ingest(org_id, df.to_dict("records"), source_batch=batch, client=get_supabase())
+    return {"ok": True, **res}
+
+
+@router.get("/epay/unmapped")
+def epay_unmapped(org_id: str = ORG_ID):
+    """Terminals with ingested rows but no resolved store — the confirm queue, each with a UserName-based
+    suggestion so an admin maps it in one click."""
+    return {"unmapped": _epay.unmapped_terminals(get_supabase(), org_id), "processor": "epay"}
+
+
+@router.post("/epay/map-terminal")
+def epay_map_terminal(body: dict, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Confirm a terminal -> store mapping. Writes the store's ePay merchant id in the registry AND
+    backfills the already-ingested rows so past days reconcile. Body: {terminal_id, store_code}."""
+    _epay_require_manager(authorization, org_id)
+    from app.modules.storeops import merchant_ids as _mids
+    terminal_id = str(body.get("terminal_id") or "").strip()
+    store_code = str(body.get("store_code") or "").strip()
+    if not (terminal_id and store_code):
+        raise HTTPException(400, "terminal_id and store_code are required")
+    _mids.upsert(org_id, store_code, _epay.PROCESSOR, merchant_id=terminal_id)
+    backfilled = _epay.backfill_store_codes(get_supabase(), org_id, terminal_id, store_code)
+    return {"ok": True, "terminal_id": terminal_id, "store_code": store_code, "rows_backfilled": backfilled}
+
+
+@router.get("/epay/recon")
+def epay_recon(date_from: str = "", date_to: str = "", org_id: str = ORG_ID):
+    """Per-store-day portal PAYMENT + FEE from the ingested ePay rows (the portal side of the recon).
+    date_from/date_to = 'YYYY-MM-DD' (date_to defaults to date_from)."""
+    if not date_from:
+        raise HTTPException(400, "date_from (YYYY-MM-DD) is required")
+    m = _epay.per_store_day(get_supabase(), org_id, date_from, date_to or date_from)
+    rows = [{"store_code": sc, "close_date": d, **vals} for (sc, d), vals in sorted(m.items())]
+    return {"rows": rows,
+            "totals": {"payment": round(sum(r["payment"] for r in rows), 2),
+                       "fee": round(sum(r["fee"] for r in rows), 2),
+                       "store_days": len(rows)}}
+
+
+@router.get("/epay/fee-recon")
+def epay_fee_recon(date_from: str = "", date_to: str = "", tolerance: float = 1.0,
+                   authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Fee reconciliation: the Boost 'ePay service charge' our system captured (raw_sales) vs the fee the
+    owner's portal shows (Daily Transaction Detail), per store-day. Biggest discrepancies first — these
+    are what the hourly sweep escalates to DM+. Scoped to the caller's store span."""
+    if not date_from:
+        raise HTTPException(400, "date_from (YYYY-MM-DD) is required")
+    from app.modules.commcalc import epay_fee_recon as _fr
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    out = _fr.fee_recon(get_supabase(), org_id, date_from, date_to or date_from, tolerance=tolerance)
+    if ks is not None:
+        out["rows"] = [r for r in out["rows"] if in_keyset(ks, r.get("store_code"))]
+        out["totals"] = {
+            "system_fee": round(sum(r["system_fee"] for r in out["rows"]), 2),
+            "portal_fee": round(sum(r["portal_fee"] for r in out["rows"]), 2),
+            "var": round(sum(r["var"] for r in out["rows"]), 2),
+            "flagged": sum(1 for r in out["rows"] if r["flag"]), "store_days": len(out["rows"])}
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# ePay DISCREPANCY ALERTS (epic P4). An HOURLY sweep that recomputes TODAY's ePay reconciliation per
+# tenant and emails District Managers AND above the same day when a store's fee or payment recon is off
+# beyond the tenant's tolerance. Mirrors the accountability morning lateness plumbing EXACTLY
+# (storeops.router `_run_lateness_alerts` / run-due / alert-config): per-tenant enable + tolerance on
+# storeops.tenants (migration 905, default OFF), dedup via storeops.alert_log (scope 'epay_discrepancy'),
+# recipient hierarchy via storeops.router `_managers_above_dm`, email via notify.channels.email_resend.
+# The pure email PLANNER lives in commcalc.epay_alerts. Config lives in storeops.* (NOT commcalc), so
+# these helpers use a storeops-schema client for tenants + alert_log; the recon recompute passes the
+# default client (epay_fee_recon / closing resolve their own commcalc schema).
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+def _epay_portal_pull(client, org_id):
+    """Config-gated Boost portal AUTO-PULL HOOK (P4). Runs at the TOP of the hourly run-due flow, BEFORE
+    the recompute, so a freshly pulled Daily Transaction Detail reconciles the same tick. Gated by
+    EPAY_PORTAL_SOURCE (env; 'email' / 'api' / 'none', default 'none'):
+
+      • 'none' (the common case today) → a documented NO-OP. The owner hasn't chosen an access path yet.
+      • 'email' → poll the report inbox for the DTD attachment (TODO, not yet wired).
+      • 'api'   → pull via the Boost owner-portal API (TODO, not yet wired).
+
+    NEVER raises and NEVER hardcodes a credential or portal URL. Returns a small status dict for the log."""
+    source = (_os.environ.get("EPAY_PORTAL_SOURCE", "") or "none").strip().lower()
+    if source in ("", "none"):
+        return {"source": "none", "pulled": 0,
+                "note": "auto-pull disabled — owner has not configured a portal source"}
+    try:
+        if source == "email":
+            # TODO(owner): poll the configured report mailbox (mirror commcalc.email_sweep / ftp_sweep) for
+            # the Boost "Daily Transaction Detail" attachment, then hand its rows to
+            # epay_ingest.ingest(org_id, records, ...). Requires the mailbox + a routing rule to be
+            # provisioned first. No-op until then.
+            return {"source": "email", "pulled": 0, "note": "TODO: email-inbox poll not yet wired"}
+        if source == "api":
+            # Portal case: drive the headless-Chromium ePay Owner Portal sweep for the Daily
+            # Transaction Detail ONLY, reusing the backend-only epay_sweep_config credentials (never
+            # hardcoded). The sweep downloads the DTD and routes it through epay_ingest (parse +
+            # payment/fee split + terminal→store resolution + idempotent upsert), so the same tick's
+            # recompute reconciles the freshest portal data. No-op (never raises) when credentials are
+            # missing.
+            cfg = _epay_cfg(client, org_id)
+            if not cfg or not cfg.get("portal_user") or not cfg.get("portal_pass"):
+                return {"source": "api", "pulled": 0,
+                        "note": "no epay_sweep_config credentials — auto-pull skipped"}
+            rcfg = _registry_report_cfg(client, org_id)
+            # sync Playwright cannot run inside this coroutine's event loop — run the sweep in a
+            # worker thread (which has no running loop), exactly like /epay/sweep/discover-reports.
+            import concurrent.futures as _cf
+
+            def _run_dtd_sweep():
+                return epay_sweep.run_epay_sweep(
+                    client, org_id, cfg.get("portal_url"), cfg["portal_user"], cfg["portal_pass"],
+                    reports=["epay_daily_tx"], report_cfg=rcfg)
+
+            with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                res = _ex.submit(_run_dtd_sweep).result() or {}
+            pulled = sum(int((r or {}).get("rows") or 0) for r in (res.get("reports") or []))
+            out = {"source": "api", "pulled": pulled}
+            if res.get("errors"):
+                out["errors"] = res["errors"]
+            return out
+    except Exception:
+        return {"source": source, "pulled": 0, "error": "auto-pull failed (swallowed)"}
+    return {"source": source, "pulled": 0, "note": "unknown EPAY_PORTAL_SOURCE; treated as no-op"}
+
+
+def _epay_recompute_flags(client, org_id, day, tolerance):
+    """Recompute ONE day's ePay reconciliation for a tenant and return the FLAGGED store-days. Reuses the
+    existing recon math — no duplication:
+      • FEE     → commcalc.epay_fee_recon.fee_recon (system raw_sales 'ePay service charge' vs portal DTD).
+      • PAYMENT → the P2 recon embedded in closing._closing_summary_for_date's money_recon['epay']
+                  (declared ePay at closing vs the portal DTD payment, epay_ingest.per_store_day).
+    Returns [{store_code, close_date, kind ('fee'|'payment'), system, portal, variance}] for
+    |variance| > tolerance. NEVER raises (a missing table / un-run migration degrades to fewer flags)."""
+    flags = []
+    # FEE side — system (raw_sales) vs portal (DTD), per store-day.
+    try:
+        from app.modules.commcalc import epay_fee_recon as _fr
+        fr = _fr.fee_recon(client, org_id, day, day, tolerance=tolerance)
+        for r in (fr.get("rows") or []):
+            if r.get("flag"):
+                flags.append({"store_code": r.get("store_code"), "close_date": r.get("close_date") or day,
+                              "kind": "fee", "system": r.get("system_fee"), "portal": r.get("portal_fee"),
+                              "variance": r.get("var")})
+    except Exception:
+        pass
+    # PAYMENT side — declared ePay vs portal DTD payment (P2 logic, embedded in the DM-Verify summary).
+    try:
+        from app.modules.closing.router import _closing_summary_for_date
+        cards = _closing_summary_for_date(client, org_id, day, None, None, None, tolerance, False)
+        for c in (cards or []):
+            ep = ((c.get("money_recon") or {}) or {}).get("epay") or {}
+            if ep.get("flag") and not ep.get("portal_pending"):
+                flags.append({"store_code": c.get("store_code"), "close_date": c.get("close_date") or day,
+                              "kind": "payment", "system": ep.get("declared"), "portal": ep.get("portal"),
+                              "variance": ep.get("var")})
+    except Exception:
+        pass
+    return flags
+
+
+def _epay_mark_run(so_client, org_id, today, detail):
+    """Bookkeeping on storeops.tenants (epay_alert_last_run / _last_detail). Best-effort, never raises."""
+    try:
+        so_client.table("tenants").update(
+            {"epay_alert_last_run": datetime.now(timezone.utc).isoformat(),
+             "epay_alert_last_detail": f"{today}: {detail}"}).eq("org_id", org_id).execute()
+    except Exception:
+        pass
+
+
+async def _run_epay_discrepancy_alerts(org_id_filter=None, respect_enabled=True, dry_run=False):
+    """The hourly ePay discrepancy sweep. Iterates tenants; skips unless `epay_alerts_enabled`; for TODAY
+    (tenant-local via storeops _biz_tz_for) runs the config-gated portal auto-pull hook, recomputes the
+    ePay reconciliation (fee + payment), flags store-days over `epay_alert_tolerance`, resolves DM+above
+    per flagged store, plans one digest per manager, and sends them deduped via storeops.alert_log
+    (scope 'epay_discrepancy', ref_key incorporating tenant+store+date+kind so a discrepancy escalates
+    once/day). Marks the run on the tenant row. NEVER raises."""
+    from app.modules.storeops.router import (_managers_above_dm, _biz_tz_for,
+                                              _lateness_already_sent, _lateness_record_sent)
+    from app.modules.commcalc import epay_alerts as _ea
+    from app.modules.notify.channels import email_resend
+    root = get_supabase()
+    so = root.schema("storeops")   # storeops.tenants + storeops.alert_log
+    try:
+        tenants = so.table("tenants").select("*").execute().data or []
+    except Exception:
+        tenants = []
+    if org_id_filter:
+        tenants = [t for t in tenants if str(t.get("org_id")) == str(org_id_filter)]
+    email_ok = email_resend.is_configured()
+    results = []
+    for t in tenants:
+        oid = t.get("org_id")
+        if respect_enabled and not bool(t.get("epay_alerts_enabled")):
+            continue
+        try:
+            tol = float(t.get("epay_alert_tolerance") or 1.0)
+        except (TypeError, ValueError):
+            tol = 1.0
+        now_local = datetime.now(timezone.utc).astimezone(_biz_tz_for(oid))
+        today = now_local.date().isoformat()
+        # Portal auto-pull HOOK — config-gated; a NO-OP unless EPAY_PORTAL_SOURCE is set. Never raises.
+        _epay_portal_pull(root, oid)
+        flags = _epay_recompute_flags(root, oid, today, tol)
+        if not flags:
+            if not dry_run:
+                _epay_mark_run(so, oid, today, "no discrepancies")
+            results.append({"org_id": oid, "sent": 0, "skipped": 0, "flagged": 0})
+            continue
+        stores = {f["store_code"] for f in flags if f.get("store_code")}
+        hierarchy = {s: _managers_above_dm(oid, s) for s in stores}
+        plan = _ea.plan_emails(flags, hierarchy, today)
+        sent = skipped = 0
+        planned = []
+        for dg in plan["digests"]:
+            # Dedup per (store, date, kind) for THIS recipient — keep only items not already sent today,
+            # so a discrepancy escalates once/day and a NEW gap found later the same day still sends.
+            new_items = [it for it in dg["items"]
+                         if not _lateness_already_sent(so, oid, "epay_discrepancy", it["ref_key"])]
+            if not new_items:
+                skipped += 1
+                planned.append({"to": dg["to"], "subject": dg["subject"], "already_sent": True})
+                continue
+            built = _ea.build_digest(dg["to_name"], new_items)
+            planned.append({"to": dg["to"], "subject": built["subject"], "already_sent": False,
+                            "items": [f"{i['store_code']} {i['close_date']} {i['kind']}" for i in new_items]})
+            if dry_run:
+                continue
+            if email_ok:
+                try:
+                    await email_resend.send_email(to=dg["to"], subject=built["subject"], html=built["html"])
+                    for it in new_items:
+                        _lateness_record_sent(so, oid, "epay_discrepancy", it["ref_key"], dg["to"])
+                    sent += 1
+                except Exception:
+                    pass
+        if not dry_run:
+            _epay_mark_run(so, oid, today,
+                           f"sent {sent}, skipped {skipped}, {len(flags)} flagged store-day(s)")
+        results.append({"org_id": oid, "sent": sent, "skipped": skipped, "flagged": len(flags),
+                        "email_configured": email_ok, "planned": planned if dry_run else None})
+    return {"ran": len(results), "dry_run": dry_run, "results": results}
+
+
+@router.post("/epay/alerts/run-due")
+async def epay_alerts_run_due(x_notify_secret: str = Header(default="")):
+    """Secret-gated HOURLY pg_cron entrypoint (P4). Recomputes TODAY's ePay reconciliation for every
+    enabled tenant and emails DM+above a digest of any store-day off beyond the tenant's tolerance,
+    deduped via storeops.alert_log so a given discrepancy escalates once per day. Mirrors the
+    accountability lateness run-due. See migration 905 for the cron registration."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return await _run_epay_discrepancy_alerts(respect_enabled=True, dry_run=False)
+
+
+@router.post("/epay/alerts/run-now")
+async def epay_alerts_run_now(send: bool = False, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin manual trigger for THIS tenant, bypassing the enable gate. Defaults to a DRY RUN
+    (returns exactly who WOULD be emailed and which store-days, sending nothing) — pass ?send=true to
+    actually send. Dedup is always honored, so a real send won't duplicate the hourly run."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    return await _run_epay_discrepancy_alerts(org_id_filter=org_id, respect_enabled=False, dry_run=(not send))
+
+
+@router.get("/epay/alert-config")
+def get_epay_alert_config(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """ePay discrepancy-alert config for the tenant (enabled + dollar tolerance), plus last-run
+    bookkeeping. Any manager may view; the PUT is manager/admin only. Config lives on storeops.tenants
+    (migration 905)."""
+    so = get_supabase().schema("storeops")
+    try:
+        rows = (so.table("tenants").select(
+            "epay_alerts_enabled,epay_alert_tolerance,epay_alert_last_run,epay_alert_last_detail")
+            .eq("org_id", org_id).limit(1).execute().data) or []
+        r = rows[0] if rows else {}
+        return {"enabled": bool(r.get("epay_alerts_enabled")),
+                "tolerance": float(r.get("epay_alert_tolerance") or 1.0),
+                "last_run": r.get("epay_alert_last_run"), "last_detail": r.get("epay_alert_last_detail"),
+                "available": True}
+    except Exception:
+        return {"enabled": False, "tolerance": 1.0, "last_run": None, "last_detail": None, "available": False}
+
+
+class EpayAlertConfigIn(LaxModel):
+    enabled: Any = None
+    tolerance: Any = None
+
+
+@router.put("/epay/alert-config")
+def put_epay_alert_config(body: EpayAlertConfigIn, authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Manager/admin only. Turn the hourly ePay discrepancy alerts on/off and set the dollar tolerance
+    (a store-day is flagged when |fee variance| or |payment variance| exceeds it; default 1.00)."""
+    from app.modules.storeops.router import _require_manager
+    mgr = _require_manager(authorization, org_id)
+    org_id = mgr.get("org_id") or org_id
+    upd = {}
+    sent = body.model_fields_set
+    if "enabled" in sent:
+        upd["epay_alerts_enabled"] = bool(body.enabled)
+    if "tolerance" in sent:
+        try:
+            tv = round(float(body.tolerance), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "tolerance must be a number (dollars), e.g. 1.00")
+        if tv < 0:
+            raise HTTPException(400, "tolerance must be >= 0")
+        upd["epay_alert_tolerance"] = tv
+    if not upd:
+        raise HTTPException(400, "Nothing to update — send `enabled` and/or `tolerance`.")
+    try:
+        get_supabase().schema("storeops").table("tenants").update(upd).eq("org_id", org_id).execute()
+    except Exception:
+        raise HTTPException(400, "Couldn't save — is migration 905 applied?")
+    return get_epay_alert_config(authorization=authorization, org_id=org_id)

@@ -23,6 +23,7 @@ from . import ops_chargebacks
 from . import expense_config
 from . import envelope as _envelope
 from . import deposit_recon
+from . import verified_overlay as _verified_overlay
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -750,6 +751,7 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
         return d
 
     by_store, by_rep, grand = {}, {}, blank()
+    _sd, _sd_code = {}, {}   # per-(store key, day) rep-sum + its store_code, for the TKT-1030 overlay
     kept_rows = []
     for r in rows:
         raw_code = r.get("store_code")
@@ -800,6 +802,37 @@ def closing_rollup(period: str = None, date_from: str = None, date_to: str = Non
             agg["rows"] += 1
             if r.get("close_date"):
                 agg["_days"].add(str(r.get("close_date")))
+        # Per-(store key, day) rep-sum, kept alongside so a DM verified correction can be applied to
+        # by_store + grand as a delta after the loop (TKT-1030), without disturbing by_rep (stays raw).
+        _sdk = (key, str(r.get("close_date") or ""))
+        _sd_code[key] = raw_code
+        _sda = _sd.setdefault(_sdk, {k: 0.0 for k in MONEY} | {"epay_on_cash": 0.0, "epay_on_cc": 0.0})
+        for k in MONEY:
+            _sda[k] = round(_sda[k] + _f(r.get(k)), 2)
+        _sda["epay_on_cash"] = round(_sda["epay_on_cash"] + epd["cash"], 2)
+        _sda["epay_on_cc"] = round(_sda["epay_on_cc"] + epd["cc"], 2)
+
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): by_store + grand (store-day / company
+    # aggregates) reflect the DM's verified corrections; by_rep stays RAW (a store-day correction can't be
+    # attributed to one rep). Applied as a per-store-day delta so only corrected store-days move, and it
+    # is a strict no-op when there is no verified correction. Best-effort.
+    try:
+        _ov = _verified_overlay.build_overlay_map(client, org_id, {d for (_k, d) in _sd.keys()})
+        if _ov:
+            for (_k, _dd), _raw in _sd.items():
+                _dm = _ov.get((_verified_overlay._norm(_sd_code.get(_k)), str(_dd)[:10]))
+                if not _dm:
+                    continue
+                _corr = _verified_overlay.apply_overlay(dict(_raw), _dm)
+                for _fld, _rv in _raw.items():
+                    _delta = round(_corr.get(_fld, _rv) - _rv, 2)
+                    if not _delta:
+                        continue
+                    if _k in by_store:
+                        by_store[_k][_fld] = round(by_store[_k].get(_fld, 0.0) + _delta, 2)
+                    grand[_fld] = round(grand.get(_fld, 0.0) + _delta, 2)
+    except Exception:
+        pass
 
     def finalize(d):
         d = {k: v for k, v in d.items() if k != "_days"} | {"days": len(d["_days"])}
@@ -971,6 +1004,14 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
     vers = (client.schema("commcalc").table("daily_closing_verification").select("*")
             .eq("org_id", org_id).eq("close_date", date).execute().data) or []
     ver_by_store = {v.get("store_code"): v for v in vers}
+    # Portal ePay (Boost Daily Transaction Detail ingest, migration 903): per-store-day PAYMENT + FEE for
+    # the recon's ePay leg. Best-effort — empty until the DTD is ingested and its terminals are mapped.
+    try:
+        from app.modules.commcalc import epay_ingest as _epay_ing
+        _epay_portal = {(_verified_overlay._norm(sc), d): v
+                        for (sc, d), v in _epay_ing.per_store_day(client, org_id, date, date).items()}
+    except Exception:
+        _epay_portal = {}
 
     # EEP (mig 506): categorized expense lines for the day, grouped by the daily_closing row they're
     # tied to — attached onto each rep row below so DM Verify can render/approve them per line. Degrades
@@ -1171,6 +1212,17 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                 "discrepancy": (act_var != 0 or upg_var != 0),
             }
 
+        # DM verified-correction overlay (TKT-1030, owner 2026-08-20): once a store-day is VERIFIED, the
+        # DM's corrected figures are authoritative for the store-day. Overlay them onto BOTH column
+        # families in `totals` HERE — before money_recon and before this store dict is returned — so the
+        # DM Verify view, the money reconciliation, and every downstream consumer of this summary see the
+        # corrected numbers, not the rep's raw sum. Per-rep rows below stay raw (a store-day correction
+        # can't be attributed to one rep) and the store carries a `dm_corrected` badge instead.
+        _ver = ver_by_store.get(code) if code else None
+        _dm_corrected = bool(_ver and _ver.get("verified") and _verified_overlay.has_correction(_ver))
+        if _dm_corrected:
+            _verified_overlay.apply_overlay(totals, _ver)
+
         # MONEY recon: store-declared closing $ vs B2B actuals (accessory gross, cash, credit).
         # Shortage = declared LESS than B2B (money unaccounted). epay-vs-portal is wired but
         # pending the ePay Daily Transactions Report sweep.
@@ -1179,7 +1231,11 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         if bm is not None:
             closing_cash = round(totals["epay_cash"] + totals["store_cash"], 2)   # cash collected
             closing_credit = round(totals["store_cc"] + totals["epay_cc"], 2)      # credit declared
-            closing_epay = round(totals["epay_cash"] + totals["epay_cc"], 2)       # total epay declared
+            # Declared ePay = the reps' ePay-on-cash + ePay-on-credit split (the DM overlay corrects these
+            # when verified). The legacy epay_cash/epay_cc are hard-zeroed for modern rows, so the old
+            # `epay_cash + epay_cc` reported $0 declared ePay for every mig103+ tenant — using epay_on_*
+            # is the figure the DM Verify view already shows and the portal reconciles against.
+            closing_epay = round(totals["epay_on_cash"] + totals["epay_on_cc"], 2)  # total ePay declared
 
             def _cmp(closing_v, b2b_v, available=True):
                 if not available:
@@ -1206,9 +1262,18 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
                 "tax_collected": round(bm.get("tax", 0.0), 2),  # sales tax on the day (ext_price is pre-tax; tenders include this)
                 "cash": _cmp(closing_cash, tender_cash, tenders_ok),
                 "credit": _cmp(closing_credit, tender_card, tenders_ok),
-                "epay": {"declared": closing_epay, "portal": None, "portal_pending": True,
-                         "fee": None, "other": None, "var": None,
-                         "note": "ePay Daily Transactions Report sweep not yet wired"},
+                "epay": (lambda _p: (
+                    {"declared": closing_epay, "portal": round(_p["payment"], 2),
+                     "portal_fee": round(_p["fee"], 2),
+                     "var": round(closing_epay - _p["payment"], 2),
+                     "shortage": (closing_epay - _p["payment"]) < -tolerance,
+                     "overage": (closing_epay - _p["payment"]) > tolerance,
+                     "flag": abs(closing_epay - _p["payment"]) > tolerance, "portal_pending": False}
+                    if _p is not None else
+                    {"declared": closing_epay, "portal": None, "portal_fee": None, "var": None,
+                     "flag": False, "portal_pending": True,
+                     "note": "No ePay portal data ingested for this store-day yet"}
+                ))(_epay_portal.get((_verified_overlay._norm(code), date)) if code else None),
                 "b2b_total": bm["total"], "b2b_tenders": bm["tenders"],
                 "tender_source": tender_src, "tenders_available": tenders_ok, "dept_available": dept_ok,
             }
@@ -1245,6 +1310,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "cross_login": cross_login, "closing_mode": closing_mode,
             "closer": closer_by_store.get(code) if code else None,
             "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
+            "dm_corrected": _dm_corrected,   # store-day totals reflect the DM's verified correction (TKT-1030)
         })
 
     # Stores where reps WORKED (clocked in / sold) but NOBODY submitted a closing never appear in
@@ -1460,7 +1526,11 @@ def _ensure_envelope_bucket():
     return c
 
 
-def _upload_envelope(org_id, data_url):
+def _upload_envelope(org_id, data_url, raise_on_error=False):
+    """Upload a base64 data-url image to the private closing-envelopes bucket → storage path, or None.
+    `raise_on_error=True` (opt-in, used by the photo endpoint) re-raises the underlying STORAGE error so
+    the caller can tell the rep the real reason instead of a misleading 'no image' — the two deposit-slip
+    callers keep the default swallow-and-return-None contract they already rely on."""
     if not data_url or "," not in str(data_url):
         return None
     try:
@@ -1473,6 +1543,8 @@ def _upload_envelope(org_id, data_url):
         return path
     except Exception as e:
         print(f"WARN envelope upload failed: {e}")
+        if raise_on_error:
+            raise
         return None
 
 
@@ -1495,11 +1567,59 @@ class UploadEnvelopePhotoIn(LaxModel):
 @router.post("/envelope-photo")
 def upload_envelope_photo(body: UploadEnvelopePhotoIn, org_id: str = ORG_ID):
     """Store a captured envelope photo (base64) → return its path + a signed URL. The path goes into
-    daily_closing.envelope_picture on submit."""
-    path = _upload_envelope(org_id, body.image)
+    daily_closing.envelope_picture on submit.
+
+    Owner-reported 2026-08-18: a rep couldn't upload the envelope (so couldn't close, so couldn't clock
+    out) and the error just said "no image provided" even though a photo WAS taken. Root: a storage
+    write failure was swallowed and reported as a missing image. Now we validate the payload up front and
+    surface the ACTUAL storage error, so the real cause is visible instead of hidden."""
+    img = str(body.image or "")
+    if "," not in img:
+        raise HTTPException(400, "No photo received — retake the envelope photo and try again.")
+    try:
+        base64.b64decode(img.split(",", 1)[1])
+    except Exception:
+        raise HTTPException(400, "That photo couldn't be read — retake the envelope photo and try again.")
+    try:
+        path = _upload_envelope(org_id, img, raise_on_error=True)
+    except Exception as e:
+        raise HTTPException(502, "The envelope photo couldn't be saved to storage — please try again. "
+                                 f"If it keeps failing, tell your manager (storage error: {str(e)[:160]}).")
     if not path:
-        raise HTTPException(400, "no image provided")
+        raise HTTPException(400, "No photo received — retake the envelope photo and try again.")
     return {"path": path, "url": _signed_envelope(path)}
+
+
+@router.get("/envelope-url")
+def closing_envelope_url(store_code: str = "", close_date: str = "", employee_name: str = "",
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Sign ONE store-day's envelope photo ON DEMAND, for the DM evening verify view and the cash-pickup
+    check. Those list endpoints (/closing/summary, /closing/pickups) return the RAW storage path only —
+    they deliberately avoid a per-row Storage round trip on a list that can be large — but the
+    closing-envelopes bucket is PRIVATE, so a raw path isn't viewable on its own. This signs it lazily
+    (one call when the DM actually clicks 📷), via an ORG-SCOPED DB lookup so a caller can only ever get
+    their own org's envelope (never an arbitrary caller-supplied storage path).
+
+    Owner-reported 2026-08-18: DMs couldn't see the envelope during DM verify + cash-pickup check —
+    the pages rendered the raw private-bucket path as a link, which never loads."""
+    require_org(org_id)
+    if not store_code or not close_date:
+        raise HTTPException(400, "store_code and close_date are required")
+    q = (sb().schema("commcalc").table("daily_closing").select("envelope_picture,employee_name,submitted_at")
+         .eq("org_id", org_id).eq("store_code", store_code).eq("close_date", str(close_date)[:10]))
+    if employee_name:
+        q = q.eq("employee_name", employee_name)
+    rows = q.order("submitted_at", desc=True).limit(30).execute().data or []
+    pic = next((r.get("envelope_picture") for r in rows if r.get("envelope_picture")), None)
+    if not pic and employee_name:
+        # fall back to the store-day (any rep's envelope) if the exact rep row has none
+        rows2 = (sb().schema("commcalc").table("daily_closing").select("envelope_picture,submitted_at")
+                 .eq("org_id", org_id).eq("store_code", store_code).eq("close_date", str(close_date)[:10])
+                 .order("submitted_at", desc=True).limit(30).execute().data) or []
+        pic = next((r.get("envelope_picture") for r in rows2 if r.get("envelope_picture")), None)
+    if not pic:
+        raise HTTPException(404, "No envelope photo on file for this store on this day.")
+    return {"url": _signed_envelope(pic)}
 
 
 async def _notify_envelope_mismatch(client, org_id, summary):
@@ -1545,6 +1665,19 @@ async def create_row(payload: dict, org_id: str = ORG_ID):
         "envelope_picture": (payload.get("envelope_picture") or "").strip() or None,
         "remarks": payload.get("remarks"), "source": "manual",
     }
+    # Robustness (owner-reported 2026-08-19 — Ali "Cellfonz ru ma" + Rashika "Cellfonz r us": the
+    # envelope photo wasn't accepted and the app bounced to the main page). The envelope image can now
+    # ride the submit as a RAW data-url and be uploaded server-side here — not only as a pre-uploaded
+    # path from the separate /envelope-photo step. That separate step is fragile on mobile: opening the
+    # camera can reload the PWA before the pre-upload finishes, stranding the rep. Accepting the image
+    # inline removes that ordering dependency (the client keeps the photo locally and sends it on submit).
+    _env = body.get("envelope_picture")
+    if _env and str(_env).startswith("data:"):
+        try:
+            body["envelope_picture"] = _upload_envelope(org_id, _env, raise_on_error=True)
+        except Exception as e:
+            raise HTTPException(502, "The envelope photo couldn't be saved — please try submitting again. "
+                                     f"If it keeps failing, tell your manager (storage error: {str(e)[:160]}).")
 
     # ── Duplicate-submission guard (mig 502): ONE ACTIVE row per (org, store_code, employee_name,
     #    close_date). A rep double-submitting used to create a SECOND daily_closing row that
@@ -2129,6 +2262,18 @@ def _tender_recon_3way_day(client, org_id, d, store, keys, tlabel, resolve_x, re
         agg = closing.setdefault(code, {t: 0.0 for t in keys})
         for t in keys:
             agg[t] += _closing_amt(r, t)
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): overlay the DM's verified corrections
+    # onto the CLOSING leg, so the 3-way reconciles the DM-corrected declared tenders against the
+    # X-report / sales actuals (never overridden — those are the source of truth). Best-effort.
+    try:
+        _ov = _verified_overlay.build_overlay_map(client, org_id, [d])
+        if _ov:
+            for _code, _cagg in closing.items():
+                _dm = _ov.get((_verified_overlay._norm(_code), str(d)[:10]))
+                if _dm:
+                    _verified_overlay.overlay_tender_legs(_cagg, _dm)
+    except Exception:
+        pass
     # (2) X-report — pos_tender_summary raw tender_type → tenant tender (fallback _canon_tender). A raw
     # label that resolves to NO tender (no tenant-map rule matched AND the hardcoded fallback either
     # doesn't recognize it or isn't on this tenant's axis) is NEVER dropped — its dollars land in
@@ -3366,6 +3511,17 @@ def accessory_recon(date: str, store: str = None, tolerance: float = 1.0,
         v = _f(r.get("acc_sale"))
         s["declared"] += v
         s["reps"].append({"employee_name": r.get("employee_name"), "acc_sale": round(v, 2)})
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): a verified DM accessory correction is
+    # the authoritative store-day declared accessory (the per-rep breakdown stays raw). Best-effort.
+    try:
+        _ov = _verified_overlay.build_overlay_map(client, org_id, [d])
+        if _ov:
+            for _code, _s in declared.items():
+                _dm = _ov.get((_verified_overlay._norm(_code), str(d)[:10]))
+                if _dm and _dm.get("dm_acc_sale") is not None:
+                    _s["declared"] = _verified_overlay._f(_dm["dm_acc_sale"])
+    except Exception:
+        pass
     b2b = _b2b_money_by_store(client, org_id, d)
     codes = [store] if store else sorted(set(declared) | set(b2b))
     if ks is not None:
@@ -4293,6 +4449,22 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
         c = r.get("created_at")
         if c and str(c) > str(last_deposited_at.get(code) or ""):
             last_deposited_at[code] = c
+
+    # DM verified-correction overlay (TKT-1030, owner 2026-08-20): a VERIFIED store-day's DECLARED cash
+    # becomes the DM's corrected total, so cash-position, store-cash-on-hand, and the pickups by_store
+    # panel (all callers of this core) run off the corrected figure. Physical pickups/deposits and EEP
+    # withdrawals below are real events and are never overridden. Best-effort; a failure leaves raw cash.
+    try:
+        _ov = _verified_overlay.build_overlay_map(
+            client, org_id, {d for days in decl_by_store_day.values() for d in days})
+        if _ov:
+            for _code, _days in decl_by_store_day.items():
+                for _dday in list(_days.keys()):
+                    _dm = _ov.get((_verified_overlay._norm(_code), str(_dday)[:10]))
+                    if _dm and _dm.get("dm_store_cash") is not None:
+                        _days[_dday] = _verified_overlay._f(_dm["dm_store_cash"])
+    except Exception:
+        pass
 
     # EEP (mig 506/507): cash actually taken out of the envelope (approved closing_expense lines +
     # envelope_withdrawal) reduces "cash on hand" exactly like a pickup does — folded straight into
@@ -6005,7 +6177,9 @@ def create_expense_line(payload: CreateExpenseLineIn, org_id: str = ORG_ID, auth
         r = client.schema("commcalc").table("closing_expense").insert(row).execute()
     except Exception as e:
         raise HTTPException(500, f"could not save expense line (run migration 506?): {e}")
-    return {"ok": True, "row": (r.data[0] if r.data else row)}
+    saved = (r.data[0] if r.data else row)
+    _intimate_expense_line(org_id, saved)
+    return {"ok": True, "row": saved}
 
 
 def _insert_expense_lines(client, org_id, store_code, close_date, closing_row_id, lines, created_by=None):
@@ -6022,7 +6196,10 @@ def _insert_expense_lines(client, org_id, store_code, close_date, closing_row_id
             for c in cleaned]
     try:
         r = client.schema("commcalc").table("closing_expense").insert(rows).execute()
-        return r.data or rows
+        saved = r.data or rows
+        for sr in saved:
+            _intimate_expense_line(org_id, sr)
+        return saved
     except Exception as e:
         print(f"WARN closing_expense insert failed (run migration 506?): {e}")
         return []
@@ -6069,6 +6246,56 @@ def _push_expense_category_pl(client, org_id, period, category_id, category_name
         return {"pushed": False, "status": None, "note": f"push failed ({type(e).__name__}: {e})"}
 
 
+def _apply_expense_line_decision(client, org_id, row, status, decided_by):
+    """Apply an approve/reject to ONE categorized closing_expense line and, on an 'expense'-kind
+    APPROVAL, push that category's updated P&L total for the line's period. This is the ONE shared
+    money/P&L effect — the /closing/expense/{id}/decide endpoint AND the unified approvals engine
+    adapter (approvals/adapters/closing_expense.py) both call it, so an inbox decision and a
+    closing-management-board decision are byte-identical (amounts, account routing, and P&L math are
+    never re-implemented). Caller guards the line is still pending. Returns the P&L-push result dict
+    (or None when no push applies)."""
+    expense_id = row.get("id")
+    upd = {"status": status, "approved_by": decided_by, "approved_at": _now(), "updated_at": _now()}
+    (client.schema("commcalc").table("closing_expense").update(upd)
+     .eq("org_id", org_id).eq("id", expense_id).execute())
+    pl = None
+    if status == "approved" and row.get("category_kind") == "expense" and row.get("category_id"):
+        period = str(row.get("close_date") or "")[:7]
+        try:
+            pl = _push_expense_category_pl(client, org_id, period, row["category_id"], row.get("category_name"))
+        except Exception as e:
+            pl = {"pushed": False, "note": str(e)}
+    return pl
+
+
+def _intimate_expense_line(org_id, row):
+    """Raise (idempotently) an intimation approval_request for a freshly-created PENDING expense line so
+    it surfaces in the unified Approvals inbox alongside the legacy closing-management board. Best-effort;
+    never raises (an approvals miss must not fail a closing submit)."""
+    try:
+        if (row.get("status") or "pending") != "pending" or not row.get("id"):
+            return
+        from app.modules.approvals import engine as _approvals
+        amt = _f(row.get("amount"))
+        store = (row.get("store_code") or "").strip() or None
+        who = row.get("employee_name") or row.get("created_by")
+        title = f"Store expense ${amt:.2f}"
+        if row.get("category_name"):
+            title += f" — {row['category_name']}"
+        if store:
+            title += f" at {store}"
+        _approvals.create_request(
+            org_id, type="closing_expense", source_table="closing_expense", source_id=row.get("id"),
+            title=title, summary=(row.get("description") or None),
+            payload={"amount": amt, "category_id": row.get("category_id"),
+                     "category_name": row.get("category_name"),
+                     "close_date": str(row.get("close_date") or "")},
+            requested_by=row.get("created_by"), requested_by_name=who,
+            store_code=store, priority="normal")
+    except Exception:
+        pass
+
+
 class DecideExpenseLineIn(LaxModel):
     status: Any = None
     decided_by: Any = None
@@ -6081,7 +6308,10 @@ def decide_expense_line(expense_id: str, payload: DecideExpenseLineIn, org_id: s
     |'rejected', decided_by?}. Extends the existing single-checkbox approve affordance (POST
     /closing/expense/approve, unchanged, still governs the legacy mig-109 expense_amount field) to the
     new categorized-line model. On an 'expense'-kind approval, best-effort pushes that category's
-    updated P&L total for the line's period immediately (never blocks the response on the push)."""
+    updated P&L total for the line's period immediately (never blocks the response on the push).
+
+    Also syncs the linked unified approval_request (engine type 'closing_expense') so the central
+    Approvals inbox reflects a decision made on this legacy board."""
     client = sb()
     if not _can_mgmt_review(_caller_perms(client, authorization)):
         raise HTTPException(403, "Approving expenses is management-restricted.")
@@ -6097,16 +6327,15 @@ def decide_expense_line(expense_id: str, payload: DecideExpenseLineIn, org_id: s
         raise HTTPException(404, "expense line not found")
     row = rows[0]
     decided_by = (payload.decided_by or _caller_email(client, authorization) or "manager")
-    upd = {"status": status, "approved_by": decided_by, "approved_at": _now(), "updated_at": _now()}
-    (client.schema("commcalc").table("closing_expense").update(upd)
-     .eq("org_id", org_id).eq("id", expense_id).execute())
-    pl = None
-    if status == "approved" and row.get("category_kind") == "expense" and row.get("category_id"):
-        period = str(row.get("close_date") or "")[:7]
-        try:
-            pl = _push_expense_category_pl(client, org_id, period, row["category_id"], row.get("category_name"))
-        except Exception as e:
-            pl = {"pushed": False, "note": str(e)}
+    pl = _apply_expense_line_decision(client, org_id, row, status, decided_by)
+    try:
+        from app.modules.approvals import engine as _approvals
+        _approvals.sync_source_decision(org_id, type="closing_expense", source_table="closing_expense",
+                                        source_id=expense_id,
+                                        decision=("approve" if status == "approved" else "deny"),
+                                        actor=decided_by)
+    except Exception:
+        pass
     return {"ok": True, "id": expense_id, "status": status, "pl_push": pl}
 
 

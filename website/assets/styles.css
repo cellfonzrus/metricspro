@@ -1,0 +1,347 @@
+/* MetricsPro — "Control Room" (design direction A).
+ *
+ * The subject is money that has to balance across five systems that disagree. So the site is built
+ * like the instrument panel you would keep open while settling a month, not like a brochure about
+ * one. Dark petrol ground, figures in a mono face with tabular numerals, and exactly two semantic
+ * colours: amber for anything that still needs a human, green for anything settled. Colour is
+ * never decorative here — if something is amber it is because it is unresolved.
+ *
+ * ONE STYLESHEET, NINE PAGES. The homepage and all seven legal documents share these classes, so
+ * every rule below has to work in both places. The legal pages deliberately switch to a light
+ * reading surface (see "Documents"): six thousand words of contract set in light-on-dark is a real
+ * readability problem, and the dark chrome above and below keeps them recognisably the same site.
+ *
+ * NOTE ON SPECIFICITY — this bit its predecessor hard. `.mpw a { color: inherit }` sits at (0,1,1)
+ * and beats a bare `.mpw-btn-primary` at (0,1,0), so an anchor styled as a button silently
+ * inherited its section's ink and rendered black on black. Every component rule here is therefore
+ * scoped under `.mpw`, lifting it to (0,2,0) and putting it above the link reset for good.
+ */
+
+:root{
+  --ground:#0e1720;        /* page ground — petrol, not black */
+  --ground-2:#0a121a;      /* header, footer, recessed bands */
+  --panel:#152230;         /* raised surface: rows, cards, screens */
+  --panel-2:#1b2b3b;       /* hover / emphasis on a panel */
+  --rule:#24384b;          /* hairlines */
+  --rule-soft:#1b2a39;
+  --ink:#e9eef3;           /* primary text */
+  --ink-2:#9fb2c4;         /* secondary text */
+  --ink-3:#8098ad;         /* labels, captions */
+  --sig:#f0a339;           /* AMBER — unresolved, needs a human */
+  --sig-ink:#12181f;       /* text on amber */
+  --ok:#4bb391;            /* GREEN — settled, matched, paid */
+  --paper:#f6f5f2;         /* document reading surface */
+  --paper-ink:#161a1e;
+  --paper-ink-2:#4d565f;
+  --paper-rule:#dcdad4;
+
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Archivo","Helvetica Neue",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+
+  --wrap:1140px;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+
+html{-webkit-text-size-adjust:100%}
+
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:var(--body);
+  font-size:16px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+
+.mpw{background:var(--ground); color:var(--ink)}
+.mpw a{color:inherit}
+.mpw :where(a,button,[tabindex]):focus-visible{outline:2px solid var(--sig); outline-offset:2px}
+.mpw img{max-width:100%; height:auto}
+.mpw-wrap{max-width:var(--wrap); margin:0 auto; padding:0 26px}
+
+/* ── Header ──────────────────────────────────────────────────────────────────────────────── */
+.mpw-header{
+  background:var(--ground-2);
+  border-bottom:1px solid var(--rule);
+  position:sticky; top:0; z-index:50;
+}
+.mpw-header-in{display:flex; align-items:center; gap:26px; min-height:58px}
+.mpw-logo{
+  font-family:var(--sans); font-weight:800; font-size:16px; letter-spacing:-.02em;
+  text-decoration:none; white-space:nowrap;
+}
+.mpw-logo b{color:var(--sig); font-weight:800}
+.mpw-header-nav{display:flex; align-items:center; gap:22px; margin-left:auto; flex-wrap:wrap}
+.mpw-header-nav a{
+  font-size:13.5px; color:var(--ink-2); text-decoration:none;
+}
+.mpw-header-nav a:hover{color:var(--ink)}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────────────────────── */
+.mpw .mpw-btn{
+  display:inline-block; font-family:var(--body); font-weight:600; font-size:14px;
+  line-height:1.2; padding:12px 20px; border-radius:2px; text-decoration:none;
+  border:1px solid transparent; cursor:pointer; transition:background .14s,border-color .14s,color .14s;
+}
+.mpw .mpw-btn-primary{background:var(--sig); color:var(--sig-ink); border-color:var(--sig)}
+.mpw .mpw-btn-primary:hover{background:#f7b357; border-color:#f7b357}
+.mpw .mpw-btn-ghost{background:transparent; color:var(--ink); border-color:var(--rule)}
+.mpw .mpw-btn-ghost:hover{border-color:var(--ink-3); background:var(--panel)}
+.mpw .mpw-btn-sm{font-size:13px; padding:9px 15px}
+
+/* ── Type ────────────────────────────────────────────────────────────────────────────────── */
+.mpw h1,.mpw h2,.mpw h3{font-family:var(--sans); letter-spacing:-.025em; text-wrap:balance; margin:0}
+.mpw h1{font-size:clamp(30px,4.4vw,50px); line-height:1.02; font-weight:800}
+.mpw h2{font-size:clamp(23px,2.7vw,32px); line-height:1.1; font-weight:700}
+.mpw h3{font-size:18px; line-height:1.25; font-weight:700}
+.mpw-label{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--sig); margin:0 0 16px; font-weight:500;
+}
+.mpw-lede{color:var(--ink-2); font-size:16.5px; line-height:1.62; max-width:64ch; margin:14px 0 0}
+
+.mpw-num{font-family:var(--mono); font-variant-numeric:tabular-nums}
+.mpw-t{font-family:var(--mono); font-size:13px; font-variant-numeric:tabular-nums}
+.mpw-ok{color:var(--ok)}
+.mpw-bad{color:var(--sig)}
+.mpw-tag{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-3);
+}
+
+/* ── Hero ────────────────────────────────────────────────────────────────────────────────── */
+.mpw-hero{padding:66px 0 0; border-bottom:1px solid var(--rule)}
+.mpw-hero-sub{color:var(--ink-2); font-size:17px; line-height:1.6; max-width:56ch; margin:20px 0 0}
+.mpw-hero-cta{display:flex; gap:11px; flex-wrap:wrap; margin:30px 0 0; align-items:center}
+
+/* The four-figure thesis: statement, computed, unexplained, recovered. This is the product stated
+   as arithmetic, so it gets the most instrument-like treatment on the page. */
+.mpw-strip{
+  display:grid; grid-template-columns:repeat(4,1fr);
+  gap:1px; background:var(--rule); border-top:1px solid var(--rule);
+  margin:52px 0 0;
+}
+.mpw-strip-cell{background:var(--ground-2); padding:22px 20px}
+.mpw-strip-cell .mpw-label{margin:0 0 10px; color:var(--ink-3)}
+.mpw-strip-val{
+  font-family:var(--mono); font-size:clamp(20px,2.5vw,27px); font-variant-numeric:tabular-nums;
+  line-height:1.05; letter-spacing:-.01em;
+}
+.mpw-strip-note{color:var(--ink-3); font-size:12.5px; margin-top:7px; line-height:1.45}
+.mpw-strip-cell[data-tone="flag"]{box-shadow:inset 3px 0 0 var(--sig)}
+.mpw-strip-cell[data-tone="flag"] .mpw-strip-val{color:var(--sig)}
+.mpw-strip-cell[data-tone="signal"]{box-shadow:inset 3px 0 0 var(--ok)}
+.mpw-strip-cell[data-tone="signal"] .mpw-strip-val{color:var(--ok)}
+.mpw-strip-caption{color:var(--ink-3); font-size:12.5px; padding:14px 0 26px; margin:0}
+
+/* ── Sections ────────────────────────────────────────────────────────────────────────────── */
+.mpw-section{padding:64px 0; border-bottom:1px solid var(--rule-soft)}
+.mpw-section-dark{background:var(--ground-2)}
+
+/* ── Steps ───────────────────────────────────────────────────────────────────────────────── */
+.mpw-steps{display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--rule); margin-top:34px}
+.mpw-step{background:var(--panel); padding:24px 22px}
+.mpw-step-n{
+  font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--sig); margin:0 0 12px;
+}
+.mpw-step h3{margin:0 0 9px}
+.mpw-step p{margin:0; color:var(--ink-2); font-size:14.5px; line-height:1.58}
+
+/* ── Demo screens ────────────────────────────────────────────────────────────────────────── */
+.mpw-demo-tabs{display:flex; gap:1px; background:var(--rule); margin:30px 0 0; flex-wrap:wrap}
+.mpw .mpw-demo-tab{
+  flex:1 1 auto; background:var(--panel); color:var(--ink-2); border:0;
+  font-family:var(--body); font-size:13.5px; font-weight:600; padding:13px 16px;
+  cursor:pointer; text-align:left; transition:background .14s,color .14s;
+}
+.mpw .mpw-demo-tab:hover{background:var(--panel-2); color:var(--ink)}
+.mpw .mpw-demo-tab[aria-selected="true"]{
+  background:var(--ground); color:var(--ink); box-shadow:inset 0 2px 0 var(--sig);
+}
+.mpw-screen{display:none; border:1px solid var(--rule); border-top:0; background:var(--ground)}
+.mpw-screen.is-on{display:block}
+.mpw-screen-bar{
+  display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+  padding:14px 18px; border-bottom:1px solid var(--rule); background:var(--ground-2);
+}
+.mpw-screen-bar h3{font-size:15px; font-weight:700}
+.mpw-screen-period{font-family:var(--mono); font-size:11.5px; color:var(--ink-3); margin-left:auto}
+.mpw-screen-body{padding:6px 18px 18px; overflow-x:auto}
+.mpw-screen-body table{width:100%; border-collapse:collapse; min-width:520px}
+.mpw-screen-body th{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--ink-3); font-weight:500; text-align:left;
+  padding:12px 12px 9px 0; border-bottom:1px solid var(--rule);
+}
+.mpw-screen-body td{
+  padding:11px 12px 11px 0; border-bottom:1px solid var(--rule-soft);
+  font-size:14px; vertical-align:top;
+}
+.mpw-screen-body th:last-child,.mpw-screen-body td:last-child{padding-right:0}
+.mpw-screen-body td.mpw-num,.mpw-screen-body th.mpw-num{text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums}
+.mpw-screen-body tr:last-child td{border-bottom:0}
+.mpw-screen-note{color:var(--ink-3); font-size:12.5px; padding:14px 18px; border-top:1px solid var(--rule); margin:0}
+/* The demo panels sit inside a dark section; keep their labels on the panel's own scale rather
+   than inheriting the section heading colour. (0,3,0) — deliberately above .mpw-label at (0,2,0). */
+.mpw .mpw-section-dark .mpw-screen .mpw-label{color:var(--ink-3)}
+
+/* ── Module grid ─────────────────────────────────────────────────────────────────────────── */
+.mpw-mods{display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--rule); margin-top:34px}
+.mpw-mod{background:var(--panel); padding:19px 18px}
+.mpw-mod-n{font-family:var(--sans); font-weight:700; font-size:14.5px; margin:0 0 6px; letter-spacing:-.01em}
+.mpw-mod p{margin:0; color:var(--ink-3); font-size:13px; line-height:1.5}
+
+/* ── Pricing ─────────────────────────────────────────────────────────────────────────────── */
+.mpw-plans{display:grid; gap:1px; background:var(--rule); margin-top:32px}
+.mpw-plans-1{grid-template-columns:1fr}
+.mpw-plans-2{grid-template-columns:repeat(2,1fr)}
+.mpw-plans-3{grid-template-columns:repeat(3,1fr)}
+.mpw-plans-4{grid-template-columns:repeat(4,1fr)}
+.mpw-plan{background:var(--panel); padding:26px 24px; display:flex; flex-direction:column; gap:13px}
+.mpw-plan-featured{background:var(--panel-2); box-shadow:inset 0 3px 0 var(--sig)}
+.mpw-plan-flag{
+  font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--sig); margin:0;
+}
+.mpw-plan-tagline{margin:0; color:var(--ink-2); font-size:14.5px; line-height:1.55}
+.mpw-plan-price{display:flex; align-items:baseline; gap:8px; flex-wrap:wrap}
+.mpw-plan-amount{font-family:var(--mono); font-size:32px; font-variant-numeric:tabular-nums; letter-spacing:-.02em}
+.mpw-plan-amount-quiet{font-family:var(--sans); font-size:20px; font-weight:700; color:var(--ink-2); letter-spacing:-.02em}
+.mpw-plan-unit{color:var(--ink-3); font-size:13px}
+.mpw-plan-features{margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px}
+.mpw-plan-features li{
+  position:relative; padding-left:18px; color:var(--ink-2); font-size:14px; line-height:1.5;
+}
+.mpw-plan-features li::before{
+  content:""; position:absolute; left:0; top:.62em; width:7px; height:1px; background:var(--sig);
+}
+.mpw-plan-note{margin:0; color:var(--ink-3); font-size:12.5px; line-height:1.5}
+.mpw-plan-cta{margin-top:auto; padding-top:4px}
+.mpw-plans-note{color:var(--ink-3); font-size:13px; margin:18px 0 0; line-height:1.55}
+.mpw-trial-pill{
+  display:inline-block; font-family:var(--mono); font-size:11px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--sig); border:1px solid var(--sig);
+  padding:5px 11px; border-radius:2px;
+}
+.mpw-trial-line{color:var(--ink-2); font-size:14.5px; margin:14px 0 0}
+
+/* ── Closing call to action ──────────────────────────────────────────────────────────────── */
+.mpw-cta{background:var(--ground-2); padding:58px 0; border-bottom:1px solid var(--rule)}
+.mpw-cta-row{display:flex; gap:11px; flex-wrap:wrap; margin-top:24px; align-items:center}
+
+/* ── Footer ──────────────────────────────────────────────────────────────────────────────── */
+.mpw-footer{background:var(--ground-2); padding:34px 0 44px}
+.mpw-footer-in{display:flex; gap:22px; flex-wrap:wrap; align-items:baseline}
+.mpw-footer-links{display:flex; gap:18px; flex-wrap:wrap; margin-left:auto}
+.mpw-footer a{color:var(--ink-3); font-size:13px; text-decoration:none}
+.mpw-footer a:hover{color:var(--ink)}
+.mpw-footer p{margin:0; color:var(--ink-3); font-size:12.5px; line-height:1.55}
+
+/* ── Documents ───────────────────────────────────────────────────────────────────────────── */
+/* Seven legal pages share this. They switch to a light reading surface ON PURPOSE: a six-thousand
+   word contract set light-on-dark is genuinely punishing to read, and these are documents someone
+   may have to work through carefully. The dark header and footer stay, so a reader can see it is
+   the same site — the paper is a reading surface, not a different brand. */
+/* The reading column is created by PADDING on the full-bleed paper, not by auto margins on each
+   child. Auto margins lose: `.mpw-doc h1 { margin:0 0 10px }` is a shorthand, so it resets
+   margin-left/right to 0 and the heading jumps to the page edge while the boxes below — which set
+   their own `margin:0 auto` — stay centred. Padding cannot be undone by a child's margin
+   shorthand, so every element lines up on the same left edge no matter what margins it sets. */
+.mpw-doc{
+  background:var(--paper); color:var(--paper-ink);
+  padding:52px max(26px, calc((100% - 70ch) / 2)) 68px;
+}
+.mpw-doc h1{
+  font-family:var(--sans); font-size:clamp(27px,3.4vw,38px); font-weight:800;
+  letter-spacing:-.028em; line-height:1.08; margin:0 0 10px; color:var(--paper-ink);
+}
+.mpw-doc h2{
+  font-family:var(--sans); font-size:19px; font-weight:700; letter-spacing:-.015em;
+  margin:38px 0 12px; color:var(--paper-ink); scroll-margin-top:74px;
+}
+.mpw-doc h3{font-family:var(--sans); font-size:16px; font-weight:700; margin:26px 0 9px}
+.mpw-doc p,.mpw-doc li{font-size:15.5px; line-height:1.68; color:var(--paper-ink)}
+.mpw-doc p{margin:0 0 14px}
+.mpw-doc ul,.mpw-doc ol{margin:0 0 16px; padding-left:22px; display:flex; flex-direction:column; gap:7px}
+.mpw-doc a{color:#0f4b7a; text-decoration:underline; text-underline-offset:2px}
+.mpw-doc strong{font-weight:600}
+.mpw-doc-meta{
+  font-family:var(--mono); font-size:12px; color:var(--paper-ink-2);
+  margin:0 0 26px; padding-bottom:20px; border-bottom:1px solid var(--paper-rule);
+}
+.mpw-doc-note{
+  background:#efece4; border-left:3px solid var(--sig); padding:16px 18px;
+  margin:0 0 30px; font-size:14.5px; line-height:1.6; color:var(--paper-ink-2);
+}
+.mpw-doc-note strong{color:var(--paper-ink)}
+.mpw-doc-toc{
+  border:1px solid var(--paper-rule); background:#f1efe9; padding:18px 20px;
+  margin:0 0 34px; font-size:14px;
+}
+.mpw-doc-toc ol,.mpw-doc-toc ul{margin:0; padding-left:20px; gap:5px}
+.mpw-doc-toc a{color:var(--paper-ink); text-decoration:none}
+.mpw-doc-toc a:hover{text-decoration:underline}
+.mpw-doc-scroll{overflow-x:auto; margin:0 0 18px}
+.mpw-doc-scroll table{border-collapse:collapse; width:100%; min-width:460px}
+.mpw-doc-scroll th,.mpw-doc-scroll td{
+  border:1px solid var(--paper-rule); padding:9px 11px; font-size:14px; text-align:left;
+  vertical-align:top;
+}
+.mpw-doc-scroll th{background:#eceae3; font-weight:600}
+/* Capability grid on the homepage. Note the near-miss: the legal pages' all-caps clause is
+   .mpw-caps-clause, a DIFFERENT class. Styling this one as uppercase turned the entire
+   "One spine under all of it" section into dim capitals — visible only on a screenshot. */
+.mpw-caps{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:1px;
+  background:var(--rule); margin-top:34px;
+}
+.mpw-cap{background:var(--panel); padding:22px 20px}
+.mpw-cap h3{margin:0 0 8px; font-size:15.5px}
+.mpw-cap p{margin:0; color:var(--ink-2); font-size:13.5px; line-height:1.56}
+.mpw-caps-clause{
+  border:1px solid var(--paper-rule); background:#f1efe9; padding:15px 17px;
+  margin:0 0 18px; text-transform:uppercase; font-size:13px; line-height:1.62;
+  letter-spacing:.01em; color:var(--paper-ink);
+}
+.mpw-doc-nav{
+  display:flex; gap:18px; flex-wrap:wrap; margin:44px 0 0; padding-top:22px;
+  border-top:1px solid var(--paper-rule);
+}
+.mpw-doc-nav a{color:var(--paper-ink-2); font-size:13.5px; text-decoration:none}
+.mpw-doc-nav a:hover{color:var(--paper-ink); text-decoration:underline}
+
+/* Unfilled owner placeholder. Loud on purpose — an unfinished legal document must not slip out
+   looking finished. check-before-launch.sh fails while any of these remain. */
+.mpw-todo{
+  background:#c0341b; color:#fff; padding:1px 7px; border-radius:2px;
+  font-family:var(--mono); font-size:12.5px; font-weight:700;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────────────────────── */
+@media (max-width:960px){
+  .mpw-mods{grid-template-columns:repeat(2,1fr)}
+  .mpw-caps{grid-template-columns:repeat(2,1fr)}
+  .mpw-plans-3,.mpw-plans-4{grid-template-columns:repeat(2,1fr)}
+}
+@media (max-width:760px){
+  .mpw-strip{grid-template-columns:repeat(2,1fr)}
+  .mpw-steps{grid-template-columns:1fr}
+  .mpw-hero{padding-top:46px}
+  .mpw-section{padding:46px 0}
+  .mpw-header-nav{gap:15px}
+  .mpw-header-nav a:not(.mpw-btn){display:none}
+  .mpw-footer-links{margin-left:0}
+}
+@media (max-width:520px){
+  .mpw-strip{grid-template-columns:1fr}
+  .mpw-mods,.mpw-caps,.mpw-plans-2,.mpw-plans-3,.mpw-plans-4{grid-template-columns:1fr}
+  .mpw .mpw-demo-tab{flex:1 1 100%}
+}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important; transition-duration:.01ms !important}
+}

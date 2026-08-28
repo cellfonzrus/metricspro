@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import { MarketStorePicker, type StoreOpt } from '../_lib/MarketStorePicker'
 
@@ -39,7 +40,7 @@ export default function ClosingReconPage() {
   const [pStores, setPStores] = useState<any[]>([])
 
   useEffect(() => { if (user?.market && permissions?.scope === 'market') setMarket(user.market) }, [user, permissions])
-  useEffect(() => { api('/api/v1/closing/stores').then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then((s: any) => setPStores(Array.isArray(s) ? s : (s?.stores || []))).catch(() => {}) }, [])
 
   const load = useCallback(() => {
     if (!period) return

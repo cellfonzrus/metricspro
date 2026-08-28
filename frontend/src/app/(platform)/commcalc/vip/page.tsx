@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { api, apiUpload, fmt, ORG_ID } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportButtons, ExportPayload, ExportColumn } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 
@@ -225,7 +226,7 @@ export default function VipInvoicesPage() {
   const [invQ, setInvQ] = useState('')                            // free-text invoice search
 
   useEffect(() => {
-    api(`/api/v1/commcalc/vip/filter-options?org_id=${ORG_ID}`)
+    apiCached(`/api/v1/commcalc/vip/filter-options?org_id=${ORG_ID}`, LOOKUP)
       .then((d: any) => { setPeriods(d.periods || []); setLocations(d.locations || []); setStatuses(d.statuses || []) })
       .catch(console.error)
   }, [])
@@ -255,7 +256,7 @@ export default function VipInvoicesPage() {
       // apiUpload (not a bare fetch) so the bearer token rides along with the multipart body
       const data = await apiUpload(`/api/v1/commcalc/vip/upload?org_id=${ORG_ID}`, form)
       setImportMsg(`✅ ${data.invoices.toLocaleString()} invoices · ${data.lines.toLocaleString()} lines · ${data.devices.toLocaleString()} devices`)
-      api(`/api/v1/commcalc/vip/filter-options?org_id=${ORG_ID}`)
+      apiCached(`/api/v1/commcalc/vip/filter-options?org_id=${ORG_ID}`, LOOKUP)
         .then((d: any) => { setPeriods(d.periods || []); setLocations(d.locations || []); setStatuses(d.statuses || []) })
       load()
     } catch (e: any) {

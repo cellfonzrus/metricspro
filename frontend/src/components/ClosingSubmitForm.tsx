@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
 // Rep-facing in-app closing form — one row per rep per day. Posts to /closing/row (source='manual').
@@ -52,6 +53,28 @@ const COUNTS: { key: 'upgrade_count' | 'new_line_count' | 'postpaid_count'; labe
   { key: 'postpaid_count', label: 'Postpaid #' },
 ]
 
+// Draft persistence (owner-reported 2026-08-19, "Cellfonz r us": taking the envelope photo bounced the
+// rep back to the main page and lost the closing). On mobile, opening the camera can let the OS reclaim
+// the PWA's memory, so on return the app RELOADS to its start URL and the in-progress closing is gone —
+// it looks like "the photo wasn't accepted". We snapshot the in-progress entry to localStorage so a
+// reload can't lose it. On a shared kiosk we do NOT silently repopulate (that would bleed one rep's
+// numbers into the next); instead we offer a Resume/Discard banner, and expire the draft after 30 min.
+const DRAFT_KEY = 'mp_closing_draft_v1'
+const DRAFT_TTL_MS = 30 * 60 * 1000
+type Draft = { f: State; tv: Record<string, string>; cv: Record<string, string>; expLines: ExpLine[]
+  envPreview: string; savedAt: number }
+function readDraft(): Draft | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const raw = window.localStorage.getItem(DRAFT_KEY)
+    if (!raw) return null
+    const d = JSON.parse(raw) as Draft
+    if (!d || typeof d.savedAt !== 'number' || Date.now() - d.savedAt > DRAFT_TTL_MS) return null
+    return d
+  } catch { return null }
+}
+function clearDraft() { try { window.localStorage.removeItem(DRAFT_KEY) } catch { /* private mode */ } }
+
 export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitted }:
   { defaultEmployeeName?: string; onSubmitted?: () => void }) {
   const [f, setF] = useState<State>(blank())
@@ -82,6 +105,33 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [expLines, setExpLines] = useState<ExpLine[]>([])
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
+
+  // ── Draft persistence (see the note above DRAFT_KEY) ──────────────────────────────────────────
+  const [resumeDraft, setResumeDraft] = useState<Draft | null>(null)
+  // On mount, if a fresh draft with real content exists, OFFER to resume it (never auto-apply).
+  useEffect(() => {
+    const d = readDraft()
+    const hasContent = d && (d.envPreview || d.f?.envelope_picture
+      || MONEY_KEYS.some(k => (d.f as any)?.[k]) || Object.values(d.tv || {}).some(Boolean)
+      || (d.expLines || []).length > 0)
+    if (hasContent) setResumeDraft(d)
+  }, [])
+  // Snapshot the in-progress entry whenever it changes, so a camera-induced reload can restore it.
+  useEffect(() => {
+    const hasContent = envPreview || f.envelope_picture || MONEY_KEYS.some(k => (f as any)[k])
+      || Object.values(tv).some(Boolean) || expLines.length > 0
+    if (!hasContent) return
+    try {
+      window.localStorage.setItem(DRAFT_KEY, JSON.stringify(
+        { f, tv, cv, expLines, envPreview, savedAt: Date.now() }))
+    } catch { /* quota / private mode — best-effort */ }
+  }, [f, tv, cv, expLines, envPreview])
+  function applyResume() {
+    const d = resumeDraft; if (!d) return
+    setF(d.f || blank()); setTv(d.tv || {}); setCv(d.cv || {}); setExpLines(d.expLines || [])
+    setEnvPreview(d.envPreview || ''); setResumeDraft(null)
+  }
+  function discardResume() { clearDraft(); setResumeDraft(null) }
 
   const enteredCash = parseFloat(tdefs ? (tv['cash'] || '') : f.t_cash) || 0
   const ocrNum = parseFloat(ocrCash) || 0
@@ -150,7 +200,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     } catch { /* OCR best-effort */ } finally { setOcrBusy(false) }
   }
 
-  useEffect(() => { api('/api/v1/closing/stores').then(s => setStores(s || [])).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/closing/stores', LOOKUP).then(s => setStores(s || [])).catch(() => {}) }, [])
   // Configured tenders (mig 111): render the tenant's own tender fields; null → the built-in 7 (static).
   useEffect(() => { api('/api/v1/closing/tender-config').then((d: any) => setTdefs((d?.defs && d.defs.length) ? d.defs : null)).catch(() => setTdefs(null)) }, [])
   // Configured count fields (mig 501): render the tenant's own activation-count fields; null → the
@@ -159,7 +209,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   // Employee roster for the "Employee" picker (RULE THREE §3b — pick, don't type): company-wide,
   // same fetch/shape cash-config already uses for the store-closer picker. id === label = the
   // employee's name (daily_closing.employee_name stays a NAME STRING this wave — see handoff).
-  useEffect(() => { api('/api/v1/storeops/employees?all_company=true').then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
+  useEffect(() => { apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
   // Expense categories (mig 506, EEP) — lazy-seeded 5 presets on first call.
   useEffect(() => { api('/api/v1/closing/expense-categories').then((d: any) => setCats(d?.categories || [])).catch(() => setCats([])) }, [])
   // Envelope config (mig 507/510) — org default merged with this store's override, re-fetched whenever
@@ -201,7 +251,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
     // Tenant-configurable hard gate (mig 510, OFF by default — see /closing/envelope-config): require
     // an envelope photo whenever cash > 0 is declared. Mirrors the server-side gate in create_row so
     // the rep gets an immediate, specific message instead of a generic 400.
-    if (envCfg.require_photo_if_cash && enteredCash > 0 && !f.envelope_picture) {
+    // The photo satisfies this gate whether it pre-uploaded (f.envelope_picture is a path) OR is still
+    // held locally (envPreview) — in the latter case it rides the submit and is uploaded server-side.
+    if (envCfg.require_photo_if_cash && enteredCash > 0 && !f.envelope_picture && !envPreview) {
       setMsg('❌ An envelope photo is required because cash was declared. Attach one before submitting.')
       return
     }
@@ -254,7 +306,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           employee_id: l.employee_id || undefined, employee_name: l.employee_name || undefined,
         })),
         ...countFields,
-        envelope_picture: f.envelope_picture, remarks: f.remarks,
+        // Prefer the pre-uploaded path; fall back to the locally-held image (data URL) so the server
+        // uploads it at submit — the photo no longer depends on the fragile pre-upload completing.
+        envelope_picture: f.envelope_picture || envPreview, remarks: f.remarks,
         ocr_cash: ocrCash || undefined,
       }) })
       // Not accepted → recount (direction only, never the amount). Keep the form so they can re-enter.
@@ -275,6 +329,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         upgrade_count: '', new_line_count: '', postpaid_count: '', envelope_picture: '', remarks: '' }))
       setTv({}); setCv({}); setExpLines([])
       setEnvPreview(''); setOcrCash(''); setOcrAmounts([]); setPhotoError('')
+      clearDraft()   // submitted successfully → the saved draft is done
       loadRecent()
       onSubmitted?.()
     } catch (e: any) { setMsg('🚫 ' + (e?.message || e)) }
@@ -308,6 +363,16 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
   return (
     <>
+      {resumeDraft && (
+        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: '#fffbeb', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 20 }}>💾</span>
+          <div style={{ flex: 1, minWidth: 200, fontSize: 13, color: '#92400e' }}>
+            <b>You have an unfinished closing from a few minutes ago.</b> The app may have restarted while opening the camera. Resume where you left off, or start fresh.
+          </div>
+          <button className="btn btn-primary" style={{ fontSize: 13 }} onClick={applyResume}>Resume it</button>
+          <button className="btn btn-secondary" style={{ fontSize: 13 }} onClick={discardResume}>Start fresh</button>
+        </div>
+      )}
       <div className="card" style={{ padding: 18 }}>
         <Row>
           <Field label="Date"><input type="date" style={inp} value={f.close_date} onChange={e => set({ close_date: e.target.value })} /></Field>
@@ -421,8 +486,14 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <Field label={envCfg.require_photo_if_cash && enteredCash > 0 ? 'Envelope photo (required — cash declared)' : 'Envelope photo'} wide>
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
               <label className="btn btn-secondary" style={{ fontSize: 13, cursor: 'pointer' }}>
-                📷 Take / choose photo
-                <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) onPickPhoto(file) }} />
+                📷 Take photo
+                <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) onPickPhoto(file); e.currentTarget.value = '' }} />
+              </label>
+              {/* Upload an existing photo — no `capture`, so mobile opens the gallery/file picker
+                  instead of forcing the camera (owner directive 2026-08-19). */}
+              <label className="btn btn-secondary" style={{ fontSize: 13, cursor: 'pointer' }}>
+                🖼️ Upload from files
+                <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const file = e.target.files?.[0]; if (file) onPickPhoto(file); e.currentTarget.value = '' }} />
               </label>
               {envPreview && (
                 <div style={{ position: 'relative', display: 'inline-block' }}>

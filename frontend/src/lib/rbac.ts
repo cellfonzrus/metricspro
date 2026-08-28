@@ -121,11 +121,12 @@ export const REPORT_AREAS: { key: string; label: string }[] = [
 const REPORT_EXACT: Record<string, string> = { '/commcalc': 'commissions', '/reports': '*' }
 // Report page TREES (prefix → area), boundary-matched; longest prefix wins.
 const REPORT_TREES: [string, string][] = [
-  ['/commcalc/exec', 'commissions'], ['/commcalc/reports', 'commissions'], ['/commcalc/gp', 'commissions'],
+  ['/commcalc/exec', 'commissions'], ['/commcalc/activations', 'commissions'], ['/commcalc/schematic', 'commissions'], ['/commcalc/onboarding', 'commissions'], ['/commcalc/reports', 'commissions'], ['/commcalc/gp', 'commissions'],
   ['/commcalc/coaching', 'commissions'], ['/commcalc/sales-analyzer', 'commissions'],
   ['/commcalc/sales-comparison', 'commissions'],
   ['/commcalc/comp-trend', 'commissions'], ['/commcalc/flags', 'commissions'], ['/commcalc/chargebacks', 'commissions'],
   ['/commcalc/discrepancy', 'commissions'], ['/commcalc/sales-recon', 'commissions'],
+  ['/commcalc/epay-fee-recon', 'commissions'],
   ['/commcalc/asset', 'asset'], ['/commcalc/vip', 'vip'], ['/accounts', 'accounts'],
   ['/storeops/reports', 'storeops'], ['/storeops/reviews', 'storeops'],
   ['/storeops/payroll', 'storeops'], ['/storeops/payroll-tax', 'storeops'],
@@ -240,6 +241,12 @@ export const NAV: NavGroup[] = [
     { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'] },
     { href: '/pos/activations', label: 'Activations', icon: '📱', module: 'pos', scopes: ['all', 'market', 'store'] },
+    // Customer Special Order (owner directive 2026-08-19). The store-facing flow is available to every
+    // POS scope (a cashier rings one). The HQ management surface (catalog vendor linkage + connectors)
+    // is 'all'/'market' in the nav AND gated server-side by pos_special_order_admin — that permission,
+    // which store roles don't hold, is what keeps the back-end vendor hidden from stores.
+    { href: '/pos/special-orders', label: 'Special Orders', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/special-orders/manage', label: 'Special Order Setup', icon: '🗂️', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
     { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
@@ -275,6 +282,31 @@ export const NAV: NavGroup[] = [
     { href: '/referral/approvals', label: 'Approvals', icon: '✅', module: 'referral', scopes: ['all', 'market'] },
     { href: '/referral/settings', label: 'Referral Settings', icon: '⚙️', module: 'referral', scopes: ['all'] },
   ]},
+  // Vision (mig 900, owner directive 2026-08-19) — live Google Nest camera feeds, customer in/out
+  // counting + floor heat map, and voice-transcript coaching. Placed after Referral: it is the last
+  // top-of-funnel surface and the only one that is OFF for every tenant until an administrator turns
+  // it on, so it sits below the modules a store uses every day.
+  // 'Coaching' carries a manager scope on purpose — it names individual employees. An employee
+  // reaches their OWN numbers through the server-side /vision/behavior/mine route, which needs no
+  // manager role, so narrowing the nav here does not hide anyone's own data from them.
+  { group: 'Vision', module: 'vision', items: [
+    // The setup wizard leads the group deliberately: a tenant whose cameras are not connected yet
+    // has nothing to look at on any other page here, and connecting them spans three Google
+    // consoles. Same 'all' scope as Vision Settings — it writes the company's Google credential.
+    { href: '/vision/onboarding', label: 'Camera Setup', icon: '🎥', module: 'vision', scopes: ['all'] },
+    { href: '/vision', label: 'Live Cameras', icon: '📹', module: 'vision', scopes: ['all', 'market', 'store'] },
+    { href: '/vision/heatmap', label: 'Traffic & Heat Map', icon: '🔥', module: 'vision', scopes: ['all', 'market', 'store'] },
+    // Busy Hours reads Google's own person events (mig 907) — no analyzer, no video, every camera.
+    // Same scope tiers as Live Cameras / Heat Map: it is store-level activity, names nobody, and a
+    // store manager staffing their own floor is exactly who it is for.
+    { href: '/vision/busy-hours', label: 'Busy Hours', icon: '🕐', module: 'vision', scopes: ['all', 'market', 'store'] },
+    // Floor Activity (mig 908). Same manager scope as Coaching and for the same reason: when it is
+    // about anybody at all it names them. An employee reaches their OWN rows through the
+    // server-side /vision/activity/mine route, which needs no manager role.
+    { href: '/vision/activity', label: 'Floor Activity', icon: '🧍', module: 'vision', scopes: ['all', 'market'] },
+    { href: '/vision/behavior', label: 'Coaching', icon: '🎧', module: 'vision', scopes: ['all', 'market'] },
+    { href: '/vision/settings', label: 'Vision Settings', icon: '⚙️', module: 'vision', scopes: ['all'] },
+  ]},
   { group: 'Incentives', module: 'commissions', items: [
       { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
     { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
@@ -283,6 +315,9 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/custom-report', label: 'Custom Report', icon: '🧩', module: 'commissions' },
     { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/activations', label: 'Activations', icon: '📲', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/schematic', label: 'System Schematic', icon: '🗺️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/onboarding', label: 'Setup Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/reports', label: 'Rep Incentive Report', icon: '📋', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
     { href: '/commcalc/device-history', label: 'Device History', icon: '📱', module: 'commissions' },
@@ -291,7 +326,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/productivity-insights', label: 'Productivity Insights', icon: '💡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/sales-analyzer', label: 'Sales Analyzer', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
+    { href: '/commcalc/sales-analyzer', label: 'Retention Analysis', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/whatif', label: 'What‑If Analysis', icon: '🔮', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/comp-trend', label: 'Total Compensation', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/commission-ledger', label: 'Commission Ledger', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
@@ -318,7 +353,9 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions' },
     { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/epay-fee-recon', label: 'ePay Fee Recon', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/imei-recon', label: 'IMEI Reconciliation', icon: '📲', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/carrier-recon', label: 'Carrier Reconciliation', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
     // Agency (Master/Sub-Agent) console — config + billing, admin/owner scope only (NEEDS CORE for
     // agency-phase1). Intentionally NOT in REPORT_DIRECTORY: it is a config+invoicing surface, not a report.
     { href: '/commcalc/agency', label: 'Agency', icon: '🏢', module: 'commissions', scopes: ['all'] },
@@ -329,6 +366,11 @@ export const NAV: NavGroup[] = [
   // Boost Rates is carrier-gated to Boost tenants (NAV_CARRIERS) so a Total-only tenant never sees the
   // hardcoded Boost tiers. Regroup is a ZERO-RBAC-CHANGE move — every item keeps its module + scopes.
   { group: 'Incentive Payout Plans', module: 'commissions', items: [
+    // FRONT DOOR (owner directive 2026-08-26): one guided place to set up the ENTIRE commission structure
+    // in the UI — pick/create the plan, set activation + accessory payouts, choose the per-plan Activation
+    // source, confirm accessory classification, assign reps, see the estimate. Composes/deep-links the
+    // existing plan editor, accessory settings and coverage wizard — additive, nothing else changes.
+    { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', icon: '🧭', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/commission-plans', label: 'Incentive Plans', icon: '🧮', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/management-incentive', label: 'Management Incentives', icon: '🏆', module: 'commissions', scopes: ['all'] },
@@ -400,6 +442,18 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'], cap: 'asset_lending' },
     { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
   ]},
+  // Unified Approvals inbox (owner directive 2026-08-19) — cross-cutting, so its own group. Every
+  // module's approval/intimation request surfaces here; approvers are managers (scope all/market/store).
+  // Module 'storeops' gates it to workforce-entitled tenants (the pilot type is time-clock permissions).
+  { group: 'Approvals', module: 'storeops', items: [
+    { href: '/approvals', label: 'Approvals', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'] },
+  ]},
+  // Internal Chat (owner directive 2026-08-19) — everyone in the org can message; no extra nav scope
+  // (the real gate is chat membership, enforced server-side). Module 'storeops' gates it to the
+  // workforce entitlement so it shows wherever the people directory does.
+  { group: 'Chat', module: 'storeops', items: [
+    { href: '/chat', label: 'Chat', icon: '💬', module: 'storeops', scopes: ['all', 'market', 'store', 'self'] },
+  ]},
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
@@ -468,6 +522,10 @@ export const NAV: NavGroup[] = [
     { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'] },
   ]},
   { group: 'Integrations & Imports', module: 'commissions', items: [
+    // Front door: ONE page listing every connection/import surface with a carrier-neutral purpose, a live
+    // status probe, and a 2-step wizard (owner 2026-08-27). The individual pages below stay reachable — this
+    // hub deep-links to each — but this is where setup should start.
+    { href: '/commcalc/integrations', label: 'Integrations', icon: '🧩', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/connectors', label: 'Connectors', icon: '🔌', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/onboarding', label: 'Onboarding Wizard', icon: '🚀', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/implementation', label: 'Implementation Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
@@ -521,6 +579,13 @@ export const NAV: NavGroup[] = [
     { href: '/admin/tenants', label: 'Companies (Tenants)', icon: '🏢', module: 'admin' },
     { href: '/admin/tenant-settings', label: 'Pay Period & Work-Week', icon: '📅', module: 'admin' },
     { href: '/admin/billing', label: 'Billing (Tenants)', icon: '💳', module: 'admin' },
+    // Pricing & Free Trial (mig 908) — where the PUBLIC price list and the trial length are set.
+    // module 'admin' with NO `scopes`, byte-identical in shape to its /admin/billing sibling above:
+    // an existing admin role already carries modules.admin, so this line adds no new permission
+    // surface and needs no SEED_VERSION bump. The page itself is super-admin-only (it renders an
+    // explainer for anyone else) and every endpoint behind it gates independently — the one
+    // exception being the anonymous read-only feed the marketing site uses.
+    { href: '/admin/pricing', label: 'Pricing & Free Trial', icon: '🏷️', module: 'admin' },
     { href: '/admin/roles', label: 'Roles & Access', icon: '🔐', module: 'admin' },
     { href: '/admin/security', label: 'Security Settings', icon: '🛡️', module: 'admin' },
     { href: '/admin/access-log', label: 'Access Log', icon: '🧭', module: 'admin' },
@@ -611,12 +676,13 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/sales-analyzer', 'sales'], ['/commcalc/sales-recon', 'sales'],
   ['/crm/reports', 'sales'],
   // Commissions & Pay
-  ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'],
+  ['/commcalc', 'comm'], ['/commcalc/exec', 'comm'], ['/commcalc/exec/mtd', 'comm'], ['/commcalc/activations', 'comm'], ['/commcalc/schematic', 'comm'], ['/commcalc/onboarding', 'comm'],
   ['/commcalc/reports', 'comm'], ['/commcalc/comp-trend', 'comm'], ['/commcalc/commission-ledger', 'comm'],
   ['/commcalc/ma-commission', 'comm'], ['/commcalc/ma-overview-recon', 'comm'], ['/commcalc/financing', 'comm'],
   ['/commcalc/commission-legs', 'comm'],
   ['/commcalc/device-history', 'comm'], ['/commcalc/whatif', 'comm'],
   ['/commcalc/discrepancy', 'comm'], ['/commcalc/recovery', 'comm'], ['/commcalc/flags', 'comm'],
+  ['/commcalc/epay-fee-recon', 'comm'],
   ['/commcalc/chargebacks', 'comm'], ['/commcalc/accessory-flags', 'comm'],
   ['/commcalc/accessory-cost-audit', 'comm'], ['/commcalc/accessory-definition', 'comm'],
   ['/commcalc/expected-commission', 'comm'], ['/commcalc/daily-commission', 'comm'],
@@ -842,6 +908,10 @@ export const NAV_CARRIERS: Record<string, string[]> = {
   '/commcalc/asset/dashboard': ['boost'], '/commcalc/asset/aging': ['boost'],
   '/commcalc/asset/missing-phones': ['boost'], '/commcalc/asset/aging-rebate': ['boost'],
   '/commcalc/asset/on-inventory': ['boost'], '/commcalc/asset/charges/rma': ['boost'],
+  // ePay (Boost processor) reconciliation reports — their body copy names the "Boost portal" and a
+  // "Boost" column, and they read Boost/ePay data that is empty for a non-Boost tenant. Gate to boost so
+  // a Total-only tenant never sees Boost language here (admin can re-enable per tenant at /admin/labels).
+  '/commcalc/epay-fee-recon': ['boost'], '/commcalc/carrier-recon': ['boost'],
   '/commcalc/kpi': ['boost'], '/commcalc/coaching': ['boost'],
   // MA / VidaPay (T-CETRA) pages — the mirror gate of Boost's ePay pages. Total-processor only.
   // Marketplace Purchases reads commcalc.raw_ma_marketplace_orders (VidaPay MA orders), so it is
@@ -866,6 +936,51 @@ export function carrierOK(href: string, tenantCarriers: CarrierRef[] | undefined
   if (!tenantCarriers || tenantCarriers.length === 0) return true
   const have = tenantCarriers.map(c => (c.code || c.name || '').toLowerCase()).filter(Boolean)
   return need.some(k => have.some(t => t.includes(k) || k.includes(t)))
+}
+
+// ── Active-carrier lens (carrier-scoping compliance rewrite) ──────────────────────────────────────
+// The house org legitimately holds BOTH Boost and Total (Total Wireless is a carrier IN the house org),
+// so carrierOK — which only hides a carrier a tenant LACKS — cannot keep the two apart on screen. The
+// fix is an ACTIVE-CARRIER lens: one carrier is "in view" at a time, and every carrier-scoped surface
+// shows only that carrier's clause/figure/vendor. A single-carrier tenant's active carrier is fixed to
+// its only carrier, so these helpers reduce to the old behaviour for them.
+
+// Normalized lowercase carrier CODE for a CarrierRef. Prefers an explicit code, else derives a
+// canonical token from the name so 'Boost Mobile' → 'boost', 'Total Wireless' → 'total'. This is the
+// value carried in activeCarrier and matched against NAV_CARRIERS.
+export function carrierCode(c: CarrierRef | undefined): string {
+  if (!c) return ''
+  const raw = (c.code || c.name || '').toLowerCase().trim()
+  if (!raw) return ''
+  if (/boost/.test(raw)) return 'boost'
+  if (/total|vidapay/.test(raw)) return 'total'
+  if (/cricket/.test(raw)) return 'cricket'
+  return raw.replace(/\s+/g, '-')
+}
+
+// The DEFAULT active carrier for a tenant: the is_default carrier's code, else the sole carrier's
+// code, else 'boost'. Pure — the persisted per-(user,org) choice overrides this at the call site.
+export function defaultActiveCarrier(carriers: CarrierRef[] | undefined): string {
+  const cs = carriers || []
+  const def = cs.find(c => c.is_default)
+  if (def) { const k = carrierCode(def); if (k) return k }
+  if (cs.length === 1) { const k = carrierCode(cs[0]); if (k) return k }
+  return 'boost'
+}
+
+// Active-aware nav carrier gate — the sidebar uses this INSTEAD of carrierOK. Admin per-item override
+// still wins (caps['carrier:<href>']); else a carrier-scoped item shows only when the ACTIVE carrier
+// matches its required carrier(s). Unlisted hrefs are generic (all carriers). For a single-carrier
+// tenant (active = its only carrier) this returns exactly what carrierOK returned.
+export function carrierOKActive(href: string, activeCarrier: string | undefined, caps: Record<string, boolean | null>): boolean {
+  const ov = caps['carrier:' + href]
+  if (ov === true) return true
+  if (ov === false) return false
+  const need = NAV_CARRIERS[href]
+  if (!need || need.length === 0) return true
+  const a = (activeCarrier || '').toLowerCase().trim()
+  if (!a) return true
+  return need.some(k => a.includes(k) || k.includes(a))
 }
 
 // Pages restricted to management (company-wide leadership by default; DMs excluded), but still
@@ -957,7 +1072,7 @@ function pageOverrideForPath(perms: Permissions, path: string): boolean | undefi
 }
 
 // Pages a self-scoped (rep) user may always reach, on top of their home.
-const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk']
+const SELF_ALLOWED = ['/commcalc/targets/my', '/commcalc/kpi', '/account/password', '/reports', '/helpdesk', '/chat']
 
 export function canAccessPath(perms: Permissions, path: string): boolean {
   if (path === '/' || path.startsWith('/account/password')) return true
@@ -974,7 +1089,18 @@ export function canAccessPath(perms: Permissions, path: string): boolean {
     // an explicit `false` is deliberately NOT honored here, so this can never remove access a rep has
     // today (that half stays exactly as shipped).
     if (perms.pages?.[path] === true) return true
-    return SELF_ALLOWED.some(p => path.startsWith(p)) || path.startsWith(home)
+    if (SELF_ALLOWED.some(p => path.startsWith(p)) || path.startsWith(home)) return true
+    // ALSO reach any nav item the sidebar actually shows this rep. canSeeItem already hides items
+    // whose scope tier excludes 'self' (e.g. the manager Daily Targets), so this only opens the
+    // module-gated, no-scope-tier items a rep legitimately sees — Time Off, Employee Dashboard,
+    // Training, etc. Without it those render in the sidebar and then dead-end back home (the "the
+    // tab is there but clicking it does nothing" class — TKT-1009 'week off', TKT-1012 'none of the
+    // options work'). WIDENING ONLY: every branch above already returned, so this can never REMOVE
+    // a path a rep can reach today — it only adds the ones the sidebar promised.
+    for (const g of NAV) for (const it of g.items) {
+      if ((path === it.href || path.startsWith(it.href + '/')) && canSeeItem(perms, it)) return true
+    }
+    return false
   }
   // For settings/manager-only sub-pages, honor the matching nav item's scope restriction — unless an
   // EXACT per-function grant lifts it, mirroring canSeeItem's precedence exactly. Without this

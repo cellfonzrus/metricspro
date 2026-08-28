@@ -254,6 +254,28 @@ check("E2. narrowing the window OFF the 2026-08-10 shift and the 2020-01-01 deco
       eids_no_window_shift_only == {"E2"}, str(eids_no_window_shift_only))
 
 
+# ══════════════════════ F. ELEVATED ROLES default 'all' even with NO roles-table row ═════════════
+# Regression guard (2026-08-18): RBAC fail-closed collapsed an admin/owner/super_admin whose tenant
+# never seeded a matching storeops.roles row to 'self' scope, so a full admin saw only his own ~2
+# stores on the Time Clock report. _role_scope now defaults the canonical top-level roles to 'all'
+# (the same precedent _can_edit_setting applies), while a genuinely unknown role still fails CLOSED.
+check("F1. an 'owner' role with NO roles-table row defaults to scope 'all' (not fail-closed 'self')",
+      SO._role_scope(HOUSE, "owner") == "all", SO._role_scope(HOUSE, "owner"))
+check("F2. 'super_admin' with no roles row also defaults to 'all'",
+      SO._role_scope(HOUSE, "super_admin") == "all", SO._role_scope(HOUSE, "super_admin"))
+check("F3. a genuinely unknown, non-elevated role STILL fails closed to 'self' (security preserved)",
+      SO._role_scope(HOUSE, "mystery_role") == "self", SO._role_scope(HOUSE, "mystery_role"))
+check("F4. the seeded 'admin' row (explicit scope 'all') is unchanged", SO._role_scope(HOUSE, "admin") == "all")
+
+# An admin/owner login with no roles row, one pinned store, must read UNRESTRICTED (None) — NOT a
+# single-store span. This is exactly the Time Clock 'admin sees only 2 people' regression.
+st[("storeops", "app_users")].append(app_user("owner-noroles", HOUSE, "owner", store_code="S1"))
+check("F5. a full admin/owner login (no roles row, one pinned store) reads UNRESTRICTED, not a "
+      "single-store span",
+      SO.scope_keyset("Bearer owner-noroles", HOUSE) is None,
+      str(SO.scope_keyset("Bearer owner-noroles", HOUSE)))
+
+
 print()
 print("=" * 72)
 print(f"  RESULT: {len(PASS)} passed, {len(FAIL)} failed")

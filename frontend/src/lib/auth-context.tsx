@@ -1,5 +1,5 @@
 'use client'
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get2faToken,
          onSessionInvalid, clearSessionInvalid,
@@ -8,6 +8,7 @@ import { supabase, setSessionOrgId, getActiveOrg, setActiveOrg, set2faToken, get
          onImpersonationInvalid, clearImpersonationInvalid, type ImpersonationState } from './client'
 import { setCacheIdentity } from './cache'
 import type { Permissions, CarrierRef } from './rbac'
+import { carrierCode, defaultActiveCarrier } from './rbac'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
@@ -22,6 +23,15 @@ export type AppUser = {
 export type TenantInfo = {
   org_id?: string; name?: string; setup_complete: boolean
   pay_period?: { work_week_start_dow: number; pay_period_type: string; payday_dow: number; payday_weeks_after: number }
+  // Free-trial state (mig 908), computed server-side in billing/trial.py::trial_view. NULL/absent for
+  // any tenant carrying no plan stamp — every tenant that existed before 907, and every one created
+  // while trials were switched off — which the UI reads as "say nothing about a trial".
+  trial?: {
+    status: 'trialing' | 'active' | 'trial_expired' | 'cancelled'
+    days_left: number | null
+    ends_at: string | null
+    expired: boolean
+  } | null
 }
 
 // One membership of a login (mig 706): which tenant + this login's role IN that tenant.
@@ -60,6 +70,12 @@ type AuthState = {
   user: AppUser | null
   permissions: Permissions
   carriers: CarrierRef[]
+  // Active-carrier lens (carrier-scoping compliance). activeCarrier is a lowercased carrier CODE
+  // ('boost'/'total'/…); the whole tenant carrier list is carrierList. A single-carrier tenant's
+  // activeCarrier is fixed to its only carrier and the header switcher is hidden.
+  activeCarrier: string
+  setActiveCarrier: (code: string) => void
+  carrierList: CarrierRef[]
   provisioned: boolean
   active: boolean
   tenant: TenantInfo | null
@@ -101,6 +117,7 @@ type AuthState = {
 
 const Ctx = createContext<AuthState>({
   loading: true, session: null, user: null, permissions: {}, carriers: [], provisioned: false,
+  activeCarrier: 'boost', setActiveCarrier: () => {}, carrierList: [],
   active: false, tenant: null, token: null, tenants: [], activeOrg: null, needsTenantChoice: false,
   switchTenant: async () => {}, pendingConnections: [], connectTenant: async () => {},
   disableAndSwitch: async () => ({}), dismissPending: () => {},
@@ -115,6 +132,39 @@ const Ctx = createContext<AuthState>({
 
 export const useAuth = () => useContext(Ctx)
 
+// Convenience hook for the active-carrier lens. Returns the active carrier code + setter, boolean
+// shortcuts, whether the tenant has more than one carrier (multi ⇒ the switcher shows), and the list.
+export const useActiveCarrier = () => {
+  const { activeCarrier, setActiveCarrier, carrierList } = useAuth()
+  const multi = (carrierList?.length || 0) > 1
+  return {
+    activeCarrier, setActiveCarrier, carrierList: carrierList || [], multi,
+    isBoost: activeCarrier === 'boost', isTotal: activeCarrier === 'total',
+  }
+}
+
+/**
+ * Whether a Supabase `onAuthStateChange` event should re-arm the loading splash and re-bootstrap the
+ * profile. Extracted as a PURE function so the real decision is unit-testable (frontend/prove_nav_no_reload.mjs)
+ * rather than re-implemented.
+ *
+ * Returns FALSE — no reload, no splash — for an event that carries the SAME already-loaded identity:
+ *   • TOKEN_REFRESHED — the ~hourly background token auto-refresh.
+ *   • SIGNED_IN / INITIAL_SESSION re-fire — supabase-js (auth-js GoTrueClient `_recoverAndRefresh`)
+ *     emits a fresh SIGNED_IN on EVERY `visibilitychange`, i.e. every time the browser tab regains
+ *     focus. This is the event that made the whole app flash "Loading…" on every tab switch.
+ * Returns TRUE for a genuine transition — first load (`settledUid === undefined`), a real login or
+ * tenant switch (identity changes), a sign-out (identity → null), or USER_UPDATED / PASSWORD_RECOVERY.
+ */
+export function authEventNeedsReload(
+  event: string, uid: string | null, settledUid: string | null | undefined,
+): boolean {
+  if (event === 'TOKEN_REFRESHED') return false
+  const sameIdentity = settledUid !== undefined && uid === settledUid
+  if (sameIdentity && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION')) return false
+  return true
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<any | null>(null)
@@ -124,6 +174,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [active, setActive] = useState(false)
   const [tenant, setTenant] = useState<TenantInfo | null>(null)
   const [carriers, setCarriers] = useState<CarrierRef[]>([])
+  const [activeCarrier, setActiveCarrierState] = useState<string>('boost')
   const [tenants, setTenants] = useState<TenantMembership[]>([])
   const [activeOrg, setActiveOrgState] = useState<string | null>(null)
   const [needsTenantChoice, setNeedsTenantChoice] = useState(false)
@@ -426,6 +477,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== 'undefined') window.location.href = '/'
   }), [])
 
+  // The identity (auth user id) we last ran a full profile `settle` for. `undefined` until the first
+  // load; then the current uid or null (signed out). Used to tell a genuine sign-in/-out transition
+  // from a same-user event re-fire (the visibilitychange SIGNED_IN / background TOKEN_REFRESHED), so
+  // the latter never re-arms `loading` and never re-bootstraps the profile.
+  const settledUidRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     let mounted = true
     // HARD GUARANTEE that the loading splash is ALWAYS released — whatever loadProfile does: resolve,
@@ -450,16 +506,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return
       setSession(data.session)
+      settledUidRef.current = data.session?.user?.id ?? null
       settle(data.session)
     })
     const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
       if (!mounted) return
-      setSession(sess)
-      // RE-ARM `loading` while the new session's profile resolves — closes the "no access on login
-      // until refresh" race (a fresh SIGNED_IN otherwise left loading=false with provisioned not yet
-      // populated, flashing a denied screen). EXCEPT a background TOKEN_REFRESHED (same already-loaded
-      // user), which would flash the whole app into a spinner on every ~hourly auto-refresh.
-      if (event !== 'TOKEN_REFRESHED') setLoading(true)
+      // Mirror the live session, but keep the SAME object reference when the token is unchanged so a
+      // same-identity re-fire (visibilitychange SIGNED_IN, hourly TOKEN_REFRESHED — supabase hands a
+      // brand-new session object each time) does not bump `session`'s reference and re-render every
+      // useAuth() consumer. A real token change (login, refresh to a new token) still updates it.
+      setSession((prev: any) => (prev?.access_token === sess?.access_token ? prev : sess))
+      const uid = sess?.user?.id ?? null
+      // DO NOT flash the whole app into the loading splash — or re-run the heavy profile bootstrap —
+      // for an event that carries the SAME already-loaded identity (see authEventNeedsReload): the
+      // visibilitychange SIGNED_IN/INITIAL_SESSION re-fire supabase-js emits on EVERY tab focus, and
+      // the ~hourly background TOKEN_REFRESHED. Re-arming `loading` on those is what made the entire
+      // app "reload" (full-screen "Loading…" splash + a full /core/bootstrap round trip) on every tab
+      // switch. The profile is already loaded, so there is nothing to reload; `refresh()` remains for
+      // an explicit, deliberate re-read.
+      if (!authEventNeedsReload(event, uid, settledUidRef.current)) return
+      // A genuine transition (real login, tenant switch to a new session, sign-out → null identity,
+      // USER_UPDATED / PASSWORD_RECOVERY). RE-ARM `loading` while the new session's profile resolves —
+      // closes the "no access on login until refresh" race (a fresh SIGNED_IN otherwise left
+      // loading=false with provisioned not yet populated, flashing a denied screen).
+      settledUidRef.current = uid
+      setLoading(true)
       settle(sess)
     })
     return () => { mounted = false; sub.subscription.unsubscribe() }
@@ -476,6 +547,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCacheIdentity(user ? (user.auth_id || user.id || null) : null,
                      user ? (activeOrg || user.org_id || null) : null)
   }, [user, activeOrg])
+
+  // ── Active-carrier lens (carrier-scoping compliance) ────────────────────────────────────────────
+  // Resolve which carrier is "in view" whenever the tenant's carrier list, the user or the active org
+  // changes. Order: a persisted per-(user,org) choice that is still a carrier the tenant has, else the
+  // default (is_default carrier → sole carrier → 'boost'). localStorage is guarded — a missing/blocked
+  // store falls back to the default. A single-carrier tenant is pinned to its only carrier.
+  const carrierUserKey = user ? (user.auth_id || user.id || null) : null
+  const carrierOrgKey = activeOrg || user?.org_id || null
+  const carrierStoreKey = carrierUserKey && carrierOrgKey ? `mp-active-carrier:${carrierUserKey}:${carrierOrgKey}` : null
+  useEffect(() => {
+    const def = defaultActiveCarrier(carriers)
+    const valid = new Set((carriers || []).map(c => carrierCode(c)).filter(Boolean))
+    let chosen = def
+    if ((carriers || []).length > 1 && carrierStoreKey) {
+      try {
+        const raw = localStorage.getItem(carrierStoreKey)
+        if (raw && valid.has(raw)) chosen = raw
+      } catch { /* missing / blocked → default */ }
+    }
+    setActiveCarrierState(chosen)
+  }, [carriers, carrierStoreKey])
+
+  const setActiveCarrier = useCallback((code: string) => {
+    const c = (code || '').toLowerCase().trim()
+    if (!c) return
+    setActiveCarrierState(c)
+    try { if (carrierStoreKey) localStorage.setItem(carrierStoreKey, c) } catch { /* blocked → session-only */ }
+  }, [carrierStoreKey])
 
   // ── Dead client session (auth-ux hardening 2026-08-03) ──────────────────────────────────────────
   // client.ts latches this the first time a module call 401s with the middleware's "authentication
@@ -534,16 +633,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const visiblePending = pendingConnections.filter(p => !dismissed.includes(p.org_id))
   const needs2fa = !!twofa.required && !twofa.verified
 
+  // Memoize the context value so a same-identity auth re-fire (which no longer changes `session`'s
+  // reference) does not hand every useAuth() consumer a brand-new value object and force a re-render.
+  // Keyed on every state field it exposes plus the stable callbacks; visiblePending/needs2fa are
+  // derived from listed deps, so recomputing them here is correct.
+  const value = useMemo<AuthState>(() => ({
+    loading, session, user, permissions, carriers, provisioned, active, tenant,
+    activeCarrier, setActiveCarrier, carrierList: carriers,
+    token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
+    switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
+    dismissPending, twofa, needs2fa, rbacEnabled, sessionInvalid,
+    passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
+    impersonation, impersonationInfo, startImpersonation, stopImpersonation, unlockClockPunch,
+    signOut, refresh,
+  }), [
+    loading, session, user, permissions, carriers, provisioned, active, tenant,
+    activeCarrier, setActiveCarrier,
+    tenants, activeOrg, needsTenantChoice, visiblePending, twofa, needs2fa, rbacEnabled,
+    sessionInvalid, passwordPolicy, defaultCc, impersonation, impersonationInfo,
+    switchTenant, connectTenant, disableAndSwitch, dismissPending, startTwoFactor, verifyTwoFactor,
+    startImpersonation, stopImpersonation, unlockClockPunch, signOut, refresh,
+  ])
+
   return (
-    <Ctx.Provider value={{
-      loading, session, user, permissions, carriers, provisioned, active, tenant,
-      token: session?.access_token || null, tenants, activeOrg, needsTenantChoice,
-      switchTenant, pendingConnections: visiblePending, connectTenant, disableAndSwitch,
-      dismissPending, twofa, needs2fa, rbacEnabled, sessionInvalid,
-      passwordPolicy, defaultCc, startTwoFactor, verifyTwoFactor,
-      impersonation, impersonationInfo, startImpersonation, stopImpersonation, unlockClockPunch,
-      signOut, refresh,
-    }}>
+    <Ctx.Provider value={value}>
       {children}
     </Ctx.Provider>
   )
