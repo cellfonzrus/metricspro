@@ -1165,10 +1165,18 @@ class CameraWorker:
         log.info("[%s] live (%s)", self.cam["device_name"], proto)
         return True
 
+    def needs_extend(self) -> bool:
+        """Whether maybe_extend() would actually send a command.
+
+        Split out so the command budget is charged for a COMMAND rather than for a call: the loop
+        asks every camera every pass, and metering the asking would drain a camera's bucket dry
+        with requests that were never going to leave the process."""
+        return bool(self.session) and time.time() >= self.extend_at
+
     def maybe_extend(self):
         """Google's grant lapses in ~5 minutes. Extend a minute early; a missed extension is not a
         retry, it drops the stream and costs a full re-negotiation."""
-        if not self.session or time.time() < self.extend_at:
+        if not self.needs_extend():
             return
         try:
             res = self.api.call("POST", "stream/extend", {"session_id": self.session.get("session_id")})
@@ -1372,30 +1380,60 @@ class CameraWorker:
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The process
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-class CommandBudget:
-    """A token bucket over the commands this analyzer sends to Google.
+# Google's documented ceiling for devices.executeCommand: 5 QPM PER PROJECT, PER USER, PER DEVICE.
+#
+# PER DEVICE is the part that matters and the part an earlier draft of this file got backwards. It
+# assumed a single ceiling shared across the whole estate and metered every camera out of one
+# bucket, which throttles nothing Google was going to throttle and instead makes a twenty-camera
+# analyzer take five minutes to come up. The aggregation Google describes runs the other way: two
+# PROJECTS talking to the SAME device share that device's five, not one project's cameras sharing
+# five between them.
+#
+# We spend 4 of the 5 and leave one, because the analyzer is not the only thing sending commands to
+# these cameras: the live-view page and the counting-line still both call executeCommand for the
+# same device, as the same user, in the same project. An analyzer that spends the whole allowance
+# means a manager pressing "Watch live" gets a throttle instead of a picture.
+#
+# SOURCE, stated because it could not be checked from here: Google's Device Access limits page
+# (developers.google.com/nest/device-access/project/limits) is unreachable from this network, so
+# this rests on two independent search summaries of it rather than on the page itself. If somebody
+# can open it, confirm the 5 and delete this paragraph.
+OPEN_QPM_PER_DEVICE = 4.0
 
-    WHY A BUDGET AND NOT A SLEEP. Two different things want to send an executeCommand — a
-    camera opening its stream, and a camera extending a grant that is about to lapse — and they
-    are not equally urgent. A missed extension costs a full re-negotiation, so extensions must
-    win; a delayed open costs a few seconds of a camera coming up, which nobody notices. A
-    shared bucket lets the loop spend on opens only what extensions did not need, which is what
-    keeps a twenty-camera analyzer from starving its own live streams to bring up a new one.
+
+class CommandBudget:
+    """A token bucket over the commands this analyzer sends to Google, PER DEVICE.
+
+    WHY A BUDGET AND NOT A SLEEP. Two different things want to send an executeCommand — a camera
+    opening its stream, and a camera extending a grant that is about to lapse — and they are not
+    equally urgent. A missed extension costs a full re-negotiation and a gap in the count; a
+    delayed open costs a few seconds of a camera coming up, which nobody notices.
+
+    So extensions get a RESERVE that opens cannot touch. Both draw on the same per-device bucket,
+    but an open must leave `reserve` tokens behind, while an extension may spend to the floor. An
+    earlier version described exactly this behaviour in its docstring and did not implement it:
+    only opens were metered and extensions bypassed the budget entirely, so the priority it claimed
+    to encode did not exist in either direction.
     """
 
-    def __init__(self, per_minute):
+    def __init__(self, per_minute=OPEN_QPM_PER_DEVICE, reserve=1.0):
         self.rate = max(0.5, float(per_minute)) / 60.0
-        self.capacity = max(1.0, float(per_minute) / 2.0)
-        self.tokens = self.capacity
-        self.last = time.time()
+        # A full minute of capacity, so a camera that has been quiet can open immediately rather
+        # than waiting out a bucket that was sized for half the rate.
+        self.capacity = max(1.0, float(per_minute))
+        self.reserve = max(0.0, float(reserve))
+        self._buckets = {}                       # device -> [tokens, last_seen]
 
-    def allow(self, cost=1.0):
-        now = time.time()
-        self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)
-        self.last = now
-        if self.tokens >= cost:
-            self.tokens -= cost
+    def allow(self, key, cost=1.0, spend_reserve=False, now=None):
+        """Spend one command against `key`'s bucket. `spend_reserve` is the extension's privilege."""
+        now = time.time() if now is None else float(now)
+        tokens, last = self._buckets.get(key, (self.capacity, now))
+        tokens = min(self.capacity, tokens + (now - last) * self.rate)
+        floor = 0.0 if spend_reserve else self.reserve
+        if tokens - cost >= floor - 1e-9:
+            self._buckets[key] = (tokens - cost, now)
             return True
+        self._buckets[key] = (tokens, now)
         return False
 
 
@@ -1403,7 +1441,7 @@ class Analyzer:
     def __init__(self, args):
         self.args = args
         self.api = Api(args.api, args.agent_key, args.secret)
-        self.opens = CommandBudget(getattr(args, "open_qpm", 4.0))
+        self.opens = CommandBudget(getattr(args, "open_qpm", OPEN_QPM_PER_DEVICE))
         # The detector is built AFTER the first config poll, because whether activity is on decides
         # which weights to load. Until then there is nothing to detect on anyway — no camera has a
         # stream open before the first refresh_config().
@@ -1541,19 +1579,20 @@ class Analyzer:
                     continue
                 worked = False
                 for w in list(self.workers.values()):
+                    dev = w.cam.get("device_name") or w.cam.get("camera_id")
                     if w.source is None:
-                        # SPACED OUT, NOT FIRED IN A BURST. Opening a stream is an SDM
-                        # executeCommand, and Google rate-limits those per project per user —
-                        # documented at 5 QPM per device and, per Google's own limits page,
-                        # an aggregate ceiling for a project's user across all devices. An
-                        # analyzer holding twenty cameras that opens them all in one pass of
-                        # this loop sends twenty commands in a second or two, is throttled,
-                        # retries, and is throttled harder. Every camera then looks offline
-                        # for reasons that have nothing to do with the cameras.
-                        if not self.opens.allow():
+                        # METERED PER CAMERA, because that is the shape of Google's limit. A
+                        # camera that has been sitting idle opens immediately; one that has just
+                        # been retried several times waits for its own bucket, and neither holds
+                        # the other twenty up.
+                        if not self.opens.allow(dev):
                             continue
                         w.open()
                     else:
+                        # An extension may spend the reserve an open may not: losing a grant costs
+                        # a full renegotiation and a hole in that camera's count.
+                        if w.needs_extend() and not self.opens.allow(dev, spend_reserve=True):
+                            continue
                         w.maybe_extend()
                         worked = w.step() or worked
                 if time.time() >= self.next_post:

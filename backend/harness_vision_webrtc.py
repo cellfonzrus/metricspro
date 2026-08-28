@@ -53,8 +53,8 @@ except Exception as e:                                   # pragma: no cover
     print(f"aiortc/av not installed ({type(e).__name__}) — install with: pip install aiortc")
     sys.exit(0)
 
-from vision_edge_analyzer import (LazyFrame, PersonDetector, WebRtcFrameSource,   # noqa: E402
-                                  capacity, webrtc_available)
+from vision_edge_analyzer import (CommandBudget, LazyFrame, PersonDetector,   # noqa: E402
+                                  WebRtcFrameSource, capacity, webrtc_available)
 
 
 # ── a stand-in for Google: a real peer that answers our offer and sends colour bars ──────────────
@@ -194,6 +194,39 @@ check("and tells the operator the rate that WOULD work instead",
 check("a nonsense measurement cannot divide by zero", capacity(0, 6, cores=4)["cameras"] > 0)
 check("detect_fps is floored so it can never divide by zero",
       capacity(0.040, 0, cores=4)["detect_fps"] == 0.5)
+
+print("\n(0b2) The command budget — Google's limit is PER DEVICE, not per estate")
+# WHAT THIS PROTECTS. devices.executeCommand is documented at 5 QPM per project, per user, PER
+# DEVICE. An earlier version metered every camera out of ONE bucket, which throttles nothing Google
+# was going to throttle and makes a twenty-camera analyzer take minutes to come up. These checks
+# pin the shape of the limit, not just the arithmetic.
+b = CommandBudget(per_minute=4.0, reserve=1.0)
+t = 1000.0
+check("a camera may open immediately", b.allow("camA", now=t))
+check("...and so may a DIFFERENT camera in the same instant — separate buckets",
+      b.allow("camB", now=t))
+check("twenty cameras all open in the same pass, which is the whole point",
+      all(b.allow(f"cam{i}", now=t) for i in range(20)))
+# Drain camA down to the reserve: capacity 4, one already spent, so two more opens then stop.
+check("one camera's opens stop at the reserve", (b.allow("camA", now=t), b.allow("camA", now=t),
+      not b.allow("camA", now=t))[-1])
+check("...and draining camA did NOT touch camB", b.allow("camB", now=t))
+check("an EXTENSION may spend the reserve an open may not",
+      b.allow("camA", spend_reserve=True, now=t))
+check("...but not beyond the floor", not b.allow("camA", spend_reserve=True, now=t))
+check("tokens come back with time (a minute restores the allowance)",
+      b.allow("camA", now=t + 60))
+# The ceiling only bites on a bucket that has been SPENT and then left alone — a fresh key starts
+# full and accumulates nothing, so testing one proves nothing about the ceiling at all.
+b2 = CommandBudget(per_minute=4.0, reserve=1.0)
+while b2.allow("c", now=0.0):
+    pass                                       # drain it to the reserve at t=0
+burst = 0
+while b2.allow("c", now=3600.0):
+    burst += 1
+check(f"an hour idle refills to capacity and NO further — not a burst of two hundred (got {burst})",
+      burst == 3)
+check("an unknown camera starts full rather than empty", b.allow("brand-new-camera", now=t))
 
 print("\n(0c) A missing detector is refused, not run blind")
 det = PersonDetector(prefer_yolo=False)
