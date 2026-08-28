@@ -89,18 +89,47 @@ def _search_criteria(cfg):
     return crit
 
 
+def _folder_candidates(cfg):
+    """Folders the sweep searches: the configured mailbox (default INBOX) PLUS the common Junk/Spam folders.
+    A daily report the mail host silently re-files to Spam is the classic 'the email stopped ingesting' cause
+    that has NOTHING to do with the sweep (owner 2026-08-28: b2bsoft is email-only because the portal's 2FA
+    locked us out — so the ingest path must self-heal a mis-filed report, since re-pulling from the portal is
+    not an option). Only folders that actually exist + SELECT are used; a host without Junk/Spam just scans
+    the primary exactly as before. All Mail is deliberately NOT scanned (it re-includes every message)."""
+    primary = (cfg.get("mailbox") or "INBOX").strip() or "INBOX"
+    out, seen = [primary], {primary.lower()}
+    for cand in ("Junk", "Spam", "Junk E-mail", "Junk Email", "[Gmail]/Spam",
+                 "INBOX.Junk", "INBOX.Spam", "Bulk Mail"):
+        if cand.lower() not in seen:
+            seen.add(cand.lower())
+            out.append(cand)
+    return out
+
+
 def _iter_messages(M, cfg):
-    """Yield (message_id, email.message.Message) for messages matching the search window."""
-    typ, data = M.search(None, *_search_criteria(cfg))
-    if typ != "OK" or not data or not data[0]:
-        return
-    for num in data[0].split():
-        typ, msgdata = M.fetch(num, "(RFC822)")
-        if typ != "OK" or not msgdata or not msgdata[0]:
+    """Yield (message_id, email.message.Message) for messages matching the search window, across the primary
+    mailbox AND Junk/Spam (so a mis-filed report is still found). Folders that don't exist are skipped."""
+    for folder in _folder_candidates(cfg):
+        try:
+            typ, _sel = M.select(folder, readonly=True)
+            if typ != "OK":
+                continue
+        except Exception:
+            continue     # folder absent on this host — skip, never fail the whole sweep
+        try:
+            typ, data = M.search(None, *_search_criteria(cfg))
+        except Exception:
             continue
-        msg = email.message_from_bytes(msgdata[0][1])
-        mid = (msg.get("Message-ID") or msg.get("Message-Id") or "").strip() or f"uid-{num.decode()}"
-        yield mid, msg
+        if typ != "OK" or not data or not data[0]:
+            continue
+        for num in data[0].split():
+            typ, msgdata = M.fetch(num, "(RFC822)")
+            if typ != "OK" or not msgdata or not msgdata[0]:
+                continue
+            msg = email.message_from_bytes(msgdata[0][1])
+            # Message-ID is stable across folders; the uid fallback is folder-scoped so it can't collide.
+            mid = (msg.get("Message-ID") or msg.get("Message-Id") or "").strip() or f"uid-{folder}-{num.decode()}"
+            yield mid, msg
 
 
 def _ext_from_magic(payload):
@@ -314,6 +343,8 @@ def fetch_new_attachments(cfg, already):
     patterns = cfg.get("patterns") or []
     M = _connect(cfg)
     out = []
+    batch_seen = set()   # (mid, fname) already collected THIS sweep — a message that exists in two scanned
+                         # folders (e.g. INBOX + Spam) must not be ingested twice.
     try:
         for mid, msg in _iter_messages(M, cfg):
             atts = list(_attachments(msg))
@@ -327,8 +358,9 @@ def fetch_new_attachments(cfg, already):
                 ut = match_upload_type(fname, patterns)
                 if not ut:
                     continue
-                if (mid, fname) in already:
+                if (mid, fname) in already or (mid, fname) in batch_seen:
                     continue
+                batch_seen.add((mid, fname))
                 out.append({"message_id": mid, "name": fname, "size": len(payload or b""),
                             "upload_type": ut, "bytes": payload})
     finally:
