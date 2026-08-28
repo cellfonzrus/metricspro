@@ -94,3 +94,86 @@ export function recentSales(params: { store_code?: string; limit?: number } = {}
   q.set('limit', String(params.limit ?? 25))
   return api.get<{ sales: any[] }>(`${BASE}/sales?${q.toString()}`)
 }
+
+// ── Receipt import (photograph a receipt from a primary POS → a searchable sale) ──────────────────
+// Backend: app/modules/pos/receipt_import.py + /pos/receipt-import[s]. Two-step by design: preview
+// (dry_run) OCRs the photo and returns the parsed fields WITHOUT writing, so the user confirms before
+// a sale is created; import then writes the sale + the (encrypted) receipt ledger row.
+export type ReceiptItem = {
+  description?: string | null
+  imei?: string | null
+  qty?: number
+  unit_price?: number
+  extended?: number
+}
+
+export type ParsedReceipt = {
+  customer_name?: string | null
+  phone?: string | null
+  email?: string | null
+  items?: ReceiptItem[]
+  subtotal?: number | null
+  tax?: number | null
+  total?: number | null
+  sale_date?: string | null
+  payment_method?: string | null
+  imei?: string | null
+  imeis?: string[]
+  device_name?: string | null
+}
+
+export type ReceiptImport = {
+  id: string
+  store_code?: string | null
+  sale_id?: string | null
+  customer_id?: string | null
+  status?: string
+  imei?: string | null
+  phone?: string | null
+  customer_name?: string | null
+  device_name?: string | null
+  total?: number | null
+  sale_date?: string | null
+  notes?: string | null
+  created_at?: string
+}
+
+/** OCR a receipt photo WITHOUT writing anything — returns the parsed fields for confirmation. */
+export function previewReceipt(image: string, ext: 'jpg' | 'png' = 'jpg') {
+  return api.post<{ dry_run: true; parsed: ParsedReceipt; raw_ocr: any }>(
+    `${BASE}/receipt-import`,
+    { image, ext, dry_run: true },
+  )
+}
+
+/** Create the sale + ledger row from a receipt photo. Returns imported=false + a message when the
+ *  photo couldn't be read (the caller falls back to manual entry). */
+export function importReceipt(body: { image: string; ext?: 'jpg' | 'png'; store_code?: string; notes?: string }) {
+  return api.post<{
+    imported: boolean
+    parsed: ParsedReceipt
+    message?: string
+    import_id?: string
+    sale_id?: string
+    customer_id?: string
+    transaction_id?: string
+  }>(`${BASE}/receipt-import`, body)
+}
+
+export function listReceiptImports(
+  params: { q?: string; imei?: string; phone?: string; customer?: string; store_code?: string; limit?: number } = {},
+) {
+  const qs = new URLSearchParams()
+  for (const k of ['q', 'imei', 'phone', 'customer', 'store_code'] as const) {
+    const v = params[k]
+    if (v && String(v).trim()) qs.set(k, String(v).trim())
+  }
+  qs.set('limit', String(params.limit ?? 50))
+  return api.get<{ receipt_imports: ReceiptImport[] }>(`${BASE}/receipt-imports?${qs.toString()}`)
+}
+
+export function getReceiptImport(id: string) {
+  return api.get<{ receipt_import: ReceiptImport & { parsed?: ParsedReceipt; raw_ocr?: any } }>(
+    `${BASE}/receipt-imports/${encodeURIComponent(id)}`,
+  )
+}
