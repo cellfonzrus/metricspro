@@ -41,6 +41,7 @@ export default function ExecMtdPage() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [showCfg, setShowCfg] = useState(false)
+  const [fresh, setFresh] = useState<any>(null)   // per-feed data freshness — surfaces a stalled ingest
   // RULE FIVE standardized filters — one StandardFilterValue (store(s) / market(s) / rep(s)), applied
   // SERVER-SIDE. `period` is NOT part of it here: this page follows the global period selector in the
   // app header (usePeriod), and a second month control in the bar would give the user two competing
@@ -70,6 +71,13 @@ export default function ExecMtdPage() {
       .then(setData).catch((e) => setErr(String(e?.message || e))).finally(() => setLoading(false))
   }, [period, selStores, selMarkets, selReps, dFrom, dTo])
   useEffect(() => { load() }, [load])
+
+  // Data freshness — a stalled feed is why report numbers "freeze" on a date. Fetch once; show a banner
+  // only when something is actually stale, so a healthy tenant sees nothing.
+  useEffect(() => {
+    api(`/api/v1/commcalc/ingest-freshness${orgParam() ? '?' + orgParam().slice(1) : ''}`)
+      .then(setFresh).catch(() => setFresh(null))
+  }, [])
 
   // Switching the MONTH in the app header drops a stale day-range. Without this, moving from July to
   // August while a July range is set would show an empty report whose emptiness is real but reads as a
@@ -204,6 +212,29 @@ export default function ExecMtdPage() {
             : ''}
         </p>
       </div>
+
+      {/* DATA-FRESHNESS banner (owner 2026-08-27). A stalled feed is why report numbers "freeze" on a date —
+          the report reads live, so if a feed stops ingesting, the numbers stop moving. Show which feed is
+          stale, when it last ingested and the latest transaction date it carries, and link to fix it. Only
+          renders when something is actually stale. */}
+      {fresh?.any_stale && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8,
+          padding: '10px 12px', fontSize: 12.5, marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠️ Some data hasn’t updated — numbers below may be stale</div>
+          {(fresh.feeds || []).filter((f: any) => f.stale && f.rows).map((f: any) => (
+            <div key={f.key} style={{ marginTop: 2 }}>
+              <b>{f.label}</b>: latest data {f.latest_data_date || '—'}
+              {typeof f.days_stale === 'number' ? ` (${f.days_stale} day${f.days_stale === 1 ? '' : 's'} behind)` : ''}
+              {f.last_ingest_at ? ` · last ingested ${String(f.last_ingest_at).slice(0, 10)}` : ''}
+              {f.source === 'raw_custom_import' && f.recent_files?.length ? ` · last file: ${f.recent_files[0]}` : ''}
+            </div>
+          ))}
+          <div style={{ marginTop: 6 }}>
+            New files aren’t being ingested. Open <Link href="/commcalc/email-imports" style={{ color: '#92400e', textDecoration: 'underline' }}>Data Imports → Email Imports</Link>,
+            check the processed history, and click <b>Run now</b>. If the latest file isn’t in the inbox, the report email stopped arriving for those days.
+          </div>
+        </div>
+      )}
 
       {/* RULE FIVE standardized filter bar — market -> store cascade (checkbox dropdowns) + employees,
           pick-don't-type over the org's real data, applied SERVER-SIDE so the tables, the trending math

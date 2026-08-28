@@ -7634,6 +7634,105 @@ def list_integrations(org_id: str = ORG_ID):
     return {"categories": cats, "summary": {"total": total, **counts}}
 
 
+# ── Data freshness probe (owner 2026-08-27: "the data has not updated after the 25th … see what is going
+#    on") — makes a stalled feed VISIBLE. The report pages read live, so frozen numbers mean the underlying
+#    feed stopped ingesting. This reports, per feed, when it last ingested and the LATEST transaction date in
+#    the data, so a gap ("latest data Aug 25, 2 days stale") is obvious and self-diagnosing. Read-only. ────
+_FRESHNESS_DATE_FIELDS = ["Trans Date", "Trans Date Time", "Service Date", "Transaction Date",
+                          "Bill Payment Date", "Payment Date", "Date"]
+
+
+def _custom_feed_freshness(client, org_id, report_key, label):
+    """Freshness for one custom-import feed (raw_custom_import): row count, last INGEST time (max created_at),
+    and the LATEST DATA date found in a bounded recent slice — so 'file stopped arriving' (last_ingest_at old)
+    is distinguishable from 'file arrives but its data is stale' (last_ingest_at recent, latest_data_date old).
+    Best-effort; never raises."""
+    out = {"key": report_key, "label": label, "source": "raw_custom_import", "rows": 0,
+           "last_ingest_at": None, "latest_data_date": None, "recent_data_dates": [], "recent_files": []}
+    try:
+        out["rows"] = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE).select("id", count="exact")
+                       .eq("org_id", org_id).eq("report_key", report_key).limit(1).execute()).count or 0
+    except Exception:
+        return out
+    if not out["rows"]:
+        return out
+    try:
+        recent = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
+                  .select("data,created_at,source_filename").eq("org_id", org_id).eq("report_key", report_key)
+                  .order("created_at", desc=True).limit(3000).execute().data) or []
+    except Exception:
+        recent = []
+    if not recent:
+        return out
+    out["last_ingest_at"] = recent[0].get("created_at")
+    files, dates = [], set()
+    for r in recent:
+        f = r.get("source_filename")
+        if f and f not in files and len(files) < 5:
+            files.append(f)
+        dl = {(k or "").strip().lower(): v for k, v in (r.get("data") or {}).items()}
+        for fld in _FRESHNESS_DATE_FIELDS:
+            v = dl.get(fld.lower())
+            if v not in (None, ""):
+                nd = _norm_report_date(v)
+                if nd:
+                    dates.add(nd)
+                break
+    sd = sorted(dates, reverse=True)
+    out["recent_files"] = files
+    out["latest_data_date"] = sd[0] if sd else None
+    out["recent_data_dates"] = sd[:10]
+    return out
+
+
+def _table_feed_freshness(client, org_id, table, date_col, label):
+    """Freshness for a real table (e.g. raw_sales): row count + the latest value of its date column."""
+    out = {"key": table, "label": label, "source": table, "rows": 0,
+           "last_ingest_at": None, "latest_data_date": None, "recent_data_dates": [], "recent_files": []}
+    try:
+        out["rows"] = (client.schema("commcalc").table(table).select("id", count="exact")
+                       .eq("org_id", org_id).limit(1).execute()).count or 0
+    except Exception:
+        return out
+    if not out["rows"]:
+        return out
+    try:
+        latest = (client.schema("commcalc").table(table).select(date_col)
+                  .eq("org_id", org_id).order(date_col, desc=True).limit(1).execute().data) or []
+        if latest:
+            out["latest_data_date"] = str(latest[0].get(date_col) or "")[:10] or None
+    except Exception:
+        pass
+    return out
+
+
+@router.get("/ingest-freshness")
+def ingest_freshness(org_id: str = ORG_ID):
+    """Per-feed freshness: when each data source last ingested and the latest transaction date it carries, so a
+    stalled feed (frozen report numbers) is visible and self-diagnosing. `days_stale` = today − latest_data_date;
+    `stale` when there is no data for yesterday or today. Read-only; degrades gracefully, never 500s."""
+    require_org(org_id)
+    client = sb()
+    today = _date.today()
+    feeds = [
+        _custom_feed_freshness(client, org_id, "activation_details", "Activation Details (activation basis)"),
+        _custom_feed_freshness(client, org_id, "bill_payment_transactions", "Bill Payment Transactions"),
+        _table_feed_freshness(client, org_id, "raw_sales", "trans_date", "Sales feed (transactions)"),
+    ]
+    for f in feeds:
+        ld = f.get("latest_data_date")
+        d = None
+        if ld:
+            try:
+                d = (today - _datetime.strptime(ld[:10], "%Y-%m-%d").date()).days
+            except Exception:
+                d = None
+        f["days_stale"] = d
+        f["stale"] = bool(f.get("rows")) and (d is None or d >= 2)
+    return {"as_of": today.isoformat(), "feeds": feeds,
+            "any_stale": any(f.get("stale") for f in feeds if f.get("rows"))}
+
+
 # ── Connector sweep registry (B-phase2 de-hardcode) ────────────────────────────────────────────
 # Maps a connector's sweep_kind → its puller so NEITHER dispatch site below hard-codes the vendor
 # list. Built-in pullers resolve via this module's globals (defined later in the file, so order
