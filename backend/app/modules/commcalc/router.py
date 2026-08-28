@@ -7706,13 +7706,10 @@ def _table_feed_freshness(client, org_id, table, date_col, label):
     return out
 
 
-@router.get("/ingest-freshness")
-def ingest_freshness(org_id: str = ORG_ID):
-    """Per-feed freshness: when each data source last ingested and the latest transaction date it carries, so a
-    stalled feed (frozen report numbers) is visible and self-diagnosing. `days_stale` = today − latest_data_date;
-    `stale` when there is no data for yesterday or today. Read-only; degrades gracefully, never 500s."""
-    require_org(org_id)
-    client = sb()
+def _data_freshness_report(client, org_id):
+    """Per-feed freshness for a tenant: when each data source last ingested and the latest transaction date it
+    carries, with `days_stale` and a `stale` flag (no data for yesterday/today). The shared core behind the
+    GET endpoint, the auto-monitor, and the run-now button. Read-only; degrades gracefully."""
     today = _date.today()
     feeds = [
         _custom_feed_freshness(client, org_id, "activation_details", "Activation Details (activation basis)"),
@@ -7731,6 +7728,73 @@ def ingest_freshness(org_id: str = ORG_ID):
         f["stale"] = bool(f.get("rows")) and (d is None or d >= 2)
     return {"as_of": today.isoformat(), "feeds": feeds,
             "any_stale": any(f.get("stale") for f in feeds if f.get("rows"))}
+
+
+async def _data_freshness_monitor(client, org_id):
+    """AUTO self-heal check (owner 2026-08-28: "an auto check and an auto fix … before users complain"). Run
+    right AFTER a sweep — the sweep IS the auto re-pull — and if a feed is STILL behind, escalate a
+    once-a-day-deduped alert with the diagnosis, distinguishing 'the report email stopped arriving' (last
+    ingest old) from 'the file arrives but its content is stale' (last ingest recent, data old). Because the
+    re-pull already ran, an alert means a human touch is genuinely needed. Best-effort; never raises, never
+    affects the sweep."""
+    try:
+        rep = _data_freshness_report(client, org_id)
+    except Exception as e:
+        print(f"WARN freshness monitor compute failed for {org_id}: {e}")
+        return {"any_stale": False, "feeds": []}
+    stale = [f for f in rep["feeds"] if f.get("stale") and f.get("rows")]
+    if not stale:
+        return rep
+    try:
+        from app.modules.closing.router import _send_alert   # lazy: avoids a commcalc<->closing cycle
+        today_s = _date.today().isoformat()
+        for f in stale:
+            ld = f.get("latest_data_date") or "unknown"
+            li_full = f.get("last_ingest_at")
+            li = str(li_full or "")[:10] or "unknown"
+            # Arrival vs stale-content: if the last ingest is itself old (≈ the data date), new files aren't
+            # coming; if the last ingest is recent but the data is old, the file arrives with stale content.
+            arrival_stopped = (not li_full) or (li <= (ld if ld != "unknown" else li))
+            why = ("the report email appears to have STOPPED ARRIVING — an automatic re-pull just ran and "
+                   "found nothing newer" if arrival_stopped else
+                   "the file is still arriving but its CONTENT is stale (the same data is being re-sent)")
+            subject = f"⚠️ Data not updating: {f['label']} is {f.get('days_stale', '?')} day(s) behind"
+            text = (f"MetricsPro auto-check — {f['label']} has not updated for this tenant.\n\n"
+                    f"Latest transaction date in the data: {ld}\n"
+                    f"Last successful ingest: {li}\n"
+                    f"Days behind: {f.get('days_stale')}\n\n"
+                    f"An automatic re-pull just ran and the feed is still behind, so {why}.\n\n"
+                    f"What to do: open Data Imports → Email Imports, check the processed history and click "
+                    f"Run now; if the latest report file is not in the inbox, have the source re-send it. "
+                    f"Reports that read this feed (Executive MTD, Activations) show stale numbers until it "
+                    f"catches up.")
+            ref = f"freshness:{org_id}:{f['key']}:{today_s}"   # once per feed per day
+            await _send_alert(client, org_id, "connector", subject, text, ref)
+    except Exception as e:
+        print(f"WARN freshness alert failed for {org_id}: {e}")
+    return rep
+
+
+@router.get("/ingest-freshness")
+def ingest_freshness(org_id: str = ORG_ID):
+    """Per-feed freshness: when each data source last ingested and the latest transaction date it carries, so a
+    stalled feed (frozen report numbers) is visible and self-diagnosing. `days_stale` = today − latest_data_date;
+    `stale` when there is no data for yesterday or today. Read-only; degrades gracefully, never 500s."""
+    require_org(org_id)
+    return _data_freshness_report(sb(), org_id)
+
+
+@router.post("/data-freshness/run-now")
+async def data_freshness_run_now(org_id: str = ORG_ID):
+    """Manual 'check & fix now': run the auto re-pull (every configured mailbox) then the freshness monitor,
+    and return the fresh report. The same two-step the platform runs automatically after each daily sweep."""
+    require_org(org_id)
+    try:
+        swept = await _run_email_sweep_all(org_id)
+    except Exception as e:
+        swept = {"ok": False, "error": str(e)}
+    rep = await _data_freshness_monitor(sb(), org_id)
+    return {"ok": True, "swept": swept, "freshness": rep}
 
 
 # ── Connector sweep registry (B-phase2 de-hardcode) ────────────────────────────────────────────
@@ -26526,6 +26590,15 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
         nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
         _email_status_update(client, oid, acct, {'next_run_at': nxt})
         ran.append({"org_id": oid, "account": acct, "result": res})
+    # AUTO DATA-FRESHNESS CHECK (owner 2026-08-28: "auto check and auto fix … before users complain"). The
+    # sweep above IS the auto re-pull; now verify each feed actually advanced. A feed still behind escalates a
+    # once-a-day-deduped alert with the diagnosis. Runs only for orgs that just swept (a daily mailbox sweeps
+    # once/day, so this fires about once/day/org). Best-effort — never affects the sweep result.
+    for _oid in {r["org_id"] for r in ran}:
+        try:
+            await _data_freshness_monitor(client, _oid)
+        except Exception as _fe:
+            print(f"WARN post-sweep freshness monitor failed for {_oid}: {_fe}")
     return {"ran": len(ran), "detail": ran}
 
 
