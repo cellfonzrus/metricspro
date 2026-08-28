@@ -1,0 +1,460 @@
+<title>Vision Hardware Buying Table</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+:root{
+  --paper:#F2F5F3; --surface:#FFFFFF; --surface-2:#E9EEEB;
+  --ink:#0F1E1C; --ink-2:#3A4B48; --ink-3:#667A76;
+  --rule:#D2DBD7; --rule-strong:#B4C2BD;
+  --accent:#0B6E63; --accent-soft:#D6E8E4;
+  --amber:#8A5A06; --amber-soft:#F7EBD2;
+  --brick:#93341F; --brick-soft:#F3DCD5;
+  --shadow:0 1px 2px rgba(15,30,28,.05),0 8px 24px -12px rgba(15,30,28,.18);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0B1413; --surface:#121D1B; --surface-2:#182523;
+    --ink:#E6EDEA; --ink-2:#B4C4C0; --ink-3:#7E918D;
+    --rule:#24332F; --rule-strong:#33443F;
+    --accent:#4FB3A5; --accent-soft:#12302C;
+    --amber:#D9A441; --amber-soft:#2E2413;
+    --brick:#D97C60; --brick-soft:#311912;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0B1413; --surface:#121D1B; --surface-2:#182523;
+  --ink:#E6EDEA; --ink-2:#B4C4C0; --ink-3:#7E918D;
+  --rule:#24332F; --rule-strong:#33443F;
+  --accent:#4FB3A5; --accent-soft:#12302C;
+  --amber:#D9A441; --amber-soft:#2E2413;
+  --brick:#D97C60; --brick-soft:#311912;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -12px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  font-size:16.5px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px 90px}
+.prose{max-width:70ch}
+h1,h2,h3,h4{font-family:Archivo,"IBM Plex Sans",sans-serif;text-wrap:balance;margin:0}
+h1{font-size:clamp(2.1rem,4.6vw,3rem);font-weight:700;letter-spacing:-.025em;line-height:1.05}
+h2{font-size:clamp(1.4rem,2.4vw,1.8rem);font-weight:650;letter-spacing:-.018em}
+h3{font-size:1.08rem;font-weight:600}
+h4{font-size:.95rem;font-weight:600}
+p{margin:0 0 1em}
+a{color:var(--accent)}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+code{font-size:.87em;background:var(--surface-2);padding:.1em .34em;border-radius:3px}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:.7rem;font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+header.top{border-bottom:1px solid var(--rule);background:var(--surface);padding:52px 0 36px;margin-bottom:44px}
+header.top .wrap{padding-bottom:0}
+.kicker{font-family:"IBM Plex Mono",monospace;font-size:.72rem;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:18px}
+.kicker b{color:var(--accent)}
+.standfirst{font-size:1.12rem;color:var(--ink-2);max-width:64ch;margin-top:16px}
+section{margin:0 0 62px}
+.shead{display:flex;gap:16px;align-items:baseline;border-bottom:2px solid var(--ink);
+  padding-bottom:10px;margin-bottom:22px;flex-wrap:wrap}
+.shead .num{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:.8rem;
+  color:var(--accent);letter-spacing:.08em;padding-top:4px}
+.tw{overflow-x:auto;margin:20px 0;border:1px solid var(--rule);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:.9rem;min-width:600px}
+th,td{padding:9px 13px;text-align:left;border-bottom:1px solid var(--rule);vertical-align:top}
+thead th{font-family:"IBM Plex Mono",monospace;font-size:.68rem;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);
+  border-bottom:1px solid var(--rule-strong);white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.hi td{background:var(--accent-soft)}
+tr.bad td{background:var(--brick-soft)}
+tr.warnrow td{background:var(--amber-soft)}
+tbody th{font-weight:600;font-size:.9rem;background:var(--surface-2);white-space:nowrap}
+caption{caption-side:bottom;text-align:left;padding:10px 13px;font-size:.78rem;
+  color:var(--ink-3);font-family:"IBM Plex Mono",monospace;border-top:1px solid var(--rule)}
+.note{border-left:3px solid var(--accent);background:var(--surface);padding:15px 19px;
+  margin:22px 0;border-radius:0 5px 5px 0;box-shadow:var(--shadow)}
+.note.warn{border-left-color:var(--amber)}
+.note.stop{border-left-color:var(--brick)}
+.note h4{margin-bottom:6px;font-family:Archivo,sans-serif}
+.note p:last-child{margin-bottom:0}
+.note .eyebrow{display:block;margin-bottom:4px}
+pre{background:var(--surface);border:1px solid var(--rule);border-radius:5px;padding:13px 15px;
+  overflow-x:auto;font-family:"IBM Plex Mono",monospace;font-size:.82rem;line-height:1.55;
+  margin:14px 0;color:var(--ink-2)}
+pre b{color:var(--ink);font-weight:600}
+ul,ol{margin:0 0 1em;padding-left:1.2em}
+li{margin-bottom:.4em}
+li::marker{color:var(--ink-3)}
+.m{display:inline-block;width:1.05em;text-align:center;font-weight:700;
+  font-family:"IBM Plex Mono",monospace;font-size:.8em;vertical-align:.08em}
+.m1{color:var(--accent)}
+.m2{color:var(--amber)}
+.m3{color:var(--brick)}
+.keybox{background:var(--surface);border:1px solid var(--rule-strong);border-radius:6px;
+  padding:16px 20px;margin:22px 0;box-shadow:var(--shadow)}
+.keybox dl{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;margin:10px 0 0;font-size:.9rem}
+.keybox dt{font-family:"IBM Plex Mono",monospace;font-weight:700;white-space:nowrap}
+.keybox dd{margin:0;color:var(--ink-2)}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:22px;margin:22px 0}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:6px;
+  padding:19px 21px;box-shadow:var(--shadow);display:flex;flex-direction:column}
+.card.pick{border-color:var(--accent);border-width:2px}
+.card h3{margin-bottom:4px}
+.card .cpu{font-family:"IBM Plex Mono",monospace;font-size:.78rem;color:var(--ink-3);margin-bottom:10px}
+.card .price{font-family:"IBM Plex Mono",monospace;font-size:1.05rem;color:var(--accent);
+  font-weight:600;margin-bottom:4px}
+.card .cap{font-size:.88rem;color:var(--ink-2);margin-bottom:10px;
+  padding-bottom:10px;border-bottom:1px solid var(--rule)}
+.card .cap b{color:var(--ink);font-size:1.15rem;font-family:Archivo,sans-serif}
+.card p:last-child{margin-bottom:0}
+.pill{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:.64rem;font-weight:600;
+  letter-spacing:.09em;text-transform:uppercase;padding:2px 8px;border-radius:99px;
+  margin-bottom:9px;align-self:flex-start}
+.pill.rec{background:var(--accent-soft);color:var(--accent)}
+.pill.alt{background:var(--surface-2);color:var(--ink-3)}
+.pill.no{background:var(--brick-soft);color:var(--brick)}
+.verdict{background:var(--accent-soft);border:2px solid var(--accent);border-radius:8px;
+  padding:22px 26px;margin:24px 0}
+.verdict h3{font-size:1.35rem;margin-bottom:8px}
+.verdict p:last-child{margin-bottom:0}
+footer{border-top:1px solid var(--rule);margin-top:12px;padding-top:22px;font-size:.85rem;color:var(--ink-3)}
+@media (max-width:640px){.wrap{padding:0 18px 70px}}
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="kicker"><b>Ordering guide</b> &nbsp;·&nbsp; MetricsPro Vision &nbsp;·&nbsp; LuxeLink, 18 stores / 21 Nest cameras &nbsp;·&nbsp; August 2026</div>
+    <h1>What to buy, and how many cameras it holds</h1>
+    <p class="standfirst">
+      Every figure here assumes the <strong>patched analyzer</strong> and includes the cost of
+      receiving the WebRTC stream from Google. Numbers are per machine, at <code>detect_fps 6</code>
+      unless a column says otherwise. Read the confidence marks before treating any cell as fact.
+    </p>
+  </div>
+</header>
+
+<div class="wrap">
+
+<div class="keybox">
+  <span class="eyebrow">Confidence marks — these appear on every number in this document</span>
+  <dl>
+    <dt><span class="m m1">&#9679;</span> measured</dt>
+    <dd>Run on real hardware in this project, with the script that produced it named.</dd>
+    <dt><span class="m m2">&#9680;</span> modelled</dt>
+    <dd>Arithmetic on measured coefficients. The model was checked against a real-time soak: within 2% where it could be checked, and 21% conservative where it could not.</dd>
+    <dt><span class="m m3">&#9675;</span> unverified</dt>
+    <dd>Could not be tested here. A reasonable expectation, not a result. <strong>Check before spending money on it.</strong></dd>
+  </dl>
+</div>
+
+<!-- ═══════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">01</span><h2>Cameras per machine</h2></div>
+  <p class="prose">
+    Rows are <strong>physical cores</strong>, not vCPUs or threads. A cloud instance advertising
+    "8 vCPU" is usually 4 physical cores with hyper-threading; use the 4-core row for it.
+    The instruction set matters more than the core count — that is not a rounding effect, it is a
+    <strong>5&times; spread</strong> on identical silicon <span class="m m1">&#9679;</span>.
+  </p>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2">CPU generation</th><th rowspan="2" class="num">Cores</th>
+          <th colspan="2" class="num">1080p stream</th><th colspan="2" class="num">720p stream</th>
+        </tr>
+        <tr>
+          <th class="num">detect 6/s</th><th class="num">detect 3/s</th>
+          <th class="num">detect 6/s</th><th class="num">detect 3/s</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="bad"><th rowspan="3">AVX2 only<br><span style="font-weight:400;font-size:.8rem;color:var(--ink-3)">N100, N305, Core Ultra,<br>Intel mobile, pre-2017</span></th><td class="num">2</td><td class="num">2.3</td><td class="num">3.6</td><td class="num">2.6</td><td class="num">4.2</td></tr>
+        <tr class="bad"><td class="num">4</td><td class="num">4.6</td><td class="num">7.1</td><td class="num">5.2</td><td class="num">8.4</td></tr>
+        <tr class="bad"><td class="num">8</td><td class="num">9.3</td><td class="num">14.2</td><td class="num">10.3</td><td class="num">16.8</td></tr>
+        <tr class="warnrow"><th rowspan="3">AVX-512<br><span style="font-weight:400;font-size:.8rem;color:var(--ink-3)">AMD Zen 4/5,<br>older Xeon</span></th><td class="num">2</td><td class="num">3.3</td><td class="num">4.6</td><td class="num">3.8</td><td class="num">5.7</td></tr>
+        <tr class="warnrow"><td class="num">4</td><td class="num">6.6</td><td class="num">9.2</td><td class="num">7.7</td><td class="num">11.5</td></tr>
+        <tr class="warnrow"><td class="num">8</td><td class="num">13.1</td><td class="num">18.4</td><td class="num">15.3</td><td class="num">23.0</td></tr>
+        <tr class="hi"><th rowspan="3">AVX-512 + AMX<br><span style="font-weight:400;font-size:.8rem;color:var(--ink-3)">Xeon 4th gen+,<br>most current cloud</span></th><td class="num">2</td><td class="num">4.7</td><td class="num">5.8</td><td class="num">5.9</td><td class="num">7.8</td></tr>
+        <tr class="hi"><td class="num">4</td><td class="num">9.4</td><td class="num">11.7</td><td class="num">11.9</td><td class="num">15.6</td></tr>
+        <tr class="hi"><td class="num">8</td><td class="num">18.9</td><td class="num">23.3</td><td class="num">23.7</td><td class="num">31.2</td></tr>
+      </tbody>
+      <caption>
+        All cells <span class="m m2">&#9680;</span> modelled. Underlying inference costs
+        <span class="m m1">&#9679;</span> measured (17.1 / 45.7 / 85.1 CPU-ms per detection).
+        Stream receive and decode <span class="m m1">&#9679;</span> measured at both resolutions.
+        AVX-512 measured on Intel only — see the AMD warning in section 02. The 2- and 4-core
+        1080p columns were additionally corroborated by a live soak <span class="m m1">&#9679;</span>.
+        No spare headroom included: these are the point at which a machine is full.
+      </caption>
+    </table>
+  </div>
+
+  <div class="note stop">
+    <span class="eyebrow">Read this before using the 720p columns</span>
+    <h4>You may not be able to order 720p at all</h4>
+    <p>
+      Google's API does <strong>not</strong> let the analyzer request a resolution
+      <span class="m m3">&#9675;</span>. The camera trait advertises a 480p&ndash;1080p range, but
+      quality is set per camera in the <strong>Google Home app</strong> (Low / Medium / High / Max) —
+      the same setting that governs what store staff see when they open the app. Nobody has
+      confirmed which app setting yields exactly 720p, or what bitrate it produces.
+    </p>
+    <p>
+      <strong>Buy against the 1080p columns.</strong> Treat 720p as an optimisation to test once the
+      system is running, not a specification to order against.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">02</span><h2>Named machines</h2></div>
+  <p class="prose">
+    Four options at four price points. Prices are what was found in August 2026 and will drift —
+    every price here is <span class="m m3">&#9675;</span>. <strong>None of these machines was
+    benchmarked</strong>; capacities are the model applied to their CPU class. Run
+    <code>--benchmark</code> on one before any bulk order.
+  </p>
+
+  <div class="cols">
+    <div class="card pick">
+      <span class="pill rec">Recommended</span>
+      <h3>Minisforum UM890 Pro</h3>
+      <div class="cpu">AMD Ryzen 9 8945HS · 8 cores / 16 threads · Zen 4 · 32 GB + 1 TB</div>
+      <div class="price">$649</div>
+      <div class="cap"><b>13</b> cameras at 1080p, <code>detect 6/s</code> <span class="m m2">&#9680;</span></div>
+      <p>
+        Zen 4 has AVX-512, which puts it a whole tier above any Intel mini PC at this price. Eight
+        real cores, low power, fits on a back-office shelf.
+        <strong>The one thing to check:</strong> AVX-512 was measured on Intel silicon, and
+        OpenVINO's AVX-512 path on AMD is untested here <span class="m m3">&#9675;</span>.
+        Buy one, benchmark it, then buy the second.
+      </p>
+    </div>
+
+    <div class="card">
+      <span class="pill alt">Hosted · cheapest</span>
+      <h3>Hetzner CCX43</h3>
+      <div class="cpu">AMD EPYC · 16 dedicated vCPU (&asymp;8 cores) · 32 GB</div>
+      <div class="price">~$100&ndash;110/mo</div>
+      <div class="cap"><b>13</b> cameras at 1080p, <code>detect 6/s</code> <span class="m m2">&#9680;</span></div>
+      <p>
+        Same CPU family as the mini PC, with nothing to own or reboot. Two caveats: vCPUs are
+        threads rather than cores, so derate <span class="m m3">&#9675;</span>; and US plans carry
+        <strong>1&ndash;8 TB traffic allowances</strong> against roughly 6 TB/month of inbound
+        video — confirm inbound is uncounted before committing.
+      </p>
+    </div>
+
+    <div class="card">
+      <span class="pill alt">Hosted · fastest</span>
+      <h3>AWS c7i.2xlarge</h3>
+      <div class="cpu">Xeon Sapphire Rapids · 8 vCPU (4 cores) · AMX · 16 GB</div>
+      <div class="price">~$0.36/hr · ~$260/mo</div>
+      <div class="cap"><b>9</b> cameras at 1080p, <code>detect 6/s</code> <span class="m m2">&#9680;</span></div>
+      <p>
+        The only option that runs the fast path actually measured here <span class="m m1">&#9679;</span> —
+        this is the machine class every headline number came from. Inbound traffic is free, so
+        bandwidth is a capacity question rather than a bill. Around five times the running cost of
+        the mini PCs; a one-year reservation removes roughly a third.
+      </p>
+    </div>
+
+    <div class="card">
+      <span class="pill no">Per-store only</span>
+      <h3>Beelink Mini S12 Pro</h3>
+      <div class="cpu">Intel N100 · 4 cores / 4 threads · AVX2 only · 16 GB</div>
+      <div class="price">~$170&ndash;190</div>
+      <div class="cap"><b>4&ndash;5</b> cameras at 1080p, <code>detect 6/s</code> <span class="m m2">&#9680;</span></div>
+      <p>
+        Ample for the one or two cameras a single store has, and that is the only job it should be
+        given. The AVX2 figure came from a fast server core with its instruction set capped, so a
+        real N100 may well be slower <span class="m m3">&#9675;</span>. Do not build a central plan
+        on these.
+      </p>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <span class="eyebrow">A CPU that looks modern but is not, for this job</span>
+    <p>
+      <strong>Intel Core Ultra</strong> mini PCs (e.g. the GMKtec K9, Core Ultra 5 125H, ~$361) sit
+      in the <em>slowest</em> row: consumer Intel has shipped no AVX-512 since Alder Lake. They do
+      carry an NPU that OpenVINO can target, which might move them up several tiers — but there is
+      no NPU in this environment and no number will be put on it <span class="m m3">&#9675;</span>.
+      One machine and one afternoon settles it. Until then, do not pay the premium expecting speed.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">03</span><h2>How many for 21 cameras</h2></div>
+
+  <div class="verdict">
+    <h3>Buy two 8-core AVX-512 machines</h3>
+    <p>
+      Two Minisforum UM890 Pro at $649 each &mdash; <strong>$1,298 one-off</strong> &mdash; carry
+      about <strong>26 cameras</strong> between them against the 21 needed. That is
+      <strong>1.25&times; headroom</strong>, and room for five more cameras before anything has to
+      change. Split them by metro: one for the New York stores, one for Chicago.
+    </p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Option</th><th class="num">Carries</th><th class="num">Headroom on 21</th><th class="num">Cost</th><th>If one box dies</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td><strong>2 &times; UM890 Pro</strong> — 8 AVX-512 cores each</td><td class="num">26</td><td class="num">1.25&times;</td><td class="num">$1,298 once</td><td>Degraded, still counting</td></tr>
+        <tr><td>2 &times; AWS c7i.2xlarge — 4 AMX cores each</td><td class="num">19</td><td class="num">0.90&times; — short</td><td class="num">$521/mo</td><td>Degraded, still counting</td></tr>
+        <tr><td>2 &times; AWS c7i.2xlarge at <code>detect 4/s</code></td><td class="num">22</td><td class="num">1.03&times; — thin</td><td class="num">$521/mo</td><td>Degraded, still counting</td></tr>
+        <tr class="bad"><td>1 &times; AWS c7i.4xlarge — 8 AMX cores</td><td class="num">19</td><td class="num">0.90&times; — short</td><td class="num">$521/mo</td><td><strong>All 18 stores blind</strong></td></tr>
+        <tr><td>18 &times; N100, one per store</td><td class="num">4&ndash;5<br><span style="font-size:.8rem;color:var(--ink-3)">per store</span></td><td class="num">ample</td><td class="num">~$3,100 once</td><td>One store blind</td></tr>
+      </tbody>
+      <caption>All capacities <span class="m m2">&#9680;</span> modelled at 1080p, <code>detect_fps 6</code>, WebRTC receive included.</caption>
+    </table>
+  </div>
+
+  <h3 style="margin-top:28px">What happens at the margin</h3>
+  <p class="prose">
+    <strong>If a store adds a camera, nothing breaks.</strong> Two 8-core boxes carry 21 with five
+    cameras spare; you can reach 26 before either is full. Past that, the failure mode is the thing
+    everyone needs to understand:
+  </p>
+
+  <div class="note stop">
+    <span class="eyebrow">The failure is silent, and that is the danger</span>
+    <h4>An overloaded box does not crash. It quietly counts fewer people.</h4>
+    <p>
+      Measured on a deliberately overloaded machine <span class="m m1">&#9679;</span>: as cameras
+      were added past capacity, the detection rate fell from 6/s to 5.4, then 4.4, and the decoder
+      began falling behind the live stream (30 fps &rarr; 27.7 &rarr; 17.0). Nothing errored.
+      Nothing alarmed. The analyzer simply looked at each doorway less often — and
+      <strong>a person walking briskly through a door can cross the counting line between two
+      samples and never be counted at all</strong>.
+    </p>
+    <p>
+      On the dashboard that appears as a gentle decline in footfall, indistinguishable from a quiet
+      fortnight. <strong>Before this goes live the analyzer should report its achieved detection
+      rate per camera</strong>, so an overloaded box announces itself instead of being found in a
+      quarterly review. That work is not done.
+    </p>
+  </div>
+
+  <p class="prose">
+    <strong>If one box dies</strong>, the survivor cannot take all 21 cameras at
+    <code>detect 6/s</code> — it holds 13. It can take all 21 at about <code>detect 2/s</code>
+    <span class="m m2">&#9680;</span>, which keeps every store counting at reduced confidence
+    rather than leaving half of them blind. Write that configuration down now and test it once;
+    it is not something to work out during the outage.
+  </p>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">04</span><h2>What changes the answer</h2></div>
+  <p class="prose">Ranked by how much capacity each lever actually returns, on the fast hardware.</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th class="num">#</th><th>Lever</th><th class="num">Effect</th><th>Which way, and the catch</th></tr></thead>
+      <tbody>
+        <tr class="hi"><td class="num">1</td><td><strong>Resolution and detection rate together</strong> — 1080p&rarr;720p and 6/s&rarr;3/s</td><td class="num">&times;1.66</td><td>Worth more than either alone. But resolution may not be selectable at all — see section 01.</td></tr>
+        <tr><td class="num">2</td><td><strong>Motion gating</strong>, while a shop is empty</td><td class="num">&times;1.48</td><td>Free capacity during quiet hours, and <em>zero</em> when anyone is in frame <span class="m m1">&#9679;</span>. Its real value is however much of the day a camera sees nobody — a per-store fact we do not have. Switch it on; do not size hardware on it.</td></tr>
+        <tr><td class="num">3</td><td><strong>Floor cameras at a slower rate</strong> — <code>detect 1/s</code> instead of 6/s</td><td class="num">&times;1.47<br><span style="font-size:.8rem;color:var(--ink-3)">on that camera only</span></td><td>Much less than it sounds across the estate — see the box below. Also needs a code change: <code>detect_fps</code> is currently one setting for every camera.</td></tr>
+        <tr><td class="num">4</td><td>Google sends 15 fps rather than 30</td><td class="num">&times;1.29</td><td>Not a lever — a thing that may already be true, and would be free capacity. Measure it on a real camera before buying.</td></tr>
+        <tr><td class="num">5</td><td><strong>Resolution alone</strong>, 1080p &rarr; 720p</td><td class="num">&times;1.26</td><td>Cuts receiving and decoding only. Detection costs exactly the same either way — the detector shrinks both resolutions to the same size before it looks at them.</td></tr>
+        <tr><td class="num">6</td><td><strong>Detection rate</strong> 6/s &rarr; 3/s</td><td class="num">&times;1.24</td><td>A straight trade against counting accuracy: fewer looks at the doorway, more chance of missing a fast walker. Not a throughput decision to make alone.</td></tr>
+        <tr><td class="num">7</td><td><strong>Detection rate</strong> 6/s &rarr; 4/s</td><td class="num">&times;1.15</td><td>The mild version of the same trade.</td></tr>
+      </tbody>
+      <caption>All <span class="m m2">&#9680;</span> modelled from measured coefficients, except motion gating whose two endpoints are <span class="m m1">&#9679;</span> measured. <code>buying_table.py</code> regenerates every figure.</caption>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="eyebrow">The question that was asked: is entrance-only counting much cheaper?</span>
+    <h4>On fast hardware, barely. On slow hardware, enormously.</h4>
+    <p>
+      Counting people at a door and watching a whole floor use the <em>same</em> person detection at
+      the same rate. The difference is only what happens to the boxes afterwards, and that costs
+      about 2 CPU-ms per second <span class="m m1">&#9679;</span> — nothing. The saving that does
+      exist comes from running floor cameras at a slower detection rate, since floor occupancy
+      accumulates person-seconds and tolerates a one-second sample where a doorway does not.
+    </p>
+    <p>
+      But on the fast path <strong>62% of a camera's cost is fixed</strong>: receiving the stream,
+      decoding it, and running the loop — all paid the moment the camera is opened at all
+      <span class="m m2">&#9680;</span>. Dropping a camera from 6 detections a second to 1 saves only
+      32%. Across the realistic LuxeLink mix — 18 entrance cameras plus 3 watching the floor — the
+      whole estate needs <strong>8.5 cores instead of 8.9</strong>. A 5% saving.
+      <strong>It does not change what you buy.</strong>
+    </p>
+    <p>
+      The inversion is worth knowing. On an <strong>AVX2-only</strong> machine the fixed share is
+      only 30%, so the same change saves 58% there. <em>The slower the hardware, the more the
+      detection dials matter; the faster it is, the more you are simply paying to hold streams
+      open.</em> The one saving that is always real is not opening cameras you are not using — and
+      the analyzer already skips any camera without Analytics ticked.
+    </p>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════ -->
+<section>
+  <div class="shead"><span class="num">05</span><h2>Before you spend money</h2></div>
+  <p class="prose">Three commands, in order. The first needs no camera, no network and no account.</p>
+  <pre><b># 1. On the machine you are considering — does it carry what this table says?</b>
+python3 backend/vision_edge_analyzer.py --benchmark --benchmark-res 1080p
+
+<b># 2. On one real store camera — what does Google actually send, and what does it cost?</b>
+python3 scratchpad/perf/measure_nest_stream.py --api https://… --seconds 120 --detect
+
+<b># 3. Rebuild this whole table from what those two produced.</b>
+python3 scratchpad/perf/capacity_model.py --cores 8 --measure
+python3 scratchpad/perf/buying_table.py</pre>
+
+  <p class="prose" style="margin-top:20px">
+    Command 2 is the important one and <strong>it has not been run</strong>. There is no Nest camera
+    in the development environment, so every figure in this document that touches a real camera —
+    the frame rate, the bitrate, the bandwidth — rests on synthetic video encoded at 2 Mbps
+    <span class="m m3">&#9675;</span>. If Google turns out to send 15 fps, every machine above holds
+    about 29% more cameras than stated. If it sends 4 Mbps, the bandwidth doubles.
+  </p>
+
+  <div class="note">
+    <span class="eyebrow">One more check that has nothing to do with hardware</span>
+    <p>
+      Google limits how many commands an account may send per minute, and holding 21 streams open
+      means renewing each one every few minutes. Documented at 5 per minute per camera; reported —
+      but <strong>not confirmed here</strong> <span class="m m3">&#9675;</span> — as 10 per minute
+      across a whole account. At 21 cameras we would sit around 6.3. <strong>Splitting the two
+      metros across two Google accounts doubles that ceiling for free</strong>, and is worth doing
+      whichever hardware is chosen.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <p>
+    Companion to the full throughput analysis, which carries the method, the scripts and the raw
+    measurements. Measured on a 4-core Intel Xeon (Emerald Rapids class, 2.10 GHz, AVX-512 + AMX).
+    Model and table generated by <code>capacity_model.py</code> and <code>buying_table.py</code> —
+    no figure in this document was typed by hand.
+  </p>
+  <p>
+    Price and specification sources, all August 2026 and all subject to drift:
+    <a href="https://store.minisforum.com/blogs/blog/minisforum-um890-pro-review">Minisforum UM890 Pro</a> ·
+    <a href="https://sparecores.com/server/hcloud/ccx33">Hetzner CCX</a> ·
+    <a href="https://instances.vantage.sh/aws/ec2/c7i.xlarge">AWS c7i</a> ·
+    <a href="https://www.amazon.com/Beelink-Intel-N100-Computer-Desktop-Display/dp/B0BVFS94J5">Beelink Mini S12 Pro</a> ·
+    <a href="https://developers.google.com/nest/device-access/traits/device/camera-live-stream">Google CameraLiveStream trait</a> ·
+    <a href="https://developers.google.com/nest/device-access/project/limits">Google rate limits</a>
+  </p>
+</footer>
+
+</div>
