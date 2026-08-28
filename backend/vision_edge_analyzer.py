@@ -105,6 +105,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.modules.vision import activity as ACT  # noqa: E402  (the SAME rules the server proves)
+from app.modules.vision import counting as CNT
 from app.modules.vision import geometry as GEO   # noqa: E402  (the SAME rules the server proves)
 
 log = logging.getLogger("vision-edge")
@@ -260,14 +261,22 @@ class PersonDetector:
 
 
 class Tracker:
-    """A deliberately simple IoU tracker.
+    """A deliberately simple IoU tracker. NO LONGER USED FOR COUNTING — kept as the baseline.
 
-    Re-identification across occlusion is a hard problem and a solved-badly one at this scale; what
-    the counting rules actually need is much weaker — a stable id for the few seconds a person takes
-    to walk through a doorway. A track that is lost and re-acquired becomes a NEW track, which the
-    server's visit pairing already handles (an unpaired entry is still a visit, an unpaired exit is
-    counted as such). Choosing the simple tracker and making the server tolerant of it beats a
-    fragile clever one whose failures would be invisible."""
+    THE ARGUMENT THIS DOCSTRING USED TO MAKE, AND WHY MEASUREMENT KILLED IT. It said that a track
+    lost and re-acquired simply becomes a NEW track, which the server's visit pairing already
+    tolerates. That is true of the SERVER. It is not true of the crossing test, which is what
+    actually counts people: a new track starts with `prev_foot = None`, so the step that carries a
+    person over the line is skipped, and the entry is never emitted at all. The failure this
+    docstring called "handled" was a silent undercount — harness_vision_counting.py measures 20
+    brisk walkers at 6 detections/second as 11.
+
+    So the reasoning was sound about occlusion and wrong about the doorway, which is the one place
+    this module has to be right. CameraWorker now uses counting.PredictiveTracker instead.
+
+    THIS CLASS STAYS because it is the control arm: harness_vision_counting.py runs both pipelines
+    over the same synthetic traffic, and every claim the new one makes is a claim RELATIVE to this
+    one. Delete it and the proof becomes an assertion. It is not wired to any live camera."""
 
     def __init__(self):
         self._tracks = {}
@@ -834,7 +843,16 @@ class CameraWorker:
         # Activity is per-camera because the switches are: a store can have one eye-level camera
         # marked posture_capable and three ceiling ones that are not.
         self.activity = (ActivityAccumulator(**activity) if activity else None)
-        self.tracker = Tracker()
+        # PredictiveTracker, not the plain IoU one. The old tracker lost a brisk walker between
+        # frames at 6 detections a second and re-issued them as a new person with no prev_foot, so
+        # the one step that mattered was skipped and the entry never counted — 20 walkers measured
+        # as 11. See counting.py for the four changes and what each fixes.
+        self.tracker = CNT.PredictiveTracker()
+        # One gate per counting line, rebuilt when the zone set changes. Gates hold per-track state
+        # (which side each track is committed to), so they must OUTLIVE a frame — building them
+        # inside the detect loop would reset the hysteresis every tick and defeat the whole thing.
+        self._gates = []
+        self._gates_key = None
         self.session = None
         self.extend_at = 0
         self.source = None
@@ -941,6 +959,13 @@ class CameraWorker:
 
         zones = self.cam.get("zones") or []
         lines = [z for z in zones if z.get("kind") == "line" and z.get("is_active", True)]
+        # Rebuild the gates only when the line set actually changes, so per-track hysteresis
+        # survives across frames. The key is the zones' identity and count, which is enough: the
+        # server hands us a fresh list on every config refresh.
+        gkey = tuple((z.get("id"), z.get("updated_at")) for z in lines)
+        if gkey != self._gates_key:
+            self._gates = CNT.gates_for(lines)
+            self._gates_key = gkey
 
         tracks = self.tracker.update(self.detector(frame), now)
 
@@ -961,9 +986,13 @@ class CameraWorker:
                 continue                            # the pavement / the back office is not the store
             on_floor += 1
             prev = track.get("prev_foot")
-            if prev and self.cam.get("is_entrance"):
-                for line in lines:
-                    direction = GEO.crossing_direction(line, prev, foot)
+            # THE COUNT. A band with hysteresis, not a bare line test: a line has zero width, so
+            # box jitter of any size crosses it, and a person pausing on the threshold produced an
+            # in/out pair per wobble (measured: one person standing in the doorway counted 4 in and
+            # 4 out). `confirmed` keeps a single-frame reflection in the glass out of the count.
+            if self.cam.get("is_entrance") and track.get("confirmed", True):
+                for gate in self._gates:
+                    direction = gate.update(track["key"], foot, track.get("box"), now)
                     if direction:
                         self._emit_traffic(direction, track)
 
