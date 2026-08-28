@@ -25528,6 +25528,7 @@ async def _run_email_sweep(org_id, account='default'):
     results = []
     shrinks = []   # row-count guardrail hits (a truncated/partial export) → alert after the loop
     journal_failures, journal_first_error, retried = 0, None, 0
+    just_ok_mids = set()   # message-ids ingested ok THIS run — the mailbox cleaner deletes these when enabled
     for f in files:
         name, size, ut, mid = f['name'], f['size'], f.get('upload_type'), f.get('message_id')
         period = "" if ut in ("daily_sales", "ma_commission", "ma_daily_tx", "ma_fulfillment") else _ftp_current_period()
@@ -25576,6 +25577,8 @@ async def _run_email_sweep(org_id, account='default'):
         results.append({"file": name, "upload_type": ut, "status": status, "rows_saved": rows_saved,
                         "detail": detail, "shrink": shrink, "skipped": skipped_flag,
                         "terminal": terminal})
+        if status == 'ok' and (rows_saved or 0) > 0 and mid:
+            just_ok_mids.add(mid)
     ok = sum(1 for r in results if r['status'] == 'ok')
     # A truncated/partial emailed export (far fewer rows than the day/period it replaced) would silently
     # corrupt reports — alert the connector recipients (same scope as connector-health) so it's caught.
@@ -25586,6 +25589,21 @@ async def _run_email_sweep(org_id, account='default'):
     status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
                                        journal_first_error=journal_first_error, retried=retried,
                                        shrinks=shrinks)
+    # MAILBOX CLEANER (owner 2026-08-28: "clean the email so we don't overload it"). When this mailbox is set
+    # to delete-after-ingest, remove the report emails whose data is ALREADY captured. Runs on THIS sweep's
+    # own authenticated connection — no separate login, no shared password — and deletes ONLY messages
+    # recorded ok+rows (this run + prior), never a non-report or un-ingested email. Off the event loop
+    # (blocking imaplib), best-effort: a cleanup failure can never affect the ingest that just succeeded.
+    if str(cfg.get('cleanup_mode') or 'off').strip().lower() == 'delete':
+        _ok_mids = set(just_ok_mids) | {r.get('message_id') for r in seen
+                                        if r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0}
+        try:
+            import asyncio as _asyncio_cl
+            _cl = await _asyncio_cl.to_thread(_email.cleanup_ingested, cfg, _ok_mids)
+            if (_cl or {}).get('deleted'):
+                status_msg += f" · cleaned {_cl['deleted']} ingested email(s) from the mailbox"
+        except Exception as _ce:
+            print(f"WARN mailbox cleanup failed for {account}: {_ce}")
     _email_status_update(client, org_id, account,
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': status_msg})
     # Auto-derive the monthly commission basis (raw_sales) from the feed — best-effort + guarded,
@@ -26114,6 +26132,7 @@ class PutEmailConfigIn(LaxModel):
     frequency: Any = None
     hour: Any = None
     password: Any = None
+    cleanup_mode: Any = None   # 'off' (keep every email) | 'delete' (remove a report email once ingested)
     acknowledge_cross_org: Any = None
 
 
@@ -26156,6 +26175,11 @@ def put_email_config(body: PutEmailConfigIn, org_id: str = ORG_ID, authorization
            "updated_at": _datetime.now(_timezone.utc).isoformat()}
     if (body.password or "").strip():
         row["password"] = body.password
+    # cleanup_mode (mig 928) — only write it when the column exists, so the save works before AND after the
+    # migration is applied (same tolerance posture as carrier_id/trans_ts elsewhere).
+    if body.cleanup_mode is not None and _table_has_column(sb(), "email_sweep_config", "cleanup_mode"):
+        _cm = str(body.cleanup_mode or "off").strip().lower()
+        row["cleanup_mode"] = _cm if _cm in ("off", "delete") else "off"
     if body.enabled:
         row["next_run_at"] = _vip_next_run(row["frequency"], None, None, row["hour"], "America/New_York")
     # MISFILE GUARD (the cross-org class has bitten twice — the Luxelink mailbox filed under the HOUSE
