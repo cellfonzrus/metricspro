@@ -546,10 +546,20 @@ def field_options(client, org_id, months=3, period="", limit=4000, value_limit=4
         if added:
             entry["custom_report_values"] = added
             entry["truncated"] = True          # a custom-sourced list is never a closed picker → allow typing
-            _cr_note = (f"{added} value(s) come from custom reports (e.g. Activation Details / Sales by "
-                        "Product) and are not in this tenant's raw_sales. A rule on a custom-only value is "
-                        "SELECTABLE but will not pay until the custom-report money path is wired — the "
-                        "commission engine reads raw_sales / the daily feed today.")
+            if f == "department":
+                # The Activation Details report's Department column (= service plan) IS wired to pay: a
+                # `department in <these>` flat-per-unit rule pays $1/activation on a plan whose activation
+                # source is "Activation Details report" (the engine stamps department onto the bridged
+                # activation lines). Values from OTHER custom reports (e.g. Sales by Product) still don't pay.
+                _cr_note = (f"{added} department value(s) come from custom reports. The Activation Details "
+                            "service-plan values PAY when the plan's activation source is 'Activation Details "
+                            "report' — build a department rule on them to pay per activation. Department "
+                            "values from other reports are selectable but do not pay yet.")
+            else:
+                _cr_note = (f"{added} value(s) come from custom reports (e.g. Activation Details / Sales by "
+                            "Product) and are not in this tenant's raw_sales. A rule on a custom-only value is "
+                            "SELECTABLE but will not pay until the custom-report money path is wired — the "
+                            "commission engine reads raw_sales / the daily feed today.")
             entry["note"] = (entry["note"] + " " + _cr_note) if entry.get("note") else _cr_note
             custom_field_summary[f] = added
 

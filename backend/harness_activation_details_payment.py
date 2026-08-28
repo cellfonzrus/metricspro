@@ -164,17 +164,28 @@ def base_tables(rules, activation_source="activation_details", scope="default",
 
 # ── Activation Details custom-import row (device-serial shape) ─────────────────────────────────────
 def ad_row(serial, ct, rep="REP D", store="Diversey", sp="", prod="", cat="", mrc=0.0,
-           trans_type="Sale", status="Active", trans_id=None, date="8/10/2026"):
+           trans_type="Sale", status="Active", trans_id=None, date="8/10/2026", dept=None):
+    data = {
+        "Serial#": serial, "Contract Type": ct, "Salesperson": rep, "Store": store,
+        "Trans Date": date, "Trans ID": trans_id or f"T{serial}", "SP/PO Name": sp,
+        "Product Desc": prod, "Category": cat, "Carrier": "TMO", "MRC": mrc,
+        "Trans Type": trans_type, "Activation Status": status, "Action Type": ct,
+    }
+    if dept is not None:                 # explicit "Department" column (its value is the service plan)
+        data["Department"] = dept
     return {
         "org_id": ORG, "period": PERIOD, "report_key": "activation_details",
-        "source_filename": "activation_details_aug.csv", "row_index": ad_row._i,
-        "data": {
-            "Serial#": serial, "Contract Type": ct, "Salesperson": rep, "Store": store,
-            "Trans Date": date, "Trans ID": trans_id or f"T{serial}", "SP/PO Name": sp,
-            "Product Desc": prod, "Category": cat, "Carrier": "TMO", "MRC": mrc,
-            "Trans Type": trans_type, "Activation Status": status, "Action Type": ct,
-        },
+        "source_filename": "activation_details_aug.csv", "row_index": ad_row._i, "data": data,
     }
+
+
+def dept_rule(match_value, kind="flat_per_unit", amount=10.0, pct=0.0):
+    """A rule keyed on the report's Department (= service plan) column — the owner's 'pick the service
+    plans that pay' shape."""
+    return {"id": "RDEP", "label": "$ per activation (by service plan)", "match_field": "department",
+            "match_op": "in", "match_value": match_value, "qualifies": True,
+            "payout_kind": kind, "amount": amount, "pct": pct, "tiered": False,
+            "unit_basis": "per_transaction", "sort": 1}
 
 
 ad_row._i = 0
@@ -351,6 +362,34 @@ t_nb[("commcalc", "raw_custom_import")] = [ad_row("Z0", "New Activation", rep="N
 t_nb[("commcalc", "raw_custom_import")][0]["row_index"] = _next_i()
 check("without the bridge the same rep drops to $0 (the failure the bridge prevents)",
       money(ce.preview(FakeClient(t_nb), ORG, PERIOD)["totals"]["payout"]) == 0.0)
+
+print("── G. DEPARTMENT (service plan) rule pays activations from the report ────────────")
+# The owner picks the report's Department (= service plan) values and pays $10 per activation on the
+# checked ones. Rule: department in {Premium Plan, BYOD Plan}. Three activations carry those service
+# plans; one carries a plan NOT selected (must not pay). No activation_bucket rule at all.
+t = base_tables([dept_rule("Premium Plan,BYOD Plan")], activation_source="activation_details")
+t[("commcalc", "raw_custom_import")] = [
+    ad_row("D0", "New Activation", rep="REP D", sp="Premium Plan"),      # fallback: no Department col -> sp
+    ad_row("D1", "New Activation", rep="REP D", dept="Premium Plan", sp="Premium Plan"),  # explicit Dept col
+    ad_row("D2", "BYOD Activation", rep="REP D", sp="BYOD Plan"),
+    ad_row("D3", "New Activation", rep="REP D", sp="Tablet Plan")]       # NOT selected -> $0
+for r in t[("commcalc", "raw_custom_import")]:
+    r["row_index"] = _next_i()
+res = ce.preview(FakeClient(t), ORG, PERIOD)
+total, per_rule = rep_payout(res)
+check("department rule pays the 3 selected service-plan activations (3 x $10 = $30)",
+      per_rule.get("RDEP") == 30.0, per_rule)
+check("total is $30 — the unselected 'Tablet Plan' activation does NOT pay", total == 30.0, total)
+# NEGATIVE CONTROL: an accessory rule can NEVER match a Detail line even though department is now populated
+# (the accessory stamp runs before the Detail lines are appended, so they are never accessory=yes).
+t2 = base_tables([dept_rule("Premium Plan"), ACCESSORY_RULE], activation_source="activation_details")
+t2[("commcalc", "raw_custom_import")] = [ad_row("E0", "New Activation", rep="REP D", sp="Premium Plan")]
+t2[("commcalc", "raw_custom_import")][0]["row_index"] = _next_i()
+res2 = ce.preview(FakeClient(t2), ORG, PERIOD)
+total2, per_rule2 = rep_payout(res2)
+check("accessory rule pays $0 on Detail lines (never mis-classified as an accessory)",
+      per_rule2.get("RACC", 0.0) == 0.0, per_rule2)
+check("only the department activation rule pays ($10)", total2 == 10.0, total2)
 
 print()
 print(f"{PASS} passed, {FAIL} failed")

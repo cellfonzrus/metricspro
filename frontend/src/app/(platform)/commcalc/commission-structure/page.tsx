@@ -41,10 +41,13 @@ const ACT_SRC_LABEL: Record<string, string> = {
   inherit: 'Inherit (default)', raw_sales: 'POS sales', activation_details: 'Activation Details report',
 }
 
-// Does this plan carry an ACTIVATION payout rule? ($ per unit on activation_bucket in premium/byod.)
+// Does this plan carry an ACTIVATION payout rule? A flat $/unit rule keyed on activation_bucket
+// (premium/byod) OR on department — the latter being the Activation Details "Department" (service-plan)
+// values the owner checks to pay activations from the report.
 function activationRules(p?: Plan | null): Rule[] {
   return (p?.rules || []).filter(r =>
-    (r.match_field || '') === 'activation_bucket' && (r.payout_kind || '') === 'flat_per_unit')
+    ['activation_bucket', 'department'].includes(r.match_field || '') &&
+    (r.payout_kind || '') === 'flat_per_unit')
 }
 // Does this plan carry an ACCESSORY payout rule? (% of price on accessory=yes.)
 function accessoryRules(p?: Plan | null): Rule[] {
@@ -124,6 +127,7 @@ export default function CommissionStructurePage() {
   // estimate
   const [estimate, setEstimate] = useState<any>(null)
   const [estBusy, setEstBusy] = useState(false)
+  const [estWhatIf, setEstWhatIf] = useState(false)
 
   const selected = useMemo(() => plans.find(p => p.id === selId) || null, [plans, selId])
 
@@ -194,11 +198,17 @@ export default function CommissionStructurePage() {
   }
 
   // ── STEP 6: read-only estimate for the selected plan.
+  // DEFAULT (assignment-scoped): preview WITHOUT plan_id, so every rep resolves to their OWN assigned
+  // plan; we then show only the reps whose effective plan IS the selected one — "who does THIS plan
+  // actually pay," and what they earn under it. WHAT-IF: pass plan_id, which the engine applies to ALL
+  // reps (the org-wide hypothetical — that mode is why Chicago reps appeared on an NY-plan estimate).
   async function runEstimate() {
     if (!selected) return
     setEstBusy(true); setEstimate(null); setMsg('')
     try {
-      const q = `?period=${encodeURIComponent(period)}&plan_id=${selected.id}`
+      const q = estWhatIf
+        ? `?period=${encodeURIComponent(period)}&plan_id=${selected.id}`
+        : `?period=${encodeURIComponent(period)}`
       setEstimate(await api(`/api/v1/commcalc/commission-plans/preview${q}`))
     } catch (e: any) { setMsg('❌ Estimate: ' + (e?.message || e)) } finally { setEstBusy(false) }
   }
@@ -207,8 +217,22 @@ export default function CommissionStructurePage() {
   const actRules = activationRules(selected)
   const accRules = accessoryRules(selected)
   const assignCount = (selected?.assignments || []).length
-  const estRows: any[] = estimate?.by_rep || []
-  const estTotal = estimate?.totals?.payout ?? estRows.reduce((s, r) => s + (Number(r.total_payout) || 0), 0)
+  const estAllRows: any[] = estimate?.by_rep || []
+  // WHAT-IF: every row already IS the forced plan. SCOPED: keep only reps whose effective plan is this one.
+  const estRows = estWhatIf ? estAllRows
+    : estAllRows.filter(r => String(r.plan_id) === String(selected?.id))
+  const estTotal = estRows.reduce((s, r) => s + (Number(r.total_payout) || 0), 0)
+  // Plan distribution across the whole period (scoped mode) — the real diagnostic: how many reps resolve
+  // to EACH plan. If the NY reps aren't on a distinct plan, they all show under one plan here.
+  const planDist: [string, { reps: number; payout: number }][] = (() => {
+    const m: Record<string, { reps: number; payout: number }> = {}
+    for (const r of estAllRows) {
+      const k = r.plan_name || '(no plan)'
+      if (!m[k]) m[k] = { reps: 0, payout: 0 }
+      m[k].reps += 1; m[k].payout += Number(r.total_payout) || 0
+    }
+    return Object.entries(m).sort((a, b) => b[1].reps - a[1].reps)
+  })()
 
   return (
     <div style={{ maxWidth: 960 }}>
@@ -390,19 +414,48 @@ export default function CommissionStructurePage() {
           <div style={{ fontWeight: 700 }}>Preview the estimated payout</div>
         </div>
         <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 10px' }}>
-          Read-only. Applies this plan's rules to the period's sales in memory — it changes no stored pay.
+          Read-only — changes no stored pay. By default this shows only the reps whose <b>assigned</b> plan
+          is the selected one, and what they'd earn under it. Tick <b>“apply to everyone”</b> to instead see
+          the org-wide hypothetical (the selected plan forced onto every rep, ignoring assignments).
         </p>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
           <select className="input" value={period} onChange={e => setPeriod(e.target.value)} style={{ minWidth: 160 }}>
             {periods.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
           <button className="btn btn-sm" onClick={runEstimate} disabled={!selected || estBusy}>
-            {estBusy ? 'Estimating…' : '💲 Estimate this plan'}
+            {estBusy ? 'Estimating…' : (estWhatIf ? '💲 Estimate (apply to everyone)' : '💲 Estimate assigned reps')}
           </button>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <input type="checkbox" checked={estWhatIf} onChange={e => setEstWhatIf(e.target.checked)} />
+            Apply to everyone (what-if)
+          </label>
         </div>
         {estimate && (
           <div>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Estimated total: {fmt(Number(estTotal) || 0)}</div>
+            {/* SCOPED diagnostic: how many reps resolve to EACH plan this period. A tenant with one broad
+                plan shows every rep under it here — the fastest way to see the NY reps aren't split out. */}
+            {!estWhatIf && planDist.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Who pays under which plan this period</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {planDist.map(([name, d]) => {
+                    const isSel = String(name) === String(selected?.name)
+                    return (
+                      <span key={name} style={{ ...chip,
+                        background: isSel ? 'var(--accent, #2563eb)' : chip.background,
+                        color: isSel ? '#fff' : undefined }}>
+                        {name}: <b>{d.reps}</b> rep(s) · {fmt(d.payout)}
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              {estWhatIf
+                ? <>Estimated total (applied to everyone): {fmt(Number(estTotal) || 0)}</>
+                : <>Estimated total — {estRows.length} rep(s) on <b>{selected?.name}</b>: {fmt(Number(estTotal) || 0)}</>}
+            </div>
             {estRows.length ? (
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 480 }}>
@@ -421,7 +474,13 @@ export default function CommissionStructurePage() {
                   </tbody>
                 </table>
               </div>
-            ) : <div style={{ fontSize: 13, color: 'var(--text2)' }}>No reps paid by this plan for {period}.</div>}
+            ) : (
+              <div style={{ fontSize: 13, color: '#b45309' }}>
+                No reps are assigned to <b>{selected?.name}</b> for {period}. Assign your NY / Luxelink reps to
+                this plan in <b>Step 5</b> (or open the Assignment audit) — until then this plan pays no one, and
+                those reps are paid by whichever plan the distribution above shows.
+              </div>
+            )}
           </div>
         )}
       </div>
