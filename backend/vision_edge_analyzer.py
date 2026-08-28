@@ -217,17 +217,31 @@ class _OpenVinoYolo:
         }
         # PRECISION IS A DECISION, NOT A DETAIL, so it is a flag rather than a default that
         # nobody reads. On a Xeon with AMX, OpenVINO silently runs an fp32 graph in bfloat16 —
-        # 17.1 CPU-ms per detection against 45.7 for true fp32, and worth having. But it is not
-        # the same arithmetic: on a replay of the same clip through the real CameraWorker, the
-        # bf16 path produced 11 line crossings where PyTorch produced 10. The boxes agree
-        # closely (75 of 76 matched at IoU > 0.976); the disagreement is at the confidence
-        # threshold, and the IoU tracker turns a marginal box into a different track and
-        # sometimes an extra crossing. `--ov-precision f32` gives up half the speed-up and
-        # stays numerically much closer to the PyTorch answer. Which one a tenant should run is
-        # a counting-accuracy question and belongs to whoever owns that evidence, not here.
-        if precision:
-            cfg["INFERENCE_PRECISION_HINT"] = ov.Type.f32 if str(precision) == "f32" \
-                else ov.Type.bf16
+        # 17.1 CPU-ms per detection against 45.7 for true fp32, and worth having.
+        #
+        # MEASURED, over 4 clips x 3 line placements, every backend on the same clock
+        # (scratchpad/perf/verify_multi.py):
+        #     fp32   agrees with the PyTorch path on 12 of 12 — identical crossings.
+        #     bf16   disagrees on 4 of 12, and always the same way: one EXTRA crossing.
+        #
+        # So fp32 is safe and bf16 is not, for a sharper reason than "less precise". bf16's bias
+        # is toward crossings NOBODY MADE — the exact error class counting.GateCounter exists to
+        # remove — so it would hand back at the detector what the gate just took away. It moves
+        # boxes by up to 0.065 of a frame height, which is enough to carry a marginal track
+        # across a band.
+        #
+        # An earlier draft of this comment blamed "the confidence threshold" and an IoU tracker
+        # turning a marginal box into an extra track. That was wrong on both counts: the real
+        # causes were this class's own NMS iou (see above) and a benchmark that timed three
+        # backends on three different clocks. Both are fixed; the bf16 bias survives them.
+        # DEFAULTS TO f32, which is NOT what OpenVINO would choose on its own. Left to itself it
+        # runs bf16 on any AMX machine — faster, and the one arithmetic measured to invent
+        # crossings. Defaulting to the fast-and-wrong option on precisely the hardware a store
+        # would buy, with nothing in the log to say so, is the silent failure this file exists to
+        # avoid. `--ov-precision auto` gives OpenVINO the choice back for anyone benchmarking.
+        prec = str(precision or "f32")
+        if prec != "auto":
+            cfg["INFERENCE_PRECISION_HINT"] = ov.Type.f32 if prec == "f32" else ov.Type.bf16
         self._cm = core.compile_model(core.read_model(path), "CPU", cfg)
         self._req = self._cm.create_infer_request()
         self._buf = np.empty((1, 3, self.h, self.w), np.float32)
@@ -322,8 +336,9 @@ class PersonDetector:
         self._hog = None
         self._ov = None
         self.supports_pose = False
-        # OPENVINO FIRST, and only for the plain detector. Same yolov8n weights, same boxes
-        # (75 of 76 matched the PyTorch answer at IoU > 0.976 — see the throughput report),
+        # OPENVINO FIRST, and only for the plain detector. Same yolov8n weights, and at fp32
+        # the SAME BOXES — identical detections on all 150 frames of the reference clip once
+        # the NMS iou matches ultralytics' 0.7 (see _OpenVinoYolo), which it now does —
         # measured at 17.1 CPU-ms per detection against PyTorch's 102.1 single-threaded and
         # 175.8 across four threads. That is the difference between three cameras on a box and
         # nine. Pose is deliberately not routed here: the pose head's decode is a second piece
@@ -1755,13 +1770,14 @@ def main():
                         "make ONE detection finish sooner and cost the machine MORE CPU per "
                         "detection, so raise it only when a single camera cannot hold "
                         "--detect-fps on its own.")
-    p.add_argument("--ov-precision", choices=("f32", "bf16"), default=None,
-                   help="Force the OpenVINO arithmetic. Left alone, OpenVINO picks: on a Xeon "
-                        "with AMX that means bfloat16, which is roughly 2.7x faster than fp32 "
-                        "and NOT the same arithmetic — on a replayed clip it produced 11 line "
-                        "crossings where the PyTorch path produced 10. Use f32 for the "
-                        "conservative deployment; validate bf16 against real footage before "
-                        "trusting its counts.")
+    p.add_argument("--ov-precision", choices=("f32", "bf16", "auto"), default="f32",
+                   help="The OpenVINO arithmetic (default f32). 'auto' hands the choice back "
+                        "to OpenVINO, which on a Xeon with AMX means bfloat16 — roughly 2.7x "
+                        "faster than fp32 and NOT the same arithmetic. Measured over 4 clips x 3 line "
+                        "placements: fp32 counts identically to the PyTorch path on 12 of 12, "
+                        "bf16 differs on 4 of 12 and always by counting one crossing too many. "
+                        "Use f32 unless you have validated bf16 against your own footage; its "
+                        "error is invented entries, which nothing downstream can undo.")
     p.add_argument("--open-qpm", type=float, default=4.0,
                    help="Cap on stream open/extend commands sent to Google per minute, across "
                         "all cameras. Google rate-limits executeCommand per project per user; "
