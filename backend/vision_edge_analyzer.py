@@ -104,7 +104,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app.modules.vision import activity as ACT  # noqa: E402  (the SAME rules the server proves)
+from app.modules.vision import activity as ACT
+from app.modules.vision import counting as CNT  # noqa: E402  (the SAME rules the server proves)
 from app.modules.vision import geometry as GEO   # noqa: E402  (the SAME rules the server proves)
 
 log = logging.getLogger("vision-edge")
@@ -185,7 +186,15 @@ class _OpenVinoYolo:
     rather than a tuning choice.
     """
 
-    def __init__(self, threads=1, shape=DETECT_SHAPE, conf=0.25, iou=0.45, weights="yolov8n.pt",
+    # iou=0.7 is ULTRALYTICS' predict default, and it is not a tuning choice — it is the number
+    # that makes this detector agree with the PyTorch one it replaces. At 0.45 the two disagreed
+    # on 49 of 150 frames of the same clip: every disagreement was a box that ultralytics keeps
+    # and cv2.dnn.NMSBoxes suppresses, all of them at the low-confidence end (e.g. a 0.284 box
+    # overlapping a 0.545 one at IoU 0.515 — kept under 0.7, dropped under 0.45). Those marginal
+    # boxes are exactly what counting.PredictiveTracker's second association pass exists to use,
+    # so losing them breaks tracks in the doorway. At 0.7 the fp32 path returns identical
+    # detections on all 150 frames. Change this and you change the count.
+    def __init__(self, threads=1, shape=DETECT_SHAPE, conf=0.25, iou=0.7, weights="yolov8n.pt",
                  precision=None):
         import numpy as np
         import openvino as ov
@@ -1090,7 +1099,9 @@ class CameraWorker:
         # Activity is per-camera because the switches are: a store can have one eye-level camera
         # marked posture_capable and three ceiling ones that are not.
         self.activity = (ActivityAccumulator(**activity) if activity else None)
-        self.tracker = Tracker()
+        self.tracker = CNT.PredictiveTracker()
+        self._gates = []
+        self._gates_key = None
         self.session = None
         self.extend_at = 0
         self.source = None
@@ -1203,6 +1214,11 @@ class CameraWorker:
         zones = self.cam.get("zones") or []
         lines = [z for z in zones if z.get("kind") == "line" and z.get("is_active", True)]
 
+        gkey = tuple((z.get("id"), z.get("updated_at")) for z in lines)
+        if gkey != self._gates_key:
+            self._gates = CNT.gates_for(lines)
+            self._gates_key = gkey
+
         tracks = self.tracker.update(self.detector(frame), now)
 
         # Mouth ratios for the whole frame, once, then matched to tracks by position. Computed only
@@ -1222,9 +1238,9 @@ class CameraWorker:
                 continue                            # the pavement / the back office is not the store
             on_floor += 1
             prev = track.get("prev_foot")
-            if prev and self.cam.get("is_entrance"):
-                for line in lines:
-                    direction = GEO.crossing_direction(line, prev, foot)
+            if self.cam.get("is_entrance") and track.get("confirmed", True):
+                for gate in self._gates:
+                    direction = gate.update(track["key"], foot, track.get("box"), now)
                     if direction:
                         self._emit_traffic(direction, track)
 
