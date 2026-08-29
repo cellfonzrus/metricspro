@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
+import { HelpProvider } from '@/lib/help-context'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
@@ -630,7 +631,9 @@ function Guard({ children }: { children: React.ReactNode }) {
 export default function PlatformLayout({ children }: { children: React.ReactNode }) {
   return (
     <PeriodProvider>
-      <Guard>{children}</Guard>
+      <HelpProvider>
+        <Guard>{children}</Guard>
+      </HelpProvider>
     </PeriodProvider>
   )
 }

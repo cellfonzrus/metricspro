@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import PageIntro from '@/components/PageIntro'
 import Link from 'next/link'
 import { api, fmt, getActiveOrg, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
@@ -195,23 +196,19 @@ export default function ExecMtdPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <h1 style={{ fontSize: 21, fontWeight: 700, margin: 0 }}>📈 Executive MTD — {period}</h1>
-          <Link href="/commcalc/exec" style={{ fontSize: 12 }}>← Owner Overview</Link>
-        </div>
-        <p style={{ color: 'var(--text2)', fontSize: 13.5, margin: '4px 0 0' }}>
+      <PageIntro
+        title={<>📈 Executive MTD — {period}</>}
+        right={<Link href="/commcalc/exec" style={{ fontSize: 12 }}>← Owner Overview</Link>}
+        help={<>
           Month-to-date location &amp; employee sales — activations by type, phones, bill payments, accessory
           sales, and trending projections.{' '}
           {tr.factor
             ? (tr.basis === 'range'
-              // The column keeps meaning "project to a full month", but the divisor is the WINDOW's own
-              // complete days — saying which is in force is what stops the same header meaning two things.
               ? `Trending = selected days × ${tr.days_in_month} ÷ ${tr.elapsed_days} complete day${tr.elapsed_days === 1 ? '' : 's'} in the range.`
               : `Trending = MTD × ${tr.days_in_month} ÷ ${tr.elapsed_days} complete days.`)
             : ''}
-        </p>
-      </div>
+        </>}
+      />
 
       {/* DATA-FRESHNESS banner (owner 2026-08-27). A stalled feed is why report numbers "freeze" on a date —
           the report reads live, so if a feed stops ingesting, the numbers stop moving. Show which feed is
