@@ -17392,6 +17392,125 @@ def sales_report(period: str = "", authorization: str = Header(default=""), org_
             "shown_rows": src_meta.get("shown_rows"), "filled_days": src_meta.get("filled_days")}
 
 
+def _sales_narrative(client, org_id, period, today=None):
+    """Sales-Report narrative banner: this period's sales vs the SAME complete-days window of last month —
+    revenue headline, activations, the store that moved revenue most, and the gross-profit / accessory
+    trend. Built from the exact `_sales_rows_union` + `_sales_cell_agg` + `_apply_activation_basis` pass the
+    Sales Report renders, windowed to the same day-of-month cut, so the banner can never disagree with the
+    grid. DISPLAY-ONLY; never raises → `available: False` hides it. Shares the deterministic sentence
+    helpers with the Exec-MTD narrative (see `_mtd_narrative`)."""
+    try:
+        _today = today or _date.today()
+        open_m = _is_open_month(period)
+        if open_m:
+            through = max(1, _today.day - 1)              # complete days only (exclude today-in-progress)
+        else:
+            _pm0 = parse_period(period)
+            through = _calendar.monthrange(_pm0['year'], _pm0['month'])[1] if (1 <= _pm0['month'] <= 12) else 30
+
+        acfg = _accessory_config(client, org_id)
+        ckey = _canonical_store_key_fn(client, org_id)
+
+        def _window_totals(p):
+            rows, _ = _sales_rows_union(client, org_id, p)
+            agg = _sales_cell_agg(rows, acfg, store_key=ckey)
+            _apply_activation_basis(client, org_id, p, agg, ckey)
+            pm = parse_period(p)
+            y, m = pm['year'], pm['month']
+            dim = _calendar.monthrange(y, m)[1] if (1 <= m <= 12) else 30
+            lo = f"{y}-{m:02d}-01"
+            hi = f"{y}-{m:02d}-{max(1, min(through, dim)):02d}"
+            tot = {'revenue': 0.0, 'gp': 0.0, 'activations': 0, 'byod': 0, 'upgrades': 0, 'accessory_rev': 0.0}
+            per_store = {}
+            for a in agg.values():
+                dt = str(a.get('trans_date') or '')[:10]
+                if not dt or dt < lo or dt > hi:
+                    continue
+                acts = (a.get('act_new', 0) or 0) + (a.get('act_port', 0) or 0)
+                st = a.get('store') or '—'
+                s = per_store.setdefault(st, {'revenue': 0.0, 'activations': 0})
+                s['revenue'] += a.get('revenue', 0.0); s['activations'] += acts
+                tot['revenue'] += a.get('revenue', 0.0); tot['gp'] += a.get('gp', 0.0)
+                tot['activations'] += acts; tot['byod'] += a.get('act_byod', 0) or 0
+                tot['upgrades'] += a.get('act_upg', 0) or 0
+                tot['accessory_rev'] += a.get('accessory_rev', 0.0)
+            return tot, per_store
+
+        cur, cur_st = _window_totals(period)
+        prior_period = _prior_period(period)
+        prior, pri_st = _window_totals(prior_period)
+
+        cur_rev, prior_rev = cur['revenue'], prior['revenue']
+        if cur_rev == 0 and prior_rev == 0:
+            return {'period': period, 'available': False}
+
+        rev_delta = cur_rev - prior_rev
+        rev_pct = _pct_change(cur_rev, prior_rev)
+        phrase, tone = _dir_word(rev_delta)
+        n_stores = len([1 for s in cur_st.values() if s['revenue']])
+
+        if prior_rev == 0:                                # no comparison available
+            when = "so far this month" if open_m else f"in {period}"
+            headline = f"${cur_rev:,.0f} in sales {when} across {n_stores} store{'s' if n_stores != 1 else ''}."
+            comparative = False
+        else:
+            pct_txt = f"{abs(rev_pct):.0f}% " if rev_pct is not None else ""
+            if open_m:
+                headline = (f"Sales are running {pct_txt}{phrase} last month — "
+                            f"${cur_rev:,.0f} vs ${prior_rev:,.0f} through the {_ordinal(through)}.")
+            else:
+                headline = (f"{period} sales came in {pct_txt}{phrase} the prior month — "
+                            f"${cur_rev:,.0f} vs ${prior_rev:,.0f}.")
+            comparative = True
+
+        bullets = []
+        # Activations line (reconciliation-relevant): count + mix + trend.
+        act_pct = _pct_change(cur['activations'], prior['activations'])
+        act_txt = (f" ({abs(act_pct):.0f}% {'up' if cur['activations'] >= prior['activations'] else 'down'} vs last month)"
+                   if act_pct is not None else "")
+        bullets.append(f"{cur['activations']:,} activations{act_txt} — "
+                       f"{cur['byod']:,} BYOD, {cur['upgrades']:,} upgrades.")
+        # Top revenue mover store.
+        movers = sorted(((cur_st[st]['revenue'] - pri_st.get(st, {}).get('revenue', 0.0), st)
+                         for st in cur_st), key=lambda x: x[0])
+        if movers and movers[-1][0] > 0:
+            bullets.append(f"{movers[-1][1]} led the gain (+${movers[-1][0]:,.0f}).")
+        elif movers and movers[0][0] < 0:
+            bullets.append(f"{movers[0][1]} is down ${abs(movers[0][0]):,.0f}.")
+        # Gross profit + accessory.
+        gp_pct = _pct_change(cur['gp'], prior['gp'])
+        gp_txt = (f" ({abs(gp_pct):.0f}% {'up' if cur['gp'] >= prior['gp'] else 'down'})" if gp_pct is not None else "")
+        bullets.append(f"Gross profit ${cur['gp']:,.0f}{gp_txt}; accessory ${cur['accessory_rev']:,.0f}.")
+
+        return {'period': period, 'prior_period': prior_period, 'through_day': through,
+                'available': True, 'comparative': comparative, 'tone': tone,
+                'headline': headline, 'bullets': bullets,
+                'facts': {'revenue': round(cur_rev, 2), 'prior_revenue': round(prior_rev, 2),
+                          'revenue_pct': rev_pct, 'activations': cur['activations'],
+                          'prior_activations': prior['activations'], 'gp': round(cur['gp'], 2),
+                          'accessory_rev': round(cur['accessory_rev'], 2), 'stores': n_stores}}
+    except Exception:
+        return {'period': period, 'available': False}
+
+
+@router.get("/sales-report/narrative")
+def sales_report_narrative(period: str = "", today: str = "", org_id: str = ORG_ID):
+    """Plain-English summary banner for the Sales Report — this period vs the same complete-days window of
+    last month (revenue, activations, the top-moving store, gross profit / accessory). Every number is
+    computed from the SAME aggregation the report renders. DISPLAY-ONLY."""
+    require_org(org_id)
+    if not period:
+        n = datetime.now(timezone.utc)
+        period = f"{n.year}-{n.month:02d}"
+    _t = None
+    if today:
+        try:
+            _t = _date.fromisoformat(str(today)[:10])
+        except Exception:
+            _t = None
+    return _sales_narrative(sb(), org_id, period, today=_t)
+
+
 @router.get("/sales-report/classification-unmatched")
 def sales_report_classification_unmatched(period: str = "", authorization: str = Header(default=""),
                                                 org_id: str = ORG_ID):

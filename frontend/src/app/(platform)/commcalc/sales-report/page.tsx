@@ -1,9 +1,10 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { api, fmt, getActiveOrg } from '@/lib/client'
+import { api, fmt, getActiveOrg, localToday } from '@/lib/client'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
+import NarrativeBanner from '@/components/NarrativeBanner'
 import ReportExportBar from '@/components/ReportExportBar'
 import { MultiSelect } from '@/lib/multiselect'
 import EntityPicker from '@/components/EntityPicker'
@@ -177,6 +178,14 @@ export default function SalesReportPage() {
     (selStores.length === 0 || selStores.includes(r.store)) &&
     (selReps.length === 0 || selReps.includes(r.salesperson)))
   const filtered = selMarkets.length > 0 || selStores.length > 0 || selReps.length > 0
+  // NARRATIVE BANNER (owner 2026-08-29). Deterministic "this period vs the same days last month" summary,
+  // computed server-side over the SAME sales aggregation. The Sales Report's market/store/rep filters are
+  // applied CLIENT-SIDE, so the org-wide banner is SUPPRESSED whenever a filter is active — it would
+  // otherwise describe the whole org while the table shows a slice.
+  const narrativeUrl = useMemo(() => (
+    (!period || filtered) ? null
+      : `/api/v1/commcalc/sales-report/narrative?period=${encodeURIComponent(period)}&today=${localToday()}${orgParam()}`
+  ), [period, filtered])
   // Tiles reflect the current filter (fall back to the backend period totals when nothing is filtered).
   const sum = (k: string) => fRows.reduce((s, r) => s + (Number(r[k]) || 0), 0)
   const t = filtered
@@ -266,6 +275,10 @@ export default function SalesReportPage() {
         <WhereAreMyRowsButton period={period} />
         {data?.source === 'daily_sales_feed' && <span style={{ fontSize: 11, color: '#b45309' }}>source: daily email feed (raw_sales not promoted yet — enable ‘auto’ on Connectors)</span>}
       </div>
+
+      {/* NARRATIVE BANNER — plain-English "how sales are tracking vs last month" above the grid.
+          Deterministic (same aggregation as the report); hidden while a client-side filter narrows the table. */}
+      <NarrativeBanner url={narrativeUrl} />
 
       {/* PROMINENT error banner (was a tiny inline span that read as "no data"). A read failure now says so. */}
       {data?.error && (

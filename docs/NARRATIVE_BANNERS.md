@@ -32,4 +32,7 @@ Every sentence is **computed from the exact same numbers the report shows** — 
 1. Backend: write `_<report>_narrative(...)` that collects the current + prior totals and returns the `{ available, tone, headline, bullets, facts }` shape (reuse `_pct_change` / `_dir_word` / `_ordinal`). Expose it as `GET /<report>/{…}/narrative`.
 2. Frontend: build the narrative URL from the page's filters and drop `<NarrativeBanner url={...} />` above the grid.
 
-First shipped on: **Executive MTD** (`/commcalc/exec/mtd`).
+## Where it's live
+
+- **Executive MTD** (`/commcalc/exec/mtd`) — `_mtd_narrative` / `GET /exec-mtd/{period}/narrative`. Honors the report's server-side store/market/rep filters; suppressed on a custom date-range slice.
+- **Sales Report** (`/commcalc/sales-report`) — `_sales_narrative` / `GET /sales-report/narrative`. Revenue headline + activations mix + top revenue-moving store + gross-profit/accessory trend. The Sales Report filters client-side, so the org-wide banner is suppressed whenever a market/store/rep filter is active.
