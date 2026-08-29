@@ -61,7 +61,7 @@ export default function OnboardingPage() {
   return (
     <div style={{ padding: '18px 22px', maxWidth: 940 }}>
       <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Setup Wizard</h1>
-      <p style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 14, maxWidth: 780 }}>
+      <p className="pg-note" style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 14, maxWidth: 780 }}>
         Answer a few questions and we&rsquo;ll tailor the setup to your business — only the steps that apply to
         your carrier, POS and processor. Each step links to where you complete it; green means done.
       </p>

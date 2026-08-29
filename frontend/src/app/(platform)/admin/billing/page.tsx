@@ -159,7 +159,7 @@ export default function BillingAdmin() {
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>💳 Billing (Tenants)</h1>
-      <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         Price each company by a <b>basis</b> (flat / per store / per entity / per user / per module) and <b>cycle</b>,
         then generate invoices. The live drivers show what would bill. Payments are recorded manually for now.
       </p>

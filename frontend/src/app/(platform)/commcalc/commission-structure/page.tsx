@@ -238,7 +238,7 @@ export default function CommissionStructurePage() {
     <div style={{ maxWidth: 960 }}>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧭 Employee Commission Structure</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
           Set up the entire commission structure here — no backend needed. Work top to bottom: pick a plan,
           set its activation &amp; accessory payouts, choose where activations come from, confirm what counts
           as an accessory, assign reps, then preview the estimate. Nothing you do here moves live pay until

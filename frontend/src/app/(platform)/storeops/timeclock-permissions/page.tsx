@@ -60,7 +60,7 @@ export default function TimeclockPermissionsPage() {
   return (
     <div style={{ maxWidth: 980 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>⏳ Time-clock permissions</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
         Reps are auto-clocked-out at their scheduled shift end plus a 5-minute grace. A <b>second session</b> after
         that, or <b>extra time</b> worked past it, is held here until you approve it — approving is what makes that
         time count toward their hours. The rep sees the same pending state on their kiosk.

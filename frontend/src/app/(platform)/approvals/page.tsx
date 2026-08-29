@@ -84,7 +84,7 @@ export default function ApprovalsPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✅ Approvals</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Everything across the app that needs your approval, in one place. Approving performs the action.
           </p>
         </div>

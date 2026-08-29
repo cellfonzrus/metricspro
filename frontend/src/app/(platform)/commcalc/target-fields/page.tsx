@@ -81,7 +81,7 @@ export default function TargetFieldsPage() {
   return (
     <div style={{ padding: 24, maxWidth: 960 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🧱 Custom Target Fields</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 8 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 8 }}>
         Define the canonical fields a report's columns map onto — for any report type. Built-in reports
         ship with defaults; add fields here to map a report we didn't ship, relabel a default, or add
         header aliases. These flow into the <b>Column Mapping</b> & <b>Import Wizard</b> auto-suggest.

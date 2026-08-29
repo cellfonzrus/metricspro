@@ -254,7 +254,7 @@ export default function PayrollApprovalsPage() {
         <div style={{ flex: 1 }} />
         <Link href="/storeops/payroll/payers" style={{ ...btn, textDecoration: 'none', color: 'var(--text1)' }}>⚙️ Who pays</Link>
       </div>
-      <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 14px', maxWidth: '78ch' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 14px', maxWidth: '78ch' }}>
         The district manager checks the closed pay period&apos;s hours, corrects anything wrong, and approves. HR approves
         after them, then sends each payer the people they pay. Hours can only be changed here with a reason,
         and every change is written to the payroll change log.

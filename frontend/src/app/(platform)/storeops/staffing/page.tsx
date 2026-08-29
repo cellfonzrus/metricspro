@@ -64,7 +64,7 @@ export default function StaffingHeatmapPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Staffing Heat Map</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           {period} · store-local hours · transaction demand → staff required, vs scheduled & actual heads.
         </p>
       </div>

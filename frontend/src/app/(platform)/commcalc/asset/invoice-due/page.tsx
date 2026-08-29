@@ -213,7 +213,7 @@ export default function InvoiceDuePage() {
         <div>
           <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>🧾 Upcoming Invoice Payment Due</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820 }}>
             Real VIP invoices (due date + total due) with a per-IMEI sold/reimbursed breakdown and an
             INFO-ONLY estimate of what VidaPay's own net-deduction model implies (total due minus the
             1st-Month commission those same devices earned). Sourced from the VIP Wireless Workbook +

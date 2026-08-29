@@ -111,7 +111,7 @@ export default function AccessoryCostAuditPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Accessory Cost Audit — what the % is being paid on</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           {period} · <b>read-only</b> · nothing on this page changes a payout. “Today” is read from the live
           commission-plan preview, so it always equals what the engine pays right now.
         </p>

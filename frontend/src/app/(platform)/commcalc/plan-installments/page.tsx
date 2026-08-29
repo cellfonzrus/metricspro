@@ -411,7 +411,7 @@ export default function PlanInstallmentsPage() {
   return (
     <div style={{ maxWidth: 1100 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Multi-month Commission (sale-triggered)</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 20px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 20px' }}>
         Pay a rep across up to 12 months from ONE sale line — paid-gated on the line staying active &
         receiving residual ("we pay as we get paid"). Schedules are editable; an edit applies from the next
         Run Calculation onward and never rewrites months already paid. Nothing here changes pay until you Run Calculation.

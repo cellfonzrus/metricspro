@@ -109,7 +109,7 @@ export default function AccessoryTargetsPage() {
         <div>
           <a href="/commcalc/targets" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Daily Targets</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>🔖 Accessory Sales Targets</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
             Per store: the monthly accessory‑$ goal, achieved so far this month, the projected month‑end
             (<b>Trending</b>, same source as Executive MTD), and what's still needed — total remaining,
             today's target, and the $/day pace for the days left.

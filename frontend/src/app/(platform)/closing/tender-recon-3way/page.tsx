@@ -217,7 +217,7 @@ export default function TenderRecon3WayPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧮 3-Way Tender Recon</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
             The same money captured three ways — <strong>Daily Closing</strong> (rep entry),
             <strong> POS X-report</strong>, and <strong>Sales Transactions</strong> — per store, per day, across
             cash / credit / external CC / gift card / store account / zelle. The X-report is generated from

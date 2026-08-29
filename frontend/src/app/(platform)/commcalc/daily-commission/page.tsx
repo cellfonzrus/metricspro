@@ -317,7 +317,7 @@ export default function DailyCommissionPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Daily Incentive</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', lineHeight: 1.6 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', lineHeight: 1.6 }}>
           What each rep has <b>probably</b> earned this cycle, what has been <b>advanced to them in cash</b>,
           and what is due now. <b>Accrued is an expected figure, not a payslip</b> — it never changes anyone's
           pay, and a recorded advance never reduces what they are owed at month end. Each day is accrued at

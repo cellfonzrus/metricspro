@@ -149,7 +149,7 @@ export default function TenderConfigPage() {
     <div>
       <div style={{ marginBottom: 6 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 Closing Tender Configuration</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Define the tenders on your daily closing sheet and map each POS report&apos;s raw Tender Type values to them —
           so the 3-way / regular recon works with <b>any</b> POS. Leave it unconfigured to use the built-in 7 tenders.
         </p>

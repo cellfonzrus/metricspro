@@ -195,7 +195,7 @@ export default function MaOverviewReconPage() {
         </span>
         <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={openMapping}>⚙ Tile mapping</button>
       </div>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginTop: 6, maxWidth: 980 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginTop: 6, maxWidth: 980 }}>
         The master-agent portal's <b>Overview of Accounts</b> states a fixed tile set for a period. This page
         puts the report's <b>stated</b> numbers next to the <b>same tiles computed from our ingested data</b>
         {' '}(MA Commission Details + MA Daily Tx) and shows the delta — so activation counts, commission and

@@ -47,7 +47,7 @@ export default function ProductivityInsightsPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Productivity Insights</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           {period} · output per hour + how well each rep's hours fit the store's busy hours. Suggestions only — you decide.
         </p>
       </div>

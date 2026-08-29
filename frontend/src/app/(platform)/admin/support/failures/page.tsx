@@ -104,7 +104,7 @@ export default function FleetFailureTriage() {
         <Link href="/admin/support/fix-requests" className="btn btn-sm">🛠️ Fix Requests</Link>
         <Link href="/admin/support" className="btn btn-sm">🎧 Console</Link>
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
         Every tenant’s failure logs in one place. Club similar failures into a fix request; a super-admin
         approves it into the automation queue. Clearing marks rows reviewed (kept for the audit trail).
       </p>

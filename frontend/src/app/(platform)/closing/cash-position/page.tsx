@@ -97,7 +97,7 @@ export default function CashPositionPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💰 Cash Position</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             Per store: cash on hand as of a chosen day — declared cash accumulated minus what&apos;s
             actually been picked up — plus the last pickup / deposit times. A date range shows a running
             <strong> cumulative</strong> ledger, carried from an opening balance before the range start.

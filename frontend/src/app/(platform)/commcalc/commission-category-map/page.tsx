@@ -98,7 +98,7 @@ export default function CommissionCategoryMapPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗺️ Category → Bucket Map (Commission Ledger)</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 8 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 8 }}>
         Rules that classify a carrier's labels into the five canonical buckets. First match by ascending
         priority wins; payouts are <b>negative</b> amounts. Pick a template ({carrierNames} / your own) — a
         new tenant can adopt a preconfigured one or fork it. See results on{' '}

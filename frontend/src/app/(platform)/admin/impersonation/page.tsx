@@ -92,7 +92,7 @@ export default function ImpersonationAuditPage() {
     <div>
       <div style={{ marginBottom: 18 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🕵️ Sign-in-as Audit</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820, lineHeight: 1.55 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820, lineHeight: 1.55 }}>
           Every time an administrator opens the app as one of your employees, it is recorded here — who
           did it, whom they viewed as, for how long, and every change they made while doing so. Start a
           session from <Link href="/admin/roles" style={{ fontWeight: 600 }}>Roles &amp; Access</Link>;

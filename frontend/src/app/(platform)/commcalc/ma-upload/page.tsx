@@ -47,7 +47,7 @@ export default function MaManualUpload() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>⬆️ Manual report upload</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Upload MA report files by hand — <b>per carrier</b>, against a saved column mapping. This is the
           parallel track to the automated portal pull. <b>Ingest only</b> — uploading never recomputes anyone&apos;s pay.
         </p>

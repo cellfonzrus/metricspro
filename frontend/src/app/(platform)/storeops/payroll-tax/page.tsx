@@ -107,7 +107,7 @@ export default function PayrollTaxPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💵 Payroll (with tax)</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Gross from clocked + manual hours, with FICA, federal and state withholding → net. <b>Estimate</b> (flat-rate) — not a substitute for your payroll provider.
         </p>
       </div>

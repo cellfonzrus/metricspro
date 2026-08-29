@@ -101,7 +101,7 @@ export default function DmAccessoryAttributionPage() {
         <span style={{ flex: 1 }} />
         <ReportExportBar title="DM Accessory-Target Attribution" subtitle={period} sheets={exportSheets} />
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         Each rep's accessory number is their schedule-derived target at the store they worked. A DM's total is
         the sum of every employee-store row whose store's market is granted to them — a rep who worked stores
         in two DMs' markets is split per store, never merged, never double-counted.

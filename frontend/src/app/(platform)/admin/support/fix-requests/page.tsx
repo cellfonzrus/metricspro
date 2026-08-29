@@ -87,7 +87,7 @@ export default function FixRequestsPage() {
         <Link href="/admin/support/failures" className="btn btn-sm">🩺 Fleet Triage</Link>
         <Link href="/admin/support" className="btn btn-sm">🎧 Console</Link>
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
         Clubbed groups of similar failures. {canApprove ? 'You are a super-admin — you can approve/reject.' : 'Approval is super-admin only.'} Approved requests form the queue the fleet picks up. Nothing here ships code automatically.
       </p>
 

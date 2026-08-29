@@ -62,7 +62,7 @@ export default function ProductivityPage() {
           <h1 style={{ fontSize: 21, fontWeight: 700, margin: 0 }}>🏅 Productivity &amp; Reviews — {period}</h1>
           <Link href="/commcalc/kpi" style={{ fontSize: 12 }}>← KPI Metrics</Link>
         </div>
-        <p style={{ color: 'var(--text2)', fontSize: 13.5, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13.5, margin: '4px 0 0' }}>
           Output per hour worked vs each store&apos;s baseline · weighted stack ranking · performance review.
           Display-only — nothing here changes commission pay.
         </p>

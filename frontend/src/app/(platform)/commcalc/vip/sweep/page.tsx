@@ -85,7 +85,7 @@ export default function VipSweepAdmin() {
     <div style={{ maxWidth: 760 }}>
       <a href="/commcalc/vip" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Distributor Invoices</a>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 4px' }}>⚙️ Distributor Auto-Sweep</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 20px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 20px' }}>
         Pulls Distributor invoices from the dealer portal on a schedule (runs on the server, not your laptop).
         Update the portal login here so a password change never needs a code change.
       </p>

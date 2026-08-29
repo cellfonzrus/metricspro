@@ -57,7 +57,7 @@ export default function AccessLogPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Access Log</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Who accessed the system — path, status, IP, and GPS. Group by IP or user to spot a scraper.
         </p>
       </div>

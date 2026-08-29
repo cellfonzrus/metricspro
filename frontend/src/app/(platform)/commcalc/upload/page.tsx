@@ -277,7 +277,7 @@ export default function UploadPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Data Imports</h1>
           <WhereAreMyRowsButton period={period} />
         </div>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Auto-imports pull from the portals on a schedule; manual upload below for anything not automated. Uploaded a file and a page still shows nothing? Open <strong>Where are my rows?</strong> — it traces every ingest and the org it landed in.</p>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Auto-imports pull from the portals on a schedule; manual upload below for anything not automated. Uploaded a file and a page still shows nothing? Open <strong>Where are my rows?</strong> — it traces every ingest and the org it landed in.</p>
       </div>
 
       {/* Period — applies to manual uploads + the period auto-imports tag their data with */}

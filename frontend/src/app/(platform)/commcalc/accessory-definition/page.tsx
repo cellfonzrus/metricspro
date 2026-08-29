@@ -300,7 +300,7 @@ export default function AccessoryDefinitionPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>What counts as an accessory</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 940 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 940 }}>
           {period} · this is your definition of “accessory”, plus an item-by-item comparison against
           every classifier the system already uses. It changes nothing about the GP report or the
           P&amp;L. It decides <b>commission pay</b> only if you switch that on below — and even then,

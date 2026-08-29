@@ -210,7 +210,7 @@ export default function PurchaseOrdersHubPage() {
   return (
     <div style={{ padding: 20, maxWidth: 1200, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, marginBottom: 4 }}>📦 Purchase Orders</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         Generate a proposed order from recommended phones, review/edit it, and save it as a real purchase order.
       </p>
       <PoNav active="/commcalc/asset/purchase-orders" />

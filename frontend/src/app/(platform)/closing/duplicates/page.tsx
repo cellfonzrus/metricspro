@@ -58,7 +58,7 @@ export default function ClosingDuplicatesPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 Duplicate Closing Submissions</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             Same store + rep + day submitted more than once — before migration 502 this silently{' '}
             <strong>doubled</strong> that store&apos;s declared cash/credit in every recon. Nothing here is
             auto-deleted or auto-merged: review each group, then either <strong>Release</strong> the row you

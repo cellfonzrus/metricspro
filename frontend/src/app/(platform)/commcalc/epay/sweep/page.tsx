@@ -82,7 +82,7 @@ export default function EpaySweepAdmin() {
     <div style={{ maxWidth: 760 }}>
       <a href="/commcalc/upload" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Upload</a>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 4px' }}>⚙️ Payment Processor MI + ATU Sync</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
         Pulls the MI + ATU reports from the <strong>payment processor portal</strong> (e.g. ePay / VidaPay) on a
         schedule and loads them automatically — <strong>replaces the manual MI / comp-report upload</strong>. Save the
         portal login here so a password change never needs a code change.

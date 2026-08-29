@@ -104,7 +104,7 @@ export default function AccountabilityPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Accountability</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Lateness &amp; attendance patterns to <b>coach</b> on — with the dates and clock-in times, for a supportive conversation. You decide any action.
           </p>
         </div>

@@ -90,7 +90,7 @@ export default function RecoveryPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0 }}>💰 Appeal Recovery — Commission Claw-back</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Denied appeals whose line later paid or activated → claim the commission back before the {cfg?.clawback_window_days || 45}-day window closes.
           </p>
         </div>

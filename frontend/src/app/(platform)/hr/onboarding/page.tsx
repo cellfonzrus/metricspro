@@ -165,7 +165,7 @@ export default function OnboardingAdminPage() {
   return (
     <div style={{ padding: 24, maxWidth: 920 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🧩 Onboarding Checklist</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         The template HR runs for every new hire. Group items into collapsible categories and assign each to whoever owns it
         (Employee, HR, the DM, or the Market Manager). Add a live form link — or 📎 upload a default template document (a blank W-4, a policy PDF, the handbook) that every new hire downloads from their onboarding portal.
         Open a person&apos;s checklist from <a href="/hr/people" style={{ color: 'var(--accent,#2563eb)' }}>HR · People</a>, or browse every

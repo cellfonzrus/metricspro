@@ -117,7 +117,7 @@ export default function ClosingReconPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔎 Closing Reconciliation</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Declared closing vs B2B daily sales — every day's errors. <b>Block</b> = cash short / credit over (stops the rep closing); <b>Flag</b> = cash over / credit under / count mismatch.
           </p>
         </div>

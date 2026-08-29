@@ -275,7 +275,7 @@ export default function MenuLayoutPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Menu Layout</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Drag <b>⠿</b> to reorder groups and the items inside them, nest items under a <b>sub-category</b>, move an item to another group, show a duplicate copy, or hide it — applies to everyone in your company. Anything you don&apos;t touch keeps its usual place, and newly released pages still appear on their own.</p>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Drag <b>⠿</b> to reorder groups and the items inside them, nest items under a <b>sub-category</b>, move an item to another group, show a duplicate copy, or hide it — applies to everyone in your company. Anything you don&apos;t touch keeps its usual place, and newly released pages still appear on their own.</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)' }}>{msg}</span>}

@@ -200,7 +200,7 @@ export default function CompliancePage() {
   return (
     <div style={{ padding: 24, maxWidth: 1080 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗂️ Compliance Document Repository</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         Every uploaded or signed onboarding document across the roster, grouped by employee — with each document&apos;s
         signature page linked alongside it. Reuses the same storage the <a href="/hr/onboarding" style={{ color: 'var(--accent,#2563eb)' }}>Documents board</a> tracks; nothing is duplicated here.
       </p>

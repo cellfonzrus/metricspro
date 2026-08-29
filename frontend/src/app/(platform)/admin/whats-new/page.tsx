@@ -126,7 +126,7 @@ export default function WhatsNewAdminPage() {
         gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✨ What&apos;s new</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 800, lineHeight: 1.6 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 800, lineHeight: 1.6 }}>
             Everything that has been added or improved, newest first. This is the same list your admins see
             beside the login warnings — nobody outside your admin staff sees any of it.
           </p>

@@ -83,7 +83,7 @@ export default function ShiftExtensionsPage() {
   return (
     <div style={{ maxWidth: 960 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>⏱️ Shift extensions</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
         Employees are automatically clocked out at their scheduled shift end. To keep someone longer, a manager
         files a request here <b>ahead of time</b> and the District Manager approves it — the approval is recorded.
       </p>

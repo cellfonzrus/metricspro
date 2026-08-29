@@ -81,7 +81,7 @@ export default function StoreMatchPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏬 Store Matching</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             Map each store spelling from your POS/sales feed to one of your canonical stores so the same
             physical store never splits across the P&amp;L, Daily Targets and recon. An explicit mapping is the
             source of truth (it always wins). Rows resolving only by an <b>exact address match</b> are shown so

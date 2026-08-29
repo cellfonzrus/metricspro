@@ -185,7 +185,7 @@ export default function OninvThreeWayReconPage() {
         <div>
           <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>🔍 On-Inventory 3-Way Rebate Recon</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780 }}>
             Every On-Inventory IMEI cross-checked against (2) the Distributor rebate already on its ledger row and
             (3) the ePay commission history for that IMEI — to find phones that were actually activated/left
             (missing-phone candidates) vs. genuinely unsold stock (non-activated).

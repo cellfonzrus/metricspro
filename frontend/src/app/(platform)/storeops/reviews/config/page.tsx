@@ -123,7 +123,7 @@ export default function GoogleReviewsConfigPage() {
   return (
     <div>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>⭐ Google Reviews — Settings</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13.5, margin: '0 0 16px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13.5, margin: '0 0 16px' }}>
         Pulls each store's Google rating from its address via Google Places. Google's API returns only a
         curated subset of reviews (typically ~5) — not the full history.
       </p>

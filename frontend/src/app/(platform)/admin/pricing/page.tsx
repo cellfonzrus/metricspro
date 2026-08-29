@@ -130,7 +130,7 @@ export default function PricingAdmin() {
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🏷️ Pricing &amp; Free Trial</h1>
-      <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         The prices published here are what the public website shows — the site has no price of its own.
         Nothing is visible to the public until you tick <b>Published</b>.
       </p>

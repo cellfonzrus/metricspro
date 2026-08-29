@@ -126,7 +126,7 @@ export default function CommissionImportWizard() {
     <div style={{ maxWidth: 1000 }}>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🪄 Commission Import Wizard</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Upload <b>any</b> carrier&apos;s commission file and map each column to a category. Missing a category
           (a 7th-month spiff, a new bounty)? Create it here — the system adds the column automatically and
           remembers your mapping for next time. Loads into <code>carrier_commission</code>; the live Boost calc is

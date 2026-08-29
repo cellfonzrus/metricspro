@@ -201,7 +201,7 @@ export default function PayrollExpensesPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💼 Payroll Expenses</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Employer payroll tax + customizable burden items (Unemployment Insurance, Workers Comp, …) —
             rolled into ONE additive &quot;Payroll Expenses&quot; line on the Store Expenses page each run.
           </p>

@@ -212,7 +212,7 @@ export default function CommissionLedgerPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1100 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🧾 Commission Ledger</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 10 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 10 }}>
         Any carrier's commission file → five canonical buckets, classified once and displayed as it's paid.
       </p>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12,

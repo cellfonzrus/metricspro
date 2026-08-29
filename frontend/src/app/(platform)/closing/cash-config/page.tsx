@@ -106,7 +106,7 @@ export default function CashConfigPage() {
   return (
     <div style={{ maxWidth: 900 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>💵 Cash management — setup</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 14px' }}>Closing deadline & gate, assigned closers, cash-aging window, and who gets alerted.</p>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 14px' }}>Closing deadline & gate, assigned closers, cash-aging window, and who gets alerted.</p>
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
 
       <div className="card" style={card}>

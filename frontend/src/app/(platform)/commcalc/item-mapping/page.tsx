@@ -144,7 +144,7 @@ export default function ItemMappingPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Item / Model Mapping</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Classify each item: type (accessory vs phone), phone model, a <b>sales category</b> and a <b>KPI category</b>.
           Filter by store / department / category / text, select multiple rows and assign in one action. The
           &quot;Activation payment&quot; sales/KPI category drives the month-1 &quot;paid at activation&quot; installment gate.

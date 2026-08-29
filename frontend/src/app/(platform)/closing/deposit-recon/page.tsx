@@ -184,7 +184,7 @@ export default function DepositReconPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💵 Cash Deposit Reconciliation</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780 }}>
             For every day with a recorded deposit: cash collected (Daily Closing + POS X-Report) vs cash
             deposited, per category, minus any adjustments you choose to include below (excluded by
             default). <Link href="/closing/deposit-categories" style={{ color: 'var(--accent)' }}>Manage categories</Link>.

@@ -87,7 +87,7 @@ export default function PlanAssignmentAuditPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🕵️ Plan Assignment Audit</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           For every employee, which commission plan they resolve to and <b>why</b> — <b>read-only</b>, nothing here changes a payout.
           Precedence is <code>employee &gt; role &gt; store &gt; market &gt; default</code>, so a <b>by-name pin</b> silently
           overrides a rep&rsquo;s store/market plan. Every answer is read from the same matcher the live calc pays from, so it agrees with what actually pays.

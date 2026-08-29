@@ -160,7 +160,7 @@ export default function ExpectedCommissionPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Expected vs Earned — multi-month incentive</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 940 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 940 }}>
           {period} · months <b>{data?.config?.from_month ?? 2}–{data?.config?.to_month ?? 6}</b> ·{' '}
           <b>Expected is a column, not a payment.</b> It is what a month will pay once the carrier pays
           us; it is never added to anyone&rsquo;s incentive. <b>Earned</b> fills in automatically the

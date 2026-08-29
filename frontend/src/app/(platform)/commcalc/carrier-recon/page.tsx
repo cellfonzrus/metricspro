@@ -142,7 +142,7 @@ export default function CarrierReconPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔁 Carrier Reconciliation</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820 }}>
           Upload the back-office <b>Rebate Reconciliation</b> workbook and compare it, per store, against{' '}
           <b>our</b> computed figures. <b>Display &amp; analysis only</b> — this never changes anyone&apos;s
           pay or writes to a money table.

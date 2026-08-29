@@ -140,7 +140,7 @@ export default function AccessoryFlagsPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔖 Accessory Flags</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Accessories sold <b>over</b> the max threshold or <b>under</b> the allowed minimum (underselling), by store + rep + date range. Click any row for the full receipt; flag rows to push a chargeback to the rep who sold it.
         </p>
       </div>

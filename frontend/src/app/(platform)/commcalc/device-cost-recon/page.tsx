@@ -267,7 +267,7 @@ export default function DeviceCostReconPage() {
   const header = (
     <div style={{ marginBottom: 14 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧮 Device Cost Reconciliation</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
         The same handset&apos;s cost, from all four sources at once — a marketplace <b>purchase</b>, a
         distributor&apos;s <b>consignment billing</b>, the <b>POS-derived</b> cost at sale, and the
         <b> inventory</b> valuation — each tagged with its arrangement and the date it is timed on, with

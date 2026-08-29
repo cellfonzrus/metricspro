@@ -103,7 +103,7 @@ export default function PayrollPayersPage() {
         <div style={{ flex: 1 }} />
         <Link href="/storeops/payroll/approvals" style={{ ...btn, textDecoration: 'none', color: 'var(--text1)' }}>← Hours Approval</Link>
       </div>
-      <p style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 14px', maxWidth: '78ch' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '0 0 14px', maxWidth: '78ch' }}>
         Once HR approves a week, each of these parties gets a statement listing only the employees they
         pay. Set one as the default — it pre-fills every employee nobody has routed anywhere else.
       </p>

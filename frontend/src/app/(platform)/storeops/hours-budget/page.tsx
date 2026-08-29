@@ -94,7 +94,7 @@ export default function HoursBudgetPage() {
   return (
     <div style={{ maxWidth: 900 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>📊 Hours budget</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 14px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 14px' }}>
         Each store&apos;s weekly labor-hours budget. Scheduling past it is blocked with an alert; a manager can
         request District Manager approval to exceed it for a given week. Week starting <b>{weekStart || '—'}</b>.
         <input type="date" value={week} onChange={e => setWeek(e.target.value)} style={{ ...inp, width: 150, marginLeft: 10 }} />

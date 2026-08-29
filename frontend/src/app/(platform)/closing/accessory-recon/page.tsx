@@ -68,7 +68,7 @@ export default function AccessoryReconPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔖 Accessory Reporting Recon</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
             What reps <strong>declared</strong> as accessory sales on the closing sheet vs what the
             <strong> sales transactions</strong> actually show, per store, for the day. Accessory isn’t a
             tender — this is a separate tally to catch reps entering wrong accessory numbers.

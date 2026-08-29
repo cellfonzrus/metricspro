@@ -146,7 +146,7 @@ export default function AdminTrainingPage() {
         gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🎓 Walk-through editor</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780, lineHeight: 1.6 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780, lineHeight: 1.6 }}>
             Every word a user reads in a guided walk-through lives here. Reword a shipped one for the way
             your business does it, or write your own — nothing here needs a developer.
           </p>

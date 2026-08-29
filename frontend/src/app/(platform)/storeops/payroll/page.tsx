@@ -231,7 +231,7 @@ export default function PayrollPage() {
       <div style={{ marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 8 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Payroll Report</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {periodName} · {visibleRows.length} employees{visibleRows.length !== rows.length ? ` (of ${rows.length})` : ''}
             {(overAlone.size > 0 || overStores.size > 0) && (
               <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ {overStores.size || overAlone.size} store-week(s) over their configured weekly hours limit (highlighted below)</span>

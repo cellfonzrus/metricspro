@@ -57,7 +57,7 @@ export default function ExecOverviewPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📊 Owner Overview — {period}</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Business health at a glance — commissions, money at risk, chargebacks, flags, and the store leaderboard.</p>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Business health at a glance — commissions, money at risk, chargebacks, flags, and the store leaderboard.</p>
         {/* WHY THERE IS NO DATE RANGE HERE (owner asked 2026-08-11 for a date-range filter on
             "Executive MTD / Owner Overview"): every tile on this page is MONTH-GRAINED at the source —
             commissions paid / at-risk / chargebacks come from the per-rep incentive run, and the three

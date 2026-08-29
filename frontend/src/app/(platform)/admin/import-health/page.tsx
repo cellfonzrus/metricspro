@@ -116,7 +116,7 @@ export default function ImportHealthPage() {
   return (
     <div style={{ maxWidth: 1180 }}>
       <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 4 }}>📡 Import Health</h1>
-      <p style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 16, maxWidth: 900 }}>
+      <p className="pg-note" style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 16, maxWidth: 900 }}>
         Every data feed this company expects, how often it should arrive, and when it last actually
         delivered. Anything overdue or never-run also pops up for admins at login. Feeds are discovered
         automatically from your import settings — edit the cadence, disable one you don&apos;t use, or

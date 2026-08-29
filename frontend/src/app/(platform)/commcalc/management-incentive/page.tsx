@@ -98,7 +98,7 @@ export default function ManagementIncentivePage() {
   return (
     <div style={{ maxWidth: 1080 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🏆 Management Incentives</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 14px', maxWidth: 820 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 14px', maxWidth: 820 }}>
         Incentive plans for managers, scored per period across the stores they run: store-performance
         components (paid on production vs target) plus qualification-gated bonuses. Assign a plan to an
         employee, a role/level, a market or store — most-specific wins, just like the rep commission plan.

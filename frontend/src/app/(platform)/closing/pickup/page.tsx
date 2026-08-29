@@ -229,7 +229,7 @@ export default function CashPickupPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💵 Cash Pickup</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Check off each cash envelope you collected, add a note, and confirm. The assigned recipient is notified by email + WhatsApp.</p>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Check off each cash envelope you collected, add a note, and confirm. The assigned recipient is notified by email + WhatsApp.</p>
         </div>
         <Link href="/closing" className="btn btn-secondary" style={{ fontSize: 13 }}>← Dashboard</Link>
       </div>

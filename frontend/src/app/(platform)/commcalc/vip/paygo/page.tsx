@@ -67,7 +67,7 @@ export default function PaygoPage() {
         <div>
           <a href="/commcalc/vip" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Distributor Invoices</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>📦 Distributor Asset Lending (PayGo)</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             What the Distributor bills for lent (Pay-As-You-Go) devices each week, scraped from the dealer portal. Each weekly batch is a group of invoices — the invoice numbers join to your Distributor invoices &amp; device IMEIs.
           </p>
         </div>

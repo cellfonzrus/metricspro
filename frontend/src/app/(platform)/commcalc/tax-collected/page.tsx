@@ -68,7 +68,7 @@ export default function TaxCollectedPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 Tax Collected</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
             Retail sales tax collected per store, from the unified sales transactions. Merchandise (ext
             price) is pre-tax; this is the tax on top the customer paid. Drill a store to its daily detail.
           </p>

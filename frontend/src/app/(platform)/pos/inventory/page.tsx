@@ -492,7 +492,7 @@ export default function PosInventoryPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📦 Inventory</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Serial-tracked units &amp; standard stock{activeStore ? ` · active store: ${storeLabel(activeStore)}` : ''}
           </p>
         </div>

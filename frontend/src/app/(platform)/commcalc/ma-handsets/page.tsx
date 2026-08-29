@@ -186,7 +186,7 @@ export default function MaHandsetCogsPage() {
   const header = (
     <div style={{ marginBottom: 14 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📦 Marketplace Handset COGS</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
         What the handsets we ordered actually cost — quantity × unit price — by product, month and
         ship-to, with the <b>open (unfulfilled)</b> orders first. These are dollars the distributor
         invoiced us; nothing here changes what anyone is paid.

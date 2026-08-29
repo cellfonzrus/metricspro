@@ -147,7 +147,7 @@ export default function EnvelopeConfigPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>✉️ Envelope Payout Configuration</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             What may be paid out in cash from the daily envelope, and on what cadence. Whatever isn&apos;t
             taken is left for the bank deposit. A store override wins over the org default for any field
             it sets.

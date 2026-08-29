@@ -377,7 +377,7 @@ export default function FixRequestsBoard() {
     <div style={{ padding: 20 }}>
       <div style={{ marginBottom: 12 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🛠️ Auto-Fix Pipeline</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 900 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 900 }}>
           Every distinct system error that was triaged into a fix, one row per problem (50 occurrences of one
           bug = one row). Each row shows where the fix is parked, what proved it, and what the AI work cost.
           <b> Nothing here deploys anything:</b> a parked fix ships only when you say “push it” in chat, and

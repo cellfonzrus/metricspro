@@ -91,7 +91,7 @@ export default function CommissionLedgerSetupPage() {
   return (
     <div style={{ padding: 24, maxWidth: 880 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>🧭 Commission Ledger — Setup</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 16 }}>
         Turn a carrier's commission file into five standard buckets. Do this once per carrier; afterwards
         you just import each month. Nothing is saved until the final step.
       </p>

@@ -67,7 +67,7 @@ export default function DepositCategoriesPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🗂️ Cash Deposit Categories</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780 }}>
             Categories split a bank deposit into buckets that reconcile against the matching cash bucket
             (bill-payment cash collected reconciles against <b>Bill Payment Cash Deposit</b>; the remaining
             store cash against <b>Store Cash Deposit</b>). Add more as needed. Deactivate a category instead

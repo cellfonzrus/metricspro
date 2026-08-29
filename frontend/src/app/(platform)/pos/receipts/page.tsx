@@ -147,7 +147,7 @@ export default function ReceiptImportPage() {
   return (
     <div style={{ padding: 20, maxWidth: 1100, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🧾 Receipt Import</h1>
-      <p style={{ color: 'var(--text2)', margin: '0 0 16px', fontSize: 13 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', margin: '0 0 16px', fontSize: 13 }}>
         Upload a receipt PDF from another POS, review &amp; edit the fields, and reprint it later in the same format.
       </p>
 

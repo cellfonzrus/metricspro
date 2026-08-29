@@ -52,7 +52,7 @@ export default function ClosingManagementPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🛡️ Closing — Management Review</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
             Every value a rep entered before a close was accepted — including the tries that were
             <strong> over or short</strong> and the ones <strong>auto-accepted after 3 attempts</strong>. Reps
             only ever see “over” or “short”; here you see the amounts and the true system variance.

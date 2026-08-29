@@ -125,7 +125,7 @@ export default function ChargebacksPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔻 Chargebacks & Fraud</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Assign each chargeback to the rep who did the sale — that writes it into the employee's chargeback. Fraud reviews can be dismissed (legit) or assigned (charged).
         </p>
       </div>

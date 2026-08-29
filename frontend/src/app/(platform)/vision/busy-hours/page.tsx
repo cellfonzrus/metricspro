@@ -106,7 +106,7 @@ export default function VisionBusyHoursPage() {
           <Link href="/vision" style={{ ...btn, textDecoration: 'none' }}>📹 Live Cameras</Link>
         </div>
       </div>
-      <p style={{ color: 'var(--text2)', fontSize: 13.5, margin: '0 0 14px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13.5, margin: '0 0 14px' }}>
         When people are in the store, reported by the cameras themselves. No analyzer, no video.
       </p>
 

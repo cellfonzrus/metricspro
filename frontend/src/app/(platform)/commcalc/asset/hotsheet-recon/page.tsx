@@ -127,7 +127,7 @@ export default function HotsheetReconPage() {
         <div>
           <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Hotsheet Recon — Expected vs Paid</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             For each activated device, the <strong>expected</strong> promo from the pricing hotsheet (by device model + the
             hotsheet effective as of its acquired date, on the column chosen from the contract type:
             Upgrade &gt; AAL &gt; Port-In &gt; Non-Port) vs the <strong>actual</strong> carrier reimbursement. Unsold On-Inventory is excluded.

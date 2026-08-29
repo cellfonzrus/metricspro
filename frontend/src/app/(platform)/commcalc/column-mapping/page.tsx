@@ -113,7 +113,7 @@ export default function ColumnMappingPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Column Mapping</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Map each carrier&apos;s spreadsheet columns to our canonical fields — config-driven, so a new carrier&apos;s report ingests with no code. Seed the default, or upload a sample to auto-detect.
         </p>
       </div>

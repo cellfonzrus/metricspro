@@ -152,7 +152,7 @@ export default function ChargeGroupPage() {
         <div>
           <a href="/commcalc/asset/dashboard" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Charges Dashboard</a>
           <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>{cfg.title}</h1>
-          <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>{cfg.blurb}</p>
+          <p className="pg-note" style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>{cfg.blurb}</p>
         </div>
         <div style={{ display: 'inline-flex', gap: 6 }}>
           <ExportButtons payload={buildPayload} />

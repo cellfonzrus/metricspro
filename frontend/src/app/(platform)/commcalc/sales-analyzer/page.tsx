@@ -82,7 +82,7 @@ export default function SalesAnalyzerPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📉 Retention Analysis — 3-Month</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {period} · cohort = activations in <strong>{data?.cohort_month || '…'}</strong> · churned before the 3rd bill (≤ {windowDays} days)
           </p>
         </div>

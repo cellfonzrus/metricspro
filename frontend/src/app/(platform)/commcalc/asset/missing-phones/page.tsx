@@ -46,7 +46,7 @@ export default function MissingPhonesPage() {
         <div>
           <a href="/commcalc/asset/aging" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Inventory Aging</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>📵 Missing Phones</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
             Devices flagged in Inventory Aging as showing in the system but <strong>not physically in the store</strong>.
             The list to investigate, with the distributor exposure at risk.
           </p>

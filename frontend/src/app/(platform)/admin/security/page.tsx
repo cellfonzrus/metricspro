@@ -155,7 +155,7 @@ export default function SecuritySettingsPage() {
   return (
     <div style={{ maxWidth: 780 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>🛡️ Security Settings</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
         Per-company password rules, two-factor authentication, and admin-assigned passwords.
         {!canEdit && <strong style={{ color: '#b45309' }}> You have read-only access — ask an admin to make changes.</strong>}
       </p>

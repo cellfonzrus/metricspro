@@ -89,7 +89,7 @@ export default function SupportConsole() {
         <span style={{ flex: 1 }} />
         <Link href="/admin/support/docs" className="btn btn-sm">📚 Help Docs</Link>
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
         Escalated tickets from every tenant, handled here by the house tech-support team.
       </p>
 

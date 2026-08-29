@@ -129,7 +129,7 @@ export default function RmaPage() {
         <div>
           <a href="/commcalc/asset/dashboard" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Charges Dashboard</a>
           <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>RMA Reconciliation</h1>
-          <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
+          <p className="pg-note" style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
             Returned devices — which were reimbursed in full, short-paid, or never credited by the Distributor.
           </p>
         </div>
