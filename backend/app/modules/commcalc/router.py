@@ -22581,6 +22581,188 @@ def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
                      date_from=date_from or None, date_to=date_to or None)
 
 
+# ── Narrative banners (owner 2026-08-29 modernization track) ───────────────────────────────────────
+# A deterministic plain-English summary rendered ABOVE a report. DELIBERATELY NOT LLM prose: every
+# sentence is computed from the same numbers the table shows, so it can never contradict them, needs no
+# API key, and cannot hallucinate a figure. `_narrate_delta` is the shared sentence-builder; the report
+# endpoints below gather the current + prior facts and call it. Adding a banner to another report is then
+# just "collect two totals dicts + a metric spec".
+
+def _pct_change(cur, prior):
+    """Signed percent change, or None when there is no prior base to compare against (a change from
+    zero has no percentage). Rounds to one decimal."""
+    try:
+        c, p = float(cur or 0), float(prior or 0)
+    except (TypeError, ValueError):
+        return None
+    if p == 0:
+        return None
+    return round((c - p) / p * 100.0, 1)
+
+
+def _dir_word(delta, *, higher_is_better=True):
+    """('ahead of' / 'behind' / 'level with', tone) for a signed delta, where tone is 'up'/'down'/'flat'
+    keyed to whether the movement is GOOD for this metric (so the UI colours it right — a fall in
+    chargebacks is good, a fall in activations is not)."""
+    if delta > 0:
+        return ('ahead of', 'up' if higher_is_better else 'down')
+    if delta < 0:
+        return ('behind', 'down' if higher_is_better else 'up')
+    return ('level with', 'flat')
+
+
+# Human labels for the activation buckets, used to name the driver ("…driven by ports").
+_MTD_BUCKET_LABELS = {'activation': 'new activations', 'port': 'ports', 'byod': 'BYOD',
+                      'upgrade': 'upgrades', 'tablet': 'tablets', 'home_internet': 'home internet',
+                      'edge': 'Edge'}
+
+
+def _mtd_window(period: str, through_day: int):
+    """(date_from, date_to) ISO strings covering day 1 → `through_day` of `period`, with `through_day`
+    clamped to the month's real length (so a 'through the 30th' comparison against February stops at the
+    28th rather than spilling). Returns (from, to, clamped)."""
+    pm = parse_period(period)
+    y, m = pm['year'], pm['month']
+    dim = _calendar.monthrange(y, m)[1] if (1 <= m <= 12 and y) else 30
+    d = max(1, min(int(through_day), dim))
+    return (f"{y}-{m:02d}-01", f"{y}-{m:02d}-{d:02d}", d != int(through_day))
+
+
+def _mtd_narrative(client, org_id, period, today=None, stores=None, markets=None, reps=None):
+    """Executive-MTD narrative: how this month-to-date compares to the SAME complete-days window of the
+    prior month, plus the store leading the change and what drove it. Both windows are day 1 → yesterday
+    (complete days only, so today's in-progress sales don't skew the comparison), fed to the exact same
+    `_exec_mtd` aggregation the table uses. DISPLAY-ONLY; never raises — any failure yields
+    `available: False` and the banner simply doesn't render."""
+    try:
+        _today = today or _date.today()
+        prior_period = _prior_period(period)
+        # OPEN month → compare month-to-date (day 1 → yesterday, complete days only) against the SAME
+        # window of last month. CLOSED/past month → the fair comparison is the whole month vs last whole
+        # month, so the window runs to the month's last day.
+        open_m = _is_open_month(period)
+        if open_m:
+            through = max(1, _today.day - 1)
+        else:
+            _pm = parse_period(period)
+            through = _calendar.monthrange(_pm['year'], _pm['month'])[1] if (1 <= _pm['month'] <= 12) else 30
+
+        cf, ct, _ = _mtd_window(period, through)
+        pf, pt, clamped = _mtd_window(prior_period, through)
+        flt = dict(stores=stores, markets=markets, reps=reps)
+        cur = _exec_mtd(client, org_id, period, today=_today, date_from=cf, date_to=ct, **flt)
+        prior = _exec_mtd(client, org_id, prior_period, date_from=pf, date_to=pt, **flt)
+
+        ct_tot = cur['by_location']['total']
+        pt_tot = prior['by_location']['total']
+        cur_ta, prior_ta = ct_tot.get('total_activation', 0), pt_tot.get('total_activation', 0)
+        cur_acc, prior_acc = ct_tot.get('acc_sales', 0.0), pt_tot.get('acc_sales', 0.0)
+        n_stores = len([r for r in cur['by_location']['rows'] if r.get('total_activation')])
+
+        # No comparison possible (first month of data, or a filter that empties the prior window):
+        # still give a useful non-comparative headline rather than nothing.
+        if prior_ta == 0:
+            if cur_ta == 0:
+                return {'period': period, 'available': False}
+            stores_txt = f"{n_stores} store{'s' if n_stores != 1 else ''}"
+            if open_m:
+                trend_val = round(cur_ta * (cur['trending'].get('factor') or 1))
+                head = (f"{cur_ta:,} activations so far this month across {stores_txt}, "
+                        f"trending to {trend_val:,} for the month.")
+            else:
+                head = f"{cur_ta:,} activations in {period} across {stores_txt}."
+            return {'period': period, 'prior_period': prior_period, 'through_day': through,
+                    'available': True, 'comparative': False, 'tone': 'flat', 'headline': head,
+                    'bullets': ([f"Accessory sales ${cur_acc:,.0f}, ${ct_tot.get('apb', 0):,.2f} per box."] if cur_acc else []),
+                    'facts': {'total_activation': cur_ta, 'acc_sales': cur_acc, 'stores': n_stores}}
+
+        ta_delta = cur_ta - prior_ta
+        ta_pct = _pct_change(cur_ta, prior_ta)
+        phrase, tone = _dir_word(ta_delta)
+        pct_txt = f"{abs(ta_pct):.0f}% " if ta_pct is not None else ""
+        if open_m:
+            headline = (f"Activations are running {pct_txt}{phrase} last month — "
+                        f"{cur_ta:,} vs {prior_ta:,} through the {_ordinal(through)}.")
+        else:
+            headline = (f"{period} activations came in {pct_txt}{phrase} the prior month — "
+                        f"{cur_ta:,} vs {prior_ta:,}.")
+
+        bullets = []
+        # Top mover store + its driving bucket, computed store-by-store on the same buckets.
+        pri_by_name = {r.get('store'): r for r in prior['by_location']['rows']}
+        movers = []
+        for r in cur['by_location']['rows']:
+            nm = r.get('store')
+            d = (r.get('total_activation', 0)) - (pri_by_name.get(nm, {}).get('total_activation', 0))
+            if nm:
+                movers.append((d, nm, r, pri_by_name.get(nm, {})))
+        movers.sort(key=lambda x: x[0])
+        gain = movers[-1] if movers else None
+        drop = movers[0] if movers else None
+        if gain and gain[0] > 0:
+            drv = _mtd_driver_bucket(gain[2], gain[3])
+            bullets.append(f"{gain[1]} leads the gain (+{gain[0]:,})"
+                           + (f", driven by {drv}." if drv else "."))
+        if drop and drop[0] < 0 and (not gain or drop[1] != gain[1]):
+            bullets.append(f"{drop[1]} is down {abs(drop[0]):,}.")
+        # Accessory line.
+        acc_pct = _pct_change(cur_acc, prior_acc)
+        if cur_acc or prior_acc:
+            acc_phrase = (f"{abs(acc_pct):.0f}% {'up' if (cur_acc - prior_acc) > 0 else 'down'} vs last month"
+                          if acc_pct is not None else "no prior comparison")
+            bullets.append(f"Accessory sales ${cur_acc:,.0f} ({acc_phrase}), ${ct_tot.get('apb', 0):,.2f} per box.")
+
+        return {'period': period, 'prior_period': prior_period, 'through_day': through,
+                'available': True, 'comparative': True, 'tone': tone, 'clamped': clamped,
+                'headline': headline, 'bullets': bullets,
+                'facts': {'total_activation': cur_ta, 'prior_total_activation': prior_ta,
+                          'ta_delta': ta_delta, 'ta_pct': ta_pct,
+                          'acc_sales': cur_acc, 'prior_acc_sales': prior_acc, 'acc_pct': acc_pct,
+                          'stores': n_stores}}
+    except Exception:
+        return {'period': period, 'available': False}
+
+
+def _mtd_driver_bucket(cur_row, prior_row):
+    """The activation bucket that moved MOST for one store between the two windows — the 'driven by …'
+    clause. Returns a human label or '' when no single bucket stands out."""
+    best_lbl, best_delta = '', 0
+    for k, lbl in _MTD_BUCKET_LABELS.items():
+        d = (cur_row.get(k, 0) or 0) - (prior_row.get(k, 0) or 0)
+        if abs(d) > abs(best_delta):
+            best_delta, best_lbl = d, lbl
+    return best_lbl if best_delta > 0 else ''
+
+
+def _ordinal(n: int) -> str:
+    """1 -> '1st', 2 -> '2nd', 22 -> '22nd' … for the 'through the Nth' phrasing."""
+    n = int(n)
+    if 10 <= (n % 100) <= 20:
+        suf = 'th'
+    else:
+        suf = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+    return f"{n}{suf}"
+
+
+@router.get("/exec-mtd/{period}/narrative")
+def exec_mtd_narrative(period: str, org_id: str = ORG_ID, today: str = "",
+                       stores: Optional[List[str]] = Query(default=None),
+                       markets: Optional[List[str]] = Query(default=None),
+                       reps: Optional[List[str]] = Query(default=None)):
+    """Plain-English summary banner for the Executive MTD report — this month-to-date vs the same
+    complete-days window of last month, the store leading the change, and the accessory trend. Every
+    number is computed from the SAME `_exec_mtd` aggregation the table renders, so the banner can never
+    disagree with the grid. Honors the same `stores`/`markets`/`reps` filters. DISPLAY-ONLY."""
+    require_org(org_id)
+    _t = None
+    if today:
+        try:
+            _t = _date.fromisoformat(str(today)[:10])
+        except Exception:
+            _t = None
+    return _mtd_narrative(sb(), org_id, period, today=_t, stores=stores, markets=markets, reps=reps)
+
+
 # Type buckets that make up b2b's "Total Activation" — everything the Activation Details report classifies
 # EXCEPT an Upgrade. Verified against the b2b "Month To Date Location Sales Report" totals row
 # (Activation+Port+BYOD+Tablet+HomeInternet+Edge = Total Activation; Upgrade is a separate column).

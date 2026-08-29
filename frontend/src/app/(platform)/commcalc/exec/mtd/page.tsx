@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import PageIntro from '@/components/PageIntro'
+import NarrativeBanner from '@/components/NarrativeBanner'
 import Link from 'next/link'
 import { api, fmt, getActiveOrg, localToday } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
@@ -97,6 +98,20 @@ export default function ExecMtdPage() {
     (opt.stores_detail as any[] | undefined)?.map(s => ({ id: s.id, label: s.label, market: s.market })) ||
     storeOpts.map(s => ({ id: s, label: s, market: null }))
   ), [opt.stores_detail, storeOpts])
+  // NARRATIVE BANNER (owner 2026-08-29). A deterministic "this MTD vs the same days last month" summary,
+  // computed server-side from the SAME aggregation the table renders. It honours the store/market/rep
+  // filters, but is SUPPRESSED while a custom date range is active — the narrative always compares whole
+  // month-to-date windows, so pairing it with a slice of the month would be comparing two different things.
+  const narrativeUrl = useMemo(() => {
+    if (!period || dFrom || dTo) return null
+    const qs = new URLSearchParams()
+    qs.set('today', localToday())
+    selStores.forEach((s) => qs.append('stores', s))
+    selMarkets.forEach((s) => qs.append('markets', s))
+    selReps.forEach((s) => qs.append('reps', s))
+    return `/api/v1/commcalc/exec-mtd/${encodeURIComponent(period)}/narrative?${qs.toString()}${orgParam()}`
+  }, [period, selStores, selMarkets, selReps, dFrom, dTo])
+
   const hasFilter = selStores.length > 0 || selMarkets.length > 0 || selReps.length > 0 || !!dFrom || !!dTo
   const clearFilters = () => setFilt(emptyStandardFilter())
   const src = data?.source || {}
@@ -232,6 +247,10 @@ export default function ExecMtdPage() {
           </div>
         </div>
       )}
+
+      {/* NARRATIVE BANNER — plain-English "how this month is going vs last" above the grid. Deterministic
+          (computed from the same numbers below), so it can never disagree with the table. */}
+      <NarrativeBanner url={narrativeUrl} />
 
       {/* RULE FIVE standardized filter bar — market -> store cascade (checkbox dropdowns) + employees,
           pick-don't-type over the org's real data, applied SERVER-SIDE so the tables, the trending math
