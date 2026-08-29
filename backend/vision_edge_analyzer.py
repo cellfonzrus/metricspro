@@ -1380,68 +1380,89 @@ class CameraWorker:
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The process
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# Google's documented ceiling for devices.executeCommand: 5 QPM PER PROJECT, PER USER, PER DEVICE.
+# Google's documented ceilings for devices.executeCommand. Three of them apply at once, and an
+# analyzer has to respect the tightest — which is NOT the per-device one.
 #
-# PER DEVICE is the part that matters and the part an earlier draft of this file got backwards. It
-# assumed a single ceiling shared across the whole estate and metered every camera out of one
-# bucket, which throttles nothing Google was going to throttle and instead makes a twenty-camera
-# analyzer take five minutes to come up. The aggregation Google describes runs the other way: two
-# PROJECTS talking to the SAME device share that device's five, not one project's cameras sharing
-# five between them.
+#   API level      10 QPM per project, PER USER, across every device.
+#   Command level   5 QPM per project, per user, per device.
+#   Device level   30 QPM or 100 QPH per camera, aggregated ACROSS projects (battery protection).
 #
-# We spend 4 of the 5 and leave one, because the analyzer is not the only thing sending commands to
-# these cameras: the live-view page and the counting-line still both call executeCommand for the
-# same device, as the same user, in the same project. An analyzer that spends the whole allowance
-# means a manager pressing "Watch live" gets a throttle instead of a picture.
+# THE ACROSS-DEVICES CEILING IS THE ONE THAT BINDS, and it is worth being blunt about how this file
+# got there. A first version metered the whole estate from a single bucket. A second replaced it
+# with per-device buckets on the reasoning that Google's limit is per device and no estate-wide
+# ceiling exists — which was wrong, and wrong in the dangerous direction: it let twenty-one cameras
+# fire twenty-one commands in one pass of the loop against a ceiling of ten. Google's own worked
+# example settles it: six devices at 5 QPM each "would result in 15 QPM for each user, when the
+# devices.executeCommand API level rate limit for a project's user is 10 QPM."
 #
-# SOURCE, stated because it could not be checked from here: Google's Device Access limits page
-# (developers.google.com/nest/device-access/project/limits) is unreachable from this network, so
-# this rests on two independent search summaries of it rather than on the page itself. If somebody
-# can open it, confirm the 5 and delete this paragraph.
-OPEN_QPM_PER_DEVICE = 4.0
+# So BOTH gates are enforced. A command needs a token from its own device AND from the estate.
+#
+# WHAT THIS COSTS AT SCALE, because it is a real limit on how many cameras one Google account can
+# carry rather than a tuning knob. Every open stream is extended roughly every 200 seconds, which is
+# 0.3 commands per minute per camera, forever:
+#
+#     21 cameras -> 6.3 QPM, about 63% of the ceiling      (LuxeLink today)
+#     27 cameras -> 8.1 QPM, the practical limit with room for opens and live view
+#     33 cameras -> 9.9 QPM, extensions alone consume the entire budget
+#
+# Past roughly 27 cameras a second Google user — or a second Device Access project — is not an
+# optimisation, it is the only way through.
+USER_QPM = 8.0            # of Google's 10, leaving room for a person pressing "Watch live"
+DEVICE_QPM = 4.0          # of Google's 5, same reason
 
 
 class CommandBudget:
-    """A token bucket over the commands this analyzer sends to Google, PER DEVICE.
+    """Token buckets over the commands this analyzer sends to Google — per device AND per user.
 
     WHY A BUDGET AND NOT A SLEEP. Two different things want to send an executeCommand — a camera
-    opening its stream, and a camera extending a grant that is about to lapse — and they are not
-    equally urgent. A missed extension costs a full re-negotiation and a gap in the count; a
-    delayed open costs a few seconds of a camera coming up, which nobody notices.
+    opening its stream, and a camera extending a grant about to lapse — and they are not equally
+    urgent. A missed extension drops the stream, costs a full renegotiation and puts a hole in that
+    camera's count; a delayed open costs a few seconds of a camera coming up, which nobody notices.
 
-    So extensions get a RESERVE that opens cannot touch. Both draw on the same per-device bucket,
-    but an open must leave `reserve` tokens behind, while an extension may spend to the floor. An
-    earlier version described exactly this behaviour in its docstring and did not implement it:
-    only opens were metered and extensions bypassed the budget entirely, so the priority it claimed
-    to encode did not exist in either direction.
+    So extensions get a RESERVE that opens cannot touch, at both levels. An earlier version
+    described exactly this and did not implement it: only opens were metered and extensions bypassed
+    the budget entirely, so the priority it claimed to encode existed in neither direction.
     """
 
-    def __init__(self, per_minute=OPEN_QPM_PER_DEVICE, reserve=1.0):
-        self.rate = max(0.5, float(per_minute)) / 60.0
-        # A full minute of capacity, so a camera that has been quiet can open immediately rather
-        # than waiting out a bucket that was sized for half the rate.
-        self.capacity = max(1.0, float(per_minute))
+    # A tuple, so it can never collide with a device_name (always a string).
+    USER_KEY = ("__estate__",)
+
+    def __init__(self, per_minute=DEVICE_QPM, reserve=1.0, user_per_minute=USER_QPM):
+        self.device_rate = max(0.5, float(per_minute)) / 60.0
+        # A full minute of capacity, so a camera that has been quiet can open at once rather than
+        # waiting out a bucket sized for half the rate.
+        self.device_cap = max(1.0, float(per_minute))
+        self.user_rate = max(0.5, float(user_per_minute)) / 60.0
+        self.user_cap = max(1.0, float(user_per_minute))
         self.reserve = max(0.0, float(reserve))
-        self._buckets = {}                       # device -> [tokens, last_seen]
+        self._buckets = {}                       # key -> (tokens, last_seen)
+
+    def _accrued(self, key, cap, rate, now):
+        tokens, last = self._buckets.get(key, (cap, now))
+        return min(cap, tokens + (now - last) * rate)
 
     def allow(self, key, cost=1.0, spend_reserve=False, now=None):
-        """Spend one command against `key`'s bucket. `spend_reserve` is the extension's privilege."""
+        """Spend one command against this device AND the estate. `spend_reserve` is the
+        extension's privilege, and it applies at both levels — an extension that could pass the
+        device gate and not the estate gate is still an extension that must not be dropped."""
         now = time.time() if now is None else float(now)
-        tokens, last = self._buckets.get(key, (self.capacity, now))
-        tokens = min(self.capacity, tokens + (now - last) * self.rate)
         floor = 0.0 if spend_reserve else self.reserve
-        if tokens - cost >= floor - 1e-9:
-            self._buckets[key] = (tokens - cost, now)
-            return True
-        self._buckets[key] = (tokens, now)
-        return False
+        dev = self._accrued(key, self.device_cap, self.device_rate, now)
+        usr = self._accrued(self.USER_KEY, self.user_cap, self.user_rate, now)
+        ok = (dev - cost >= floor - 1e-9) and (usr - cost >= floor - 1e-9)
+        # Write back either way so `last` advances and time keeps accruing; only spend when both
+        # gates opened, because a command refused by one gate is never sent.
+        self._buckets[key] = (dev - cost if ok else dev, now)
+        self._buckets[self.USER_KEY] = (usr - cost if ok else usr, now)
+        return ok
 
 
 class Analyzer:
     def __init__(self, args):
         self.args = args
         self.api = Api(args.api, args.agent_key, args.secret)
-        self.opens = CommandBudget(getattr(args, "open_qpm", OPEN_QPM_PER_DEVICE))
+        self.opens = CommandBudget(getattr(args, "open_qpm", DEVICE_QPM),
+                                   user_per_minute=getattr(args, "user_qpm", USER_QPM))
         # The detector is built AFTER the first config poll, because whether activity is on decides
         # which weights to load. Until then there is nothing to detect on anyway — no camera has a
         # stream open before the first refresh_config().
@@ -1829,11 +1850,18 @@ def main():
                         "bf16 differs on 4 of 12 and always by counting one crossing too many. "
                         "Use f32 unless you have validated bf16 against your own footage; its "
                         "error is invented entries, which nothing downstream can undo.")
-    p.add_argument("--open-qpm", type=float, default=4.0,
-                   help="Cap on stream open/extend commands sent to Google per minute, across "
-                        "all cameras. Google rate-limits executeCommand per project per user; "
-                        "an analyzer holding many cameras can trip that on startup, when every "
-                        "camera negotiates at once. Lower this if you see throttling.")
+    p.add_argument("--open-qpm", type=float, default=DEVICE_QPM,
+                   help="Commands per minute allowed to ONE camera (default %(default)s of "
+                        "Google's documented 5 QPM per project, per user, per device). One camera "
+                        "retrying hard cannot starve the others.")
+    p.add_argument("--user-qpm", type=float, default=USER_QPM,
+                   help="Commands per minute allowed across ALL cameras (default %(default)s of "
+                        "Google's documented 10 QPM per project, per user). This is the ceiling "
+                        "that actually binds: every open stream is extended about every 200 "
+                        "seconds, so each camera costs 0.3 QPM forever — 21 cameras use 63%% of "
+                        "the budget and past roughly 27 a second Google user is the only way "
+                        "through. Lower this if you see throttling; raising it past 10 will not "
+                        "help, because the limit is Google's.")
     p.add_argument("--priority", choices=("low", "normal"), default="low",
                    help="Scheduling priority (default low). Low keeps the register responsive when "
                         "the analyzer shares a machine with the point of sale.")
