@@ -725,10 +725,13 @@ export default function CommissionPlansPage() {
           </div>
           {/* mig 297 — one-line explainer for the Activation source dropdown above. */}
           <div style={{ fontSize: 11, color: '#64748b', marginTop: -8, marginBottom: 16 }}>
-            <b>Activation source</b> controls where this plan's reps get their activations counted from.
+            <b>Activation source</b> controls where this plan's reps get their <b>activations</b> counted from.
             {' '}<b>Inherit</b> uses the org default (POS sales). <b>POS sales</b> always counts POS activations.
             {' '}<b>Activation Details report</b> pays activations from the uploaded report and suppresses POS
-            activations for this plan's reps (single source, no double-count). Changes nothing until you recalculate.
+            activations for this plan's reps (single source, no double-count).
+            {' '}<b>Accessories and every non-activation rule always pay from POS sales regardless of this
+            setting</b> — so ONE plan can pay accessories from POS and activations from the report at the same
+            time. Changes nothing until you recalculate.
           </div>
 
           {/* RULES */}
@@ -760,7 +763,8 @@ export default function CommissionPlansPage() {
                           inline, computed exactly from the facet table. */}
                       <MatchValuePicker opts={planOpts} field={r.match_field} op={r.match_op}
                         value={r.match_value || ''} width={176}
-                        onChange={v => updRule(i, { match_value: v })} />
+                        onChange={v => updRule(i, { match_value: v })}
+                        onOpChange={op => updRule(i, { match_op: op })} />
                       {r.match_field !== 'any' && (
                         <MatchWarnings opts={planOpts} rules={matchRules} stats={matchStats} index={i} />
                       )}
@@ -873,7 +877,8 @@ export default function CommissionPlansPage() {
               <label style={lbl}>Value
                 <MatchValuePicker opts={planOpts} field={draft.tier_match_field || 'any'}
                   op={draft.tier_match_op || 'equals'} value={draft.tier_match_value || ''} width={200}
-                  ariaLabel="Tier match value" onChange={v => upd({ tier_match_value: v })} />
+                  ariaLabel="Tier match value" onChange={v => upd({ tier_match_value: v })}
+                  onOpChange={op => upd({ tier_match_op: op })} />
                 {(draft.tier_match_field || 'any') !== 'any' && tierCount && (
                   <span style={{ fontSize: 10.5, color: tierCount.lines === 0 ? '#b45309' : 'var(--text3)' }}>
                     {tierCount.lines === 0
