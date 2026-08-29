@@ -9,6 +9,7 @@ import { apiCached, LOOKUP, CONFIG, invalidateApiCache } from '@/lib/cache'
 import { usePeriod } from '@/lib/period-context'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
+import StatTile from '@/components/StatTile'
 import { PAY_BASES, PAY_BASIS_LABEL, periodPayPreviewLabel, type PayBasis } from '../storeops/lib/pay-basis'
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
@@ -214,17 +215,13 @@ export default function HRPage() {
           {tab === 'comp' && (
             <>
               {comp?.totals && (
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-                  {[['Base salary', comp.totals.base_salary], ['Commission', comp.totals.commission], ['Total comp', comp.totals.total_comp], ['Annualized (proj.)', comp.totals.annualized]].map(([l, v]: any) => (
-                    <div key={l} className="card" style={{ padding: '12px 18px', minWidth: 140 }}>
-                      <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>{l}</div>
-                      <div style={{ fontSize: 20, fontWeight: 700 }}>{fmt(v)}</div>
-                    </div>
-                  ))}
-                  <div className="card" style={{ padding: '12px 18px', minWidth: 120 }}>
-                    <div style={{ fontSize: 12, color: 'var(--text3)', fontWeight: 600 }}>People</div>
-                    <div style={{ fontSize: 20, fontWeight: 700 }}>{comp.totals.employees}</div>
-                  </div>
+                <div className="stat-grid" style={{ marginBottom: 16 }}>
+                  <StatTile hero label="Total comp" value={fmt(comp.totals.total_comp)} accent="var(--accent)"
+                    sub="base + commission − chargebacks" />
+                  <StatTile label="Base salary" value={fmt(comp.totals.base_salary)} accent="#2563eb" />
+                  <StatTile label="Commission" value={fmt(comp.totals.commission)} accent="var(--green)" />
+                  <StatTile label="Annualized (proj.)" value={fmt(comp.totals.annualized)} accent="#7c3aed" />
+                  <StatTile label="People" value={comp.totals.employees?.toLocaleString?.() ?? comp.totals.employees} accent="#d97706" />
                 </div>
               )}
               <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 8px' }}>

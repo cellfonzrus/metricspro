@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import Link from 'next/link'
+import StatTile from '@/components/StatTile'
 
 function weekRange() {
   const d = new Date()
@@ -46,16 +47,6 @@ export default function StoreOpsDashboard() {
   const pendingTO = timeoff.filter(t => t.status === 'pending').length
   const weekHours = shifts.reduce((s, x) => s + (Number(x.scheduled_hours) || 0), 0)
 
-  const Tile = ({ label, value, accent, href }: { label: string; value: string; accent?: string; href: string }) => (
-    <Link href={href} style={{ textDecoration: 'none', color: 'inherit' }}>
-      <div className="card" style={{ padding: '14px 18px', minWidth: 150, borderLeft: `4px solid ${accent || 'var(--accent)'}`, cursor: 'pointer' }}>
-        <div style={{ fontSize: 11, color: 'var(--text3)', textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
-        <div style={{ fontSize: 24, fontWeight: 700, marginTop: 2 }}>{value}</div>
-        <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 4 }}>View →</div>
-      </div>
-    </Link>
-  )
-
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
@@ -67,11 +58,12 @@ export default function StoreOpsDashboard() {
         <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}><div className="spinner" /></div>
       ) : (
         <>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 22 }}>
-            <Tile label="Active employees" value={String(emps.length)} accent="#2563eb" href="/storeops/employees" />
-            <Tile label="Active stores" value={String(activeStores)} accent="#059669" href="/storeops/admin" />
-            <Tile label="This week's scheduled hrs" value={weekHours.toFixed(1)} accent="#d97706" href="/storeops/schedule" />
-            <Tile label="Pending time off" value={String(pendingTO)} accent={pendingTO ? '#dc2626' : '#6b7280'} href="/storeops/timeoff" />
+          <div className="stat-grid" style={{ marginBottom: 22 }}>
+            <StatTile label="Active employees" value={emps.length.toLocaleString()} accent="#2563eb" href="/storeops/employees" sub="View →" />
+            <StatTile label="Active stores" value={activeStores.toLocaleString()} accent="#059669" href="/storeops/admin" sub="View →" />
+            <StatTile label="This week's scheduled hrs" value={weekHours.toFixed(1)} accent="#d97706" href="/storeops/schedule" sub="View →" />
+            <StatTile label="Pending time off" value={pendingTO.toLocaleString()} accent={pendingTO ? '#dc2626' : '#6b7280'} href="/storeops/timeoff"
+              sub="View →" delta={pendingTO ? { value: 'needs review', dir: 'down' } : undefined} />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
