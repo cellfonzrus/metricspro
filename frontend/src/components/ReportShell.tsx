@@ -53,7 +53,7 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, rowStyle, totals, stickyHeader, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
+export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, rowStyle, totals, stickyHeader, pinFirst, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
   title: string
   subtitle?: string
   filename?: string
@@ -77,6 +77,14 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                                             // z-index 3 keeps it above the scrolling body AND above the
                                             // sticky totals footer (z-index 2); both use --surface2 so
                                             // they stay opaque in light & dark.
+  pinFirst?: boolean                        // opt-in: keep the FIRST column visible (sticky-left) while a
+                                            // wide table scrolls sideways — the "high-density grid" pin.
+                                            // Off by default → every other consumer byte-identical. Pure
+                                            // CSS position:sticky on the first cell of the header, each
+                                            // body row, each group header and the totals footer; opaque
+                                            // backgrounds + a right hairline keep it legible over the
+                                            // scrolling columns, and the corner cell (first col + sticky
+                                            // header) sits above both.
   defaultGroupBy?: string                   // opt-in: initial Group-by column (its key/header). The user
                                             // can still change it. Off by default → other consumers ungrouped.
   collapsibleGroups?: boolean               // opt-in: each group header becomes a ▸/▾ toggle; a collapsed
@@ -211,9 +219,26 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
     ? { position: 'sticky', top: 0, zIndex: 3, boxShadow: 'inset 0 -1px 0 var(--border)' }
     : { position: 'relative' }
 
+  // Opt-in first-column pin. Sticky at left:0 for each cell of the first column, with z-order layered so
+  // the header corner (top+left) sits above the sticky header ribbon and the pinned body cells. Body
+  // cells get their background from the `.rs-pin-body` class (not inline) so the row-hover rule can still
+  // override it; header/group/total cells carry an opaque bg inline. `left` guides subsequent columns'
+  // start, but only ONE column is pinned so left:0 is all that's needed.
+  const pinBase: React.CSSProperties = { position: 'sticky', left: 0, boxShadow: 'inset -1px 0 0 var(--border)' }
+  const pinFor = (kind: 'head' | 'body' | 'group' | 'total'): React.CSSProperties | undefined => {
+    if (!pinFirst) return undefined
+    if (kind === 'head') return { ...pinBase, zIndex: 4 }                                   // corner (also sticky-top via th)
+    if (kind === 'body') return { ...pinBase, zIndex: 2 }                                   // bg via .rs-pin-body
+    if (kind === 'group') return { ...pinBase, zIndex: 2, background: 'var(--surface2)' }
+    return { ...pinBase, zIndex: 3, background: 'var(--surface2)' }                          // total (also sticky-bottom)
+  }
+  const pinBodyCls = (i: number) => (pinFirst && i === 0 ? 'rs-pin-body' : undefined)
+
   return (
     <div>
-      <style>{`.rs-clickable:hover td{background:var(--surface2)}`}</style>
+      <style>{`.rs-clickable:hover td{background:var(--surface2)}
+        td.rs-pin-body{background:var(--surface)}
+        .rs-clickable:hover td.rs-pin-body{background:var(--surface2)}`}</style>
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
         {repCol && (
@@ -291,9 +316,9 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
       <div className="table-wrapper" style={{ maxHeight: '70vh', overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
           <colgroup>{cols.map(c => <col key={key(c)} style={{ width: cw.width(key(c)) }} />)}</colgroup>
-          <thead><tr>{cols.map(c => (
+          <thead><tr>{cols.map((c, i) => (
             <SortableTh key={key(c)} field={key(c)} sort={sort} onSort={toggle}
-              style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', ...thPos }}
+              style={{ ...th, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', whiteSpace: 'nowrap', ...thPos, ...(i === 0 ? pinFor('head') : {}) }}
               after={<ResizeHandle onDown={e => cw.start(key(c), e)} onReset={() => cw.reset(key(c))} />}>
               {c.header}
             </SortableTh>
@@ -303,7 +328,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
               <tr key={i} onClick={onRowClick ? () => onRowClick(r) : undefined}
                 style={{ ...(onRowClick ? { cursor: 'pointer' } : undefined), ...(rowStyle ? rowStyle(r) : undefined) }}
                 className={onRowClick ? 'rs-clickable' : undefined}>
-                {cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
+                {cols.map((c, i) => <td key={key(c)} className={pinBodyCls(i)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', ...(i === 0 ? pinFor('body') : {}) }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
             ))}
             {groups && groups.map(([g, rs]) => {
               const collapsed = isCollapsed(g)
@@ -317,7 +342,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                     {cols.map((c, i) => {
                       const numeric = isMoney(c) || c.align === 'right'
                       return (
-                        <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: numeric ? 'right' : 'left', whiteSpace: 'nowrap' }}>
+                        <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: numeric ? 'right' : 'left', whiteSpace: 'nowrap', ...(i === 0 ? pinFor('group') : {}) }}>
                           {i === 0 ? `${collapsed ? '▸' : '▾'} ${g} · ${rs.length}` : (numeric ? (isMoney(c) ? money(subtotal(rs, c)) : String(subtotal(rs, c))) : '')}
                         </td>
                       )
@@ -325,7 +350,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                   </tr>
                 ) : (
                   <tr style={{ background: 'var(--surface2)' }}>
-                    <td style={{ ...cell, fontWeight: 700 }} colSpan={cols.length - moneyCols.length || 1}>{g} · {rs.length}</td>
+                    <td style={{ ...cell, fontWeight: 700, ...pinFor('group') }} colSpan={cols.length - moneyCols.length || 1}>{g} · {rs.length}</td>
                     {cols.filter(isMoney).map(c => <td key={'gs' + key(c)} style={{ ...cell, textAlign: 'right', fontWeight: 700 }}>{money(subtotal(rs, c))}</td>)}
                   </tr>
                 )}
@@ -333,7 +358,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                   <tr key={g + i} onClick={onRowClick ? () => onRowClick(r) : undefined}
                     style={{ ...(onRowClick ? { cursor: 'pointer' } : undefined), ...(rowStyle ? rowStyle(r) : undefined) }}
                     className={onRowClick ? 'rs-clickable' : undefined}>
-                    {cols.map(c => <td key={key(c)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left' }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
+                    {cols.map((c, i) => <td key={key(c)} className={pinBodyCls(i)} style={{ ...cell, textAlign: isMoney(c) || c.align === 'right' ? 'right' : 'left', ...(i === 0 ? pinFor('body') : {}) }}>{isMoney(c) ? money(c.get(r)) : str(c.get(r))}</td>)}</tr>
                 ))}
               </Fragment>
             )})}
@@ -341,12 +366,12 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
           </tbody>
           {totalCells && (
             <tfoot><tr>
-              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: (isMoney(c) || c.align === 'right') ? 'right' : 'left', borderTop: '2px solid var(--text3)', position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--surface2)' }}>{totalCells[i].text}</td>)}
+              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: (isMoney(c) || c.align === 'right') ? 'right' : 'left', borderTop: '2px solid var(--text3)', position: 'sticky', bottom: 0, zIndex: 2, background: 'var(--surface2)', ...(i === 0 ? pinFor('total') : {}) }}>{totalCells[i].text}</td>)}
             </tr></tfoot>
           )}
           {!totals && moneyCols.length > 0 && filtered.length > 0 && (
             <tfoot><tr style={{ borderTop: '2px solid var(--border)' }}>
-              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: isMoney(c) ? 'right' : 'left' }}>{isMoney(c) ? money(subtotal(filtered, c)) : (i === 0 ? 'Total' : '')}</td>)}
+              {cols.map((c, i) => <td key={key(c)} style={{ ...cell, fontWeight: 700, textAlign: isMoney(c) ? 'right' : 'left', ...(i === 0 ? pinFor('total') : {}) }}>{isMoney(c) ? money(subtotal(filtered, c)) : (i === 0 ? 'Total' : '')}</td>)}
             </tr></tfoot>
           )}
         </table>

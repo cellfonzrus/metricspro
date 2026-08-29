@@ -369,6 +369,7 @@ export default function SalesReportPage() {
           rows={fRows}
           totals
           stickyHeader
+          pinFirst
           defaultGroupBy="Store"
           collapsibleGroups
           defaultCollapsed

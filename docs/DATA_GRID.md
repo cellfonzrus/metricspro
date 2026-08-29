@@ -48,5 +48,18 @@ still come from `get`, so the grid can never disagree with the export.
 
 If the page already builds `ExportColumn[]` for export (most reports do, via `ReportShell` or an export bar),
 pass that same array to `<DataGrid>`. Add `render`/`tip` only where a column needs custom formatting or a
-header tooltip. Reports that go through `ReportShell` already get sort/resize/sticky/grouping there — reach
-for `<DataGrid>` on the wide, hand-rolled tables that don't use `ReportShell`.
+header tooltip. Reach for `<DataGrid>` on the wide, hand-rolled tables that **don't** use `ReportShell`.
+
+## Reports that DO use `ReportShell`
+
+`ReportShell` already has sort, resize, opt-in sticky header, sticky totals and grouping — so don't swap it
+for `<DataGrid>` (you'd lose its filtering / grouping / export / Send). It also now takes an opt-in
+**`pinFirst`** prop that gives the same **pinned first column** as `<DataGrid>` (sticky-left on the header,
+every body row, each group header and the totals footer). Default off, so every other consumer is
+byte-identical; turn it on where a wide table benefits:
+
+```tsx
+<ReportShell columns={cols} rows={rows} totals stickyHeader pinFirst defaultGroupBy="Store" … />
+```
+
+Live on: the **Sales Report** (`/commcalc/sales-report`).
