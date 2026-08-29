@@ -3,17 +3,16 @@
 // every menu … toggled off, but give access to roles which are approved to see the comments").
 //
 // Two independent conditions must BOTH be true for a page's explanatory text to render:
-//   1. canSee  — the signed-in user's ROLE is approved to see help at all (admin / owner). Everyone else
-//                never sees the comments, and never even sees the toggle. This is the role gate.
-//   2. enabled — an approved user has turned help ON (persisted per browser; default OFF, so the app is
-//                clean out of the box even for admins until they opt in).
+//   1. canSee  — the signed-in user holds the MASTER ADMIN role (owner 2026-08-29: a single named
+//                all-access role is the one approved to see the comments). Everyone else — including
+//                ordinary admins/owners — never sees the comments, and never even sees the toggle.
+//   2. enabled — a Master admin has turned help ON (persisted per browser; default OFF, so the app is
+//                clean out of the box even for a Master admin until they opt in).
 // PageIntro reads `show = canSee && enabled`. The top-bar toggle (rendered only when canSee) flips `enabled`.
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { isMasterAdminRole } from '@/lib/rbac'
 
-// Roles approved to reveal the on-page help. Kept deliberately narrow for the production look; can later be
-// made a per-tenant setting without changing any call site.
-const HELP_ROLES = new Set(['admin', 'owner'])
 const LS_KEY = 'mp.helpText'
 
 type HelpCtx = { canSee: boolean; enabled: boolean; show: boolean; toggle: () => void; setEnabled: (v: boolean) => void }
@@ -21,7 +20,7 @@ const Ctx = createContext<HelpCtx>({ canSee: false, enabled: false, show: false,
 
 export function HelpProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
-  const canSee = HELP_ROLES.has(String((user as any)?.role || '').toLowerCase())
+  const canSee = isMasterAdminRole((user as any)?.role, (user as any)?.role_display)
   const [enabled, setEnabledState] = useState(false)
 
   useEffect(() => {
