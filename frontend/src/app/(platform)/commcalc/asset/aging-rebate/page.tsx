@@ -50,7 +50,7 @@ export default function AgingRebatePage() {
         <div>
           <a href="/commcalc/asset/aging" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Inventory Aging</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>💵 Aging — Rebate Received</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 740 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 740 }}>
             Devices still sitting in Inventory Aging but for which a <strong>rebate was received</strong> — they were
             effectively sold/activated, so pull them from inventory. Each rebate is matched to a sale by IMEI;
             a <strong>rebate with no matching sale</strong> is flagged to investigate.

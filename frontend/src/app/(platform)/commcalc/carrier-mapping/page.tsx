@@ -110,7 +110,7 @@ export default function CarrierMappingPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📡 Carrier Mapping — Comp Report → 4 Components</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Manage your carriers, and sort each carrier's raw <b>compensation-report categories</b> into the 4
           canonical components that power the <b>Total Compensation</b> report. Config-driven — works for any
           carrier. Period: {period}.

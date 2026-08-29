@@ -173,7 +173,7 @@ export default function NewVisitPage() {
   return (
     <div style={{ maxWidth: 860 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>📝 New Store Visit</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>
         Check in at the store, confirm the rep on duty, and run the inspection checklist.
       </p>
 

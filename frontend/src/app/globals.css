@@ -116,3 +116,10 @@ tr:hover td { background: var(--surface2); }
 .mp-nav::-webkit-scrollbar-track { background: transparent; }
 .mp-nav::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); border-radius: 3px; }
 .mp-nav::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
+
+/* Page-intro help text gating (owner 2026-08-29: gate the comments on top of every menu for the production
+   look; only approved roles can reveal them). Every page's intro banner carries `.pg-note`; it is HIDDEN by
+   default (so the app reads clean for everyone, with no flash on load) and shown ONLY when an approved user
+   has turned help on — help-context sets <html data-help="on"> in that case and nothing else does. */
+.pg-note { display: none !important; }
+html[data-help="on"] .pg-note { display: revert !important; }

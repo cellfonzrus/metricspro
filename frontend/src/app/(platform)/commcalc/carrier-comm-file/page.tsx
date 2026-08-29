@@ -58,7 +58,7 @@ export default function CarrierCommFilePage() {
     <div style={{ maxWidth: 1000 }}>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📑 Carrier Commission File → Table</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Upload a carrier&apos;s commission / comp statement to view it as a clean table and download a normalized CSV.
           Then map its columns and load it into the system on the <Link href="/commcalc/implementation">Implementation Wizard</Link> (the
           comp report path). Works for any carrier — the file shape doesn&apos;t have to match ours.

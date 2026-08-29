@@ -242,7 +242,7 @@ export default function SalesReportPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 Sales Report</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Sales done across all stores, from the imported Sales Transaction Details. Filter by rep, store, date or
           month, add your own filter, group by any column, then export or send to a rep.
         </p>

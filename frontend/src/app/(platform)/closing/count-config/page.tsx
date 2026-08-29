@@ -67,7 +67,7 @@ export default function CountConfigPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔢 Closing Count-Field Configuration</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Define the activation-count fields on your daily closing sheet — the built-in 3 (Upgrades / New Lines / Postpaid), or your own.
             Recon class drives which B2B count (activations vs upgrades) a field is compared against; it&apos;s a flag only, never part of the cash/credit close gate.
             Leave it unconfigured to use the built-in 3.

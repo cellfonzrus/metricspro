@@ -51,7 +51,7 @@ export default function PosSettingsPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>⚙️ POS Settings</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Register rules, sales tax, and receipts — org-wide defaults with per-store overrides
         </p>
       </div>

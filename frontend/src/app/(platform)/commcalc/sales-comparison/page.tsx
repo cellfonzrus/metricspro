@@ -147,7 +147,7 @@ export default function SalesComparisonPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📈 Sales Comparison</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Period-over-period change per item sold — <b>Phones, BYOD, Activation, Tablets</b> (units),
           <b> Accessories</b> ($) and <b>Financing</b> (units &amp; $) — across all stores. Compare
           month-over-month, year-over-year, or week-1-over-week-1, aligned to the same day of the month.

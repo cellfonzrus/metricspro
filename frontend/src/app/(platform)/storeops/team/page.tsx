@@ -38,7 +38,7 @@ export default function TeamPage() {
           </select>
         </label>
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         Performance for every store and rep under you for <b>{period}</b>. Pick a unit to roll up a specific
         part of the org (admins). Tap a rep to see their full dashboard.
       </p>

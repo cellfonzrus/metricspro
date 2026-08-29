@@ -599,7 +599,7 @@ export default function CommissionPlansPage() {
     <div style={{ maxWidth: 1140 }}>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧮 Incentive Plans</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Build your own incentive plans. Any line on the sales transaction report can qualify for incentive
           on rules YOU define — then assign each plan to employees / stores / markets. The preview shows what a
           plan <strong>would</strong> pay; it is <strong>read-only</strong> and does not change live incentives.

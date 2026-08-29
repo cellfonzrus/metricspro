@@ -75,7 +75,7 @@ export default function IntegrationsPage() {
   return (
     <div style={{ padding: '18px 22px', maxWidth: 1100 }}>
       <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>Integrations</h1>
-      <p style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 12, maxWidth: 820 }}>
+      <p className="pg-note" style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 12, maxWidth: 820 }}>
         Every way to get data into the platform, in one place. Each one has a plain-English purpose and a short,
         guided setup — pick a source, connect it, and it keeps your reports fed automatically.
       </p>

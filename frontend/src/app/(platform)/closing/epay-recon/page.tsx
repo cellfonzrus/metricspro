@@ -110,7 +110,7 @@ export default function EpayReconPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏦 ePay Bank‑Deposit Recon</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 740 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 740 }}>
             ePay bill‑payment cash: what reps <strong>declared</strong> (closing) vs the <strong>bill‑payments in sales</strong> (by tender)
             vs what was <strong>deposited in the bank</strong>. Headline variance = declared ePay cash − bank deposited.
           </p>

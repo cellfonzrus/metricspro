@@ -78,7 +78,7 @@ export default function ActivationReportPage() {
   return (
     <div style={{ padding: 20, maxWidth: 1100, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>📶 Activation / Rebate Report</h1>
-      <p style={{ color: 'var(--text2)', margin: '0 0 16px', fontSize: 13 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', margin: '0 0 16px', fontSize: 13 }}>
         Upload the carrier&apos;s Vendor Rebate/Commission History (.xlsx). We create customers + activations and feed the
         commission into the P&amp;L (device rebate nets against device cost as a contra-COGS).
       </p>

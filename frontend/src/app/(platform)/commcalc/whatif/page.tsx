@@ -861,7 +861,7 @@ export default function WhatIfPage() {
       <div style={{ marginBottom: 18 }}>
         <a href="/commcalc" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Commissions</a>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>What‑If / Scenario Analysis</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Carrier-agnostic scenario modeling — employee payout, company payout / carrier income, and BYOD residuals — for any carrier.</p>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Carrier-agnostic scenario modeling — employee payout, company payout / carrier income, and BYOD residuals — for any carrier.</p>
       </div>
 
       {!anyAllowed ? (

@@ -240,7 +240,7 @@ export default function CommissionExplainPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Incentive Explain — how was this calculated?</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           {period} · read-only · plan component + multi-month installments (M1–M6) with gate status &amp; the MA-file cross-reference
         </p>
       </div>

@@ -192,7 +192,7 @@ export default function OrgStructurePage() {
         <button className="btn" disabled={busy} onClick={() => addChild(null)}>+ Top-level unit</button>
         <button className="btn" disabled={busy} onClick={seed}>Seed from stores (markets only)</button>
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         A configurable tree of org units. Assign a manager to any node and they see every store + rep in that
         node’s subtree. Stores attach to a node; reps follow their home store. Levels are user-defined — add a
         “Region” or “District” anytime.

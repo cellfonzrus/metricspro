@@ -177,7 +177,7 @@ export default function FinancingReportPage() {
             🎯 Set store targets
           </Link>
         </div>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '6px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '6px 0 0' }}>
           {period} · Financed units and financed dollars by vendor, store and rep, against each store's
           monthly financing target. One financed sale = one <b>device</b>, not one receipt line.
         </p>

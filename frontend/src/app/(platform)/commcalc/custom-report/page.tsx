@@ -181,7 +181,7 @@ export default function CustomReportPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Custom Report</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Build a report over any of your datasets — sales, commissions, targets, KPIs, expenses, chargebacks,
           flags and carrier data. Pick datasets and columns, filter by store / market / rep, group by anything,
           then export or send. Save a configuration to recall it as one of your primary reports.

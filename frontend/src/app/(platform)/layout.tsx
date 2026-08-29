@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { HelpProvider } from '@/lib/help-context'
+import HelpToggle from '@/components/HelpToggle'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
@@ -362,6 +363,9 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                   letterSpacing: '0.04em', color: 'rgba(255,255,255,0.32)', pointerEvents: 'none' }}>⌘K</span>}
           </div>
         )}
+
+        {/* Global help-text toggle (approved roles only) — reveals the gated on-page explanations app-wide. */}
+        <HelpToggle collapsed={collapsed} />
 
         {!collapsed && !query && (
           <div style={{ padding: '0 12px 12px' }}>

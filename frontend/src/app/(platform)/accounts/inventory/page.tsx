@@ -86,7 +86,7 @@ export default function InventoryValuesPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📦 Inventory Values</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Real-time on-hand value per store (b2bsoft Inventory Aging) → Balance Sheet · a manual override always wins.</p>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Real-time on-hand value per store (b2bsoft Inventory Aging) → Balance Sheet · a manual override always wins.</p>
           {/* PURPOSE LINE (owner 2026-08-10: "this page shows the inventory so what is the difference
               between the 2 pages — show the purpose of each page on top"). Two pages read the SAME
               Inventory Aging file for two different questions; say which one this is, and link the other. */}

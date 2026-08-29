@@ -97,7 +97,7 @@ export default function HelpDocsEditor() {
         <span style={{ flex: 1 }} />
         <Link href="/admin/support" className="btn btn-sm">← Support Console</Link>
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 12, marginTop: 4 }}>
         Per-page help. <b>User help</b> shows in the "?" panel; the <b>support playbook</b> shows only in the console.
       </p>
       {msg && <div className="card" style={{ padding: 8, marginBottom: 10, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#166534', fontSize: 13 }}>{msg}</div>}

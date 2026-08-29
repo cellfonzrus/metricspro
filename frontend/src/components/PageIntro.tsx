@@ -20,8 +20,10 @@ export default function PageIntro({ title, help, right }: { title: ReactNode; he
         )}
         {right && <div style={{ marginLeft: 'auto' }}>{right}</div>}
       </div>
-      {show && help && (
-        <p style={{ color: 'var(--text2)', fontSize: 13, margin: '6px 0 0', maxWidth: 820, lineHeight: 1.5 }}>{help}</p>
+      {/* `.pg-note` is the ONE gate shared with every legacy banner: hidden by CSS unless an approved user has
+          help on (html[data-help="on"]). Rendered in the DOM either way so the toggle needs no re-render. */}
+      {help && (
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '6px 0 0', maxWidth: 820, lineHeight: 1.5 }}>{help}</p>
       )}
     </div>
   )

@@ -63,7 +63,7 @@ export default function ReportRecipientsPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📬 Report Recipients</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           One place to choose the designated person for every report — different reports can go to different people. Every &quot;send to the designated person&quot; in the app reads this routing.
         </p>
       </div>

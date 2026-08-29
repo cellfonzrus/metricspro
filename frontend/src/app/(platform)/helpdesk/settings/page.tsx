@@ -29,7 +29,7 @@ export default function HelpdeskSettings() {
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>⚙️ Helpdesk Settings</h1>
         <span style={{ flex: 1 }} /><Link href="/helpdesk" className="btn">🎫 Inbox</Link>
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>Configure this organization’s helpdesk. Changes are data, not code — they apply immediately.</p>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>Configure this organization’s helpdesk. Changes are data, not code — they apply immediately.</p>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
         {TABS.map(t => (
           <button key={t} className={`btn btn-sm ${tab === t ? 'btn-primary' : ''}`} onClick={() => setTab(t)} style={{ textTransform: 'capitalize' }}>{t.replace('-', ' ')}</button>

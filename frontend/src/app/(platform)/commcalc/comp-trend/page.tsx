@@ -147,7 +147,7 @@ export default function CompTrendPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📊 Total Compensation</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {view === 'rep'
               ? <>The <strong>commission we actually pay each rep</strong> (the spiff stack × KPI tier = rep payout), month over month. Switch to <em>By account</em> for the carrier-compensation trend.</>
               : <>Month-over-month <strong>total carrier compensation</strong> per account from the Comprehensive Comp report (~95% promos + bounties = Commission + SPIFF, <em>not</em> residual). True <strong>Residual = MI + ATU</strong> shown alongside. A <strong>dip</strong> = comp that fell or an account that vanished.</>}

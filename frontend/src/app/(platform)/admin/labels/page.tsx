@@ -65,7 +65,7 @@ export default function DisplayLabelsPage() {
   return (
     <div style={{ padding: 24, maxWidth: 820 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🏷️ Display Labels</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 4 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 4 }}>
         Rename any sidebar group or page for your company. Leave a field blank to keep the built-in name.
         This changes display text only — never a route, table, or data path.
       </p>

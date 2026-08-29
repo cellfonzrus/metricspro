@@ -52,7 +52,7 @@ export default function GpCategoryMapPage() {
   return (
     <div style={{ padding: 24, maxWidth: 880 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>💰 GP Category Map</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 6 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 6 }}>
         Map each POS department to a Gross-Profit category so GP & P&L compute for your store taxonomy.
         Leave a department on its <b>default</b> to keep the built-in behavior.
       </p>

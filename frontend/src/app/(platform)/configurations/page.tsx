@@ -119,7 +119,7 @@ export default function ConfigurationsPage() {
     <div>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>⚙️ Configurations</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Every settings &amp; configuration screen in one place — set the whole company up from here, or jump
           to any of these from inside its own module. Start with <b>Company Setup</b> (pay period + carriers).
         </p>

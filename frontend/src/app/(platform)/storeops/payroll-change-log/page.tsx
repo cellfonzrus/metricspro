@@ -164,7 +164,7 @@ export default function PayrollChangeLogPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📜 Payroll Change Log</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Every manual change to a rep's scheduled/actual hours — shift edits, manager clock-in
           overrides, manual hours adjustments, force clock-outs, and lunch-deduction setting changes —
           who made it, when, and the before → after values. {periodName}. Click a row to jump to the

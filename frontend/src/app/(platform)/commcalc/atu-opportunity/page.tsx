@@ -95,7 +95,7 @@ export default function AtuOpportunityPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Autopay Opportunity</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: '68ch' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: '68ch' }}>
             Customers who pay by card already have an instrument on file, so enrolling them in autopay is a
             question rather than a sale. This is how many are still unenrolled, and what that costs each month.
           </p>

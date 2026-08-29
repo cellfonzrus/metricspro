@@ -123,7 +123,7 @@ export default function OwedWeeklyPage() {
         <div>
           <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Weekly Owed to Distributor</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             What the Distributor collects each Friday — phones sold (billed the following Friday) and aged inventory past 60 days.
           </p>
         </div>

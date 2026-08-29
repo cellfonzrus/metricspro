@@ -199,7 +199,7 @@ export default function StoreOpsReportsPage() {
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 8 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📋 StoreOps Reports — Hours & Payroll</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Scheduled vs actual hours and pay, per employee and per store. {periodName}.
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Scheduled vs actual hours and pay, per employee and per store. {periodName}.
             {(overAlone.size > 0 || overStores.size > 0) && (
               <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ hours over the configured weekly limit this period (highlighted below)</span>
             )}

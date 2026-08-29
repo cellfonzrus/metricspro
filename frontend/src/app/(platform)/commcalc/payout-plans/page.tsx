@@ -81,7 +81,7 @@ export default function PayoutPlansHub() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💳 Incentive Payout Plans</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 720 }}>
           One home for how every carrier pays its reps. Each carrier below maps to the engine that
           actually calculates its incentive — this is exactly what <b>Run Calculation</b> uses.
         </p>

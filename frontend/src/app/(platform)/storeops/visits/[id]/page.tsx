@@ -76,7 +76,7 @@ export default function VisitDetailPage() {
         <><ExportButtons payload={payload} /><SendReportButton exportPayload={payload} compact /></>
       </div>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>{v.store_address || v.store_code || 'Store visit'}</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>
         {v.status === 'submitted' ? '✅ Submitted' : '🟡 In progress'} · {fmtDateTime(v.check_in_at)}
       </p>
 

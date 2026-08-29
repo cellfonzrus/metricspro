@@ -86,7 +86,7 @@ export default function ReportMappingsPage() {
     <div style={{ maxWidth: 1080 }}>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🗺️ Report-pull mapping</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           How the automated VidaPay / T-CETRA report pull maps each portal report to a database table and each
           source column to a destination column — <b>configuration, not code</b>. Editing a report that shows
           <span style={{ background: '#eef2ff', color: '#3730a3', padding: '0 6px', borderRadius: 6, fontSize: 12, margin: '0 4px' }}>default</span>

@@ -196,7 +196,7 @@ export default function CommissionLegsPage() {
           READ-ONLY · changes no pay
         </span>
       </div>
-      <p style={{ color: 'var(--text2)', fontSize: 13, margin: '8px 0 12px', maxWidth: 980, lineHeight: 1.6 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '8px 0 12px', maxWidth: 980, lineHeight: 1.6 }}>
         Every dollar of carrier money the company receives belongs to a <b>month of life</b> of the number it was
         paid on. <b>M1</b> means it arrived in the same month the number activated; <b>M2, M3 …</b> mean it arrived
         that many months later, for a number that was already active. Money whose source never states a month sits

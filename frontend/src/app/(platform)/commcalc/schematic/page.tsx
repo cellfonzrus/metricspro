@@ -59,7 +59,7 @@ export default function SchematicPage() {
         <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>System Schematic</h1>
         <span style={{ fontSize: 12.5, color: 'var(--text3)' }}>How ingested data & metrics feed each other · {data?.count ?? 0} links</span>
       </div>
-      <p style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 12, maxWidth: 900 }}>
+      <p className="pg-note" style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 12, maxWidth: 900 }}>
         Each row is a dependency: a <b>source</b> item → an <b>affected</b> item, with where it&rsquo;s visible, the
         code that implements it, and a plain-English effect. The <b>Auto</b> badge means a change propagates
         automatically; <b>Manual</b> marks a wiring gap to watch. Data from <code style={mono}>commcalc.data_lineage</code>.

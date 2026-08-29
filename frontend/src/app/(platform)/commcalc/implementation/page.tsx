@@ -44,7 +44,7 @@ export default function ImplementationWizard() {
     <div style={{ maxWidth: 900 }}>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧩 Implementation Wizard</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Map every report this company uploads to our fields, and we&apos;ll produce the reports you want.
           Upload a sample of each file — we auto-detect the columns; you confirm and save.
         </p>

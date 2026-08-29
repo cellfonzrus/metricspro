@@ -42,7 +42,7 @@ export default function ReportCenterPage() {
   return (
     <div style={{ padding: 24, maxWidth: 980 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📊 Report Center</h1>
-      <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 4 }}>
         Every report, in one place. {admin ? 'Toggle “Portal” to surface a report in the employee portal, and pick which roles can see it (employees still need the report’s clearance from Roles & Access).' : 'Open any report you have access to.'}
       </p>
 

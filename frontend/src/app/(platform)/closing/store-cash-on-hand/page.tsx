@@ -99,7 +99,7 @@ export default function StoreCashOnHandPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏦 Store Cash on Hand</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             <strong>Day</strong>: how much cash is physically sitting in each store as of that day — the
             primary question this page answers, and what Cash Pickup uses. <strong>Range</strong>: the
             movement that produced the balance over a window — opening balance, cash collected, minus

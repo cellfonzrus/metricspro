@@ -98,7 +98,7 @@ export default function TrainingCenterPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🎓 Training Center</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820, lineHeight: 1.6 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 820, lineHeight: 1.6 }}>
           Guided walk-throughs of the things people actually do in here. Pick one and the app will take
           you through it step by step on the real page — it points at each control and explains it while
           you click through yourself. You can stop at any point and pick it up again later.

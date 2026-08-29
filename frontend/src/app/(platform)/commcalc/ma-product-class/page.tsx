@@ -265,7 +265,7 @@ export default function MaProductClassPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1400 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🏷️ MA Daily Tx — Product Name Classification</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 10, maxWidth: 900, lineHeight: 1.5 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 10, maxWidth: 900, lineHeight: 1.5 }}>
         One <code>product_name</code> column on the MA Daily Tx file carries commission installments, spiffs,
         residuals, customer <b>plan purchases</b>, <b>device sales</b>, dealer fees and credit memos side by
         side. Classify each name here so the file can be read as what it actually is.{' '}

@@ -47,7 +47,7 @@ export default function RepMapPage() {
       <div style={{ marginBottom: 16 }}>
         <a href="/commcalc/targets/my" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← My Targets</a>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>Merge Duplicate Reps</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           The same person can appear under different name spellings (e.g. "Abdul K" vs "Abdul Kakar") across the
           schedule and the DLAR/sales data — which splits them into two rows and breaks their target totals.
           Merge the variants into one canonical name here.

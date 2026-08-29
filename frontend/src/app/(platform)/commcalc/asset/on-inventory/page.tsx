@@ -167,7 +167,7 @@ export default function OnInventoryByStorePage() {
         <div>
           <a href="/commcalc/asset" style={{ fontSize: 13, color: 'var(--text3)', textDecoration: 'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 0' }}>On-Inventory by Store</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Unsold On-Inventory devices and $ owed to the Distributor, rolled up per store (spelling variants of the same address are merged — see "also seen as"). Aging buckets match Inventory Aging (&lt;45 / 45–60 WARN / &gt;60 MISSED, from acquired date).
           </p>
         </div>

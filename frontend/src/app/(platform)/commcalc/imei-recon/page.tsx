@@ -64,7 +64,7 @@ export default function ImeiReconPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>IMEI Reconciliation</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           {period} · B2B inventory vs B2B sales — is every IMEI accounted for, and sold within {maxDays} days of receiving?
         </p>
       </div>

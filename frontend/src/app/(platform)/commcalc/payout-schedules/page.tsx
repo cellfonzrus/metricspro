@@ -182,7 +182,7 @@ export default function PayoutSchedulesPage() {
     <div style={{ maxWidth: 980 }}>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📆 Multi-Month Payout Schedules</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Spread a rep&apos;s commission for one activation over up to 3 months (flat or % of that month&apos;s MRC).
           Months 2–3 pay only if the bill was <strong>paid + residual received</strong> that month. No schedule =
           single-month payout (unchanged). <strong>Preview</strong> is read-only — it does not change live payouts.

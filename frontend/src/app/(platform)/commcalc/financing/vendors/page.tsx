@@ -209,7 +209,7 @@ export default function FinancingVendorsPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Financing vendors</h1>
           <Link href="/commcalc/financing" className="btn btn-secondary" style={{ fontSize: 12 }}>← Financing report</Link>
         </div>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '6px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '6px 0 0' }}>
           Who finances your sales, which carriers each one serves, and how a financed sale is recognised
           in the data. Adding a vendor — or putting an existing vendor on another carrier — is a setting
           here, never a code change.

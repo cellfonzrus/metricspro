@@ -116,7 +116,7 @@ export default function XTenderReconPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧾 X-Tender Recon</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             POS <strong>X report</strong> tenders vs the <strong>daily closing sheet</strong> employees submit, per store —
             cash (store + ePay cash) and card (store + ePay credit). A <strong>variance</strong> beyond the tolerance flags a
             cash/card discrepancy to chase.

@@ -92,7 +92,7 @@ export default function HelpdeskInbox() {
         {(permissions?.modules?.admin || permissions?.scope === 'all') && <Link href="/helpdesk/settings" className="btn">⚙️ Settings</Link>}
         <Link href="/helpdesk/new" className="btn btn-primary">➕ Raise a ticket</Link>
       </div>
-      <p style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
+      <p className="pg-note" style={{ color: 'var(--text3)', fontSize: 13, marginTop: 0 }}>
         {isAgent ? 'All tickets in your organization. Assign, prioritize, and resolve.' : 'Your tickets. Raise a new one anytime — a manager will pick it up.'}
       </p>
 

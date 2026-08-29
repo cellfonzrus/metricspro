@@ -60,7 +60,7 @@ export default function TenantSettingsPage() {
   return (
     <div style={{ maxWidth: 760 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 4px' }}>⚙️ Pay period & work-week</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 16px' }}>
         {name ? <b>{name}</b> : 'This company'}&apos;s work-week and pay cycle. The schedule week, the manager
         hours budget, and payroll all derive from this — define it once. {complete
           ? <span style={{ color: '#166534', fontWeight: 600 }}>✓ Setup complete.</span>

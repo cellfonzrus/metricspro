@@ -68,7 +68,7 @@ export default function ConnectorsPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔌 Connectors</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Every vendor portal and the reports it feeds, with live sweep status and per-connector schedule. The data-pipeline registry (framework Phase 2).
         </p>
         <p style={{ color: 'var(--text3)', fontSize: 12, margin: '4px 0 0' }}>

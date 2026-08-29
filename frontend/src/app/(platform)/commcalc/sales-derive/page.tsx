@@ -111,7 +111,7 @@ export default function SalesDerivePage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔄 Monthly sales basis</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Commissions for a closed month are calculated from the monthly basis, which is derived from the daily sales feed.
           This page shows whether a month&apos;s basis is in step with its feed — and re-derives it when it is not.
         </p>

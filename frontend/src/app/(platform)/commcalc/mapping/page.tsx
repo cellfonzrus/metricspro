@@ -21,7 +21,7 @@ export default function MappingHubPage() {
     <div>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🗂️ Mapping</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Every mapping &amp; alias screen in one place — stores, carriers, items/models, reps and device pricing.
         </p>
       </div>

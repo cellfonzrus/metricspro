@@ -148,7 +148,7 @@ export default function ResidualPerSubPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Residual per Subscriber</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 13, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '4px 0 0' }}>
             Residual (MI + ATU) per paid subscriber, month over month, vs commissions paid — to see the effect of lower commissions on residual.
           </p>
           {/* Provenance: which residual source actually answered for this tenant (read-only). */}

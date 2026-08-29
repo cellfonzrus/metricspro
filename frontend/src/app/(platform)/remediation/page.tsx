@@ -66,7 +66,7 @@ export default function RemediationConsole() {
   return (
     <div style={{ maxWidth: 920, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, fontWeight: 800, margin: '0 0 4px' }}>🤖 Auto-Remediation Agent</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>
         Describe an issue. The agent proposes a fix from a whitelisted playbook and sends it for a one-tap
         approval — then runs only that one bounded action. Code bugs are escalated to a developer.
       </p>

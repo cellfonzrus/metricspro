@@ -183,7 +183,7 @@ export default function VisionLinesPage() {
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Counting lines</h1>
         <Link href="/vision" style={{ fontSize: 13, color: 'var(--text2)' }}>← Cameras</Link>
       </div>
-      <p style={{ fontSize: 13.5, color: 'var(--text2)', margin: '8px 0 18px', maxWidth: 760 }}>
+      <p className="pg-note" style={{ fontSize: 13.5, color: 'var(--text2)', margin: '8px 0 18px', maxWidth: 760 }}>
         A camera only counts people where a line is drawn across the doorway. Take a picture, drag a
         line right across the opening, then drag the test marker through it the way a customer walks
         in — if it says OUT, press flip.

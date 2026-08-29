@@ -139,7 +139,7 @@ export default function TimeOffPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Time Off Requests</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {requests.filter(r => r.status === 'pending').length} pending · {requests.length} total ·{' '}
             {conflictMode === 'block'
               ? 'approved time off BLOCKS scheduling for this tenant'

@@ -146,7 +146,7 @@ export default function FailureLogsPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🩺 Failure Logs</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780 }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 780 }}>
           Things the system couldn’t complete — grouped by similar nature, each with a plain-English
           <b> what this means</b> and <b>how to fix it</b>. Tick rows (or a whole group) and <b>Clear</b> to
           mark them reviewed — the rows are kept for the audit trail. {unreviewedTotal > 0 &&

@@ -237,7 +237,7 @@ export default function SpecialOrderManagePage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🗂️ Special Orders — HQ Management</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Curate the catalog and the vendors behind it. HQ-only — not visible to stores.</p>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Curate the catalog and the vendors behind it. HQ-only — not visible to stores.</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <a href="/pos/special-orders" className="btn btn-secondary" style={{ textDecoration: 'none' }}>Store view →</a>

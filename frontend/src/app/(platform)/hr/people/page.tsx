@@ -112,7 +112,7 @@ export default function HRPeoplePage() {
     <div style={{ maxWidth: 920 }}>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🧑‍💼 HR · People</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Add an employee once here — they appear everywhere (scheduling, payroll, org, commissions).
           Give an email + role to also grant app access; tick “create login” to provision it now.
         </p>

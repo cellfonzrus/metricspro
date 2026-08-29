@@ -185,7 +185,7 @@ export default function DailyTargetsPage() {
       </div>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Daily Targets</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           {period} · Schedule-weighted daily targets with daily catch-up. Today's target rolls in any shortfall;
           pace spreads the remaining balance over the open days left.
         </p>

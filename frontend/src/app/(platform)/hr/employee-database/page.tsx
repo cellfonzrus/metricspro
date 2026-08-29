@@ -182,7 +182,7 @@ export default function EmployeeDatabasePage() {
   return (
     <div style={{ padding: 24, maxWidth: 1200 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🗄️ Employee Database</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 14 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 14 }}>
         Every employee record collected across the roster + HR onboarding intake, in one exportable table.
         Direct-deposit numbers are masked to the last 4 digits by default — see the notice below.
       </p>

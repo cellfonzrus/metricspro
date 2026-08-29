@@ -124,7 +124,7 @@ export default function InventoryReconPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📦 On-Inventory ↔ b2bsoft Recon</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Asset On-Inventory vs b2bsoft inventory, per store · iPhone / Android / Tablet / Watch / Hotspot. Each cell = <b>asset / b2b</b>; mismatches highlighted.
           </p>
           {/* PURPOSE LINE (owner 2026-08-10) — see the twin note on /accounts/inventory. */}

@@ -138,7 +138,7 @@ export default function TrendsHubPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Trends</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 13, margin: '4px 0 0' }}>Month-over-month across expenses, commissions, residual and profit · {scope}</p>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, margin: '4px 0 0' }}>Month-over-month across expenses, commissions, residual and profit · {scope}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {msg && <span style={{ fontSize: 12, color: 'var(--text2)', maxWidth: 320 }}>{msg}</span>}

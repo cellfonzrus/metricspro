@@ -196,7 +196,7 @@ export default function ImeiRebatesPage() {
   const header = (
     <div style={{ marginBottom: 14 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📱 IMEI Rebate Reconciliation</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
         Every IMEI activated in the month and the rebate recorded against it — and, just as importantly,
         the ones with <b>no rebate</b>. The source is whichever activation + rebate feed this tenant
         actually has; nothing here changes what anyone is paid.

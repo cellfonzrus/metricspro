@@ -81,7 +81,7 @@ export default function DistributorsPage() {
     <div style={{ maxWidth: 960 }}>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏬 Distributors</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Who you source devices/inventory from. Each has an <strong>arrangement</strong> — terms (net credit),
           consignment (lent devices billed on a cycle, like Asset Lending), or COD — set at onboarding.
           Record each payment&apos;s <strong>funding source</strong> (own vs borrowed account).

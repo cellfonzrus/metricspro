@@ -52,7 +52,7 @@ export default function VisitChecklistSettingsPage() {
     <div style={{ maxWidth: 800 }}>
       <Link href="/storeops/visits" style={{ fontSize: 13, color: 'var(--accent)' }}>← Store visits</Link>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 4px' }}>🧾 Visit Checklist</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '0 0 18px' }}>
         Configure the inspection items district managers check on every store visit. Add, reorder, or deactivate items.
       </p>
 

@@ -247,7 +247,7 @@ export default function TimeClockAdminPage() {
       <div style={{ marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>⏱️ Time Clock</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Review clock-in/out punches with selfie, GPS and face-match audit. Employees clock in from the mobile portal.
           </p>
         </div>

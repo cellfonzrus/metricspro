@@ -270,7 +270,7 @@ export default function GPReportPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Gross Profit Report</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             {period} · {rows.length} stores · Net: <strong style={{ color: totals.net_profit >= 0 ? 'var(--green)' : 'var(--red)' }}>{fmt(totals.net_profit || 0)}</strong>
           </p>
         </div>

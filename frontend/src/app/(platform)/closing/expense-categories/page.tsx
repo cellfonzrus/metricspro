@@ -49,7 +49,7 @@ export default function ExpenseCategoriesPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🗂️ Expense Categories</h1>
-          <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
+          <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0', maxWidth: 760 }}>
             Categories for expenses entered from the Daily Closing form. <b>Payroll</b>/<b>Commission</b>
             categories require picking an employee and record a cash advance from the envelope — they
             never post to the P&amp;L. <b>Expense</b> categories are plain store expenses that roll up to

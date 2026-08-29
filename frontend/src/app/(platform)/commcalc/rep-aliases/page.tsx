@@ -46,7 +46,7 @@ export default function RepAliasesPage() {
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🔗 Rep Aliases</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Merge name variants of the same rep into one canonical name so their numbers roll up together.
         </p>
       </div>

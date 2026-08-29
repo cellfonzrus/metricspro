@@ -180,7 +180,7 @@ export default function MaClassWiringPage() {
   return (
     <div style={{ padding: 24, maxWidth: 1180 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>🔌 MA Product Class → Money</h1>
-      <p style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 10, maxWidth: 980, lineHeight: 1.6 }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13, marginBottom: 10, maxWidth: 980, lineHeight: 1.6 }}>
         Where the MA product classification actually changes a number. Two places, two switches, both
         starting on <b>Legacy</b> — exactly what the system does today. Each switch shows what would move
         <b> before</b> you flip it, and flipping back is the same dropdown (no deploy, no SQL, no recompute).

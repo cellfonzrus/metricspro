@@ -141,7 +141,7 @@ export default function VisionActivityPage() {
           <Link href="/vision/busy-hours" style={{ ...btn, textDecoration: 'none' }}>🕐 Busy Hours</Link>
         </div>
       </div>
-      <p style={{ color: 'var(--text2)', fontSize: 13.5, margin: '0 0 14px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13.5, margin: '0 0 14px' }}>
         What the cameras could work out about people on the floor. Google reports none of this —
         it is computed in the store and only the numbers are sent.
       </p>

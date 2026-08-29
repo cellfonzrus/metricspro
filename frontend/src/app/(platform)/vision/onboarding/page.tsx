@@ -181,7 +181,7 @@ export default function VisionOnboardingPage() {
           <Link href="/vision" style={{ ...btn, textDecoration: 'none' }}>📹 Cameras</Link>
         </div>
       </div>
-      <p style={{ color: 'var(--text2)', fontSize: 13.5, margin: '4px 0 16px' }}>
+      <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 13.5, margin: '4px 0 16px' }}>
         About half an hour, across three Google consoles. Everything you type is saved as you go —
         stop whenever you like and pick up here, on any computer.
       </p>

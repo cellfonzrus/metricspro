@@ -106,7 +106,7 @@ export default function ActivationsPage() {
           b2b Activation Details — distinct devices (Serial#), {period || '—'}
         </span>
       </div>
-      <p style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 12, maxWidth: 820 }}>
+      <p className="pg-note" style={{ fontSize: 12.5, color: 'var(--text2)', marginTop: 6, marginBottom: 12, maxWidth: 820 }}>
         Total Activation counts one row per device and excludes Upgrade (the b2b-consistent definition). The
         export has no Store column, so activations roll up by <b>Market</b> (e.g. LuxeLink vs Nova) and by
         <b> Store</b> (Dealer Code / District). Toggle Upgrade in or out below.

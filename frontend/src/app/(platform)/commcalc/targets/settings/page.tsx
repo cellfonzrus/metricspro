@@ -183,7 +183,7 @@ export default function TargetSettingsPage() {
     <div>
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Target Settings</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           {period} · Monthly targets per store. Set at the start of the month — the engine reverse-calculates
           per-day and per-rep targets from the StoreOps schedule.
         </p>

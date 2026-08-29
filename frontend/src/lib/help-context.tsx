@@ -35,6 +35,13 @@ export function HelpProvider({ children }: { children: ReactNode }) {
   const toggle = useCallback(() => setEnabled(!enabled), [enabled, setEnabled])
 
   const show = canSee && enabled
+  // Mirror `show` onto <html data-help> so a single global CSS rule gates EVERY page's intro banner (the
+  // legacy inline `.pg-note` paragraphs the sweep tagged, plus PageIntro) with no per-page JS. Default is
+  // hidden (no attribute / 'off'); only an approved user who turned help on flips it to 'on'.
+  useEffect(() => {
+    try { document.documentElement.setAttribute('data-help', show ? 'on' : 'off') } catch { /* SSR */ }
+  }, [show])
+
   return <Ctx.Provider value={{ canSee, enabled, show, toggle, setEnabled }}>{children}</Ctx.Provider>
 }
 

@@ -88,7 +88,7 @@ export default function RepCoachingPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🎓 Rep Coaching — {period}</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Which KPIs each rep met vs missed, and the money they're leaving on the table (incentive below tier + chargebacks). Sorted by biggest opportunity.
         </p>
       </div>

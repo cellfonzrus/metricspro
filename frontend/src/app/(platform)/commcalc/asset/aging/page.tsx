@@ -270,7 +270,7 @@ export default function AgingPage() {
         <div>
           <a href="/commcalc/asset" style={{ fontSize:13, color:'var(--text3)', textDecoration:'none' }}>← Asset Ledger</a>
           <h1 style={{ fontSize:22, fontWeight:700, margin:'6px 0 0' }}>Inventory Aging — Sell Before 60 Days</h1>
-          <p style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
+          <p className="pg-note" style={{ color:'var(--text2)', fontSize:14, margin:'4px 0 0' }}>
             Unsold NET60 inventory. Devices in the 45–60 day window must sell before day 60 or the Distributor bills them unsold.
           </p>
         </div>

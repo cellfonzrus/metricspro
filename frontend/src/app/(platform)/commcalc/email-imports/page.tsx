@@ -630,7 +630,7 @@ export default function EmailImportsPage() {
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>📧 Email Auto-Import</h1>
           <WhereAreMyRowsButton />
         </div>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Poll a mailbox a vendor (e.g. B2B Soft) emails reports to, and route each attachment to its upload parser.
           Add <strong>more than one mailbox</strong> when reports arrive in different inboxes (e.g. the B2B feed at one
           address, Total Wireless at another) — each has its own creds, patterns and schedule.

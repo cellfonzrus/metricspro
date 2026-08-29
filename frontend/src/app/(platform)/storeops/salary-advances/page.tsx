@@ -198,7 +198,7 @@ export default function SalaryAdvancesPage() {
     <div>
       <div style={{ marginBottom: 14 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>💵 Salary Advances</h1>
-        <p style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
+        <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
           Per-employee earned salary (clock-in based — the SAME basis as the Payroll Report) vs cash
           paid out of the daily-closing envelope. Cash payments are <b>advances</b>, never a change to
           Payroll itself; only cumulative excess of cash paid over earned posts to the P&L, as
