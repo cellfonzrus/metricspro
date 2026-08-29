@@ -1407,8 +1407,20 @@ class CameraWorker:
 #
 # Past roughly 27 cameras a second Google user — or a second Device Access project — is not an
 # optimisation, it is the only way through.
+# TWO NOTES ON THE PER-DEVICE NUMBER, so a later reader does not mistake either for a bug.
+#
+#   Google's 5 QPM is per TRAIT COMMAND, so GenerateWebRtcStream and ExtendWebRtcStream each get
+#   their own 5 per device. This bucket lumps them together at 4, which is stricter than required.
+#   That costs nothing — a camera holding a stream spends 0.3 commands a minute against it — and it
+#   keeps the one case the device gate exists for: a camera stuck in a reopen loop cannot spend the
+#   estate's budget on itself.
+#
+#   Those two commands are also the ONLY executeCommand calls this system makes. CameraEventImage
+#   is granted write access in the Device Access console but GenerateImage is never called; if that
+#   ever changes, it draws on the SAME 10 QPM as the stream commands and this ceiling must account
+#   for it.
 USER_QPM = 8.0            # of Google's 10, leaving room for a person pressing "Watch live"
-DEVICE_QPM = 4.0          # of Google's 5, same reason
+DEVICE_QPM = 4.0          # of Google's 5-per-command, deliberately shared across both commands
 
 
 class CommandBudget:
