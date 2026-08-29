@@ -9,10 +9,10 @@
 //   • an optional pinned TOTALS footer row.
 // Cells render via each column's optional `render` (for report-specific number formatting) and fall back to
 // a money/number/text default otherwise — DISPLAY ONLY; the numbers still come from the column's `get`.
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useMemo, useState, useEffect, type CSSProperties } from 'react'
 import {
   useReactTable, getCoreRowModel, getSortedRowModel,
-  type ColumnDef, type SortingState, type ColumnPinningState, type Column,
+  type ColumnDef, type SortingState, type ColumnPinningState, type VisibilityState, type Column,
 } from '@tanstack/react-table'
 import type { ExportColumn } from '@/lib/export'
 
@@ -38,7 +38,7 @@ function pinnedStyle(col: Column<any, unknown>, bg: string, z: number): CSSPrope
 }
 
 export default function DataGrid({
-  columns, rows, totalRow, totalLabel = 'TOTAL', pinFirst = true, maxHeight = '70vh', onRowClick,
+  columns, rows, totalRow, totalLabel = 'TOTAL', pinFirst = true, maxHeight = '70vh', onRowClick, storageKey,
 }: {
   columns: ExportColumn[]
   rows: any[]
@@ -47,6 +47,7 @@ export default function DataGrid({
   pinFirst?: boolean                 // keep the first column visible while scrolling sideways (default on)
   maxHeight?: string
   onRowClick?: (row: any) => void
+  storageKey?: string                // when set, the user's column show/hide choice persists under this key
 }) {
   const cols = useMemo(() => columns.filter(Boolean), [columns])
 
@@ -63,14 +64,26 @@ export default function DataGrid({
   })), [cols])
 
   const [sorting, setSorting] = useState<SortingState>([])
+  const [colSizing, setColSizing] = useState<Record<string, number>>({})   // only set when the user resizes
+  const [colVis, setColVis] = useState<VisibilityState>(() => {
+    if (!storageKey || typeof window === 'undefined') return {}
+    try { const v = window.localStorage.getItem(`mp.cols.${storageKey}`); return v ? JSON.parse(v) : {} } catch { return {} }
+  })
+  const [colMenu, setColMenu] = useState(false)
+  useEffect(() => {
+    if (!storageKey || typeof window === 'undefined') return
+    try { window.localStorage.setItem(`mp.cols.${storageKey}`, JSON.stringify(colVis)) } catch { /* private mode */ }
+  }, [storageKey, colVis])
   const pinning: ColumnPinningState = useMemo(
     () => (pinFirst && cols.length ? { left: [colId(cols[0])], right: [] } : { left: [], right: [] }),
     [pinFirst, cols])
 
   const table = useReactTable({
     data: rows, columns: defs,
-    state: { sorting, columnPinning: pinning },
+    state: { sorting, columnPinning: pinning, columnSizing: colSizing, columnVisibility: colVis },
     onSortingChange: setSorting,
+    onColumnSizingChange: setColSizing as any,
+    onColumnVisibilityChange: setColVis,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     columnResizeMode: 'onChange',
@@ -86,11 +99,47 @@ export default function DataGrid({
     whiteSpace: 'nowrap', background: 'var(--surface)' }
 
   const leaf = table.getVisibleLeafColumns()
+  const allLeaf = table.getAllLeafColumns()
+  const hiddenCount = allLeaf.filter((c) => !c.getIsVisible()).length
 
   return (
-    <div className="table-wrapper" style={{ maxHeight, overflow: 'auto' }}>
-      <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed' }}>
-        <colgroup>{leaf.map((c) => <col key={c.id} style={{ width: c.getSize() }} />)}</colgroup>
+    <div>
+      {/* Columns show/hide — lists every column so a hidden one can return; the last visible column can't
+          be hidden. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6, position: 'relative' }}>
+        <button className="btn btn-secondary" style={{ fontSize: 12, padding: '4px 9px' }} onClick={() => setColMenu((o) => !o)}
+          title="Show or hide columns">▦ Columns{hiddenCount ? ` · ${allLeaf.length - hiddenCount}/${allLeaf.length}` : ''}</button>
+        {colMenu && (
+          <>
+            <div onClick={() => setColMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
+            <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, zIndex: 21, background: 'var(--surface)',
+              border: '1px solid var(--border)', borderRadius: 8, boxShadow: 'var(--shadow-md)', padding: 8, maxHeight: 340, overflow: 'auto', minWidth: 210 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 6px 6px' }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Columns</span>
+                {hiddenCount > 0 && <button onClick={() => table.toggleAllColumnsVisible(true)}
+                  style={{ fontSize: 11, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}>Show all</button>}
+              </div>
+              {allLeaf.map((column) => {
+                const c: ExportColumn = (column.columnDef.meta as any).col
+                const vis = column.getIsVisible()
+                const isLast = vis && (allLeaf.length - hiddenCount <= 1)
+                return (
+                  <label key={column.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', borderRadius: 6,
+                    fontSize: 12.5, cursor: isLast ? 'default' : 'pointer' }}>
+                    <input type="checkbox" checked={vis} disabled={isLast} onChange={column.getToggleVisibilityHandler()} />
+                    <span style={{ color: vis ? 'var(--text)' : 'var(--text3)' }}>{c.header}</span>
+                  </label>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </div>
+      <div className="table-wrapper" style={{ maxHeight, overflow: 'auto' }}>
+        {/* width:auto + tableLayout:auto → columns fit their CONTENT (not a uniform fixed width, not
+            stretched); a resized column pins its width via the colgroup, others stay content-fit. */}
+        <table style={{ width: 'auto', borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'auto' }}>
+          <colgroup>{leaf.map((c) => <col key={c.id} style={{ width: colSizing[c.id] ? c.getSize() : undefined }} />)}</colgroup>
         <thead>
           {table.getHeaderGroups().map((hg) => (
             <tr key={hg.id}>
@@ -162,7 +211,8 @@ export default function DataGrid({
             </tr>
           </tfoot>
         )}
-      </table>
+        </table>
+      </div>
     </div>
   )
 }

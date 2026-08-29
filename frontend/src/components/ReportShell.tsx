@@ -53,7 +53,7 @@ function ymd(v: any): string {
   return s
 }
 
-export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, rowStyle, totals, stickyHeader, pinFirst, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
+export function ReportShell({ title, subtitle, filename, columns, rows, compact, right, children, onRowClick, rowStyle, totals, stickyHeader, pinFirst = true, defaultGroupBy, collapsibleGroups, defaultCollapsed, groupPersistKey }: {
   title: string
   subtitle?: string
   filename?: string
@@ -77,14 +77,16 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
                                             // z-index 3 keeps it above the scrolling body AND above the
                                             // sticky totals footer (z-index 2); both use --surface2 so
                                             // they stay opaque in light & dark.
-  pinFirst?: boolean                        // opt-in: keep the FIRST column visible (sticky-left) while a
-                                            // wide table scrolls sideways — the "high-density grid" pin.
-                                            // Off by default → every other consumer byte-identical. Pure
-                                            // CSS position:sticky on the first cell of the header, each
-                                            // body row, each group header and the totals footer; opaque
-                                            // backgrounds + a right hairline keep it legible over the
-                                            // scrolling columns, and the corner cell (first col + sticky
-                                            // header) sits above both.
+  pinFirst?: boolean                        // keep the FIRST column visible (sticky-left) while a wide
+                                            // table scrolls sideways — the "high-density grid" pin.
+                                            // DEFAULT ON (owner 2026-08-29 "batch onto the wide reports"):
+                                            // it only has a visible effect when the table actually scrolls
+                                            // sideways, so narrow reports are unaffected; pass pinFirst={false}
+                                            // to opt a report out. Pure CSS position:sticky on the first
+                                            // cell of the header, each body row, each group header and the
+                                            // totals footer; opaque backgrounds + a soft right-edge shadow
+                                            // keep it legible over the scrolling columns, and the corner
+                                            // cell (first col + sticky header) sits above both.
   defaultGroupBy?: string                   // opt-in: initial Group-by column (its key/header). The user
                                             // can still change it. Off by default → other consumers ungrouped.
   collapsibleGroups?: boolean               // opt-in: each group header becomes a ▸/▾ toggle; a collapsed
@@ -93,7 +95,25 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   defaultCollapsed?: boolean                // opt-in (with collapsibleGroups): start every group COLLAPSED.
   groupPersistKey?: string                  // opt-in: persist the user's Group-by choice to localStorage.
 }) {
-  const cols = useMemo(() => columns.filter(Boolean), [columns])
+  const allCols = useMemo(() => columns.filter(Boolean), [columns])
+  // Column show/hide — a per-report user preference, persisted to localStorage keyed by the report's
+  // filename/title. Hidden columns drop out of BOTH the table and the export (what you see is what you
+  // export). Everything downstream reads `cols`, so hiding is transparent to sort / filter / group /
+  // export; the "Columns" menu lists `allCols` so a hidden one can come back. Never leaves zero columns.
+  const colsKey = `mp.cols.${String(filename || title || 'report').replace(/\s+/g, '_')}`
+  const [hidden, setHidden] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try { const v = window.localStorage.getItem(colsKey); return v ? new Set<string>(JSON.parse(v)) : new Set() } catch { return new Set() }
+  })
+  useEffect(() => { try { window.localStorage.setItem(colsKey, JSON.stringify([...hidden])) } catch { /* private mode */ } }, [colsKey, hidden])
+  const [colMenu, setColMenu] = useState(false)
+  const cols = useMemo(() => { const v = allCols.filter(c => !hidden.has(key(c))); return v.length ? v : allCols }, [allCols, hidden])
+  const toggleCol = (k: string) => setHidden(s => {
+    const n = new Set(s)
+    if (n.has(k)) n.delete(k)
+    else if (allCols.length - n.size > 1) n.add(k)   // never hide the LAST visible column
+    return n
+  })
   const byKey = useMemo(() => Object.fromEntries(cols.map(c => [key(c), c])), [cols])
   const cw = useColumnResize()   // auto-fit + user-resizable columns
 
@@ -224,7 +244,7 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
   // cells get their background from the `.rs-pin-body` class (not inline) so the row-hover rule can still
   // override it; header/group/total cells carry an opaque bg inline. `left` guides subsequent columns'
   // start, but only ONE column is pinned so left:0 is all that's needed.
-  const pinBase: React.CSSProperties = { position: 'sticky', left: 0, boxShadow: 'inset -1px 0 0 var(--border)' }
+  const pinBase: React.CSSProperties = { position: 'sticky', left: 0, boxShadow: '2px 0 5px -2px rgba(15,23,42,0.10)' }
   const pinFor = (kind: 'head' | 'body' | 'group' | 'total'): React.CSSProperties | undefined => {
     if (!pinFirst) return undefined
     if (kind === 'head') return { ...pinBase, zIndex: 4 }                                   // corner (also sticky-top via th)
@@ -274,6 +294,35 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
             <option value="">— none —</option>
             {cols.map(c => <option key={key(c)} value={key(c)}>{c.header}</option>)}
           </select></label>
+        {/* Columns show/hide — a per-report preference. Lists EVERY column so a hidden one can return; the
+            last visible column can't be hidden. Hidden columns leave both the table and the export. */}
+        <div style={{ position: 'relative' }}>
+          <button className="btn btn-secondary" style={{ fontSize: 12, padding: '5px 9px' }} onClick={() => setColMenu(o => !o)}
+            title="Show or hide columns">▦ Columns{hidden.size ? ` · ${allCols.length - hidden.size}/${allCols.length}` : ''}</button>
+          {colMenu && (
+            <>
+              <div onClick={() => setColMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 20 }} />
+              <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 21, background: 'var(--surface)',
+                border: '1px solid var(--border)', borderRadius: 8, boxShadow: 'var(--shadow-md)', padding: 8, maxHeight: 340, overflow: 'auto', minWidth: 210 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 6px 6px' }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Columns</span>
+                  {hidden.size > 0 && <button onClick={() => setHidden(new Set())}
+                    style={{ fontSize: 11, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer' }}>Show all</button>}
+                </div>
+                {allCols.map(c => {
+                  const k = key(c); const vis = !hidden.has(k); const isLast = vis && (allCols.length - hidden.size <= 1)
+                  return (
+                    <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px', borderRadius: 6,
+                      fontSize: 12.5, cursor: isLast ? 'default' : 'pointer' }}>
+                      <input type="checkbox" checked={vis} disabled={isLast} onChange={() => toggleCol(k)} />
+                      <span style={{ color: vis ? 'var(--text)' : 'var(--text3)' }}>{c.header}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
         {/* Add custom filter */}
         <button className="btn btn-secondary" style={{ fontSize: 12, padding: '5px 9px' }}
           onClick={() => setCustom(f => [...f, { field: key(cols[0]), op: 'contains', value: '' }])}>＋ Filter</button>
@@ -314,7 +363,10 @@ export function ReportShell({ title, subtitle, filename, columns, rows, compact,
       {/* Table */}
       {cw.dirty && <div style={{ fontSize: 11, color: 'var(--text3)', margin: '0 0 4px' }}><button className="btn" style={{ padding: '2px 8px', fontSize: 11 }} onClick={cw.resetAll}>↺ Reset column widths</button> <span>drag a column edge to resize · double-click to auto-fit</span></div>}
       <div className="table-wrapper" style={{ maxHeight: '70vh', overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
+        {/* width:auto (not 100%) so `tableLayout:auto` sizes each column to its CONTENT and does NOT stretch
+            the columns to fill leftover width — "not wider than needed" (owner 2026-08-29). A wide table
+            still overflows into the horizontal scroll; a narrow one simply sits at its content width. */}
+        <table style={{ width: 'auto', borderCollapse: 'collapse', tableLayout: 'auto' }}>
           <colgroup>{cols.map(c => <col key={key(c)} style={{ width: cw.width(key(c)) }} />)}</colgroup>
           <thead><tr>{cols.map((c, i) => (
             <SortableTh key={key(c)} field={key(c)} sort={sort} onSort={toggle}
