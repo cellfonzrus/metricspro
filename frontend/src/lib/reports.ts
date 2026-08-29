@@ -12,6 +12,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/exec', label: 'Owner Overview', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/activations', label: 'Activations', module: 'commissions', scopes: ['all', 'market'], desc: 'b2b Activation Details basis of truth — distinct devices by market/store, Upgrade toggle, and automatic reconciliation against the sales feed' },
     { href: '/commcalc/schematic', label: 'System Schematic', module: 'commissions', scopes: ['all'], desc: 'Data-lineage map: how ingested data and metrics feed each other, with code references and plain-English effects' },
+    { href: '/commcalc/reports-index', label: 'Reports Index', module: 'commissions', scopes: ['all', 'market'], desc: 'A searchable directory of every report on the platform — what each shows, who can see it, and whether it is live for you and what data feeds it' },
     { href: '/commcalc/onboarding', label: 'Setup Wizard', module: 'commissions', scopes: ['all'], desc: 'Guided onboarding: every data feed & config the platform needs, whether it is set up for you, and where to complete each one' },
     { href: '/commcalc/integrations', label: 'Integrations', module: 'commissions', scopes: ['all'], desc: 'One page for every data connection & import — plain-English purpose, live connected/not-set-up status, and a 2-step setup wizard for each' },
     { href: '/commcalc/gp', label: 'Gross Profit', module: 'commissions' },

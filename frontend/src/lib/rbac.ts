@@ -323,6 +323,7 @@ export const NAV: NavGroup[] = [
     { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/activations', label: 'Activations', icon: '📲', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/schematic', label: 'System Schematic', icon: '🗺️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/reports-index', label: 'Reports Index', icon: '🗂️', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/onboarding', label: 'Setup Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
     { href: '/commcalc/reports', label: 'Rep Incentive Report', icon: '📋', module: 'commissions' },
     { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
