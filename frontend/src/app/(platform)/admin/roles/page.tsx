@@ -3,7 +3,8 @@ import { useState, useEffect, Fragment } from 'react'
 import { apiCached, CONFIG, LOOKUP } from '@/lib/cache'
 import { api } from '@/lib/client'
 import { REPORT_AREAS, DATA_GRANTS, NAV, reportAreaForPath, canSeeItem, navBlockReason,
-         schedulingReach, canImpersonate, type Permissions } from '@/lib/rbac'
+         schedulingReach, canImpersonate, MASTER_ADMIN_ROLE, MASTER_ADMIN_DISPLAY,
+         type Permissions } from '@/lib/rbac'
 import { ExportButtons } from '@/lib/export'
 import { useAuth } from '@/lib/auth-context'
 import EntityPicker from '@/components/EntityPicker'
@@ -33,6 +34,27 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'support', label: 'Tech Support (cross-tenant console)' },
   { key: 'admin', label: 'Admin (role mgmt)' },
 ]
+
+// ── Master admin (owner 2026-08-29) — the one-click all-access role, WITHIN ONE TENANT ────────────
+// Owner ruling: a SUPER admin controls all tenants; a MASTER admin has full control of their OWN tenant.
+// So Master admin ticks every module EXCEPT `support` — the cross-tenant Tech Support console, which is
+// the one capability that reaches outside the tenant and therefore stays super-admin-only. Everything else
+// is on: every operational module (incl. `admin` for tenant role management), every sensitive-data grant,
+// company-wide scope, org-wide scheduling and impersonate. Built from the live MODULES + DATA_GRANTS lists
+// so "all the options" stays literally all of them (minus the cross-tenant one) as new ones are added.
+// It is also the only role approved to reveal the on-page help (see help-context). Nothing seeds it: an
+// administrator consciously clicks "Master admin" to create it, then assigns someone — the same
+// deliberate-action principle that guards impersonate.
+const TENANT_ONLY_MODULES = MODULES.filter(m => m.key !== 'support')   // 'support' = cross-tenant → super admin only
+const MASTER_ADMIN_TEMPLATE: { name: string; display: string; permissions: any } = {
+  name: MASTER_ADMIN_ROLE, display: MASTER_ADMIN_DISPLAY,
+  permissions: {
+    modules: Object.fromEntries(TENANT_ONLY_MODULES.map(m => [m.key, true])),
+    data: Object.fromEntries(DATA_GRANTS.map(d => [d.key, true])),
+    scope: 'all', scheduling_reach: 'org', impersonate: true, home: '/commcalc',
+  },
+}
+
 const SCOPES = [
   { v: 'all', l: 'All stores (company-wide)' },
   { v: 'market', l: 'Their market(s)' },
@@ -668,6 +690,15 @@ export default function RolesAdminPage() {
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Quick add:</span>
+              {!roles.some(r => r.name === MASTER_ADMIN_TEMPLATE.name) ? (
+                <button className="btn btn-primary" style={{ fontSize: 12 }}
+                  title="Full control of THIS tenant: every module except the cross-tenant Tech Support console, every sensitive-data grant, company-wide scope, org-wide scheduling and sign-in-as-employee. (A platform super admin, by contrast, spans all tenants.) This is also the only role that can reveal the on-page help text."
+                  onClick={() => addRole(MASTER_ADMIN_TEMPLATE.name, MASTER_ADMIN_TEMPLATE.display, MASTER_ADMIN_TEMPLATE.permissions)}>
+                  ★ {MASTER_ADMIN_TEMPLATE.display} (all access)
+                </button>
+              ) : (
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>{MASTER_ADMIN_TEMPLATE.display} exists ✓</span>
+              )}
               {ROLE_TEMPLATES.filter(t => !roles.some(r => r.name === t.name)).map(t => (
                 <button key={t.name} className="btn" style={{ fontSize: 12 }} onClick={() => addRole(t.name, t.display, t.permissions)}>＋ {t.display}</button>
               ))}

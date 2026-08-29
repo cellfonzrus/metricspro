@@ -191,6 +191,22 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
   { key: 'whatif_carrier_income', label: 'What-If — Company Payout / Carrier Income',
     help: 'The 💵 Company Payout / Carrier Income tab of /commcalc/whatif — what the carrier / master-agent pays the COMPANY. DEFAULT-CLOSED — admin-only until granted; also rides "carrier_residual" when the tenant sets residual visibility to "permissioned".' },
 ]
+
+// ── Master admin (owner 2026-08-29) ──────────────────────────────────────────────────────────────
+// A single NAMED all-access role: it holds every module (including `admin`, which trips isSuperAdmin),
+// every data grant, company-wide scope and every capability. It is created from a one-click template on
+// /admin/roles — nothing seeds it automatically — and it is the ONLY role approved to reveal the on-page
+// help/comments (see help-context). The slug is canonical here so the roles page and the help gate agree.
+export const MASTER_ADMIN_ROLE = 'master_admin'
+export const MASTER_ADMIN_DISPLAY = 'Master admin'
+// Tolerant match on either the role slug or its display name ('master_admin' / 'Master admin' /
+// 'masteradmin'), normalising away case, spaces, hyphens and underscores so a tenant that typed the name
+// slightly differently still resolves.
+export function isMasterAdminRole(role?: string | null, roleDisplay?: string | null): boolean {
+  const norm = (s?: string | null) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  return norm(role) === 'masteradmin' || norm(roleDisplay) === 'masteradmin'
+}
+
 // Frontend mirror of backend commcalc `_can_view_carrier_residual` — KEEP IN SYNC. Super-admins /
 // company-wide ('all') roles / admins always pass; otherwise the grant is honored under either the
 // `data` bucket (what the roles UI writes) or a `modules` key of the same name (backend also accepts it).
