@@ -104,10 +104,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app.modules.vision import activity as ACT  # noqa: E402  (the SAME rules the server proves)
+from app.modules.vision import activity as ACT
+from app.modules.vision import counting as CNT  # noqa: E402  (the SAME rules the server proves)
 from app.modules.vision import geometry as GEO   # noqa: E402  (the SAME rules the server proves)
 
 log = logging.getLogger("vision-edge")
+
+def process_cpu_seconds() -> float:
+    """CPU time this process has consumed across all its threads, on any OS.
+
+    Capacity is spent in CPU-seconds, not wall-clock seconds, so the benchmark has to be able
+    to read them — and the machine most likely to be benchmarked is a Windows till, where
+    `resource` does not exist. `time.process_time()` is stdlib and portable, and unlike
+    `resource` on Linux it already includes every thread, which is exactly what is wanted when
+    the thing being timed spreads itself over four cores."""
+    return time.process_time()
+
 
 DETECT_FPS = 6               # detections per second per camera — see CameraWorker.step()
 SAMPLE_SECONDS = 60          # how often occupancy is flushed as presence samples
@@ -151,6 +163,144 @@ class Api:
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # Detection + tracking
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+DETECT_SHAPE = (384, 640)       # (h, w) — 16:9 and stride-32 legal, which every fixed camera is
+
+
+class _OpenVinoYolo:
+    """yolov8n on the OpenVINO runtime: the same weights and the same boxes, several times
+    cheaper per detection than the PyTorch path.
+
+    WHY THIS IS WORTH A SECOND BACKEND. Measured on one core at 640x384, per detection:
+    PyTorch 102.1 CPU-ms, ONNX Runtime 48.2, OpenVINO 17.1. The gap is not the model, it is
+    the kernels — and on a Xeon with AMX, OpenVINO additionally runs the graph in bfloat16 by
+    default, which is most of that 17.1. On a machine with only AVX2 the same call measured
+    85.1 CPU-ms, so the win is real but hardware-dependent, and `--benchmark` reports what THIS
+    box actually does rather than repeating a number from somewhere else.
+
+    ONE THREAD, ON PURPOSE. Multi-threaded inference lowers latency and RAISES cost: the same
+    detection costs 20.0 CPU-ms at one thread and 43.0 CPU-ms across four. Cameras are already
+    parallel work; spending 2.15x the CPU to make one camera finish sooner than its 6 fps
+    budget needs buys nothing and halves the box.
+
+    ENABLE_CPU_PINNING OFF, ALSO ON PURPOSE — see the compile options below. This one is a trap
+    rather than a tuning choice.
+    """
+
+    # iou=0.7 is ULTRALYTICS' predict default, and it is not a tuning choice — it is the number
+    # that makes this detector agree with the PyTorch one it replaces. At 0.45 the two disagreed
+    # on 49 of 150 frames of the same clip: every disagreement was a box that ultralytics keeps
+    # and cv2.dnn.NMSBoxes suppresses, all of them at the low-confidence end (e.g. a 0.284 box
+    # overlapping a 0.545 one at IoU 0.515 — kept under 0.7, dropped under 0.45). Those marginal
+    # boxes are exactly what counting.PredictiveTracker's second association pass exists to use,
+    # so losing them breaks tracks in the doorway. At 0.7 the fp32 path returns identical
+    # detections on all 150 frames. Change this and you change the count.
+    def __init__(self, threads=1, shape=DETECT_SHAPE, conf=0.25, iou=0.7, weights="yolov8n.pt",
+                 precision=None):
+        import numpy as np
+        import openvino as ov
+        self.np = np
+        self.h, self.w = shape
+        self.conf, self.iou = conf, iou
+        path = self._graph(shape, weights)
+        core = ov.Core()
+        # ENABLE_CPU_PINNING must be False. OpenVINO pins inference threads to specific cores
+        # and chooses them per process, knowing nothing about the other analyzer processes on
+        # the box. Run one process per camera with pinning left on and every one of them pins
+        # to the same core: measured at 8 workers taking 159 ms of wall clock for 27 ms of CPU
+        # each while the machine sat 61% idle. A box that looks bored and still cannot keep up
+        # is the most expensive kind of capacity bug to diagnose.
+        cfg = {
+            "PERFORMANCE_HINT": "LATENCY",
+            "INFERENCE_NUM_THREADS": int(threads),
+            "NUM_STREAMS": 1,
+            "ENABLE_CPU_PINNING": False,
+        }
+        # PRECISION IS A DECISION, NOT A DETAIL, so it is a flag rather than a default that
+        # nobody reads. On a Xeon with AMX, OpenVINO silently runs an fp32 graph in bfloat16 —
+        # 17.1 CPU-ms per detection against 45.7 for true fp32, and worth having.
+        #
+        # MEASURED, over 4 clips x 3 line placements, every backend on the same clock
+        # (scratchpad/perf/verify_multi.py):
+        #     fp32   agrees with the PyTorch path on 12 of 12 — identical crossings.
+        #     bf16   disagrees on 4 of 12, and always the same way: one EXTRA crossing.
+        #
+        # So fp32 is safe and bf16 is not, for a sharper reason than "less precise". bf16's bias
+        # is toward crossings NOBODY MADE — the exact error class counting.GateCounter exists to
+        # remove — so it would hand back at the detector what the gate just took away. It moves
+        # boxes by up to 0.065 of a frame height, which is enough to carry a marginal track
+        # across a band.
+        #
+        # An earlier draft of this comment blamed "the confidence threshold" and an IoU tracker
+        # turning a marginal box into an extra track. That was wrong on both counts: the real
+        # causes were this class's own NMS iou (see above) and a benchmark that timed three
+        # backends on three different clocks. Both are fixed; the bf16 bias survives them.
+        # DEFAULTS TO f32, which is NOT what OpenVINO would choose on its own. Left to itself it
+        # runs bf16 on any AMX machine — faster, and the one arithmetic measured to invent
+        # crossings. Defaulting to the fast-and-wrong option on precisely the hardware a store
+        # would buy, with nothing in the log to say so, is the silent failure this file exists to
+        # avoid. `--ov-precision auto` gives OpenVINO the choice back for anyone benchmarking.
+        prec = str(precision or "f32")
+        if prec != "auto":
+            cfg["INFERENCE_PRECISION_HINT"] = ov.Type.f32 if prec == "f32" else ov.Type.bf16
+        self._cm = core.compile_model(core.read_model(path), "CPU", cfg)
+        self._req = self._cm.create_infer_request()
+        self._buf = np.empty((1, 3, self.h, self.w), np.float32)
+        try:
+            prec = str(self._cm.get_property("INFERENCE_PRECISION_HINT"))
+        except Exception:
+            prec = "?"
+        self.kind = "yolov8n-openvino-%dx%d-%s" % (self.w, self.h, prec.strip("<>").split()[-1]
+                                                   if prec != "?" else "?")
+
+    @staticmethod
+    def _graph(shape, weights):
+        """The fixed-shape ONNX graph OpenVINO compiles, exported once and cached beside the
+        weights. Export needs ultralytics; steady-state running does not, which is what lets a
+        store box carry the analyzer without a PyTorch install."""
+        cache = os.path.join(os.path.expanduser("~/.metricspro"),
+                             "yolov8n_%dx%d.onnx" % (shape[1], shape[0]))
+        if os.path.exists(cache):
+            return cache
+        os.makedirs(os.path.dirname(cache), mode=0o700, exist_ok=True)
+        from ultralytics import YOLO
+        produced = YOLO(weights).export(format="onnx", imgsz=shape, simplify=True,
+                                        dynamic=False, verbose=False)
+        os.replace(produced, cache)
+        log.info("exported the detector graph to %s (once)", cache)
+        return cache
+
+    def __call__(self, frame):
+        import cv2
+        np = self.np
+        H, W = frame.shape[:2]
+        r = min(self.w / W, self.h / H)
+        nw, nh = int(round(W * r)), int(round(H * r))
+        top, left = (self.h - nh) // 2, (self.w - nw) // 2
+        canvas = np.full((self.h, self.w, 3), 114, np.uint8)
+        cv2.resize(frame, (nw, nh), dst=canvas[top:top + nh, left:left + nw],
+                   interpolation=cv2.INTER_LINEAR)
+        x = canvas.astype(np.float32)
+        np.multiply(x, 1.0 / 255.0, out=x)
+        self._buf[0, 0], self._buf[0, 1], self._buf[0, 2] = x[:, :, 2], x[:, :, 1], x[:, :, 0]
+        self._req.infer({0: self._buf})
+        p = self._req.get_output_tensor(0).data[0]      # (84, anchors); row 4 = person score
+        keep = p[4, :] > self.conf
+        if not keep.any():
+            return []
+        b, cc = p[:4, keep].T, p[4, keep].astype(np.float32)
+        boxes = [[float((bx - bw / 2 - left) / r), float((by - bh / 2 - top) / r),
+                  float(bw / r), float(bh / r)] for bx, by, bw, bh in b]
+        idx = cv2.dnn.NMSBoxes(boxes, cc.tolist(), self.conf, self.iou)
+        if idx is None or len(idx) == 0:
+            return []
+        out = []
+        for i in np.array(idx).reshape(-1):
+            bx, by, bw, bh = boxes[int(i)]
+            out.append({"x": bx / W, "y": by / H, "w": bw / W, "h": bh / H,
+                        "conf": float(cc[int(i)])})
+        return out
+
+
 class PersonDetector:
     """Returns [{"x","y","w","h","conf"}] in NORMALIZED coordinates.
 
@@ -167,7 +317,8 @@ class PersonDetector:
     exactly like a quiet store, which is the most expensive kind of bug to notice.
     """
 
-    def __init__(self, prefer_yolo=True, pose=False):
+    def __init__(self, prefer_yolo=True, pose=False, no_openvino=False, ov_threads=1,
+                 ov_precision=None):
         """`pose=True` loads the POSE weights instead of the plain detector.
 
         This is a model SWAP, not a second pass, and that is the whole reason posture is affordable:
@@ -183,7 +334,24 @@ class PersonDetector:
         self.reason = ""
         self._yolo = None
         self._hog = None
+        self._ov = None
         self.supports_pose = False
+        # OPENVINO FIRST, and only for the plain detector. Same yolov8n weights, and at fp32
+        # the SAME BOXES — identical detections on all 150 frames of the reference clip once
+        # the NMS iou matches ultralytics' 0.7 (see _OpenVinoYolo), which it now does —
+        # measured at 17.1 CPU-ms per detection against PyTorch's 102.1 single-threaded and
+        # 175.8 across four threads. That is the difference between three cameras on a box and
+        # nine. Pose is deliberately not routed here: the pose head's decode is a second piece
+        # of work to get right and posture is a per-tenant feature, so it stays on the proven
+        # path until somebody needs it to be fast.
+        if prefer_yolo and not pose and not no_openvino:
+            try:
+                self._ov = _OpenVinoYolo(threads=ov_threads, precision=ov_precision)
+                self.kind = self._ov.kind
+                return
+            except Exception as e:
+                log.info("OpenVINO detector unavailable (%s: %s) — falling back to PyTorch",
+                         type(e).__name__, e)
         if prefer_yolo:
             try:
                 from ultralytics import YOLO
@@ -231,6 +399,8 @@ class PersonDetector:
         if frame is None or self.kind is None:
             return []
         h, w = frame.shape[:2]
+        if self._ov is not None:
+            return self._ov(frame)
         if self._yolo is not None:
             out = []
             for r in self._yolo(frame, verbose=False, classes=[0]):     # class 0 = person
@@ -260,14 +430,22 @@ class PersonDetector:
 
 
 class Tracker:
-    """A deliberately simple IoU tracker.
+    """A deliberately simple IoU tracker. NO LONGER USED FOR COUNTING — kept as the baseline.
 
-    Re-identification across occlusion is a hard problem and a solved-badly one at this scale; what
-    the counting rules actually need is much weaker — a stable id for the few seconds a person takes
-    to walk through a doorway. A track that is lost and re-acquired becomes a NEW track, which the
-    server's visit pairing already handles (an unpaired entry is still a visit, an unpaired exit is
-    counted as such). Choosing the simple tracker and making the server tolerant of it beats a
-    fragile clever one whose failures would be invisible."""
+    THE ARGUMENT THIS DOCSTRING USED TO MAKE, AND WHY MEASUREMENT KILLED IT. It said that a track
+    lost and re-acquired simply becomes a NEW track, which the server's visit pairing already
+    tolerates. That is true of the SERVER. It is not true of the crossing test, which is what
+    actually counts people: a new track starts with `prev_foot = None`, so the step that carries a
+    person over the line is skipped, and the entry is never emitted at all. The failure this
+    docstring called "handled" was a silent undercount — harness_vision_counting.py measures 20
+    brisk walkers at 6 detections/second as 11.
+
+    So the reasoning was sound about occlusion and wrong about the doorway, which is the one place
+    this module has to be right. CameraWorker now uses counting.PredictiveTracker instead.
+
+    THIS CLASS STAYS because it is the control arm: harness_vision_counting.py runs both pipelines
+    over the same synthetic traffic, and every claim the new one makes is a claim RELATIVE to this
+    one. Delete it and the proof becomes an assertion. It is not wired to any live camera."""
 
     def __init__(self):
         self._tracks = {}
@@ -466,9 +644,38 @@ class ActivityAccumulator:
 #   WebRtcFrameSource  every Nest camera sold since 2021, and any older camera that has been migrated
 #                      into the Google Home app. Needs a real peer connection — see below.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+class LazyFrame:
+    """A decoded frame that has NOT been converted to BGR yet.
+
+    WHY THIS EXISTS. The loop reads from every camera on every tick — it has to, because on
+    RTSP that is what keeps the decoder drained — but it only DETECTS at detect_fps. Converting
+    YUV to a contiguous BGR array costs 3.0 CPU-ms at 1080p (measured, webrtc_loopback.py), and
+    the shipped code paid it inside the WebRTC pump for every arriving frame: 30 x 3.0 = 91
+    CPU-ms per second per camera, of which detection at 6 fps consumed one frame in five and
+    threw the other four away. That is 73 CPU-ms/sec/camera bought and binned — about a fifth
+    of a whole camera's budget, per camera.
+
+    So the pump now stores the frame as it arrived and the conversion happens HERE, called only
+    after the rate limiter has decided this tick will actually run a detection. Cached, because
+    face state and the detector both want the same array.
+    """
+
+    __slots__ = ("_src", "_arr")
+
+    def __init__(self, src):
+        self._src = src          # an av.VideoFrame, or an already-converted ndarray
+        self._arr = src if src is not None and not hasattr(src, "to_ndarray") else None
+
+    def array(self):
+        if self._arr is None and self._src is not None:
+            self._arr = self._src.to_ndarray(format="bgr24")
+        return self._arr
+
+
 class FrameSource:
-    """read() returns (ok, frame_bgr). ok=False means "nothing right now" — the caller decides
-    whether that is a hiccup or a dead stream."""
+    """read() returns (ok, LazyFrame). ok=False means "nothing right now" — the caller decides
+    whether that is a hiccup or a dead stream. The frame is deliberately NOT converted to BGR
+    until somebody asks for the pixels; see LazyFrame."""
 
     def read(self):
         raise NotImplementedError
@@ -488,7 +695,10 @@ class RtspFrameSource(FrameSource):
     def read(self):
         if self._cap is None or not self._cap.isOpened():
             return False, None
-        return self._cap.read()
+        ok, frame = self._cap.read()
+        # OpenCV already hands back BGR, so LazyFrame is a no-op wrapper here — it exists so
+        # both transports present one interface to the loop.
+        return ok, (LazyFrame(frame) if ok else None)
 
     def close(self):
         try:
@@ -651,9 +861,12 @@ class WebRtcFrameSource(FrameSource):
         try:
             while True:
                 frame = await track.recv()
-                img = frame.to_ndarray(format="bgr24")     # BGR — what the detector expects
+                # NOT converted here. The colour conversion is deferred to LazyFrame.array(),
+                # which the loop calls only for the frames a detection will actually consume.
+                # Converting in this thread cost 91 CPU-ms/sec/camera at 1080p30 and threw
+                # four fifths of it away at detect_fps 6.
                 with self._lock:
-                    self._frame = img
+                    self._frame = frame
                     self._frame_at = time.time()
         except Exception as e:                              # track ended / connection dropped
             log.debug("[%s] video track ended: %s", self.device_name, type(e).__name__)
@@ -668,7 +881,7 @@ class WebRtcFrameSource(FrameSource):
             return False, None
         if time.time() - at > self.FRAME_STALE_AFTER:
             return False, None        # connection alive but silent ⇒ let the worker reopen
-        return True, frame
+        return True, LazyFrame(frame)
 
     def close(self):
         pc, loop = self._pc, self._loop
@@ -705,30 +918,74 @@ def lower_priority() -> bool:
         return False
 
 
-def capacity(per_detection_s: float, detect_fps: float, headroom: float = 0.5) -> dict:
+# Per-camera costs that a detector benchmark alone cannot see, in CPU-milliseconds. Measured
+# on an Emerald-Rapids-class Xeon; see the throughput report for the scripts. They are stated
+# as constants rather than measured on the candidate box because they are dominated by libav
+# and aiortc rather than by the machine, and because a benchmark that needs a live camera is a
+# benchmark nobody runs before buying the machine.
+FRAME_COSTS_MS = {
+    #                    rtp   decode   bgr
+    "1080p": {"rtp": 2.8, "decode": 3.14, "bgr": 3.04},
+    "720p": {"rtp": 1.8, "decode": 1.47, "bgr": 2.90},
+}
+PROCESS_OVERHEAD_MS = 65.0      # per camera per second: the Python loop and the frame handoff
+USABLE_FRACTION = 0.93          # measured ceiling before cameras slipped in a real-time soak
+
+
+def capacity(per_detection_s: float, detect_fps: float, headroom: float = 0.5,
+             cores: int = None, res: str = "1080p", stream_fps: float = 30.0,
+             webrtc: bool = True) -> dict:
     """How many cameras a machine of this measured speed can carry. PURE — proven offline.
 
-    The analyzer detects sequentially across cameras in one loop, so the machine's total budget is
-    `1 / per_detection` detections per second, and each camera claims `detect_fps` of them.
+    WHAT THIS USED TO GET WRONG, AND WHY IT MATTERED. The first version divided one core's
+    detection rate by detect_fps and stopped there. Three things were missing and they pulled
+    in opposite directions, so the error was not a safe one:
 
-    `headroom` is the half of the measured capacity deliberately NOT offered. It exists because the
-    common deployment is a computer that is already running the store's register, and because a
-    synthetic benchmark on an idle machine always flatters it relative to a real shop at 5pm. Give
-    away the whole measured number and the first busy Saturday turns into a slow till.
+      * IT COUNTED ONE CORE. A detection timed at 44 ms of WALL CLOCK on four cores is not 44 ms
+        of machine; it is up to 176 ms of CPU spread thin. Dividing wall latency by detect_fps
+        silently assumed the rest of the machine was free, which on a 4-core box it is not.
+      * IT IGNORED THE VIDEO. Receiving and decoding a 1080p30 stream costs ~180 CPU-ms every
+        second per camera before a detector runs at all, and the analyzer pays it whether or not
+        it looks at the frame. On a fast detector that is now the largest single line.
+      * IT MEASURED RANDOM NOISE at 720p. Noise is unrepresentative for a detector's NMS stage
+        and says nothing about decode at all.
+
+    The result was a number that told an owner with a perfectly serviceable machine that it
+    could carry "about 1 camera". This version prices a whole camera-second and divides by the
+    whole machine.
+
+    `headroom` is the fraction of the measured capacity deliberately offered. It exists because
+    the common deployment is a computer that is already running the store's register, and
+    because a synthetic benchmark on an idle machine always flatters it relative to a real shop
+    at 5pm.
     """
     per = max(1e-9, float(per_detection_s))
-    fps_ceiling = 1.0 / per
-    usable = fps_ceiling * max(0.0, min(1.0, headroom))
+    cores = cores or (os.cpu_count() or 1)
     target = max(0.5, float(detect_fps))
+    f = FRAME_COSTS_MS.get(res, FRAME_COSTS_MS["1080p"])
+    per_camera_ms = (
+        (stream_fps * f["rtp"] if webrtc else 0.0)
+        + stream_fps * f["decode"]
+        + target * f["bgr"]                       # lazy conversion: only frames we detect on
+        + target * per * 1000.0
+        + target * 0.25                           # tracker + counting geometry
+        + PROCESS_OVERHEAD_MS
+    )
+    budget = cores * 1000.0 * USABLE_FRACTION * max(0.0, min(1.0, headroom))
+    cams = budget / per_camera_ms
+    # If it cannot carry one camera at the requested rate, the honest alternative is a slower
+    # rate — reported so the operator has a number to try rather than "buy a better machine".
+    fixed = per_camera_ms - target * (per * 1000.0 + f["bgr"] + 0.25)
+    per_detect = per * 1000.0 + f["bgr"] + 0.25
+    max_fps_one = max(0.0, (budget - fixed) / per_detect) if per_detect > 0 else 0.0
     return {
         "ms_per_detection": round(per * 1000, 1),
-        "fps_ceiling": round(fps_ceiling, 1),
-        "usable_fps": round(usable, 1),
+        "cores": cores,
+        "cpu_ms_per_camera_second": round(per_camera_ms, 1),
         "detect_fps": target,
-        "cameras": int(usable // target),
-        # If it cannot carry one camera at the requested rate, the honest alternative is a slower
-        # rate — reported so the operator has a number to try rather than "buy a better machine".
-        "max_fps_for_one_camera": round(usable, 1),
+        "cameras": int(cams),
+        "cameras_exact": round(cams, 1),
+        "max_fps_for_one_camera": round(max_fps_one, 1),
     }
 
 
@@ -741,38 +998,58 @@ def benchmark(args) -> int:
     it can be run on a candidate machine before anything else is set up."""
     import numpy as np
 
-    det = PersonDetector(prefer_yolo=not args.no_yolo)
+    det = PersonDetector(prefer_yolo=not args.no_yolo,
+                         no_openvino=getattr(args, "no_openvino", False),
+                         ov_threads=getattr(args, "ov_threads", 1),
+                         ov_precision=getattr(args, "ov_precision", None))
     if det.kind is None:
         log.error(det.unavailable_message())
         return 1
 
-    # A 720p frame with some structure in it — a flat grey image is unrepresentatively fast for HOG,
-    # which would produce a benchmark that flatters the machine.
+    # A 1080p frame with real structure in it. Random noise is what the first version used and
+    # it is wrong twice over: it is unrepresentatively fast for HOG, and it produces almost no
+    # detections, so NMS — a real part of the per-frame cost — never runs. A smooth gradient with
+    # blocks is not a shop either, but it exercises the same code paths at the right size.
     rng = np.random.default_rng(7)
-    frame = rng.integers(0, 255, (720, 1280, 3), dtype=np.uint8)
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    frame[:, :, 0] = np.linspace(0, 255, 1920, dtype=np.uint8)[None, :]
+    frame[:, :, 1] = np.linspace(0, 255, 1080, dtype=np.uint8)[:, None]
+    frame[::7, ::5] = rng.integers(0, 255, frame[::7, ::5].shape, dtype=np.uint8)
 
     runs = max(5, args.benchmark_runs)
 
     def time_it(d):
-        for _ in range(3):                # warm up: the first call pays for lazy CUDA/graph setup
+        """CPU-seconds per detection, not wall-clock. A detection that takes 44 ms of wall
+        clock on four cores can cost 176 ms of machine, and capacity is spent in the second
+        currency. Wall latency is reported too, because it is what a person watching a log
+        sees, but it is not what the arithmetic uses."""
+        for _ in range(3):                # warm up: the first call pays for lazy graph setup
             d(frame)
-        started = time.perf_counter()
+        c0, w0 = process_cpu_seconds(), time.perf_counter()
         for _ in range(runs):
             d(frame)
-        return (time.perf_counter() - started) / runs
+        wall = (time.perf_counter() - w0) / runs
+        cpu = (process_cpu_seconds() - c0) / runs
+        return cpu, wall
 
     log.info("detector: %s · warming up…", det.kind)
-    per_detection = time_it(det)
-    cap = capacity(per_detection, args.detect_fps)
+    per_detection, wall = time_it(det)
+    cap = capacity(per_detection, args.detect_fps, res=args.benchmark_res,
+                   stream_fps=args.benchmark_stream_fps)
 
     log.info("")
-    log.info("  %.1f ms per detection  (%.1f detections/sec at full tilt)",
-             cap["ms_per_detection"], cap["fps_ceiling"])
+    log.info("  %.1f CPU-ms per detection  (%.1f ms of wall clock, using %.1f core%s)",
+             cap["ms_per_detection"], wall * 1000, per_detection / max(wall, 1e-9),
+             "" if per_detection / max(wall, 1e-9) < 1.5 else "s")
+    log.info("  %d core%s on this machine", cap["cores"], "" if cap["cores"] == 1 else "s")
+    log.info("  a %s camera at %.0f fps costs %.0f CPU-ms per second: receive + decode + "
+             "%.1f detections", args.benchmark_res, args.benchmark_stream_fps,
+             cap["cpu_ms_per_camera_second"], cap["detect_fps"])
     log.info("  at --detect-fps %.1f, with 50%% headroom left for the register:", cap["detect_fps"])
     log.info("")
     if cap["cameras"] >= 1:
-        log.info("  ==> this machine can carry about %d camera%s", cap["cameras"],
-                 "" if cap["cameras"] == 1 else "s")
+        log.info("  ==> this machine can carry about %d camera%s  (%.1f before rounding)",
+                 cap["cameras"], "" if cap["cameras"] == 1 else "s", cap["cameras_exact"])
     else:
         log.warning("  ==> NOT enough for one camera at %.1f fps.", cap["detect_fps"])
         log.warning("      Try --detect-fps %.1f, or use a faster machine. Below about 3 fps a fast "
@@ -786,15 +1063,26 @@ def benchmark(args) -> int:
     # as a store box that fell behind.
     pose = PersonDetector(prefer_yolo=not args.no_yolo, pose=True)
     if pose.supports_pose:
-        pcap = capacity(time_it(pose), args.detect_fps)
+        pcap = capacity(time_it(pose)[0], args.detect_fps, res=args.benchmark_res,
+                        stream_fps=args.benchmark_stream_fps)
         log.info("")
         log.info("  WITH EMPLOYEE ACTIVITY (posture) switched on:")
-        log.info("    %.1f ms per detection  ==> about %d camera%s  (%.0f%% of the above)",
+        log.info("    %.1f CPU-ms per detection  ==> about %d camera%s  (%.0f%% of the above)",
                  pcap["ms_per_detection"], pcap["cameras"],
                  "" if pcap["cameras"] == 1 else "s",
                  100.0 * pcap["ms_per_detection"] / max(cap["ms_per_detection"], 0.001))
         log.info("    Movement, company and floor coverage cost nothing extra — they are computed "
                  "from tracks this machine already produces. Only POSTURE needs these weights.")
+        if det.kind and "openvino" in det.kind and pose.kind and "openvino" not in pose.kind:
+            # Say WHY the ratio is so ugly. Most of that multiple is the runtime, not the
+            # posture model: the plain detector above is running on OpenVINO and the pose
+            # weights are not, because only the detection head has been ported. Reported
+            # plainly so nobody concludes that posture is six times the work — it is not, and
+            # the gap would mostly close if the pose head were ported too.
+            log.info("    NOTE: most of that multiple is the RUNTIME, not posture. The detector "
+                     "above runs on OpenVINO (%s); the pose weights fall back to PyTorch, which "
+                     "is several times dearer per detection on this machine whatever model it "
+                     "is running.", det.kind)
     elif not args.no_yolo:
         log.info("")
         log.info("  Employee activity (posture) could not be timed — the pose weights did not load.")
@@ -834,7 +1122,9 @@ class CameraWorker:
         # Activity is per-camera because the switches are: a store can have one eye-level camera
         # marked posture_capable and three ceiling ones that are not.
         self.activity = (ActivityAccumulator(**activity) if activity else None)
-        self.tracker = Tracker()
+        self.tracker = CNT.PredictiveTracker()
+        self._gates = []
+        self._gates_key = None
         self.session = None
         self.extend_at = 0
         self.source = None
@@ -875,10 +1165,18 @@ class CameraWorker:
         log.info("[%s] live (%s)", self.cam["device_name"], proto)
         return True
 
+    def needs_extend(self) -> bool:
+        """Whether maybe_extend() would actually send a command.
+
+        Split out so the command budget is charged for a COMMAND rather than for a call: the loop
+        asks every camera every pass, and metering the asking would drain a camera's bucket dry
+        with requests that were never going to leave the process."""
+        return bool(self.session) and time.time() >= self.extend_at
+
     def maybe_extend(self):
         """Google's grant lapses in ~5 minutes. Extend a minute early; a missed extension is not a
         retry, it drops the stream and costs a full re-negotiation."""
-        if not self.session or time.time() < self.extend_at:
+        if not self.needs_extend():
             return
         try:
             res = self.api.call("POST", "stream/extend", {"session_id": self.session.get("session_id")})
@@ -932,7 +1230,12 @@ class CameraWorker:
 
         now = time.time()
         if self.last_detect_at and (now - self.last_detect_at) < self.detect_interval:
-            return False                      # frame drained, inference skipped
+            return False                      # frame drained, NOT converted, inference skipped
+
+        # Only now, past the rate limiter, is it worth turning this frame into pixels.
+        frame = frame.array()
+        if frame is None:
+            return False
 
         # dt is time since the last DETECTION, not since the last frame — occupancy is measured in
         # person-seconds, so it must advance by the interval actually observed.
@@ -941,6 +1244,11 @@ class CameraWorker:
 
         zones = self.cam.get("zones") or []
         lines = [z for z in zones if z.get("kind") == "line" and z.get("is_active", True)]
+
+        gkey = tuple((z.get("id"), z.get("updated_at")) for z in lines)
+        if gkey != self._gates_key:
+            self._gates = CNT.gates_for(lines)
+            self._gates_key = gkey
 
         tracks = self.tracker.update(self.detector(frame), now)
 
@@ -961,9 +1269,13 @@ class CameraWorker:
                 continue                            # the pavement / the back office is not the store
             on_floor += 1
             prev = track.get("prev_foot")
-            if prev and self.cam.get("is_entrance"):
-                for line in lines:
-                    direction = GEO.crossing_direction(line, prev, foot)
+            # THE COUNT. A band with hysteresis, not a bare line test: a line has zero width, so
+            # box jitter of any size crosses it, and a person pausing on the threshold produced an
+            # in/out pair per wobble (measured: one person standing in the doorway counted 4 in and
+            # 4 out). `confirmed` keeps a single-frame reflection in the glass out of the count.
+            if self.cam.get("is_entrance") and track.get("confirmed", True):
+                for gate in self._gates:
+                    direction = gate.update(track["key"], foot, track.get("box"), now)
                     if direction:
                         self._emit_traffic(direction, track)
 
@@ -1068,10 +1380,68 @@ class CameraWorker:
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The process
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+# Google's documented ceiling for devices.executeCommand: 5 QPM PER PROJECT, PER USER, PER DEVICE.
+#
+# PER DEVICE is the part that matters and the part an earlier draft of this file got backwards. It
+# assumed a single ceiling shared across the whole estate and metered every camera out of one
+# bucket, which throttles nothing Google was going to throttle and instead makes a twenty-camera
+# analyzer take five minutes to come up. The aggregation Google describes runs the other way: two
+# PROJECTS talking to the SAME device share that device's five, not one project's cameras sharing
+# five between them.
+#
+# We spend 4 of the 5 and leave one, because the analyzer is not the only thing sending commands to
+# these cameras: the live-view page and the counting-line still both call executeCommand for the
+# same device, as the same user, in the same project. An analyzer that spends the whole allowance
+# means a manager pressing "Watch live" gets a throttle instead of a picture.
+#
+# SOURCE, stated because it could not be checked from here: Google's Device Access limits page
+# (developers.google.com/nest/device-access/project/limits) is unreachable from this network, so
+# this rests on two independent search summaries of it rather than on the page itself. If somebody
+# can open it, confirm the 5 and delete this paragraph.
+OPEN_QPM_PER_DEVICE = 4.0
+
+
+class CommandBudget:
+    """A token bucket over the commands this analyzer sends to Google, PER DEVICE.
+
+    WHY A BUDGET AND NOT A SLEEP. Two different things want to send an executeCommand — a camera
+    opening its stream, and a camera extending a grant that is about to lapse — and they are not
+    equally urgent. A missed extension costs a full re-negotiation and a gap in the count; a
+    delayed open costs a few seconds of a camera coming up, which nobody notices.
+
+    So extensions get a RESERVE that opens cannot touch. Both draw on the same per-device bucket,
+    but an open must leave `reserve` tokens behind, while an extension may spend to the floor. An
+    earlier version described exactly this behaviour in its docstring and did not implement it:
+    only opens were metered and extensions bypassed the budget entirely, so the priority it claimed
+    to encode did not exist in either direction.
+    """
+
+    def __init__(self, per_minute=OPEN_QPM_PER_DEVICE, reserve=1.0):
+        self.rate = max(0.5, float(per_minute)) / 60.0
+        # A full minute of capacity, so a camera that has been quiet can open immediately rather
+        # than waiting out a bucket that was sized for half the rate.
+        self.capacity = max(1.0, float(per_minute))
+        self.reserve = max(0.0, float(reserve))
+        self._buckets = {}                       # device -> [tokens, last_seen]
+
+    def allow(self, key, cost=1.0, spend_reserve=False, now=None):
+        """Spend one command against `key`'s bucket. `spend_reserve` is the extension's privilege."""
+        now = time.time() if now is None else float(now)
+        tokens, last = self._buckets.get(key, (self.capacity, now))
+        tokens = min(self.capacity, tokens + (now - last) * self.rate)
+        floor = 0.0 if spend_reserve else self.reserve
+        if tokens - cost >= floor - 1e-9:
+            self._buckets[key] = (tokens - cost, now)
+            return True
+        self._buckets[key] = (tokens, now)
+        return False
+
+
 class Analyzer:
     def __init__(self, args):
         self.args = args
         self.api = Api(args.api, args.agent_key, args.secret)
+        self.opens = CommandBudget(getattr(args, "open_qpm", OPEN_QPM_PER_DEVICE))
         # The detector is built AFTER the first config poll, because whether activity is on decides
         # which weights to load. Until then there is nothing to detect on anyway — no camera has a
         # stream open before the first refresh_config().
@@ -1094,7 +1464,10 @@ class Analyzer:
         their camera count fits on that hardware.
         """
         if self.detector is None or self.pose_loaded != want_pose:
-            self.detector = PersonDetector(prefer_yolo=not self.args.no_yolo, pose=want_pose)
+            self.detector = PersonDetector(prefer_yolo=not self.args.no_yolo, pose=want_pose,
+                                           no_openvino=getattr(self.args, "no_openvino", False),
+                                           ov_threads=getattr(self.args, "ov_threads", 1),
+                                           ov_precision=getattr(self.args, "ov_precision", None))
             self.pose_loaded = want_pose
             if self.detector.kind is None:
                 log.error(self.detector.unavailable_message())
@@ -1206,9 +1579,20 @@ class Analyzer:
                     continue
                 worked = False
                 for w in list(self.workers.values()):
+                    dev = w.cam.get("device_name") or w.cam.get("camera_id")
                     if w.source is None:
+                        # METERED PER CAMERA, because that is the shape of Google's limit. A
+                        # camera that has been sitting idle opens immediately; one that has just
+                        # been retried several times waits for its own bucket, and neither holds
+                        # the other twenty up.
+                        if not self.opens.allow(dev):
+                            continue
                         w.open()
                     else:
+                        # An extension may spend the reserve an open may not: losing a grant costs
+                        # a full renegotiation and a hole in that camera's count.
+                        if w.needs_extend() and not self.opens.allow(dev, spend_reserve=True):
+                            continue
                         w.maybe_extend()
                         worked = w.step() or worked
                 if time.time() >= self.next_post:
@@ -1279,7 +1663,7 @@ def probe(args):
         while time.time() < deadline:
             ok, f = worker.source.read()
             if ok:
-                frame = f
+                frame = f.array()
                 break
             time.sleep(0.2)
         if frame is None:
@@ -1421,6 +1805,35 @@ def main():
                         "camera, network or credentials — run it on a candidate store PC first.")
     p.add_argument("--benchmark-runs", type=int, default=20,
                    help="With --benchmark: how many detections to time.")
+    p.add_argument("--benchmark-res", choices=("1080p", "720p"), default="1080p",
+                   help="With --benchmark: the resolution the cameras will stream at. This "
+                        "changes the answer a lot — receiving and decoding 1080p costs about "
+                        "twice what 720p does, per camera, forever.")
+    p.add_argument("--benchmark-stream-fps", type=float, default=30.0,
+                   help="With --benchmark: the frame rate the cameras will DELIVER (not the "
+                        "detection rate). Receive and decode are paid on every arriving frame.")
+    p.add_argument("--no-openvino", action="store_true",
+                   help="Do not use the OpenVINO detector even if it is installed. The "
+                        "OpenVINO and PyTorch paths run the same yolov8n weights; use this to "
+                        "compare them, or if you suspect the fast path of the two.")
+    p.add_argument("--ov-threads", type=int, default=1,
+                   help="Inference threads for the OpenVINO detector (default 1). More threads "
+                        "make ONE detection finish sooner and cost the machine MORE CPU per "
+                        "detection, so raise it only when a single camera cannot hold "
+                        "--detect-fps on its own.")
+    p.add_argument("--ov-precision", choices=("f32", "bf16", "auto"), default="f32",
+                   help="The OpenVINO arithmetic (default f32). 'auto' hands the choice back "
+                        "to OpenVINO, which on a Xeon with AMX means bfloat16 — roughly 2.7x "
+                        "faster than fp32 and NOT the same arithmetic. Measured over 4 clips x 3 line "
+                        "placements: fp32 counts identically to the PyTorch path on 12 of 12, "
+                        "bf16 differs on 4 of 12 and always by counting one crossing too many. "
+                        "Use f32 unless you have validated bf16 against your own footage; its "
+                        "error is invented entries, which nothing downstream can undo.")
+    p.add_argument("--open-qpm", type=float, default=4.0,
+                   help="Cap on stream open/extend commands sent to Google per minute, across "
+                        "all cameras. Google rate-limits executeCommand per project per user; "
+                        "an analyzer holding many cameras can trip that on startup, when every "
+                        "camera negotiates at once. Lower this if you see throttling.")
     p.add_argument("--priority", choices=("low", "normal"), default="low",
                    help="Scheduling priority (default low). Low keeps the register responsive when "
                         "the analyzer shares a machine with the point of sale.")

@@ -297,6 +297,10 @@ export const NAV: NavGroup[] = [
     // consoles. Same 'all' scope as Vision Settings — it writes the company's Google credential.
     { href: '/vision/onboarding', label: 'Camera Setup', icon: '🎥', module: 'vision', scopes: ['all'] },
     { href: '/vision', label: 'Live Cameras', icon: '📹', module: 'vision', scopes: ['all', 'market', 'store'] },
+    // Counting Lines is 'all', not a viewer tier, because PUT /cameras/{id}/zones goes through
+    // _require_settings: the line decides what "a customer came in" MEANS for that door, and a
+    // whole-set replace can also delete the exclude polygons keeping the pavement out of the count.
+    { href: '/vision/lines', label: 'Counting Lines', icon: '📏', module: 'vision', scopes: ['all'] },
     { href: '/vision/heatmap', label: 'Traffic & Heat Map', icon: '🔥', module: 'vision', scopes: ['all', 'market', 'store'] },
     // Busy Hours reads Google's own person events (mig 907) — no analyzer, no video, every camera.
     // Same scope tiers as Live Cameras / Heat Map: it is store-level activity, names nobody, and a
