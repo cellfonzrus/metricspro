@@ -4,6 +4,7 @@ import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import { useAuth } from '@/lib/auth-context'
 import { carrierMode } from '@/lib/rbac'
+import StatTile from '@/components/StatTile'
 import { GoogleRatingChips, useGoogleRatings } from './_lib/googleRatings'
 
 interface RepRow {
@@ -88,10 +89,10 @@ export default function CommCalcDashboard() {
   })
 
   const KPI_CARDS = [
-    { label: 'Total Incentive Payout', value: fmt(totalPayout), color: 'var(--accent)', icon: '💰' },
-    { label: 'Total Activations', value: totalActs.toString(), color: 'var(--green)', icon: '📱' },
-    { label: 'Total Upgrades', value: totalUpgrades.toString(), color: '#7c3aed', icon: '🔄' },
-    { label: 'Reps Calculated', value: reps.length.toString(), color: 'var(--amber)', icon: '👥' },
+    { label: 'Total Incentive Payout', value: fmt(totalPayout), color: 'var(--accent)', icon: '💰', hero: true },
+    { label: 'Total Activations', value: totalActs.toLocaleString(), color: 'var(--green)', icon: '📱' },
+    { label: 'Total Upgrades', value: totalUpgrades.toLocaleString(), color: '#7c3aed', icon: '🔄' },
+    { label: 'Reps Calculated', value: reps.length.toLocaleString(), color: 'var(--amber)', icon: '👥' },
   ]
 
   return (
@@ -202,14 +203,10 @@ export default function CommCalcDashboard() {
         </div>
       )}
 
-      {/* KPI Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
-        {KPI_CARDS.map(({ label, value, color, icon }) => (
-          <div key={label} className="card" style={{ borderTop: `3px solid ${color}` }}>
-            <div style={{ fontSize: 24 }}>{icon}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color, marginTop: 8 }}>{value}</div>
-            <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 2 }}>{label}</div>
-          </div>
+      {/* KPI tiles — bento layout: the payout headline reads as the hero, the counts support it. */}
+      <div className="stat-grid" style={{ marginBottom: 24 }}>
+        {KPI_CARDS.map(({ label, value, color, icon, hero }) => (
+          <StatTile key={label} label={label} value={value} icon={icon} accent={color} hero={hero} />
         ))}
       </div>
 
