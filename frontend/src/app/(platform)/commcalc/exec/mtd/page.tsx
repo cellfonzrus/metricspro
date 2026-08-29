@@ -8,7 +8,7 @@ import { usePeriod } from '@/lib/period-context'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { emptyStandardFilter, type StandardFilterValue } from '@/lib/standard-filters'
 import type { StoreOpt } from '@/lib/market-store-cascade'
-import { SortableTh, useTableSort } from '@/components/SortableTh'
+import DataGrid from '@/components/DataGrid'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import { useActiveCarrier } from '@/lib/auth-context'
 
@@ -23,11 +23,6 @@ const orgParam = () => { const o = getActiveOrg(); return o ? `&org_id=${encodeU
 // Executive MTD summary — replicates b2bsoft's "Month To Date Location / Employee Sales Report".
 // Reads the org-corrected sales source (feed for the open month, raw_sales for a closed one) so it works
 // for luxelink AND the house org with NO monthly upload. DISPLAY-ONLY.
-
-const th: React.CSSProperties = { textAlign: 'right', padding: '7px 8px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }
-const thL: React.CSSProperties = { ...th, textAlign: 'left' }
-const td: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', borderTop: '1px solid var(--border)', fontSize: 12.5, whiteSpace: 'nowrap' }
-const tdL: React.CSSProperties = { ...td, textAlign: 'left' }
 
 const pct = (n: number) => `${((n || 0) * 100).toFixed(1)}%`
 const n2 = (n: number) => Number(n || 0).toFixed(2)
@@ -118,7 +113,6 @@ export default function ExecMtdPage() {
 
   const active = tab === 'location' ? data?.by_location : data?.by_employee
   const labelKey = tab === 'location' ? 'store' : 'employee'
-  const labelHdr = tab === 'location' ? 'Store' : 'Employee'
   const rows: any[] = active?.rows || []
   const total = active?.total || {}
   const tr = data?.trending || {}
@@ -174,10 +168,6 @@ export default function ExecMtdPage() {
   // hand-rolled table behaves identically. Column keys come from `cols(...)` (the export definition), so
   // the sortable columns and the exported columns can never drift apart. The TOTAL row is rendered
   // separately below and is therefore never sorted into the middle of the table.
-  const sortCols = cols(labelKey)
-  const getCell = useCallback((r: any, field: string) => r?.[field], [])
-  const { sort, toggle, sorted: viewRows } = useTableSort(rows, getCell)
-
   // Export BOTH tabs (like the file's two sheets), each with its own totals row appended.
   const withTotal = (rs: any[], tot: any, lk: string) => [...rs, { ...tot, [lk]: 'TOTAL' }]
   const exportSheets = [
@@ -185,9 +175,6 @@ export default function ExecMtdPage() {
     { name: 'By employee', columns: cols('employee'), rows: withTotal(data?.by_employee?.rows || [], data?.by_employee?.total || {}, 'employee') },
   ]
 
-  const HEADERS = ['Total Activation', 'Activation', 'Port', 'BYOD', 'Tablet', 'Home Internet', 'Edge', 'Upgrade', 'Total Phones', 'Trending Box',
-    'Bill Payment Qty', '$', 'Conv.', 'Acc. Sales', 'APB', 'Trending Acc. Sales', 'Activation Fee', 'Total Protect',
-    'Set-up Fee', 'Dealer share', 'Employee pay', 'Acc.+Set-up']
   // Tooltips only on the two appended reconciliation columns (the b2bsoft 15 are unchanged).
   const HEADER_TIPS: Record<string, string> = {
     'Acc. Sales': 'Accessory sales revenue ONLY — the device set-up fee is excluded (it is a separate pay item). Same number as the Sales Report.',
@@ -202,12 +189,23 @@ export default function ExecMtdPage() {
   // A percentage nobody has entered is NOT zero dollars. Render it as an em-dash so the column
   // cannot be read as "the dealer gets nothing".
   const dash = (v: any) => (v === null || v === undefined ? '—' : fmt(v))
-  const cellVals = (r: any) => [
-    int(r.total_activation), int(r.activation), int(r.port), int(r.byod), int(r.tablet), int(r.home_internet), int(r.edge), int(r.upgrade), int(r.total_phones),
-    int(r.trending_box), int(r.bill_payment_qty), fmt(r.amount), pct(r.conv), fmt(r.acc_sales), n2(r.apb),
-    fmt(r.trending_acc_sales), fmt(r.activation_fee), int(r.total_protect),
-    fmt(r.setup_fee), dash(r.setup_fee_dealer_share), dash(r.setup_fee_employee_pay), fmt(r.acc_plus_setup),
-  ]
+  // Grid columns = the export columns, plus a DISPLAY-ONLY `render` per column that reproduces the exact
+  // b2bsoft formatting (int / $ / % / 2-dp / em-dash) and the reconciliation-column tooltips. <DataGrid>
+  // handles the sticky header, the pinned Store/Employee column, click-sort and resize; the numbers still
+  // come from each column's own `get`, so this stays byte-identical to what the report always showed.
+  const gridCols: ExportColumn[] = useMemo(() => cols(labelKey).map((c) => {
+    const f = c.field || ''
+    const render = (r: any) => {
+      if (f === labelKey) return r[labelKey] || '—'
+      if (f === 'conv') return pct(r.conv)
+      if (f === 'apb') return n2(r.apb)
+      if (f === 'setup_fee_dealer_share' || f === 'setup_fee_employee_pay') return dash(r[f])
+      if (c.money) return fmt(r[f])
+      return int(r[f])
+    }
+    return { ...c, render, tip: HEADER_TIPS[c.header] }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [labelKey, activeCarrier])
 
   return (
     <div>
@@ -384,28 +382,11 @@ export default function ExecMtdPage() {
               POST /commcalc/sales/promote-due — or check the tenant&apos;s sales mailbox.)</>}
         </div>
       ) : (
-        <div className="card table-wrapper" style={{ padding: 0 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr style={{ background: 'var(--surface2)' }}>
-              <SortableTh field={labelKey} sort={sort} onSort={toggle} style={thL}>{labelHdr}</SortableTh>
-              {HEADERS.map((h, i) => (
-                <SortableTh key={h} field={String(sortCols[i + 1]?.field || h)} sort={sort} onSort={toggle}
-                  style={th} title={HEADER_TIPS[h]}>{h}</SortableTh>
-              ))}
-            </tr></thead>
-            <tbody>
-              {viewRows.map((r, i) => (
-                <tr key={i}>
-                  <td style={{ ...tdL, fontWeight: 600 }}>{r[labelKey] || '—'}</td>
-                  {cellVals(r).map((v, j) => <td key={j} style={td}>{v}</td>)}
-                </tr>
-              ))}
-              <tr style={{ background: 'var(--surface2)', fontWeight: 700 }}>
-                <td style={{ ...tdL, fontWeight: 800 }}>TOTAL</td>
-                {cellVals(total).map((v, j) => <td key={j} style={{ ...td, fontWeight: 700 }}>{v}</td>)}
-              </tr>
-            </tbody>
-          </table>
+        <div className="card" style={{ padding: 0 }}>
+          {/* High-density grid: the Store/Employee column stays pinned while the 20+ metric columns scroll
+              sideways, the header ribbon stays put on vertical scroll, and every column click-sorts and
+              drag-resizes. The TOTAL row is pinned to the footer. */}
+          <DataGrid columns={gridCols} rows={rows} totalRow={total} maxHeight="72vh" />
         </div>
       )}
 

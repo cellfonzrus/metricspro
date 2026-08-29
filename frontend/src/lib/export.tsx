@@ -3,7 +3,7 @@
 // and browser Print. All three render from the same structured payload so every
 // report exports identically. Libs are dynamically imported on click to keep them
 // out of the initial bundle and the SSR path.
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { pinSheetCellTypes } from '@/lib/cell-safety'
 import { isSafeMediaSrc } from '@/lib/safe-url'
 import { api } from '@/lib/client'
@@ -59,6 +59,9 @@ export type ExportColumn = {
   field?: string                                   // stable identity (defaults to header)
   type?: 'text' | 'money' | 'number' | 'date'      // filter/sort semantics (money implies type=money)
   role?: 'rep' | 'store' | 'date' | 'month'        // force a quick-filter role (else auto-detected)
+  // Optional DISPLAY-ONLY hints used by <DataGrid> (ignored by export — export always uses `get`):
+  render?: (row: any) => ReactNode                 // custom cell rendering (e.g. per-column number format)
+  tip?: string                                     // header tooltip
 }
 export type ExportSheet = { name: string; columns: ExportColumn[]; rows: any[] }
 export type ExportPayload = {
