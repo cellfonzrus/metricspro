@@ -21,7 +21,8 @@
 // is 'mapped'). Parity with the Python is proven case-by-case by
 // backend/scratchpad/plan_options_proof.py → frontend/scratchpad/prove_plan_match.mjs. DISPLAY ONLY: these
 // numbers are a warning label, never a payout.
-import { useMemo } from 'react'
+import { useMemo, useState, useRef, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 
 export type FieldOption = {
@@ -213,25 +214,154 @@ function toOptions(info: FieldInfo | undefined, current: string[]): EntityOption
 }
 
 /**
+ * CheckboxValuePicker — a real-checkbox multi-select for a rule's value (OWNER DIRECTIVE 2026-08-28:
+ * "the items to be picked from in/contains should be check boxes … the full drop down does not open and
+ * then closes after the 1st item is picked"). Two things it fixes over the plain combo-box:
+ *   • REAL CHECKBOXES that STAY OPEN so several values are checked in one go (a filter box on top).
+ *   • The panel is PORTALED to <body> with position:fixed, so it is NOT clipped by the rules table's
+ *     `overflow-x:auto` (that clipping is exactly why the dropdown "did not fully open"). Fixed + portal
+ *     also survives a transformed modal ancestor.
+ * Emits the selected id array; the caller joins to the comma list the engine parses and flips the op to
+ * 'in' when 2+ are checked (so an operator can never leave it on 'equals' and silently pay $0).
+ */
+function CheckboxValuePicker({ options, selected, onChange, width = 200, ariaLabel = 'Match value',
+  placeholder = 'pick one or more…' }: {
+  options: EntityOption[]; selected: string[]; onChange: (ids: string[]) => void
+  width?: number; ariaLabel?: string; placeholder?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  const reposition = useCallback(() => {
+    const r = btnRef.current?.getBoundingClientRect()
+    if (r) setRect({ left: r.left, top: r.bottom + 4, width: r.width })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    reposition()
+    const onMove = () => reposition()
+    window.addEventListener('scroll', onMove, true)
+    window.addEventListener('resize', onMove)
+    function onDoc(e: MouseEvent) {
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return
+      setOpen(false); setQuery('')
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => {
+      window.removeEventListener('scroll', onMove, true)
+      window.removeEventListener('resize', onMove)
+      document.removeEventListener('mousedown', onDoc)
+    }
+  }, [open, reposition])
+
+  const selLower = useMemo(() => new Set(selected.map(s => s.toLowerCase())), [selected])
+  const byId = useMemo(() => { const m: Record<string, EntityOption> = {}; options.forEach(o => { m[o.id] = o }); return m }, [options])
+  const q = query.trim().toLowerCase()
+  const filtered = useMemo(() => (!q ? options
+    : options.filter(o => o.label.toLowerCase().includes(q) || (o.sublabel || '').toLowerCase().includes(q))), [options, q])
+
+  function toggle(id: string) {
+    const has = selected.some(s => s.toLowerCase() === id.toLowerCase())
+    onChange(has ? selected.filter(s => s.toLowerCase() !== id.toLowerCase()) : [...selected, id])
+  }
+
+  const summary = selected.length === 0 ? placeholder
+    : selected.length <= 2 ? selected.map(id => byId[id]?.label || id).join(', ')
+    : `${selected.length} selected`
+
+  return (
+    <div style={{ display: 'inline-block', width }}>
+      <button ref={btnRef} type="button" aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel}
+        onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left',
+          padding: '7px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13,
+          background: 'var(--surface)', cursor: 'pointer', color: selected.length ? 'var(--text1)' : 'var(--text3)' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{summary}</span>
+        <span aria-hidden style={{ fontSize: 10, color: 'var(--text3)' }}>▾</span>
+      </button>
+      {open && rect && typeof document !== 'undefined' && createPortal(
+        <div ref={panelRef} role="listbox" aria-multiselectable
+          style={{ position: 'fixed', zIndex: 4000, left: rect.left, top: rect.top, width: 'max-content',
+            minWidth: Math.max(rect.width, 220), maxWidth: 360, background: 'var(--surface)',
+            border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 6px 24px rgba(0,0,0,0.22)', padding: 6 }}>
+          <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Filter…"
+            aria-label={`Filter ${ariaLabel}`}
+            style={{ width: '100%', padding: '6px 8px', marginBottom: 4, borderRadius: 6, border: '1px solid var(--border)',
+              fontSize: 12, background: 'var(--surface)', color: 'var(--text1)', boxSizing: 'border-box' }}
+            onKeyDown={e => { if (e.key === 'Escape') { setOpen(false); setQuery('') } }} />
+          <ul style={{ listStyle: 'none', margin: 0, padding: 0, maxHeight: 260, overflowY: 'auto' }}>
+            {filtered.length === 0 && <li style={{ padding: '7px 8px', fontSize: 12, color: 'var(--text3)' }}>No matching values</li>}
+            {filtered.map(o => {
+              const checked = selLower.has(o.id.toLowerCase())
+              return (
+                <li key={o.id} role="option" aria-selected={checked} onClick={() => toggle(o.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', fontSize: 13, cursor: 'pointer', borderRadius: 6 }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface2)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                  <input type="checkbox" checked={checked} readOnly tabIndex={-1} style={{ pointerEvents: 'none' }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {o.label}{o.sublabel ? <span style={{ color: 'var(--text3)' }}> · {o.sublabel}</span> : null}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+          <div style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: 'var(--text3)' }}>{selected.length} selected</span>
+            <span>
+              {selected.length > 0 && (
+                <button type="button" className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px', marginRight: 6 }}
+                  onClick={() => onChange([])}>Clear</button>
+              )}
+              <button type="button" className="btn btn-secondary" style={{ fontSize: 11, padding: '2px 8px' }}
+                onClick={() => { setOpen(false); setQuery('') }}>Done</button>
+            </span>
+          </div>
+        </div>, document.body)}
+    </div>
+  )
+}
+
+/**
  * The ONE match-value input used by every plan/tier/schedule matcher.
  *  • op 'in'       → MULTI picker; the stored value stays a comma list (what the engine parses).
  *  • op 'contains' → typeahead over observed values, free entry ALLOWED (a substring pattern is not a value).
  *  • op 'equals'   → single picker; free entry only where the option list can't be complete
  *                    (product_desc, or a list the backend truncated).
+ * When `onOpChange` is provided and the field has a known value list, the value is picked with REAL
+ * CHECKBOXES (CheckboxValuePicker) and the op is auto-flipped to 'in' as soon as 2+ values are checked —
+ * so multi-value picking is obvious and can never be left on 'equals' (which matches the literal comma
+ * string and silently pays $0).
  */
-export function MatchValuePicker({ opts, field, op, value, onChange, width = 200, ariaLabel = 'Match value' }: {
+export function MatchValuePicker({ opts, field, op, value, onChange, onOpChange, width = 200, ariaLabel = 'Match value' }: {
   opts: PlanOptions | null; field: string; op: string; value: string
-  onChange: (v: string) => void; width?: number; ariaLabel?: string
+  onChange: (v: string) => void; onOpChange?: (op: string) => void; width?: number; ariaLabel?: string
 }) {
   const f = norm(field || 'any')
   const o = norm(op || 'equals')
   const info = opts?.fields?.[f]
   const isAny = f === 'any'
+  // Values are ALWAYS a comma list under the hood; both 'in' and (checkbox-managed) 'equals' read/write it.
   const multi = o === 'in'
-  const selected = useMemo(() => (multi
-    ? (value || '').split(',').map(s => s.trim()).filter(Boolean)
-    : [(value || '').trim()].filter(Boolean)), [value, multi])
+  const selected = useMemo(() => (value || '').split(',').map(s => s.trim()).filter(Boolean), [value])
   const options = useMemo(() => toOptions(info, selected), [info, selected])
+  const hasList = (info?.values?.length ?? 0) > 0
+  const canManageOp = typeof onOpChange === 'function'
+  // CHECKBOX multi-select whenever the field has a known value list and this is not a 'contains' pattern.
+  // If the caller lets us manage the op (onOpChange), checkboxes work from 'equals' too and we flip to 'in'
+  // when 2+ are checked; without that we only show checkboxes when the op is already 'in'.
+  const useCheckbox = !isAny && o !== 'contains' && hasList && (multi || canManageOp)
+  // Zero-wipe legacy: a rule saved as `equals "a,b"` (multi value under a single-match op) is repaired to
+  // 'in' once, so it actually matches instead of silently paying $0. Fires at most once (o then === 'in').
+  useEffect(() => {
+    if (canManageOp && o === 'equals' && selected.length >= 2) onOpChange!('in')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManageOp, o, selected.length])
   // Free entry is allowed ONLY where a closed list would be wrong or unusable: a 'contains' PATTERN (a
   // substring is not a value), a genuinely free-text field, a list the backend had to truncate, or NO
   // options at all (a brand-new tenant, or sales that couldn't be read — never lock the editor).
@@ -240,6 +370,13 @@ export function MatchValuePicker({ opts, field, op, value, onChange, width = 200
   if (isAny) {
     return <EntityPicker options={[]} value={null} disabled width={width}
       placeholder="(every line — no value)" onChange={() => { }} ariaLabel={ariaLabel} />
+  }
+  if (useCheckbox) {
+    return <CheckboxValuePicker options={options} selected={selected} width={width} ariaLabel={ariaLabel}
+      onChange={ids => {
+        onChange(ids.join(','))
+        if (canManageOp && ids.length >= 2 && o !== 'in') onOpChange!('in')
+      }} />
   }
   if (multi) {
     return <EntityPicker multi options={options} value={selected} width={width} allowCreate={allowCreate}
