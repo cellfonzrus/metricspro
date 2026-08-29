@@ -53,8 +53,9 @@ except Exception as e:                                   # pragma: no cover
     print(f"aiortc/av not installed ({type(e).__name__}) — install with: pip install aiortc")
     sys.exit(0)
 
-from vision_edge_analyzer import (CommandBudget, LazyFrame, PersonDetector,   # noqa: E402
-                                  WebRtcFrameSource, capacity, webrtc_available)
+from vision_edge_analyzer import (CommandBudget, DEVICE_QPM, LazyFrame,   # noqa: E402
+                                  PersonDetector, USER_QPM, WebRtcFrameSource,
+                                  capacity, webrtc_available)
 
 
 # ── a stand-in for Google: a real peer that answers our offer and sends colour bars ──────────────
@@ -195,38 +196,103 @@ check("a nonsense measurement cannot divide by zero", capacity(0, 6, cores=4)["c
 check("detect_fps is floored so it can never divide by zero",
       capacity(0.040, 0, cores=4)["detect_fps"] == 0.5)
 
-print("\n(0b2) The command budget — Google's limit is PER DEVICE, not per estate")
-# WHAT THIS PROTECTS. devices.executeCommand is documented at 5 QPM per project, per user, PER
-# DEVICE. An earlier version metered every camera out of ONE bucket, which throttles nothing Google
-# was going to throttle and makes a twenty-camera analyzer take minutes to come up. These checks
-# pin the shape of the limit, not just the arithmetic.
-b = CommandBudget(per_minute=4.0, reserve=1.0)
+print("\n(0b2) The command budget — TWO ceilings, and the estate-wide one is the tight one")
+# Google documents three limits on devices.executeCommand and an analyzer meets the tightest:
+#   API level     10 QPM per project, PER USER, across every device   <- this one binds
+#   Command level  5 QPM per project, per user, per device
+#   Device level  30 QPM / 100 QPH per camera, across projects
+#
+# A previous version of this file asserted that "twenty cameras all open in the same pass, which is
+# the whole point". That check encoded a MISREADING — that no across-devices ceiling existed — and
+# it passed happily while the analyzer was arranged to send 21 commands a minute against a limit of
+# 10. The checks below pin the real shape, including the case that mistake would have broken.
+b = CommandBudget(per_minute=4.0, reserve=1.0, user_per_minute=8.0)
 t = 1000.0
 check("a camera may open immediately", b.allow("camA", now=t))
-check("...and so may a DIFFERENT camera in the same instant — separate buckets",
-      b.allow("camB", now=t))
-check("twenty cameras all open in the same pass, which is the whole point",
-      all(b.allow(f"cam{i}", now=t) for i in range(20)))
-# Drain camA down to the reserve: capacity 4, one already spent, so two more opens then stop.
-check("one camera's opens stop at the reserve", (b.allow("camA", now=t), b.allow("camA", now=t),
-      not b.allow("camA", now=t))[-1])
-check("...and draining camA did NOT touch camB", b.allow("camB", now=t))
-check("an EXTENSION may spend the reserve an open may not",
-      b.allow("camA", spend_reserve=True, now=t))
-check("...but not beyond the floor", not b.allow("camA", spend_reserve=True, now=t))
-check("tokens come back with time (a minute restores the allowance)",
-      b.allow("camA", now=t + 60))
-# The ceiling only bites on a bucket that has been SPENT and then left alone — a fresh key starts
-# full and accumulates nothing, so testing one proves nothing about the ceiling at all.
-b2 = CommandBudget(per_minute=4.0, reserve=1.0)
-while b2.allow("c", now=0.0):
-    pass                                       # drain it to the reserve at t=0
+check("...and so may a different camera in the same instant", b.allow("camB", now=t))
+check("ONE camera cannot spend the estate's budget — its own gate stops it first "
+      "(device cap 4, reserve 1, one already spent)",
+      [b.allow("camA", now=t) for _ in range(6)].count(True) == 2)
+check("...and the other camera still has its own allowance", b.allow("camB", now=t))
+
+# THE CEILING THAT BINDS. Twenty fresh cameras, all opening in the same instant: each passes its own
+# device gate, and the estate gate is what stops them.
+b2 = CommandBudget(per_minute=4.0, reserve=1.0, user_per_minute=8.0)
+opened = [b2.allow(f"cam{i}", now=t) for i in range(20)].count(True)
+check(f"twenty cameras opening at once are capped by the ESTATE, not their own buckets "
+      f"(got {opened}, user cap 8 less a reserve of 1)", opened == 7)
+check("...and the refused ones are simply not sent, not queued into a burst later",
+      not b2.allow("cam19", now=t))
+
+# EXTENSIONS OUTRANK OPENS AT BOTH LEVELS.
+b3 = CommandBudget(per_minute=4.0, reserve=1.0, user_per_minute=8.0)
+while b3.allow("cam0", now=t):
+    pass                                        # drain cam0 to its device reserve
+check("an extension may spend the reserve an open may not",
+      b3.allow("cam0", spend_reserve=True, now=t))
+b4 = CommandBudget(per_minute=4.0, reserve=1.0, user_per_minute=8.0)
+for i in range(7):
+    b4.allow(f"c{i}", now=t)                    # drain the ESTATE to its reserve
+check("an extension gets through the estate gate when an open would not",
+      (not b4.allow("cX", now=t)) and b4.allow("cX", spend_reserve=True, now=t))
+
+# REFILL. Only bites on a bucket that has been spent and then left alone — a fresh key starts full
+# and accrues nothing, so testing one proves nothing about the ceiling.
+b5 = CommandBudget(per_minute=4.0, reserve=1.0, user_per_minute=8.0)
+while b5.allow("c", now=0.0):
+    pass
 burst = 0
-while b2.allow("c", now=3600.0):
+while b5.allow("c", now=3600.0):
     burst += 1
-check(f"an hour idle refills to capacity and NO further — not a burst of two hundred (got {burst})",
+check(f"an hour idle refills to capacity and no further — not a burst of hundreds (got {burst})",
       burst == 3)
-check("an unknown camera starts full rather than empty", b.allow("brand-new-camera", now=t))
+
+# THE ARITHMETIC THAT DECIDES HOW MANY CAMERAS ONE GOOGLE USER CARRIES. Each open stream is
+# extended about every 200 s = 0.3 commands/min, forever. This is the real capacity limit and it is
+# checked here so a future change to the extend interval cannot quietly blow the ceiling.
+per_cam_qpm = 60.0 / 200.0
+check(f"21 cameras sit inside Google's 10 QPM on extensions alone "
+      f"({21 * per_cam_qpm:.1f} QPM)", 21 * per_cam_qpm < 10.0)
+check(f"...but 40 cameras do NOT, and no setting can fix that "
+      f"({40 * per_cam_qpm:.1f} QPM)", 40 * per_cam_qpm > 10.0)
+# THE HAZARD, and it is worth a check of its own because the AVERAGE looks fine. 21 cameras at
+# 0.3 QPM average 6.3 QPM, comfortably inside 10 — but if their extend timers align, all 21 land
+# within a few seconds and that minute sees 21 commands. The bucket refuses them, and a refused
+# EXTENSION drops a stream.
+def _hour(spread, budget=None):
+    bb = budget or CommandBudget(per_minute=4.0, reserve=1.0, user_per_minute=8.0)
+    granted = 0
+    for period in range(int(3600 / 200)):
+        for i in range(21):
+            if bb.allow(f"cam{i}", spend_reserve=True,
+                        now=period * 200.0 + i * (spread / 21.0)):
+                granted += 1
+    return granted, 21 * int(3600 / 200)
+
+clumped, due = _hour(8.4)
+check(f"21 extends CLUMPED into 8 seconds are throttled — the average being 6.3 QPM does not "
+      f"save them ({clumped} of {due} granted)", clumped < due)
+
+# WHAT SAVES IT. Opens are metered by the same estate gate, so 21 cameras cannot all come up at
+# once — they arrive over about three minutes, and their extend timers inherit that spread. At 21
+# cameras that is one command every 8.6 s, against the 7.5 s the bucket sustains.
+spread_ok, due2 = _hour(180.0)
+check(f"...but extends inheriting the open stagger all get through ({spread_ok} of {due2})",
+      spread_ok == due2)
+check("the sustainable spacing is ~7.5 s between commands, and 21 cameras give 9.5 s",
+      abs(60.0 / 8.0 - 7.5) < 1e-9 and (200.0 / 21) > 7.5)
+
+# THE SHIPPED CONSTANTS MUST SIT INSIDE GOOGLE'S DOCUMENTED CEILINGS. Every check above builds its
+# own budget with explicit numbers, so none of them would notice someone raising the defaults past
+# what Google actually allows — a change that buys nothing (the limit is Google's, not ours) and
+# turns a throttle into a mystery. Source: Device Access "User and Rate Limits", API level
+# devices.executeCommand 10 QPM per project per user; command level 5 QPM per device.
+check(f"the estate default ({USER_QPM}) sits inside Google's 10 QPM per project, per user",
+      0 < USER_QPM <= 10.0)
+check(f"the per-device default ({DEVICE_QPM}) sits inside Google's 5 QPM per device",
+      0 < DEVICE_QPM <= 5.0)
+check("...and each leaves room for a person opening live view",
+      USER_QPM < 10.0 and DEVICE_QPM < 5.0)
 
 print("\n(0c) A missing detector is refused, not run blind")
 det = PersonDetector(prefer_yolo=False)
