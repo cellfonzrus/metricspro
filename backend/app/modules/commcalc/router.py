@@ -15279,33 +15279,13 @@ def _commission_from_mtd_rows(emp_rows, rate_map, acc_pct):
     return out
 
 
-@router.get("/commission-mtd/{period}")
-def commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID, today: str = "",
-                   rates: str = "", acc_pct: str = ""):
-    """READ-ONLY commission computed from the Executive MTD per-employee numbers (see the block header).
-    Applies ONE plan's rates to the reps in that plan's scope (its store / market / employee assignments),
-    so the total reconciles to the Exec MTD report filtered to the same stores. Moves no pay — run the
-    calculation to pay.
-
-    `rates` (optional) is the owner's PER-CATEGORY override, 'activation:10,byod:10,tablet:10,upgrade:0,…'
-    over the Exec MTD activation categories; omitted -> the plan's flat rate on every category except
-    Upgrade. `acc_pct` (optional, e.g. 0.10) overrides the plan's accessory %. `today` (YYYY-MM-DD) is the
-    caller's local date for the MTD cut, exactly as /exec-mtd takes it."""
-    require_org(org_id)
-    if not period:
-        raise HTTPException(400, "period required")
-    if not plan_id:
-        raise HTTPException(400, "plan_id required")
-    client = sb()
-    plans, ready = commission_engine._load_plans(client, org_id)
-    if not ready:
-        raise HTTPException(400, "Commission plans are not set up (migration 059).")
-    plan = next((p for p in plans if str(p.get("id")) == str(plan_id)), None)
-    if not plan:
-        raise HTTPException(404, "plan_id not found")
+def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", today=""):
+    """Compute the Exec-MTD commission for ONE plan + period. PURE-ish (reads Exec MTD; writes nothing).
+    Shared by GET /commission-mtd and the Save endpoint so the saved record and the preview can never
+    disagree. Returns the same dict the endpoint returns."""
     plan_act_rate, plan_acc_pct = _plan_mtd_rates(plan)
     # Fallback rate map, in order: the plan's SAVED per-category rates (mig 298 mtd_rates), else the plan's
-    # flat activation rate on every category except Upgrade. An explicit ?rates override still wins.
+    # flat activation rate on every category except Upgrade. An explicit `rates` override still wins.
     _stored = plan.get("mtd_rates") if isinstance(plan.get("mtd_rates"), dict) else {}
     _base_map = _default_mtd_rate_map(plan_act_rate)
     for _c in _MTD_ACT_CATEGORIES:
@@ -15359,16 +15339,119 @@ def commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID, today: 
         "by_category": cat_totals,
     }
     return {
-        "period": period, "plan_id": plan_id, "plan_name": plan.get("name"),
+        "period": period, "plan_id": plan.get("id"), "plan_name": plan.get("name"),
         "categories": [{"key": c, "label": _MTD_CATEGORY_LABELS[c]} for c in _MTD_ACT_CATEGORIES],
         "rate_map": rate_map, "accessory_pct": eff_acc_pct,
         "scope": {"stores": stores, "markets": markets, "employees": emps_scope},
         "activation_source": data.get("activation_source"),
         "by_rep": rows, "totals": totals,
-        "note": ("Commission computed from Executive MTD per-employee numbers "
-                 "(per-category activation rate + Acc. Sales × %). READ-ONLY — matches the Exec MTD report "
-                 "filtered to this plan's stores; nothing is paid until you run the calculation."),
     }
+
+
+def _load_plan_or_404(client, org_id, plan_id):
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        raise HTTPException(400, "Commission plans are not set up (migration 059).")
+    plan = next((p for p in plans if str(p.get("id")) == str(plan_id)), None)
+    if not plan:
+        raise HTTPException(404, "plan_id not found")
+    return plan
+
+
+@router.get("/commission-mtd/{period}")
+def commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID, today: str = "",
+                   rates: str = "", acc_pct: str = ""):
+    """READ-ONLY commission computed from the Executive MTD per-employee numbers (see the block header).
+    Applies ONE plan's rates to the reps in that plan's scope. Moves no pay — Save it or run the calc.
+
+    `rates` (optional) is the owner's PER-CATEGORY override, 'activation:10,byod:10,tablet:10,upgrade:0,…';
+    omitted -> the plan's saved rates / flat rate. `acc_pct` (optional) overrides the accessory %. `today`
+    (YYYY-MM-DD) is the caller's local date for the MTD cut."""
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    if not plan_id:
+        raise HTTPException(400, "plan_id required")
+    client = sb()
+    plan = _load_plan_or_404(client, org_id, plan_id)
+    out = _commission_mtd_result(client, org_id, period, plan, rates=rates, acc_pct=acc_pct, today=today)
+    out["note"] = ("Commission computed from Executive MTD per-employee numbers (per-category activation "
+                   "rate + Acc. Sales × %). READ-ONLY — press Save to record it for this period.")
+    # attach any existing saved record so the UI can show 'saved / stale'
+    out["saved"] = _mtd_saved_summary(client, org_id, period, plan_id)
+    return out
+
+
+def _mtd_saved_summary(client, org_id, period, plan_id):
+    """The saved Exec-MTD commission record for (org, period, plan), or None. Never raises (pre-299 DB)."""
+    try:
+        rows = (client.schema('commcalc').table('mtd_commission_payout')
+                .select('rep,commission,saved_at')
+                .eq('org_id', org_id).in_('period', _pvariants(period))
+                .eq('plan_id', plan_id).execute().data) or []
+    except Exception:
+        return None
+    if not rows:
+        return None
+    return {"reps": len(rows), "commission": round(sum(safe_float(r.get("commission")) for r in rows), 2),
+            "saved_at": max((str(r.get("saved_at") or "") for r in rows), default=None)}
+
+
+@router.post("/commission-mtd/{period}/save")
+def save_commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID, today: str = "",
+                        rates: str = "", acc_pct: str = ""):
+    """SAVE the Exec-MTD-derived commission for a plan + period into commcalc.mtd_commission_payout (mig
+    299). ADDITIVE and standalone: it does NOT touch rep_commissions or the /calculate path, so nothing
+    else changes and a recalculation never disturbs this record. Recomputes from the SAME helper the
+    preview uses, then delete-then-inserts this (org, period, plan)'s rows so a re-save is idempotent."""
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    if not plan_id:
+        raise HTTPException(400, "plan_id required")
+    client = sb()
+    plan = _load_plan_or_404(client, org_id, plan_id)
+    res = _commission_mtd_result(client, org_id, period, plan, rates=rates, acc_pct=acc_pct, today=today)
+    rows = res.get("by_rep") or []
+    _now = datetime.now(timezone.utc).isoformat()
+    payload = [{
+        "org_id": org_id, "period": period, "plan_id": plan_id,
+        "rep": r.get("employee") or "", "activations": int(r.get("activations") or 0),
+        "acc_sales": safe_float(r.get("acc_sales")), "activation_pay": safe_float(r.get("activation_pay")),
+        "accessory_pay": safe_float(r.get("accessory_pay")), "commission": safe_float(r.get("commission")),
+        "by_category": r.get("by_category"), "rate_map": res.get("rate_map"),
+        "accessory_pct": safe_float(res.get("accessory_pct")), "saved_at": _now,
+    } for r in rows if (r.get("employee") or "").strip()]
+    try:
+        (client.schema('commcalc').table('mtd_commission_payout')
+         .delete().eq('org_id', org_id).in_('period', _pvariants(period)).eq('plan_id', plan_id).execute())
+        if payload:
+            client.schema('commcalc').table('mtd_commission_payout').insert(payload).execute()
+    except Exception as e:
+        raise HTTPException(500, f"save failed (is migration 299 applied?): {e}")
+    return {"saved": True, "period": period, "plan_id": plan_id, "plan_name": plan.get("name"),
+            "reps": len(payload), "totals": res.get("totals"),
+            "note": ("Saved the Executive-MTD commission for this plan + period. Standalone record — it does "
+                     "not change rep_commissions or any other payout.")}
+
+
+@router.get("/commission-mtd/{period}/saved")
+def get_saved_commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID):
+    """Read back the saved Exec-MTD commission record (mig 299) for a plan + period."""
+    require_org(org_id)
+    client = sb()
+    try:
+        q = (client.schema('commcalc').table('mtd_commission_payout').select('*')
+             .eq('org_id', org_id).in_('period', _pvariants(period)))
+        if plan_id:
+            q = q.eq('plan_id', plan_id)
+        rows = q.execute().data or []
+    except Exception:
+        rows = []
+    rows.sort(key=lambda r: -safe_float(r.get("commission")))
+    return {"period": period, "plan_id": plan_id, "rows": rows,
+            "totals": {"reps": len(rows),
+                       "commission": round(sum(safe_float(r.get("commission")) for r in rows), 2)}}
 
 
 # ── Commission-plan ASSIGNMENT roster + BULK assign (owner directive 2026-07-23) ──────────────────
