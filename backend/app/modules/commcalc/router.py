@@ -586,7 +586,7 @@ SWEEP_RETRYABLE_ZERO = ('price_guard', 'inventory_no_stores') + XREPORT_ZERO_REA
 SWEEP_CAVEAT_MARKERS = ('price_guard_partial', 'inventory_devices_only',
                         'x_report_partial_save', 'x_report_unmapped_labels')
 # Statuses a sweep's dedup may treat as DONE even though 0 rows landed.
-SWEEP_TERMINAL_ZERO_STATUSES = ('empty', 'ignored')
+SWEEP_TERMINAL_ZERO_STATUSES = ('empty', 'ignored', 'duplicate')
 
 
 def _ingest_rows_saved(res):
@@ -645,12 +645,14 @@ def _sweep_ingest_outcome(res, *, upload_type=None):
                     res.get('reason') or note or f"'{upload_type}' has no importer — ignored",
                     True)
 
-    # (a2) The DDIA Phase 1 idempotency guard refused an exact re-upload (mig 732). TERMINAL, unlike
-    #      every other named 0-row marker below: the refusal is a property of the BYTES, so retrying
-    #      the identical attachment next sweep can only be refused again. Marking it retryable would
-    #      make every re-delivered email attachment a permanent ⚠️ in the sweep history.
+    # (a2) The DDIA Phase 1 idempotency guard refused an exact re-upload (mig 732). Its OWN terminal
+    #      status 'duplicate' (in SWEEP_TERMINAL_ZERO_STATUSES) — NOT 'skipped': the persisted dedup set
+    #      keys off status, and 'skipped' is the RETRYABLE bucket, so recording a duplicate as 'skipped'
+    #      made b2b's hourly re-send of the SAME file (e.g. Inventory Aging) re-fetch + re-refuse on every
+    #      sweep forever, spamming the history with dozens of "will retry" rows. A duplicate is a property
+    #      of the BYTES — retrying the identical attachment can only be refused again — so it is terminal.
     if marker == 'duplicate_file':
-        return _out('skipped',
+        return _out('duplicate',
                     note or 'exact duplicate of an earlier import — nothing inserted',
                     True)
 
@@ -26801,12 +26803,26 @@ def test_email(body: TestEmailIn, org_id: str = ORG_ID):
 
 
 @router.post("/email-sweep/run-now")
-async def email_run_now(org_id: str = ORG_ID, account: str = ""):
-    """Run one mailbox (?account=total) or ALL of the tenant's mailboxes (omit account)."""
+async def email_run_now(background_tasks: BackgroundTasks, org_id: str = ORG_ID, account: str = "", wait: bool = False):
+    """Run one mailbox (?account=total) or ALL of the tenant's mailboxes (omit account).
+
+    By DEFAULT the sweep runs in the BACKGROUND and returns immediately ({started: true}). A full mailbox
+    sweep (connect + download every attachment + import each) can take longer than a browser / gateway
+    request timeout — which surfaced as a spurious "Failed to fetch" even though the sweep had actually
+    completed server-side. Backgrounding removes that: the processed-history list reflects progress as each
+    report imports, and the user can navigate away. Pass wait=true to run it inline and get the final
+    result summary (used by the freshness run-now, which wants the outcome back)."""
     require_org(org_id)
-    if account.strip():
-        return await _run_email_sweep(org_id, account.strip())
-    return await _run_email_sweep_all(org_id)
+    acct = account.strip()
+    if wait:
+        return await (_run_email_sweep(org_id, acct) if acct else _run_email_sweep_all(org_id))
+    if acct:
+        background_tasks.add_task(_run_email_sweep, org_id, acct)
+    else:
+        background_tasks.add_task(_run_email_sweep_all, org_id)
+    return {"ok": True, "started": True, "account": acct or "all",
+            "message": "Sweep started — it runs in the background and imports reports one at a time. The "
+                       "processed list below updates as it goes; you can leave this page."}
 
 
 @router.get("/email-sweep/processed")
