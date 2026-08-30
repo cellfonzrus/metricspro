@@ -147,6 +147,7 @@ export default function CommissionPlansPage() {
   // Executive-MTD commission basis (an additional calculation, alongside the rules preview)
   const [mtd, setMtd] = useState<any>(null)
   const [mtdBusy, setMtdBusy] = useState(false)
+  const [mtdSaving, setMtdSaving] = useState(false)
   const [mtdRates, setMtdRates] = useState<Record<string, number>>({})
   const [mtdAccPct, setMtdAccPct] = useState<number>(0)
   // plan-coverage diagnostic (mig 232): uncovered sellers · unmatched lines · tier/CT warnings · stale snapshot
@@ -614,6 +615,20 @@ export default function CommissionPlansPage() {
       const q = `?plan_id=${draft.id}&rates=${encodeURIComponent(rateStr)}&acc_pct=${Number(mtdAccPct) || 0}`
       setMtd(await api(`/api/v1/commcalc/commission-mtd/${encodeURIComponent(period)}${q}`))
     } catch (e: any) { setMsg('❌ Exec-MTD commission: ' + (e?.message || e)) } finally { setMtdBusy(false) }
+  }
+
+  // SAVE the Exec-MTD-derived commission for this plan + period (mig 299). Standalone record — does NOT
+  // touch rep_commissions or the calc, so nothing else changes. Recomputes server-side from the same rates.
+  async function saveMtd() {
+    if (!draft?.id) { setMsg('Save the plan first.'); return }
+    setMtdSaving(true); setMsg('')
+    try {
+      const rateStr = MTD_CATS.map(c => `${c.key}:${Number(mtdRates[c.key]) || 0}`).join(',')
+      const q = `?plan_id=${draft.id}&rates=${encodeURIComponent(rateStr)}&acc_pct=${Number(mtdAccPct) || 0}`
+      const r = await api(`/api/v1/commcalc/commission-mtd/${encodeURIComponent(period)}/save${q}`, { method: 'POST' })
+      setMsg(`✅ Saved the Exec-MTD commission — ${r.reps} rep(s), ${fmt(Number(r?.totals?.commission) || 0)} for ${period}.`)
+      if (mtd) setMtd({ ...mtd, saved: { reps: r.reps, commission: r?.totals?.commission, saved_at: new Date().toISOString() } })
+    } catch (e: any) { setMsg('❌ Save: ' + (e?.message || e)) } finally { setMtdSaving(false) }
   }
 
   // ── PAYOUT STRUCTURE — the employee-facing "how commission is earned" document ─────────────────────
@@ -1120,6 +1135,16 @@ export default function CommissionPlansPage() {
           <button className="btn btn-secondary" disabled={mtdBusy} onClick={runMtd}>
             {mtdBusy ? '…' : '📈 Calculate from Exec MTD'}
           </button>
+          <button className="btn" disabled={mtdSaving || !mtd} onClick={saveMtd}
+            title="Save these Exec-MTD numbers as the recorded commission for this plan + period (standalone — does not change other payouts).">
+            {mtdSaving ? 'Saving…' : '💾 Save to commissions'}
+          </button>
+          {mtd?.saved && (
+            <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+              Saved: <b>{mtd.saved.reps}</b> rep(s) · {fmt(Number(mtd.saved.commission) || 0)}
+              {mtd.saved.saved_at ? ` · ${String(mtd.saved.saved_at).slice(0, 10)}` : ''}
+            </span>
+          )}
         </div>
         {mtd && (
           <div>
