@@ -109,6 +109,40 @@ INGEST_TABLES_BY_MODULE = {
 }
 
 
+# ── FRESHNESS COLUMN per table — which timestamp reflects DATA ARRIVAL ────────────────────────────
+# A "is data flowing?" probe must read the column that moves when new data lands. For most raw tables
+# that is created_at (the DB stamps it on insert). daily_sales_feed is the exception: rows are re-inserted
+# / promoted, so its true arrival stamp is `uploaded_at`, NOT created_at — probing created_at made a
+# feed-only tenant (luxelink) read newest_ingest_at=None, so its P&L/Balance-Sheet never auto-computed
+# (permanently empty) and the books-stale banner never fired. account/autocompute._PERIOD_SOURCES already
+# lists daily_sales_feed with uploaded_at first (fix dcb0807); this registry makes that rule the ONE place
+# it's written down, and the guard locks it so it can't silently regress.
+FRESHNESS_COLUMN_BY_TABLE = {
+    "daily_sales_feed": "uploaded_at",
+}
+
+# ── MODULES AUDITED TO HAVE NO EXTERNAL FEED (owner 2026-08-30 census) ─────────────────────────────
+# These modules were checked and own NO external-feed ingest: either pure in-app CRUD, or a compute/
+# derive engine that READS the feeds above and writes computed tables (not feeds). Listed so "every
+# module" is explicitly accounted for — nothing was skipped silently. The guard asserts none of these
+# is also in INGEST_TABLES_BY_MODULE (a module can't be both feed-owning and feed-less).
+MODULES_WITHOUT_EXTERNAL_FEEDS = (
+    # compute / derive engines (read feeds, write computed tables — not feeds):
+    "account", "payables",
+    # core owns the freshness/feed REGISTRY infrastructure (core.import_feed), not an external feed itself:
+    "core",
+    # pure in-app feature modules (user-created data, no external file/API feed):
+    "approvals", "chat", "crm", "helpdesk", "hr", "notify",
+    "recovery", "referral", "remediation", "storevisit", "vision",
+)
+
+
+def freshness_column(table: str) -> str:
+    """The timestamp column a freshness probe should read for `table` to detect new data — the mapped
+    override (e.g. daily_sales_feed → uploaded_at) or 'created_at' by default."""
+    return FRESHNESS_COLUMN_BY_TABLE.get(table, "created_at")
+
+
 def all_ingest_tables() -> tuple:
     """Flattened, de-duplicated set of every registered external-feed ingest table across all modules."""
     seen, out = set(), []

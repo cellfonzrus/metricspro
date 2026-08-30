@@ -27,6 +27,10 @@ Each edge is *source → affected* with: the **entry point**, a **code reference
 Sweeps (email, FTP, ePay, VidaPay, DLAR, VIP) do **not** add tables — they funnel into the tables above via `upload_file`.
 
 > **Freshness / "is data flowing?" measures the LIVE feed, not the monthly upload.** The data-freshness banner reads **`daily_sales_feed`** (the hourly-swept live feed, clean ISO `trans_date`) via `_sales_feed_freshness`, falling back to `raw_sales` only when the daily feed is empty. `raw_sales` is the **monthly** reconciliation upload and moves only on a monthly load — measuring it reports "stale since <last monthly>" while the daily feed is current, a false alarm (owner 2026-08-30). Displayed numbers read the **union** of both, so they stay correct regardless.
+>
+> **And the right COLUMN, not just the right table.** A freshness probe must read the timestamp that moves when new data lands: `created_at` for most raw tables, but **`uploaded_at` for `daily_sales_feed`** (its rows are re-inserted/promoted). Probing `created_at` there made a feed-only tenant read `newest_ingest_at=None`, so its P&L never auto-computed. The per-table rule lives in `data_lineage_registry.FRESHNESS_COLUMN_BY_TABLE` / `freshness_column()`; the guard locks `account/autocompute`'s use of it.
+
+**Every module is classified.** `data_lineage_registry` splits all 21 backend modules into feed-owning (`INGEST_TABLES_BY_MODULE`: commcalc, pos, closing, storeops, billing, asset) and feed-less (`MODULES_WITHOUT_EXTERNAL_FEEDS`: account/payables/core compute or registry, plus the in-app feature modules). The guard fails if a new module appears in neither — so "which modules ingest external data" can't drift out of date.
 
 ---
 
