@@ -33585,6 +33585,97 @@ def mi_delete_plan(plan_id: str, org_id: str = ORG_ID):
     return {"ok": True}
 
 
+# ── Store → manager map (mig 305) — the config primitive that lets a manager-incentive compute resolve
+#    which stores a DM / market manager owns (and so their accessory-override actual + targets + gates).
+def _mi_store_manager_rows(client, org_id):
+    """All active store_manager rows for the org. Empty (and never raises) if mig 305 hasn't run."""
+    try:
+        return (client.schema("commcalc").table("store_manager").select("*")
+                .eq("org_id", org_id).eq("is_active", True).limit(100000).execute().data) or []
+    except Exception:
+        return []
+
+
+@router.get("/management-incentive/store-managers")
+def mi_list_store_managers(org_id: str = ORG_ID, role: str = "", manager_name: str = ""):
+    """The store→manager map for the tenant (config for Chicago-style 3-tier). Optional filters: role,
+    manager_name. Empty pre-migration-305."""
+    require_org(org_id)
+    try:
+        q = (sb().schema("commcalc").table("store_manager").select("*").eq("org_id", org_id))
+        if role:
+            q = q.eq("role", role)
+        if manager_name:
+            q = q.eq("manager_name", manager_name)
+        rows = q.order("role").order("manager_name").order("store_code").limit(100000).execute().data or []
+    except Exception:
+        rows = []
+    return {"rows": rows}
+
+
+class MiStoreManagerIn(LaxModel):
+    id: Any = None
+    store_code: str = ""
+    role: str = ""
+    manager_name: str = ""
+    market: Any = None
+    priority: Any = 0
+    is_active: Any = True
+    # bulk form: replace the whole map for one (role, manager_name) with a list of store_codes
+    store_codes: Any = None
+
+
+@router.post("/management-incentive/store-managers")
+def mi_save_store_manager(body: MiStoreManagerIn, org_id: str = ORG_ID):
+    """Add / update the store→manager map. Two shapes:
+      • single row: {store_code, role, manager_name, market?, priority?, is_active?}
+      • bulk set:   {role, manager_name, store_codes:[...]} — REPLACES that manager+role's whole store
+        set (delete-then-insert), so the UI can save a manager's stores in one call.
+    Config only; writes nothing that pays. Requires migration 305."""
+    require_org(org_id)
+    role = (body.role or "").strip()
+    manager = (body.manager_name or "").strip()
+    if not role or not manager:
+        raise HTTPException(400, "role and manager_name are required")
+    client = sb()
+    try:
+        if body.store_codes is not None:
+            codes = [str(c).strip() for c in (body.store_codes or []) if str(c).strip()]
+            client.schema("commcalc").table("store_manager").delete() \
+                  .eq("org_id", org_id).eq("role", role).eq("manager_name", manager).execute()
+            rows = [{"org_id": org_id, "role": role, "manager_name": manager, "store_code": c,
+                     "market": (body.market or None), "is_active": True} for c in codes]
+            if rows:
+                client.schema("commcalc").table("store_manager").insert(rows).execute()
+            return {"ok": True, "count": len(rows)}
+        code = (body.store_code or "").strip()
+        if not code:
+            raise HTTPException(400, "store_code required (or pass store_codes for a bulk set)")
+        row = {"org_id": org_id, "store_code": code, "role": role, "manager_name": manager,
+               "market": (body.market or None), "priority": int(body.priority or 0),
+               "is_active": bool(body.is_active),
+               "updated_at": datetime.now(timezone.utc).isoformat()}
+        client.schema("commcalc").table("store_manager").upsert(
+            row, on_conflict="org_id,store_code,role,manager_name").execute()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"save failed (has migration 305 run?): {e}")
+
+
+@router.delete("/management-incentive/store-managers/{row_id}")
+def mi_delete_store_manager(row_id: str, org_id: str = ORG_ID):
+    """Remove one store→manager row."""
+    require_org(org_id)
+    try:
+        sb().schema("commcalc").table("store_manager").delete() \
+            .eq("id", row_id).eq("org_id", org_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"delete failed: {e}")
+    return {"ok": True}
+
+
 class MiComputeIn(LaxModel):
     plan_id: Any = None
     employee_id: Any = None
@@ -33625,19 +33716,48 @@ def mi_compute(body: MiComputeIn, org_id: str = ORG_ID):
     if not plan:
         raise HTTPException(404, "no management-incentive plan resolves for this manager")
 
-    store_codes = body.store_codes or []
+    period = (body.period or "").strip()
+
+    # ── Chicago 3-tier AUTO-RESOLUTION (mig 305). The manager-incentive engine scores a manager against
+    #    the roll-up of the stores they own. Historically the caller had to pass store_codes + the
+    #    store-performance actuals in the body; now, when they're omitted, resolve them from CONFIG + the
+    #    SAME sales numbers the reports show, so the DM / market-manager incentive computes end-to-end:
+    #      • store set  ← the store_manager map (mig 305), by this manager's name + role/level
+    #      • actuals    ← Executive-MTD by-store roll-up across that store set (accessory$, VHI, Edge, …),
+    #                     mapped onto each component's metric_source via the alias table.
+    #    The body STILL WINS wherever it supplies a value, so an explicit compute is byte-identical.
+    store_codes = list(body.store_codes or [])
+    if not store_codes and (body.employee_name or body.role or plan.get("level")):
+        try:
+            store_codes = _mi.stores_for_manager(
+                _mi_store_manager_rows(client, org_id),
+                manager_name=body.employee_name, role=(body.role or plan.get("level")))
+        except Exception as _sme:
+            print(f"WARN store_manager resolve skipped: {_sme}")
     store_count = body.manager_store_count
     if store_count is None:
         store_count = len(store_codes)
+
+    actuals = dict(body.actuals or {})
+    auto_actuals = {}
+    if store_codes and period:
+        try:
+            _emtd = _exec_mtd(client, org_id, period)
+            _roll = _mi.rollup_store_sales((_emtd.get("by_location") or {}).get("rows") or [], store_codes)
+            auto_actuals = _mi.actuals_from_rollup(plan.get("components") or [], _roll)
+            for _ms, _val in auto_actuals.items():
+                actuals.setdefault(_ms, _val)   # explicit body actual wins over the auto roll-up
+        except Exception as _acte:
+            print(f"WARN sales-actuals rollup skipped: {_acte}")
+
     result = _mi.compute_payout(
         plan,
-        actuals=body.actuals or {},
+        actuals=actuals,
         qualifier_values=body.qualifier_values or {},
         manager_store_count=store_count,
         derived=body.derived or {},
         overrides=body.overrides or {})
 
-    period = (body.period or "").strip()
     saved = None
     if body.save and period and body.employee_id:
         row = {
@@ -33656,7 +33776,10 @@ def mi_compute(body: MiComputeIn, org_id: str = ORG_ID):
         except Exception as e:
             saved = f"not saved: {e}"
     return {"ok": True, "plan_id": plan.get("id"), "plan_name": plan.get("name"),
-            "breakdown": result, "saved": saved}
+            "breakdown": result, "saved": saved,
+            # what auto-resolution filled in (transparency for the UI / a caller that passed nothing):
+            "resolved": {"store_codes": store_codes, "manager_store_count": store_count,
+                         "auto_actuals": auto_actuals}}
 
 
 @router.get("/management-incentive/payouts")

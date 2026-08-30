@@ -82,6 +82,84 @@ def _num(v, d=0.0):
         return d
 
 
+# ── Store → manager resolution + sales roll-up → component actuals (Chicago 3-tier, mig 305) ──────────
+# A management-incentive plan is scored against the ROLL-UP of the stores a manager owns. These pure
+# helpers turn the store_manager config map (mig 305) into a manager's store set, and an Executive-MTD /
+# sales by-store roll-up into the {metric_source: actual} the component engine consumes — so the
+# accessory-override actual (and the VHI / Edge / activation counts) resolve automatically from the SAME
+# sales numbers the reports show, instead of a human keying them into the compute call.
+
+def stores_for_manager(store_manager_rows, *, manager_name=None, role=None):
+    """The distinct store_codes a manager owns for a role, from the store_manager map. Manager match is
+    name-order-insensitive (_canon_person); role match is case-insensitive; inactive rows are ignored.
+    Returns a sorted list (stable, de-duped)."""
+    want_mgr = _canon_person(manager_name)
+    want_role = _canon(role)
+    out = set()
+    for r in (store_manager_rows or []):
+        if r.get("is_active") is False:
+            continue
+        if want_mgr and _canon_person(r.get("manager_name")) != want_mgr:
+            continue
+        if want_role and _canon(r.get("role")) != want_role:
+            continue
+        code = str(r.get("store_code") or "").strip()
+        if code:
+            out.add(code)
+    return sorted(out)
+
+
+# A component's metric_source (free config text) maps to a field on the per-store sales roll-up. The
+# aliases keep the config human ('accessory_gp', 'edge_count', …) while the value comes from the ONE
+# shared sales aggregation (Executive MTD by-location: acc_sales + the per-category activation counts).
+_SALES_METRIC_ALIASES = {
+    "accessory_gp": "acc_sales", "accessory_sales": "acc_sales", "accessory": "acc_sales",
+    "acc_sales": "acc_sales",
+    "vhi_fios_count": "home_internet", "home_internet": "home_internet", "home_internet_count": "home_internet",
+    "vhi_count": "home_internet", "fios_count": "home_internet",
+    "edge_count": "edge", "edge_activations": "edge", "edge": "edge",
+    "activation_count": "activation", "activation": "activation", "new_count": "activation",
+    "port_count": "port", "port": "port",
+    "byod_count": "byod", "byod": "byod",
+    "tablet_count": "tablet", "tablet": "tablet",
+    "upgrade_count": "upgrade", "upgrade": "upgrade",
+    "total_activation": "total_activation", "total_activations": "total_activation",
+}
+_SALES_ROLLUP_FIELDS = ("acc_sales", "activation", "port", "byod", "tablet", "home_internet",
+                        "edge", "upgrade", "total_activation")
+
+
+def rollup_store_sales(by_store_rows, store_codes):
+    """Sum the sales fields across the manager's stores. `by_store_rows` are Executive-MTD by-location
+    rows ({store, acc_sales, activation, port, byod, tablet, home_internet, edge, upgrade,
+    total_activation}); store match is case/space-insensitive. Returns {field: total} over
+    _SALES_ROLLUP_FIELDS. A TOTAL row (store == 'TOTAL') is never a store and is skipped."""
+    want = {_canon(c) for c in (store_codes or []) if _canon(c)}
+    totals = {f: 0.0 for f in _SALES_ROLLUP_FIELDS}
+    for r in (by_store_rows or []):
+        st = _canon(r.get("store"))
+        if not st or st == "total":
+            continue
+        if want and st not in want:
+            continue
+        for f in _SALES_ROLLUP_FIELDS:
+            totals[f] += _num(r.get(f))
+    return totals
+
+
+def actuals_from_rollup(components, rollup):
+    """Build {metric_source: actual} for the plan's components from a sales roll-up, via the alias map.
+    A component whose metric_source isn't a recognized sales metric is left out (the router/body can still
+    supply it explicitly)."""
+    out = {}
+    for c in (components or []):
+        ms = str(c.get("metric_source") or "").strip()
+        field = _SALES_METRIC_ALIASES.get(ms.lower())
+        if field is not None:
+            out[ms] = round(_num((rollup or {}).get(field)), 4)
+    return out
+
+
 def component_payout(component, actual, manager_store_count):
     """One store-performance component. Payout = rate × actual (percent: actual is $, rate 0.02 = 2%;
     per_unit: actual is a count, rate is $/unit). The OPPORTUNITY (goal) = rate × (target_per_store ×
