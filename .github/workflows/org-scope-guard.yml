@@ -1,0 +1,41 @@
+name: org-scope-guard
+
+# Org-scope guard (audit fix #3, owner 2026-08-30). Every commcalc table ships with `open_all` RLS —
+# the database does NOT isolate tenants, so isolation depends entirely on the application carrying an
+# org_id scope on every query. Until real RLS is validated against a live DB, this job is the safety
+# net: it FAILS the build if a query on a money/sales table (rep_commissions, raw_sales, commission_plan,
+# carrier_commission, …) reads rows or mutates without an org_id filter — the cross-tenant leak class.
+#
+# Dependency-free: the guard imports nothing from the app, it statically scans the router source, so it
+# runs on bare Python in seconds with no pip install.
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/modules/commcalc/router.py"
+      - "backend/harness_org_scope_guard.py"
+      - ".github/workflows/org-scope-guard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/app/modules/commcalc/router.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: org-scope-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  org-scope-guard:
+    name: Sensitive queries are org-scoped
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run org-scope guard
+        working-directory: backend
+        run: python3 harness_org_scope_guard.py | tee "$GITHUB_STEP_SUMMARY"
