@@ -96,6 +96,15 @@ INGEST_TABLES_BY_MODULE = {
         "storeops.store_merchant_id", "store_mapping",
         "storeops.google_review_store", "storeops.google_review_snapshot", "storeops.google_review_item",
     ),
+    # billing — the ONLY external feed here is the platform-cost connector (it pulls each store's
+    # platform bill from an external source). Plans/invoices/pricing are in-app config, not feeds.
+    "billing": (
+        "storeops.platform_billing_connector",
+    ),
+    # asset — the Asset Lending ledger, parsed from an uploaded Asset_Lending.xlsx (staging → atomic swap).
+    "asset": (
+        "asset_ledger",
+    ),
     # Other modules are added in subsequent PRs, one by one.
 }
 
