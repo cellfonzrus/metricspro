@@ -7708,6 +7708,24 @@ def _table_feed_freshness(client, org_id, table, date_col, label):
     return out
 
 
+def _sales_feed_freshness(client, org_id):
+    """Freshness for the LIVE sales feed. The hourly email/FTP sweep lands transactions in
+    commcalc.daily_sales_feed (clean ISO trans_date) — that is the feed that flows continuously and
+    drives the exec/MTD actuals. commcalc.raw_sales is the MONTHLY reconciliation upload and only moves
+    when a monthly 'sales' file is loaded, so measuring IT made the banner report 'Sales feed stale since
+    <last monthly upload>' (≈8-09) while the daily feed was importing fine and the numbers were current
+    (owner 2026-08-30: "our numbers would be totally off" — they weren't; the banner read the wrong table).
+
+    Fix: measure daily_sales_feed. Fall back to raw_sales ONLY when the daily feed is empty (a tenant that
+    does monthly uploads only), so that tenant still gets a real signal instead of a blank."""
+    daily = _table_feed_freshness(client, org_id, "daily_sales_feed", "trans_date", "Sales feed (transactions)")
+    if daily.get("rows"):
+        return daily
+    monthly = _table_feed_freshness(client, org_id, "raw_sales", "trans_date", "Sales feed (transactions)")
+    monthly["label"] = "Sales feed (transactions)"
+    return monthly
+
+
 def _data_freshness_report(client, org_id):
     """Per-feed freshness for a tenant: when each data source last ingested and the latest transaction date it
     carries, with `days_stale` and a `stale` flag (no data for yesterday/today). The shared core behind the
@@ -7716,7 +7734,7 @@ def _data_freshness_report(client, org_id):
     feeds = [
         _custom_feed_freshness(client, org_id, "activation_details", "Activation Details (activation basis)"),
         _custom_feed_freshness(client, org_id, "bill_payment_transactions", "Bill Payment Transactions"),
-        _table_feed_freshness(client, org_id, "raw_sales", "trans_date", "Sales feed (transactions)"),
+        _sales_feed_freshness(client, org_id),
     ]
     for f in feeds:
         ld = f.get("latest_data_date")

@@ -26,6 +26,8 @@ Each edge is *source → affected* with: the **entry point**, a **code reference
 
 Sweeps (email, FTP, ePay, VidaPay, DLAR, VIP) do **not** add tables — they funnel into the tables above via `upload_file`.
 
+> **Freshness / "is data flowing?" measures the LIVE feed, not the monthly upload.** The data-freshness banner reads **`daily_sales_feed`** (the hourly-swept live feed, clean ISO `trans_date`) via `_sales_feed_freshness`, falling back to `raw_sales` only when the daily feed is empty. `raw_sales` is the **monthly** reconciliation upload and moves only on a monthly load — measuring it reports "stale since <last monthly>" while the daily feed is current, a false alarm (owner 2026-08-30). Displayed numbers read the **union** of both, so they stay correct regardless.
+
 ---
 
 ## 2. The single shared aggregation
