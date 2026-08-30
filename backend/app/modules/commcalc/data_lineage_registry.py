@@ -55,6 +55,10 @@ DAILY_CLOSING = "daily_closing"           # employee cash + tender declaration (
 # module introduces (e.g. the POS builtin stream) belongs here so the guard can hold the invariant.
 LIVE_VS_MONTHLY_PAIRS = {
     "sales": (LIVE_SALES_FEED, MONTHLY_SALES),
+    # POS builtin stream (pos/commcalc_feed.py MODE_TABLES): the in-house POS writes its OWN daily and
+    # monthly tables, then promotes into the sales feed/raw_sales. Same trap — a freshness read here must
+    # take the daily stream, never the monthly one.
+    "pos_builtin": ("pos_builtin_daily_sales", "pos_builtin_sales"),
 }
 
 # ── EXTERNAL-FEED INGEST TABLES, BY OWNING MODULE ─────────────────────────────────────────────────
@@ -70,6 +74,15 @@ INGEST_TABLES_BY_MODULE = {
         "raw_comp_report", "raw_ma_commission", "raw_ma_daily_tx", "raw_ma_fulfillment",
         "pos_tender_summary", "inventory_value", "ma_overview_upload",
         "raw_custom_import", "raw_epay_daily_tx",
+    ),
+    # pos — the in-house POS. Its builtin stream (commcalc.pos_builtin_daily_sales /
+    # commcalc.pos_builtin_sales) promotes into the sales feed; receipt OCR and the carrier vendor-rebate
+    # xlsx are its other external ingests. pos.* live in the `pos` schema (qualified keys); the two
+    # commcalc-schema tables use bare keys, matching the seed's affected_key convention.
+    "pos": (
+        "pos_builtin_daily_sales", "pos_builtin_sales",
+        "pos.sales", "pos.receipt_imports", "pos.customers", "pos.activations",
+        "activation_rebate_ledger",
     ),
     # Other modules are added in subsequent PRs, one by one.
 }
