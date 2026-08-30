@@ -98,8 +98,22 @@ Bill Payment Transactions report (basis of truth)
 
 ## Maintaining this map
 
+**Before you read a data source or add a metric/report — reference the map, don't hardcode a table.**
+The runtime slice code dereferences is `backend/app/modules/commcalc/data_lineage_registry.py` (e.g. the
+live sales feed is `data_lineage_registry.LIVE_SALES_FEED`, never the string `"raw_sales"` at a call
+site). This is what stops the 2026-08-30 class of bug: the freshness banner read the monthly `raw_sales`
+instead of the live `daily_sales_feed` and cried "stale since 8-09" while the numbers were current.
+
 When you add an ingested item, a derived metric, or a new report:
-1. Add the edge(s) to `925_data_lineage_seed.sql` (and re-run it), and
-2. Add the row(s) here.
+1. **Reuse or add a table constant** in `data_lineage_registry.py` — if the data already has a table
+   there / an edge below, use it; do **not** stand up a second capture path for the same data.
+2. Add the edge(s) to `925_data_lineage_seed.sql` (and re-run it), and
+3. Add the row(s) here.
+
+**The guard runs it for you.** `backend/harness_data_lineage_guard.py` (CI: `lineage-guard.yml`, and
+`cd backend && python3 harness_data_lineage_guard.py` locally) fails the build if the registry, the seed,
+and the source-reading code drift: a malformed or duplicated edge, a raw ingest table with no lineage
+edge, or freshness ceasing to read the live feed. A new feed can't land undocumented, and a metric can't
+quietly point at the wrong table.
 
 Query "what does X touch?": `select * from commcalc.data_lineage where source_key = 'X'` — or `GET /api/v1/commcalc/data-lineage?source_key=X`.

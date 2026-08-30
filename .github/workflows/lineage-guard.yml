@@ -1,0 +1,44 @@
+name: lineage-guard
+
+# Data-lineage guard (owner 2026-08-30). Before a change to a data source or the lineage map merges,
+# prove the registry, the SQL seed, and the code that reads sources still agree — so the "read the
+# wrong table / duplicate a feed / miss a consumer" class (the freshness banner reading raw_sales
+# instead of the live daily_sales_feed) can't ship again.
+#
+# ENFORCING, not report-only: this job FAILS on drift. It is intentionally dependency-free — the guard
+# imports only the pure data_lineage_registry module (empty package __init__s) and reads files, so it
+# runs on bare Python in seconds with no pip install.
+
+on:
+  pull_request:
+    paths:
+      - "backend/app/modules/commcalc/**"
+      - "backend/harness_data_lineage_guard.py"
+      - "database/migrations/925_data_lineage_seed.sql"
+      - "database/migrations/924_*.sql"
+      - ".github/workflows/lineage-guard.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/app/modules/commcalc/**"
+      - "database/migrations/925_data_lineage_seed.sql"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lineage-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lineage-guard:
+    name: Data-lineage registry ↔ seed ↔ code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      - name: Run lineage guard
+        working-directory: backend
+        run: python3 harness_data_lineage_guard.py | tee "$GITHUB_STEP_SUMMARY"

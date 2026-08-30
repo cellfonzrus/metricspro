@@ -27,6 +27,7 @@ from app.modules.commcalc import vip_sweep
 from app.modules.commcalc import dlar_sweep
 from app.modules.commcalc import epay_sweep
 from app.modules.commcalc.safe_replace import safe_replace, ReplaceFailed
+from app.modules.commcalc import data_lineage_registry as _lineage  # canonical source-of-truth tables
 from app.modules.commcalc import url_guard as _url_guard   # SSRF guard for tenant URLs (C4)
 from app.modules.commcalc import installment_engine
 from app.modules.commcalc import commission_legs as _commission_legs
@@ -7717,12 +7718,17 @@ def _sales_feed_freshness(client, org_id):
     (owner 2026-08-30: "our numbers would be totally off" — they weren't; the banner read the wrong table).
 
     Fix: measure daily_sales_feed. Fall back to raw_sales ONLY when the daily feed is empty (a tenant that
-    does monthly uploads only), so that tenant still gets a real signal instead of a blank."""
-    daily = _table_feed_freshness(client, org_id, "daily_sales_feed", "trans_date", "Sales feed (transactions)")
+    does monthly uploads only), so that tenant still gets a real signal instead of a blank.
+
+    The two table names come from the source-of-truth registry (data_lineage_registry), NOT hardcoded
+    here — so "which table is the live sales feed" lives in ONE place and harness_data_lineage_guard.py
+    fails if this ever stops pointing at the live feed."""
+    label = "Sales feed (transactions)"
+    daily = _table_feed_freshness(client, org_id, _lineage.freshness_source("sales"), "trans_date", label)
     if daily.get("rows"):
         return daily
-    monthly = _table_feed_freshness(client, org_id, "raw_sales", "trans_date", "Sales feed (transactions)")
-    monthly["label"] = "Sales feed (transactions)"
+    monthly = _table_feed_freshness(client, org_id, _lineage.MONTHLY_SALES, "trans_date", label)
+    monthly["label"] = label
     return monthly
 
 
