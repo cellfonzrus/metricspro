@@ -157,6 +157,34 @@ def main():
     ok("_sales_feed_freshness(" in rb and '"raw_sales"' not in rb,
        "_data_freshness_report routes sales through _sales_feed_freshness, not raw_sales directly")
 
+    print("E. freshness-COLUMN invariant — daily_sales_feed probes uploaded_at, not created_at")
+    ok(reg.freshness_column("daily_sales_feed") == "uploaded_at",
+       "freshness_column('daily_sales_feed') is 'uploaded_at' (not created_at)")
+    ok(reg.freshness_column("raw_sales") == "created_at",
+       "freshness_column defaults to 'created_at' for a table with no override")
+    # Regression guard for the feed-only-tenant empty-P&L bug (dcb0807): account/autocompute must probe
+    # daily_sales_feed on uploaded_at BEFORE created_at, so a feed-only tenant's books auto-compute.
+    ac_path = os.path.join(_HERE, "app", "modules", "account", "autocompute.py")
+    ac = open(ac_path, encoding="utf-8").read()
+    m = re.search(r'"daily_sales_feed"\s*,\s*\[([^\]]*)\]', ac)
+    cand = m.group(1) if m else ""
+    ok(bool(m) and "uploaded_at" in cand
+       and (cand.index('"uploaded_at"') < cand.index('"created_at"') if '"created_at"' in cand else True),
+       "account/autocompute _PERIOD_SOURCES probes daily_sales_feed on uploaded_at first")
+
+    print("F. module census — every module is accounted for (feed-owning XOR feed-less)")
+    feed_owning = set(reg.INGEST_TABLES_BY_MODULE)
+    feed_less = set(reg.MODULES_WITHOUT_EXTERNAL_FEEDS)
+    overlap = sorted(feed_owning & feed_less)
+    ok(not overlap, f"no module is both feed-owning and feed-less (overlap: {overlap})")
+    # The 21 backend modules under backend/app/modules — every one is in exactly one bucket.
+    mods_dir = os.path.join(_HERE, "app", "modules")
+    all_mods = {d for d in os.listdir(mods_dir)
+                if os.path.isdir(os.path.join(mods_dir, d)) and not d.startswith("__")}
+    # commcalc owns the registry itself; it is feed-owning. Everything else must be classified.
+    unclassified = sorted(all_mods - feed_owning - feed_less)
+    ok(not unclassified, f"every backend module is classified in the registry (unclassified: {unclassified})")
+
     print(f"\n{'PASS' if FAIL == 0 else 'FAIL'}: {PASS} checks passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 
