@@ -118,6 +118,33 @@ def update_category(cat_id: str, body: dict, org_id: str = ORG_ID):
     return {"category": r.data[0]}
 
 
+# ── Catalog suggestions (setup wizard: "define what you have", smartly) ──────────────────────────────
+# The Catalog steps used to dead-end for a fresh store: the only offer was "import from your sales
+# history", which is empty for a store that never fed one. These two endpoints add the third path —
+# pickable, pre-built catalog COMBINATIONS tailored by this store's own data and by the common
+# taxonomy other stores use. See app/modules/pos/catalog_suggest.py for the privacy rules.
+from app.modules.pos import catalog_suggest as _catsug
+
+
+@router.get("/catalog/suggest")
+def catalog_suggest(org_id: str = ORG_ID):
+    """What this store already has + pickable presets + product candidates from its own devices +
+    the department/category structure common to other stores in the system. Read-only."""
+    return _catsug.build_suggestions(sb(), org_id)
+
+
+@router.post("/catalog/apply-suggestion")
+def catalog_apply_suggestion(body: dict, org_id: str = ORG_ID):
+    """Create the picked departments / categories / system-categories, idempotently (existing names
+    are skipped). Body: {departments:[{short_name,full_name?,system_category?}],
+    categories:[{name,department?}], system_categories:[name,...]}."""
+    return _catsug.apply_suggestion(
+        sb(), org_id,
+        departments=body.get("departments") or [],
+        categories=body.get("categories") or [],
+        system_categories=body.get("system_categories") or [])
+
+
 # ── System categories (tenant-configurable; migration 745) ──────────────────────────────────────────
 # `system_category` used to be four values frozen in FOUR places at once: a CHECK constraint on
 # pos.products, SYSTEM_CATEGORIES in the products page, _sys_cat() in the importer, and the filter
