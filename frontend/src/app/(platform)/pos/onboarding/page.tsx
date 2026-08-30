@@ -238,6 +238,13 @@ function StepPanel({ task, onChanged, onSetState, busy }: {
         </div>
       )}
 
+      {/* Catalog steps get an inline builder: define departments/categories/products right here,
+          pick a pre-built combination, or start from the device list this store already recorded —
+          instead of bouncing to a page that itself needs the catalog to exist first. */}
+      {['departments', 'categories', 'products'].includes(task.task_key) && task.available && (
+        <CatalogBuilder task={task} onChanged={onChanged} />
+      )}
+
       {task.import_source && !task.complete && task.available && (
         <ImportFromExisting source={task.import_source} onChanged={onChanged} />
       )}
@@ -437,6 +444,322 @@ function ImportFromExisting({ source, onChanged }: { source: string; onChanged: 
         <button className="btn" onClick={apply} disabled={busy || !preview?.count}>
           {busy ? 'Working…' : `Bring over ${preview?.count ?? 0}`}
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// CATALOG BUILDER — the fix for "the wizard won't let me add a department/category/item".
+// Three ways in, from smartest to most manual:
+//   • pick a pre-built COMBINATION (presets, tailored by this store's own devices),
+//   • adopt the department/category structure OTHER stores in the system commonly use, or
+//   • type one in by hand.
+// Everything writes through the same idempotent endpoints, so nothing is ever duplicated and the two
+// dependent steps (departments → categories) can both be satisfied from one preset click.
+type Dept = { id: string; short_name: string }
+type Cat = { id: string; name: string; department_id: string | null }
+type PresetDept = { short_name: string; full_name?: string; system_category?: string; categories: string[] }
+type Preset = { id: string; label: string; why: string; departments: PresetDept[] }
+type Learned = { department: string; orgs: number; categories: string[] }
+type Suggest = {
+  have: { departments: Dept[]; categories: Cat[] }
+  presets: Preset[]
+  learned: Learned[]
+  derived: { manufacturers: string[]; device_types: string[]; devices: string[]; plans: string[]; has_own_data: boolean }
+}
+
+function CatalogBuilder({ task, onChanged }: { task: Task; onChanged: () => void }) {
+  const [sug, setSug] = useState<Suggest | null>(null)
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState('')
+
+  const reload = useCallback(async () => {
+    setErr('')
+    try { setSug(await api('/api/v1/pos/catalog/suggest')) }
+    catch (e: any) { setErr(e?.message || 'Could not load suggestions.') }
+  }, [])
+  useEffect(() => { reload() }, [reload])
+
+  const refresh = useCallback(async () => { await reload(); onChanged() }, [reload, onChanged])
+
+  async function applyPreset(p: Preset) {
+    if (busy) return
+    setBusy(p.id); setErr('')
+    try {
+      const departments = p.departments.map(d => ({
+        short_name: d.short_name, full_name: d.full_name || d.short_name, system_category: d.system_category,
+      }))
+      const categories = p.departments.flatMap(d => d.categories.map(name => ({ name, department: d.short_name })))
+      const system_categories = Array.from(new Set(p.departments.map(d => d.system_category).filter(Boolean)))
+      await api('/api/v1/pos/catalog/apply-suggestion', {
+        method: 'POST', body: JSON.stringify({ departments, categories, system_categories }),
+      })
+      await refresh()
+    } catch (e: any) { setErr(e?.message || 'Could not apply.') } finally { setBusy('') }
+  }
+
+  async function applyLearned(l: Learned) {
+    if (busy) return
+    setBusy('learned:' + l.department); setErr('')
+    try {
+      await api('/api/v1/pos/catalog/apply-suggestion', {
+        method: 'POST',
+        body: JSON.stringify({
+          departments: [{ short_name: l.department }],
+          categories: l.categories.map(name => ({ name, department: l.department })),
+        }),
+      })
+      await refresh()
+    } catch (e: any) { setErr(e?.message || 'Could not apply.') } finally { setBusy('') }
+  }
+
+  if (task.task_key === 'products') {
+    return <ProductBuilder sug={sug} err={err} onChanged={refresh} reload={reload} />
+  }
+
+  const have = sug?.have
+  return (
+    <div style={{ border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: 10, padding: 14, marginBottom: 14 }}>
+      <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>
+        🧩 Build your catalog — pick a ready-made set, or add your own
+      </div>
+
+      {err && <div style={{ fontSize: 12.5, color: '#b91c1c', marginBottom: 8 }}>{err}</div>}
+
+      {/* what already exists */}
+      {have && (
+        <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 10 }}>
+          You have <b>{have.departments.length}</b> department(s) and <b>{have.categories.length}</b> categor(ies).
+          {have.departments.length > 0 && (
+            <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {have.departments.map(d => (
+                <span key={d.id} style={{ fontSize: 11, background: 'var(--card)', border: '1px solid var(--border)',
+                  borderRadius: 99, padding: '2px 8px' }}>{d.short_name}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* presets */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginBottom: 12 }}>
+        {(sug?.presets || []).map(p => (
+          <div key={p.id} style={{ border: '1px solid var(--border)', background: 'var(--card)', borderRadius: 10, padding: 12 }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>{p.label}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--text2)', margin: '4px 0 8px', lineHeight: 1.45 }}>{p.why}</div>
+            <div style={{ fontSize: 11.5, color: 'var(--text3)', marginBottom: 8 }}>
+              {p.departments.map(d => (
+                <div key={d.short_name} style={{ marginBottom: 2 }}>
+                  <b style={{ color: 'var(--text2)' }}>{d.short_name}</b>
+                  {d.categories.length > 0 && <span> — {d.categories.join(', ')}</span>}
+                </div>
+              ))}
+            </div>
+            <button className="btn btn-primary" disabled={!!busy} onClick={() => applyPreset(p)}>
+              {busy === p.id ? 'Adding…' : 'Use this set'}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* learned from other stores */}
+      {sug?.learned && sug.learned.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>
+            💡 Common in other stores on the system
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {sug.learned.map(l => (
+              <button key={l.department} className="btn" disabled={!!busy}
+                onClick={() => applyLearned(l)} title={l.categories.join(', ')}
+                style={{ fontSize: 12 }}>
+                {busy === 'learned:' + l.department ? 'Adding…' : `+ ${l.department}`}
+                {l.categories.length > 0 && (
+                  <span style={{ color: 'var(--text3)' }}> ({l.categories.length} cats)</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* manual add */}
+      <ManualCatalogAdd have={sug?.have} onChanged={refresh} />
+    </div>
+  )
+}
+
+function ManualCatalogAdd({ have, onChanged }: { have?: { departments: Dept[]; categories: Cat[] }; onChanged: () => void }) {
+  const [dept, setDept] = useState('')
+  const [cat, setCat] = useState('')
+  const [catDept, setCatDept] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const depts = have?.departments || []
+
+  async function addDept() {
+    if (!dept.trim() || busy) return
+    setBusy(true); setErr('')
+    try {
+      await api('/api/v1/pos/departments', { method: 'POST', body: JSON.stringify({ short_name: dept.trim() }) })
+      setDept(''); onChanged()
+    } catch (e: any) { setErr(e?.message || 'Could not add.') } finally { setBusy(false) }
+  }
+  async function addCat() {
+    if (!cat.trim() || busy) return
+    setBusy(true); setErr('')
+    try {
+      await api('/api/v1/pos/categories', {
+        method: 'POST', body: JSON.stringify({ name: cat.trim(), department_id: catDept || undefined }),
+      })
+      setCat(''); onChanged()
+    } catch (e: any) { setErr(e?.message || 'Could not add.') } finally { setBusy(false) }
+  }
+
+  const inp: React.CSSProperties = { padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6,
+    background: 'var(--card)', color: 'var(--text)', fontSize: 13 }
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Or add your own</div>
+      {err && <div style={{ fontSize: 12, color: '#b91c1c', marginBottom: 6 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+        <input style={{ ...inp, width: 200 }} placeholder="New department (e.g. Phones)"
+          value={dept} onChange={e => setDept(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && addDept()} />
+        <button className="btn" onClick={addDept} disabled={busy || !dept.trim()}>Add department</button>
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input style={{ ...inp, width: 200 }} placeholder="New category (e.g. Smartphones)"
+          value={cat} onChange={e => setCat(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && addCat()} />
+        <select style={inp} value={catDept} onChange={e => setCatDept(e.target.value)}>
+          <option value="">(no department)</option>
+          {depts.map(d => <option key={d.id} value={d.id}>{d.short_name}</option>)}
+        </select>
+        <button className="btn" onClick={addCat} disabled={busy || !cat.trim()}>Add category</button>
+      </div>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────────────────────────
+// PRODUCT BUILDER — the Products step. Add products from the DEVICES this store already recorded
+// (one click each, or all at once), or type one in with its department/category/price.
+function ProductBuilder({ sug, err, onChanged, reload }: {
+  sug: Suggest | null; err: string; onChanged: () => void; reload: () => void
+}) {
+  const [busy, setBusy] = useState('')
+  const [localErr, setLocalErr] = useState('')
+  const [added, setAdded] = useState<Set<string>>(new Set())
+  const depts = sug?.have.departments || []
+  const cats = sug?.have.categories || []
+  const devices = sug?.derived.devices || []
+
+  // manual form
+  const [name, setName] = useState('')
+  const [deptId, setDeptId] = useState('')
+  const [catId, setCatId] = useState('')
+  const [price, setPrice] = useState('')
+
+  async function createProduct(body: any, tag: string) {
+    setBusy(tag); setLocalErr('')
+    try {
+      await api('/api/v1/pos/products', { method: 'POST', body: JSON.stringify(body) })
+      return true
+    } catch (e: any) { setLocalErr(e?.message || 'Could not add product.'); return false }
+    finally { setBusy('') }
+  }
+
+  async function addDevice(d: string) {
+    if (busy) return
+    const ok = await createProduct({ short_name: d, full_name: d, system_category: 'Cell Phone', inventory_type: 'serial' }, 'dev:' + d)
+    if (ok) { setAdded(s => new Set(s).add(d)); onChanged() }
+  }
+  async function addAllDevices() {
+    if (busy) return
+    setBusy('all')
+    for (const d of devices) {
+      if (added.has(d)) continue
+      try {
+        await api('/api/v1/pos/products', {
+          method: 'POST',
+          body: JSON.stringify({ short_name: d, full_name: d, system_category: 'Cell Phone', inventory_type: 'serial' }),
+        })
+        setAdded(s => new Set(s).add(d))
+      } catch { /* keep going; a dup just means it exists */ }
+    }
+    setBusy(''); onChanged()
+  }
+  async function addManual() {
+    if (!name.trim()) return
+    const ok = await createProduct({
+      short_name: name.trim(), full_name: name.trim(),
+      department_id: deptId || undefined, category_id: catId || undefined,
+      retail_price: price ? Number(price) : undefined,
+    }, 'manual')
+    if (ok) { setName(''); setPrice(''); onChanged() }
+  }
+
+  const inp: React.CSSProperties = { padding: '5px 8px', border: '1px solid var(--border)', borderRadius: 6,
+    background: 'var(--card)', color: 'var(--text)', fontSize: 13 }
+  const catsFor = catId ? cats : cats.filter(c => !deptId || c.department_id === deptId)
+
+  return (
+    <div style={{ border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: 10, padding: 14, marginBottom: 14 }}>
+      <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>🧩 Add your products</div>
+      {(err || localErr) && <div style={{ fontSize: 12.5, color: '#b91c1c', marginBottom: 8 }}>{err || localErr}</div>}
+
+      {devices.length > 0 ? (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700 }}>
+              {devices.length} device(s) this store has already sold
+            </span>
+            <button className="btn btn-primary" onClick={addAllDevices} disabled={!!busy}>
+              {busy === 'all' ? 'Adding…' : 'Add all as products'}
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxHeight: 150, overflow: 'auto' }}>
+            {devices.map(d => (
+              <button key={d} className="btn" disabled={!!busy || added.has(d)} onClick={() => addDevice(d)}
+                style={{ fontSize: 12, opacity: added.has(d) ? 0.5 : 1 }}>
+                {added.has(d) ? '✓ ' : '+ '}{d}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 12 }}>
+          No recorded devices to suggest yet — add your products by hand below, or download the template.
+        </div>
+      )}
+
+      {/* manual add */}
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6 }}>Or add one by hand</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input style={{ ...inp, width: 220 }} placeholder="Product / service name"
+            value={name} onChange={e => setName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addManual()} />
+          <select style={inp} value={deptId} onChange={e => { setDeptId(e.target.value); setCatId('') }}>
+            <option value="">Department…</option>
+            {depts.map(d => <option key={d.id} value={d.id}>{d.short_name}</option>)}
+          </select>
+          <select style={inp} value={catId} onChange={e => setCatId(e.target.value)}>
+            <option value="">Category…</option>
+            {catsFor.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <input style={{ ...inp, width: 90 }} placeholder="Price" inputMode="decimal"
+            value={price} onChange={e => setPrice(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addManual()} />
+          <button className="btn" onClick={addManual} disabled={!!busy || !name.trim()}>Add product</button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10 }}>
+        <button className="btn" onClick={reload} disabled={!!busy}>Re-check</button>
       </div>
     </div>
   )
