@@ -215,6 +215,14 @@ export default function EmailImportsPage() {
     setBusy('run')
     try {
       const r: any = await api(`/api/v1/commcalc/email-sweep/run-now?account=${encodeURIComponent(cfg.account || 'default')}`, { method: 'POST', body: '{}' })
+      // The sweep now runs in the BACKGROUND (a full mailbox sweep can outlast a request timeout — the old
+      // inline await surfaced as a spurious "Failed to fetch"). Show it started and poll the processed list
+      // as reports import; the user can leave the page.
+      if (r?.started) {
+        setMsg('⏳ ' + (r.message || 'Sweep started — running in the background; the list below updates as reports import.'))
+        ;[2500, 5000, 9000, 15000, 25000].forEach((ms) => setTimeout(() => refresh(cfg.account), ms))
+        return
+      }
       const guardSkips = (r.files || []).filter((f: any) => f.status === 'skipped' && String(f.skipped || '').startsWith('price_guard'))
       // A PARTIAL price-guard ingest comes back status='ok' (rows saved) with skipped='price_guard_partial'.
       const partials = (r.files || []).filter((f: any) => f.skipped === 'price_guard_partial')
