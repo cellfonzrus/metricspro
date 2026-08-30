@@ -41,6 +41,28 @@ const ACT_SRC_LABEL: Record<string, string> = {
   inherit: 'Inherit (default)', raw_sales: 'POS sales', activation_details: 'Activation Details report',
 }
 
+// The Exec MTD activation categories — the SAME columns for every tenant (Boost / Cricket just relabel);
+// each is its own payout option so Upgrade / BYOD / Tablet / Home Internet can pay different rates.
+const MTD_CATS: { key: string; label: string }[] = [
+  { key: 'activation', label: 'New Activation' }, { key: 'port', label: 'Port' },
+  { key: 'byod', label: 'BYOD' }, { key: 'tablet', label: 'Tablet' },
+  { key: 'home_internet', label: 'Home Internet' }, { key: 'edge', label: 'Edge' },
+  { key: 'upgrade', label: 'Upgrade' },
+]
+
+// The plan's simple defaults: the flat $/unit of its activation rule + its accessory %. Used to seed the
+// per-category rate editor (flat rate on every category except Upgrade, which starts at $0).
+function planFlatAndAcc(p?: Plan | null): { flat: number; acc: number } {
+  let flat = 0, acc = 0
+  for (const r of (p?.rules || [])) {
+    if (r.qualifies === false) continue
+    const mf = r.match_field || '', pk = r.payout_kind || ''
+    if (!flat && pk === 'flat_per_unit' && ['activation_bucket', 'department'].includes(mf)) flat = Number(r.amount) || 0
+    else if (!acc && mf === 'accessory' && String(pk).startsWith('pct')) acc = Number(r.pct) || 0
+  }
+  return { flat, acc }
+}
+
 // Does this plan carry an ACTIVATION payout rule? A flat $/unit rule keyed on activation_bucket
 // (premium/byod) OR on department — the latter being the Activation Details "Department" (service-plan)
 // values the owner checks to pay activations from the report.
@@ -129,6 +151,13 @@ export default function CommissionStructurePage() {
   const [estBusy, setEstBusy] = useState(false)
   const [estWhatIf, setEstWhatIf] = useState(false)
 
+  // commission-from-Executive-MTD (matches the report numbers) + per-category rate editor
+  const [mtd, setMtd] = useState<any>(null)
+  const [mtdBusy, setMtdBusy] = useState(false)
+  // one rate per Exec MTD activation category (tenant-agnostic columns) + the accessory %
+  const [mtdRates, setMtdRates] = useState<Record<string, number>>({})
+  const [mtdAccPct, setMtdAccPct] = useState<number>(0)
+
   const selected = useMemo(() => plans.find(p => p.id === selId) || null, [plans, selId])
 
   const loadPlans = useCallback(async () => {
@@ -155,6 +184,14 @@ export default function CommissionStructurePage() {
 
   useEffect(() => { loadPlans(); loadAcc() }, [loadPlans, loadAcc])
   useEffect(() => { setActSrc(selected?.activation_source || 'inherit'); setEstimate(null) }, [selId, selected])
+  // Seed the per-category rate editor from the selected plan: its flat rate on every category except
+  // Upgrade ($0 by default — a separate, opt-in payout), and its accessory %.
+  useEffect(() => {
+    const { flat, acc } = planFlatAndAcc(selected)
+    setMtdRates(Object.fromEntries(MTD_CATS.map(c => [c.key, c.key === 'upgrade' ? 0 : flat])))
+    setMtdAccPct(acc)
+    setMtd(null)
+  }, [selId, selected])
 
   // ── STEP 3: save the per-plan activation source. Re-POSTs the FULL loaded plan (rules/tiers/assignments
   // included, byte-for-byte as GET returned them) with only activation_source changed — exactly what the
@@ -211,6 +248,20 @@ export default function CommissionStructurePage() {
         : `?period=${encodeURIComponent(period)}`
       setEstimate(await api(`/api/v1/commcalc/commission-plans/preview${q}`))
     } catch (e: any) { setMsg('❌ Estimate: ' + (e?.message || e)) } finally { setEstBusy(false) }
+  }
+
+  // ── Commission FROM Executive MTD: the SAME numbers the owner sees on that report drive the payout
+  // (Total Activation × the plan's rate + Acc. Sales × the plan's %). One data source for report + pay,
+  // so an accessory number visible on Exec MTD can never be missing from the commission. READ-ONLY.
+  async function runMtd() {
+    if (!selected) return
+    setMtdBusy(true); setMtd(null); setMsg('')
+    try {
+      const rateStr = MTD_CATS.map(c => `${c.key}:${Number(mtdRates[c.key]) || 0}`).join(',')
+      const q = `?period=${encodeURIComponent(period)}&plan_id=${selected.id}` +
+        `&rates=${encodeURIComponent(rateStr)}&acc_pct=${Number(mtdAccPct) || 0}`
+      setMtd(await api(`/api/v1/commcalc/commission-mtd/${encodeURIComponent(period)}${q}`))
+    } catch (e: any) { setMsg('❌ MTD commission: ' + (e?.message || e)) } finally { setMtdBusy(false) }
   }
 
   const editHref = selected ? `/commcalc/commission-plans` : '/commcalc/commission-plans'
@@ -479,6 +530,107 @@ export default function CommissionStructurePage() {
                 No reps are assigned to <b>{selected?.name}</b> for {period}. Assign your NY / Luxelink reps to
                 this plan in <b>Step 5</b> (or open the Assignment audit) — until then this plan pays no one, and
                 those reps are paid by whichever plan the distribution above shows.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* COMMISSION FROM EXECUTIVE MTD — the same numbers the owner sees on that report drive the pay. */}
+      <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          <span style={{ ...sectionNum, background: '#0891b2' }}>📈</span>
+          <div style={{ fontWeight: 700 }}>Commission from Executive MTD (matches the report)</div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 10px' }}>
+          Computes each rep's commission straight from the <b>Executive MTD</b> numbers, over this plan's
+          stores. Set a <b>$ rate per activation category</b> below (each type is its own option — pay BYOD,
+          Tablet or Home Internet differently, and <b>Upgrade</b> separately, $0 by default) plus the
+          accessory %. Same data source as the Sales Report and Exec MTD, so the accessory number you see on
+          that report is the one that pays. The categories are the same for every tenant — Boost / Cricket
+          just relabel. Read-only; nothing pays until you Run below.
+        </p>
+        {/* PER-CATEGORY RATE EDITOR — one $ input per Exec MTD activation column + the accessory %. */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+          {MTD_CATS.map(c => (
+            <label key={c.key} style={{ display: 'flex', flexDirection: 'column', fontSize: 11, gap: 2 }}>
+              <span style={{ color: 'var(--text2)' }}>{c.label}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <span style={{ fontSize: 12, color: 'var(--text3)' }}>$</span>
+                <input className="input" type="number" step="0.5" min="0" style={{ width: 66 }}
+                  value={mtdRates[c.key] ?? 0}
+                  onChange={e => setMtdRates(s => ({ ...s, [c.key]: Number(e.target.value) }))} />
+              </div>
+            </label>
+          ))}
+          <label style={{ display: 'flex', flexDirection: 'column', fontSize: 11, gap: 2 }}>
+            <span style={{ color: 'var(--text2)' }}>Accessories</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <input className="input" type="number" step="1" min="0" style={{ width: 60 }}
+                value={Math.round((Number(mtdAccPct) || 0) * 1000) / 10}
+                onChange={e => setMtdAccPct((Number(e.target.value) || 0) / 100)} />
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>%</span>
+            </div>
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+          <select className="input" value={period} onChange={e => setPeriod(e.target.value)} style={{ minWidth: 160 }}>
+            {periods.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <button className="btn btn-sm" onClick={runMtd} disabled={!selected || mtdBusy}>
+            {mtdBusy ? 'Computing…' : '📈 Commission from Exec MTD'}
+          </button>
+        </div>
+        {mtd && (
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>
+              <b>{((Number(mtd.accessory_pct) || 0) * 100).toFixed(1)}%</b> of accessories
+              {mtd?.activation_source?.active && <> · activations from the Activation Details report</>}
+            </div>
+            {/* Per-category totals: count × rate = $ paid, so the owner sees where every dollar came from. */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              {MTD_CATS.map(c => {
+                const t = mtd?.totals?.by_category?.[c.key]
+                if (!t || (!t.count && !t.rate)) return null
+                return (
+                  <span key={c.key} style={chip}>
+                    {c.label}: <b>{t.count}</b> × {fmt(Number(t.rate) || 0)} = {fmt(Number(t.pay) || 0)}
+                  </span>
+                )
+              })}
+              <span style={{ ...chip, background: 'var(--panel2, #f1f5f9)' }}>
+                Accessories: {fmt(Number(mtd?.totals?.acc_sales) || 0)} × {((Number(mtd.accessory_pct) || 0) * 100).toFixed(1)}% = {fmt(Number(mtd?.totals?.accessory_pay) || 0)}
+              </span>
+            </div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              Total commission — {(mtd.by_rep || []).length} rep(s): {fmt(Number(mtd?.totals?.commission) || 0)}
+              {' '}<span style={{ fontWeight: 400, color: 'var(--text2)' }}>
+                (activation {fmt(Number(mtd?.totals?.activation_pay) || 0)} + accessory {fmt(Number(mtd?.totals?.accessory_pay) || 0)})
+              </span>
+            </div>
+            {(mtd.by_rep || []).length ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 520 }}>
+                  <thead><tr>{['Rep', 'Activations', 'Acc. Sales', 'Activation $', 'Accessory $', 'Commission'].map(h =>
+                    <th key={h} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--border, #e2e8f0)' }}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {(mtd.by_rep || []).map((r: any, i: number) => (
+                      <tr key={i}>
+                        <td style={{ padding: '4px 8px' }}>{r.employee}</td>
+                        <td style={{ padding: '4px 8px' }}>{r.activations}</td>
+                        <td style={{ padding: '4px 8px' }}>{fmt(Number(r.acc_sales) || 0)}</td>
+                        <td style={{ padding: '4px 8px' }}>{fmt(Number(r.activation_pay) || 0)}</td>
+                        <td style={{ padding: '4px 8px' }}>{fmt(Number(r.accessory_pay) || 0)}</td>
+                        <td style={{ padding: '4px 8px', fontWeight: 600 }}>{fmt(Number(r.commission) || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: '#b45309' }}>
+                No Exec MTD rows for <b>{selected?.name}</b>’s stores in {period}. Check the plan's store
+                assignments (Step 5) and that {period} has sales.
               </div>
             )}
           </div>

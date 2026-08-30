@@ -15141,6 +15141,174 @@ def preview_commission_plan(period: str, plan_id: str = "", org_id: str = ORG_ID
     return commission_engine.preview(client, org_id, period, plan_id=plan_id or None)
 
 
+# ── COMMISSION FROM EXECUTIVE MTD (owner directive 2026-08-30) ─────────────────────────────────────
+# "A simple $10 and 10% should be easily calculated from the Executive MTD ... the data source should be
+# the SAME for all sales reports, commission and Exec MTD ... if the accessory numbers show in Exec MTD why
+# are they not in the incentive payout." Root cause: the line-by-line commission engine classifies
+# accessories with its OWN classifier, which drifts from the shared Sales-Report classifier that Exec MTD
+# (and the Sales Report, Daily Targets) use — so an accessory counted on Exec MTD can be invisible to the
+# payout. This computes the two headline commission components DIRECTLY from the Exec MTD per-employee
+# aggregates, so the commission basis is byte-identical to what the owner already sees on that report:
+#     activation_pay = Total Activation (excl. Upgrade on the Activation-Details basis) × the plan's flat rate
+#     accessory_pay  = Acc. Sales                                                       × the plan's accessory %
+# READ-ONLY: it calls _exec_mtd and writes nothing. ONE trustworthy data source for report AND commission.
+# The DISJOINT Exec MTD activation categories (they sum to Total Activation): each is its OWN payout
+# option so a plan can pay, say, BYOD and Tablet and Home Internet at different rates and Upgrade at $0.
+# TENANT-AGNOSTIC: every tenant's contract types already normalize into these SAME columns via the shared
+# classifier — Boost / Cricket just relabel; the product (and therefore the architecture) is the same, so
+# one rate map per category serves all tenants. `activation` here is the PURE New count (Tablet / Home
+# Internet / Edge are broken out on their own, matching the Exec MTD row).
+_MTD_ACT_CATEGORIES = ("activation", "port", "byod", "tablet", "home_internet", "edge", "upgrade")
+_MTD_CATEGORY_LABELS = {
+    "activation": "New Activation", "port": "Port", "byod": "BYOD", "tablet": "Tablet",
+    "home_internet": "Home Internet", "edge": "Edge", "upgrade": "Upgrade",
+}
+
+
+def _plan_mtd_rates(plan):
+    """(activation flat $/unit, accessory fraction) for the MTD-basis commission, read from a plan's rules:
+    the amount of the first qualifying flat_per_unit rule keyed on activation_bucket|department, and the pct
+    of the first qualifying pct_* rule keyed on accessory. 0 when a component is absent (it then pays $0).
+    This is the SIMPLE default; a caller can override with an explicit per-category rate map."""
+    act_rate, acc_pct = 0.0, 0.0
+    for r in (plan.get("rules") or []):
+        if r.get("qualifies") is False:
+            continue
+        mf = str(r.get("match_field") or "").strip().lower()
+        pk = str(r.get("payout_kind") or "").strip().lower()
+        if not act_rate and pk == "flat_per_unit" and mf in ("activation_bucket", "department"):
+            act_rate = safe_float(r.get("amount"))
+        elif not acc_pct and mf == "accessory" and pk.startswith("pct"):
+            acc_pct = safe_float(r.get("pct"))
+    return act_rate, acc_pct
+
+
+def _default_mtd_rate_map(act_rate):
+    """Per-category default: the plan's flat activation rate on EVERY activation category EXCEPT Upgrade
+    (0 — the standing 'upgrades don't pay' rule), so with no override the total reproduces
+    Total-Activation-excluding-Upgrade × rate."""
+    return {c: (0.0 if c == "upgrade" else float(act_rate or 0.0)) for c in _MTD_ACT_CATEGORIES}
+
+
+def _parse_mtd_rate_map(rates_str, fallback):
+    """Parse a compact 'activation:10,byod:12,upgrade:0' string into a category->rate map layered over the
+    fallback. Unknown keys ignored; malformed values skipped; None/'' -> the fallback unchanged. This is
+    how the wizard sends the owner's per-category rates without a schema change."""
+    out = dict(fallback)
+    for part in str(rates_str or "").split(","):
+        if ":" not in part:
+            continue
+        k, v = part.split(":", 1)
+        k = k.strip().lower()
+        if k in _MTD_ACT_CATEGORIES:
+            try:
+                out[k] = float(str(v).strip())
+            except Exception:
+                pass
+    return out
+
+
+def _commission_from_mtd_rows(emp_rows, rate_map, acc_pct):
+    """Per-rep commission from Exec MTD by_employee rows, with a PER-CATEGORY rate map. PURE (no I/O), so
+    it is unit-testable: activation_pay = Σ_category round(count × rate); accessory_pay = round(acc × pct).
+    Each rep row carries a `by_category` breakdown so the wizard can show where the money came from."""
+    out = []
+    for r in emp_rows or []:
+        by_cat, ap = {}, 0.0
+        for c in _MTD_ACT_CATEGORIES:
+            cnt = int(round(safe_float(r.get(c))))
+            rate = float((rate_map or {}).get(c, 0.0) or 0.0)
+            pay = round(cnt * rate, 2)
+            by_cat[c] = {"count": cnt, "rate": rate, "pay": pay}
+            ap += pay
+        ap = round(ap, 2)
+        acc = round(safe_float(r.get("acc_sales")), 2)
+        cp = round(acc * acc_pct, 2)
+        out.append({"employee": r.get("employee"),
+                    "activations": int(round(safe_float(r.get("total_activation")))),
+                    "acc_sales": acc, "activation_pay": ap, "accessory_pay": cp,
+                    "commission": round(ap + cp, 2), "by_category": by_cat})
+    out.sort(key=lambda x: -x["commission"])
+    return out
+
+
+@router.get("/commission-mtd/{period}")
+def commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID, today: str = "",
+                   rates: str = "", acc_pct: str = ""):
+    """READ-ONLY commission computed from the Executive MTD per-employee numbers (see the block header).
+    Applies ONE plan's rates to the reps in that plan's scope (its store / market / employee assignments),
+    so the total reconciles to the Exec MTD report filtered to the same stores. Moves no pay — run the
+    calculation to pay.
+
+    `rates` (optional) is the owner's PER-CATEGORY override, 'activation:10,byod:10,tablet:10,upgrade:0,…'
+    over the Exec MTD activation categories; omitted -> the plan's flat rate on every category except
+    Upgrade. `acc_pct` (optional, e.g. 0.10) overrides the plan's accessory %. `today` (YYYY-MM-DD) is the
+    caller's local date for the MTD cut, exactly as /exec-mtd takes it."""
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    if not plan_id:
+        raise HTTPException(400, "plan_id required")
+    client = sb()
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        raise HTTPException(400, "Commission plans are not set up (migration 059).")
+    plan = next((p for p in plans if str(p.get("id")) == str(plan_id)), None)
+    if not plan:
+        raise HTTPException(404, "plan_id not found")
+    plan_act_rate, plan_acc_pct = _plan_mtd_rates(plan)
+    rate_map = _parse_mtd_rate_map(rates, _default_mtd_rate_map(plan_act_rate))
+    try:
+        eff_acc_pct = float(acc_pct) if str(acc_pct).strip() != "" else plan_acc_pct
+    except Exception:
+        eff_acc_pct = plan_acc_pct
+    stores, markets, emps_scope = [], [], []
+    for a in (plan.get("assignments") or []):
+        sc = str(a.get("scope") or "").strip().lower()
+        sv = a.get("scope_value")
+        if not sv:
+            continue
+        if sc == "store":
+            stores.append(sv)
+        elif sc == "market":
+            markets.append(sv)
+        elif sc == "employee":
+            emps_scope.append(sv)
+    _t = None
+    if today:
+        try:
+            _t = _date.fromisoformat(str(today)[:10])
+        except Exception:
+            _t = None
+    data = _exec_mtd(client, org_id, period, stores=stores or None, markets=markets or None,
+                     reps=emps_scope or None, today=_t)
+    emp_rows = ((data.get("by_employee") or {}).get("rows")) or []
+    rows = _commission_from_mtd_rows(emp_rows, rate_map, eff_acc_pct)
+    cat_totals = {c: {"count": sum(r["by_category"][c]["count"] for r in rows),
+                      "pay": round(sum(r["by_category"][c]["pay"] for r in rows), 2),
+                      "rate": rate_map.get(c, 0.0), "label": _MTD_CATEGORY_LABELS[c]}
+                  for c in _MTD_ACT_CATEGORIES}
+    totals = {
+        "activations": sum(r["activations"] for r in rows),
+        "acc_sales": round(sum(r["acc_sales"] for r in rows), 2),
+        "activation_pay": round(sum(r["activation_pay"] for r in rows), 2),
+        "accessory_pay": round(sum(r["accessory_pay"] for r in rows), 2),
+        "commission": round(sum(r["commission"] for r in rows), 2),
+        "by_category": cat_totals,
+    }
+    return {
+        "period": period, "plan_id": plan_id, "plan_name": plan.get("name"),
+        "categories": [{"key": c, "label": _MTD_CATEGORY_LABELS[c]} for c in _MTD_ACT_CATEGORIES],
+        "rate_map": rate_map, "accessory_pct": eff_acc_pct,
+        "scope": {"stores": stores, "markets": markets, "employees": emps_scope},
+        "activation_source": data.get("activation_source"),
+        "by_rep": rows, "totals": totals,
+        "note": ("Commission computed from Executive MTD per-employee numbers "
+                 "(per-category activation rate + Acc. Sales × %). READ-ONLY — matches the Exec MTD report "
+                 "filtered to this plan's stores; nothing is paid until you run the calculation."),
+    }
+
+
 # ── Commission-plan ASSIGNMENT roster + BULK assign (owner directive 2026-07-23) ──────────────────
 # The plan editor assigns ONE person at a time and shows only a name. These two endpoints back the
 # people-centric bulk surface: a filterable roster (role + market next to each name — RULE FIVE
