@@ -3576,3 +3576,50 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
             return pull_b2bsoft_on_page(page)
         finally:
             browser.close()
+
+
+# ── UNATTENDED LOGIN (owner directive 2026-08-30: pull the reports without human intervention) ────────
+# begin_login() + complete_2fa() are deliberately INTERACTIVE: the first lands on the code-entry screen
+# and a HUMAN supplies the code. That is why a scheduled pull could never finish on its own — it reached
+# the prompt and stalled, whatever the WAF and the selectors did. This wrapper is the whole difference:
+# it starts the login, then WAITS FOR THE PORTAL'S OWN EMAIL to arrive in the tenant's mailbox and feeds
+# that code straight back into complete_2fa. Orchestration only — no new browser work, no new credential
+# (oob_code reads the mailbox already configured for the daily attachment sweep).
+
+def login_unattended(url, account_id, user, pw, imap_cfg, oob_rules=None, proxy_url=None,
+                     poll_seconds=10, timeout_seconds=180, _now=None):
+    """begin_login → wait for the emailed 2FA code → complete_2fa. Returns what complete_2fa returns (or
+    what begin_login returned when the portal did not challenge at all).
+
+    Only the code that arrives AFTER this call started is ever accepted (`not_before`), so a poll can
+    never pick up the still-in-window code from a PREVIOUS run and submit one the portal has retired.
+
+    Raises VidaPayLoginError with an actionable message — never the code — when no usable code arrives
+    inside `timeout_seconds`. The code is never logged, and it is held only for the complete_2fa call."""
+    import time as _time
+    from datetime import datetime as _dt, timezone as _tz
+    from app.modules.commcalc import oob_code as _oob
+
+    started = (_now or _dt.now(_tz.utc))
+    res = begin_login(url, account_id, user, pw, proxy_url=proxy_url)
+    if (res or {}).get("status") == "authenticated":
+        return res                              # portal trusted this device; no second factor needed
+    if (res or {}).get("status") != "needs_2fa":
+        raise VidaPayLoginError(f"Unexpected login state '{(res or {}).get('status')}' — cannot continue "
+                                "unattended.")
+
+    rules = dict(oob_rules or {})
+    rules["not_before"] = started               # a code from before this login is never acceptable
+    deadline = _time.monotonic() + max(1, int(timeout_seconds))
+    last_reason = "no code seen yet"
+    while _time.monotonic() < deadline:
+        got = _oob.read_latest_code(imap_cfg, rules)
+        if got.get("code"):
+            return complete_2fa(url, res, got["code"], proxy_url=proxy_url)
+        last_reason = got.get("reason") or last_reason
+        _time.sleep(max(1, int(poll_seconds)))
+
+    raise VidaPayLoginError(
+        f"No 2FA code arrived within {timeout_seconds}s of starting the login ({last_reason}). Check that "
+        "the portal mails the code to the mailbox in email_sweep_config, and that this login's "
+        "oob_from_contains / oob_subject_contains match that mail (data_source, mig 307).")
