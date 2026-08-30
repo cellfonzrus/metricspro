@@ -84,6 +84,10 @@ INGEST_TABLES_BY_MODULE = {
         "pos.sales", "pos.receipt_imports", "pos.customers", "pos.activations",
         "activation_rebate_ledger",
     ),
+    # closing — employee daily cash + tender declaration and the per-org tender-map config sheet.
+    "closing": (
+        "daily_closing", "closing_tender_def", "closing_tender_map",
+    ),
     # Other modules are added in subsequent PRs, one by one.
 }
 
