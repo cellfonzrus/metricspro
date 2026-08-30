@@ -13,7 +13,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app.modules.commcalc.router import _plan_mtd_rates, _commission_from_mtd_rows  # noqa: E402
+from app.modules.commcalc.router import (  # noqa: E402
+    _plan_mtd_rates, _commission_from_mtd_rows, _default_mtd_rate_map, _parse_mtd_rate_map)
 
 PASS = 0
 FAIL = 0
@@ -52,29 +53,50 @@ act3, acc3 = _plan_mtd_rates({"rules": [
     {"match_field": "activation_bucket", "payout_kind": "flat_per_unit", "amount": 99, "qualifies": False}]})
 check("a non-qualifying rule contributes no rate", act3 == 0.0 and acc3 == 0.0, (act3, acc3))
 
-print("── B. per-rep commission from Exec MTD by_employee rows ─────────────────────────")
-# Exactly the shape _exec_mtd returns: total_activation (excl. Upgrade on the AD basis) + acc_sales.
+print("── B. per-rep commission — DEFAULT rate map ($10 all activation cats, upgrade $0) ─")
+# The default map applies the plan's flat rate to every activation category EXCEPT upgrade. Exec MTD rows
+# break the count out per category; here they sum to Total Activation (excl. upgrade).
+DEF = _default_mtd_rate_map(act)   # {activation:10, port:10, byod:10, tablet:10, home_internet:10, edge:10, upgrade:0}
+check("default map: byod = $10", DEF["byod"] == 10.0, DEF)
+check("default map: upgrade = $0 (separate, not paid by default)", DEF["upgrade"] == 0.0, DEF)
 emp_rows = [
-    {"employee": "Fozilova, Shakhnoza", "total_activation": 25, "acc_sales": 400.0},   # 25*10 + 40 = 290
-    {"employee": "Navarro, Alondra",    "total_activation": 3,  "acc_sales": 0.0},      # 30 + 0   = 30
-    {"employee": "Jacobo, Liset",       "total_activation": 0,  "acc_sales": 150.55},   # 0 + 15.06 (round)
+    # 10 new + 5 port + 6 byod + 2 tablet + 1 home_internet + 1 edge = 25 payable; 3 upgrades NOT paid.
+    {"employee": "Fozilova, Shakhnoza", "total_activation": 25, "activation": 10, "port": 5, "byod": 6,
+     "tablet": 2, "home_internet": 1, "edge": 1, "upgrade": 3, "acc_sales": 400.0},   # 25*10 + 40 = 290
+    {"employee": "Navarro, Alondra", "total_activation": 3, "activation": 3, "port": 0, "byod": 0,
+     "tablet": 0, "home_internet": 0, "edge": 0, "upgrade": 0, "acc_sales": 0.0},      # 30 + 0 = 30
+    {"employee": "Jacobo, Liset", "total_activation": 0, "activation": 0, "port": 0, "byod": 0,
+     "tablet": 0, "home_internet": 0, "edge": 0, "upgrade": 0, "acc_sales": 150.55},   # 0 + 15.06
 ]
-rows = _commission_from_mtd_rows(emp_rows, act, acc)
+rows = _commission_from_mtd_rows(emp_rows, DEF, acc)
 by = {r["employee"]: r for r in rows}
-check("rep A: 25 act × $10 + $400 × 10% = $290", by["Fozilova, Shakhnoza"]["commission"] == 290.0,
-      by["Fozilova, Shakhnoza"])
+check("rep A: 25 payable × $10 + $400 × 10% = $290 (3 upgrades excluded)",
+      by["Fozilova, Shakhnoza"]["commission"] == 290.0, by["Fozilova, Shakhnoza"])
 check("rep A activation_pay = $250", by["Fozilova, Shakhnoza"]["activation_pay"] == 250.0, by["Fozilova, Shakhnoza"])
-check("rep A accessory_pay = $40", by["Fozilova, Shakhnoza"]["accessory_pay"] == 40.0, by["Fozilova, Shakhnoza"])
-check("rep B: 3 act × $10 + $0 = $30", by["Navarro, Alondra"]["commission"] == 30.0, by["Navarro, Alondra"])
+check("rep A byod category paid 6 × $10 = $60", by["Fozilova, Shakhnoza"]["by_category"]["byod"]["pay"] == 60.0,
+      by["Fozilova, Shakhnoza"]["by_category"]["byod"])
+check("rep A upgrade category paid $0 (rate 0)", by["Fozilova, Shakhnoza"]["by_category"]["upgrade"]["pay"] == 0.0,
+      by["Fozilova, Shakhnoza"]["by_category"]["upgrade"])
+check("rep B: 3 new × $10 = $30", by["Navarro, Alondra"]["commission"] == 30.0, by["Navarro, Alondra"])
 check("rep C: 0 act + $150.55 × 10% = $15.06 (rounded)", by["Jacobo, Liset"]["commission"] == 15.06,
       by["Jacobo, Liset"])
-check("rows are sorted by commission desc", [r["employee"] for r in rows][0] == "Fozilova, Shakhnoza",
+check("rows sorted by commission desc", [r["employee"] for r in rows][0] == "Fozilova, Shakhnoza",
       [r["employee"] for r in rows])
 
-print("── C. accessory number on Exec MTD == the number that pays (the whole point) ─────")
-# The owner's complaint: acc_sales shows on Exec MTD but not in the payout. Here the SAME acc_sales drives
-# accessory_pay, so a non-zero Exec MTD accessory number can never silently pay $0.
-only_acc = _commission_from_mtd_rows([{"employee": "X", "total_activation": 0, "acc_sales": 1000.0}], 10.0, 0.10)
+print("── C. PER-CATEGORY override — pay Upgrade $5, BYOD $12, everything else $10 ──────")
+custom = _parse_mtd_rate_map("upgrade:5,byod:12", DEF)
+check("override kept new=$10", custom["activation"] == 10.0, custom)
+check("override set byod=$12", custom["byod"] == 12.0, custom)
+check("override set upgrade=$5 (now a paid option)", custom["upgrade"] == 5.0, custom)
+rows2 = _commission_from_mtd_rows(emp_rows, custom, acc)
+a2 = {r["employee"]: r for r in rows2}["Fozilova, Shakhnoza"]
+# new10*10 + port5*10 + byod6*12 + tablet2*10 + hi1*10 + edge1*10 + upg3*5 = 100+50+72+20+10+10+15 = 277 ; +40 acc = 317
+check("rep A with overrides: $277 activation + $40 acc = $317", a2["commission"] == 317.0, a2)
+check("rep A upgrade now pays 3 × $5 = $15", a2["by_category"]["upgrade"]["pay"] == 15.0, a2["by_category"]["upgrade"])
+
+print("── D. accessory number on Exec MTD == the number that pays (the whole point) ─────")
+only_acc = _commission_from_mtd_rows(
+    [{"employee": "X", "total_activation": 0, "acc_sales": 1000.0}], _default_mtd_rate_map(10.0), 0.10)
 check("an Exec-MTD accessory number always pays (1000 × 10% = $100)", only_acc[0]["commission"] == 100.0,
       only_acc[0])
 
