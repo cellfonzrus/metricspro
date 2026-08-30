@@ -88,6 +88,14 @@ INGEST_TABLES_BY_MODULE = {
     "closing": (
         "daily_closing", "closing_tender_def", "closing_tender_map",
     ),
+    # storeops — roster/identity template uploads, the external merchant-ID mapping, and the Google
+    # Reviews API sweep. storeops.* are in the `storeops` schema (qualified keys); store_mapping is the
+    # commcalc-schema mirror the roster upload writes (bare key, per the seed convention).
+    "storeops": (
+        "storeops.employees", "storeops.stores", "storeops.store_alias",
+        "storeops.store_merchant_id", "store_mapping",
+        "storeops.google_review_store", "storeops.google_review_snapshot", "storeops.google_review_item",
+    ),
     # Other modules are added in subsequent PRs, one by one.
 }
 
