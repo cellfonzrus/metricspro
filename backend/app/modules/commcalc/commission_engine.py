@@ -394,13 +394,40 @@ def _pvariants(period):
     return [x for x in out if x]
 
 
-def _read_sales(client, org_id, period):
+def _read_sales(client, org_id, period, source_mode=None):
     """Paginated sales for a period (REST 1000-row cap). select * so a missing column never errors.
 
-    raw_sales first, FALLING BACK to daily_sales_feed when raw_sales has no rows. The calculator's
-    rep roster already reads the feed for the open month, so without this fallback a tenant whose
-    feed→raw_sales promotion hasn't run yet gets reps LISTED but paid $0 — the roster and the money
-    disagreed on what "sales" means (luxelink, 2026-07-14). When raw_sales exists it wins unchanged."""
+    'legacy' (the default, and what every caller got before mig 306): raw_sales first, FALLING BACK to
+    daily_sales_feed when raw_sales has no rows. The calculator's rep roster already reads the feed for
+    the open month, so without this fallback a tenant whose feed→raw_sales promotion hasn't run yet gets
+    reps LISTED but paid $0 — the roster and the money disagreed on what "sales" means (luxelink,
+    2026-07-14). When raw_sales exists it wins unchanged.
+
+    'union' (mig 306, per-tenant config `commission_org_config.sales_source`): read the SAME rows the
+    Sales Report and Executive MTD show — the TRANSACTION-grain feed∪raw_sales union. WHY THIS EXISTS:
+    'legacy' makes the pay engines read a DIFFERENT sales universe from the reports the same numbers are
+    checked against. Measured live (org 854f6d7b, 2026-08): raw_sales held 3,235 rows for the period
+    while the union held 9,161, so a rules-plan rep was paid on ~a third of their accessory sales and the
+    Rep Incentive drill could never reconcile with the report. Owner decision 2026-08-30: "the sales
+    source which creates the sales report is accurate, the same source should feed into all other related
+    modules."
+
+    The union reader is `router._sales_rows_union_txn` — TRANSACTION grain, deduped by trans_id, so a
+    transaction present in BOTH tables is counted ONCE and every line item of a kept transaction survives
+    (accessory / tax ext_price sums stay correct). That is the variant a per-LINE pay engine needs; the
+    per-day `_sales_rows_union` the report itself uses is a display cell-pick and must NOT be used here.
+    Imported lazily because router imports this module — the same router<->module cycle break used
+    elsewhere in commcalc. Any failure degrades to the legacy read rather than paying on nothing."""
+    mode = str(source_mode or "legacy").strip().lower()
+    if mode == "union":
+        try:
+            from app.modules.commcalc.router import _sales_rows_union_txn   # lazy: router<->engine cycle
+            rows, _meta = _sales_rows_union_txn(client, org_id, period, cols="*")
+            if rows:
+                return rows
+        except Exception as e:                      # never leave a pay path with no sales because of this
+            print(f"WARN _read_sales union source failed, falling back to legacy: {e}")
+
     def _page(table):
         out, start, page = [], 0, 1000
         while True:
@@ -1267,7 +1294,7 @@ def _unmatched_record(row, why, rep, store, market, plan_name=None):
 def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, coverage=False,
             rule_overrides=None, unmatched_detail=False, gate_override=None,
             setup_fee_override=None, sales_override=None, mrc_override=None,
-            definition_pay_override=None, identity_map=None):
+            definition_pay_override=None, identity_map=None, source_mode=None):
     """READ-ONLY: apply plan rules to a period's raw_sales. Writes nothing.
 
     Returns {ready, period, by_rep:[...], totals, plans, note}. If plan_id is given, that plan is applied
@@ -1347,7 +1374,10 @@ def preview(client, org_id, period, plan_id=None, detail=False, only_rep=None, c
     # SALES SOURCE. `sales_override` (pay simulator) replaces the raw_sales/feed read with synthetic
     # lines; everything downstream — the voided/Return gate below included — is identical, so a
     # simulated line goes through the same funnel a real one does. None → the historic read.
-    sales = list(sales_override) if sales_override is not None else _read_sales(client, org_id, period)
+    # `source_mode` ('legacy'|'union', mig 306) selects WHICH sales universe the read covers — see
+    # _read_sales. None → 'legacy', byte-identical to before. A sales_override still wins outright.
+    sales = (list(sales_override) if sales_override is not None
+             else _read_sales(client, org_id, period, source_mode))
     # only un-voided, non-return lines qualify (same gate as the live calculator). VOIDED uses the
     # SHARED token set (owner 2026-07-25) so a 'true'/'1'/'void' line can never be paid while the Sales
     # Report excludes it.

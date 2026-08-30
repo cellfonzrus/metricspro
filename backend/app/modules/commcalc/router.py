@@ -10129,7 +10129,8 @@ def _commission_org_config(client, org_id):
     rate-plan line — the engine's own default, so the read degrading changes nothing)."""
     default = {"pay_disabled": False, "residual_visibility": "all", "plan_ct_resolution": "raw",
                "installment_mrc_basis": "plan_line", "installment_mrc_hardware_guard": True,
-               "store_resolution": "exact", "calc_stale_minutes": None}
+               "store_resolution": "exact", "calc_stale_minutes": None,
+               "sales_source": "legacy"}
     try:
         rows = (client.schema('commcalc').table('commission_org_config').select('*')
                 .eq('org_id', org_id).limit(1).execute().data) or []
@@ -10145,6 +10146,7 @@ def _commission_org_config(client, org_id):
     # assignment. 'exact' (default, and the value read when the column is absent) is today's
     # store_mapping-only lookup, byte-identical.
     _sr = str(r.get("store_resolution") or "exact").strip().lower()
+    _ss = str(r.get("sales_source") or "legacy").strip().lower()
     try:
         _csm = int(r["calc_stale_minutes"]) if r.get("calc_stale_minutes") is not None else None
     except Exception:
@@ -10159,7 +10161,32 @@ def _commission_org_config(client, org_id):
             "store_resolution": _sr if _sr in ("exact", "alias") else "exact",
             # mig 275 — NOT a money setting: how long a recompute may stay marked 'running' before the
             # next Calculate presumes it dead and takes the slot over. None = the code default (20 min).
-            "calc_stale_minutes": _csm}
+            "calc_stale_minutes": _csm,
+            # mig 306 — WHICH SALES ROWS THE PAY ENGINES READ. 💰 MONEY SETTING.
+            #   'legacy' (default, and the value read when the column is absent) = today's behaviour:
+            #           commission_engine._read_sales takes raw_sales and only falls back to the daily
+            #           feed when raw_sales is EMPTY. Byte-identical to before this migration.
+            #   'union'  = the SAME completeness the Sales Report / Executive MTD show — the
+            #           TRANSACTION-grain feed∪raw_sales union (`_sales_rows_union_txn`, deduped by
+            #           trans_id so nothing is double-counted and every line item is kept).
+            # Owner decision 2026-08-30: "the sales source which creates the sales report is accurate,
+            # the same source should feed into all other related modules." Config-gated and default OFF
+            # so merging changes no payout; flipping the row is the deliberate money event, and flipping
+            # it back is an instant revert. Live measurement before the switch (org 854f6d7b, 2026-08):
+            # the accessory basis for rules-plan reps grows ~2.75x (12-rep sample $6,165 → $16,969),
+            # because raw_sales held 3,235 rows for the period while the union holds 9,161.
+            "sales_source": _ss if _ss in ("legacy", "union") else "legacy"}
+
+
+def _sales_source_mode(client, org_id):
+    """'legacy' | 'union' — which sales universe the pay engines and the commission drill read (mig 306,
+    `commission_org_config.sales_source`). Defaults to 'legacy' (today's raw_sales-first read) whenever
+    the config, column or table is absent, so this can never change a payout by accident. See
+    commission_engine._read_sales for what each mode covers and why the setting exists."""
+    try:
+        return _commission_org_config(client, org_id).get("sales_source") or "legacy"
+    except Exception:
+        return "legacy"
 
 
 def _can_view_carrier_residual(authorization, org_id):
@@ -10459,7 +10486,11 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
             # employee-scope plan pinned under a rep's ROSTER name still attaches to their POS sales. Empty
             # map (no name_map rows) => byte-identical to before.
             _id_map = _rep_canon_map(client, org_id)
-            pr = commission_engine.preview(client, org_id, period, identity_map=_id_map)
+            # 💰 SALES SOURCE (mig 306). 'legacy' (default) = raw_sales-first, byte-identical to
+            # before. 'union' = the same feed∪raw_sales completeness the Sales Report / Exec MTD show,
+            # so a rules-plan rep is paid on the SAME sales their report is checked against.
+            pr = commission_engine.preview(client, org_id, period, identity_map=_id_map,
+                                           source_mode=_sales_source_mode(client, org_id))
             for r in (pr.get("by_rep") or []):
                 rn = str(r.get("rep") or "").strip().upper()
                 if rn:
@@ -18761,13 +18792,21 @@ def commission_drill(period: str, rep: str = "", org_id: str = ORG_ID):
     def _q(table):
         return (client.schema("commcalc").table(table).select(cols)
                 .eq("org_id", org_id).in_("period", _pvariants(period)).limit(200000).execute().data) or []
-    rows = _q("raw_sales")
-    source = "raw_sales"
-    if not rows:
-        try:
-            rows = _q("daily_sales_feed"); source = "daily_sales_feed"
-        except Exception:
-            rows = []
+    # SOURCE MUST MIRROR PAY (mig 306). This drill exists so every number on the Rep Commission Report
+    # can be verified, which only works while it reads the SAME sales universe the pay engines read —
+    # so it follows the same `sales_source` config, never its own rule. Under 'legacy' this is the
+    # historic raw_sales-first pick, byte-identical.
+    if _sales_source_mode(client, org_id) == "union":
+        rows, _umeta = _sales_rows_union_txn(client, org_id, period, cols=cols)
+        source = "union(feed+raw_sales)"
+    else:
+        rows = _q("raw_sales")
+        source = "raw_sales"
+        if not rows:
+            try:
+                rows = _q("daily_sales_feed"); source = "daily_sales_feed"
+            except Exception:
+                rows = []
 
     def _norm(s):
         return _re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).strip()
@@ -19864,9 +19903,13 @@ def _sales_rows_union(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     which source led, which days were filled from the other, and which days were swapped to the richer
     source (`richer_days`) — for the report's transparency line.
 
-    DISPLAY ONLY. The commission CALC path (`_run_calculation`/`_fetch_sales_unified`,
-    `commission_engine._read_sales`) is deliberately NOT wired to this — that is money and gets its own
-    gate; this function must not be called from a payout path."""
+    DISPLAY ONLY — and unlike the TRANSACTION-grain `_sales_rows_union_txn`, this one stays that way.
+    This function picks per (day × store) CELL, which is right for a display aggregate but wrong for a
+    per-LINE pay engine (a swapped cell can drop or duplicate line items). A payout path that needs the
+    feed∪raw_sales completeness must use `_sales_rows_union_txn` instead, which dedupes by trans_id and
+    keeps every line item of a kept transaction — that is what `commission_org_config.sales_source =
+    'union'` (mig 306) wires into commission_engine._read_sales. So: never call THIS from a payout
+    path."""
     primary, other = _open_month_source(client, org_id, period)
 
     def _q(table):
@@ -19996,7 +20039,13 @@ def _sales_rows_union_txn(client, org_id, period, cols=_SALES_DISPLAY_COLS):
     Differs from `_sales_rows_union` (per-DAY): this keeps a raw_sales transaction the feed doesn't have
     even on a day the feed also sold — the completeness the Daily-Targets actuals + Tax drill-down need.
     In the healthy feed-only state (raw_sales empty or fully promoted from the feed) the result is the feed
-    verbatim → byte-identical to reading the feed alone. NEVER raises. Returns (rows, meta)."""
+    verbatim → byte-identical to reading the feed alone. NEVER raises. Returns (rows, meta).
+
+    PAY-ELIGIBLE (mig 306). Because this is transaction-grain and dedupes by trans_id, it is the ONE union
+    a payout path may read: `commission_engine._read_sales` calls it when the tenant sets
+    `commission_org_config.sales_source = 'union'`, so the pay engines see the same sales completeness the
+    Sales Report and Executive MTD show. The per-day `_sales_rows_union` is NOT pay-eligible — see its
+    docstring. Callers on the money path pass cols='*' (the engine needs every column)."""
     primary, other = _open_month_source(client, org_id, period)
 
     def _q(table):
@@ -34149,7 +34198,13 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
             else:
                 out["unresolved"].append(k)
                 out["notes"][k] = "No stored KPI value yet — enter on the KPI page (manual mode) or via email import once wired."
-    return out
+
+    # FAIL CLOSED WHEN THE MANAGER HAS NO STORES. Every metric above is a roll-up ACROSS the manager's
+    # stores, so an EMPTY store set makes each one aggregate to a VACUOUS 0 that the blocks above would
+    # otherwise record as `resolved` — handing back a number nobody could compute as authoritative. See
+    # management_incentive.demote_vacuous_when_no_stores for the full rationale and the live proof.
+    from app.modules.commcalc import management_incentive as _mi_pure
+    return _mi_pure.demote_vacuous_when_no_stores(out, bool(scodes))
 
 
 def _f_num(v):

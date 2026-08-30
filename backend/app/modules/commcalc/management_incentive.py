@@ -286,3 +286,40 @@ def compute_payout(plan, *, actuals=None, qualifier_values=None, manager_store_c
         "bonus_total": round(bonus_total, 2),
         "total": total,
     }
+
+
+# ── Resolve-side fail-closed rule (audit follow-up, live-proven 2026-08-30) ───────────────────────
+# `_mi_resolve_numbers` (router) pre-fills a manager's actuals + qualifier metrics by rolling each one
+# up ACROSS THE STORES THEY MANAGE. Its contract is explicit: a metric with no data source "is left
+# UNRESOLVED … never silently guessed."
+#
+# But every one of those roll-ups is a sum/average over the manager's store set, so when that set is
+# EMPTY each aggregation lands on a VACUOUS 0 (or an empty average) rather than failing — and the
+# per-metric blocks then record it as `resolved`. The result is a number nobody could actually compute
+# being handed back as authoritative; a caller that forwards the pre-fill straight into /compute (the
+# Compute tab does) turns it into a $0 payout that reads as legitimately earned instead of "could not
+# be determined". Live proof (org 854f6d7b, 2026-08): the org tree resolved 0 stores for every manager,
+# yet resolve returned accessory_gp=0 under `resolved` with `unresolved` empty.
+#
+# PURE so it is unit-provable (the router cannot be imported without FastAPI installed).
+
+def demote_vacuous_when_no_stores(out, has_stores):
+    """Fail closed when a manager has NO stores: every key the caller marked `resolved` is demoted to
+    `unresolved`, its vacuous value dropped from `actuals` / `qualifier_values`, and a note explains why
+    — so the field stays manual-entry exactly as the contract promises.
+
+    No-op when `has_stores` is truthy, or when nothing was resolved. Mutates and returns `out` (the same
+    dict the router builds), so the router calls it as the last step before returning."""
+    if has_stores or not (out or {}).get("resolved"):
+        return out
+    note = ("Not resolved: no store resolved for this manager, so a roll-up across their stores has "
+            "nothing to sum. Configure the manager's stores (org tree / store→manager map) or enter "
+            "this value manually.")
+    for k in out["resolved"]:
+        if k not in out["unresolved"]:
+            out["unresolved"].append(k)
+        out.get("actuals", {}).pop(k, None)
+        out.get("qualifier_values", {}).pop(k, None)
+        out.setdefault("notes", {})[k] = note
+    out["resolved"] = []
+    return out
