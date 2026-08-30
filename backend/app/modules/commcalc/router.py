@@ -18753,10 +18753,63 @@ def commission_explain(period: str, rep: str = "", org_id: str = ORG_ID):
         # _apply_new_engines) so this drill-down resolves the rep's plan — and its no-plan diagnosis —
         # exactly as pay does. Deterministic; None would leave the explain view blind to a name bridge
         # the payout already honours.
-        return commission_drilldown.explain_rep(client, org_id, period, rep, carrier_mode=mode,
+        _res = commission_drilldown.explain_rep(client, org_id, period, rep, carrier_mode=mode,
                                                 identity_map=_rep_canon_map(client, org_id))
     except Exception as e:
         raise HTTPException(500, f"commission-explain failed: {e}")
+    # EXEC-MTD BASIS DRILL (mig 298/299): if this rep's effective plan pays from Executive MTD, the rules
+    # preview inside explain_rep shows $0 (the rules did not generate the pay) — which contradicts the paid
+    # total. Attach the REAL per-category breakdown (New/Port/BYOD/…/Upgrade count × rate + Acc.Sales × %)
+    # so the Rep Incentive Report drill reconciles to what was paid. Best-effort; never fails the endpoint.
+    try:
+        _mb = _exec_mtd_breakdown_for_rep(client, org_id, period, rep)
+        if _mb:
+            _res["mtd_breakdown"] = _mb
+    except Exception as _mbe:
+        print(f"WARN exec_mtd drill breakdown skipped: {_mbe}")
+    return _res
+
+
+def _exec_mtd_breakdown_for_rep(client, org_id, period, rep):
+    """The Executive-MTD per-category commission breakdown for ONE rep (for the /commission-explain drill).
+    Returns None unless the rep's EFFECTIVE plan is an exec_mtd-basis plan AND the rep has an Exec MTD row.
+    Name matching is order-insensitive via commission_engine._canon_person, so 'Kellie, Mark' == 'Mark
+    Kellie'. Reuses _commission_mtd_result — the SAME code the panel/Save/live-pay use — so the drill can
+    never disagree with the paid total."""
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        return None
+    mtd_plans = [p for p in plans
+                 if str(p.get("commission_basis") or "rules").strip().lower() == "exec_mtd"
+                 and p.get("is_active", True)]
+    if not mtd_plans:
+        return None
+    target = commission_engine._canon_person(rep)
+    for mp in mtd_plans:
+        try:
+            res = _commission_mtd_result(client, org_id, period, mp)
+        except Exception:
+            continue
+        for r in (res.get("by_rep") or []):
+            if commission_engine._canon_person(r.get("employee")) != target:
+                continue
+            cats = []
+            for c in _MTD_ACT_CATEGORIES:
+                bc = (r.get("by_category") or {}).get(c) or {}
+                if bc.get("count") or bc.get("rate"):
+                    cats.append({"key": c, "label": _MTD_CATEGORY_LABELS[c],
+                                 "count": bc.get("count", 0), "rate": bc.get("rate", 0.0),
+                                 "pay": bc.get("pay", 0.0)})
+            return {
+                "plan_name": mp.get("name"), "basis": "exec_mtd", "rep": r.get("employee"),
+                "categories": cats,
+                "activation_pay": r.get("activation_pay", 0.0),
+                "acc_sales": r.get("acc_sales", 0.0),
+                "accessory_pct": res.get("accessory_pct", 0.0),
+                "accessory_pay": r.get("accessory_pay", 0.0),
+                "commission": r.get("commission", 0.0),
+            }
+    return None
 
 
 @router.get("/commission-device")

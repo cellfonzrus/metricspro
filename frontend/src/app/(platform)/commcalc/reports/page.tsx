@@ -366,6 +366,10 @@ export default function ReportsPage() {
   const explainOk  = explainFresh && !explainFresh.error ? explainFresh : null
   const explainPc  = explainOk?.plan_component || null
   const explainMm  = explainOk?.multimonth_component || null
+  // EXEC-MTD basis breakdown (mig 298/299): present ONLY when this rep's plan pays from Executive MTD.
+  // It is the authoritative per-category math (rules don't generate this plan's pay), so we render it in
+  // place of the "no rule matched" message for those reps.
+  const explainMtd = explainOk?.mtd_breakdown || null
   const explainRec = explainOk?.reconciliation || null
   // Gate-1 INFO-4 — the BOOST drill gets the SAME rep+period render gate (declared here because it reuses
   // `drillRep` above). openDrill() tags its payload with the identical rep expression, so for a fresh
@@ -1021,7 +1025,46 @@ export default function ReportsPage() {
                           onAttach={attachPlan} onLink={linkAlias} />
                       )}
 
-                      {(explainOk.zero_explanation?.length > 0) && (
+                      {/* EXEC-MTD BASIS: the per-category math (New/Port/BYOD/…/Upgrade count × rate +
+                          Acc.Sales × %) — how this rep's commission is actually paid. Shown only for a
+                          plan whose basis is Executive MTD; rules plans keep the line breakdown below. */}
+                      {explainMtd && (
+                        <div style={{ marginBottom: 6 }}>
+                          <div style={{ fontSize: 12.5, color: 'var(--text2)', marginBottom: 6 }}>
+                            Paid from <b>Executive MTD</b> — plan <b style={{ color: 'var(--text)' }}>{explainMtd.plan_name}</b>.
+                            Total <b style={{ color: 'var(--accent)' }}>{fmt(explainMtd.commission || 0)}</b>
+                            {' '}(activations {fmt(explainMtd.activation_pay || 0)} + accessories {fmt(explainMtd.accessory_pay || 0)}).
+                          </div>
+                          <div style={{ overflowX: 'auto' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 380 }}>
+                              <thead><tr>{['Component', 'Count', 'Rate', 'Pays'].map(h =>
+                                <th key={h} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>{h}</th>)}</tr></thead>
+                              <tbody>
+                                {(explainMtd.categories || []).map((c: any, i: number) => (
+                                  <tr key={i}>
+                                    <td style={{ padding: '4px 8px' }}>{c.label}</td>
+                                    <td style={{ padding: '4px 8px' }}>{c.count}</td>
+                                    <td style={{ padding: '4px 8px' }}>{fmt(Number(c.rate) || 0)}</td>
+                                    <td style={{ padding: '4px 8px' }}>{fmt(Number(c.pay) || 0)}</td>
+                                  </tr>
+                                ))}
+                                <tr>
+                                  <td style={{ padding: '4px 8px' }}>Accessories</td>
+                                  <td style={{ padding: '4px 8px' }}>{fmt(Number(explainMtd.acc_sales) || 0)}</td>
+                                  <td style={{ padding: '4px 8px' }}>{((Number(explainMtd.accessory_pct) || 0) * 100).toFixed(1)}%</td>
+                                  <td style={{ padding: '4px 8px' }}>{fmt(Number(explainMtd.accessory_pay) || 0)}</td>
+                                </tr>
+                                <tr style={{ fontWeight: 700, borderTop: '1px solid var(--border)' }}>
+                                  <td style={{ padding: '4px 8px' }} colSpan={3}>Commission</td>
+                                  <td style={{ padding: '4px 8px' }}>{fmt(Number(explainMtd.commission) || 0)}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {(!explainMtd && explainOk.zero_explanation?.length > 0) && (
                         <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--text2)', lineHeight: 1.7 }}>
                           {explainOk.zero_explanation.map((z: string, i: number) => <li key={i}>{z}</li>)}
                         </ul>
@@ -1033,7 +1076,7 @@ export default function ReportsPage() {
                           amounts are the engine's own line amounts — display only. */}
                       {planLineRows.length > 0 ? (
                         <PlanLineBreakdown rows={planLineRows} compact />
-                      ) : (
+                      ) : explainMtd ? null : (
                         <div style={{ fontSize: 13, color: 'var(--text3)' }}>
                           {explainPc?.plan_name
                             ? `Plan attached, but no rule matched a sale line in ${period}.`
