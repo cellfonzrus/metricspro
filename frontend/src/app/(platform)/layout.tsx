@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { PeriodProvider, usePeriod } from '@/lib/period-context'
 import { HelpProvider } from '@/lib/help-context'
 import HelpToggle from '@/components/HelpToggle'
+import AskBar from '@/components/AskBar'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
@@ -363,6 +364,9 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
                   letterSpacing: '0.04em', color: 'rgba(255,255,255,0.32)', pointerEvents: 'none' }}>⌘K</span>}
           </div>
         )}
+
+        {/* Ask bar — natural-language query / report jump (⌘/). Deterministic quick answers + report search. */}
+        <AskBar collapsed={collapsed} />
 
         {/* Global help-text toggle (approved roles only) — reveals the gated on-page explanations app-wide. */}
         <HelpToggle collapsed={collapsed} />
