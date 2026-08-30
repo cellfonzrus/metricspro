@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { api, fmt, ORG_ID } from '@/lib/client'
 import { usePeriod } from '@/lib/period-context'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import NarrativeBanner from '@/components/NarrativeBanner'
 
 export default function AccountsDashboard() {
   const { period } = usePeriod()
@@ -99,6 +100,9 @@ export default function AccountsDashboard() {
         </div>
       ) : (
         <>
+          {/* NARRATIVE BANNER — deterministic "consolidated P&L vs last month" above the statements.
+              Computed from the same account_statements shown below, so it can never disagree with them. */}
+          <NarrativeBanner url={`/api/v1/account/overview/${encodeURIComponent(period)}/narrative?org_id=${ORG_ID}`} />
           {consolidated && (
             <div className="card" style={{ padding: 18, marginBottom: 18 }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Consolidated (all companies)</div>

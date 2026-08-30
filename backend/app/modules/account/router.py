@@ -568,6 +568,108 @@ def overview(period: str, org_id: str = ORG_ID):
                                             x.get("scope_label") or ""))}
 
 
+# ── Narrative banner (owner 2026-08-29 modernization track) ──────────────────────────────────────
+# A deterministic plain-English summary of the consolidated P&L vs the prior month, computed from the SAME
+# `account_statements` the dashboard reads (no LLM, no API key — this is separate from the optional Claude
+# statement-narrative engine and always works). Reuses the shared <NarrativeBanner> component on the
+# frontend. Never raises → {available: false} hides the banner.
+_ACC_MONTHS = ["", "January", "February", "March", "April", "May", "June", "July",
+               "August", "September", "October", "November", "December"]
+
+
+def _acc_pct_change(cur, prior):
+    try:
+        c, p = float(cur or 0), float(prior or 0)
+    except (TypeError, ValueError):
+        return None
+    return None if p == 0 else round((c - p) / p * 100.0, 1)
+
+
+def _acc_money(v):
+    """'$1,234' / '-$1,234' — a signed dollar figure with no cents (statements headline in whole dollars)."""
+    v = float(v or 0)
+    return f"-${abs(v):,.0f}" if v < 0 else f"${v:,.0f}"
+
+
+def _consolidated_pl(client, org_id, period):
+    """The consolidated P&L headline numbers for `period` from account_statements, or None when that period
+    has no computed consolidated P&L. Matches BOTH period spellings via `period_keys` (the finance-wide
+    month-name/numeric duality)."""
+    from app.modules.account._period import period_keys
+    rows = (client.schema("commcalc").table("account_statements")
+            .select("payload")
+            .eq("org_id", org_id).in_("period", list(period_keys(period)))
+            .eq("scope_key", "consolidated").eq("statement_type", "pl").execute().data) or []
+    if not rows:
+        return None
+    pl = rows[0].get("payload") or {}
+    rev = sum(sec.get("subtotal", 0) for sec in pl.get("sections", []) if sec.get("type") == "revenue")
+    return {"revenue": rev, "gross_profit": pl.get("gross_profit") or 0, "net_income": pl.get("net_income") or 0}
+
+
+def _account_narrative(client, org_id, period):
+    try:
+        from app.modules.account._period import parse_period
+        m, y = parse_period(period)
+        if not (1 <= m <= 12 and y):
+            return {"period": period, "available": False}
+        pm, py = (12, y - 1) if m == 1 else (m - 1, y)
+        prior_label = f"{_ACC_MONTHS[pm]} {py}"
+
+        cur = _consolidated_pl(client, org_id, period)
+        if not cur:
+            return {"period": period, "available": False}
+        prior = _consolidated_pl(client, org_id, prior_label)
+
+        ni, rev, gp = cur["net_income"], cur["revenue"], cur["gross_profit"]
+        margin = round(gp / rev * 100, 1) if rev else None
+        cur_txt = (f"net income of {_acc_money(ni)}" if ni >= 0 else f"a net loss of ${abs(ni):,.0f}")
+
+        if not prior:                                      # first computed month — no comparison
+            head = f"Consolidated {cur_txt} in {period} on {_acc_money(rev)} revenue."
+            bullets = [f"Gross profit {_acc_money(gp)}" + (f" ({margin:.0f}% margin)." if margin is not None else ".")]
+            return {"period": period, "available": True, "comparative": False, "tone": "flat",
+                    "headline": head, "bullets": bullets,
+                    "facts": {"net_income": ni, "revenue": rev, "gross_profit": gp, "margin": margin}}
+
+        pni, prev, pgp = prior["net_income"], prior["revenue"], prior["gross_profit"]
+        delta = ni - pni
+        tone = "up" if delta > 0 else "down" if delta < 0 else "flat"
+        phrase = "ahead of" if delta > 0 else "behind" if delta < 0 else "level with"
+        # A percentage is only meaningful when the prior base is positive and same-signed; otherwise state
+        # the direction and both figures rather than a misleading percent off a negative base.
+        ni_pct = _acc_pct_change(ni, pni) if (pni > 0 and ni >= 0) else None
+        pct_txt = f"{abs(ni_pct):.0f}% " if ni_pct is not None else ""
+        head = f"Consolidated {cur_txt} in {period} — {pct_txt}{phrase} last month ({_acc_money(pni)})."
+
+        bullets = []
+        rev_pct = _acc_pct_change(rev, prev)
+        rev_dir = "up" if rev - prev > 0 else "down"
+        bullets.append(f"Revenue {_acc_money(rev)}"
+                       + (f" ({abs(rev_pct):.0f}% {rev_dir} vs last month)." if rev_pct is not None else "."))
+        gp_pct = _acc_pct_change(gp, pgp)
+        gp_dir = "up" if gp - pgp > 0 else "down"
+        bullets.append(f"Gross profit {_acc_money(gp)}"
+                       + (f" ({margin:.0f}% margin," if margin is not None else " (")
+                       + (f" {abs(gp_pct):.0f}% {gp_dir} vs last month)." if gp_pct is not None else " no prior comparison)."))
+
+        return {"period": period, "prior_period": prior_label, "available": True, "comparative": True,
+                "tone": tone, "headline": head, "bullets": bullets,
+                "facts": {"net_income": ni, "prior_net_income": pni, "revenue": rev, "prior_revenue": prev,
+                          "gross_profit": gp, "margin": margin, "net_income_pct": ni_pct, "revenue_pct": rev_pct}}
+    except Exception:
+        return {"period": period, "available": False}
+
+
+@router.get("/overview/{period}/narrative")
+def overview_narrative(period: str, org_id: str = ORG_ID):
+    """Plain-English summary of the consolidated P&L for `period` vs the prior month — net income headline,
+    revenue and gross-profit / margin trend. Computed from the SAME `account_statements` the dashboard
+    reads, so it can never disagree with the figures. DISPLAY-ONLY; hidden until statements are computed."""
+    require_org(org_id)
+    return _account_narrative(sb(), org_id, period)
+
+
 # ── #10 reconciliation (VIP credit-memo residual vs MI + ATU) ────────────────────────────────
 @router.get("/recon/{period}")
 async def get_recon(period: str, tolerance: float = 1.0, date_col: str = "mi_activation_date",
