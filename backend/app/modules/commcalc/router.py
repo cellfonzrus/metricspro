@@ -10387,6 +10387,29 @@ def _apply_new_engines(client, org_id, period, comms, carrier_mode='boost', noti
                                     "message": _w.get("message")})
         except Exception:
             plan_by_rep = {}
+        # EXEC-MTD BASIS LIVE PAY (opt-in, mig 298) — for plans whose commission_basis=='exec_mtd', pay
+        # their reps from the Executive MTD numbers (per-category rate + Acc.Sales×%) INSTEAD of the rules.
+        # ADDITIVE + OPT-IN: a rules-based plan is never in this set, so it is byte-identical. The override
+        # DROPS those plans' rules-based entries first (no double basis) then adds the exec-mtd amounts; a
+        # rep with no Exec MTD row is simply not paid by that plan. Reads the SAME _commission_mtd_result
+        # the Save/preview use, so live pay can never disagree with the saved record.
+        try:
+            _pall, _prdy = commission_engine._load_plans(client, org_id)
+            _mtd_plans = ([p for p in (_pall or [])
+                           if str(p.get("commission_basis") or "rules").strip().lower() == "exec_mtd"
+                           and p.get("is_active", True)] if _prdy else [])
+            if _mtd_plans:
+                _mtd_by_plan = []
+                for _mp in _mtd_plans:
+                    try:
+                        _res = _commission_mtd_result(client, org_id, period, _mp)
+                        _mtd_by_plan.append((_mp.get("name"), _res.get("by_rep") or []))
+                    except Exception as _e1:
+                        print(f"WARN exec_mtd plan {_mp.get('name')} skipped: {_e1}")
+                _override_plan_by_rep_with_mtd(
+                    plan_by_rep, {p.get("name") for p in _mtd_plans}, _mtd_by_plan)
+        except Exception as _mtde:
+            print(f"WARN exec_mtd basis live pay skipped: {_mtde}")
         # carrier commission STATEMENT (Total/VidaPay etc.): sum total_commission per rep for the period.
         stmt_by_rep = {}
         try:
@@ -15301,6 +15324,27 @@ def _commission_from_mtd_rows(emp_rows, rate_map, acc_pct):
                     "commission": round(ap + cp, 2), "by_category": by_cat})
     out.sort(key=lambda x: -x["commission"])
     return out
+
+
+def _override_plan_by_rep_with_mtd(plan_by_rep, mtd_plan_names, mtd_by_plan):
+    """LIVE-PAY WIRING for the exec_mtd basis (opt-in, mig 298), pure so it is unit-testable. Mutates and
+    returns the calc's `plan_by_rep` map {REP(UPPER) -> {amount, plan_name, setup_fee_comm}}:
+      1. DROP every rules-based entry whose resolved plan is an exec_mtd plan, so the rules basis can never
+         ALSO pay those reps (no double-count).
+      2. ADD the Exec-MTD-derived commission for those plans' reps.
+    A rules-based plan is never in `mtd_plan_names`, so its entries are untouched — byte-identical."""
+    upper = {str(n or "").strip().upper() for n in (mtd_plan_names or set())}
+    for rn in list(plan_by_rep.keys()):
+        if str((plan_by_rep.get(rn) or {}).get("plan_name") or "").strip().upper() in upper:
+            del plan_by_rep[rn]
+    for pname, rows in (mtd_by_plan or []):
+        for r in (rows or []):
+            rn = str(r.get("employee") or "").strip().upper()
+            if not rn:
+                continue
+            plan_by_rep[rn] = {"amount": safe_float(r.get("commission")),
+                               "plan_name": pname, "setup_fee_comm": 0.0}
+    return plan_by_rep
 
 
 def _commission_mtd_result(client, org_id, period, plan, rates="", acc_pct="", today=""):
