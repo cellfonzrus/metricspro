@@ -127,17 +127,21 @@ def main():
     dupes = sorted({e for e in edges if edges.count(e) > 1})
     ok(not dupes, f"no duplicate (source → affected) edge  (dupes: {dupes})")
 
-    print("B. coverage — every raw ingest table is documented as an ingest edge")
+    print("B. coverage — every registered external-feed ingest table has an ingest edge (per module)")
     ingest_targets = {_clean(r[3]) for r in rows if len(r) == len(_COLS) and _clean(r[6]) == "ingest"}
-    for t in reg.RAW_INGEST_TABLES:
-        ok(t in ingest_targets, f"'{t}' has an ingest edge in the seed")
+    for module, tables in reg.INGEST_TABLES_BY_MODULE.items():
+        for t in tables:
+            ok(t in ingest_targets, f"[{module}] '{t}' has an ingest edge in the seed")
 
-    print("C. registry ↔ seed sync (sales source-of-truth)")
+    print("C. live-vs-monthly invariant — freshness reads the LIVE side of every pair")
     all_keys = {_clean(r[3]) for r in rows if len(r) == len(_COLS)}
+    for item, (live, monthly) in reg.LIVE_VS_MONTHLY_PAIRS.items():
+        ok(reg.freshness_source(item) == live,
+           f"freshness_source('{item}') resolves to the LIVE table '{live}', not '{monthly}'")
+        ok(live in reg.all_ingest_tables(),
+           f"live table '{live}' of pair '{item}' is a registered ingest table")
     ok(reg.LIVE_SALES_FEED in all_keys, f"live feed '{reg.LIVE_SALES_FEED}' appears in the seed")
     ok(reg.MONTHLY_SALES in all_keys, f"monthly table '{reg.MONTHLY_SALES}' appears in the seed")
-    ok(reg.freshness_source("sales") == reg.LIVE_SALES_FEED,
-       "freshness_source('sales') resolves to the LIVE feed, not the monthly table")
 
     print("D. freshness invariant — code reads the LIVE feed via the registry (2026-08-30 regression)")
     src = open(_ROUTER, encoding="utf-8").read()
