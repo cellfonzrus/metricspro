@@ -14,7 +14,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.modules.commcalc.router import (  # noqa: E402
-    _plan_mtd_rates, _commission_from_mtd_rows, _default_mtd_rate_map, _parse_mtd_rate_map)
+    _plan_mtd_rates, _commission_from_mtd_rows, _default_mtd_rate_map, _parse_mtd_rate_map,
+    _override_plan_by_rep_with_mtd)
 
 PASS = 0
 FAIL = 0
@@ -99,6 +100,33 @@ only_acc = _commission_from_mtd_rows(
     [{"employee": "X", "total_activation": 0, "acc_sales": 1000.0}], _default_mtd_rate_map(10.0), 0.10)
 check("an Exec-MTD accessory number always pays (1000 × 10% = $100)", only_acc[0]["commission"] == 100.0,
       only_acc[0])
+
+print("── E. LIVE-PAY override: exec_mtd plan reps paid from Exec MTD, rules plans untouched ──")
+# plan_by_rep as the calc builds it from the rules preview (REP UPPER -> {amount, plan_name, setup_fee_comm}).
+pbr = {
+    "KELLIE, MARK": {"amount": 21.40, "plan_name": "NY / Luxelink Comp", "setup_fee_comm": 0.0},   # rules basis, to be replaced
+    "STALE, REP": {"amount": 15.00, "plan_name": "NY / Luxelink Comp", "setup_fee_comm": 0.0},      # exec_mtd plan, but NOT in exec MTD -> dropped
+    "CHICAGO, DM": {"amount": 99.00, "plan_name": "Total Comp DM", "setup_fee_comm": 0.0},          # a RULES plan -> untouched
+}
+mtd_by_plan = [("NY / Luxelink Comp", [
+    {"employee": "Kellie, Mark", "commission": 1000.93},
+    {"employee": "Fatima, Syeda Zainab", "commission": 385.08},   # new rep, added
+])]
+_override_plan_by_rep_with_mtd(pbr, {"NY / Luxelink Comp"}, mtd_by_plan)
+check("exec_mtd rep's amount is REPLACED with the Exec-MTD commission (not the rules $21.40)",
+      pbr.get("KELLIE, MARK", {}).get("amount") == 1000.93, pbr.get("KELLIE, MARK"))
+check("a new exec_mtd rep is ADDED", pbr.get("FATIMA, SYEDA ZAINAB", {}).get("amount") == 385.08,
+      pbr.get("FATIMA, SYEDA ZAINAB"))
+check("an exec_mtd-plan rep with NO Exec MTD row is DROPPED (not paid by rules)",
+      "STALE, REP" not in pbr, list(pbr.keys()))
+check("a RULES plan's rep is UNTOUCHED (byte-identical)", pbr.get("CHICAGO, DM", {}).get("amount") == 99.00,
+      pbr.get("CHICAGO, DM"))
+check("no double-count: exactly one entry per paid rep",
+      len(pbr) == 3 and set(pbr) == {"KELLIE, MARK", "FATIMA, SYEDA ZAINAB", "CHICAGO, DM"}, list(pbr.keys()))
+# with NO exec_mtd plans, the map is byte-identical
+pbr2 = {"A": {"amount": 5.0, "plan_name": "X"}}
+_override_plan_by_rep_with_mtd(pbr2, set(), [])
+check("no exec_mtd plans -> plan_by_rep unchanged", pbr2 == {"A": {"amount": 5.0, "plan_name": "X"}}, pbr2)
 
 print()
 print(f"{PASS} passed, {FAIL} failed")
