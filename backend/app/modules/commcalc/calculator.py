@@ -68,8 +68,36 @@ def parse_period(period: str) -> dict:
     }
 
 def safe_float(v) -> float:
-    try: return float(v or 0)
-    except: return 0.0
+    """Parse a report cell into a float, returning 0.0 for anything unparseable.
+
+    CURRENCY-AWARE (owner 2026-08-30): b2bsoft's "Sales Transaction Details Legacy New with all columns"
+    export writes money as TEXT — "$40.00", "1,234.56", accounting negatives "($42.50)". The old
+    `float(v or 0)` threw on the "$"/comma and silently returned 0.0, so EVERY Ext Price / GP / Tax read
+    as zero: the dollars vanished AND the daily feed's price-coverage guard saw "0 priced rows incoming"
+    and refused the whole file every sweep — so nothing after the format switch imported at all. Strip a
+    leading currency symbol, thousands commas and surrounding whitespace, and read (…) as a negative,
+    before giving up. A genuinely non-numeric cell still returns 0.0 (unchanged); the only values whose
+    result changes are currency-formatted strings that used to (wrongly) become 0."""
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        s = str(v).strip()
+        if not s:
+            return 0.0
+        neg = s[0] == '(' and s[-1] == ')'   # accounting negative: ($42.50)
+        if neg:
+            s = s[1:-1].strip()
+        for ch in ('$', '£', '€', ','):
+            s = s.replace(ch, '')
+        s = s.strip()
+        if s in ('', '-', '.', '-.', '+'):
+            return 0.0
+        f = float(s)
+        return -f if neg else f
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def safe_int(v):
