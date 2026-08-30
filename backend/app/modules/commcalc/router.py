@@ -7726,7 +7726,24 @@ def _data_freshness_report(client, org_id):
                 d = None
         f["days_stale"] = d
         f["stale"] = bool(f.get("rows")) and (d is None or d >= 2)
-    return {"as_of": today.isoformat(), "feeds": feeds,
+    # Reports that arrived but matched NO import rule, persisted by the sweep (a renamed/unruled report whose
+    # data never imported). Guarded — an absent column, no rows, or a parse miss all yield []. Aggregated
+    # across the tenant's mailbox account(s), deduped.
+    unrouted = []
+    try:
+        if _table_has_column(client, "email_sweep_config", "last_unrouted"):
+            import json as _ju
+            rows = (client.schema("commcalc").table("email_sweep_config")
+                    .select("last_unrouted").eq("org_id", org_id).execute().data) or []
+            for r in rows:
+                raw = r.get("last_unrouted")
+                names = raw if isinstance(raw, list) else (_ju.loads(raw) if raw else [])
+                for n in (names or []):
+                    if n and n not in unrouted:
+                        unrouted.append(n)
+    except Exception:
+        unrouted = []
+    return {"as_of": today.isoformat(), "feeds": feeds, "unrouted": unrouted[:25],
             "any_stale": any(f.get("stale") for f in feeds if f.get("rows"))}
 
 
@@ -25934,6 +25951,22 @@ def _auto_custom_report_patterns(client, org_id):
     return out
 
 
+# Built-in FALLBACK filename patterns for the three core feeds the freshness banner tracks (daily sales,
+# activation details, bill payment). Appended AFTER the tenant's explicit rules AND the custom-report auto
+# patterns, so an explicit rule always wins — these only catch a report the tenant never wrote a rule for,
+# in particular one RENAMED at the source. b2b recreating "Sales Transaction Details" as
+# "My Sales Transaction Details Legacy New" stops matching a narrow old glob and would otherwise freeze the
+# Sales feed silently; a broad-but-specific glob on the report's distinctive words keeps it importing.
+# `daily_sales` has NO custom auto-pattern (it is a built-in upload type, not a custom report), so this is
+# the one that actually closes the current gap; the other two are belt-and-braces for a tenant whose
+# activation/bill report is not registered as a custom sheet. `auto: True` marks them derived.
+_BUILTIN_FEED_FALLBACK_PATTERNS = [
+    {"pattern": "*sales*transaction*details*", "upload_type": "daily_sales", "auto": True},
+    {"pattern": "*activation*details*", "upload_type": "activation_details", "auto": True},
+    {"pattern": "*bill*payment*transaction*", "upload_type": "bill_payment_transactions", "auto": True},
+]
+
+
 async def _run_email_sweep(org_id, account='default'):
     """Connect to ONE tenant mailbox (org, account), download every NEW attachment matching a configured
     pattern, route each through the existing upload pipeline, and record what was processed (dedup by
@@ -25948,8 +25981,10 @@ async def _run_email_sweep(org_id, account='default'):
     # explicit rules (explicit wins first), so a report the tenant just added ingests without a hand-written
     # glob. This closes the "attachment is in the inbox but never imports because no rule matched it" gap.
     _auto_pats = _auto_custom_report_patterns(client, org_id)
-    if _auto_pats:
-        cfg = {**cfg, 'patterns': (cfg.get('patterns') or []) + _auto_pats}
+    # Explicit tenant rules first, then per-custom-report auto patterns, then the built-in core-feed
+    # fallbacks (sales / activation / bill). First match wins, so nothing that already matched changes;
+    # the fallbacks only rescue a renamed/unruled report that would otherwise be dropped.
+    cfg = {**cfg, 'patterns': (cfg.get('patterns') or []) + (_auto_pats or []) + _BUILTIN_FEED_FALLBACK_PATTERNS}
     # An empty rules list matches NOTHING — fail loudly instead of a silent "0/0 ingested" while
     # reports sit in the inbox (bit the Total/luxelink mailbox setup 2026-07-02).
     if not any((p.get('pattern') or '').strip() for p in (cfg.get('patterns') or []) if isinstance(p, dict)):
@@ -25978,7 +26013,8 @@ async def _run_email_sweep(org_id, account='default'):
         # top of every hour. The 30s socket timeout in email_sweep._connect caps the hang; this keeps
         # even the capped hang off the loop.
         import asyncio as _asyncio
-        files = await _asyncio.to_thread(_email.fetch_new_attachments, cfg, already)
+        _unrouted = []   # data-file attachments that matched NO rule (a renamed/unruled report) — surfaced below
+        files = await _asyncio.to_thread(_email.fetch_new_attachments, cfg, already, _unrouted)
     except Exception as e:
         em = str(e)
         # An AUTH rejection is routinely misread as "the password was erased" — it never is (nothing in
@@ -26073,6 +26109,36 @@ async def _run_email_sweep(org_id, account='default'):
                 status_msg += f" · cleaned {_cl['deleted']} ingested email(s) from the mailbox"
         except Exception as _ce:
             print(f"WARN mailbox cleanup failed for {account}: {_ce}")
+    # UNROUTED REPORTS (owner 2026-08-29). Data-file attachments that arrived but matched NO import rule —
+    # the "the email HAS the data but the system didn't import it" failure, usually a report renamed at the
+    # source. Persist the list for the freshness banner (guarded — no-ops until the column exists; writing []
+    # clears it once the report gets a rule) and escalate a once-a-day-deduped alert, so a silent feed freeze
+    # becomes a visible, self-explaining prompt to add a rule. Best-effort: never affects the ingest above.
+    _unr_names, _seen_un = [], set()
+    for _u in (_unrouted or []):
+        _n = (_u.get('name') or '').strip()
+        if _n and _n.lower() not in _seen_un:
+            _seen_un.add(_n.lower()); _unr_names.append(_n)
+    if _table_has_column(client, 'email_sweep_config', 'last_unrouted'):
+        try:
+            import json as _json_un
+            _email_status_update(client, org_id, account, {'last_unrouted': _json_un.dumps(_unr_names[:25])})
+        except Exception as _ue:
+            print(f"WARN persist unrouted failed for {account}: {_ue}")
+    if _unr_names:
+        try:
+            from app.modules.closing.router import _send_alert
+            _subj = f"⚠️ {len(_unr_names)} report(s) arrived that no import rule matched"
+            _preview = "\n".join(f"  • {n}" for n in _unr_names[:12])
+            _txt = (f"MetricsPro found report attachment(s) in the '{account}' mailbox that were delivered but "
+                    f"matched NO filename import rule, so their data was NOT imported. A feed can silently go "
+                    f"stale this way — usually because a report was renamed at the source:\n\n{_preview}\n\n"
+                    f"What to do: open Data Imports → Email Imports and add or widen a rule so the filename "
+                    f"matches (e.g. *Sales*Transaction*Details* → daily sales). The next sweep imports it.")
+            _ref = f"unrouted:{org_id}:{account}:{_date.today().isoformat()}"   # once per mailbox per day
+            await _send_alert(client, org_id, "connector", _subj, _txt, _ref)
+        except Exception as _ae:
+            print(f"WARN unrouted alert failed for {account}: {_ae}")
     _email_status_update(client, org_id, account,
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(), 'last_status': status_msg})
     # Auto-derive the monthly commission basis (raw_sales) from the feed — best-effort + guarded,
