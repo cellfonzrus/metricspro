@@ -40,7 +40,10 @@ type Plan = { id?: string; name: string; carrier_id?: string | null; base_tier_m
   // mig 297 — where THIS plan's reps get their activations classified from. 'inherit' (default) defers to
   // the org-level setting → today's POS raw_sales. 'raw_sales' pins POS even if the org flips. 'activation_details'
   // pays activations from the uploaded Activation Details report and suppresses POS activations for this plan.
-  activation_source?: string | null }
+  activation_source?: string | null
+  // mig 298 — an ADDITIONAL basis: 'exec_mtd' pays per-category rates over the Exec MTD numbers. Default
+  // 'rules'. mtd_rates holds {category -> $rate, accessory_pct -> fraction}. Persisted, not yet paying.
+  commission_basis?: string | null; mtd_rates?: Record<string, number> | null }
 // bulk-assignment roster (people-centric surface)
 type CurPlan = { plan_id: string; plan_name: string }
 type Person = { id?: string; name: string; value: string; role: string; market: string; email: string
@@ -495,6 +498,13 @@ export default function CommissionPlansPage() {
         rules: (draft.rules || []).map((r, i) => ({ ...r, amount: Number(r.amount) || 0, pct: Number(r.pct) || 0, sort: i })),
         tiers: (draft.tiers || []).map((t, i) => ({ ...t, min_count: Number(t.min_count) || 0, multiplier: Number(t.multiplier) || 1, sort: i })),
         assignments: (draft.assignments || []).map(a => ({ ...a, priority: Number(a.priority) || 0 })),
+        // mig 298 — persist the Exec-MTD basis + the per-category rate editor values (the backend ignores
+        // these keys entirely when the migration hasn't run). Always sent so a change is saved.
+        commission_basis: draft.commission_basis || 'rules',
+        mtd_rates: {
+          ...Object.fromEntries(MTD_CATS.map(c => [c.key, Number(mtdRates[c.key]) || 0])),
+          accessory_pct: Number(mtdAccPct) || 0,
+        },
       }
       await api('/api/v1/commcalc/commission-plans', { method: 'POST', body: JSON.stringify(body) })
       setMsg('✅ Saved.'); setDraft(null); load()
@@ -583,12 +593,14 @@ export default function CommissionPlansPage() {
     } catch (e: any) { setMsg('❌ Preview: ' + (e?.message || e)) } finally { setPreviewBusy(false) }
   }
 
-  // Seed the Exec-MTD per-category rate editor from the saved plan (its flat rate on every category except
-  // Upgrade, plus its accessory %) whenever the loaded plan changes.
+  // Seed the Exec-MTD per-category rate editor when the loaded plan changes: from the plan's SAVED mtd_rates
+  // (mig 298) if present, else its flat rate on every category except Upgrade + its accessory %.
   useEffect(() => {
+    const stored = draft?.mtd_rates && typeof draft.mtd_rates === 'object' ? draft.mtd_rates : null
     const { flat, acc } = planFlatAndAcc(draft)
-    setMtdRates(Object.fromEntries(MTD_CATS.map(c => [c.key, c.key === 'upgrade' ? 0 : flat])))
-    setMtdAccPct(acc)
+    setMtdRates(Object.fromEntries(MTD_CATS.map(c => [c.key,
+      stored && c.key in stored ? Number(stored[c.key]) || 0 : (c.key === 'upgrade' ? 0 : flat)])))
+    setMtdAccPct(stored && 'accessory_pct' in stored ? Number(stored.accessory_pct) || 0 : acc)
     setMtd(null)
   }, [draft?.id])   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1066,12 +1078,19 @@ export default function CommissionPlansPage() {
           📈 Calculate from Executive MTD <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text2)' }}>
             (an additional basis — one $ rate per activation type + accessory %)</span>
         </div>
-        <p style={{ fontSize: 12, color: 'var(--text2)', margin: '0 0 10px' }}>
+        <p style={{ fontSize: 12, color: 'var(--text2)', margin: '0 0 8px' }}>
           Same numbers as the Sales Report and Executive MTD, so the accessory total you see there is what pays.
           Each activation type is its own option — pay BYOD / Tablet / Home Internet differently, and <b>Upgrade</b>
           {' '}separately ($0 by default). The categories are identical for every tenant; Boost / Cricket just relabel.
-          Reads this plan's store assignments, so <b>save the plan first</b>. Read-only.
+          Reads this plan's store assignments, so <b>save the plan first</b>. The rates below <b>save with the plan</b>
+          {' '}(the plan’s Save button); the calculation here is a read-only preview.
         </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, margin: '0 0 10px' }}>
+          <input type="checkbox" checked={(draft?.commission_basis || 'rules') === 'exec_mtd'}
+            onChange={e => setDraft(d => d ? { ...d, commission_basis: e.target.checked ? 'exec_mtd' : 'rules' } : d)} />
+          <span><b>Make Executive MTD this plan’s commission basis</b> (saved on the plan). The rules above stay
+            in place and keep paying until the Exec-MTD pay basis is switched on — this only records the choice + rates.</span>
+        </label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
           {MTD_CATS.map(c => (
             <label key={c.key} style={{ display: 'flex', flexDirection: 'column', fontSize: 11, gap: 2 }}>

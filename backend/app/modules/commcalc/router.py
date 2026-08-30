@@ -14017,6 +14017,8 @@ class SaveCommissionPlanIn(LaxModel):
     tier_match_value: Any = None
     tier_below_min_multiplier: Any = None
     activation_source: Any = None
+    commission_basis: Any = None
+    mtd_rates: Any = None
     rules: Any = None
     tiers: Any = None
     assignments: Any = None
@@ -14064,6 +14066,17 @@ def save_commission_plan(body: SaveCommissionPlanIn, org_id: str = ORG_ID):
         if _as not in ("inherit", "raw_sales", "activation_details"):
             _as = "inherit"
         plan_row["activation_source"] = _as
+    # EXEC-MTD COMMISSION BASIS (mig 298) — money-safe: persists the basis flag + per-category rate map the
+    # "Calculate from Executive MTD" panel uses. Written only when the caller sent the field AND the columns
+    # exist (pre-298 DB saves exactly as before). Moves no money by itself — the pay path reads these only
+    # once the exec-mtd basis is wired; an 'exec_mtd' plan keeps paying by its rules until then.
+    if _plan_basis_cols_present(client):
+        if "commission_basis" in body.model_fields_set:
+            _cb = str(body.commission_basis or "rules").strip().lower()
+            plan_row["commission_basis"] = _cb if _cb in ("rules", "exec_mtd") else "rules"
+        if "mtd_rates" in body.model_fields_set:
+            _mr = body.mtd_rates
+            plan_row["mtd_rates"] = _mr if isinstance(_mr, dict) else None
     try:
         if body.id:
             r = client.schema('commcalc').table('commission_plan').update(plan_row).eq('id', body.id).eq('org_id', org_id).execute()
@@ -14780,6 +14793,21 @@ def exclusion_impact(period: str, org_id: str = ORG_ID):
 
 _PLAN_TIER_COLS_OK = {}
 _PLAN_ACTIVATION_SOURCE_COL_OK = {}
+_PLAN_BASIS_COLS_OK = {}
+
+
+def _plan_basis_cols_present(client):
+    """True when commcalc.commission_plan carries the mig-298 commission_basis / mtd_rates columns. Probed
+    ONCE per process so a pre-298 deployment keeps saving plans exactly as before instead of 500-ing on an
+    unknown column."""
+    if "ok" not in _PLAN_BASIS_COLS_OK:
+        try:
+            (client.schema('commcalc').table('commission_plan')
+             .select('commission_basis,mtd_rates').limit(1).execute())
+            _PLAN_BASIS_COLS_OK["ok"] = True
+        except Exception:
+            _PLAN_BASIS_COLS_OK["ok"] = False
+    return _PLAN_BASIS_COLS_OK["ok"]
 
 
 def _plan_activation_source_col_present(client):
@@ -15276,9 +15304,24 @@ def commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID, today: 
     if not plan:
         raise HTTPException(404, "plan_id not found")
     plan_act_rate, plan_acc_pct = _plan_mtd_rates(plan)
-    rate_map = _parse_mtd_rate_map(rates, _default_mtd_rate_map(plan_act_rate))
+    # Fallback rate map, in order: the plan's SAVED per-category rates (mig 298 mtd_rates), else the plan's
+    # flat activation rate on every category except Upgrade. An explicit ?rates override still wins.
+    _stored = plan.get("mtd_rates") if isinstance(plan.get("mtd_rates"), dict) else {}
+    _base_map = _default_mtd_rate_map(plan_act_rate)
+    for _c in _MTD_ACT_CATEGORIES:
+        if _c in _stored:
+            try:
+                _base_map[_c] = float(_stored[_c])
+            except Exception:
+                pass
+    rate_map = _parse_mtd_rate_map(rates, _base_map)
     try:
-        eff_acc_pct = float(acc_pct) if str(acc_pct).strip() != "" else plan_acc_pct
+        if str(acc_pct).strip() != "":
+            eff_acc_pct = float(acc_pct)
+        elif "accessory_pct" in _stored:
+            eff_acc_pct = float(_stored.get("accessory_pct") or 0.0)
+        else:
+            eff_acc_pct = plan_acc_pct
     except Exception:
         eff_acc_pct = plan_acc_pct
     stores, markets, emps_scope = [], [], []
