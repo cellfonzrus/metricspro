@@ -12,6 +12,7 @@ import email
 import imaplib
 import io
 import os
+import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
@@ -75,6 +76,34 @@ def _connect(cfg):
     M.login(user, pw)
     M.select((cfg.get("mailbox") or "INBOX"), readonly=True)
     return M
+
+
+# A hard, non-retryable configuration problem — retrying can't fix it, so fail fast.
+_CONNECT_FATAL_HINTS = ("host not configured", "nodename nor servname", "name or service not known",
+                        "no address associated", "getaddrinfo")
+
+
+def _connect_resilient(cfg, attempts=3, backoff=2.0):
+    """Connect for the interactive TEST button, riding through a TRANSIENT block instead of surfacing it
+    as a hard failure. The owner's report (2026-08-30): "tested → failed; re-entered the SAME password →
+    worked." The password was never lost — mail hosts (Gmail/Outlook especially) temporarily throttle
+    frequent logins and return it AS an auth error, so a one-shot test can fail while the very next
+    attempt succeeds. This retries a couple of times with a short backoff so the user doesn't have to
+    re-type a password that was fine all along. A genuinely wrong host fails fast (no point retrying);
+    a genuinely wrong password simply fails after the retries, unchanged. Used only by the sync test
+    path — the scheduled sweep is left single-shot (it self-heals on its next run, and this runs on the
+    event loop where blocking sleeps are avoided)."""
+    last = None
+    for i in range(max(1, attempts)):
+        try:
+            return _connect(cfg)
+        except Exception as e:  # noqa: BLE001 — classify below, re-raise the real error at the end
+            last = e
+            if any(h in str(e).lower() for h in _CONNECT_FATAL_HINTS):
+                raise
+            if i < attempts - 1:
+                time.sleep(backoff)
+    raise last
 
 
 def _search_criteria(cfg):
@@ -316,7 +345,7 @@ def list_messages(cfg, limit=50):
     extract (with pattern match) AND a full MIME part inventory so a non-matching email is diagnosable.
     Read-only."""
     patterns = cfg.get("patterns") or []
-    M = _connect(cfg)
+    M = _connect_resilient(cfg)
     out = []
     try:
         for mid, msg in _iter_messages(M, cfg):
