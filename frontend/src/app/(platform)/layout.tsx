@@ -523,6 +523,18 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               </select>
             )}
           </div>
+          {/* Ask bar — the always-visible natural-language query / report-jump entry on EVERY page.
+              Opens the shared AskBar overlay (also reachable at ⌘/ or from the sidebar). Input-styled so
+              it reads as a query bar; shrinks on narrow screens. */}
+          <button onClick={() => window.dispatchEvent(new Event('askbar:open'))}
+            title="Ask a question or jump to a report (⌘/)" aria-label="Ask a question"
+            style={{ flex: '0 1 400px', maxWidth: 400, minWidth: 150, display: 'flex', alignItems: 'center',
+              gap: 8, margin: '0 16px', padding: '7px 12px', borderRadius: 9, cursor: 'text', fontSize: 13,
+              color: 'var(--text3)', background: '#f1f5f9', border: '1px solid var(--border)' }}>
+            <span aria-hidden>🔎</span>
+            <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Ask a question…</span>
+            <kbd style={{ fontSize: 10, opacity: 0.7, border: '1px solid var(--border)', borderRadius: 4, padding: '0 4px' }}>⌘/</kbd>
+          </button>
           {open ? (
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>🔓 Login not enforced</span>
           ) : (

@@ -91,6 +91,13 @@ export default function AskBar({ collapsed }: { collapsed?: boolean }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+  // Any prominent trigger elsewhere (e.g. the top-header ask bar) opens THIS one overlay by dispatching
+  // `askbar:open` — so there is a single overlay + single set of handlers, no duplicate instances.
+  useEffect(() => {
+    const onOpen = () => setOpen(true)
+    window.addEventListener('askbar:open', onOpen)
+    return () => window.removeEventListener('askbar:open', onOpen)
+  }, [])
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 30) }, [open])
 
   // Rank reports by how many typed words they match (label/category/desc), then alphabetically.
