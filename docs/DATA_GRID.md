@@ -50,16 +50,27 @@ If the page already builds `ExportColumn[]` for export (most reports do, via `Re
 pass that same array to `<DataGrid>`. Add `render`/`tip` only where a column needs custom formatting or a
 header tooltip. Reach for `<DataGrid>` on the wide, hand-rolled tables that **don't** use `ReportShell`.
 
+## Column controls (both grids)
+
+- **Fit-content widths** — columns size to their content and are **not stretched** to fill leftover space
+  (`width:auto` + `tableLayout:auto`). A wide table overflows into the horizontal scroll; a narrow one sits
+  at its content width. `<DataGrid>` keeps a user-resized column's width; others stay content-fit.
+- **Show / hide columns** — a **▦ Columns** menu lets each user pick which columns they see. Hidden columns
+  leave both the table and the export (what you see is what you export). `ReportShell` persists the choice
+  per report (keyed by filename/title); `<DataGrid>` persists it when given a `storageKey`. The last visible
+  column can't be hidden.
+- **Pinned first column** — on by default (see below).
+
 ## Reports that DO use `ReportShell`
 
-`ReportShell` already has sort, resize, opt-in sticky header, sticky totals and grouping — so don't swap it
-for `<DataGrid>` (you'd lose its filtering / grouping / export / Send). It also now takes an opt-in
-**`pinFirst`** prop that gives the same **pinned first column** as `<DataGrid>` (sticky-left on the header,
-every body row, each group header and the totals footer). Default off, so every other consumer is
-byte-identical; turn it on where a wide table benefits:
+`ReportShell` already has sort, resize, sticky header (opt-in), sticky totals and grouping — so don't swap it
+for `<DataGrid>` (you'd lose its filtering / grouping / export / Send). It now also has the **pinned first
+column** via the **`pinFirst`** prop, **default on** (owner 2026-08-29 "batch onto the wide reports"): it
+only has a visible effect when a table actually scrolls sideways, so narrow reports are unaffected. Pass
+`pinFirst={false}` to opt a report out.
 
 ```tsx
-<ReportShell columns={cols} rows={rows} totals stickyHeader pinFirst defaultGroupBy="Store" … />
+<ReportShell columns={cols} rows={rows} totals stickyHeader defaultGroupBy="Store" … />   // pinned by default
 ```
 
-Live on: the **Sales Report** (`/commcalc/sales-report`).
+Live everywhere `ReportShell` is used; e.g. the **Sales Report** (`/commcalc/sales-report`).

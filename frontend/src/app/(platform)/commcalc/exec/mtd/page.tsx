@@ -386,7 +386,7 @@ export default function ExecMtdPage() {
           {/* High-density grid: the Store/Employee column stays pinned while the 20+ metric columns scroll
               sideways, the header ribbon stays put on vertical scroll, and every column click-sorts and
               drag-resizes. The TOTAL row is pinned to the footer. */}
-          <DataGrid columns={gridCols} rows={rows} totalRow={total} maxHeight="72vh" />
+          <DataGrid columns={gridCols} rows={rows} totalRow={total} maxHeight="72vh" storageKey="exec-mtd" />
         </div>
       )}
 
