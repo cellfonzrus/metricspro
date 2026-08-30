@@ -34149,7 +34149,13 @@ def _mi_resolve_numbers(client, org_id, period, employee_id, plan):
             else:
                 out["unresolved"].append(k)
                 out["notes"][k] = "No stored KPI value yet — enter on the KPI page (manual mode) or via email import once wired."
-    return out
+
+    # FAIL CLOSED WHEN THE MANAGER HAS NO STORES. Every metric above is a roll-up ACROSS the manager's
+    # stores, so an EMPTY store set makes each one aggregate to a VACUOUS 0 that the blocks above would
+    # otherwise record as `resolved` — handing back a number nobody could compute as authoritative. See
+    # management_incentive.demote_vacuous_when_no_stores for the full rationale and the live proof.
+    from app.modules.commcalc import management_incentive as _mi_pure
+    return _mi_pure.demote_vacuous_when_no_stores(out, bool(scodes))
 
 
 def _f_num(v):
