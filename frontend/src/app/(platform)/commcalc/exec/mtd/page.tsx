@@ -227,7 +227,7 @@ export default function ExecMtdPage() {
           the report reads live, so if a feed stops ingesting, the numbers stop moving. Show which feed is
           stale, when it last ingested and the latest transaction date it carries, and link to fix it. Only
           renders when something is actually stale. */}
-      {fresh?.any_stale && (
+      {(fresh?.any_stale || fresh?.unrouted?.length > 0) && (
         <div style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8,
           padding: '10px 12px', fontSize: 12.5, marginBottom: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠️ Some data hasn’t updated — numbers below may be stale</div>
@@ -239,6 +239,20 @@ export default function ExecMtdPage() {
               {f.source === 'raw_custom_import' && f.recent_files?.length ? ` · last file: ${f.recent_files[0]}` : ''}
             </div>
           ))}
+          {/* UNROUTED REPORTS — attachments that arrived but matched no import rule (a report renamed at the
+              source). The precise cause: the email HAS the data, but no rule imported it. */}
+          {fresh?.unrouted?.length > 0 && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #fde68a' }}>
+              <div style={{ fontWeight: 700 }}>📎 {fresh.unrouted.length} report{fresh.unrouted.length === 1 ? '' : 's'} arrived that no import rule matched:</div>
+              <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
+                {fresh.unrouted.slice(0, 6).map((n: string, i: number) => <li key={i}>{n}</li>)}
+              </ul>
+              <div style={{ marginTop: 4 }}>
+                The email has the data, but no filename rule matched it. Open <Link href="/commcalc/email-imports" style={{ color: '#92400e', textDecoration: 'underline' }}>Data Imports → Email Imports</Link> and
+                add or widen a rule so the name matches (e.g. <code>*Sales*Transaction*Details*</code> → daily sales), then <b>Run now</b>.
+              </div>
+            </div>
+          )}
           <div style={{ marginTop: 6 }}>
             New files aren’t being ingested. Open <Link href="/commcalc/email-imports" style={{ color: '#92400e', textDecoration: 'underline' }}>Data Imports → Email Imports</Link>,
             check the processed history, and click <b>Run now</b>. If the latest file isn’t in the inbox, the report email stopped arriving for those days.

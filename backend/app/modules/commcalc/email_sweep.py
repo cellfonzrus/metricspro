@@ -337,14 +337,21 @@ def list_messages(cfg, limit=50):
     return out
 
 
-def fetch_new_attachments(cfg, already):
+def fetch_new_attachments(cfg, already, unrouted=None):
     """Download every attachment matching a configured pattern that isn't already processed.
-    `already` is a set of (message_id, filename). Returns [{message_id, name, size, upload_type, bytes}]."""
+    `already` is a set of (message_id, filename). Returns [{message_id, name, size, upload_type, bytes}].
+
+    `unrouted` (optional list): if provided, every DATA-file attachment (.xlsx/.xls/.csv) that matched NO
+    pattern is appended as {message_id, name, from, subject, date}. This is the "the email HAS the data but
+    the system didn't import it" signal — a report that was renamed at the source (e.g. b2b recreating a
+    report as 'My Sales Transaction Details Legacy New') stops matching an old glob and would otherwise be
+    dropped silently. The caller surfaces these as an alert + on the freshness banner instead."""
     patterns = cfg.get("patterns") or []
     M = _connect(cfg)
     out = []
     batch_seen = set()   # (mid, fname) already collected THIS sweep — a message that exists in two scanned
                          # folders (e.g. INBOX + Spam) must not be ingested twice.
+    unr_seen = set()
     try:
         for mid, msg in _iter_messages(M, cfg):
             atts = list(_attachments(msg))
@@ -357,6 +364,14 @@ def fetch_new_attachments(cfg, already):
                     continue
                 ut = match_upload_type(fname, patterns)
                 if not ut:
+                    # A DATA-file attachment nothing matched — record it (deduped) so the caller can surface
+                    # "a report arrived that no import rule matched" rather than let the feed go silently stale.
+                    if (unrouted is not None and fname.lower().endswith((".xlsx", ".xls", ".csv"))
+                            and (mid, fname) not in unr_seen):
+                        unr_seen.add((mid, fname))
+                        unrouted.append({"message_id": mid, "name": fname,
+                                         "from": _decode(msg.get("From")), "subject": _decode(msg.get("Subject")),
+                                         "date": _decode(msg.get("Date"))})
                     continue
                 if (mid, fname) in already or (mid, fname) in batch_seen:
                     continue

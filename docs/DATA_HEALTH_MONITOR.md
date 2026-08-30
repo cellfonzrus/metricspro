@@ -38,3 +38,23 @@ fixed before anyone looks at a stale report.
   the sweep it rides on.
 - Feeds covered: Activation Details (activation basis), Bill Payment Transactions, and the Sales feed
   (`raw_sales`). Adding a feed is one line in `_data_freshness_report`.
+
+## Unrouted-report detection (owner 2026-08-29)
+
+The most common real cause of a frozen feed isn't "the email stopped arriving" — it's **"the email arrived
+but no import rule matched it"**, usually because a report was **renamed at the source** (e.g. b2b recreating
+"Sales Transaction Details" as "My Sales Transaction Details Legacy New"). Previously such an attachment was
+fetched and silently dropped, and the feed just went stale.
+
+Now:
+- **The sweep records every unmatched DATA-file attachment.** `email_sweep.fetch_new_attachments` takes an
+  optional `unrouted` list and appends `{message_id, name, from, subject, date}` for any `.xlsx/.xls/.csv`
+  that matched no pattern.
+- **It's surfaced, not swallowed.** `_run_email_sweep` persists the filenames to
+  `email_sweep_config.last_unrouted` (guarded by `_table_has_column`; migration `929`) and fires a
+  once-a-day-deduped connector alert (`ref = unrouted:{org}:{account}:{date}`). `_data_freshness_report`
+  returns them as `unrouted[]`, and the Executive-MTD freshness banner lists them with a fix link.
+- **Built-in fallback patterns** (`_BUILTIN_FEED_FALLBACK_PATTERNS`) are appended after the tenant's explicit
+  rules and the custom-report auto-patterns (explicit always wins), so a renamed core report still matches:
+  `*sales*transaction*details*` → `daily_sales`, `*activation*details*`, `*bill*payment*transaction*`. The
+  `daily_sales` one closes the actual gap — it is a built-in upload type with no custom auto-pattern.
