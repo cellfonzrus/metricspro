@@ -1007,7 +1007,14 @@ export default function ReportsPage() {
 
                   {isPlanTab ? (
                     <>
-                      {explainPc?.plan_name ? (
+                      {/* EXEC-MTD BASIS (audit fix #5): when this rep is paid from Executive MTD, the rules
+                          preview inside explain_rep can still show a NON-ZERO "Subtotal × tier = total" that
+                          CONTRADICTS the paid exec_mtd amount (an exec_mtd plan still carries the flat
+                          activation + accessory rules the basis reads its rates from, and those rules match
+                          sale lines). So suppress ALL the rules-plan rendering — header, line breakdown,
+                          dead-rules, why-$0 — whenever `explainMtd` is present, leaving the Executive-MTD
+                          table below as the single, coherent explanation that reconciles to plan_comm. */}
+                      {!explainMtd && (explainPc?.plan_name ? (
                         <div style={{ fontSize: 13, color: 'var(--text2)' }}>
                           Plan <b style={{ color: 'var(--text)' }}>{explainPc.plan_name}</b>
                           {explainPc.assignment ? <> attached via the <b>{explainPc.assignment.scope}</b> assignment
@@ -1023,7 +1030,7 @@ export default function ReportsPage() {
                         <NoPlanDiagnosis diagnosis={explainPc?.diagnosis} plans={plans}
                           assigning={assigning} linking={linking}
                           onAttach={attachPlan} onLink={linkAlias} />
-                      )}
+                      ))}
 
                       {/* EXEC-MTD BASIS: the per-category math (New/Port/BYOD/…/Upgrade count × rate +
                           Acc.Sales × %) — how this rep's commission is actually paid. Shown only for a
@@ -1074,17 +1081,19 @@ export default function ReportsPage() {
                           together with its own subtotal, and a category (plan-rule) breakdown/filter.
                           Shared with commission-explain so both drill-downs read identically. The
                           amounts are the engine's own line amounts — display only. */}
-                      {planLineRows.length > 0 ? (
+                      {/* Rules line detail / dead-rules / why-$0 are RULES-basis explanations — hidden for
+                          an exec_mtd rep (the Executive-MTD table above is the whole story for them). */}
+                      {!explainMtd && (planLineRows.length > 0 ? (
                         <PlanLineBreakdown rows={planLineRows} compact />
-                      ) : explainMtd ? null : (
+                      ) : (
                         <div style={{ fontSize: 13, color: 'var(--text3)' }}>
                           {explainPc?.plan_name
                             ? `Plan attached, but no rule matched a sale line in ${period}.`
                             : `No plan-mode line detail for ${rep} in ${period}.`}
                         </div>
-                      )}
+                      ))}
 
-                      {planDeadRules.length > 0 && (
+                      {!explainMtd && planDeadRules.length > 0 && (
                         <div style={{ fontSize: 12, color: 'var(--text2)' }}>
                           <div style={{ fontWeight: 600, marginBottom: 4 }}>Rules that matched nothing</div>
                           <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
@@ -1100,8 +1109,8 @@ export default function ReportsPage() {
 
                       {/* PLAN ATTACHED BUT $0 — the engine's own coverage explanation + this rep's
                           per-rule field distribution (read-only; no auto-fix). Renders nothing unless
-                          the backend attached plan_component.zero_diagnosis. */}
-                      <WhyZeroPanel zd={explainPc?.zero_diagnosis} />
+                          the backend attached plan_component.zero_diagnosis. Rules-basis only. */}
+                      {!explainMtd && <WhyZeroPanel zd={explainPc?.zero_diagnosis} />}
                     </>
                   ) : (
                     <>

@@ -3236,6 +3236,32 @@ class CarrierIn(LaxModel):
     name: str = ""
     code: str = ""
     is_default: Any = None
+    engine_mode: Any = None   # mig 303: legacy_boost | plan | "" (clear). None = not sent.
+
+
+def _clean_engine_mode_in(v):
+    """Validate a carrier engine_mode value coming from the API. Returns the stored value:
+    'legacy_boost' | 'plan' | None (explicit clear). Raises 400 on anything else."""
+    s = str(v or "").strip().lower()
+    if s == "":
+        return None
+    if s in ("legacy_boost", "boost"):
+        return "legacy_boost"
+    if s == "plan":
+        return "plan"
+    raise HTTPException(400, "engine_mode must be 'legacy_boost', 'plan', or empty")
+
+
+def _carrier_write_with_engine_fallback(q_builder, has_engine_mode):
+    """Execute a carrier write; if engine_mode was included but the column isn't there yet (mig 303
+    not applied), retry once without it so carrier CRUD never hard-fails on a pending migration."""
+    try:
+        return q_builder(True)
+    except Exception as e:
+        if has_engine_mode and 'engine_mode' in str(e).lower():
+            print("WARN carrier write: engine_mode column absent (run mig 303); persisted without it")
+            return q_builder(False)
+        raise
 
 
 @router.post("/carriers")
@@ -3247,10 +3273,17 @@ def create_carrier(body: CarrierIn, org_id: str = ORG_ID):
     is_default = bool(body.is_default)
     row = {"org_id": org_id, "name": name, "code": (body.code or "").strip() or None,
            "is_default": is_default}
+    sent_engine = "engine_mode" in body.model_fields_set
+    if sent_engine:
+        row["engine_mode"] = _clean_engine_mode_in(body.engine_mode)
     client = sb()
     if is_default:  # only one default carrier per org
         client.schema("commcalc").table("carrier").update({"is_default": False}).eq("org_id", org_id).execute()
-    r = client.schema("commcalc").table("carrier").upsert(row, on_conflict="org_id,name").execute()
+
+    def _do(include_engine):
+        payload = row if include_engine else {k: v for k, v in row.items() if k != "engine_mode"}
+        return client.schema("commcalc").table("carrier").upsert(payload, on_conflict="org_id,name").execute()
+    r = _carrier_write_with_engine_fallback(_do, sent_engine)
     return r.data[0] if r.data else row
 
 
@@ -3267,12 +3300,19 @@ def update_carrier(cid: str, body: CarrierIn, org_id: str = ORG_ID):
         patch["code"] = (body.code or "").strip() or None
     if "is_default" in body.model_fields_set:
         patch["is_default"] = bool(body.is_default)
+    sent_engine = "engine_mode" in body.model_fields_set
+    if sent_engine:
+        patch["engine_mode"] = _clean_engine_mode_in(body.engine_mode)
     if not patch:
         raise HTTPException(400, "nothing to update")
     client = sb()
     if patch.get("is_default"):  # only one default carrier per org
         client.schema("commcalc").table("carrier").update({"is_default": False}).eq("org_id", org_id).neq("id", cid).execute()
-    client.schema("commcalc").table("carrier").update(patch).eq("org_id", org_id).eq("id", cid).execute()
+
+    def _do(include_engine):
+        payload = patch if include_engine else {k: v for k, v in patch.items() if k != "engine_mode"}
+        return client.schema("commcalc").table("carrier").update(payload).eq("org_id", org_id).eq("id", cid).execute()
+    _carrier_write_with_engine_fallback(_do, sent_engine)
     return {"ok": True, "id": cid}
 
 
@@ -10034,17 +10074,46 @@ def calculate(
     return {"status": "started", "period": period, "message": "Calculation running in background"}
 
 
+def _norm_engine_mode(v):
+    """Normalize a carrier.engine_mode config value (mig 303) to the internal mode string the calc
+    uses ('boost' | 'plan'). Accepts 'legacy_boost'/'boost' -> 'boost', 'plan' -> 'plan'. Anything
+    else (incl. None/'' — the value on every pre-303 row) returns None = "no explicit choice"."""
+    s = str(v or '').strip().lower()
+    if s in ('legacy_boost', 'boost'):
+        return 'boost'
+    if s == 'plan':
+        return 'plan'
+    return None
+
+
 def _resolve_carrier_mode(carriers):
     """'boost' -> legacy verified Boost engine; 'plan' -> pay ONLY from configurable Commission
-    Plans / Payout Schedules. Conservative so existing Boost tenants (and the house org, whose
-    default carrier IS Boost) are never flipped: return 'plan' ONLY when the org's CHOSEN carrier is
-    explicitly non-Boost. No explicit default + a Boost carrier present => 'boost'."""
+    Plans / Payout Schedules.
+
+    RULE ONE (config, never hard-coded): an EXPLICIT carrier.engine_mode (mig 303) wins. The default
+    carrier's engine_mode is consulted first, then any carrier's — so a tenant (or the onboarding
+    wizard's "which carrier?" answer) sets the engine as data instead of relying on the carrier's name.
+
+    Only when NO carrier carries an explicit engine_mode do we fall back to the legacy name-substring
+    heuristic below — kept solely so pre-303 rows behave byte-identically (the house org, whose default
+    carrier IS Boost, still resolves to 'boost'; a tenant whose CHOSEN carrier is explicitly non-Boost
+    resolves to 'plan'). The name is a migration heuristic, no longer the source of truth."""
     def _is_boost(c):
         return 'boost' in ((c.get('code') or '') + ' ' + (c.get('name') or '')).lower()
     carriers = carriers or []
     if not carriers:
         return 'boost'
     default = next((c for c in carriers if c.get('is_default')), None)
+    # 1) explicit config wins — default carrier first, then any carrier.
+    if default is not None:
+        m = _norm_engine_mode(default.get('engine_mode'))
+        if m is not None:
+            return m
+    for c in carriers:
+        m = _norm_engine_mode(c.get('engine_mode'))
+        if m is not None:
+            return m
+    # 2) legacy fallback (byte-identical to pre-303): name-substring heuristic.
     if default is not None:
         return 'boost' if _is_boost(default) else 'plan'
     if any(_is_boost(c) for c in carriers):
@@ -10259,7 +10328,28 @@ def _apply_engine_components_to_row(row, ks, inst_by_rep, sale_inst_by_rep, stmt
     sale_inst = next((sale_inst_by_rep[k] for k in ks if k in sale_inst_by_rep), 0.0)
     stmt = next((stmt_by_rep[k] for k in ks if k in stmt_by_rep), 0.0)
     pv = next((plan_by_rep[k] for k in ks if k in plan_by_rep), None)
-    matched = set()
+    matched = ks & set(plan_by_rep) if pv is not None else set()
+    # ── audit fix #4: ORDER-INSENSITIVE plan join. The exact-UPPER match above misses when the rep's
+    #    sales spelling and their rep_commissions/plan spelling differ in name ORDER — "Kellie, Mark" vs
+    #    "Mark Kellie" — silently dropping their plan pay (or, worse, stranding it on a duplicate blank
+    #    row). Assignment resolution already canonicalizes via _canon_person; this makes the PAY-WRITE do
+    #    the same. It is a strict FALLBACK: it fires only when no exact key matched, so every prior exact
+    #    match is byte-identical. `matched` returns the ORIGINAL plan_by_rep key, so the "reps with a plan
+    #    but no standard row" loop still skips a rep paid here (no double row).
+    if pv is None and plan_by_rep:
+        try:
+            from app.modules.commcalc.commission_engine import _canon_person
+            _canon_index = {}
+            for _pk in plan_by_rep:
+                _canon_index.setdefault(_canon_person(_pk), _pk)
+            for k in ks:
+                _hit = _canon_index.get(_canon_person(k))
+                if _hit is not None:
+                    pv = plan_by_rep[_hit]
+                    matched = {_hit}
+                    break
+        except Exception:
+            pass
     if cols["residual_installment_comm"]:
         row["residual_installment_comm"] = inst
     if cols["installment_comm_sale"]:
@@ -10270,7 +10360,9 @@ def _apply_engine_components_to_row(row, ks, inst_by_rep, sale_inst_by_rep, stmt
     if cols["carrier_statement_comm"]:
         row["carrier_statement_comm"] = stmt
     if pv is not None:
-        matched = ks & set(plan_by_rep)
+        # `matched` was set above (exact-upper intersection, or the {_hit} from the canon fallback).
+        # Do NOT recompute it here as ks & set(plan_by_rep) — that would be EMPTY for a canon-only match
+        # and the "reps with a plan but no standard row" loop would then ADD a duplicate paying row.
         if cols["plan_comm"]:
             row["plan_comm"] = pv["amount"]
         if cols["plan_name"]:
@@ -18765,6 +18857,11 @@ def commission_explain(period: str, rep: str = "", org_id: str = ORG_ID):
         _mb = _exec_mtd_breakdown_for_rep(client, org_id, period, rep)
         if _mb:
             _res["mtd_breakdown"] = _mb
+            # audit fix #5: this rep is paid from Executive MTD, so the rules-preview plan_component in
+            # `_res` (which can carry a NON-ZERO subtotal×tier that CONTRADICTS the paid exec_mtd total)
+            # is superseded. The Rep Incentive drill hides the rules rendering off `mtd_breakdown`; this
+            # flag says the same for any other consumer of the endpoint.
+            _res["mtd_supersedes_rules"] = True
     except Exception as _mbe:
         print(f"WARN exec_mtd drill breakdown skipped: {_mbe}")
     return _res
@@ -22708,7 +22805,7 @@ def _exec_act_class(ct, rules):
 
 
 def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, today=None,
-              date_from=None, date_to=None):
+              date_from=None, date_to=None, authorization=""):
     """Executive Month-To-Date summary — the b2bsoft 'Month To Date Location/Employee Sales Report',
     now DERIVED FROM the EXACT SAME aggregation the Sales Report uses (owner directive 2026-07-16: "the
     Sales Report is correct — Exec MTD should take its cumulative numbers from there"). Reads the SAME
@@ -22858,6 +22955,21 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
         return True
     if store_sel or rep_sel or market_sel:
         rows = [r for r in rows if _keep(r)]
+
+    # ── RBAC store-scope (audit fix #2) — a store-scoped manager must see ONLY their stores here, exactly
+    #    as the Sales Report already enforces (sales_report: scope_keyset/in_keyset on the output rows).
+    #    Before this, Exec MTD took no `authorization` and applied no scope, so a scoped manager saw EVERY
+    #    store's totals — a data leak, and the reason Exec MTD could not reconcile against that user's own
+    #    Sales Report. Filtering the UNION rows (pre-bucketing) scopes by_location AND by_employee together.
+    #    None keyset = unrestricted (admin / RBAC off) → byte-identical. Fail OPEN on any resolution error so
+    #    a span lookup can never blank the report.
+    try:
+        from app.modules.storeops.router import scope_keyset as _scope_keyset, in_keyset as _in_keyset
+        _ks_ex = _scope_keyset(authorization, org_id)
+        if _ks_ex is not None:
+            rows = [r for r in rows if _in_keyset(_ks_ex, r.get('store'))]
+    except Exception:
+        pass
 
     # trending divisor: complete days elapsed (= yesterday's day-of-month) for the OPEN month; the full
     # month (factor 1) for a closed/past month. days_in_month from the calendar. `today` injectable.
@@ -23101,6 +23213,7 @@ def _exec_mtd(client, org_id, period, stores=None, markets=None, reps=None, toda
 @router.get("/exec-mtd/{period}")
 def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
              date_from: str = "", date_to: str = "",
+             authorization: str = Header(default=""),
              stores: Optional[List[str]] = Query(default=None),
              markets: Optional[List[str]] = Query(default=None),
              reps: Optional[List[str]] = Query(default=None)):
@@ -23131,7 +23244,7 @@ def exec_mtd(period: str, org_id: str = ORG_ID, today: str = "",
         except Exception:
             _t = None      # malformed override -> server date (never 500 a report over it)
     return _exec_mtd(sb(), org_id, period, stores=stores, markets=markets, reps=reps, today=_t,
-                     date_from=date_from or None, date_to=date_to or None)
+                     date_from=date_from or None, date_to=date_to or None, authorization=authorization)
 
 
 # ── Narrative banners (owner 2026-08-29 modernization track) ───────────────────────────────────────
@@ -23181,7 +23294,8 @@ def _mtd_window(period: str, through_day: int):
     return (f"{y}-{m:02d}-01", f"{y}-{m:02d}-{d:02d}", d != int(through_day))
 
 
-def _mtd_narrative(client, org_id, period, today=None, stores=None, markets=None, reps=None):
+def _mtd_narrative(client, org_id, period, today=None, stores=None, markets=None, reps=None,
+                   authorization=""):
     """Executive-MTD narrative: how this month-to-date compares to the SAME complete-days window of the
     prior month, plus the store leading the change and what drove it. Both windows are day 1 → yesterday
     (complete days only, so today's in-progress sales don't skew the comparison), fed to the exact same
@@ -23202,7 +23316,9 @@ def _mtd_narrative(client, org_id, period, today=None, stores=None, markets=None
 
         cf, ct, _ = _mtd_window(period, through)
         pf, pt, clamped = _mtd_window(prior_period, through)
-        flt = dict(stores=stores, markets=markets, reps=reps)
+        # audit fix #2: thread the caller's scope into BOTH windows so the banner is computed over the
+        # SAME store-scoped set the grid shows — a scoped manager's narrative can't leak org-wide totals.
+        flt = dict(stores=stores, markets=markets, reps=reps, authorization=authorization)
         cur = _exec_mtd(client, org_id, period, today=_today, date_from=cf, date_to=ct, **flt)
         prior = _exec_mtd(client, org_id, prior_period, date_from=pf, date_to=pt, **flt)
 
@@ -23299,6 +23415,7 @@ def _ordinal(n: int) -> str:
 
 @router.get("/exec-mtd/{period}/narrative")
 def exec_mtd_narrative(period: str, org_id: str = ORG_ID, today: str = "",
+                       authorization: str = Header(default=""),
                        stores: Optional[List[str]] = Query(default=None),
                        markets: Optional[List[str]] = Query(default=None),
                        reps: Optional[List[str]] = Query(default=None)):
@@ -23313,7 +23430,8 @@ def exec_mtd_narrative(period: str, org_id: str = ORG_ID, today: str = "",
             _t = _date.fromisoformat(str(today)[:10])
         except Exception:
             _t = None
-    return _mtd_narrative(sb(), org_id, period, today=_t, stores=stores, markets=markets, reps=reps)
+    return _mtd_narrative(sb(), org_id, period, today=_t, stores=stores, markets=markets, reps=reps,
+                          authorization=authorization)
 
 
 # Type buckets that make up b2b's "Total Activation" — everything the Activation Details report classifies
