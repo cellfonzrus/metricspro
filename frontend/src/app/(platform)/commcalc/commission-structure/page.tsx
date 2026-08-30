@@ -129,6 +129,10 @@ export default function CommissionStructurePage() {
   const [estBusy, setEstBusy] = useState(false)
   const [estWhatIf, setEstWhatIf] = useState(false)
 
+  // commission-from-Executive-MTD (matches the report numbers)
+  const [mtd, setMtd] = useState<any>(null)
+  const [mtdBusy, setMtdBusy] = useState(false)
+
   const selected = useMemo(() => plans.find(p => p.id === selId) || null, [plans, selId])
 
   const loadPlans = useCallback(async () => {
@@ -211,6 +215,18 @@ export default function CommissionStructurePage() {
         : `?period=${encodeURIComponent(period)}`
       setEstimate(await api(`/api/v1/commcalc/commission-plans/preview${q}`))
     } catch (e: any) { setMsg('❌ Estimate: ' + (e?.message || e)) } finally { setEstBusy(false) }
+  }
+
+  // ── Commission FROM Executive MTD: the SAME numbers the owner sees on that report drive the payout
+  // (Total Activation × the plan's rate + Acc. Sales × the plan's %). One data source for report + pay,
+  // so an accessory number visible on Exec MTD can never be missing from the commission. READ-ONLY.
+  async function runMtd() {
+    if (!selected) return
+    setMtdBusy(true); setMtd(null); setMsg('')
+    try {
+      const q = `?period=${encodeURIComponent(period)}&plan_id=${selected.id}`
+      setMtd(await api(`/api/v1/commcalc/commission-mtd/${encodeURIComponent(period)}${q}`))
+    } catch (e: any) { setMsg('❌ MTD commission: ' + (e?.message || e)) } finally { setMtdBusy(false) }
   }
 
   const editHref = selected ? `/commcalc/commission-plans` : '/commcalc/commission-plans'
@@ -479,6 +495,69 @@ export default function CommissionStructurePage() {
                 No reps are assigned to <b>{selected?.name}</b> for {period}. Assign your NY / Luxelink reps to
                 this plan in <b>Step 5</b> (or open the Assignment audit) — until then this plan pays no one, and
                 those reps are paid by whichever plan the distribution above shows.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* COMMISSION FROM EXECUTIVE MTD — the same numbers the owner sees on that report drive the pay. */}
+      <div className="card" style={{ padding: 16, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          <span style={{ ...sectionNum, background: '#0891b2' }}>📈</span>
+          <div style={{ fontWeight: 700 }}>Commission from Executive MTD (matches the report)</div>
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--text2)', margin: '0 0 10px' }}>
+          Computes each rep's commission straight from the <b>Executive MTD</b> numbers — <b>Total Activation ×
+          the plan's $/activation</b> + <b>Acc. Sales × the plan's %</b> — over this plan's stores. Same data
+          source as the Sales Report and Exec MTD, so the accessory number you see on that report is the one
+          that pays. Read-only; nothing pays until you Run below.
+        </p>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+          <select className="input" value={period} onChange={e => setPeriod(e.target.value)} style={{ minWidth: 160 }}>
+            {periods.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <button className="btn btn-sm" onClick={runMtd} disabled={!selected || mtdBusy}>
+            {mtdBusy ? 'Computing…' : '📈 Commission from Exec MTD'}
+          </button>
+        </div>
+        {mtd && (
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--text2)', marginBottom: 6 }}>
+              Rates: <b>{fmt(Number(mtd.activation_rate) || 0)}</b>/activation ·{' '}
+              <b>{((Number(mtd.accessory_pct) || 0) * 100).toFixed(1)}%</b> of accessories
+              {mtd?.activation_source?.active && <> · activations from the Activation Details report</>}
+            </div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>
+              Total commission — {(mtd.by_rep || []).length} rep(s): {fmt(Number(mtd?.totals?.commission) || 0)}
+              {' '}<span style={{ fontWeight: 400, color: 'var(--text2)' }}>
+                ({mtd?.totals?.activations || 0} activations × rate = {fmt(Number(mtd?.totals?.activation_pay) || 0)} +{' '}
+                {fmt(Number(mtd?.totals?.acc_sales) || 0)} accessories × % = {fmt(Number(mtd?.totals?.accessory_pay) || 0)})
+              </span>
+            </div>
+            {(mtd.by_rep || []).length ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 520 }}>
+                  <thead><tr>{['Rep', 'Activations', 'Acc. Sales', 'Activation $', 'Accessory $', 'Commission'].map(h =>
+                    <th key={h} style={{ textAlign: 'left', padding: '4px 8px', borderBottom: '1px solid var(--border, #e2e8f0)' }}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {(mtd.by_rep || []).map((r: any, i: number) => (
+                      <tr key={i}>
+                        <td style={{ padding: '4px 8px' }}>{r.employee}</td>
+                        <td style={{ padding: '4px 8px' }}>{r.activations}</td>
+                        <td style={{ padding: '4px 8px' }}>{fmt(Number(r.acc_sales) || 0)}</td>
+                        <td style={{ padding: '4px 8px' }}>{fmt(Number(r.activation_pay) || 0)}</td>
+                        <td style={{ padding: '4px 8px' }}>{fmt(Number(r.accessory_pay) || 0)}</td>
+                        <td style={{ padding: '4px 8px', fontWeight: 600 }}>{fmt(Number(r.commission) || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ fontSize: 13, color: '#b45309' }}>
+                No Exec MTD rows for <b>{selected?.name}</b>’s stores in {period}. Check the plan's store
+                assignments (Step 5) and that {period} has sales.
               </div>
             )}
           </div>

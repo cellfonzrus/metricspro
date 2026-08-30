@@ -15141,6 +15141,110 @@ def preview_commission_plan(period: str, plan_id: str = "", org_id: str = ORG_ID
     return commission_engine.preview(client, org_id, period, plan_id=plan_id or None)
 
 
+# ── COMMISSION FROM EXECUTIVE MTD (owner directive 2026-08-30) ─────────────────────────────────────
+# "A simple $10 and 10% should be easily calculated from the Executive MTD ... the data source should be
+# the SAME for all sales reports, commission and Exec MTD ... if the accessory numbers show in Exec MTD why
+# are they not in the incentive payout." Root cause: the line-by-line commission engine classifies
+# accessories with its OWN classifier, which drifts from the shared Sales-Report classifier that Exec MTD
+# (and the Sales Report, Daily Targets) use — so an accessory counted on Exec MTD can be invisible to the
+# payout. This computes the two headline commission components DIRECTLY from the Exec MTD per-employee
+# aggregates, so the commission basis is byte-identical to what the owner already sees on that report:
+#     activation_pay = Total Activation (excl. Upgrade on the Activation-Details basis) × the plan's flat rate
+#     accessory_pay  = Acc. Sales                                                       × the plan's accessory %
+# READ-ONLY: it calls _exec_mtd and writes nothing. ONE trustworthy data source for report AND commission.
+def _plan_mtd_rates(plan):
+    """(activation flat $/unit, accessory fraction) for the MTD-basis commission, read from a plan's rules:
+    the amount of the first qualifying flat_per_unit rule keyed on activation_bucket|department, and the pct
+    of the first qualifying pct_* rule keyed on accessory. 0 when a component is absent (it then pays $0)."""
+    act_rate, acc_pct = 0.0, 0.0
+    for r in (plan.get("rules") or []):
+        if r.get("qualifies") is False:
+            continue
+        mf = str(r.get("match_field") or "").strip().lower()
+        pk = str(r.get("payout_kind") or "").strip().lower()
+        if not act_rate and pk == "flat_per_unit" and mf in ("activation_bucket", "department"):
+            act_rate = safe_float(r.get("amount"))
+        elif not acc_pct and mf == "accessory" and pk.startswith("pct"):
+            acc_pct = safe_float(r.get("pct"))
+    return act_rate, acc_pct
+
+
+def _commission_from_mtd_rows(emp_rows, act_rate, acc_pct):
+    """Per-rep commission from Exec MTD by_employee rows. PURE (no I/O), so it is unit-testable:
+    activation_pay = round(total_activation × act_rate) ; accessory_pay = round(acc_sales × acc_pct)."""
+    out = []
+    for r in emp_rows or []:
+        acts = int(round(safe_float(r.get("total_activation"))))
+        acc = round(safe_float(r.get("acc_sales")), 2)
+        ap = round(acts * act_rate, 2)
+        cp = round(acc * acc_pct, 2)
+        out.append({"employee": r.get("employee"), "activations": acts, "acc_sales": acc,
+                    "activation_pay": ap, "accessory_pay": cp, "commission": round(ap + cp, 2)})
+    out.sort(key=lambda x: -x["commission"])
+    return out
+
+
+@router.get("/commission-mtd/{period}")
+def commission_mtd(period: str, plan_id: str = "", org_id: str = ORG_ID, today: str = ""):
+    """READ-ONLY commission computed from the Executive MTD per-employee numbers (see the block header).
+    Applies ONE plan's rates to the reps in that plan's scope (its store / market / employee assignments),
+    so the total reconciles to the Exec MTD report filtered to the same stores. Moves no pay — run the
+    calculation to pay. `today` (YYYY-MM-DD) is the caller's local date for the MTD cut, exactly as
+    /exec-mtd takes it."""
+    require_org(org_id)
+    if not period:
+        raise HTTPException(400, "period required")
+    if not plan_id:
+        raise HTTPException(400, "plan_id required")
+    client = sb()
+    plans, ready = commission_engine._load_plans(client, org_id)
+    if not ready:
+        raise HTTPException(400, "Commission plans are not set up (migration 059).")
+    plan = next((p for p in plans if str(p.get("id")) == str(plan_id)), None)
+    if not plan:
+        raise HTTPException(404, "plan_id not found")
+    act_rate, acc_pct = _plan_mtd_rates(plan)
+    stores, markets, emps_scope = [], [], []
+    for a in (plan.get("assignments") or []):
+        sc = str(a.get("scope") or "").strip().lower()
+        sv = a.get("scope_value")
+        if not sv:
+            continue
+        if sc == "store":
+            stores.append(sv)
+        elif sc == "market":
+            markets.append(sv)
+        elif sc == "employee":
+            emps_scope.append(sv)
+    _t = None
+    if today:
+        try:
+            _t = _date.fromisoformat(str(today)[:10])
+        except Exception:
+            _t = None
+    data = _exec_mtd(client, org_id, period, stores=stores or None, markets=markets or None,
+                     reps=emps_scope or None, today=_t)
+    emp_rows = ((data.get("by_employee") or {}).get("rows")) or []
+    rows = _commission_from_mtd_rows(emp_rows, act_rate, acc_pct)
+    totals = {
+        "activations": sum(r["activations"] for r in rows),
+        "acc_sales": round(sum(r["acc_sales"] for r in rows), 2),
+        "activation_pay": round(sum(r["activation_pay"] for r in rows), 2),
+        "accessory_pay": round(sum(r["accessory_pay"] for r in rows), 2),
+        "commission": round(sum(r["commission"] for r in rows), 2),
+    }
+    return {
+        "period": period, "plan_id": plan_id, "plan_name": plan.get("name"),
+        "activation_rate": act_rate, "accessory_pct": acc_pct,
+        "scope": {"stores": stores, "markets": markets, "employees": emps_scope},
+        "activation_source": data.get("activation_source"),
+        "by_rep": rows, "totals": totals,
+        "note": ("Commission computed from Executive MTD per-employee numbers "
+                 "(Total Activation × rate + Acc. Sales × %). READ-ONLY — matches the Exec MTD report "
+                 "filtered to this plan's stores; nothing is paid until you run the calculation."),
+    }
+
+
 # ── Commission-plan ASSIGNMENT roster + BULK assign (owner directive 2026-07-23) ──────────────────
 # The plan editor assigns ONE person at a time and shows only a name. These two endpoints back the
 # people-centric bulk surface: a filterable roster (role + market next to each name — RULE FIVE
