@@ -9,12 +9,17 @@ import AskBar from '@/components/AskBar'
 import { useAuth, useActiveCarrier } from '@/lib/auth-context'
 import { setActiveOrg } from '@/lib/client'
 import { apiCached, CONFIG } from '@/lib/cache'
-import { NAV, canSeeItem, canAccessPath, carrierOKActive, safeHomeFor, applyNavLayout, carrierCode, type NavItem, type NavLayout } from '@/lib/rbac'
+import { NAV, canSeeItem, canAccessPath, carrierOKActive, safeHomeFor, applyNavLayout, carrierCode, REPORT_CATEGORIES, type NavItem, type NavLayout } from '@/lib/rbac'
 import { carrierDisplayName } from '@/lib/carrier-scope'
 import HelpPanel from '@/components/HelpPanel'
 import AdminAttention from '@/components/AdminAttention'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
+// Reports-directory category names ('Reports · Sales', …). tileOnly filtering (below) never applies
+// inside these groups: applyNavLayout duplicates the SAME NavItem objects into them, and the owner's
+// W2.1 cleanup targets the MODULE groups only — the categorized report directory must stay complete.
+const REPORT_CAT_NAMES = new Set(REPORT_CATEGORIES.map(c => c.label))
 
 function Splash({ text }: { text: string }) {
   return (
@@ -408,11 +413,24 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
             // In the icon rail (collapsed) every item shows as an icon (no headers); in the full
             // sidebar only the open group's items render.
             const isOpen = collapsed || openGroup === group
+            // Phase W2.1 (owner feedback 2026-09-01, "cleaner look"): a `tileOnly` item — one a hub
+            // tile on /payroll or /storeops covers — is skipped at RENDER time only. The item stays
+            // in `groups`, so canSeeItem/canAccessPath gating, ⌘K search, and active-group detection
+            // are untouched, and the 'Reports · …' directory categories (same item objects, injected
+            // by applyNavLayout) still show it. A tenant /admin/menu layout that lists/moves the item
+            // (itemOrder/group/sub) does not resurrect it: the skip is unconditional because the
+            // designer never persists an explicit `hidden: false` (it stores `hidden: true` or omits
+            // the key — see admin/menu setHidden), so there is no "un-hide" flag to mirror.
+            const shown = (it: NavItem) => !it.tileOnly || REPORT_CAT_NAMES.has(group)
             // Sub-categories (tenant layout, roadmap #5). `items` carries EVERY item in the group, so
             // the loose list is whatever no sub claimed — that keeps a group with no subs identical to
             // before, and an item whose sub was deleted still renders instead of vanishing.
             const claimed = new Set((subs || []).flatMap(s => s.items.map(i => i.href)))
-            const loose = subs?.length ? items.filter(i => !claimed.has(i.href)) : items
+            const loose = (subs?.length ? items.filter(i => !claimed.has(i.href)) : items).filter(shown)
+            const shownSubs = (subs || []).map(s => ({ ...s, items: s.items.filter(shown) })).filter(s => s.items.length > 0)
+            // Everything tileOnly (possible only via a tenant layout that regrouped hidden items):
+            // drop the group entirely rather than render a header over nothing.
+            if (loose.length === 0 && shownSubs.length === 0) return null
             const renderItem = ({ href, label, icon }: NavItem, inSub = false) => {
               const active = pathname === href || pathname.startsWith(href + '/')
               return (
@@ -441,7 +459,7 @@ function PlatformShell({ children, open }: { children: React.ReactNode; open: bo
               {isOpen && loose.map(it => renderItem(it))}
               {/* Sub-categories render AFTER the loose items so an unassigned page never hides below a
                   heading. In the icon rail there are no headings at all — only the icons, in order. */}
-              {isOpen && !!subs?.length && subs.map(s => (
+              {isOpen && !!shownSubs.length && shownSubs.map(s => (
                 <div key={s.name}>
                   {!collapsed && (
                     <div className="mp-nav-sub" style={{ padding: '7px 14px 3px 22px', fontSize: 10,

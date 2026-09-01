@@ -5,6 +5,7 @@ import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
 import { ExportButtons, ExportPayload } from '@/lib/export'
 import { SendReportButton } from '@/lib/send-report'
 import { buildScheduleExport } from '../lib/scheduleExport'
+import { currentPeriodFromSettingsResponse } from '@/lib/pay-period'
 
 interface Shift {
   id: number
@@ -108,16 +109,24 @@ export default function SchedulePage() {
   const weekEnd = addDays(weekStart, 6)
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart])
 
-  // Snap the default view to the tenant's OWN work-week start once we know it (no-op for the
-  // default Monday tenants — e.g. Boost — since dow===0 leaves weekStart unchanged).
+  // Snap the default view to the tenant's OWN work-week start once we know it — and (Phase W2 period
+  // coherence, owner directive 2026-09-01) ANCHOR the default week to the week containing the CURRENT
+  // pay period's START (shared resolver: @/lib/pay-period over preview[0], the same period Payroll /
+  // Payroll Tax default to). The grid stays a week grid (structural); only which week opens first
+  // changes. For a weekly tenant the current period's start IS this work week, so this is a no-op
+  // there; for a biweekly tenant mid-fortnight it opens on the period's first week instead of the
+  // second. Degrades to the old behavior (today's week, tenant work-week snap) when the period can't
+  // be resolved.
   useEffect(() => {
     let cancelled = false
     apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
-      const dow = r?.settings?.work_week_start_dow
-      if (!cancelled && typeof dow === 'number' && dow !== 0) {
-        setWwDow(dow)
-        setWeekStart(workWeekStartOf(dow))
-      }
+      if (cancelled) return
+      const dowRaw = r?.settings?.work_week_start_dow
+      const dow = typeof dowRaw === 'number' ? dowRaw : 0
+      if (dow !== 0) setWwDow(dow)
+      const cur = currentPeriodFromSettingsResponse(r)
+      if (cur) setWeekStart(workWeekStartOf(dow, cur.period.start))
+      else if (dow !== 0) setWeekStart(workWeekStartOf(dow))
     }).catch(() => {})
     return () => { cancelled = true }
   }, [])

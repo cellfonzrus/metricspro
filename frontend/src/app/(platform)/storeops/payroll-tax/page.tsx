@@ -1,7 +1,8 @@
 'use client'
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api } from '@/lib/client'
-import { apiCached, LOOKUP } from '@/lib/cache'
+import { apiCached, LOOKUP, CONFIG } from '@/lib/cache'
+import { currentPeriodFromSettingsResponse, stepPeriod, type PayPeriodSettings } from '@/lib/pay-period'
 import { computePay, TAX_RATES, W4 } from '@/lib/payroll-tax'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
 import StandardFilterBar from '@/components/StandardFilterBar'
@@ -25,9 +26,27 @@ const STATES = ['NY', 'NJ', 'PA', 'DE', 'IL', 'CT', 'MA', 'IN']
 const FILING = ['Single', 'Married', 'HOH']
 
 export default function PayrollTaxPage() {
+  // Default range = the tenant's CURRENT pay period (Phase W2 period coherence, owner directive
+  // 2026-09-01: schedule / payroll / payroll tax / payroll expenses / hours approval share ONE
+  // period resolver — @/lib/pay-period over GET /core/tenant-settings preview[0]). Was a rolling
+  // last-7-days window, which matched nobody's actual pay cycle. The From/To inputs still override
+  // freely; if the resolver can't answer (pre-migration tenant, network) the old rolling week stays
+  // as the degrade default.
   const today = new Date(); const weekAgo = new Date(); weekAgo.setDate(today.getDate() - 6)
   const [start, setStart] = useState(iso(weekAgo))
   const [end, setEnd] = useState(iso(today))
+  const [rangeReady, setRangeReady] = useState(false)
+  const [ppSettings, setPpSettings] = useState<PayPeriodSettings | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
+      if (cancelled) return
+      const cur = currentPeriodFromSettingsResponse(r)
+      if (cur) { setPpSettings(cur.settings); setStart(cur.period.start); setEnd(cur.period.end) }
+    }).catch(() => {}).finally(() => { if (!cancelled) setRangeReady(true) })
+    return () => { cancelled = true }
+  }, [])
   const [rows, setRows] = useState<any[]>([])
   const [edit, setEdit] = useState<string>('')        // employee_id whose W-4 is being edited
   const [slip, setSlip] = useState<any>(null)
@@ -41,7 +60,9 @@ export default function PayrollTaxPage() {
   const load = useCallback(() => {
     api(`/api/v1/storeops/payroll-raw?start=${start}&end=${end}`).then((r: any) => setRows(r?.rows || [])).catch((e: any) => setMsg('Load failed (run migration 045?): ' + (e?.message || e)))
   }, [start, end])
-  useEffect(() => { load() }, [load])
+  // Wait for the pay-period default to resolve before the first fetch, so the page doesn't load the
+  // rolling week and immediately reload the real period.
+  useEffect(() => { if (rangeReady) load() }, [rangeReady, load])
   useEffect(() => {
     // include_inactive=true: this report is a HISTORICAL surface (RULE FIVE filter bar) — a store
     // closed today may still own past rows in this range, and the market lookup below must still
@@ -115,6 +136,18 @@ export default function PayrollTaxPage() {
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 12 }}>From <input type="date" style={sel} value={start} onChange={e => setStart(e.target.value)} /></label>
         <label style={{ fontSize: 12 }}>To <input type="date" style={sel} value={end} onChange={e => setEnd(e.target.value)} /></label>
+        {/* Same period steppers as the Payroll report — one shared resolver (@/lib/pay-period). */}
+        <button className="btn" style={{ fontSize: 12, padding: '4px 9px' }} title="Previous pay period"
+          onClick={() => { const p = stepPeriod({ start, end }, ppSettings, -1); setStart(p.start); setEnd(p.end) }}>‹ Prev period</button>
+        <button className="btn" style={{ fontSize: 12, padding: '4px 9px' }} title="Next pay period"
+          onClick={() => { const p = stepPeriod({ start, end }, ppSettings, 1); setStart(p.start); setEnd(p.end) }}>Next period ›</button>
+        <button className="btn" style={{ fontSize: 12, padding: '4px 9px' }} title="Jump back to the company's current pay period"
+          onClick={() => {
+            apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
+              const cur = currentPeriodFromSettingsResponse(r)
+              if (cur) { setPpSettings(cur.settings); setStart(cur.period.start); setEnd(cur.period.end) }
+            }).catch(() => {})
+          }}>This pay period</button>
         <div style={{ flex: 1 }} />
         <span className="badge" style={{ fontSize: 12 }}>Gross {$(tot.gross)}</span>
         <span className="badge" style={{ fontSize: 12 }}>Net {$(tot.net)}</span>

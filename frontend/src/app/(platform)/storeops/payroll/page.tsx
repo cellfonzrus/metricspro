@@ -132,10 +132,18 @@ export default function PayrollPage() {
     store: r => r.store, market: r => storeMarket[r.store] || '', rep: r => r.name,
   }), [rows, filt, storeMarket])
 
+  // Pay-visibility (mig 434 / PR #162): GET /storeops/payroll is a bare array, and a gated caller's
+  // money keys are DELETED server-side (strip_pay — the route signals via the X-Can-See-Pay-Rates
+  // header, which the JSON api() helper doesn't surface). So detect it from the payload itself: rows
+  // exist but NONE carries a pay key → the caller is gated, and the pay columns/tiles are DROPPED
+  // (never rendered as fake $0.00s, and never exported as blank columns — same doctrine as the
+  // approvals board). Empty result / ungated rows → true, byte-identical to before.
+  const canSeePay = rows.length === 0 || rows.some(r => 'pay_rate' in (r as any) || 'actual_pay' in (r as any) || 'scheduled_pay' in (r as any))
+
   const totalScheduled = visibleRows.reduce((s, r) => s + r.scheduled_hours, 0)
   const totalActual    = visibleRows.reduce((s, r) => s + r.actual_hours, 0)
-  const totalPayScheduled = visibleRows.reduce((s, r) => s + r.scheduled_pay, 0)
-  const totalPayActual    = visibleRows.reduce((s, r) => s + r.actual_pay, 0)
+  const totalPayScheduled = visibleRows.reduce((s, r) => s + (r.scheduled_pay || 0), 0)
+  const totalPayActual    = visibleRows.reduce((s, r) => s + (r.actual_pay || 0), 0)
 
   const periodName = rangeLabel(filt.period || '', filt.periodTo || '')
 
@@ -156,9 +164,12 @@ export default function PayrollPage() {
     { header: 'Store', field: 'store', role: 'store', get: r => r.store },
     // Salary pay-basis (2026-07-27): a salaried rep's "Pay Rate" isn't an hourly figure — show the
     // basis + period-converted amount instead, so the export never implies a $/hr number that isn't real.
-    { header: 'Pay Rate', field: 'pay_rate', get: r => r.pay_basis && r.pay_basis !== 'hourly'
-        ? `${PAY_BASIS_LABEL[r.pay_basis as PayBasis]} — $${(r.salary_period_pay ?? 0).toFixed(2)}/period`
-        : `$${Number(r.pay_rate).toFixed(2)}/hr` },
+    // DROPPED (not blanked) for a pay-gated caller — the server already withheld the values.
+    ...(canSeePay ? [
+      { header: 'Pay Rate', field: 'pay_rate', get: (r: PayrollRow) => r.pay_basis && r.pay_basis !== 'hourly'
+          ? `${PAY_BASIS_LABEL[r.pay_basis as PayBasis]} — $${(r.salary_period_pay ?? 0).toFixed(2)}/period`
+          : `$${Number(r.pay_rate).toFixed(2)}/hr` },
+    ] as ExportColumn[] : []),
     { header: 'Shifts', field: 'shifts', type: 'number', get: r => r.shifts },
     { header: 'Scheduled Hrs', field: 'scheduled_hours', type: 'number', get: r => r.scheduled_hours.toFixed(1) },
     // ONE ROW PER REP (2026-07-27): /payroll now returns a single, merged row per employee — this
@@ -193,13 +204,16 @@ export default function PayrollPage() {
         if (r.salary_note) f.push('⚠ ' + r.salary_note)
         return f.join(' · ')
       } },
-    { header: 'Scheduled Pay', field: 'scheduled_pay', money: true, get: r => r.scheduled_pay },
-    { header: 'Actual Pay', field: 'actual_pay', money: true, get: r => r.actual_pay },
-    // Additive-only (2026-07-22): a POSTED payroll chargeback shown as a visible deduction + the
-    // resulting net — pending/waived chargebacks never deduct, so this is $0 for the common case
-    // (no chargebacks this period) and byte-identical to Actual Pay when nothing's posted.
-    { header: 'Chargebacks', field: 'chargeback_deduction', money: true, get: r => chargebacks[r.employee_id] || 0 },
-    { header: 'Net Pay', field: 'net_pay', money: true, get: r => Math.max(0, r.actual_pay - (chargebacks[r.employee_id] || 0)) },
+    // The money block — DROPPED as a set for a pay-gated caller (see canSeePay above).
+    ...(canSeePay ? [
+      { header: 'Scheduled Pay', field: 'scheduled_pay', money: true, get: (r: PayrollRow) => r.scheduled_pay },
+      { header: 'Actual Pay', field: 'actual_pay', money: true, get: (r: PayrollRow) => r.actual_pay },
+      // Additive-only (2026-07-22): a POSTED payroll chargeback shown as a visible deduction + the
+      // resulting net — pending/waived chargebacks never deduct, so this is $0 for the common case
+      // (no chargebacks this period) and byte-identical to Actual Pay when nothing's posted.
+      { header: 'Chargebacks', field: 'chargeback_deduction', money: true, get: (r: PayrollRow) => chargebacks[r.employee_id] || 0 },
+      { header: 'Net Pay', field: 'net_pay', money: true, get: (r: PayrollRow) => Math.max(0, r.actual_pay - (chargebacks[r.employee_id] || 0)) },
+    ] as ExportColumn[] : []),
   ]
 
   function setRange(start: string, end: string) {
@@ -258,14 +272,16 @@ export default function PayrollPage() {
         }
       />
 
-      {/* Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+      {/* Summary — pay tiles are DROPPED (not zeroed) for a pay-gated caller. */}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${canSeePay ? 4 : 2}, 1fr)`, gap: 12, marginBottom: 20 }}>
         {[
           { label: 'Scheduled Hours', val: totalScheduled.toFixed(1), unit: 'hrs', icon: '📅' },
           { label: 'Actual Hours', val: totalActual.toFixed(1), unit: 'hrs', icon: '⏱️' },
-          { label: 'Scheduled Pay', val: fmt(totalPayScheduled), icon: '💵' },
-          { label: 'Actual Pay', val: fmt(totalPayActual), icon: '💰' },
-        ].map(({ label, val, unit, icon }) => (
+          ...(canSeePay ? [
+            { label: 'Scheduled Pay', val: fmt(totalPayScheduled), icon: '💵' },
+            { label: 'Actual Pay', val: fmt(totalPayActual), icon: '💰' },
+          ] : []),
+        ].map(({ label, val, unit, icon }: any) => (
           <div key={label} className="card">
             <div style={{ fontSize: 20 }}>{icon}</div>
             <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--accent)', marginTop: 8 }}>

@@ -77,7 +77,10 @@ const GROUPS: Group[] = [
     title: 'StoreOps & Closing',
     desc: 'Stores, schedules, visits and daily cash.',
     items: [
-      { href: '/storeops/admin', icon: '🛠️', label: 'StoreOps Admin', desc: 'Stores (code / address / market / target), payscale, bulk tools.' },
+      // Phase W2 (2026-09-01): the combined /storeops/admin page was split into two dedicated setup
+      // surfaces (the old page still works, with a banner pointing at these).
+      { href: '/storeops/setup/stores', icon: '🏬', label: 'Store Setup', desc: 'Stores — code / address / market / time zone / target, bulk tools.' },
+      { href: '/storeops/setup/employees', icon: '🧑‍🔧', label: 'Employee Setup', desc: 'Employee records — names, IDs, home stores, contact info, bulk tools.' },
       { href: '/storeops/visits/settings', icon: '🧾', label: 'Visit Checklist', desc: 'Store-visit checklist items, categories and order.' },
       { href: '/closing/cash-config', icon: '💰', label: 'Cash Setup', desc: 'Closing deadline + gate, per-store closer, alert recipients, cash-aging.' },
       { href: '/closing/pickup', icon: '💵', label: 'Cash Pickup Recipient', desc: 'Who receives the daily cash-envelope pickup notifications.' },

@@ -1,8 +1,11 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
 
 // Shift-extension request → District Manager approval workflow (mig 086). A manager files a request
 // to keep an employee past their scheduled end; the DM (or an admin) approves it IN-APP — the tick
@@ -57,8 +60,29 @@ export default function ShiftExtensionsPage() {
     } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
   }
 
-  const pending = exts.filter(x => x.status === 'pending')
-  const decided = exts.filter(x => x.status !== 'pending')
+  // Standard filters (Phase W2, RULE FIVE §3d): market→store cascade (the stores roster is already
+  // loaded, with markets) + employee(s) + a date range over the shift date. One filter state drives
+  // BOTH tables and BOTH exports.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const storeMarket = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
+    return m
+  }, [stores])
+  const cascadeStores: StoreOpt[] = useMemo(() => stores
+    .filter((s: any) => s.store_code)
+    .map((s: any) => ({ id: s.store_code, label: s.store_code, market: s.market || undefined }))
+    .sort((a: StoreOpt, b: StoreOpt) => a.label.localeCompare(b.label)), [stores])
+  const repOptions = useMemo(() => Array.from(new Set(
+    exts.map(x => x.employee_name || x.employee_id).filter(Boolean) as string[],
+  )).sort().map(n => ({ id: n, label: n })), [exts])
+  const shown = useMemo(() => filterRows(exts, filt, {
+    rep: x => x.employee_name || x.employee_id, store: x => x.store_code || '',
+    market: x => storeMarket[x.store_code || ''] || '', date: x => x.shift_date,
+  }), [exts, filt, storeMarket])
+
+  const pending = shown.filter(x => x.status === 'pending')
+  const decided = shown.filter(x => x.status !== 'pending')
   const decidedVisible = decided.slice(0, 30)
   const inp: React.CSSProperties = { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 14, background: 'var(--surface)' }
   const lbl: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--text2)', display: 'block', marginBottom: 4 }
@@ -88,6 +112,12 @@ export default function ShiftExtensionsPage() {
         files a request here <b>ahead of time</b> and the District Manager approves it — the approval is recorded.
       </p>
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
+
+      {/* Standard filter bar (Phase W2) — drives BOTH tables and BOTH exports below. */}
+      {exts.length > 0 && (
+        <StandardFilterBar value={filt} onChange={setFilt} periodMode="range"
+          cascadeStores={cascadeStores} repOptions={repOptions} repLabel="Employees…" />
+      )}
 
       <div className="card" style={{ padding: 18, marginBottom: 18 }}>
         <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Request an extension</div>

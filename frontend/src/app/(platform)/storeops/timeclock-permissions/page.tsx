@@ -1,7 +1,9 @@
 'use client'
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from '@/lib/client'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 // Rep-initiated time-clock permissions → District Manager approval (migration 432). Reps are
 // auto-clocked-out at their scheduled end + a 5-minute grace. Two things then need the DM's tick to
@@ -44,8 +46,20 @@ export default function TimeclockPermissionsPage() {
   }
 
   const extra = (x: Perm) => x.kind === 'late_clockout' && x.extra_minutes != null ? `${x.extra_minutes} min` : '—'
-  const pending = perms.filter(x => x.status === 'pending')
-  const decided = perms.filter(x => x.status !== 'pending').slice(0, 30)
+
+  // Standard filters (Phase W2, RULE FIVE §3d): employee(s) + store(s) + a date range over the work
+  // date; options off the loaded rows (org-scoped by construction; no market on these rows). One
+  // filter state drives BOTH tables and BOTH exports.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const filtOpts = useMemo(() => optionsFromRows(perms, {
+    rep: x => x.employee_name || x.employee_id, store: x => x.store_code,
+  }), [perms])
+  const shown = useMemo(() => filterRows(perms, filt, {
+    rep: x => x.employee_name || x.employee_id, store: x => x.store_code || '', date: x => x.work_date,
+  }), [perms, filt])
+
+  const pending = shown.filter(x => x.status === 'pending')
+  const decided = shown.filter(x => x.status !== 'pending').slice(0, 30)
 
   // RULE FOUR: export exactly what each table shows — no PII beyond name/store/date/kind/status.
   const pendingCols: ExportColumn[] = [
@@ -55,6 +69,14 @@ export default function TimeclockPermissionsPage() {
     { header: 'Request', field: 'kind', get: x => kindLabel[x.kind] || x.kind },
     { header: 'Extra', field: 'extra', get: x => extra(x) },
     { header: 'Reason', field: 'reason', get: x => x.reason || '' },
+  ]
+  const decidedCols: ExportColumn[] = [
+    { header: 'Employee', field: 'employee', role: 'rep', get: x => x.employee_name || x.employee_id },
+    { header: 'Store', field: 'store_code', role: 'store', get: x => x.store_code || '' },
+    { header: 'Date', field: 'work_date', role: 'date', type: 'date', get: x => x.work_date },
+    { header: 'Request', field: 'kind', get: x => kindLabel[x.kind] || x.kind },
+    { header: 'Status', field: 'status', get: x => (badge[x.status] || badge.pending).t },
+    { header: 'Decided by', field: 'decided_by', get: x => x.decided_by || '' },
   ]
 
   return (
@@ -66,6 +88,12 @@ export default function TimeclockPermissionsPage() {
         time count toward their hours. The rep sees the same pending state on their kiosk.
       </p>
       {msg && <div style={{ fontSize: 13, marginBottom: 12 }}>{msg}</div>}
+
+      {/* Standard filter bar (Phase W2) — drives BOTH tables and BOTH exports below. */}
+      {perms.length > 0 && (
+        <StandardFilterBar value={filt} onChange={setFilt} periodMode="range" show={{ markets: false }}
+          storeOptions={filtOpts.stores} repOptions={filtOpts.reps} repLabel="Employees…" />
+      )}
 
       <div className="card" style={{ padding: 18, marginBottom: 18 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -97,7 +125,10 @@ export default function TimeclockPermissionsPage() {
 
       {decided.length > 0 && (
         <div className="card" style={{ padding: 18 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>Recent decisions</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Recent decisions</div>
+            <ReportExportBar title="Time-clock Permissions — Recent Decisions" columns={decidedCols} rows={decided} />
+          </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead><tr style={{ background: 'var(--surface2)' }}>{['Employee', 'Date', 'Request', 'Status', 'Decided by'].map(h => <th key={h} style={{ textAlign: 'left', padding: '7px 9px', fontSize: 11, color: 'var(--text2)' }}>{h}</th>)}</tr></thead>
             <tbody>

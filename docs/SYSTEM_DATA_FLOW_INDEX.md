@@ -504,6 +504,60 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   `GET /hr/employee-database` (`hr/router.py:1384`); each dict response carries `can_see_pay_rates`.
   The hours-approval board (`payroll_approval.py`) keeps its own STRICTER deny-list (market managers
   hidden too) via the same module. Proof: `backend/harness_pay_visibility.py`.
+- **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
+  frontend-only, no new endpoints):**
+  - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new
+    entries): `/payroll` (`frontend/src/app/(platform)/payroll/page.tsx` — Payroll Setup / Employee
+    Database / Payroll incl. the formerly-orphaned `/storeops/payroll-change-log` +
+    `/storeops/salary-advances` / HR Total Comp) and `/storeops`
+    (`storeops/page.tsx` rebuilt — Schedule / Shift Approvals / Attendance / Employees / Reports /
+    Store Setup / Employee Setup tiles + StatTile KPI row with best-effort pending counts). NAV
+    (`rbac.ts`): `/payroll` added first in 'Payroll & HR' (module `storeops`, `['all','market']`),
+    `/storeops` relabeled 'Workforce Dashboard'; NO nav item deleted (longest-prefix gating).
+  - **`/storeops/admin` split:** `/storeops/setup/stores` + `/storeops/setup/employees` (mechanical
+    extraction of the two tab branches; shared helpers `storeops/setup/lib.tsx`); the combined page
+    survives with a banner. Both new routes in NAV, module `storeops`, `['all','market']`.
+  - **Rename:** the `/storeops/accountability` page label/h1/export title is now **"Lateness %"**
+    (route + module unchanged).
+  - **Period coherence — ONE shared resolver** (`frontend/src/lib/pay-period.ts`, PROMOTED from
+    `storeops/lib/pay-period.ts` which now re-exports it; server authority stays
+    `GET /core/tenant-settings` `preview[0]` ← `core/router.pay_period_for`): `/storeops/payroll`
+    (already), `/storeops/payroll-tax` (default was rolling last-7-days → now the current pay
+    period, From/To still override), `/hr/payroll-expenses` (default month = the calendar month of
+    the current period's START; the `{month}` backend contract is a DOCUMENTED SEAM, not rewritten),
+    `/storeops/schedule` (week grid anchored to the week containing the current period's start), and
+    `/storeops/payroll/approvals` (server default stays the PREVIOUS complete period — deliberately,
+    `payroll_approval.previous_pay_period` — now made explicit by a cycle chip computed client-side
+    as `stepPeriod(current, settings, -1)` naming BOTH periods).
+  - **Standard filters/exports** added to `/storeops/timeoff`, `/storeops/swaps`,
+    `/storeops/shift-extensions`, `/storeops/timeclock-permissions`, `/storeops/employees`
+    (`StandardFilterBar` + visible-rows exports; `/storeops/team` already had both via
+    `TeamSnapshot`). `/storeops/payroll` now DROPS pay columns/tiles when the server stripped pay
+    (mig 434 `strip_pay` deletes the keys; the bare-array route's header isn't visible to `api()`,
+    so absence-of-keys is the detection).
+  - **W2.1 — collapsed master tiles + sidebar cleanup (owner feedback 2026-09-01, frontend-only):**
+    both hubs now render each master tile COLLAPSED via the shared
+    `frontend/src/components/HubTiles.tsx` — one card per tile (icon + title + one-line desc + a
+    subtle page count); interior links are hidden until the tile is clicked, then expand in place
+    (independent per-tile `useState`, chevron rotates, `<button>` header with `aria-expanded`;
+    nothing persisted). Single-link tiles (Employee Database, HR Total Comp, Store Setup, Employee
+    Setup) are plain `<Link>`s that navigate directly. Coverage additions so the menu could be
+    cleaned: NEW **"Store Ops"** tile on `/storeops` (Store Visits `/storeops/visits`, Visit
+    Checklist `/storeops/visits/settings`, Google Reviews `/storeops/reviews`, Reviews Setup
+    `/storeops/reviews/config`) and **HR Communications** `/hr/letters` added to the `/payroll`
+    Payroll Setup tile (`/storeops/staffing` was already on the Schedule tile). Sidebar: new
+    OPTIONAL `NavItem.tileOnly` flag (`rbac.ts`) on every 'Workforce' / 'Payroll & HR' item a hub
+    tile covers — the two groups collapse to essentially just their Dashboard links.
+    `tileOnly` is DISPLAY-ONLY and filtered at RENDER time in `(platform)/layout.tsx`: the items
+    stay in `NAV`, so `canSeeItem`/`navModuleForPath`/`canAccessPath` gating, ⌘K search,
+    active-group detection and the `REPORT_DIRECTORY` duplicates are untouched, and the renderer
+    deliberately keeps tileOnly items visible inside the 'Reports · …' directory categories (same
+    item objects). A tenant `/admin/menu` layout cannot un-hide a tileOnly item (the designer never
+    persists `hidden:false`, only `hidden:true`/absent — no "show" flag exists to mirror);
+    layout moves/subs of such items simply stay hidden, and a group left with zero visible items
+    renders nothing. `/storeops/admin` (combined, backward-compat alias) is tileOnly WITHOUT a
+    tile on purpose — its two surfaces ARE the Store Setup / Employee Setup tiles; bookmarks and
+    ⌘K search still reach it.
 
 ---
 

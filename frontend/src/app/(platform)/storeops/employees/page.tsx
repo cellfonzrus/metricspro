@@ -1,7 +1,11 @@
 'use client'
-import { useState, useEffect, Fragment } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { api } from '@/lib/client'
+import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
 import GoogleReviewsCard from '@/components/GoogleReviewsCard'
 
 interface Employee {
@@ -39,6 +43,11 @@ export default function EmployeesPage() {
   // for the store(s) they work — compact embed, GoogleReviewsCard fetches its own data off
   // employee_id and renders nothing if the integration is off/empty for this tenant.
   const [expanded, setExpanded] = useState<number | null>(null)
+  // Standard filters (Phase W2, RULE FIVE §3d): market→home-store cascade + employee(s), no period
+  // (a roster has no date). Runs ON TOP of the existing free-text search + active toggle; the table
+  // and the export read the SAME narrowed set.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const [stores, setStores] = useState<any[]>([])
 
   async function load() {
     setLoading(true)
@@ -48,7 +57,12 @@ export default function EmployeesPage() {
     } catch (err: any) { setMsg('Load failed: ' + (err?.message || err)) }
     setLoading(false)
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // include_inactive: an employee's home store may be a closed store; its market must still resolve.
+    apiCached('/api/v1/storeops/stores?include_inactive=true', LOOKUP)
+      .then((r: any) => setStores(Array.isArray(r) ? r : [])).catch(() => {})
+  }, [])
 
   const setEmp = (id: number, patch: Partial<Employee>) =>
     setEmployees(es => es.map(e => e.id === id ? { ...e, ...patch } : e))
@@ -99,7 +113,22 @@ export default function EmployeesPage() {
     } catch (err: any) { setMsg('Merge failed: ' + (err?.message || err)) }
   }
 
-  const filtered = employees.filter(e => {
+  const storeMarket = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
+    return m
+  }, [stores])
+  const cascadeStores: StoreOpt[] = useMemo(() => stores
+    .filter((s: any) => s.store_code)
+    .map((s: any) => ({ id: s.store_code, label: s.store_code + (s.is_active === false ? ' (inactive)' : ''), market: s.market || undefined }))
+    .sort((a: StoreOpt, b: StoreOpt) => a.label.localeCompare(b.label)), [stores])
+  const repOptions = useMemo(() => employees
+    .map(e => ({ id: e.name, label: e.name })).filter(o => o.id)
+    .sort((a, b) => a.label.localeCompare(b.label)), [employees])
+
+  const filtered = filterRows(employees, filt, {
+    rep: e => e.name, store: e => e.home_store || '', market: e => storeMarket[e.home_store || ''] || '',
+  }).filter(e => {
     if (!showInactive && !e.is_active) return false
     if (search && ![e.name, e.home_store, e.role, e.email, e.epay_salesperson]
       .some(v => (v || '').toLowerCase().includes(search.toLowerCase()))) return false
@@ -141,6 +170,10 @@ export default function EmployeesPage() {
           <ReportExportBar title="Employees" columns={cols} rows={filtered} />
         </div>
       </div>
+
+      {/* Standard filter bar (Phase W2) — market→home-store cascade + employees; no period (roster). */}
+      <StandardFilterBar value={filt} onChange={setFilt} periodMode="none" show={{ period: false }}
+        cascadeStores={cascadeStores} repOptions={repOptions} repLabel="Employees…" storeLabel="Home stores…" />
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
