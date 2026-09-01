@@ -4,11 +4,16 @@ Drives the REAL `email_run_due` + `_email_sweep_due_worker` against an in-memory
 stubbed sweeps. No network, no DB. What it proves:
 
   THE TICK CAN NEVER OUTLIVE pg_net AGAIN (root cause of the dead scheduler)
-  • the handler returns WITHOUT awaiting a single sweep — sweeps are queued on BackgroundTasks and
-    run only after the response (pg_net's http_post hangs up at 5000 ms; the old inline handler was
-    cancelled mid-sweep at that point, and because next_run_at was only stamped after a sweep
-    finished, the schedule never advanced and every 15-min tick restarted the same ever-larger
-    sweep and died again — silently, since CancelledError bypasses `except Exception`)
+  • the handler returns WITHOUT awaiting a single sweep — sweeps are handed to a DEDICATED daemon
+    thread with its own event loop (pg_net's http_post hangs up at 5000 ms; the old inline handler
+    was cancelled mid-sweep at that point, and because next_run_at was only stamped after a sweep
+    finished, the schedule never advanced — the dead-scheduler spiral of 2026-08-26→09-01)
+  • the thread, not Starlette BackgroundTasks: BackgroundTasks runs on the SERVING loop, and the
+    sweep's sync stretches (pandas, supabase .execute()) blocked it long enough for gunicorn's
+    heartbeat timeout to KILL the worker mid-sweep (observed 2026-09-01 14:0x/15:0x: first
+    mailbox's ingests landed, then the process died — no completion stamps, second mailbox starved)
+  • the due list is SHUFFLED per tick, so a sweep that still dies partway rotates which mailbox
+    goes first on the next tick instead of starving the same scan-order victim forever
   • next_run_at is advanced UP FRONT for EVERY due mailbox — before any sweep work — so even a
     crashed/killed sweep retries at the mailbox's own cadence instead of re-entering the spiral
 
@@ -31,7 +36,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from fastapi import BackgroundTasks, HTTPException     # noqa: E402
+from fastapi import HTTPException                      # noqa: E402
 from app.modules.commcalc import router as R           # noqa: E402
 
 _pass = 0
@@ -114,26 +119,29 @@ def run():
         monitored.append(org_id)
         raise RuntimeError("monitor exploded")    # its failure must be swallowed
 
-    real = (R.sb, R._run_email_sweep, R._data_freshness_monitor, R.verify_notify_secret)
+    real = (R.sb, R._run_email_sweep, R._data_freshness_monitor, R.verify_notify_secret,
+            R._dispatch_email_sweep_worker)
+    real_dispatch = R._dispatch_email_sweep_worker
+    dispatched = []   # batches handed to the dedicated sweep thread
+
     fake = _FakeSB(due_rows)
     R.sb = lambda: fake
     R._run_email_sweep = fake_sweep
     R._data_freshness_monitor = fake_monitor
     R.verify_notify_secret = lambda s: s == 'sekret'
+    R._dispatch_email_sweep_worker = lambda due: dispatched.append(list(due))
     try:
-        print("── 1. wrong secret: 403, no writes, no queued work ─────────────────────────────")
-        bt = BackgroundTasks()
+        print("── 1. wrong secret: 403, no writes, no dispatched work ─────────────────────────")
         try:
-            asyncio.run(R.email_run_due(bt, x_notify_secret='wrong'))
+            asyncio.run(R.email_run_due(x_notify_secret='wrong'))
             check("wrong secret raises", False)
         except HTTPException as e:
             check("wrong secret raises 403", e.status_code == 403)
         check("no schedule writes on 403", not [l for l in fake.log if l[0] == 'update'])
-        check("no background task on 403", len(bt.tasks) == 0)
+        check("no worker dispatched on 403", dispatched == [])
 
         print("── 2. the tick: advances ALL schedules up front, sweeps NOTHING inline ─────────")
-        bt = BackgroundTasks()
-        resp = asyncio.run(R.email_run_due(bt, x_notify_secret='sekret'))
+        resp = asyncio.run(R.email_run_due(x_notify_secret='sekret'))
         upds = [l for l in fake.log if l[0] == 'update']
         check("returns triggered=2", resp.get("triggered") == 2)
         check("no sweep ran inline", swept == [])
@@ -141,12 +149,16 @@ def run():
         check("next_run_at advanced for every due mailbox up front",
               len(upds) == 2 and all('next_run_at' in u[2] for u in upds))
         check("advance did not wait for sweep status", all(set(u[2]) == {'next_run_at'} for u in upds))
-        check("exactly one background task queued", len(bt.tasks) == 1)
+        check("worker dispatched exactly once, as one batch", len(dispatched) == 1)
+        check("dispatched batch carries every due mailbox (any order — shuffled on purpose)",
+              sorted((c['org_id'], c['account']) for c in dispatched[0])
+              == sorted((c['org_id'], c['account']) for c in due_rows))
 
         print("── 3. the background worker: per-mailbox isolation, monitor best-effort ────────")
         n_upd_before = len([l for l in fake.log if l[0] == 'update'])
-        asyncio.run(bt())     # run what the response left behind — this is what pg_net never waits for
-        check("worker swept exactly the due set, in order",
+        # run the real worker directly on the dispatched batch — this is what the thread executes
+        asyncio.run(R._email_sweep_due_worker([_due(HOUSE, 'default'), _due(TEN, 'default')]))
+        check("worker swept exactly the given batch, in order",
               swept == [(HOUSE, 'default'), (TEN, 'default')])
         crash_upds = [l for l in fake.log if l[0] == 'update'][n_upd_before:]
         check("crashed mailbox stamped last_status on its row",
@@ -154,14 +166,26 @@ def run():
         check("worker never re-touches next_run_at", all('next_run_at' not in u[2] for u in crash_upds))
         check("freshness monitor ran once per swept org", sorted(monitored) == sorted([HOUSE, TEN]))
 
-        print("── 4. empty due set: fast no-op, nothing queued ────────────────────────────────")
+        print("── 4. empty due set: fast no-op, nothing dispatched ────────────────────────────")
         fake.rows = []
-        bt = BackgroundTasks()
-        resp = asyncio.run(R.email_run_due(bt, x_notify_secret='sekret'))
+        n_disp = len(dispatched)
+        resp = asyncio.run(R.email_run_due(x_notify_secret='sekret'))
         check("triggered=0 on empty due", resp.get("triggered") == 0)
-        check("no background task on empty due", len(bt.tasks) == 0)
+        check("no worker dispatched on empty due", len(dispatched) == n_disp)
+
+        print("── 5. the real dispatcher runs the worker on a separate daemon thread ──────────")
+        R._dispatch_email_sweep_worker = real_dispatch
+        import threading as _th
+        before = {t.name for t in _th.enumerate()}
+        swept.clear()
+        real_dispatch([_due(TEN, 'default')])
+        deadline = __import__('time').time() + 5
+        while __import__('time').time() < deadline and (TEN, 'default') not in swept:
+            __import__('time').sleep(0.05)
+        check("dedicated thread executed the sweep off the serving loop", (TEN, 'default') in swept)
     finally:
-        R.sb, R._run_email_sweep, R._data_freshness_monitor, R.verify_notify_secret = real
+        (R.sb, R._run_email_sweep, R._data_freshness_monitor, R.verify_notify_secret,
+         R._dispatch_email_sweep_worker) = real
 
     print(f"\n{_pass} passed, {_fail} failed")
     if FAILED:

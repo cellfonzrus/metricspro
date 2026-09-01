@@ -72,6 +72,7 @@ from uuid import uuid4 as _uuid4
 from datetime import datetime, timezone, timedelta
 import calendar as _calendar
 import threading
+import random as _random
 import os as _os
 
 
@@ -27924,8 +27925,23 @@ async def _email_sweep_due_worker(due):
             print(f"WARN post-sweep freshness monitor failed for {_oid}: {_fe}")
 
 
+def _dispatch_email_sweep_worker(due):
+    """Run _email_sweep_due_worker on a DEDICATED daemon thread with its own event loop — never on
+    the serving loop (same pattern as main.py's encryption-backfill thread).
+
+    Why not BackgroundTasks: Starlette runs those on the request's event loop, and much of the sweep
+    (pandas parses, supabase .execute() calls) is synchronous — a big attachment blocks the loop for
+    minutes, gunicorn's worker heartbeat (--timeout 120) stops ticking, and the arbiter KILLS the
+    worker mid-sweep. Observed live 2026-09-01 after the background-dispatch fix deployed: ticks at
+    14:00/15:00 ingested the first mailbox's files until ~X:03:32, then the process died at ~X:04 —
+    completion stamps never landed and the second mailbox never swept, every hour. A separate thread
+    keeps the serving loop (and its heartbeat) free no matter how long the sweep blocks."""
+    threading.Thread(target=lambda: __import__("asyncio").run(_email_sweep_due_worker(due)),
+                     name="email-sweep-due", daemon=True).start()
+
+
 @router.post("/email-sweep/run-due")
-async def email_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+async def email_run_due(x_notify_secret: str = Header(default="")):
     """pg_cron entrypoint — advance every due mailbox's next_run_at, dispatch the sweeps to the
     BACKGROUND, and return immediately (same shape as /vip/sweep/run-due).
 
@@ -27943,12 +27959,16 @@ async def email_run_due(background_tasks: BackgroundTasks, x_notify_secret: str 
     now_iso = _datetime.now(_timezone.utc).isoformat()
     due = (client.schema('commcalc').table('email_sweep_config').select('*')
            .eq('enabled', True).lte('next_run_at', now_iso).execute().data) or []
+    # Shuffle so a sweep that dies partway (worker kill, OOM, redeploy) rotates WHICH mailbox goes
+    # first next tick, instead of the same scan-order victim being starved on every retry — the
+    # second mailbox got zero sweeps across repeated partial runs on 2026-09-01 exactly this way.
+    _random.shuffle(due)
     for cfg in due:
         nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
         _email_status_update(client, cfg.get('org_id') or ORG_ID, cfg.get('account') or 'default',
                              {'next_run_at': nxt})
     if due:
-        background_tasks.add_task(_email_sweep_due_worker, due)
+        _dispatch_email_sweep_worker(due)
     return {"triggered": len(due),
             "detail": [{"org_id": c.get('org_id') or ORG_ID, "account": c.get('account') or 'default'}
                        for c in due]}
