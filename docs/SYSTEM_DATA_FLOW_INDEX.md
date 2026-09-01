@@ -510,8 +510,12 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   `/storeops/payroll-by-store` (`:1685`), `/storeops/payroll/actual-hours-detail` (`:1960`),
   `/storeops/salary-owed` (`:8023`), `GET /hr/compensation` (`hr/router.py:334`),
   `GET /hr/employee-database` (`hr/router.py:1384`); each dict response carries `can_see_pay_rates`.
-  The hours-approval board (`payroll_approval.py`) keeps its own STRICTER deny-list (market managers
-  hidden too) via the same module. Proof: `backend/harness_pay_visibility.py`.
+  A SEVENTH route joined 2026-09-01 (§19.12 closure): `GET /storeops/payroll-raw`
+  (`payroll_raw_route`) — same gate, but FAIL-CLOSED 403 instead of strip, because that feed is
+  ALL-money by purpose (rate + W-4 for the browser tax calc; no hours-only consumer) — matching its
+  scheduled twin `storeops_payroll_tax`. The hours-approval board (`payroll_approval.py`) keeps its
+  own STRICTER deny-list (market managers hidden too) via the same module.
+  Proof: `backend/harness_pay_visibility.py` (§I covers the payroll-raw route).
 - **Phase W2 — tiled Payroll & Workforce dashboards + period alignment (owner directive 2026-09-01,
   frontend-only, no new endpoints):**
   - **Two tile hubs** (landings, deliberately NOT in `REPORT_TREES`/`REPORT_DIRECTORY` as new
@@ -577,7 +581,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   |---|---|---|---|
   | `storeops_payroll` | Payroll (Hours & Pay) | `storeops.router.get_payroll` | mig-434 gate = the live route's exact `can_see_pay`→`strip_pay` pair; pay COLUMNS drop with it |
   | `storeops_hours_approval` | Hours Approval | `payroll_approval.list_approvals` | HOURS-ONLY: pay stripped unconditionally, no pay column exists |
-  | `storeops_payroll_tax` | Payroll with Tax (Estimate) | `storeops.router.payroll_raw` + `storeops/payroll_tax_estimate.py` | ALL-money: gate denial ⇒ ValueError, fail closed (⚠ stricter than the live `/payroll-raw`, which is UNGATED today — see §19.12) |
+  | `storeops_payroll_tax` | Payroll with Tax (Estimate) | `storeops.router.payroll_raw` + `storeops/payroll_tax_estimate.py` | ALL-money: gate denial ⇒ ValueError, fail closed (same posture as the live `/payroll-raw`, gated fail-closed 403 since 2026-09-01 — §19.12 closed) |
   | `storeops_payroll_expenses` | Payroll Expenses | `storeops.router.get_payroll_expenses` (`{YYYY-MM}`) | ALL-money: gate denial ⇒ ValueError, fail closed |
   | `storeops_attendance` | Attendance Exceptions | `storeops.router.attendance_exceptions` | hours-only |
   | `storeops_lateness` | Lateness % | `storeops.router.accountability` | hours-only |
@@ -775,7 +779,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `PUT /tile-layout` (fail-closed: house/foreign → super-admin; own org → `menu_layout` grant) | `commcalc/router.py` (`put_tile_layout`) | §14 D1 |
 | `POST /nav-labels`, `POST /nav-layout` (RETROFIT 2026-09-01: were UNGATED — now fail-closed `menu_layout` gate, non-super pinned to own org) | `commcalc/router.py` (`set_nav_label`/`set_nav_layout`) | §14 D1 |
 | `POST /notify/send`, `POST /notify/run-due` → report keys `storeops_payroll` / `storeops_hours_approval` / `storeops_payroll_tax` / `storeops_payroll_expenses` / `storeops_attendance` / `storeops_lateness` (W3 scheduled workforce reports) | `notify/router.py` `_dispatch` → `report_registry.build_payload` → `notify/workforce_reports.py` builders | §14 W3 |
-| `GET /storeops/payroll-raw` (payroll-tax page inputs; ⚠ UNGATED for pay — §19.12) | `storeops/router.py:6288` | §14 W3 |
+| `GET /storeops/payroll-raw` (payroll-tax page inputs; mig-434 pay gate, FAIL-CLOSED 403 — ALL-money feed, §19.12 closed 2026-09-01; route `payroll_raw_route`, shared `payroll_raw()` stays ungated for pre-gated in-process callers) | `storeops/router.py` (`payroll_raw_route`) | §14 W3 |
 | `GET /storeops/payroll-expenses/{period}`, `GET /storeops/payroll/approvals`, `GET /storeops/timeclock/attendance-exceptions`, `GET /storeops/accountability` | `storeops/router.py:7703` / `payroll_approval.py:469` / `storeops/router.py:4294` / `:4318` | §14 W3 |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
@@ -852,13 +856,21 @@ closing tender recon mig `103`,`104`,`106`,`111`.
     (menu/labels help docs) still describes `POST /nav-labels` / `POST /nav-layout` as open
     admin-page saves — since the D1 retrofit both require the `menu_layout` settings grant (a save
     without it now fails 403, and signed-out saves 401 even in open-app mode).
-12. **`GET /storeops/payroll-raw` is NOT pay-gated (mig 434 gap, found during W3 2026-09-01).** The
-    payroll-tax page's input feed serves `pay_rate` + W-4 settings to any caller who passes span
-    scoping — it is absent from the six gated money routes. The W3 SCHEDULED report over it
-    (`storeops_payroll_tax`) applies the charter-4 `can_see_pay` gate itself (fail closed), so the
-    scheduled path cannot leak — but the LIVE endpoint still can, to a below-market-manager caller
-    on a `manager_up` tenant. Fix belongs on the route (same `get_payroll_route` posture); reported
-    rather than patched inline because it changes a live page's behavior.
+12. ~~`GET /storeops/payroll-raw` is NOT pay-gated~~ **CLOSED (2026-09-01, owner-approved fix, same
+    day as found).** The payroll-tax page's input feed served `pay_rate` + W-4 settings to any caller
+    who passed span scoping. Now gated on the route (`storeops/router.py::payroll_raw_route`) with
+    the mig-434 `can_see_pay` gate, **FAIL-CLOSED (403)** rather than `get_payroll_route`'s strip
+    posture — deliberately, and differently from the sibling six: this feed is ALL-money by purpose
+    (every row exists to carry rate + W-4 into the browser tax calc; the payroll-tax page
+    dereferences `row.settings` unconditionally, so a stripped row is a crashed page, and hours-only
+    needs are served by `GET /payroll`). That matches its scheduled twin `storeops_payroll_tax`,
+    which already denied loudly (`_require_pay_access` ⇒ ValueError) — live route and scheduled
+    report now share one posture. The SHARED `payroll_raw()` function stays undecorated/ungated
+    (get_payroll's route-vs-function split) so in-process consumers are byte-identical: the W3
+    scheduled builder pre-gates with the caller's own token before calling it, and
+    `harness_payroll_data_flow` proves the ungated computation. Proof:
+    `harness_pay_visibility.py` §I (exec's the real route source; manager_up / permissioned /
+    per-org `pay_visible_roles` / grant / pre-434 adaptive default / broken-token all covered).
 
 ---
 
