@@ -1,9 +1,12 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api, parseLocalDate } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, type StandardFilterValue } from '@/lib/standard-filters'
+import type { StoreOpt } from '@/lib/market-store-cascade'
 
 interface Request {
   id: number; employee_id: string; employee_name?: string
@@ -37,14 +40,21 @@ export default function TimeOffPage() {
   // server-side (PUT /storeops/timeoff-conflict-mode → 403 for a non-manager).
   const [conflictMode, setConflictMode] = useState<'warn' | 'block'>('warn')
   const [savingMode, setSavingMode] = useState(false)
+  // Phase W2 (owner rule: standard filters on every workforce surface): market→store cascade +
+  // employee(s) + a date range over the request's start date. Store/market attribution follows the
+  // employee's HOME store (a time-off request has no store of its own).
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const [stores, setStores] = useState<any[]>([])
 
   useEffect(() => {
     Promise.all([
       api('/api/v1/storeops/time-off'),
       apiCached('/api/v1/storeops/employees', LOOKUP),
-    ]).then(([reqs, emps]) => {
+      apiCached('/api/v1/storeops/stores', LOOKUP).catch(() => []),
+    ]).then(([reqs, emps, sts]) => {
       setRequests(reqs || [])
       setEmployees(emps || [])
+      setStores(Array.isArray(sts) ? sts : [])
     }).catch(console.error).finally(() => setLoading(false))
     api('/api/v1/storeops/timeoff-conflict-mode').then((r: any) => {
       if (r?.mode === 'block') setConflictMode('block')
@@ -119,6 +129,36 @@ export default function TimeOffPage() {
     } finally { setSavingEdit(false) }
   }
 
+  // Standard filters (RULE FIVE §3d): filter state → the table AND the export read the SAME filtered
+  // rows (what you see is what exports). Store/market resolve via the employee's home store.
+  const empStore = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const e of employees) {
+      if (e.employee_id) m[String(e.employee_id)] = e.home_store || ''
+      if (e.id != null) m[String(e.id)] = e.home_store || ''
+    }
+    return m
+  }, [employees])
+  const storeMarket = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const s of stores) if (s.store_code) m[s.store_code] = s.market || ''
+    return m
+  }, [stores])
+  const cascadeStores: StoreOpt[] = useMemo(() => stores
+    .filter(s => s.store_code)
+    .map(s => ({ id: s.store_code, label: s.store_code, market: s.market || undefined }))
+    .sort((a, b) => a.label.localeCompare(b.label)), [stores])
+  const repOptions = useMemo(() => employees
+    .map(e => ({ id: e.name, label: e.name }))
+    .filter(o => o.id)
+    .sort((a, b) => a.label.localeCompare(b.label)), [employees])
+  const visible = useMemo(() => filterRows(requests, filt, {
+    rep: r => r.employee_name || empName(r.employee_id),
+    store: r => empStore[String(r.employee_id)] || '',
+    market: r => storeMarket[empStore[String(r.employee_id)] || ''] || '',
+    date: r => r.start_date,
+  }), [requests, filt, empStore, storeMarket])   // eslint-disable-line react-hooks/exhaustive-deps
+
   // RULE FOUR (§3c): export the visible rows — no PII (dates/type/notes/status only).
   const cols: ExportColumn[] = [
     { header: 'Employee', field: 'employee', role: 'rep', get: r => r.employee_name || empName(r.employee_id) },
@@ -155,7 +195,7 @@ export default function TimeOffPage() {
               <option value="block">Block</option>
             </select>
           </label>
-          <ReportExportBar title="Time Off Requests" columns={cols} rows={requests} />
+          <ReportExportBar title="Time Off Requests" columns={cols} rows={visible} />
           <button className="btn btn-primary" onClick={() => { setErr(''); setShowForm(true) }}>+ New Request</button>
         </div>
       </div>
@@ -265,6 +305,10 @@ export default function TimeOffPage() {
         </div>
       )}
 
+      {/* Standard filter bar (Phase W2) — market→store cascade + employees + date range. */}
+      <StandardFilterBar value={filt} onChange={setFilt} periodMode="range"
+        cascadeStores={cascadeStores} repOptions={repOptions} repLabel="Employees…" />
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : (
@@ -282,7 +326,7 @@ export default function TimeOffPage() {
               </tr>
             </thead>
             <tbody>
-              {requests.map((r, i) => {
+              {visible.map((r, i) => {
                 const start = parseLocalDate(r.start_date)
                 const end = parseLocalDate(r.end_date)
                 const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1
@@ -321,9 +365,9 @@ export default function TimeOffPage() {
                   </tr>
                 )
               })}
-              {requests.length === 0 && (
+              {visible.length === 0 && (
                 <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text3)' }}>
-                  No time off requests
+                  {requests.length ? 'No requests match the current filters' : 'No time off requests'}
                 </td></tr>
               )}
             </tbody>

@@ -103,12 +103,14 @@ export default function AccountabilityPage() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Accountability</h1>
+          {/* RENAMED from "Accountability" (Phase W2, owner directive 2026-09-01) — route/module keep
+              their names; only the user-facing label changes. */}
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Lateness %</h1>
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
             Lateness &amp; attendance patterns to <b>coach</b> on — with the dates and clock-in times, for a supportive conversation. You decide any action.
           </p>
         </div>
-        <ReportExportBar title="Accountability — Lateness" subtitle={`${filt.period} → ${filt.periodTo}`}
+        <ReportExportBar title="Lateness %" subtitle={`${filt.period} → ${filt.periodTo}`}
           filename={`accountability-${filt.period}_${filt.periodTo}`} columns={cols} rows={incidentRows} />
       </div>
 

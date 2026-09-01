@@ -14,7 +14,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/client'
+import { apiCached, CONFIG } from '@/lib/cache'
 import { useAuth } from '@/lib/auth-context'
+import { currentPeriodFromSettingsResponse, stepPeriod, rangeLabel } from '@/lib/pay-period'
 import StandardFilterBar from '@/components/StandardFilterBar'
 import { ReportExportBar, type ExportColumn } from '@/components/ReportExportBar'
 import type { StandardFilterValue } from '@/lib/standard-filters'
@@ -73,6 +75,23 @@ export default function PayrollApprovalsPage() {
   // The pay CYCLE the shown period belongs to (server-resolved from the tenant's own settings, the same
   // ones the schedule grid uses). `payday` is present only when the range IS a configured period.
   const [cycle, setCycle] = useState<{ pay_period_type?: string; week_starts_on?: string; payday?: string | null; matches_cycle?: boolean } | null>(null)
+  // Phase W2 period coherence (owner directive 2026-09-01): the board's server default is DELIBERATELY
+  // the PREVIOUS complete pay period (payroll_approval.previous_pay_period — half a fortnight isn't
+  // approvable), while schedule/payroll/payroll-tax default to the CURRENT one. To make that
+  // relationship explicit rather than implicit, we ALSO resolve the shared current period client-side
+  // (same resolver every sibling uses: @/lib/pay-period over GET /core/tenant-settings preview[0]),
+  // derive previous = stepPeriod(current, settings, -1), and show a cycle chip naming both.
+  const [shared, setShared] = useState<{ current: { start: string; end: string }; previous: { start: string; end: string } } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
+      if (cancelled) return
+      const cur = currentPeriodFromSettingsResponse(r)
+      if (cur) setShared({ current: { start: cur.period.start, end: cur.period.end },
+                           previous: stepPeriod(cur.period, cur.settings, -1) })
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   // Owner 2026-08-11: a DM / market manager approves HOURS and must not see anyone's pay scale. The
   // server withholds the values; this only controls whether the columns are rendered at all.
   const [canSeePay, setCanSeePay] = useState(true)
@@ -259,6 +278,21 @@ export default function PayrollApprovalsPage() {
         after them, then sends each payer the people they pay. Hours can only be changed here with a reason,
         and every change is written to the payroll change log.
       </p>
+
+      {/* Cycle chip (Phase W2, owner directive 2026-09-01): name BOTH periods so the deliberate
+          previous-period default is visible, not mysterious. Hidden while a custom range filter is
+          active — the relationship statement would be false for an arbitrary range. */}
+      {shared && cycle?.matches_cycle !== false && (
+        <div style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12,
+          padding: '6px 12px', borderRadius: 999, border: '1px solid var(--border)', background: 'var(--surface2)', fontSize: 12.5 }}>
+          <span>🗓️ Approving the <b>last complete pay period</b> — {rangeLabel(shared.previous.start, shared.previous.end)}</span>
+          <span style={{ color: 'var(--text3)' }}>·</span>
+          <span style={{ color: 'var(--text2)' }}>
+            the current period ({rangeLabel(shared.current.start, shared.current.end)}) — the one Schedule, Payroll and
+            Payroll Tax default to — becomes approvable when it ends
+          </span>
+        </div>
+      )}
 
       {!ready && <div style={{ ...card, background: '#fff7ed', borderColor: '#fdba74', color: '#9a3412', marginBottom: 12 }}>{note}</div>}
       {err && <div style={{ ...card, background: '#fef2f2', borderColor: '#fca5a5', color: '#991b1b', marginBottom: 12, fontSize: 13 }}>{err}</div>}

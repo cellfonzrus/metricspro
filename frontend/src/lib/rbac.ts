@@ -479,18 +479,25 @@ export const NAV: NavGroup[] = [
   { group: 'Chat', module: 'storeops', items: [
     { href: '/chat', label: 'Chat', icon: '💬', module: 'storeops', scopes: ['all', 'market', 'store', 'self'] },
   ]},
+  // ── Phase W2 (owner directive 2026-09-01): the Workforce + Payroll TILED DASHBOARDS are now the
+  // primary entry (each group's dashboard link FIRST); the per-page menu entries below stay as the
+  // secondary path. Pure regrouping/relabeling — every item keeps its module + scopes, so this is a
+  // ZERO-RBAC-CHANGE move (see the taxonomy note above). NOTHING here was deleted:
+  // navModuleForPath/canAccessPath gate from the longest matching NAV href, so removing an item
+  // (e.g. the scopes:['all'] payers row) would silently re-gate its whole subtree.
   { group: 'Workforce', module: 'storeops', items: [
-    { href: '/storeops', label: 'Dashboard', icon: '🏠', module: 'storeops' },
+    { href: '/storeops', label: 'Workforce Dashboard', icon: '🏠', module: 'storeops' },
     { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
     { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops' },
     { href: '/storeops/swaps', label: 'Shift Swaps', icon: '🔄', module: 'storeops' },
     { href: '/storeops/shift-extensions', label: 'Shift Extensions', icon: '⏱️', module: 'storeops', scopes: ['all', 'market', 'store'] },
-    { href: '/storeops/timeclock-permissions', label: 'Time-clock Permissions', icon: '⏳', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/hours-budget', label: 'Hours Budget', icon: '📊', module: 'storeops', scopes: ['all', 'market', 'store'] },
+    { href: '/storeops/timeclock-permissions', label: 'Time-clock Permissions', icon: '⏳', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/staffing', label: 'Staffing Heat Map', icon: '🔥', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/timeclock', label: 'Time Clock', icon: '⏱️', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/accountability', label: 'Accountability', icon: '🎓', module: 'storeops', scopes: ['all', 'market'] },
+    // RENAMED from 'Accountability' (Phase W2) — same route, same module/scopes, label only.
+    { href: '/storeops/accountability', label: 'Lateness %', icon: '🎓', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'] },
@@ -498,9 +505,18 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/reviews', label: 'Google Reviews', icon: '⭐', module: 'storeops', scopes: ['all', 'market', 'store'] },
     { href: '/storeops/reviews/config', label: 'Reviews Setup', icon: '⚙️', module: 'storeops', scopes: ['all'] },
     { href: '/storeops/reports', label: 'Reports', icon: '📋', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/admin', label: 'Admin', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'] },
+    // /storeops/admin SPLIT (Phase W2): Store Setup + Employee Setup are the primary surfaces now;
+    // the combined Admin page stays (backward compat — bookmarks/help docs) with a banner pointing
+    // at the two. Same module + scopes on all three, so no role re-seeding.
+    { href: '/storeops/setup/stores', label: 'Store Setup', icon: '🏬', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/setup/employees', label: 'Employee Setup', icon: '🧑‍🔧', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/admin', label: 'Admin (combined)', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'] },
   ]},
   { group: 'Payroll & HR', module: 'storeops', items: [
+    // The Payroll tiled dashboard (Phase W2) — group's front door, FIRST on purpose. module
+    // 'storeops' + ['all','market'] mirrors /storeops/payroll: the hub lists payroll surfaces, and
+    // each destination keeps its own (sometimes stricter) gate — e.g. payers stays scopes:['all'].
+    { href: '/payroll', label: 'Payroll Dashboard', icon: '🏠', module: 'storeops', scopes: ['all', 'market'] },
     { href: '/hr/people', label: 'People (add employees)', icon: '🧑‍💼', module: 'hr', scopes: ['all', 'market'] },
     { href: '/hr/onboarding', label: 'Onboarding Checklist', icon: '🧩', module: 'hr', scopes: ['all', 'market'] },
     { href: '/hr/compliance', label: 'Compliance', icon: '📋', module: 'hr', scopes: ['all', 'market'] },

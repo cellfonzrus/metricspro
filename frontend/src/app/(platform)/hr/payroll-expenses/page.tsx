@@ -13,6 +13,8 @@
 // + docs/handoffs/people.md for the full contract.
 import { useState, useEffect, useCallback } from 'react'
 import { api, fmt, parseLocalDate } from '@/lib/client'
+import { apiCached, CONFIG } from '@/lib/cache'
+import { currentPeriodFromSettingsResponse } from '@/lib/pay-period'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
 import { ReportExportBar, ExportColumn } from '@/components/ReportExportBar'
 
@@ -62,6 +64,29 @@ function currentMonth() {
 
 export default function PayrollExpensesPage() {
   const [month, setMonth] = useState(() => currentMonth())
+
+  // Phase W2 period coherence (owner directive 2026-09-01): the DEFAULT month is derived from the
+  // tenant's CURRENT pay period — the calendar month containing the pay period's START date — via
+  // the shared resolver (@/lib/pay-period over GET /core/tenant-settings preview[0]).
+  //
+  // DOCUMENTED SEAM: this page's whole backend contract is keyed on a calendar-MONTH path param
+  // ({period} in GET/POST /storeops/payroll-expenses[/run]/{month}), not an arbitrary start/end
+  // range — wage-base caps are tracked cumulatively per calendar year, so the month is a real
+  // backend concept, not a UI convenience. This phase deliberately does NOT rewrite that contract;
+  // it only aligns the DEFAULT month with the shared pay period. Making the run period-native
+  // (biweekly-range payroll-expense runs) is a separate backend phase.
+  useEffect(() => {
+    let cancelled = false
+    apiCached('/api/v1/core/tenant-settings', CONFIG).then((r: any) => {
+      if (cancelled) return
+      const cur = currentPeriodFromSettingsResponse(r)
+      const m = cur?.period?.start?.slice(0, 7)
+      // Applied only while the month is still the untouched initial default, so a month the user
+      // picked before this (cached) fetch resolved is never clobbered.
+      if (m && /^\d{4}-\d{2}$/.test(m)) setMonth(prev => (prev === currentMonth() ? m : prev))
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [])
   const [taxCfg, setTaxCfg] = useState<TaxConfig | null>(null)
   const [taxSaving, setTaxSaving] = useState(false)
   const [taxMsg, setTaxMsg] = useState('')

@@ -355,6 +355,13 @@ export default function StoreOpsAdminPage() {
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Manage employees, pay rates, and stores.</p>
       </div>
 
+      {/* Phase W2 (owner directive 2026-09-01): this combined page was split into two dedicated
+          surfaces. It keeps working (bookmarks, help docs), but the split pages are the primary path. */}
+      <div className="card" style={{ padding: '10px 14px', marginBottom: 14, fontSize: 13, background: 'var(--surface2)' }}>
+        ℹ️ This page has been split: manage stores in <a href="/storeops/setup/stores" style={{ color: 'var(--accent)', fontWeight: 600 }}>Store Setup</a> and
+        people in <a href="/storeops/setup/employees" style={{ color: 'var(--accent)', fontWeight: 600 }}>Employee Setup</a> — same data, dedicated pages.
+      </div>
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         {(['employees', 'stores'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{ padding: '7px 16px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontWeight: 600, cursor: 'pointer', background: tab === t ? 'var(--accent)' : 'var(--surface)', color: tab === t ? '#fff' : 'var(--text2)' }}>

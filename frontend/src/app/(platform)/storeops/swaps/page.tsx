@@ -1,8 +1,10 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import ReportExportBar, { type ExportColumn } from '@/components/ReportExportBar'
+import StandardFilterBar from '@/components/StandardFilterBar'
+import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterValue } from '@/lib/standard-filters'
 
 const sel: React.CSSProperties = { padding: '6px 9px', borderRadius: 7, border: '1px solid var(--border)', fontSize: 13, background: 'var(--surface)' }
 const cell: React.CSSProperties = { padding: '8px 10px', borderBottom: '1px solid var(--border)', fontSize: 13 }
@@ -63,6 +65,19 @@ export default function ShiftSwapsPage() {
     catch (e: any) { setMsg('Update failed: ' + (e?.message || e)) }
   }
 
+  // Standard filters (Phase W2, RULE FIVE §3d): employee(s) + store(s) + a date range over the
+  // requester's shift date. Options come off the loaded rows (org-scoped by construction); no market
+  // control — a swap row carries no market. Table + export read the SAME filtered set.
+  const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
+  const swapStore = (s: any) => s.shift?.store_code || s.target_shift?.store_code || ''
+  const swapDate = (s: any) => s.shift?.shift_date || s.target_shift?.shift_date || ''
+  const filtOpts = useMemo(() => optionsFromRows(swaps, {
+    rep: s => s.requester_name || s.requester_id, store: swapStore,
+  }), [swaps])
+  const visible = useMemo(() => filterRows(swaps, filt, {
+    rep: s => s.requester_name || s.requester_id, store: swapStore, date: swapDate,
+  }), [swaps, filt])
+
   // RULE FOUR (§3c): export the visible rows — no PII (names/shift labels/status/notes only).
   const cols: ExportColumn[] = [
     { header: 'Requester', field: 'requester', role: 'rep', get: s => s.requester_name || s.requester_id },
@@ -81,7 +96,7 @@ export default function ShiftSwapsPage() {
           <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>Request and approve shift swaps. Approving reassigns the shift(s).</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {swaps.length > 0 && <ReportExportBar title="Shift Swaps" columns={cols} rows={swaps} />}
+          {swaps.length > 0 && <ReportExportBar title="Shift Swaps" columns={cols} rows={visible} />}
           <button className="btn btn-primary" onClick={() => setShowForm(v => !v)}>{showForm ? '✕ Cancel' : '＋ New swap request'}</button>
         </div>
       </div>
@@ -126,10 +141,18 @@ export default function ShiftSwapsPage() {
         </div>
       )}
 
+      {/* Standard filter bar (Phase W2) — employees + stores + date range over the shift date. */}
+      {swaps.length > 0 && (
+        <StandardFilterBar value={filt} onChange={setFilt} periodMode="range" show={{ markets: false }}
+          storeOptions={filtOpts.stores} repOptions={filtOpts.reps} repLabel="Employees…" />
+      )}
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><div className="spinner" /></div>
       ) : swaps.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>No shift-swap requests yet.</div>
+      ) : visible.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: 60, color: 'var(--text3)' }}>No swap requests match the current filters.</div>
       ) : (
         <div className="table-wrapper">
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -138,7 +161,7 @@ export default function ShiftSwapsPage() {
                 <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', textTransform: 'uppercase' }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {swaps.map(s => (
+              {visible.map(s => (
                 <tr key={s.id}>
                   <td style={{ ...cell, fontWeight: 500 }}>{s.requester_name || s.requester_id}</td>
                   <td style={cell}>{shiftLabel(s.shift)}</td>
