@@ -15,6 +15,7 @@ export type Permissions = {
   reports?: Record<string, boolean>   // per-AREA report access (separate from the operational module)
   data?: Record<string, boolean>      // per-KEY sensitive-data grants (e.g. carrier_residual) — see DATA_GRANTS
   pages?: Record<string, boolean>     // per-FUNCTION override (by nav href): explicit true/false wins over module
+  settings?: Record<string, boolean>  // per-AREA settings-editing grants (core SETTING_AREAS, e.g. 'menu_layout')
   scope?: Scope                       // REPORTING span (whose numbers) — NOT scheduling reach
   scheduling_reach?: SchedulingReach  // SCHEDULING reach (whom you may schedule); default 'org'
   home?: string
@@ -255,28 +256,34 @@ export const NAV: NavGroup[] = [
   // POS module (mig 724/725) — the point-of-sale port (Phase 1: register, customers, inventory,
   // settings). Activations/vendors/POs/reports arrive in Phase 2; see pos-system INTEGRATION_PLAN.md.
   { group: 'Point of Sale', module: 'pos', items: [
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/point-of-sale', label: 'Point of Sale Dashboard', icon: '🛒', module: 'pos', scopes: ['all', 'market', 'store'] },
     // Setup wizard (mig 733, owner directive 2026-08-09). FIRST in the group deliberately: a tenant
     // whose POS is not configured is redirected here by (platform)/pos/layout.tsx, and this entry is
     // how they get BACK to it afterwards. Scoped 'all' + 'market' — a store-scoped cashier is not the
     // person who defines the tenant's departments and tax rates.
-    { href: '/pos/onboarding', label: 'Setup Wizard', icon: '🛠️', module: 'pos', scopes: ['all', 'market'] },
-    { href: '/pos/sales', label: 'Register', icon: '🛒', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/customers', label: 'Customers', icon: '👤', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/activations', label: 'Activations', icon: '📱', module: 'pos', scopes: ['all', 'market', 'store'] },
+    { href: '/pos/onboarding', label: 'Setup Wizard', icon: '🛠️', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/pos/sales', label: 'Register', icon: '🛒', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/pos/customers', label: 'Customers', icon: '👤', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/pos/inventory', label: 'Inventory', icon: '📦', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/pos/products', label: 'Products & Services', icon: '🏷️', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/pos/activations', label: 'Activations', icon: '📱', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
     // Customer Special Order (owner directive 2026-08-19). The store-facing flow is available to every
     // POS scope (a cashier rings one). The HQ management surface (catalog vendor linkage + connectors)
     // is 'all'/'market' in the nav AND gated server-side by pos_special_order_admin — that permission,
     // which store roles don't hold, is what keeps the back-end vendor hidden from stores.
-    { href: '/pos/special-orders', label: 'Special Orders', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/special-orders/manage', label: 'Special Order Setup', icon: '🗂️', module: 'pos', scopes: ['all', 'market'] },
-    { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'] },
-    { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'] },
-    { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'] },
-    { href: '/pos/receipts', label: 'Receipt Import', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'] },
-    { href: '/pos/activation-report', label: 'Activation / Rebate Report', icon: '📶', module: 'pos', scopes: ['all', 'market'] },
-    { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'] },
+    { href: '/pos/special-orders', label: 'Special Orders', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/pos/special-orders/manage', label: 'Special Order Setup', icon: '🗂️', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/pos/vendors', label: 'Vendors', icon: '🏭', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/pos/reports', label: 'POS Reports', icon: '📈', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/pos/import', label: 'Import', icon: '📥', module: 'pos', scopes: ['all'], tileOnly: true },
+    { href: '/pos/receipts', label: 'Receipt Import', icon: '🧾', module: 'pos', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/pos/activation-report', label: 'Activation / Rebate Report', icon: '📶', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/pos/settings', label: 'POS Settings', icon: '⚙️', module: 'pos', scopes: ['all', 'market'], tileOnly: true },
   ]},
   // CRM (mig 800, owner directive 2026-08-12) — the sales pipeline + follow-up system + the
   // phone-number Customer 360. Placed directly after Point of Sale: it is the surface a rep touches
@@ -284,15 +291,21 @@ export const NAV: NavGroup[] = [
   // 'Customer Lookup' carries no extra nav scope on purpose — the real gate is the server-side
   // `customer_360` data grant (default-closed), so widening the nav here cannot widen access.
   { group: 'CRM', module: 'crm', items: [
-    { href: '/crm', label: 'Dashboard', icon: '🎯', module: 'crm', scopes: ['all', 'market', 'store'] },
-    { href: '/crm/my-followups', label: 'My Follow-ups', icon: '🔔', module: 'crm' },
-    { href: '/crm/leads', label: 'Leads', icon: '📇', module: 'crm', scopes: ['all', 'market', 'store'] },
-    { href: '/crm/leads/new', label: 'Log a Lead', icon: '➕', module: 'crm' },
-    { href: '/crm/pipeline', label: 'Pipeline Board', icon: '🗂️', module: 'crm', scopes: ['all', 'market', 'store'] },
-    { href: '/crm/lookup', label: 'Customer Lookup', icon: '🔎', module: 'crm' },
-    { href: '/crm/agencies', label: 'Outside Agencies', icon: '🤝', module: 'crm', scopes: ['all', 'market'] },
-    { href: '/crm/reports', label: 'CRM Reports', icon: '📈', module: 'crm', scopes: ['all', 'market'] },
-    { href: '/crm/settings', label: 'CRM Settings', icon: '⚙️', module: 'crm', scopes: ['all'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/crm', label: 'CRM Dashboard', icon: '🎯', module: 'crm' },
+    { href: '/crm', label: 'Dashboard', icon: '🎯', module: 'crm', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/crm/my-followups', label: 'My Follow-ups', icon: '🔔', module: 'crm', tileOnly: true },
+    { href: '/crm/leads', label: 'Leads', icon: '📇', module: 'crm', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/crm/leads/new', label: 'Log a Lead', icon: '➕', module: 'crm', tileOnly: true },
+    { href: '/crm/pipeline', label: 'Pipeline Board', icon: '🗂️', module: 'crm', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/crm/lookup', label: 'Customer Lookup', icon: '🔎', module: 'crm', tileOnly: true },
+    { href: '/crm/agencies', label: 'Outside Agencies', icon: '🤝', module: 'crm', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/crm/reports', label: 'CRM Reports', icon: '📈', module: 'crm', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/crm/settings', label: 'CRM Settings', icon: '⚙️', module: 'crm', scopes: ['all'], tileOnly: true },
   ]},
   // Referral (mig 850, owner directive 2026-08-13) — QR-code customer referrals + activation-gated,
   // approval-gated commission. Placed after CRM: it is a sibling top-of-funnel surface (a rep hands a
@@ -302,11 +315,17 @@ export const NAV: NavGroup[] = [
   // (_can_approve) is the real gate — the nav scope only decides who sees the tab. Settings is 'all'
   // only, like every other module's config surface.
   { group: 'Referral', module: 'referral', items: [
-    { href: '/referral', label: 'Dashboard', icon: '🎁', module: 'referral', scopes: ['all', 'market', 'store'] },
-    { href: '/referral/new', label: 'New Referral', icon: '➕', module: 'referral', scopes: ['all', 'market', 'store'] },
-    { href: '/referral/list', label: 'Referrals', icon: '📇', module: 'referral', scopes: ['all', 'market', 'store'] },
-    { href: '/referral/approvals', label: 'Approvals', icon: '✅', module: 'referral', scopes: ['all', 'market'] },
-    { href: '/referral/settings', label: 'Referral Settings', icon: '⚙️', module: 'referral', scopes: ['all'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/referral', label: 'Referral Dashboard', icon: '🎁', module: 'referral', scopes: ['all', 'market', 'store'] },
+    { href: '/referral', label: 'Dashboard', icon: '🎁', module: 'referral', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/referral/new', label: 'New Referral', icon: '➕', module: 'referral', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/referral/list', label: 'Referrals', icon: '📇', module: 'referral', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/referral/approvals', label: 'Approvals', icon: '✅', module: 'referral', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/referral/settings', label: 'Referral Settings', icon: '⚙️', module: 'referral', scopes: ['all'], tileOnly: true },
   ]},
   // Vision (mig 900, owner directive 2026-08-19) — live Google Nest camera feeds, customer in/out
   // counting + floor heat map, and voice-transcript coaching. Placed after Referral: it is the last
@@ -316,54 +335,66 @@ export const NAV: NavGroup[] = [
   // reaches their OWN numbers through the server-side /vision/behavior/mine route, which needs no
   // manager role, so narrowing the nav here does not hide anyone's own data from them.
   { group: 'Vision', module: 'vision', items: [
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/vision', label: 'Vision Dashboard', icon: '📹', module: 'vision', scopes: ['all', 'market', 'store'] },
     // The setup wizard leads the group deliberately: a tenant whose cameras are not connected yet
     // has nothing to look at on any other page here, and connecting them spans three Google
     // consoles. Same 'all' scope as Vision Settings — it writes the company's Google credential.
-    { href: '/vision/onboarding', label: 'Camera Setup', icon: '🎥', module: 'vision', scopes: ['all'] },
-    { href: '/vision', label: 'Live Cameras', icon: '📹', module: 'vision', scopes: ['all', 'market', 'store'] },
+    { href: '/vision/onboarding', label: 'Camera Setup', icon: '🎥', module: 'vision', scopes: ['all'], tileOnly: true },
+    { href: '/vision', label: 'Live Cameras', icon: '📹', module: 'vision', scopes: ['all', 'market', 'store'], tileOnly: true },
     // Counting Lines is 'all', not a viewer tier, because PUT /cameras/{id}/zones goes through
     // _require_settings: the line decides what "a customer came in" MEANS for that door, and a
     // whole-set replace can also delete the exclude polygons keeping the pavement out of the count.
-    { href: '/vision/lines', label: 'Counting Lines', icon: '📏', module: 'vision', scopes: ['all'] },
-    { href: '/vision/heatmap', label: 'Traffic & Heat Map', icon: '🔥', module: 'vision', scopes: ['all', 'market', 'store'] },
+    { href: '/vision/lines', label: 'Counting Lines', icon: '📏', module: 'vision', scopes: ['all'], tileOnly: true },
+    { href: '/vision/heatmap', label: 'Traffic & Heat Map', icon: '🔥', module: 'vision', scopes: ['all', 'market', 'store'], tileOnly: true },
     // Busy Hours reads Google's own person events (mig 907) — no analyzer, no video, every camera.
     // Same scope tiers as Live Cameras / Heat Map: it is store-level activity, names nobody, and a
     // store manager staffing their own floor is exactly who it is for.
-    { href: '/vision/busy-hours', label: 'Busy Hours', icon: '🕐', module: 'vision', scopes: ['all', 'market', 'store'] },
+    { href: '/vision/busy-hours', label: 'Busy Hours', icon: '🕐', module: 'vision', scopes: ['all', 'market', 'store'], tileOnly: true },
     // Floor Activity (mig 908). Same manager scope as Coaching and for the same reason: when it is
     // about anybody at all it names them. An employee reaches their OWN rows through the
     // server-side /vision/activity/mine route, which needs no manager role.
-    { href: '/vision/activity', label: 'Floor Activity', icon: '🧍', module: 'vision', scopes: ['all', 'market'] },
-    { href: '/vision/behavior', label: 'Coaching', icon: '🎧', module: 'vision', scopes: ['all', 'market'] },
-    { href: '/vision/settings', label: 'Vision Settings', icon: '⚙️', module: 'vision', scopes: ['all'] },
+    { href: '/vision/activity', label: 'Floor Activity', icon: '🧍', module: 'vision', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/vision/behavior', label: 'Coaching', icon: '🎧', module: 'vision', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/vision/settings', label: 'Vision Settings', icon: '⚙️', module: 'vision', scopes: ['all'], tileOnly: true },
   ]},
   { group: 'Incentives', module: 'commissions', items: [
-      { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions' },
-    { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions' },
-    { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions' },
-    { href: '/commcalc/sales-comparison', label: 'Sales Comparison', icon: '📈', module: 'commissions' },
-    { href: '/commcalc/custom-report', label: 'Custom Report', icon: '🧩', module: 'commissions' },
-    { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/activations', label: 'Activations', icon: '📲', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/schematic', label: 'System Schematic', icon: '🗺️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/reports-index', label: 'Reports Index', icon: '🗂️', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/onboarding', label: 'Setup Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/reports', label: 'Rep Incentive Report', icon: '📋', module: 'commissions' },
-    { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions' },
-    { href: '/commcalc/device-history', label: 'Device History', icon: '📱', module: 'commissions' },
-    { href: '/commcalc/ma-handsets', label: 'Handset COGS', icon: '📦', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/device-cost-recon', label: 'Device Cost Recon', icon: '🧮', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/productivity-insights', label: 'Productivity Insights', icon: '💡', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/sales-analyzer', label: 'Retention Analysis', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'] },
-    { href: '/commcalc/whatif', label: 'What‑If Analysis', icon: '🔮', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/comp-trend', label: 'Total Compensation', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/commission-ledger', label: 'Commission Ledger', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/ma-commission', label: 'Total Processor', icon: '📡', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/ma-overview-recon', label: 'MA Overview cross-check', icon: '🧾', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/commission-legs', label: 'Commission Legs (M1 / M2–M12)', icon: '🧩', module: 'commissions', scopes: ['all'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/incentives', label: 'Incentives Dashboard', icon: '📊', module: 'commissions' },
+      { href: '/commcalc/pay-simulator', label: 'What Would I Make?', icon: '🎚️', module: 'commissions', tileOnly: true },
+    { href: '/commcalc', label: 'Dashboard', icon: '📊', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/sales-report', label: 'Sales Report', icon: '🧾', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/sales-comparison', label: 'Sales Comparison', icon: '📈', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/custom-report', label: 'Custom Report', icon: '🧩', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/exec', label: 'Owner Overview', icon: '🏆', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/exec/mtd', label: 'Executive MTD', icon: '📅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/activations', label: 'Activations', icon: '📲', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/schematic', label: 'System Schematic', icon: '🗺️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/reports-index', label: 'Reports Index', icon: '🗂️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/onboarding', label: 'Setup Wizard', icon: '🧭', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/reports', label: 'Rep Incentive Report', icon: '📋', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/kpi', label: 'KPI Metrics', icon: '🎯', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/device-history', label: 'Device History', icon: '📱', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/ma-handsets', label: 'Handset COGS', icon: '📦', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/device-cost-recon', label: 'Device Cost Recon', icon: '🧮', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/productivity', label: 'Productivity & Reviews', icon: '🏅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/productivity-insights', label: 'Productivity Insights', icon: '💡', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/coaching', label: 'Rep Coaching', icon: '🎓', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/sales-analyzer', label: 'Retention Analysis', icon: '📉', module: 'commissions', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/commcalc/whatif', label: 'What‑If Analysis', icon: '🔮', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/comp-trend', label: 'Total Compensation', icon: '📡', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/commission-ledger', label: 'Commission Ledger', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/ma-commission', label: 'Total Processor', icon: '📡', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/ma-overview-recon', label: 'MA Overview cross-check', icon: '🧾', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/commission-legs', label: 'Commission Legs (M1 / M2–M12)', icon: '🧩', module: 'commissions', scopes: ['all'], tileOnly: true },
     // DM GATE — OWNER DIRECTIVE 2026-08-07, verbatim: "all flags need to be fed thru the dm, so yes
     // route it thru the dm and then visible to the scoped user." Flags now carries the SAME scope gate
     // its Chargebacks & Fraud sibling below has always had (admin 'all' + DM 'market'), so a flag
@@ -373,23 +404,23 @@ export const NAV: NavGroup[] = [
     // "Commission reports" for a store role, silently handing that role the un-reviewed queue.
     // Shape byte-identical to the chargebacks row: an EXACT per-function grant still lifts it, exactly
     // as it lifts chargebacks (that override is an admin's deliberate act, not the default posture).
-    { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', icon: '🔻', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/accessory-cost-audit', label: 'Accessory Cost Audit', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/expected-commission', label: 'Expected vs Earned', icon: '⏳', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/daily-commission', label: 'Daily Incentive', icon: '📅', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/training', label: 'Training Center', icon: '🎓', module: 'targets' },
-    { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions' },
-    { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions' },
-    { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/epay-fee-recon', label: 'ePay Fee Recon', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/imei-recon', label: 'IMEI Reconciliation', icon: '📲', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/carrier-recon', label: 'Carrier Reconciliation', icon: '🔁', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/flags', label: 'Flags', icon: '🚩', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', icon: '🔻', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/accessory-flags', label: 'Accessory Flags', icon: '🔖', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/accessory-cost-audit', label: 'Accessory Cost Audit', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/expected-commission', label: 'Expected vs Earned', icon: '⏳', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/daily-commission', label: 'Daily Incentive', icon: '📅', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/training', label: 'Training Center', icon: '🎓', module: 'targets', tileOnly: true },
+    { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', icon: '⚠️', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/imei-rebates', label: 'IMEI Rebates', icon: '🔁', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/recovery', label: 'Appeal Recovery', icon: '💰', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/sales-recon', label: 'Sales Feed Recon', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/epay-fee-recon', label: 'ePay Fee Recon', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/imei-recon', label: 'IMEI Reconciliation', icon: '📲', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/carrier-recon', label: 'Carrier Reconciliation', icon: '🔁', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
     // Agency (Master/Sub-Agent) console — config + billing, admin/owner scope only (NEEDS CORE for
     // agency-phase1). Intentionally NOT in REPORT_DIRECTORY: it is a config+invoicing surface, not a report.
-    { href: '/commcalc/agency', label: 'Agency', icon: '🏢', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/agency', label: 'Agency', icon: '🏢', module: 'commissions', scopes: ['all'], tileOnly: true },
   ]},
   // ── Commission Payout Plans ────────────────────────────────────────────────────────────────
   // ONE home for HOW reps get paid, per carrier. 'Overview' maps each enabled carrier to the engine
@@ -397,81 +428,111 @@ export const NAV: NavGroup[] = [
   // Boost Rates is carrier-gated to Boost tenants (NAV_CARRIERS) so a Total-only tenant never sees the
   // hardcoded Boost tiers. Regroup is a ZERO-RBAC-CHANGE move — every item keeps its module + scopes.
   { group: 'Incentive Payout Plans', module: 'commissions', items: [
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/incentive-payout-plans', label: 'Incentive Payout Plans Dashboard', icon: '💳', module: 'commissions', scopes: ['all', 'market'] },
     // FRONT DOOR (owner directive 2026-08-26): one guided place to set up the ENTIRE commission structure
     // in the UI — pick/create the plan, set activation + accessory payouts, choose the per-plan Activation
     // source, confirm accessory classification, assign reps, see the estimate. Composes/deep-links the
     // existing plan editor, accessory settings and coverage wizard — additive, nothing else changes.
-    { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', icon: '🧭', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/commission-plans', label: 'Incentive Plans', icon: '🧮', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/management-incentive', label: 'Management Incentives', icon: '🏆', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/plan-installments', label: 'Multi‑Month Installments', icon: '🗓️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/payout-schedules', label: 'Payout Schedules', icon: '📆', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/settings', label: 'Boost Rates (KPI‑tier)', icon: '⚙️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '📡', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/commission-category-map', label: 'Category → Bucket Map', icon: '🗺️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/ma-product-class', label: 'MA Product Name Classification', icon: '🏷️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/accessory-definition', label: 'Accessory Definition', icon: '🎧', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/commission-import', label: 'Import Wizard', icon: '🪄', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/commission-structure', label: 'Employee Commission Structure', icon: '🧭', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/payout-plans', label: 'Overview', icon: '💳', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/commission-plans', label: 'Incentive Plans', icon: '🧮', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/management-incentive', label: 'Management Incentives', icon: '🏆', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/plan-installments', label: 'Multi‑Month Installments', icon: '🗓️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/payout-schedules', label: 'Payout Schedules', icon: '📆', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/settings', label: 'Boost Rates (KPI‑tier)', icon: '⚙️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/carrier-mapping', label: 'Carrier Mapping', icon: '📡', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/commission-category-map', label: 'Category → Bucket Map', icon: '🗺️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/ma-product-class', label: 'MA Product Name Classification', icon: '🏷️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/accessory-definition', label: 'Accessory Definition', icon: '🎧', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/commission-import', label: 'Import Wizard', icon: '🪄', module: 'commissions', scopes: ['all'], tileOnly: true },
   ]},
   { group: 'Targets & Coaching', module: 'targets', items: [
-    { href: '/commcalc/targets', label: 'Daily Targets', icon: '📈', module: 'targets', scopes: ['all', 'market', 'store'] },
-    { href: '/commcalc/financing', label: 'Financing', icon: '💳', module: 'commissions', scopes: ['all', 'market', 'store'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/targets-coaching', label: 'Targets & Coaching Dashboard', icon: '📈', module: 'targets' },
+    { href: '/commcalc/targets', label: 'Daily Targets', icon: '📈', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/commcalc/financing', label: 'Financing', icon: '💳', module: 'commissions', scopes: ['all', 'market', 'store'], tileOnly: true },
     // Autopay opportunity (owner 2026-08-12). Sits in Targets & Coaching, not Commissions: it states
     // revenue NOT collected and is a thing a rep is COACHED to fix, not a payout anyone is owed.
-    { href: '/commcalc/atu-opportunity', label: 'Autopay Opportunity', icon: '🔁', module: 'targets', scopes: ['all', 'market', 'store'] },
-    { href: '/commcalc/targets/action-plan', label: 'Action Plan', icon: '✅', module: 'targets', scopes: ['all', 'market', 'store'] },
-    { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'] },
-    { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'] },
-    { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'] },
-    { href: '/commcalc/targets/my', label: 'My Targets', icon: '🙋', module: 'targets' },
-    { href: '/employee', label: 'Employee Dashboard', icon: '🧑‍💼', module: 'targets' },
+    { href: '/commcalc/atu-opportunity', label: 'Autopay Opportunity', icon: '🔁', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/commcalc/targets/action-plan', label: 'Action Plan', icon: '✅', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/commcalc/targets/accessories', label: 'Accessory Targets', icon: '🔖', module: 'targets', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/commcalc/targets/rep-map', label: 'Rep → Store Map', icon: '🗺️', module: 'targets', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/targets/settings', label: 'Target Settings', icon: '🎚️', module: 'targets', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/targets/my', label: 'My Targets', icon: '🙋', module: 'targets', tileOnly: true },
+    { href: '/employee', label: 'Employee Dashboard', icon: '🧑‍💼', module: 'targets', tileOnly: true },
   ]},
   { group: 'Finance', module: 'accounts', items: [
-    { href: '/accounts', label: 'Dashboard', icon: '💼', module: 'accounts', scopes: ['all', 'market'] },
-    { href: '/accounts/trends', label: 'Trends', icon: '📊', module: 'accounts', scopes: ['all', 'market'] },
-    { href: '/accounts/pl', label: 'P&L Statement', icon: '📈', module: 'accounts', scopes: ['all', 'market'] },
-    { href: '/commcalc/gp', label: 'Gross Profit', icon: '💰', module: 'commissions' },
-    { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/tax-collected', label: 'Tax Collected', icon: '🧾', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/accounts/balance-sheet', label: 'Balance Sheet', icon: '⚖️', module: 'accounts', scopes: ['all', 'market'] },
-    { href: '/accounts/inventory', label: 'Inventory Values', icon: '📦', module: 'accounts', scopes: ['all', 'market'] },
-    { href: '/accounts/recon', label: 'Reconciliation', icon: '🔎', module: 'accounts', scopes: ['all', 'market'] },
-    { href: '/accounts/residual-per-sub', label: 'Residual per Subscriber', icon: '📉', module: 'accounts', scopes: ['all', 'market'] },
-    { href: '/accounts/journal', label: 'Journal', icon: '📒', module: 'accounts', scopes: ['all'] },
-    { href: '/accounts/companies', label: 'Companies', icon: '🏢', module: 'accounts', scopes: ['all'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/finance', label: 'Finance Dashboard', icon: '💼', module: 'accounts' },
+    { href: '/accounts', label: 'Dashboard', icon: '💼', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/trends', label: 'Trends', icon: '📊', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/pl', label: 'P&L Statement', icon: '📈', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/gp', label: 'Gross Profit', icon: '💰', module: 'commissions', tileOnly: true },
+    { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/tax-collected', label: 'Tax Collected', icon: '🧾', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/balance-sheet', label: 'Balance Sheet', icon: '⚖️', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/inventory', label: 'Inventory Values', icon: '📦', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/recon', label: 'Reconciliation', icon: '🔎', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/residual-per-sub', label: 'Residual per Subscriber', icon: '📉', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/journal', label: 'Journal', icon: '📒', module: 'accounts', scopes: ['all'], tileOnly: true },
+    { href: '/accounts/companies', label: 'Companies', icon: '🏢', module: 'accounts', scopes: ['all'], tileOnly: true },
   ]},
   { group: 'Assets', module: 'asset', items: [
-    { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦', module: 'asset' },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/assets', label: 'Assets Dashboard', icon: '📦', module: 'asset' },
+    { href: '/commcalc/asset', label: 'Asset Ledger', icon: '📦', module: 'asset', tileOnly: true },
     // MA / VidaPay marketplace-purchase orders (mig 207). First-class nav entry per mod-asset NEEDS CORE
     // [asset-10] — was reachable only via a button on the VIP-styled landing. carrier-gated to Total in
     // NAV_CARRIERS (the one asset page that applies to luxelink/Total, and only to them).
-    { href: '/commcalc/asset/marketplace-purchases', label: 'Marketplace Purchases', icon: '🛒', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/dashboard', label: 'Charges Dashboard', icon: '📊', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/owed-weekly', label: 'Weekly Owed-to-Distributor', icon: '📅', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/aging', label: 'Inventory Aging', icon: '⏳', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/missing-phones', label: 'Missing Phones', icon: '📵', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/aging-rebate', label: 'Aging · Rebate Received', icon: '💵', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/payables', label: 'Forecasting & Vendor Payables', icon: '📱', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/borrowed', label: 'Borrowed / Lending', icon: '🔁', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/lending', label: 'Asset Lending (PayGo)', icon: '📲', module: 'asset', scopes: ['all', 'market'], cap: 'asset_lending' },
-    { href: '/commcalc/asset/charges/rma', label: 'RMA', icon: '↩️', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/inventory-recon', label: 'Inventory Recon', icon: '🔎', module: 'asset', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/marketplace-purchases', label: 'Marketplace Purchases', icon: '🛒', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/dashboard', label: 'Charges Dashboard', icon: '📊', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/owed-weekly', label: 'Weekly Owed-to-Distributor', icon: '📅', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/aging', label: 'Inventory Aging', icon: '⏳', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/missing-phones', label: 'Missing Phones', icon: '📵', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/aging-rebate', label: 'Aging · Rebate Received', icon: '💵', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/on-inventory', label: 'On-Inventory by Store', icon: '🏬', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/payables', label: 'Forecasting & Vendor Payables', icon: '📱', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/borrowed', label: 'Borrowed / Lending', icon: '🔁', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/lending', label: 'Asset Lending (PayGo)', icon: '📲', module: 'asset', scopes: ['all', 'market'], cap: 'asset_lending', tileOnly: true },
+    { href: '/commcalc/asset/charges/rma', label: 'RMA', icon: '↩️', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/inventory-recon', label: 'Inventory Recon', icon: '🔎', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
     // Purchase Orders (mig 301) — proposed PO → receiving → sold tally → unsold aging. First-class nav
     // entry per mod-asset NEEDS CORE [asset-11] (was reachable only via a button on /commcalc/asset).
     // Carrier-NEUTRAL by design (buying/receiving is universal) → deliberately NOT in NAV_CARRIERS.
     // scopes ['all','market'] mirrors every sibling asset item: the PO endpoints are ORG-scoped, not
     // store-scoped, so a store-scoped user would see other stores' POs. If store-level receiving is
     // wanted, mod-asset should store-scope the reads first and then file for the scope widening.
-    { href: '/commcalc/asset/purchase-orders', label: 'Purchase Orders', icon: '📦', module: 'asset', scopes: ['all', 'market'] },
-    { href: '/commcalc/asset/hotsheet-recon', label: 'Pricing Hotsheet', icon: '🏷️', module: 'commissions', scopes: ['all', 'market'] },
+    { href: '/commcalc/asset/purchase-orders', label: 'Purchase Orders', icon: '📦', module: 'asset', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/asset/hotsheet-recon', label: 'Pricing Hotsheet', icon: '🏷️', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
   ]},
   { group: 'Distributors', module: 'vip', items: [
-    { href: '/commcalc/distributors', label: 'Distributors', icon: '🏬', module: 'vip', scopes: ['all', 'market'] },
-    { href: '/commcalc/vip', label: 'Distributor · Invoices', icon: '🧾', module: 'vip' },
-    { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'], cap: 'asset_lending' },
-    { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/distributors', label: 'Distributors Dashboard', icon: '🏬', module: 'vip' },
+    { href: '/commcalc/distributors', label: 'Distributors', icon: '🏬', module: 'vip', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/vip', label: 'Distributor · Invoices', icon: '🧾', module: 'vip', tileOnly: true },
+    { href: '/commcalc/vip/paygo', label: 'Distributor · PayGo / Asset Lending', icon: '📲', module: 'vip', scopes: ['all', 'market'], cap: 'asset_lending', tileOnly: true },
+    { href: '/commcalc/vip/sweep', label: 'Distributor · Sweep', icon: '🧹', module: 'vip', scopes: ['all'], tileOnly: true },
   ]},
   // Unified Approvals inbox (owner directive 2026-08-19) — cross-cutting, so its own group. Every
   // module's approval/intimation request surfaces here; approvers are managers (scope all/market/store).
@@ -551,85 +612,121 @@ export const NAV: NavGroup[] = [
     { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
   ]},
   { group: 'Daily Closing', module: 'closing', items: [
-    { href: '/closing', label: 'Dashboard', icon: '🧾', module: 'closing', scopes: ['all', 'market', 'store'] },
-    { href: '/closing/submit', label: 'Submit Closing', icon: '➕', module: 'closing' },
-    { href: '/closing/verify', label: 'DM Verify', icon: '✅', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/management', label: 'Management Review', icon: '🛡️', module: 'closing' },
-    { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/tender-recon', label: 'X-Tender Recon', icon: '🧾', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/accessory-recon', label: 'Accessory Recon', icon: '🔖', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/envelope-payout', label: 'Envelope Payouts', icon: '💸', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/expenses-report', label: 'Closing Expenses', icon: '📋', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/daily-closing', label: 'Daily Closing Dashboard', icon: '🧾', module: 'closing' },
+    { href: '/closing', label: 'Dashboard', icon: '🧾', module: 'closing', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/closing/submit', label: 'Submit Closing', icon: '➕', module: 'closing', tileOnly: true },
+    { href: '/closing/verify', label: 'DM Verify', icon: '✅', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/management', label: 'Management Review', icon: '🛡️', module: 'closing', tileOnly: true },
+    { href: '/closing/recon', label: 'Reconciliation', icon: '🔎', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/tender-recon', label: 'X-Tender Recon', icon: '🧾', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/accessory-recon', label: 'Accessory Recon', icon: '🔖', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/envelope-payout', label: 'Envelope Payouts', icon: '💸', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/expenses-report', label: 'Closing Expenses', icon: '📋', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Cash Deposit Recon + Deposit Categories (mig 509) — nav entries per mod-retail-ops NEEDS CORE
     // 2026-08-05 (both pages were reachable only via direct links on the Closing dashboard / ePay recon).
     // Same `module: 'closing'` key + scope tiers as every sibling above, so NO role re-seeding is needed
     // ([[seeded-role-modules-forward-only]]): any role that already has the closing module sees them, and
     // neither href falls under a REPORT_TREES prefix (`/closing/recon` boundary-matches only itself), so
     // there is no extra report-area gate — identical gating to Closing Expenses / Expense Categories.
-    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', icon: '💵', module: 'closing', scopes: ['all', 'market'] },
-    { href: '/closing/cash-config', label: 'Cash Setup', icon: '⚙️', module: 'closing', scopes: ['all'] },
-    { href: '/closing/tender-config', label: 'Tender Setup', icon: '🧾', module: 'closing', scopes: ['all'] },
-    { href: '/closing/expense-categories', label: 'Expense Categories', icon: '🗂️', module: 'closing', scopes: ['all'] },
-    { href: '/closing/deposit-categories', label: 'Deposit Categories', icon: '🗂️', module: 'closing', scopes: ['all'] },
-    { href: '/closing/envelope-config', label: 'Envelope Payout Setup', icon: '⚙️', module: 'closing', scopes: ['all'] },
-    { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'] },
+    { href: '/closing/deposit-recon', label: 'Cash Deposit Recon', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/closing/cash-config', label: 'Cash Setup', icon: '⚙️', module: 'closing', scopes: ['all'], tileOnly: true },
+    { href: '/closing/tender-config', label: 'Tender Setup', icon: '🧾', module: 'closing', scopes: ['all'], tileOnly: true },
+    { href: '/closing/expense-categories', label: 'Expense Categories', icon: '🗂️', module: 'closing', scopes: ['all'], tileOnly: true },
+    { href: '/closing/deposit-categories', label: 'Deposit Categories', icon: '🗂️', module: 'closing', scopes: ['all'], tileOnly: true },
+    { href: '/closing/envelope-config', label: 'Envelope Payout Setup', icon: '⚙️', module: 'closing', scopes: ['all'], tileOnly: true },
+    { href: '/closing/imports', label: 'Auto-Import', icon: '🔄', module: 'closing', scopes: ['all'], tileOnly: true },
   ]},
   { group: 'Integrations & Imports', module: 'commissions', items: [
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/integrations-imports', label: 'Integrations & Imports Dashboard', icon: '🧩', module: 'commissions', scopes: ['all', 'market'] },
     // Front door: ONE page listing every connection/import surface with a carrier-neutral purpose, a live
     // status probe, and a 2-step wizard (owner 2026-08-27). The individual pages below stay reachable — this
     // hub deep-links to each — but this is where setup should start.
-    { href: '/commcalc/integrations', label: 'Integrations', icon: '🧩', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/connectors', label: 'Connectors', icon: '🔌', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/onboarding', label: 'Onboarding Wizard', icon: '🚀', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/implementation', label: 'Implementation Wizard', icon: '🧭', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/upload', label: 'Upload Files', icon: '📁', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/upload/wizard', label: 'Upload Wizard', icon: '🧭', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/carrier-comm-file', label: 'Carrier Comm File → Table', icon: '📑', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/ftp-imports', label: 'FTP Auto-Import', icon: '🔁', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/email-imports', label: 'Email & Portal Logins (2FA)', icon: '📨', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/epay/sweep', label: 'Payment Processor Sync', icon: '🧹', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/dlar/sweep', label: 'Metrics Rep/Store Sync', icon: '🧹', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/integrations', label: 'Integrations', icon: '🧩', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/connectors', label: 'Connectors', icon: '🔌', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/onboarding', label: 'Onboarding Wizard', icon: '🚀', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/implementation', label: 'Implementation Wizard', icon: '🧭', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/upload', label: 'Upload Files', icon: '📁', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/upload/wizard', label: 'Upload Wizard', icon: '🧭', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/commcalc/carrier-comm-file', label: 'Carrier Comm File → Table', icon: '📑', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/ftp-imports', label: 'FTP Auto-Import', icon: '🔁', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/email-imports', label: 'Email & Portal Logins (2FA)', icon: '📨', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/epay/sweep', label: 'Payment Processor Sync', icon: '🧹', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/dlar/sweep', label: 'Metrics Rep/Store Sync', icon: '🧹', module: 'commissions', scopes: ['all'], tileOnly: true },
   ]},
   { group: 'Mapping', module: 'commissions', items: [
-    { href: '/commcalc/mapping', label: 'All Mappings', icon: '🗂️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/store-match', label: 'Store Matching', icon: '🏬', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/column-mapping', label: 'Column Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/target-fields', label: 'Custom Target Fields', icon: '🧱', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/gp-category-map', label: 'GP Category Map', icon: '💰', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/item-mapping', label: 'Item / Model Mapping', icon: '🧩', module: 'commissions', scopes: ['all'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/mapping', label: 'Mapping Dashboard', icon: '🗺️', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/mapping', label: 'All Mappings', icon: '🗂️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/store-match', label: 'Store Matching', icon: '🏬', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/column-mapping', label: 'Column Mapping', icon: '🧩', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/target-fields', label: 'Custom Target Fields', icon: '🧱', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/gp-category-map', label: 'GP Category Map', icon: '💰', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/item-mapping', label: 'Item / Model Mapping', icon: '🧩', module: 'commissions', scopes: ['all'], tileOnly: true },
     // Catalog Categories (migs 230/231) — the per-tenant category-override layer on top of the uploaded
     // product catalog; feeds catalog-driven accessory classification. Nav entry per mod-commission
     // NEEDS CORE (catalog-accessory-byod). Filed under Mapping, not Commissions: it is a mapping/config
     // surface like GP Category Map / Item Mapping, so it is also intentionally NOT in REPORT_DIRECTORY
     // (config pages are excluded) and has no report-area gate. Carrier-NEUTRAL — the page accepts BOTH
     // the house (product-ID) and TOTAL (UPC) catalog files, so it must NOT go in NAV_CARRIERS.
-    { href: '/commcalc/catalog', label: 'Catalog Categories', icon: '🏷️', module: 'commissions', scopes: ['all'] },
-    { href: '/commcalc/rep-aliases', label: 'Rep Aliases', icon: '🔗', module: 'commissions', scopes: ['all'] },
+    { href: '/commcalc/catalog', label: 'Catalog Categories', icon: '🏷️', module: 'commissions', scopes: ['all'], tileOnly: true },
+    { href: '/commcalc/rep-aliases', label: 'Rep Aliases', icon: '🔗', module: 'commissions', scopes: ['all'], tileOnly: true },
   ]},
   { group: 'Notify', module: 'notify', items: [
-    { href: '/notify', label: 'Notify', icon: '📤', module: 'notify' },
-    { href: '/notify/report-recipients', label: 'Report Recipients', icon: '📬', module: 'notify' },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/notify', label: 'Notify Dashboard', icon: '📤', module: 'notify' },
+    { href: '/notify', label: 'Notify', icon: '📤', module: 'notify', tileOnly: true },
+    { href: '/notify/report-recipients', label: 'Report Recipients', icon: '📬', module: 'notify', tileOnly: true },
   ]},
   { group: 'Helpdesk', module: 'helpdesk', items: [
-    { href: '/helpdesk', label: 'Tickets', icon: '🎫', module: 'helpdesk' },
-    { href: '/helpdesk/new', label: 'Raise a Ticket', icon: '➕', module: 'helpdesk' },
-    { href: '/helpdesk/dashboard', label: 'Dashboard', icon: '📊', module: 'helpdesk', scopes: ['all', 'market', 'store'] },
-    { href: '/helpdesk/settings', label: 'Settings', icon: '⚙️', module: 'helpdesk', scopes: ['all'] },
-    { href: '/remediation', label: 'Auto-Remediation', icon: '🤖', module: 'helpdesk', scopes: ['all', 'market'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/helpdesk', label: 'Helpdesk Dashboard', icon: '🎫', module: 'helpdesk' },
+    { href: '/helpdesk', label: 'Tickets', icon: '🎫', module: 'helpdesk', tileOnly: true },
+    { href: '/helpdesk/new', label: 'Raise a Ticket', icon: '➕', module: 'helpdesk', tileOnly: true },
+    { href: '/helpdesk/dashboard', label: 'Dashboard', icon: '📊', module: 'helpdesk', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/helpdesk/settings', label: 'Settings', icon: '⚙️', module: 'helpdesk', scopes: ['all'], tileOnly: true },
+    { href: '/remediation', label: 'Auto-Remediation', icon: '🤖', module: 'helpdesk', scopes: ['all', 'market'], tileOnly: true },
   ]},
   // Tech Support (mig 715) — the HOUSE support team's cross-tenant console + per-page help docs. Gated on
   // module 'support' (NOT 'admin'): support agents need not be admins. The console's backend endpoints are
   // additionally house-gated + super-admin-only cross-tenant, so a tenant user granted the module still
   // can't read another tenant's cases.
   { group: 'Support', module: 'support', items: [
-    { href: '/admin/support', label: 'Support Console', icon: '🎧', module: 'support', scopes: ['all', 'market'] },
-    { href: '/admin/support/failures', label: 'Fleet Failure Triage', icon: '🩺', module: 'support', scopes: ['all', 'market'] },
-    { href: '/admin/support/fix-requests', label: 'Fix Requests', icon: '🛠️', module: 'support', scopes: ['all', 'market'] },
-    { href: '/admin/support/docs', label: 'Help Docs', icon: '📚', module: 'support', scopes: ['all'] },
+    // D2 hub entry (dashboard-builder Phase D2, owner spec 2026-09-01): the group's tiled
+    // dashboard is the primary entry; every other item below is tileOnly (sidebar render-skip
+    // only — NAV membership, gating, ⌘K search and the Reports directory copies are untouched,
+    // exactly the W2.1 Workforce/Payroll precedent). scopes = the BROADEST tier of the group's
+    // items (omitted when any item is unrestricted), so the hub link never widens RBAC.
+    { href: '/hub/support', label: 'Support Dashboard', icon: '🎧', module: 'support', scopes: ['all', 'market'] },
+    { href: '/admin/support', label: 'Support Console', icon: '🎧', module: 'support', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/admin/support/failures', label: 'Fleet Failure Triage', icon: '🩺', module: 'support', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/admin/support/fix-requests', label: 'Fix Requests', icon: '🛠️', module: 'support', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/admin/support/docs', label: 'Help Docs', icon: '📚', module: 'support', scopes: ['all'], tileOnly: true },
   ]},
   { group: 'Configuration', module: 'admin', items: [
     { href: '/configurations', label: 'All Settings', icon: '⚙️', module: 'admin' },
@@ -658,6 +755,13 @@ export const NAV: NavGroup[] = [
     { href: '/admin/org-chart', label: 'Employee Org Chart', icon: '👥', module: 'admin' },
     { href: '/admin/labels', label: 'Display Labels', icon: '🏷️', module: 'admin' },
     { href: '/admin/menu', label: 'Menu Layout', icon: '🧭', module: 'admin' },
+    // Dashboard Designer (dashboard-builder Phase D2) — the drag-and-drop tile-layout designer for
+    // every module's /hub dashboard. module 'admin' + no `scopes`, byte-identical in shape to its
+    // /admin/menu sibling: an existing admin role already carries modules.admin, so no new
+    // permission surface, no SEED_VERSION bump. The PAGE additionally opens for holders of the
+    // 'menu_layout' settings grant (they reach it by URL / ⌘K); the backend PUT /tile-layout gates
+    // authoritatively either way (tile_layout.tile_write_gate).
+    { href: '/admin/dashboards', label: 'Dashboard Designer', icon: '🎛️', module: 'admin' },
     { href: '/failures', label: 'Failure Logs', icon: '🩺', module: 'admin' },
     // Import Health (mig 717) — the universal import-freshness registry behind the admin login popup.
     // module 'admin' + no `scopes`, IDENTICAL to its Failure Logs sibling: an existing admin role already
@@ -921,6 +1025,18 @@ export function navModuleForPath(path: string): string | null {
 // without re-seeding each role's permissions JSONB. Non-admin roles still need the flag.
 export function isSuperAdmin(perms: Permissions): boolean {
   return !!perms?.modules?.admin
+}
+
+// May this user EDIT the given settings AREA (core SETTING_AREAS key, e.g. 'menu_layout')?
+// MIRROR of backend core.router._can_edit_setting — KEEP IN SYNC. Precedence: super-admin always;
+// an explicit per-role grant/deny (permissions.settings[area]) wins either way; default = a
+// full-scope admin (scope 'all', or the literal 'admin' role) edits everything, anyone else nothing.
+// CLIENT-SIDE CONVENIENCE ONLY (page affordances) — every settings write is gated server-side too.
+export function canEditSettingArea(perms: Permissions, area: string, role?: string | null): boolean {
+  if (isSuperAdmin(perms)) return true
+  const s = perms?.settings
+  if (s && area in s) return !!s[area]
+  return (perms?.scope || 'all') === 'all' || String(role || '').toLowerCase() === 'admin'
 }
 
 // May this user see the ADMIN ATTENTION popup / indicator (overdue imports, pending mappings,

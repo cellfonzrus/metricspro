@@ -592,6 +592,47 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   - **Proof:** `backend/harness_tile_layout.py` (stdlib-only; sanitizer, resolve order, save
     semantics, gate truth table). Frontend consumption (designer UI + hubs reading the resolved
     layout) is Phase D2 — see §19.11.
+- **Dashboard-builder Phase D2 — tiled hubs + drag-and-drop designer, frontend (owner spec
+  2026-09-01):** every module group now HAS a tiled dashboard, and the tile layout D1 stores is
+  live (no longer inert — §19.11).
+  - **Pure resolver `frontend/src/lib/tile-hubs.ts`:** `slugGroup(name)` (group name → URL slug ==
+    the backend tile-layout `module` key, e.g. 'Daily Closing'→'daily-closing'; collision-free over
+    NAV, alphabet ⊂ the backend key regex) · `defaultHubGroups(group, items, subs?)` — the
+    deterministic zero-config tiling (tenant `/admin/menu` sub-categories become master tiles when
+    present, else natural-order chunks: ≤10 items → one '<Group> pages' tile, >10 → 2–4 balanced
+    tiles titled by each chunk's first item) · `layoutToHubGroups`/`hubGroupsToLayout` (API-layout ⇄
+    `HubTiles` converters; unknown/RBAC-invisible hrefs drop on render, `keepUnknown` preserves
+    them in the designer) · `mergeUnplacedItems` (the NEWLY-SHIPPED-PAGE INVARIANT: any visible NAV
+    item a saved layout does not name appends to a trailing 'More' tile — a design never freezes a
+    module) · `subsFromNavLayout` (per-group sub extraction from the tenant nav layout). PROOF:
+    `frontend/scratchpad/prove_tile_hubs.mjs` (verbatim re-impl + real-NAV parse; determinism,
+    chunk balance, slug validity/collisions, round-trip, merge invariant, NAV-conversion shape).
+  - **Generic hub route `(platform)/hub/[group]/page.tsx`:** `/hub/<slug>` renders ANY nav group as
+    a tiled dashboard: `GET /commcalc/tile-layout?module=<slug>` (apiCached CONFIG) → designed
+    layout, else `defaultHubGroups` fallback; interior links pass the SAME sidebar predicates
+    (canSeeItem + tenant cap + active-carrier + nav-layout `hidden`), provenance chip, friendly
+    unknown-slug notice. `/payroll` + `/storeops` deliberately keep their curated pages + KPI rows.
+  - **NAV conversion (`rbac.ts`):** 16 groups gained a `/hub/<slug>` '<Group> Dashboard' entry at
+    the top (module = the group's module; scopes = the BROADEST tier of the group's items, omitted
+    when any item is unrestricted) with every other item `tileOnly` (W2.1 render-skip semantics —
+    gating/search/Reports-directory untouched): Point of Sale · CRM · Referral · Vision ·
+    Incentives · Incentive Payout Plans · Targets & Coaching · Finance · Assets · Distributors ·
+    Daily Closing · Integrations & Imports · Mapping · Notify · Helpdesk · Support. SKIPPED:
+    Configuration (admin pages, untouched), single-item groups (Approvals, Chat, Reports),
+    Workforce + Payroll & HR (already converted, W2), and the 'Reports · …' directory mechanics.
+    New rbac helpers: `Permissions.settings` + `canEditSettingArea()` (client mirror of core
+    `_can_edit_setting` — affordance only, server-gated regardless).
+  - **Designer `(platform)/admin/dashboards/page.tsx`** (NAV: Configuration → 'Dashboard
+    Designer', module 'admin'): left panel = the group's pages, right canvas = master tiles;
+    hand-rolled HTML5 DnD (admin/menu + crm/pipeline idiom, ONE drag union `page|tile|item`, NO
+    library) with keyboard fallbacks (▲▼, add-to-tile select); inline tile title/emoji-icon/desc
+    editing; live `HubTiles` preview; module/group picker + (platform super admins,
+    `TenantMembership.super_admin`) tenant picker fed by `GET /core/tenants` with a 'Platform
+    default' pseudo-entry + provenance chip. Saves `PUT /commcalc/tile-layout`
+    (`target='tenant'|'house'`, `?org_id=` for foreign tenants); Revert-to-inherited sends
+    `layout:null`; 403s surface as a friendly menu-layout-grant message. Page opens for super
+    admins OR `canEditSettingArea('menu_layout')`; the backend gate (§14 D1) is authoritative.
+  - **Backend:** NOTHING new — D2 consumes the D1 endpoints as shipped (§17 unchanged).
 
 ---
 
@@ -756,14 +797,16 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 10. **MI gates fail CLOSED** (`management_incentive.py:117`): any qualifier whose value can't be measured
     (`None`) does NOT pass. An unresolved cash/tmr3 read silently blocks the consolidated bonus unless
     entered manually. Check `_mi_resolve_numbers` `unresolved` list.
-11. **Tile-layout rows are STORED-BUT-INERT until Phase D2 (frontend).** D1 (2026-09-01) shipped the
-    backend only — storage, resolution, gates, `GET/PUT /tile-layout` (§14). The hub pages
-    (`/payroll`, `/storeops` via `HubTiles.tsx`) still render their HARDCODED tile arrays and do not
-    yet read the resolved layout; the designer UI does not exist yet. Also note the STALE external
-    claim: `backend/app/data/support_docs_seed.json` (menu/labels help docs) still describes
-    `POST /nav-labels` / `POST /nav-layout` as open admin-page saves — since the D1 retrofit both
-    require the `menu_layout` settings grant (a save without it now fails 403, and signed-out saves
-    401 even in open-app mode).
+11. ~~Tile-layout rows are STORED-BUT-INERT until Phase D2~~ **RESOLVED by D2 (2026-09-01, same
+    day):** the generic hub route `(platform)/hub/[group]/page.tsx` reads the resolved layout for
+    every converted group and the designer `(platform)/admin/dashboards` writes it (§14 D2). STILL
+    TRUE, by design: the curated `/payroll` and `/storeops` hubs render their hardcoded tile arrays
+    (owner-specced taxonomy + KPI rows) — a layout saved for 'Workforce' / 'Payroll & HR' affects
+    only their generic `/hub/workforce` / `/hub/payroll-hr` pages, which the sidebar does not link.
+    Also still open — the STALE external claim: `backend/app/data/support_docs_seed.json`
+    (menu/labels help docs) still describes `POST /nav-labels` / `POST /nav-layout` as open
+    admin-page saves — since the D1 retrofit both require the `menu_layout` settings grant (a save
+    without it now fails 403, and signed-out saves 401 even in open-app mode).
 
 ---
 
