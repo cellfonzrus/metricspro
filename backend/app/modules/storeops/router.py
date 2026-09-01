@@ -43,6 +43,7 @@ from app.modules.storeops.payroll_identity import (
     reconcile_employee_identity as _reconcile_employee_identity,
 )
 from app.modules.storeops import payroll_salary
+from app.modules.storeops import pay_visibility as _payvis
 from app.modules.storeops.lunch_deduction import (
     get_lunch_config as _lunch_get_config,
     get_tenant_lunch_config as _lunch_get_tenant_config,
@@ -1131,10 +1132,13 @@ def payroll_change_log(start: str = "", end: str = "", employee_id: str = "", st
     return {"items": rows, "available": True}
 
 
-@router.get("/payroll")
 def get_payroll(month: str = None, start: str = None, end: str = None,
                  authorization: str = Header(default=""), org_id: str = ORG_ID, response: Response = None):
     """Returns scheduled vs actual hours per employee for payroll.
+
+    NOTE (mig 434): this is the shared, UNGATED computation — the HTTP route is `get_payroll_route`
+    below, which applies the pay-visibility gate. In-process callers (payroll_approval, over-hours,
+    the harnesses) call THIS function and stay byte-identical; each surface applies its own gate.
 
     Accepts EITHER the legacy `month` ('YYYY-MM', unchanged, still byte-identical) OR an explicit
     `start`/`end` ISO date range (both inclusive) for an arbitrary pay period — biweekly, semimonthly,
@@ -1382,6 +1386,35 @@ def get_payroll(month: str = None, start: str = None, end: str = None,
     return sorted(rows, key=lambda x: x["name"])
 
 
+@router.get("/payroll")
+def get_payroll_route(month: str = None, start: str = None, end: str = None,
+                       authorization: str = Header(default=""), org_id: str = ORG_ID,
+                       response: Response = None):
+    """HTTP surface for GET /storeops/payroll: get_payroll() + the PAY-VISIBILITY GATE (mig 434,
+    pay_visibility.py — owner rule: pay-per-hour / gross pay / salary hidden below market manager,
+    per-org configurable via storeops.tenants.pay_visibility). Money keys are STRIPPED server-side,
+    on the payload, before serialization — the export can't carry what the screen hides (RULE FOUR).
+    Hours always render, so a gated caller still runs hours corrections.
+
+    The gate sits HERE on the route and NOT inside get_payroll() deliberately: in-process consumers
+    (payroll_approval._hours_for_period — which applies its own STRICTER approvals deny-list —
+    payroll_over_hours, and the payroll harnesses) read the shared ungated rows and stay
+    byte-identical. This endpoint returns a BARE ARRAY (long-standing shape harnesses/UI iterate),
+    so the UI's column-drop flag rides the X-Can-See-Pay-Rates response header rather than a body
+    key — the same additive-header convention Gate-1 N5 used for X-Salary-Override-Warning."""
+    rows = get_payroll(month=month, start=start, end=end,
+                       authorization=(authorization or ""), org_id=org_id, response=response)
+    allowed = _payvis.can_see_pay(authorization or "", org_id, client=get_supabase())
+    if not allowed:
+        rows, _ = _payvis.strip_pay(rows)
+    if response is not None:
+        try:
+            response.headers["X-Can-See-Pay-Rates"] = "true" if allowed else "false"
+        except Exception:
+            pass
+    return rows
+
+
 def _apply_approved_hours(org_id, lo, hi, rows):
     """Overlay `payroll_approval` decisions onto payroll rows for the period [lo, hi).
 
@@ -1428,11 +1461,14 @@ def _apply_approved_hours(org_id, lo, hi, rows):
     return rows
 
 
-@router.get("/payroll-by-store")
 def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
                           authorization: str = Header(default=""), org_id: str = ORG_ID, response: Response = None):
     """Per-STORE payroll for a month OR an arbitrary start/end range (same precedence as /payroll —
     see _resolve_range), for the Store Expenses 'Employee Salaries' auto-fill.
+
+    NOTE (mig 434): the HTTP route is `get_payroll_by_store_route` below, which applies the
+    pay-visibility gate; this shared function stays ungated for in-process/harness callers — the
+    same route-vs-function split as get_payroll.
 
     For each shift in range, hours = actual_hours where clocked else scheduled_hours (SAME basis
     as /payroll, so the numbers reconcile), pay = hours * the employee's pay_rate, attributed to the
@@ -1647,14 +1683,33 @@ def get_payroll_by_store(month: str = None, start: str = None, end: str = None,
     return {"month": month, "stores": sorted(rows, key=lambda x: x["store_code"])}
 
 
+@router.get("/payroll-by-store")
+def get_payroll_by_store_route(month: str = None, start: str = None, end: str = None,
+                                authorization: str = Header(default=""), org_id: str = ORG_ID,
+                                response: Response = None):
+    """HTTP surface for GET /storeops/payroll-by-store: the shared computation + the mig-434 pay
+    gate (see get_payroll_route's docstring for the route-vs-function split). A store row's money
+    key is the generic `amount` (hours x rate / salary allocation), so it is stripped via an
+    endpoint-local fields tuple rather than globalizing "amount" into PAY_FIELDS. `hours` always
+    stays — the Store Expenses page can still reconcile labor HOURS without the dollars."""
+    out = get_payroll_by_store(month=month, start=start, end=end,
+                               authorization=(authorization or ""), org_id=org_id, response=response)
+    allowed = _payvis.can_see_pay(authorization or "", org_id, client=get_supabase())
+    if not allowed:
+        _payvis.strip_pay(out.get("stores"), fields=_payvis.PAY_FIELDS + ("amount",))
+    out["can_see_pay_rates"] = allowed
+    return out
+
+
 # ════════════════════════════════════════════════════════════════════════════════════════════════
 # ACTUAL-HOURS DRILL-DOWN (owner directive 2026-07-27, Deliverable 2): "need a drill down for the
 # payroll hours showing as actual" — clicking a rep's Actual Hrs on the report opens this.
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-@router.get("/payroll/actual-hours-detail")
 def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
                                  authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Day-by-day composition behind a rep's Actual Hrs figure: each day's shift + punch pairs (in/
+    """(HTTP route: `payroll_actual_hours_detail_route` below — mig-434 pay gate; this shared
+    function stays ungated for harness callers, same split as get_payroll.)
+    Day-by-day composition behind a rep's Actual Hrs figure: each day's shift + punch pairs (in/
     out, store, source), which were manually edited/overridden (cross-referenced against
     storeops.payroll_change_log, migration 414), and day subtotals that reconcile EXACTLY to
     `/payroll`'s own total for this employee/range — including faithfully reproducing (never
@@ -1900,6 +1955,23 @@ def payroll_actual_hours_detail(employee_id: str, start: str, end: str,
     if lunch_available:
         out["total_lunch_deduction_hours"] = total_lunch_deduction
     out.update(salary_meta)
+    return out
+
+
+@router.get("/payroll/actual-hours-detail")
+def payroll_actual_hours_detail_route(employee_id: str, start: str, end: str,
+                                       authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HTTP surface for GET /storeops/payroll/actual-hours-detail: the shared computation + the
+    mig-434 pay gate (see get_payroll_route's docstring for the route-vs-function split). The
+    drill-down is a single dict, and its money keys (`pay_rate`, `pay_amount`,
+    `salary_period_pay`, `salary_derived_pay`) are all in PAY_FIELDS; the per-day rows carry hours
+    only, so a gated caller keeps the full hours explanation with no dollars attached."""
+    out = payroll_actual_hours_detail(employee_id=employee_id, start=start, end=end,
+                                      authorization=(authorization or ""), org_id=org_id)
+    allowed = _payvis.can_see_pay(authorization or "", org_id, client=get_supabase())
+    if not allowed:
+        _payvis.strip_pay(out)
+    out["can_see_pay_rates"] = allowed
     return out
 
 
@@ -7836,10 +7908,11 @@ def _salary_owed_for_employees(emp_rows, lo_by_emp, hi: _date, shifts_by_emp: di
     return out
 
 
-@router.get("/salary-owed")
 def get_salary_owed(start: str, end: str, store_code: str = "", employee_id: str = "",
                      authorization: str = Header(default=""), org_id: str = ORG_ID):
-    """Per-employee daily salary owed vs cash paid vs balance for [start, end] (both inclusive) — the
+    """(HTTP route: `get_salary_owed_route` below — mig-434 pay gate; this shared function stays
+    ungated for harness callers, same split as get_payroll.)
+    Per-employee daily salary owed vs cash paid vs balance for [start, end] (both inclusive) — the
     Salary Advances page's data source. Hours basis REUSES /storeops/payroll's exact rules (see
     salary_owed.daily_hours_for_employee's docstring) — this can never diverge from what /payroll shows
     for the SAME employee/range, including its open-punch exclusion and shift-covered no-double-count
@@ -7946,6 +8019,31 @@ def get_salary_owed(start: str, end: str, store_code: str = "", employee_id: str
     if ks is not None:
         out = [r for r in out if in_keyset(ks, r.get("store"))]
     return {"start": start, "end": end, "employees": sorted(out, key=lambda r: r["name"])}
+
+
+@router.get("/salary-owed")
+def get_salary_owed_route(start: str, end: str, store_code: str = "", employee_id: str = "",
+                           authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """HTTP surface for GET /storeops/salary-owed: the shared computation + the mig-434 pay gate
+    (see get_payroll_route's docstring for the route-vs-function split). This report is salary
+    dollars end-to-end, so a gated caller keeps only the HOURS skeleton: per-employee `owed_total` /
+    `cash_paid_total` / `balance` and each day's `rate` / `owed` are stripped (endpoint-local
+    tuples — those key names are too generic to globalize into PAY_FIELDS). KNOWN CONSUMER:
+    closing's envelope preview reads `balance` over HTTP with the CALLER'S token
+    (closing/router.py::_get_salary_owed) — a gated closer's envelope therefore shows no salary due,
+    which is the owner rule working as stated (grant `employee_pay_rates` to that role, or list it
+    in pay_visible_roles, to restore it)."""
+    data = get_salary_owed(start=start, end=end, store_code=store_code, employee_id=employee_id,
+                           authorization=(authorization or ""), org_id=org_id)
+    allowed = _payvis.can_see_pay(authorization or "", org_id, client=get_supabase())
+    if not allowed:
+        for r in data.get("employees") or []:
+            if isinstance(r, dict):
+                _payvis.strip_pay(r.get("days"), fields=("rate", "owed"))
+        _payvis.strip_pay(data.get("employees"),
+                          fields=_payvis.PAY_FIELDS + ("owed_total", "cash_paid_total", "balance"))
+    data["can_see_pay_rates"] = allowed
+    return data
 
 
 def _additional_payroll_store_for(org_id, employee_id, period_end_iso, home_store):

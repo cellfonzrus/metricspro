@@ -37,6 +37,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from app.core.database import get_supabase
 from app.core.schemas import LaxModel
+from app.modules.storeops import pay_visibility as _payvis
 
 router = APIRouter()
 
@@ -287,20 +288,9 @@ def _resolve_payer(row_payer_id, store_code, store_map, payers_by_id, default_pa
 
 
 def _is_admin(authorization, org_id, who=None):
-    """True for a super-admin, a full-scope role, or the 'admin' role — core's `_can_edit_setting`
-    precedence, resolved from the verified JWT. Falls back to the role name from `who` if core's
-    resolver is unavailable, so a transient failure denies rather than grants."""
-    try:
-        from app.modules.core.router import _resolve_caller, _can_edit_setting, sb as _core_sb
-        from app.modules.core.router import _uid_from_token
-        uid = _uid_from_token(authorization)
-        if uid:
-            caller = _resolve_caller(_core_sb(), uid, org_id)
-            if caller and _can_edit_setting(caller, "security"):
-                return True
-    except Exception:
-        pass
-    return (who or {}).get("role", "").lower() == "admin"
+    """Thin alias — the algorithm moved VERBATIM to pay_visibility.is_full_admin (mig 434 refactor)
+    so the new tenant-configurable pay gate and this board resolve admins identically."""
+    return _payvis.is_full_admin(authorization, org_id, who)
 
 
 # ── pay-rate visibility (OWNER 2026-08-11) ────────────────────────────────────────────────────────
@@ -313,40 +303,29 @@ def _is_admin(authorization, org_id, who=None):
 # the columns in the UI alone would still ship the rates to the browser and straight into the Excel /
 # PDF export (RULE FOUR — "a gated money column never leaks through an export").
 #
+# MIG-434 REFACTOR: the mechanism now lives in pay_visibility.py, which also serves the general
+# payroll/workforce money surfaces under the tenant-configurable 'manager_up' allow-list (market
+# manager and above see pay). THIS board deliberately keeps its ORIGINAL, STRICTER deny-list —
+# market managers are hidden here too, because approving hours never requires a pay scale — by
+# passing PAY_RATE_HIDDEN_ROLES below. Behavior is byte-identical to pre-434; only the code moved.
+#
 # The role list is a seeded DEFAULT VALUE, not a branch — the same convention as
 # plan_pay_gate.DEFAULT_EXCLUSIONS. It lives in ONE place so a tenant that names its roles differently
 # is a one-line change here rather than a hunt through the module.
-PAY_RATE_HIDDEN_ROLES = {"district_manager", "dm", "market_manager", "market"}
+PAY_RATE_HIDDEN_ROLES = set(_payvis.APPROVALS_PAY_HIDDEN_ROLES)
 
 
 def _can_see_pay_rates(authorization, org_id, who=None):
     """May this caller see per-employee pay RATES and dollar amounts on the approvals board?
-
-    An admin / full-scope / super-admin always may. A caller acting in one of the
-    PAY_RATE_HIDDEN_ROLES may not. Anyone else is unchanged (HR, accountant, company — the roles that
-    actually run payroll keep the money view they have today; this narrows the DM's view only).
-
-    FAIL-CLOSED: if the caller cannot be resolved, the rates are HIDDEN. Hours still render, so a
-    transient resolver failure degrades to "less information", never to a leak."""
-    if _is_admin(authorization, org_id, who):
-        return True
-    role = ""
-    try:
-        from app.modules.core.router import _resolve_caller, sb as _core_sb, _uid_from_token
-        uid = _uid_from_token(authorization)
-        if uid:
-            caller = _resolve_caller(_core_sb(), uid, org_id) or {}
-            role = str(caller.get("role") or "").strip().lower()
-    except Exception:
-        role = str((who or {}).get("role") or "").strip().lower()
-    if not role:
-        role = str((who or {}).get("role") or "").strip().lower()
-    if not role:
-        return False                      # unresolvable caller -> hide
-    return role not in PAY_RATE_HIDDEN_ROLES
+    Thin alias over pay_visibility.can_see_pay_deny_list (moved verbatim, mig 434 refactor) —
+    admin/full-scope/super-admin always may; PAY_RATE_HIDDEN_ROLES may not; anyone else unchanged
+    (HR, accountant, company keep the money view). FAIL-CLOSED on an unresolvable caller."""
+    return _payvis.can_see_pay_deny_list(authorization, org_id, PAY_RATE_HIDDEN_ROLES, who)
 
 
-# The row keys that carry an employee's pay scale, and the totals key derived from them.
+# The row keys that carry an employee's pay scale, and the totals key derived from them. Kept as this
+# board's OWN narrow tuples (not pay_visibility.PAY_FIELDS) so the approvals payload stays
+# byte-identical for every caller class it already served.
 PAY_FIELDS = ("pay_rate", "pay_effective")
 PAY_TOTALS_FIELDS = ("payable_pay",)
 
@@ -354,14 +333,9 @@ PAY_TOTALS_FIELDS = ("payable_pay",)
 def _strip_pay(rows, totals):
     """Remove every pay-scale figure from an outgoing payload. Returns (rows, totals) with the keys
     DELETED rather than zeroed — a 0.00 rate reads as "this person earns nothing", which is a
-    different and worse lie than "you cannot see this"."""
-    for r in rows:
-        for k in PAY_FIELDS:
-            r.pop(k, None)
-    if isinstance(totals, dict):
-        for k in PAY_TOTALS_FIELDS:
-            totals.pop(k, None)
-    return rows, totals
+    different and worse lie than "you cannot see this". Delegates to pay_visibility.strip_pay with
+    this board's own narrow field tuples (mig 434 refactor — same behavior, one implementation)."""
+    return _payvis.strip_pay(rows, totals, fields=PAY_FIELDS, totals_fields=PAY_TOTALS_FIELDS)
 
 
 def _payer_recipient(org_id, payer, store_code):
