@@ -490,6 +490,21 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 `shifts = fetch('storeops_shifts') if False else []` (`router.py:9490`), i.e. an empty list is passed to
 `calc_rep_commissions`. Scheduling feeds **Targets** (hours scoping/projection) but not Boost pay. `⚠`
 
+- **Pay visibility RBAC (mig `434`, 2026-09-01):** `backend/app/modules/storeops/pay_visibility.py` —
+  server-side gate over every payroll/workforce money column (owner rule: pay-per-hour / gross pay /
+  salary hidden below market manager; per-org config). Mode column `storeops.tenants.pay_visibility`
+  (`'manager_up'` default | `'permissioned'` = `employee_pay_rates` data grant, rbac.ts `DATA_GRANTS` |
+  `'all'` legacy open) + allow-list `pay_visible_roles TEXT[]` (NULL = admin/master_admin/
+  market_manager/market; scope-`'all'` roles always pass). Money keys are DELETED from the payload
+  pre-serialization (`strip_pay` — never zeroed, exports can't leak). Endpoints gated (route wrappers;
+  the shared compute functions stay ungated for in-process callers): `GET /storeops/payroll`
+  (`storeops/router.py:1390`, bare array — flag rides `X-Can-See-Pay-Rates` header),
+  `/storeops/payroll-by-store` (`:1685`), `/storeops/payroll/actual-hours-detail` (`:1960`),
+  `/storeops/salary-owed` (`:8023`), `GET /hr/compensation` (`hr/router.py:334`),
+  `GET /hr/employee-database` (`hr/router.py:1384`); each dict response carries `can_see_pay_rates`.
+  The hours-approval board (`payroll_approval.py`) keeps its own STRICTER deny-list (market managers
+  hidden too) via the same module. Proof: `backend/harness_pay_visibility.py`.
+
 ---
 
 ## 15. Other commission subsystems (pointers)
@@ -574,6 +589,12 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /upload-mapped` | `3637` | §2 |
 | `GET /store-resolution` | `14296` | §13 |
 | `GET /flags/{period}` | `10299` | §15 |
+| `GET /storeops/payroll` (pay-gated, mig 434 — money keys stripped for callers below market manager; `X-Can-See-Pay-Rates` header) | `storeops/router.py:1390` | §14 |
+| `GET /storeops/payroll-by-store` (pay-gated: `amount` stripped, `hours` kept) | `storeops/router.py:1685` | §14 |
+| `GET /storeops/payroll/actual-hours-detail` (pay-gated: `pay_rate`/salary $ stripped, hours kept) | `storeops/router.py:1960` | §14 |
+| `GET /storeops/salary-owed` (pay-gated: `owed_total`/`cash_paid_total`/`balance` + per-day `rate`/`owed` stripped) | `storeops/router.py:8023` | §14 |
+| `GET /hr/compensation` (pay-gated: `pay_rate`/`base_salary`/`total_comp`/`annualized` stripped; commission stays — commcalc's own gate domain) | `hr/router.py:334` | §14 |
+| `GET /hr/employee-database` (pay-gated forward guard: pay-classified keys stripped from field registry + rows) | `hr/router.py:1384` | §14 |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 

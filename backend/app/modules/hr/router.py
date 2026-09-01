@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core import crypto
 from app.modules.storeops.router import scope_emp_ids, _tenant_pp_settings, _employees_with_pay_fields
 from app.modules.storeops import payroll_salary
+from app.modules.storeops import pay_visibility as _payvis
 
 router = APIRouter(prefix="/hr", tags=["HR"])
 ORG_ID = "00000000-0000-0000-0000-000000000001"
@@ -195,11 +196,12 @@ async def hr_update_employee(emp_id: str, body: dict, authorization: str = Heade
     return res or {"ok": True, "id": emp_id}
 
 
-@router.get("/compensation")
 def compensation(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID,
                   response: Response = None):
     """Per-employee total compensation for a period: wages (hours × pay_rate, from shifts) +
-    commission (rep_commissions total_payout) − chargeback deductions. Span-scoped to the caller."""
+    commission (rep_commissions total_payout) − chargeback deductions. Span-scoped to the caller.
+    (HTTP route: `compensation_route` below — mig-434 pay-visibility gate; this shared function
+    stays ungated for in-process/harness callers, the same split storeops.get_payroll uses.)"""
     so, cc = _so(), _cc()
     emps = _employees_with_pay_fields(org_id, "employee_id,name,home_store,pay_rate,is_active,epay_salesperson")
     emps = [e for e in emps if e.get("is_active") is True]   # matches the prior .eq("is_active", True)
@@ -325,6 +327,26 @@ def compensation(period: str, authorization: str = Header(default=""), org_id: s
                 response.headers["X-Salary-Override-Warning"] = "salary override failed for one or more employees on GET /compensation"
             except Exception:
                 pass
+    return out
+
+
+@router.get("/compensation")
+def compensation_route(period: str, authorization: str = Header(default=""), org_id: str = ORG_ID,
+                        response: Response = None):
+    """HTTP surface for GET /hr/compensation: compensation() + the PAY-VISIBILITY GATE (mig 434,
+    storeops.pay_visibility — owner rule: pay hidden below market manager, per-org configurable).
+    Stripped server-side before serialization so the export can't carry it (RULE FOUR): per-row
+    `pay_rate` / `base_salary` / `salary_period_pay` / `total_comp` / `annualized` and the same keys
+    on `totals` (total_comp would let a caller back the salary out of commission − chargebacks, so
+    it goes too). `hours`, `commission` and `chargebacks` stay — commission visibility is commcalc's
+    own gate domain, not this one's. A company-wide (scope 'all') HR role keeps its money view; a
+    narrow-scoped payroll clerk role gets the `employee_pay_rates` data grant instead."""
+    out = compensation(period=period, authorization=(authorization or ""), org_id=org_id,
+                       response=response)
+    allowed = _payvis.can_see_pay(authorization or "", org_id, client=get_supabase())
+    if not allowed:
+        _payvis.strip_pay(out.get("rows"), out.get("totals"))
+    out["can_see_pay_rates"] = allowed
     return out
 
 
@@ -1213,10 +1235,11 @@ def hr_employee_database_fields(authorization: str = Header(default="")):
     return {"fields": _EMPDB_BASE_FIELDS + _empdb_dd_fields(org_id)}
 
 
-@router.get("/employee-database")
 def hr_employee_database(employee_ids: str = "", fields: str = "", include_inactive: bool = True,
                           reveal: bool = False, authorization: str = Header(default="")):
-    """The Employee Database report (owner directive 2026-07-29): one row per employee, every PII
+    """(HTTP route: `hr_employee_database_route` below — mig-434 pay-visibility gate; this shared
+    function stays ungated for harness callers, the same split storeops.get_payroll uses.)
+    The Employee Database report (owner directive 2026-07-29): one row per employee, every PII
     field this app actually collects, plus document status from the Documents board. `employee_ids`
     / `fields` (both comma-separated) are the server-side honoring of the frontend's pick-don't-type
     employee multi-select + column picker — omit either to get the full roster / every column.
@@ -1355,6 +1378,29 @@ def hr_employee_database(employee_ids: str = "", fields: str = "", include_inact
 
     return {"ready": True, "reveal": bool(reveal), "encryption_enabled": crypto.is_enabled(),
             "fields": _EMPDB_BASE_FIELDS + dd_defs, "employees": out_rows}
+
+
+@router.get("/employee-database")
+def hr_employee_database_route(employee_ids: str = "", fields: str = "", include_inactive: bool = True,
+                                reveal: bool = False, authorization: str = Header(default="")):
+    """HTTP surface for GET /hr/employee-database: hr_employee_database() + the PAY-VISIBILITY GATE
+    (mig 434, storeops.pay_visibility). Pay-classified columns are matched BY KEY NAME against
+    pay_visibility.PAY_FIELDS in both the embedded field REGISTRY (so the column picker never offers
+    a gated column) and the rows themselves. Today the registry carries no pay column (`pay_rate`
+    lives on the storeops roster endpoints, not here), so this is the forward guard the owner spec
+    requires: the day a pay field is added to this report it arrives gated, not leaking. org_id is
+    deliberately NOT passed to the gate — this report resolves the tenant from the CALLER'S OWN
+    membership (see the inner docstring), and can_see_pay resolves the same acting org itself."""
+    out = hr_employee_database(employee_ids=employee_ids, fields=fields,
+                               include_inactive=include_inactive, reveal=reveal,
+                               authorization=(authorization or ""))
+    allowed = _payvis.can_see_pay(authorization or "", None, client=get_supabase())
+    if not allowed:
+        pay_keys = set(_payvis.PAY_FIELDS)
+        out["fields"] = [f for f in out.get("fields") or [] if f.get("key") not in pay_keys]
+        _payvis.strip_pay(out.get("employees"))
+    out["can_see_pay_rates"] = allowed
+    return out
 
 
 class OnboardingUpdateStatusIn(LaxModel):

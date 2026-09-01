@@ -190,6 +190,8 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
     help: 'The $ inside a customer lookup: margin, cost, extended price, lifetime value (backend crm `customer_360_financial_allowed`). DEFAULT-CLOSED with NO tenant toggle. Without it the lookup still shows what/when/where/who-sold-it — the money is listed as withheld, never shown as zero.' },
   { key: 'whatif_carrier_income', label: 'What-If — Company Payout / Carrier Income',
     help: 'The 💵 Company Payout / Carrier Income tab of /commcalc/whatif — what the carrier / master-agent pays the COMPANY. DEFAULT-CLOSED — admin-only until granted; also rides "carrier_residual" when the tenant sets residual visibility to "permissioned".' },
+  { key: 'employee_pay_rates', label: 'Employee pay rates & gross pay',
+    help: 'See pay-per-hour, gross pay and salary across payroll & workforce reports. Without it those columns are removed server-side.' },
 ]
 
 // ── Master admin (owner 2026-08-29) ──────────────────────────────────────────────────────────────
