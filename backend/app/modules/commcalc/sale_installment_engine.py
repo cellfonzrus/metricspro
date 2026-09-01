@@ -49,8 +49,19 @@ from app.modules.commcalc.commission_engine import (
 from app.modules.commcalc import installment_category as icat
 from app.modules.commcalc import installment_category_payout as icpay
 from app.modules.commcalc import expected_commission as xcomm
+# THE "MONTH n" parser (mig 308 / MA TX): the ONE regex that reads 'TBV MONTH 5 New Activation SPF'
+# → 5 already lives in the Commission Ledger. REUSED, never re-implemented, so the ledger's month
+# attribution and the installment gate can never drift apart on wording.
+from app.modules.commcalc.commission_ledger import parse_payment_month
 
 ORG_ID = "00000000-0000-0000-0000-000000000001"
+
+# The SCHEMA ceiling for a multi-month schedule (mig 308 CHECK 1..16 on plan_installment_schedule
+# .num_months). The ACTUAL horizon is always config — the schedule's own num_months (and, for MA
+# gates, installment_gate_source_config.ma_max_month) — this constant only clamps a mis-entered row
+# to what the database itself allows. Was 12 (a comment-only cap in mig 201) before the MA TX
+# "MONTH 2..16" payout wording (owner spec 2026-09-01) required months 13..16.
+MAX_SCHEDULE_MONTHS = 16
 
 # ── READ-ONLY SIMULATION KEY ────────────────────────────────────────────────────────────────────────
 # The employee pay simulator ("what would I make?") has to ask this engine what a sale it has NOT MADE
@@ -360,7 +371,10 @@ _NON_PLAN_CLASSES = ("accessory", "bill_payment", "rebate")
 
 # 'plan_line' = the fix (default). 'trigger_line' = the pre-fix resolution, kept as the documented
 # escape hatch for a tenant whose rate-plan wording the matcher cannot express yet.
-_MRC_BASIS_VALUES = ("plan_line", "trigger_line")
+# 'ma_tx_activation' (mig 308) = resolve the activation's MRC from the linked MA Daily Tx ACTIVATION
+# row's retail_cost (two-hop join through raw_ma_commission), FALLING THROUGH to the 'plan_line'
+# ladder when no linked activation is found — a broken linkage must never zero out a payable chain.
+_MRC_BASIS_VALUES = ("plan_line", "trigger_line", "ma_tx_activation")
 
 # L2 KILL SWITCH (reversal layer, same doctrine as INSTALLMENT_GATE_LEGACY): truthy restores BOTH the
 # per-line chains and the unbounded MRC prefill — i.e. the exact pre-fix behaviour, including its
@@ -721,17 +735,24 @@ _GATE_CFG_DEFAULTS = {
     "boost": {"gate_source": "boost_mi", "ma_device_fields": ["imei", "sim"],
               "ma_month_field_prefix": "spiff_m", "ma_max_month": 6,
               "ma_month1_extra_fields": ["rebate", "device_margin"], "ma_min_amount": 0.01,
-              "ma_payout_sign": -1, "ma_lookup_periods": "sale"},
+              "ma_payout_sign": -1, "ma_lookup_periods": "sale",
+              "ma_tx_activation_order_type": "Activation Order"},
     "plan":  {"gate_source": "ma_commission", "ma_device_fields": ["imei", "sim"],
               "ma_month_field_prefix": "spiff_m", "ma_max_month": 6,
               "ma_month1_extra_fields": ["rebate", "device_margin"], "ma_min_amount": 0.01,
-              "ma_payout_sign": -1, "ma_lookup_periods": "sale"},
+              "ma_payout_sign": -1, "ma_lookup_periods": "sale",
+              # mig 308: gate_source stays 'ma_commission' BY DEFAULT — 'ma_tx' (the raw_ma_daily_tx
+              # union gate) is a per-org/per-carrier config opt-in, never a silent default flip.
+              "ma_tx_activation_order_type": "Activation Order"},
 }
 _GATE_CFG_KEYS = ("gate_source", "ma_device_fields", "ma_month_field_prefix", "ma_max_month",
                   "ma_month1_extra_fields", "ma_min_amount", "ma_payout_sign",
                   # mig 232: WHICH statement period(s) prove month N was actually received —
                   # 'sale' (default, byte-identical) | 'pay' | 'both'.
-                  "ma_lookup_periods")
+                  "ma_lookup_periods",
+                  # mig 308 (gate_source='ma_tx'): the raw_ma_daily_tx.order_type value that marks
+                  # the M1 ACTIVATION row. Config, not code — VidaPay says 'Activation Order'.
+                  "ma_tx_activation_order_type")
 
 
 def _ma_lookup_periods(cfg, sale_period, pay_period):
@@ -945,6 +966,228 @@ def _gate_met_ma(sale_line, ma_index, month_index, cfg):
     return paid, {"matched": True, "reason": reason, "evidence": per_col, "payout_sign": sign}
 
 
+# ── MA DAILY TX joins the multi-month formula (mig 308; owner spec 2026-09-01) ─────────────────────
+# raw_ma_daily_tx (the VidaPay per-transaction export, mig 083) carries the activation itself
+# (order_type = the configured activation order type; THAT row's retail_cost IS the MRC) and the
+# months-2..16 payouts as 'TBV MONTH n …' product wording. It has NO imei/mdn, so a B2B sale reaches
+# its MA TX rows through a TWO-HOP join: raw_sales.serial_1 ↔ raw_ma_commission.imei|sim (digit-
+# normalized, _norm_imei) → raw_ma_commission.activation_order ↔ raw_ma_daily_tx.order_number.
+# order_number is NOT unique in the feed (one order = activation row + MONTH-n rows + adjustments),
+# which is exactly why the index below groups and NETS per order. The month wording is parsed by the
+# Commission Ledger's parse_payment_month — REUSED, never a second regex.
+#
+# 💰 MONEY GUARD: the ONLY raw_ma_daily_tx money column these paths read is retail_cost.
+# merchant_discount (airtime margin) is not part of this formula, and merchant_invoice is an invoice
+# NUMBER stored as NUMERIC (residual_subs._MA_IDENTIFIER_COLUMNS) — it must NEVER be summed; it does
+# not appear in the select list or the index. Everything below is PURE (rows/config passed in) so the
+# proof harness exercises it without a database.
+_MA_TX_SELECT_COLS = ("order_number", "order_type", "product_name", "retail_cost", "account_id")
+_MA_TX_MONEY_COLS = ("retail_cost",)
+
+
+def _norm_order(v):
+    """Normalize an order number for the activation_order ↔ order_number join: trim + strip an
+    Excel-float trailing '.0'. NOT digit-only — order numbers can be alphanumeric. PURE."""
+    s = str(v or "").strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+
+def build_ma_link_index(ma_rows):
+    """Hop 1 of the two-hop join: {normalized device key -> sorted [activation_order, …]} from
+    raw_ma_commission rows. A row contributes under BOTH its imei and sim keys (same posture as
+    _ma_gate_index, which keeps the base+adjustment NETTING for the spiff evidence — this index only
+    carries the LINK, so multiple rows per device simply union their orders). Rows with no device key
+    or no activation_order are skipped; never raises. PURE."""
+    idx = {}
+    for r in (ma_rows or []):
+        order = _norm_order(r.get("activation_order"))
+        if not order:
+            continue
+        for f in _MA_DEVICE_COLS:
+            k = _norm_imei(r.get(f))
+            if k:
+                idx.setdefault(k, set()).add(order)
+    return {k: sorted(v) for k, v in idx.items()}
+
+
+def build_ma_tx_index(tx_rows, cfg):
+    """Hop 2: {normalized order_number -> {'activation': {...}|None, 'months': {n: net retail_cost},
+    'account_id': str|None}} from raw_ma_daily_tx rows for the lookup period(s).
+      • 'activation' — the M1 activation row: order_type equals cfg['ma_tx_activation_order_type']
+        (case-insensitive, trimmed; CONFIG, never a literal). Carries retail_cost (the MRC),
+        product_name and account_id. The first activation row with a nonzero retail_cost wins as the
+        MRC donor; 'count' reports how many were seen.
+      • 'months' — per payment month n (parse_payment_month over product_name), the NET summed
+        retail_cost across the order's rows, so a base + adjustment/clawback pair nets exactly like
+        the ma_commission spiff evidence does.
+    Rows with no order_number are skipped; never raises. PURE (rows + config passed in)."""
+    act_type = str((cfg or {}).get("ma_tx_activation_order_type") or "Activation Order").strip().lower()
+    idx = {}
+    for r in (tx_rows or []):
+        order = _norm_order(r.get("order_number"))
+        if not order:
+            continue
+        e = idx.setdefault(order, {"activation": None, "months": {}, "account_id": None})
+        acct = str(r.get("account_id") or "").strip()
+        if acct and not e["account_id"]:
+            e["account_id"] = acct
+        if str(r.get("order_type") or "").strip().lower() == act_type:
+            rc = safe_float(r.get("retail_cost"))
+            if e["activation"] is None:
+                e["activation"] = {"retail_cost": rc, "product_name": str(r.get("product_name") or ""),
+                                   "account_id": acct or None, "count": 1}
+            else:
+                e["activation"]["count"] += 1
+                # a later activation row with money beats an earlier $0 one (deterministic upgrade)
+                if not e["activation"]["retail_cost"] and rc:
+                    e["activation"]["retail_cost"] = rc
+                    e["activation"]["product_name"] = str(r.get("product_name") or "")
+                    e["activation"]["account_id"] = acct or e["activation"].get("account_id")
+        n = parse_payment_month(r.get("product_name"))
+        if n:
+            e["months"][n] = round(safe_float(e["months"].get(n)) + safe_float(r.get("retail_cost")), 2)
+    return idx
+
+
+def _ma_tx_orders(serial, indexes):
+    """The activation_order list a raw device serial links to, or []. indexes = {'link': …, 'tx': …}."""
+    k = _norm_imei(serial)
+    if not k:
+        return []
+    return (indexes or {}).get("link", {}).get(k, [])
+
+
+def ma_tx_mrc_for(serial, indexes):
+    """The sale's MRC from its linked MA TX ACTIVATION row (owner spec: that row's retail_cost IS the
+    MRC), or None when the linkage/row/amount is missing — the caller then FALLS THROUGH to the
+    existing MRC ladder (a broken linkage never zeroes a payable chain). Returns
+    {'mrc', 'order_number', 'account_id'}. MRC is the ABSOLUTE value (a monthly charge has no
+    direction; an export that signs dealer-side rows negative still yields the right $). Orders are
+    walked in sorted order so the same data always resolves the same row. PURE."""
+    for order in _ma_tx_orders(serial, indexes):
+        e = (indexes or {}).get("tx", {}).get(order)
+        act = (e or {}).get("activation")
+        if act and safe_float(act.get("retail_cost")):
+            return {"mrc": round(abs(safe_float(act.get("retail_cost"))), 2),
+                    "order_number": order,
+                    "account_id": act.get("account_id") or (e or {}).get("account_id")}
+    return None
+
+
+def ma_tx_month_evidence(serial, month_index, indexes, cfg):
+    """(met, evidence): does the MA Daily Tx feed prove month `month_index` was paid on this device's
+    activation order(s)? Direction-checked EXACTLY like the ma_commission gate: month n's evidence is
+    the NET retail_cost of the linked orders' 'MONTH n' rows, and it proves paid iff
+    (net * ma_payout_sign) >= ma_min_amount — so a net clawback reads as 'net_clawback', never as
+    paid. Month 1 ADDITIONALLY counts the existence of the linked ACTIVATION ORDER row itself (the
+    activation posting IS month-1 evidence). ma_max_month (config; a Total org row can set 16) caps
+    the horizon. min/sign clamped identically to _gate_met_ma. PURE."""
+    cfg = cfg or {}
+    orders = _ma_tx_orders(serial, indexes)
+    if not orders:
+        return False, {"matched": False, "reason": "no_ma_tx_link"}
+    max_month = int(cfg.get("ma_max_month") or 6)
+    if month_index > max_month:
+        return False, {"matched": True, "reason": "month_beyond_ma_max", "max_month": max_month}
+    min_amt = safe_float(cfg.get("ma_min_amount"))
+    if min_amt <= 0:            # 0 is NOT a no-minimum sentinel (same clamp as _gate_met_ma)
+        min_amt = 0.01
+    raw_sign = safe_float(cfg.get("ma_payout_sign"))
+    sign = 1.0 if raw_sign > 0 else -1.0
+    net, act_seen, order_hit, acct = 0.0, False, None, None
+    for order in orders:
+        e = (indexes or {}).get("tx", {}).get(order) or {}
+        m = safe_float((e.get("months") or {}).get(month_index))
+        if m:
+            net = round(net + m, 2)
+            order_hit = order_hit or order
+            acct = acct or e.get("account_id")
+        if e.get("activation") is not None:
+            act_seen = True
+            order_hit = order_hit or order
+            acct = acct or (e.get("activation") or {}).get("account_id") or e.get("account_id")
+    directed = net * sign
+    paid = directed >= min_amt or (month_index == 1 and act_seen)
+    if paid:
+        reason = "paid"
+    elif directed <= -min_amt:
+        reason = "net_clawback"
+    else:
+        reason = "no_month_payout"
+    return paid, {"matched": True, "reason": reason,
+                  "evidence": {"month_net": round(net, 2), "activation_order_seen": act_seen,
+                               "orders": orders[:8]},
+                  "payout_sign": sign, "order_number": order_hit, "account_id": acct}
+
+
+def _gate_met_ma_tx(sale_line, ma_index, tx_indexes, month_index, cfg):
+    """(met, evidence) for gate_source='ma_tx' (mig 308): the UNION of
+      (i)  the existing ma_commission spiff evidence (spiff_m1..spiff_m6 + month-1 extras) via
+           _gate_met_ma UNCHANGED, and
+      (ii) the MA Daily Tx month evidence via ma_tx_month_evidence above.
+    Either half proving paid pays the month; neither half can turn a paid month off. Evidence from
+    both halves is carried so the preview can say WHICH statement proved it. PURE."""
+    met_sp, ev_sp = _gate_met_ma(sale_line, ma_index, month_index, cfg)
+    met_tx, ev_tx = False, {"matched": False, "reason": "no_ma_tx_link"}
+    for f in ("serial_1", "imei"):
+        s = sale_line.get(f)
+        if _norm_imei(s):
+            met_tx, ev_tx = ma_tx_month_evidence(s, month_index, tx_indexes, cfg)
+            if (ev_tx or {}).get("matched"):
+                break
+    met = bool(met_sp or met_tx)
+    sp_r, tx_r = (ev_sp or {}).get("reason"), (ev_tx or {}).get("reason")
+    matched = bool((ev_sp or {}).get("matched") or (ev_tx or {}).get("matched"))
+    if met:
+        reason = "paid"
+    elif "net_clawback" in (sp_r, tx_r):
+        reason = "net_clawback"
+    elif sp_r in ("month_beyond_ma_columns",) and tx_r in ("month_beyond_ma_max", "no_ma_tx_link"):
+        reason = "month_beyond_ma_columns"
+    elif not matched:
+        reason = "no_ma_record"
+    else:
+        reason = "no_month_payout"
+    out = {"matched": matched, "reason": reason,
+           "evidence": {"ma_commission": (ev_sp or {}).get("evidence"),
+                        "ma_tx": (ev_tx or {}).get("evidence")},
+           "payout_sign": (ev_tx or ev_sp or {}).get("payout_sign")}
+    if reason == "month_beyond_ma_columns":
+        out["max_month"] = (ev_sp or {}).get("max_month") or (ev_tx or {}).get("max_month")
+    if (ev_tx or {}).get("order_number"):
+        out["order_number"] = ev_tx.get("order_number")
+        out["account_id"] = ev_tx.get("account_id")
+    return met, out
+
+
+def _read_ma_tx(client, org_id, period):
+    """Paginated raw_ma_daily_tx for one period — ORG-SCOPED, and selecting ONLY the columns this
+    formula needs (_MA_TX_SELECT_COLS; deliberately excludes merchant_invoice — an identifier that
+    must never be summed — and everything else). Falls back to select('*') if a column is missing in
+    an older schema, and to [] if the table is absent (mig 083 unrun). Never raises."""
+    out, start, page = [], 0, 1000
+    sel = ",".join(_MA_TX_SELECT_COLS)
+    while True:
+        try:
+            rows = (client.schema("commcalc").table("raw_ma_daily_tx").select(sel)
+                    .eq("org_id", org_id).in_("period", _pvariants(period))
+                    .range(start, start + page - 1).execute().data) or []
+        except Exception:
+            try:
+                rows = (client.schema("commcalc").table("raw_ma_daily_tx").select("*")
+                        .eq("org_id", org_id).in_("period", _pvariants(period))
+                        .range(start, start + page - 1).execute().data) or []
+            except Exception:
+                break
+        out.extend(rows)
+        if len(rows) < page:
+            break
+        start += page
+    return out
+
+
 # ── USER-DEFINED effective window (backfill vs cutover) (PURE) ──────────────────────────────────────
 def _sale_date(sale_line):
     s = str(sale_line.get("trans_date") or "")[:10]
@@ -1069,6 +1312,12 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     the same MA-evidence test — the MA feed carries no reliable per-month line status. `_gate_source_override`
     forces every gate to that source (used by preview_gate_impact to diff new-vs-legacy).
 
+    MA DAILY TX (mig 308, config opt-in): gate_source='ma_tx' proves month n from the UNION of the
+    ma_commission spiffs AND raw_ma_daily_tx 'MONTH n' rows (two-hop join through raw_ma_commission
+    .activation_order; ma_max_month up to 16); commission_org_config.installment_mrc_basis=
+    'ma_tx_activation' resolves the MRC from the linked MA TX Activation Order row's retail_cost,
+    falling through to the plan-line ladder when unlinked.
+
     L2 KILL SWITCH: env INSTALLMENT_GATE_LEGACY truthy forces the vendored LEGACY raw_mi gate for EVERY
     org/mode (bypassing config resolution entirely) → the exact pre-mig-223 behavior, instant Railway toggle
     with no redeploy.
@@ -1147,6 +1396,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
     carrier_mode_by_id, default_mode = _carrier_mode_map(client, org_id)
     gate_org_rows, gate_house_rows = _load_gate_source_rows(client, org_id)
     _gate_cfg_cache, _ma_index_cache = {}, {}
+    _ma_rows_cache, _ma_tx_idx_cache = {}, {}
 
     def _gate_cfg_for(carrier_id):
         ck = str(carrier_id) if carrier_id else "__default__"
@@ -1159,6 +1409,20 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             _gate_cfg_cache[ck] = cfg
         return _gate_cfg_cache[ck]
 
+    def _ma_rows_for(periods):
+        """The raw_ma_commission ROWS for a periods tuple, read ONCE per key. Shared by the spiff
+        evidence index AND the mig-308 two-hop link index so raw_ma_commission is never read twice
+        for the same periods in one compute."""
+        if isinstance(periods, str):
+            periods = (periods,)
+        key = tuple(periods)
+        if key not in _ma_rows_cache:
+            rows = []
+            for p in key:
+                rows.extend(_read_ma_commission(client, org_id, p))
+            _ma_rows_cache[key] = rows
+        return _ma_rows_cache[key]
+
     def _ma_index_for(periods):
         """MA evidence index for ONE or MORE statement periods (mig 232). A single-period tuple is the
         pre-mig-232 behaviour byte-for-byte; multiple periods are read into the SAME index so their rows
@@ -1167,11 +1431,29 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             periods = (periods,)
         key = tuple(periods)
         if key not in _ma_index_cache:
-            rows = []
-            for p in key:
-                rows.extend(_read_ma_commission(client, org_id, p))
-            _ma_index_cache[key] = _ma_gate_index(rows)
+            _ma_index_cache[key] = _ma_gate_index(_ma_rows_for(key))
         return _ma_index_cache[key]
+
+    def _ma_tx_indexes_for(periods, gate_cfg):
+        """The mig-308 two-hop indexes {'link': serial→activation_orders, 'tx': order→activation/
+        month nets} for a periods tuple — raw_ma_daily_tx read ONCE per compute per key (same
+        _ma_lookup_periods semantics as the spiff evidence), org-scoped, needed columns only. Only
+        ever called when a chain actually resolves to gate_source='ma_tx' or mrc_basis=
+        'ma_tx_activation', so every other tenant performs ZERO extra reads."""
+        if isinstance(periods, str):
+            periods = (periods,)
+        pkey = tuple(periods)
+        # keyed on (periods, activation order type): two carriers configured with DIFFERENT
+        # order-type spellings must not share one index built with the wrong matcher.
+        act = str((gate_cfg or {}).get("ma_tx_activation_order_type") or "Activation Order").strip().lower()
+        key = (pkey, act)
+        if key not in _ma_tx_idx_cache:
+            tx_rows = []
+            for p in pkey:
+                tx_rows.extend(_read_ma_tx(client, org_id, p))
+            _ma_tx_idx_cache[key] = {"link": build_ma_link_index(_ma_rows_for(pkey)),
+                                     "tx": build_ma_tx_index(tx_rows, gate_cfg)}
+        return _ma_tx_idx_cache[key]
 
     pay_idx = _period_index(pay_period)
     if pay_idx is None:
@@ -1180,7 +1462,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 "note": f"Unparseable pay_period '{pay_period}'."}
 
     # horizon: pull sales for pay_period back through the deepest schedule's num_months.
-    max_n = min(12, max((int(s.get("num_months") or 1) for s in scheds), default=1))
+    max_n = min(MAX_SCHEDULE_MONTHS, max((int(s.get("num_months") or 1) for s in scheds), default=1))
     sale_periods = [_shift_period(pay_period, -k) for k in range(0, max_n)]
     sale_periods = [p for p in sale_periods if p]
 
@@ -1346,7 +1628,7 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             for sched in scheds:
                 if sched.get("plan_id") != plan.get("id"):
                     continue
-                num_months = min(12, int(sched.get("num_months") or 1))
+                num_months = min(MAX_SCHEDULE_MONTHS, int(sched.get("num_months") or 1))
                 if month_index > num_months:
                     continue
                 if not _rule_matches(line, {"match_field": sched.get("trigger_match_field"),
@@ -1426,8 +1708,21 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
             # MRC BASIS (mig 233): a %-of-MRC installment is paid on the ACTIVATION'S RATE-PLAN line —
             # never on a device/hardware line's price. 'trigger_line' = the pre-fix per-line resolution.
             _chain_lines = _mrc_pool(_ck)
-            _mrc_override, _mrc_line = None, None
-            if (mrc_basis == "plan_line"
+            _mrc_override, _mrc_line, _ma_tx_prov = None, None, None
+            # MA TX MRC (mig 308): basis 'ma_tx_activation' resolves the MRC from the linked MA Daily
+            # Tx ACTIVATION row's retail_cost (two-hop join via the chain's coalesced serial). When no
+            # linked activation is found it FALLS THROUGH to the plan_line ladder below — a broken
+            # linkage must never zero out a payable chain.
+            if (mrc_basis == "ma_tx_activation" and serial
+                    and str(iline.get("payout_kind") or "flat").strip().lower() == "pct_mrc"):
+                _gcfg = _gate_cfg_for(carrier_id)
+                _hit = ma_tx_mrc_for(
+                    serial, _ma_tx_indexes_for(_ma_lookup_periods(_gcfg, sale_period, pay_period), _gcfg))
+                if _hit is not None:
+                    _mrc_override = (_hit["mrc"], "ma_tx_activation")
+                    _ma_tx_prov = _hit
+            if (_mrc_override is None
+                    and mrc_basis in ("plan_line", "ma_tx_activation")
                     and str(iline.get("payout_kind") or "flat").strip().lower() == "pct_mrc"):
                 _cs = []
                 for _cl in _chain_lines:
@@ -1473,6 +1768,9 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                                 "detail": ("Two lines of this activation look equally like the rate plan but "
                                            "imply different MRCs — the highest-confidence one was used. "
                                            "Confirm the correct plan under Plan Installments → MRC mapping.")})
+                amount, mrc, mrc_src = _line_amount(line, iline, catalog, carrier_id, _mrc_override)
+            elif _mrc_override is not None:
+                # MA TX-resolved MRC (mig 308): mrc_source stamps 'ma_tx_activation' on the row.
                 amount, mrc, mrc_src = _line_amount(line, iline, catalog, carrier_id, _mrc_override)
             else:
                 amount, mrc, mrc_src = _line_amount(line, iline, catalog, carrier_id)
@@ -1652,6 +1950,25 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 else:
                     gate_met = True
                 gate_kind = "ma_residual"
+            elif gate_source == "ma_tx":
+                # MA DAILY TX gate (mig 308; config opt-in, never a default flip): month-n evidence
+                # is the UNION of (i) the ma_commission spiff evidence — reused UNCHANGED — and (ii)
+                # the MA Daily Tx 'MONTH n' rows reached through the two-hop
+                # serial → raw_ma_commission.activation_order → raw_ma_daily_tx.order_number join.
+                # Month 1 additionally counts the linked Activation Order row itself. Direction/
+                # min-amount semantics identical to the ma_commission gate; ma_max_month (config,
+                # up to 16 for a Total org) caps the horizon.
+                gated = month_index >= gate_from and gate_mode != "none"
+                if gated:
+                    _ma_periods = _ma_lookup_periods(gate_cfg, sale_period, pay_period)
+                    gate_met, ma_ev = _gate_met_ma_tx(gate_line, _ma_index_for(_ma_periods),
+                                                      _ma_tx_indexes_for(_ma_periods, gate_cfg),
+                                                      month_index, gate_cfg)
+                    if ma_ev is not None:
+                        ma_ev = {**ma_ev, "lookup_periods": list(_ma_periods)}
+                else:
+                    gate_met = True
+                gate_kind = "ma_residual"
             else:
                 # BOOST / raw_mi paid gate — UNCHANGED (byte-identical to pre-mig-223).
                 gated = month_index >= gate_from and gate_mode != "none"
@@ -1821,6 +2138,18 @@ def compute_sale_installments(client, org_id, pay_period, persist=False, _gate_s
                 # mig 232: WHICH statement period(s) the evidence was read from (default ['<sale>'],
                 # i.e. pre-mig-232). In-memory only — _persist writes a fixed column list.
                 ledger_row["ma_lookup_periods"] = (ma_ev or {}).get("lookup_periods")
+            # MA TX provenance (mig 308): the order_number/account_id the two-hop linkage resolved —
+            # from the MRC hit (basis 'ma_tx_activation') or the ma_tx gate evidence. Written
+            # ADAPTIVELY by _persist (like expected_amount), so a DB without mig 308 degrades; rows
+            # whose evidence did not come from MA TX carry NO new keys (shape byte-identical).
+            _ma_tx_order = ((_ma_tx_prov or {}).get("order_number")
+                            or (ma_ev or {}).get("order_number"))
+            if _ma_tx_order:
+                ledger_row["order_number"] = str(_ma_tx_order)[:100]
+                _ma_tx_acct = ((_ma_tx_prov or {}).get("account_id")
+                               or (ma_ev or {}).get("account_id"))
+                if _ma_tx_acct:
+                    ledger_row["account_id"] = str(_ma_tx_acct)[:100]
             # OPT-IN provenance (absent unless this chain actually needed the new logic, so an
             # ordinary one-line activation keeps the pre-fix ledger shape byte-for-byte). In-memory
             # only — _persist writes a fixed column list.
@@ -2063,9 +2392,11 @@ def _persist(client, org_id, pay_period, ledger):
             "epay_salesperson", "sale_period", "pay_period", "month_index", "payout_kind",
             "mrc_at_pay", "mrc_source", "amount", "paid_gate_met", "gate_mode", "status",
             "matched_mi_period")
-    # mig 258 adds four columns. They are written ONLY if the migration has been run — see the
-    # ADAPTIVE write below. This list is deliberately separate so the base set can always be used.
+    # mig 258 adds four columns, mig 308 two more (MA TX provenance). Each set is written ONLY if
+    # its migration has been run — see the TIERED ADAPTIVE write below. The lists are deliberately
+    # separate so each narrower set can always be fallen back to.
     extra = ("expected_amount", "promote_id", "promoted_by", "promoted_at")
+    extra308 = ("order_number", "account_id")
     rows, seen, dropped = [], set(), 0
     for d in ledger:
         if not (d.get("trans_id") or d.get("mdn")):
@@ -2076,7 +2407,7 @@ def _persist(client, org_id, pay_period, ledger):
             dropped += 1
             continue
         seen.add(key)
-        rows.append({k: d.get(k) for k in (cols + extra)})
+        rows.append({k: d.get(k) for k in (cols + extra + extra308)})
     deleted = False
     if rows:
         try:
@@ -2085,30 +2416,34 @@ def _persist(client, org_id, pay_period, ledger):
             deleted = True
         except Exception:
             deleted = False
-    # ADAPTIVE WRITE (mig 258). The delete above has ALREADY run, so a write that fails for every
-    # batch would leave the period EMPTY — and the original `except: pass` would have hidden it. If the
-    # extended column set is rejected (migration 258 not applied yet), fall back to the BASE columns
-    # for this and every later batch and REPORT it, rather than silently losing the period.
-    used, wrote, failed = "extended", 0, 0
+    # TIERED ADAPTIVE WRITE (mig 258 + mig 308). The delete above has ALREADY run, so a write that
+    # fails for every batch would leave the period EMPTY — and the original `except: pass` would have
+    # hidden it. Tiers, widest first; a rejection degrades ONE tier for this and every later batch
+    # and is REPORTED, never silent:
+    #   'extended308' — base + mig-258 + mig-308 (order_number/account_id) columns
+    #   'extended'    — base + mig-258 columns (DB without mig 308; expected_amount still lands —
+    #                   the 308 columns must never cost a tenant its mig-258 audit trail)
+    #   'base'        — the mig-201 column set (DB without mig 258)
+    tiers = (("extended308", cols + extra + extra308), ("extended", cols + extra), ("base", cols))
+    ti, wrote, failed = 0, 0, 0
     for i in range(0, len(rows), 500):
         batch = rows[i:i + 500]
-        if used == "extended":
+        while True:
+            name, keyset = tiers[ti]
             try:
                 client.schema("commcalc").table("sale_installment_ledger").upsert(
-                    batch, on_conflict="org_id,trans_id,mdn,month_index,pay_period").execute()
+                    [{k: r.get(k) for k in keyset} for r in batch],
+                    on_conflict="org_id,trans_id,mdn,month_index,pay_period").execute()
                 wrote += len(batch)
-                continue
+                break
             except Exception:
-                used = "base"          # 258 not applied (or the columns are absent) — degrade once
-        try:
-            client.schema("commcalc").table("sale_installment_ledger").upsert(
-                [{k: r.get(k) for k in cols} for r in batch],
-                on_conflict="org_id,trans_id,mdn,month_index,pay_period").execute()
-            wrote += len(batch)
-        except Exception:
-            failed += len(batch)
+                if ti + 1 < len(tiers):
+                    ti += 1        # columns absent (migration unrun) — degrade once, keep writing
+                    continue
+                failed += len(batch)
+                break
     return {"rows": len(rows), "dropped": dropped, "deleted": deleted,
-            "columns": used, "written": wrote, "write_failed": failed}
+            "columns": tiers[ti][0], "written": wrote, "write_failed": failed}
 
 
 # ── IMPACT PREVIEW (read-only; Gate-2 review artifact for mig 223) ──────────────────────────────────

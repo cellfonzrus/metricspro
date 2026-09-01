@@ -83,6 +83,7 @@ Bill Payment Transactions report (basis of truth)
 ```
 
 - Processor is chosen from `metric_source_of_truth.processor` or `commcalc.data_source` (ePay=Boost, VidaPay=Total).
+- **VidaPay MA Daily Tx is also a PAY evidence source** (mig 308, config opt-in): with `gate_source='ma_tx'` the `'MONTH n'` product wording proves month-n paid for plan-mode multi-month installments and the Activation Order row's `retail_cost` is the M1 MRC, joined via serial → `raw_ma_commission.activation_order` → `order_number` and written to `commcalc.sale_installment_ledger` (`order_number`/`account_id` provenance; `retail_cost` is the only money column read — `merchant_invoice` is an identifier).
 - The **daily-cash** link (`/metric-recon?metric=bill_payments` → `daily_cash` block) reconciles actual bill-payment cash against what employees declared at closing — join grain `(store, period)`.
 - Declared cash also reconciles against `bank_deposit` via `deposit_recon.py`.
 
