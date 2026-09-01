@@ -18,6 +18,11 @@ enforced SERVER-side so a gated money column never leaks through an export (RULE
      on the money reports ('manager_up') but NOT on the approvals board.
   G. grant_allowed mirror of account.report_gates.grant_allowed.
   H. ARMED negative control.
+  I. GET /storeops/payroll-raw route gate (§19.12 closure, 2026-09-01) — the REAL shipped
+     `payroll_raw_route` source (AST-extracted from storeops/router.py, no full-router import)
+     against the real gate: ALL-money feed, so denial FAILS CLOSED (403) like its scheduled twin
+     `storeops_payroll_tax`; allowed callers get the payload byte-identical; the shared
+     payroll_raw() stays undecorated/ungated for in-process consumers that bring their own gate.
 
 Run: python3 harness_pay_visibility.py     (stdlib-only — fastapi/core/db are stubbed)
 """
@@ -387,6 +392,100 @@ _armed = [k for k in pv.PAY_FIELDS if k in _leaky[0]] == []
 check("H1: the C1 predicate correctly FAILS on an unstripped payload (guard is armed)", _armed, False)
 check("H2: the E4 predicate correctly flips when the mode is 'all' (gate genuinely mode-driven)",
       pv.can_see_pay("Bearer dm", "ORG1", T_ALL), True)
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+section("I. GET /payroll-raw route gate (§19.12 closure) — real route source, fail-closed 403")
+# The full storeops router cannot import stdlib-only (requests, app.core.config, ...), so the ROUTE
+# function's real shipped source is AST-extracted from router.py and exec'd against this harness's
+# fake core/DB — the same technique-in-spirit as exec'ing the module under stubs: what runs below IS
+# the code that serves GET /storeops/payroll-raw, not a re-implementation.
+import ast
+
+_router_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "app", "modules", "storeops", "router.py")
+with open(_router_path, encoding="utf-8") as _fh:
+    _router_src = _fh.read()
+_router_tree = ast.parse(_router_src)
+_route_fns = [n for n in ast.walk(_router_tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "payroll_raw_route"]
+_shared_fns = [n for n in ast.walk(_router_tree)
+               if isinstance(n, ast.FunctionDef) and n.name == "payroll_raw"]
+
+
+def _is_payroll_raw_get(dec):
+    """True for a `@router.get("/payroll-raw")` decorator node."""
+    return (isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute)
+            and dec.func.attr == "get" and dec.args
+            and isinstance(dec.args[0], ast.Constant) and dec.args[0].value == "/payroll-raw")
+
+
+check("I1: exactly one payroll_raw_route in router.py", len(_route_fns), 1)
+check("I2: the @router.get('/payroll-raw') registration sits on payroll_raw_route — and ONLY there",
+      (sum(1 for d in _route_fns[0].decorator_list if _is_payroll_raw_get(d)),
+       sum(1 for n in ast.walk(_router_tree) if isinstance(n, ast.FunctionDef)
+           for d in n.decorator_list if _is_payroll_raw_get(d))),
+      (1, 1))
+check("I3: the shared payroll_raw() is UNDECORATED — in-process consumers (W3 scheduled builder "
+      "with its own pre-gate, harness_payroll_data_flow) reach the ungated computation unchanged",
+      (len(_shared_fns), _shared_fns[0].decorator_list if _shared_fns else None), (1, []))
+
+# exec the real route source with this harness's fakes wired in at its free names
+_CLIENT_HOLDER = [FAKE_DEFAULT]
+_CANON_ROW = {"employee_id": "E1", "name": "A", "store": "S1", "pay_rate": 20.0,
+              "clocked_hours": 40.0, "manual_hours": 0.0, "total_hours": 40.0, "basis": "clocked",
+              "settings": {"filing_status": "Single", "allowances": 0, "state": "NY",
+                           "extra_withholding": 0.0, "skipped": False}}
+
+
+def _fake_payroll_raw(start=None, end=None, authorization="", org_id=None):
+    import copy
+    return {"start": start, "end": end, "rows": [copy.deepcopy(_CANON_ROW)]}
+
+
+_route_ns = {"router": _APIRouter(), "Header": _fastapi.Header, "HTTPException": _HTTPException,
+             "ORG_ID": "ORG1", "_payvis": pv, "get_supabase": lambda: _CLIENT_HOLDER[0],
+             "payroll_raw": _fake_payroll_raw}
+exec(compile(ast.Module(body=[_route_fns[0]], type_ignores=[]), _router_path, "exec"), _route_ns)
+_route = _route_ns["payroll_raw_route"]
+
+
+def _hit(auth, client, org_id="ORG1"):
+    """(payload, None) when allowed; (None, status_code) when the gate denies."""
+    _CLIENT_HOLDER[0] = client
+    try:
+        return _route(start="2026-07-01", end="2026-07-15", authorization=auth, org_id=org_id), None
+    except _HTTPException as e:
+        return None, e.status_code
+
+
+_p, _e = _hit("Bearer admin", T_MU)
+check("I4: manager_up — admin passes; payload BYTE-IDENTICAL to the shared function (no strip, "
+      "pay_rate + W-4 settings intact)", (_e, _p), (None, _fake_payroll_raw("2026-07-01", "2026-07-15")))
+check("I5: manager_up — market manager passes (owner line: MM and above)",
+      _hit("Bearer mm", T_MU)[1], None)
+for _tok, _who in (("Bearer dm", "district manager"), ("Bearer sm", "store manager"),
+                   ("Bearer rep", "sales rep")):
+    check(f"I6: manager_up — {_who} below MM: 403, whole payload withheld (ALL-money feed — "
+          "fail closed like the storeops_payroll_tax scheduled twin, not stripped)",
+          _hit(_tok, T_MU), (None, 403))
+check("I7: manager_up — store manager WITH the employee_pay_rates grant passes (config beats default)",
+      _hit("Bearer sm-grant", T_MU)[1], None)
+check("I8: per-org pay_visible_roles honored — 'Store Manager' listed lets a store manager in...",
+      _hit("Bearer sm", FakeClient(tenants=[{"pay_visibility": "manager_up",
+                                             "pay_visible_roles": ["Store Manager"]}]))[1], None)
+check("I9: ...and an UNLISTED market manager is then denied (allow-list replaces the default)",
+      _hit("Bearer mm", FakeClient(tenants=[{"pay_visibility": "manager_up",
+                                             "pay_visible_roles": ["Store Manager"]}])), (None, 403))
+check("I10: permissioned — market manager WITHOUT the grant: 403", _hit("Bearer mm", T_PERM), (None, 403))
+check("I11: permissioned — the grant opens it", _hit("Bearer sm-grant", T_PERM)[1], None)
+check("I12: 'all' (legacy open) — even a sales rep passes", _hit("Bearer rep", T_ALL)[1], None)
+check("I13: pre-434 DB — adaptive owner default: store manager 403, admin passes",
+      (_hit("Bearer sm", T_PRE434)[1], _hit("Bearer admin", T_PRE434)[1]), (403, None))
+check("I14: broken token verifier on a gated mode -> 403 (fail closed, never a leak)",
+      _hit("Bearer broken", T_MU), (None, 403))
+check("I15: ARMED — the SAME denied caller (dm) flips to allowed on an 'all' tenant, so the I6 "
+      "denials are genuinely the gate, not a route that always 403s",
+      _hit("Bearer dm", T_ALL)[1], None)
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 print(f"\n{'='*100}")

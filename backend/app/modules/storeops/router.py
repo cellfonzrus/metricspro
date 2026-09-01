@@ -6285,11 +6285,16 @@ def delete_manual_hours(mid: str, authorization: str = Header(default=""), org_i
     return {"ok": True}
 
 
-@router.get("/payroll-raw")
 def payroll_raw(start: str, end: str, authorization: str = Header(default=""), org_id: str = ORG_ID):
     """Raw payroll inputs for a pay period — actual clocked hours (timelog) + manual adjustments +
     pay rate + W-4 settings per employee. The browser runs the tax calc (so stored figures never go
-    stale when rates change), per the StoreOps payroll spec."""
+    stale when rates change), per the StoreOps payroll spec.
+
+    UNGATED SHARED FUNCTION (the get_payroll route-vs-function split): the mig-434 pay gate lives on
+    `payroll_raw_route` below, NOT here, so in-process consumers stay byte-identical — the W3
+    scheduled builder (notify/workforce_reports._payroll_tax) pre-checks can_see_pay with the
+    caller's own token before calling this (fail closed, ValueError), and harness_payroll_data_flow
+    proves the ungated computation. Never expose this function over HTTP without the gate."""
     emps = (sb().table("employees").select("employee_id,name,home_store,pay_rate,is_active")
             .eq("org_id", org_id).eq("is_active", True).execute().data) or []
     tl = (sb().table("timelog").select("employee_id,hours,clock_out,work_date,store_code")
@@ -6376,6 +6381,30 @@ def payroll_raw(start: str, end: str, authorization: str = Header(default=""), o
         out = [r for r in out if in_keyset(ks, r.get("store"))]
     out.sort(key=lambda r: r["name"] or "")
     return {"start": start, "end": end, "rows": out}
+
+
+@router.get("/payroll-raw")
+def payroll_raw_route(start: str, end: str, authorization: str = Header(default=""),
+                      org_id: str = ORG_ID):
+    """HTTP surface for GET /storeops/payroll-raw: payroll_raw() + the mig-434 pay gate — closes
+    index gap §19.12 (2026-09-01; this route served pay_rate + W-4 to any span-scoped caller).
+
+    FAIL-CLOSED (403), not strip — the ONE gated payroll surface with this posture, deliberately:
+    this feed is ALL-money BY PURPOSE. Every row exists to carry `pay_rate` + the W-4 `settings`
+    into the browser-side tax calc (frontend payroll-tax page — its render dereferences
+    `row.settings` and multiplies by `row.pay_rate` unconditionally, so a stripped row is a crashed
+    page pretending to be an hours report, and there is NO hours-only consumer of this endpoint:
+    hours live on GET /payroll, which strips). Its scheduled twin `storeops_payroll_tax`
+    (notify/workforce_reports._require_pay_access) already classifies this exact payload ALL-money
+    and denies loudly rather than sending an empty lie — the live route now matches. Same gate, same
+    per-org config knobs (storeops.tenants.pay_visibility / pay_visible_roles, `employee_pay_rates`
+    grant), same denial semantics."""
+    if not _payvis.can_see_pay(authorization or "", org_id, client=get_supabase()):
+        raise HTTPException(403, "This feed is payroll money (pay rate + W-4 per employee; "
+                            "market-manager-and-up per your org's pay-visibility config, migration "
+                            "434). An admin can widen storeops.tenants.pay_visibility / "
+                            "pay_visible_roles, or grant the 'employee_pay_rates' data permission.")
+    return payroll_raw(start=start, end=end, authorization=(authorization or ""), org_id=org_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
