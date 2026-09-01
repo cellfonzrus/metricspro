@@ -21,6 +21,7 @@ from app.modules.commcalc.portout_flags import calc_portout_flags
 from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a flag's store for DM routing
 from app.modules.commcalc import flag_persist          # mig 287 — ADDITIVE flag writes (DM review survives)
 from app.modules.commcalc.hotsheet_parser import parse_hotsheet
+from app.modules.commcalc import multisheet          # 2026-09-01 — continuation-worksheet stitching
 from app.modules.commcalc.discrepancy_engine import run_discrepancy
 from app.modules.commcalc import targets_engine
 from app.modules.commcalc import vip_sweep
@@ -235,6 +236,36 @@ def _flatten_grouped_sales(df):
         rec["Trans ID"] = cur_tid or rec.get("Trans ID", "")
         rows.append(rec)
     return pd.DataFrame(rows) if rows else df
+
+
+def _read_excel_all_sheets(contents):
+    """Read an uploaded workbook INCLUDING continuation worksheets (2026-09-01 fix).
+
+    B2B Soft splits a large export (the month-to-date 'Sales Transaction Details (Legacy)'
+    file) across several worksheets, each repeating the same header row. The old
+    `pd.read_excel(contents)` parsed ONLY the first sheet, so once the file outgrew one sheet
+    every hourly email parsed to the identical truncated row set and days beyond the split
+    point never ingested (the 08/27→08/31 LuxeLink feed freeze). This concatenates the first
+    sheet with every LATER sheet whose header matches it exactly (multisheet.continuation_
+    sheet_names — summary/notes tabs with different columns are excluded, preserving the old
+    behavior for them) and drops repeated header-echo rows (multisheet.is_header_echo). A
+    single-sheet workbook returns byte-identically to the old path."""
+    book = pd.read_excel(io.BytesIO(contents), dtype=str, sheet_name=None)
+    frames = list(book.values())
+    if not frames:
+        return pd.DataFrame()
+    primary = frames[0]
+    names = list(book.keys())
+    keep = set(multisheet.continuation_sheet_names(
+        primary.columns, [(n, f.columns) for n, f in zip(names[1:], frames[1:])]))
+    parts = [primary] + [f for n, f in zip(names[1:], frames[1:]) if n in keep]
+    df = pd.concat(parts, ignore_index=True) if len(parts) > 1 else primary
+    if len(parts) > 1 and not df.empty:
+        hdr = multisheet.norm_header(df.columns)
+        echo = df.apply(lambda r: multisheet.is_header_echo(list(r), hdr), axis=1)
+        if echo.any():
+            df = df[~echo].reset_index(drop=True)
+    return df
 
 
 # ── POS X-Report parser (multi-sheet: one SHEET PER STORE, tender matrix) ────────────────────────
@@ -1022,7 +1053,9 @@ async def _upload_file_impl(
                 except UnicodeDecodeError:
                     continue
         else:
-            df = pd.read_excel(io.BytesIO(contents), dtype=str)
+            # 2026-09-01: read continuation worksheets too — a big b2bsoft export splits across
+            # sheets and the first-sheet-only default silently truncated it (feed-freeze RCA).
+            df = _read_excel_all_sheets(contents)
     except Exception as e:
         raise HTTPException(400, f"Could not read file ({fname or 'upload'}): {e}")
 

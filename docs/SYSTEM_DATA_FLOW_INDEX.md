@@ -65,6 +65,14 @@ email), (c) **RPC/manual entry**.
 ### Ingest route A — manual upload (mapping wizard)
 - Endpoint `POST /upload/{file_type}` `router.py:844`; mapped ingest `POST /upload-mapped` `router.py:3637`;
   generic manual-report ingest `POST /manual-upload/ingest` `router.py:24291`.
+- **Multi-sheet stitching (2026-09-01 feed-freeze RCA):** `/upload/{file_type}` parses Excel via
+  `_read_excel_all_sheets` (`router.py`, beside `_flatten_grouped_sales`) — b2bsoft splits a large
+  month-to-date export across continuation worksheets, and the old first-sheet-only read silently
+  truncated it (LuxeLink daily feed frozen at 08-30 while emails carried 08-31 data on sheet 2).
+  Pure rules in `commcalc/multisheet.py` (`continuation_sheet_names` = later sheets with the EXACT
+  same header, `is_header_echo` = repeated header rows dropped; summary/reordered tabs excluded),
+  proven by `backend/harness_multisheet_ingest.py`. The email/FTP sweeps reuse this endpoint, so
+  they inherit the fix. MA-overview and ePay uploads keep their own single-sheet readers.
 - Column mapping config: migrations `042_column_mapping.sql`, `212_commission_manual_report_mapping.sql`;
   endpoints `/column-mapping*` `router.py:3333-3472`, `/manual-upload/mapping` `router.py:24125`.
 - Upload history/trace: `/upload/history` `router.py:2168`, `/upload-trace` `router.py:16256` (mig `202`,`241`).
