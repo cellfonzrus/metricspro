@@ -29092,6 +29092,16 @@ async def manual_upload_ingest(
     return result
 
 
+def _dispatch_data_sources_worker(rows, org_id):
+    """Run _data_sources_pull_worker on a DEDICATED daemon thread with its own event loop — same
+    pattern as _dispatch_email_sweep_worker and main.py's encryption backfill. Portal pulls block for
+    minutes (Playwright + IMAP 2FA polls); on the serving loop that starves gunicorn's worker
+    heartbeat, and pg_net's 5000 ms hangup can cancel a pull mid-flight — the same failure class that
+    killed the email scheduler (incident 2026-08-26→09-01)."""
+    threading.Thread(target=lambda: __import__("asyncio").run(_data_sources_pull_worker(rows, org_id)),
+                     name="data-sources-run-due", daemon=True).start()
+
+
 @router.post("/data-sources/sweep/run-due")
 async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Header(default="")):
     """Scheduled trigger (pg_cron → this endpoint, like the other /run-due sweeps): for every ENABLED
@@ -29103,8 +29113,12 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
     EVERY tenant's due logins (unchanged behaviour, and the same gate the other five /run-due sweeps use).
     Without the secret it is an ordinary authenticated call and sweeps ONLY the caller's own org — before
     this, any signed-in user could trigger pulls for every tenant on the platform.
-    NOTE the cron itself does not exist yet: nothing scheduled this endpoint, so the "VidaPay runs on a
-    schedule" expectation has never been true. The SQL to schedule it is in migration 241."""
+
+    CRON PATH = advance-then-background (the email-sweep incident pattern, 2026-09-01): each due
+    source's next_run_at is advanced UP FRONT, the pulls run on a dedicated thread, and the tick
+    answers pg_net in milliseconds — a pull that outlives pg_net's 5 s hangup can no longer be
+    cancelled mid-flight or stall its source's schedule. The interactive (secret-less, org-scoped)
+    call still runs inline and returns the full per-source results: a human asked and is waiting."""
     cron = verify_notify_secret(x_notify_secret)
     if not cron:
         require_org(org_id)
@@ -29120,6 +29134,27 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
         rows = q.execute().data or []
     except Exception as e:
         return {"ok": False, "error": f"data_source not ready (mig 083/084/207?): {e}", "ran": []}
+    if cron:
+        # Advance every schedulable source's next_run_at BEFORE any pull, so a killed/hung pull
+        # retries at its own cadence instead of going hot-or-never. The worker's cooldown paths may
+        # still push next_run_at LATER (past a portal block); nothing in the worker moves it earlier.
+        actionable = [s for s in rows if _SOURCE_SCRAPERS.get((s.get("processor") or "").strip().lower())]
+        for s in actionable:
+            nxt = _vip_next_run(s.get("frequency") or "daily", None, None, s.get("hour"), "America/New_York")
+            _source_reschedule(client, s["id"], s.get("org_id") or org_id, nxt)
+        if actionable:
+            _dispatch_data_sources_worker(actionable, org_id)
+        return {"ok": True, "triggered": len(actionable),
+                "detail": [{"id": s["id"], "org_id": s.get("org_id") or org_id} for s in actionable]}
+    return await _data_sources_pull_worker(rows, org_id)
+
+
+async def _data_sources_pull_worker(rows, org_id):
+    """The actual per-source pulling for /data-sources/sweep/run-due. On the cron path this runs on a
+    dedicated thread AFTER the response (next_run_at already advanced by the handler); the interactive
+    path awaits it inline. Best-effort per source — one failure never aborts the batch."""
+    client = sb()
+    now = datetime.now(timezone.utc)
     ran, skipped = [], []
     for s in rows:
         proc = (s.get("processor") or "").strip().lower()
