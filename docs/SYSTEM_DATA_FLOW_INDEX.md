@@ -152,6 +152,21 @@ commissions, expenses.
 `/expenses-trend` `14784`; `/commission-trend` `14808`. **Frontend:** `commcalc/gp/page.tsx`,
 `gp-category-map/page.tsx`.
 
+- **MA TX → P&L booking (mig `309`, owner spec 2026-09-01 Phase B — "merchant discount as merchant
+  discount, residual under residual"):** for MA/VidaPay tenants (no `raw_mi` for the period),
+  `account/coa.py:build_inputs` books `raw_ma_daily_tx.merchant_discount` to the dedicated
+  **`ma_merchant_discount` "Merchant discount"** revenue line (per-org opt-out:
+  `commission_org_config.pl_merchant_discount_own_line=false` restores the legacy `atu_income` fold
+  byte-identically), and the MA residual (−`retail_cost`) to **`mi_income` "MI residual income"**
+  (label already names residual — deliberately no second Residual line) for rows matching the
+  **UNION** of the `product_name` `'%residual%'` family (`residual_subs._MA_RESIDUAL_LABEL_MATCH`)
+  and the configured `order_type` family (`commission_org_config.pl_ma_residual_order_types`,
+  default `['Postpaid Residual Order']`) — each row books ONCE. Classification is pure
+  (`residual_subs.ma_tx_pnl_bookings` / `ma_residual_row_matcher`; config
+  `residual_subs.load_ma_pnl_config`, adaptive pre-309); only `merchant_discount` + `retail_cost`
+  are read as money (`assert_money_columns`). Proofs: `harness_ma_tx_pnl.py`,
+  `harness_ma_income_heads.py`.
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -519,7 +534,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
 | `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report, `_cr_resolve_store_expenses` |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
-| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx`, VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store`), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier) |
+| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx`, VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store`), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once) |
 | `commcalc.raw_ma_commission` | upload `/upload/ma_commission`, VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus |
@@ -583,6 +598,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | MI payout / ATU payout | `raw_mi.actual_mi_payout` / `actual_atu_payout` | installment gate; MI ATU RPC |
 | MA-TX MRC (M1 activation) | `raw_ma_daily_tx.retail_cost` on the `order_type='Activation Order'` row (config: `ma_tx_activation_order_type`) | `sale_installment_engine.ma_tx_mrc_for` via the two-hop serial→`activation_order`→`order_number` join (mig `308`; `mrc_source='ma_tx_activation'`) |
 | MA-TX month-n paid evidence | `raw_ma_daily_tx.retail_cost` net of the `'MONTH n'`-worded rows (`product_name` via `commission_ledger.parse_payment_month`) | `sale_installment_engine.ma_tx_month_evidence` / `_gate_met_ma_tx` — UNION with `raw_ma_commission.spiff_m{n}` (n ≤ 6); direction `ma_payout_sign`, floor `ma_min_amount`, horizon `ma_max_month` ≤ 16 (mig `308`) |
+| MA merchant discount (P&L "Merchant discount") | `raw_ma_daily_tx.merchant_discount` (+, dealer income) | `account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings` (mig `309`); per-org toggle `commission_org_config.pl_merchant_discount_own_line` — `false` = legacy `atu_income` fold, byte-identical dollars |
+| MA residual (P&L "MI residual income") | `raw_ma_daily_tx.retail_cost` sign-flipped (negative = paid to dealer) on rows in the `'%residual%'` product family ∪ `pl_ma_residual_order_types` order types (default `Postpaid Residual Order`) | `residual_subs.ma_residual_row_matcher` → `coa.build_inputs` (mig `309`; union dedup — each row books once) |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 

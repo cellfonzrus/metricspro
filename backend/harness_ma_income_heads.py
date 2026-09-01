@@ -141,7 +141,12 @@ def run():
         ("fee_income", 75.00, "fees_margin"),
         ("financing_income", 50.00, "consumer_financing"),
         ("carrier_comm", 40.00, "spiff_m1..m6: 10 + 20 + 5 + 5"),
-        ("atu_income", 5.00, "merchant_discount 3 + 2; residual rows contribute 0"),
+        # RE-BASED for OWNER SPEC 2026-09-01 (Phase B, mig 309): merchant_discount now books to its
+        # OWN "Merchant discount" line by default (pl_merchant_discount_own_line, default TRUE with
+        # no config row — this stub has none, so the default path is what runs). The legacy fold
+        # (atu_income) is proven separately in harness_ma_tx_pnl.py with the toggle set FALSE.
+        ("ma_merchant_discount", 5.00, "merchant_discount 3 + 2 on its own line (Phase B default)"),
+        ("atu_income", 0.00, "merchant discount has LEFT atu_income (owner spec 2026-09-01)"),
     ]
     ok = True
     for key, want, why in checks:
@@ -166,8 +171,8 @@ def run():
     print(f"  {'✓' if good else '✗'} P&L total {on_pl:,.2f} == Σ heads {want_pl:,.2f} "
           f"— no wallet funding leaked onto any P&L line")
 
-    # ── no double-count: a residual row must not also be counted as ATU ──────────────────────────
-    ok &= approx(cw("atu_income"), 5.00)
+    # ── no double-count: a residual row must not also be counted as merchant discount ────────────
+    ok &= approx(cw("ma_merchant_discount"), 5.00)
 
     print("\n" + ("PASS — every MA component books to its own head" if ok else "FAIL"))
     return 0 if ok else 1

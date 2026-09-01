@@ -77,6 +77,15 @@ PL_SPEC = [
     ("carrier_comm",  "Carrier commissions & incentives",            "revenue", "auto",  "company"),
     ("mi_income",     "MI residual income",                          "revenue", "auto",  "company"),
     ("atu_income",    "ATU income",                                  "revenue", "auto",  "company"),
+    # Owner spec 2026-09-01 (Phase B, mig 309): "Merchant discount for each line item goes into the
+    # P&L as merchant discount, residual under residual." The MA TX airtime margin
+    # (raw_ma_daily_tx.merchant_discount) gets its OWN revenue line instead of being folded into
+    # ATU income — same section and sign the sum carried there (positive = dealer income in this
+    # export). Per-org opt-OUT: commission_org_config.pl_merchant_discount_own_line=false keeps the
+    # legacy fold byte-identically. `auto` (not auto_opt) deliberately: the owner asked for this
+    # line to exist on the statement; MA residual stays on `mi_income`, whose label already says
+    # residual (see the MA TX block in build_inputs).
+    ("ma_merchant_discount", "Merchant discount",                    "revenue", "auto",  "company"),
     # Owner ruling 2026-08-10. These three carried no head of their own, so they were swept into
     # "MI residual income" along with the device rebate — see the MA block below for the numbers.
     ("ma_device_margin", "Device margin (Distributor/MA)",           "revenue", "auto",  "company"),
@@ -625,24 +634,42 @@ def build_inputs(client, org_id, period):
                         detail_label=_DETAIL.get(head))
         except Exception:
             pass
+        # ── MA TX → P&L (Phase B, owner spec 2026-09-01, mig 309): "Merchant discount for each line
+        # item goes into the P&L as merchant discount, residual under residual." ONE org-scoped scan
+        # of raw_ma_daily_tx books both figures; the per-row classification is PURE
+        # (residual_subs.ma_tx_pnl_bookings — provable without a DB, harness_ma_tx_pnl.py):
+        #   • +merchant_discount → "Merchant discount" (`ma_merchant_discount`) by default, or the
+        #     legacy `atu_income` fold when the org sets pl_merchant_discount_own_line=false. Per-row
+        #     bookings keep add()'s incremental rounding byte-identical to the old sweep either way.
+        #   • −retail_cost → RESIDUAL for rows matching the UNION of the product_name '%residual%'
+        #     label family (residual_subs._MA_RESIDUAL_LABEL_MATCH, the residual-per-sub report's
+        #     filter — books and report still cannot diverge) and the configured order_type family
+        #     (pl_ma_residual_order_types, default ['Postpaid Residual Order']). Each row books ONCE
+        #     however many criteria hit. DESTINATION DECISION: the residual stays on `mi_income`
+        #     because PL_SPEC's label of record — "MI residual income" — already names residual; a
+        #     dedicated "Residual" line would split one figure across two heads for no reader gain.
+        #     luxelink July 2026 label-family residual = $24,004.11 (see the pre-309 note in git
+        #     history); a residual row's merchant_discount is $0.00 so nothing double-counts, and a
+        #     mixed row (order-type residual WITH airtime margin) legitimately books both columns —
+        #     they are different money. Config resolution is org-scoped + adaptive (pre-mig-309 ⇒
+        #     defaults); merchant_discount + retail_cost are the ONLY columns read as money
+        #     (residual_subs.assert_money_columns — merchant_invoice is an identifier, never summed).
         try:
-            for r in _fetch_all(client, "raw_ma_daily_tx", "merchant_discount",
-                                {"org_id": org_id, "period": period_keys}):
-                add("atu_income", None, r.get("merchant_discount"))
-        except Exception:
-            pass
-        # The ACTUAL recurring residual, which nothing above ever booked. It lives in raw_ma_daily_tx
-        # under the product_name residual labels, and its dollars are in `retail_cost` — on those rows
-        # `merchant_discount` is $0.00, so this cannot double-count the ATU sweep directly above (a
-        # residual row contributes 0 there). luxelink July 2026 = $24,004.11, which until now appeared
-        # on no P&L line at all while $124k of other money sat under its name. Same filter as the
-        # residual-per-sub report so the report and the books cannot diverge.
-        try:
-            from app.modules.account.residual_subs import _MA_RESIDUAL_LABEL_MATCH
-            for r in _fetch_all(client, "raw_ma_daily_tx", "retail_cost",
-                                {"org_id": org_id, "period": period_keys},
-                                ilike=("product_name", _MA_RESIDUAL_LABEL_MATCH)):
-                add("mi_income", None, -safe_float(r.get("retail_cost")))
+            from app.modules.account import residual_subs as _rs
+            _ma_pnl_cfg = _rs.load_ma_pnl_config(client, org_id)
+            try:
+                _tx_rows = _fetch_all(
+                    client, "raw_ma_daily_tx",
+                    "product_name,order_type," + ",".join(_rs._MA_PNL_MONEY_COLUMNS),
+                    {"org_id": org_id, "period": period_keys})
+            except Exception:
+                # order_type column absent (older feed schema): the label family alone still books.
+                _tx_rows = _fetch_all(
+                    client, "raw_ma_daily_tx",
+                    "product_name," + ",".join(_rs._MA_PNL_MONEY_COLUMNS),
+                    {"org_id": org_id, "period": period_keys})
+            for _line, _amt in _rs.ma_tx_pnl_bookings(_tx_rows, _ma_pnl_cfg):
+                add(_line, None, _amt)
         except Exception:
             pass
 

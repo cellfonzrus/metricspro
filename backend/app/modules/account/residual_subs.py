@@ -115,6 +115,104 @@ _MA_ATU_COLUMN = assert_money_columns(["merchant_discount"], "raw_ma_daily_tx AT
 assert_money_columns(_MA_COMPONENTS, "raw_ma_commission MI-equivalent")
 
 
+# ── MA TX → P&L booking (Phase B, owner spec 2026-09-01, mig 309) ────────────────────────────────
+# "Merchant discount for each line item goes into the P&L as merchant discount, residual under
+# residual." The row classification is PURE (rows + resolved config in, per-row bookings out) so
+# the money rules are provable without a DB (harness_ma_tx_pnl.py); coa.build_inputs is the only
+# I/O caller. RULE TWO: the order-type family and the own-line toggle are per-org CONFIG
+# (commcalc.commission_org_config, mig 309) — the values below are the code DEFAULTS that apply
+# when the migration hasn't run or the org has no row, and the order-type default mirrors the
+# migration's column default exactly.
+_MA_RESIDUAL_ORDER_TYPES_DEFAULT = ("Postpaid Residual Order",)
+# P&L line keys (coa.PL_SPEC). The residual destination stays `mi_income` because its label of
+# record — "MI residual income" — already names residual; adding a second residual line would split
+# one figure across two heads for no reader benefit (decision recorded in coa.build_inputs).
+_MA_PNL_DISCOUNT_LINE = "ma_merchant_discount"
+_MA_PNL_LEGACY_DISCOUNT_LINE = "atu_income"
+_MA_PNL_RESIDUAL_LINE = "mi_income"
+# The ONLY raw_ma_daily_tx columns the P&L reads as money — checked at import so no future edit can
+# quietly sum an identifier (merchant_invoice et al., see _MA_IDENTIFIER_COLUMNS above).
+_MA_PNL_MONEY_COLUMNS = assert_money_columns(
+    ["merchant_discount", "retail_cost"], "raw_ma_daily_tx P&L booking (mig 309)")
+
+
+def default_ma_pnl_config():
+    """The mig-309 defaults — what every org gets before the migration runs / without a config row."""
+    return {"merchant_discount_own_line": True,
+            "residual_order_types": list(_MA_RESIDUAL_ORDER_TYPES_DEFAULT)}
+
+
+def load_ma_pnl_config(client, org_id):
+    """Per-org MA TX P&L config (commcalc.commission_org_config, mig 309), org-scoped, ADAPTIVE:
+    a missing table/column (pre-309) or missing row degrades to `default_ma_pnl_config()`.
+    NEVER raises. Values are validated — a non-bool toggle or non-list order-type value keeps the
+    default rather than guessing."""
+    cfg = default_ma_pnl_config()
+    try:
+        rows = (client.schema("commcalc").table("commission_org_config")
+                .select("pl_merchant_discount_own_line,pl_ma_residual_order_types")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            own = rows[0].get("pl_merchant_discount_own_line")
+            if isinstance(own, bool):
+                cfg["merchant_discount_own_line"] = own
+            ots = rows[0].get("pl_ma_residual_order_types")
+            if isinstance(ots, list):
+                # An explicit EMPTY list is honored: it means "label family only" (the pre-309 filter).
+                cfg["residual_order_types"] = [str(t).strip() for t in ots if str(t).strip()]
+    except Exception:
+        pass
+    return cfg
+
+
+def ma_residual_row_matcher(cfg=None):
+    """PURE: resolved config → predicate(product_name, order_type) for "this raw_ma_daily_tx row is
+    residual". The match is the UNION of:
+      (a) the product_name label FAMILY — `_MA_RESIDUAL_LABEL_MATCH` ('%residual%'), the same
+          case-insensitive containment the server-side ILIKE has always applied (owner ruling
+          2026-08-05/10, see the docstring above `_MA_RESIDUAL_LABEL`); and
+      (b) order_type ∈ cfg['residual_order_types'] (case-insensitive, trimmed) — mig 309's widening
+          for rows like order_type 'Postpaid Residual Order' whose product_name lacks the word.
+    A row matching both is still ONE match (the predicate is boolean — the caller books it once)."""
+    fam = _MA_RESIDUAL_LABEL_MATCH.strip("%").lower()
+    if cfg is None or "residual_order_types" not in cfg:
+        ots = _MA_RESIDUAL_ORDER_TYPES_DEFAULT          # unresolved config → the mig-309 default
+    else:
+        ots = cfg.get("residual_order_types") or ()     # explicit [] → label family only (pre-309)
+    types = {str(t).strip().lower() for t in ots if str(t).strip()}
+
+    def match(product_name, order_type=None):
+        if fam and fam in str(product_name or "").lower():
+            return True
+        return str(order_type or "").strip().lower() in types
+
+    return match
+
+
+def ma_tx_pnl_bookings(rows, cfg=None):
+    """PURE: raw_ma_daily_tx rows + resolved config → ordered per-row P&L bookings
+    [(line_key, amount), ...] for coa's `add()`. Owner spec 2026-09-01 (Phase B):
+      • +merchant_discount → its own "Merchant discount" line (`ma_merchant_discount`) when
+        cfg['merchant_discount_own_line'] (the mig-309 default), else the legacy `atu_income` fold —
+        per row, so the incremental 2-dp rounding in coa's add() is byte-identical to the old sweep.
+      • −retail_cost → `mi_income` ("MI residual income") for rows the residual union matches —
+        booked ONCE per row no matter how many criteria hit (the matcher is a single boolean).
+    A row can legitimately book BOTH columns (they are different money: the airtime margin and the
+    residual amount). Zero amounts are emitted and skipped by add(), same as today. Only the
+    `_MA_PNL_MONEY_COLUMNS` are ever read as money; merchant_invoice is untouched."""
+    cfg = cfg if cfg is not None else default_ma_pnl_config()
+    match = ma_residual_row_matcher(cfg)
+    disc_line = (_MA_PNL_DISCOUNT_LINE if cfg.get("merchant_discount_own_line", True)
+                 else _MA_PNL_LEGACY_DISCOUNT_LINE)
+    out = []
+    for r in rows or []:
+        r = r or {}
+        out.append((disc_line, safe_float(r.get("merchant_discount"))))
+        if match(r.get("product_name"), r.get("order_type")):
+            out.append((_MA_PNL_RESIDUAL_LINE, -safe_float(r.get("retail_cost"))))
+    return out
+
+
 def _latest_ma_period(client, org_id):
     """(year, month) of the most recent raw_ma_commission period; today's month if unknown/empty."""
     try:
