@@ -35,6 +35,11 @@ from app.modules.account import router as AC
 from .report_filters import (ReportConfigError, business_today as _business_today,      # noqa: F401
                              resolve_billing_friday as _resolve_billing_friday,
                              validate_filters as _validate_filters)
+# Payroll & Workforce entries (W3) live in their own module — same entry shape, spliced into
+# REPORTS below. That module keeps every app import LAZY (its builders call the storeops handlers
+# in-process at build time), so importing it here adds no import-time weight and it stays provable
+# offline (harness_workforce_report_registry.py).
+from .workforce_reports import WORKFORCE_REPORTS
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -676,6 +681,10 @@ REPORTS = {
         "label": "Balance Sheet (Account Module)", "filters": ["period", "scope"],
         "live_path": lambda f: "/accounts/balance-sheet" + _qs(f, ["scope"]),
         "build": _account_balance_sheet},
+    # Payroll & Workforce (W3): payroll / hours approval / payroll tax / payroll expenses /
+    # attendance / lateness — see workforce_reports.py for the builders, the shared pay-period
+    # default, and the mig-434 pay-visibility posture of each entry.
+    **WORKFORCE_REPORTS,
 }
 
 
