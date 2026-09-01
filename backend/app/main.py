@@ -271,6 +271,30 @@ def _service_role_startup():
         pass
 
 
+@app.on_event("startup")
+def _email_sweep_cron_startup():
+    """Self-heal the email-sweep schedule on EVERY boot.
+
+    Incident 2026-08-25→09-01: the pg_cron job driving /email-sweep/run-due stopped firing (job lost
+    or its embedded notify secret went stale — either way, silently), and the ONLY re-registration
+    path was a HUMAN re-saving the mailbox form. Every scheduled sweep sat dead for days while the
+    report mail piled up in the tenant mailboxes — LuxeLink's daily sales feed went dark from 08/27.
+    An automation whose repair step is a human click defeats the automation (owner, 2026-09-01).
+
+    cron.schedule() with the same job name REPLACES it (mig 922), so this is idempotent, re-embeds
+    the CURRENT API_PUBLIC_URL + NOTIFY_RUN_SECRET on every deploy, and survives secret rotations
+    with no flag day. Best-effort by design: missing cron infra or an unset secret logs the exact
+    reason and never blocks boot — and that log line is the first thing to read when sweeps are
+    quiet."""
+    try:
+        from app.modules.commcalc.router import _ensure_email_sweep_cron
+        print(f"[email-sweep-cron] self-register on boot: {_ensure_email_sweep_cron() or 'no status returned'}",
+              flush=True)
+    except Exception as e:
+        print(f"WARN [email-sweep-cron] self-register failed (sweeps stay on their last-known schedule): {e}",
+              flush=True)
+
+
 # ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────
 # The modules list here used to be a hardcoded literal, and it went stale the moment a module was
 # added without someone editing it — by 2026-08 it was missing pos, crm, referral, payables, billing,
