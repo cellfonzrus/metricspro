@@ -15,6 +15,14 @@ Commission/ops platform for multi-tenant wireless retail. Backend FastAPI
   registers in `backend/app/modules/commcalc/data_lineage_registry.py` +
   `database/migrations/925_data_lineage_seed.sql` and must pass `harness_data_lineage_guard.py`.
 
+## Payroll & Workforce work routes to the Payroll & Workforce agent (owner directive 2026-09-01)
+
+Any job touching payroll or workforce — payroll setup/onboarding/compliance, employee database,
+hours approval, payroll runs, payroll tax/expenses, HR total comp, scheduling, time off, shift
+swaps/extensions, hours budget, shift approvals, time-clock permissions, attendance/lateness,
+workforce reports, store/employee setup — is assigned to the **payroll-workforce-agent**
+(`.claude/agents/payroll-workforce-agent.md`). The two domains are interrelated and owned together.
+
 ## Commission work routes to the Commission agent (owner directive 2026-09-01)
 
 Any job touching commission — MA commission, MA TX, multi-month/installment payouts, spiffs,
