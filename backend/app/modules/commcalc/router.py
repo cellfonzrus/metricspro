@@ -27889,36 +27889,29 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
     return {"checked_sources": len(_CONNECTOR_HEALTH_SOURCES), "failing": len(failures), "sent": sent}
 
 
-@router.post("/email-sweep/run-due")
-async def email_run_due(x_notify_secret: str = Header(default="")):
-    """pg_cron entrypoint — run the email sweep if enabled + due, then advance next_run_at."""
-    if not verify_notify_secret(x_notify_secret):
-        raise HTTPException(403, "forbidden")
+async def _email_sweep_due_worker(due):
+    """The actual sweeping for /email-sweep/run-due, run AFTER the HTTP response is sent
+    (BackgroundTasks). next_run_at was already advanced by the handler; this only sweeps and stamps
+    per-mailbox status.
+
+    ONE broken mailbox must never starve the rest (incident 2026-08-26→09-01: a mailbox whose
+    sweep RAISED — not returned an error — 500'd this loop mid-iteration on every 15-min tick,
+    so every config after it in scan order was silently never swept and its next_run_at never
+    advanced; which tenant got starved depended on nothing but Postgres heap order. LuxeLink's
+    sales feed went dark for days while its own mailbox was perfectly healthy). Per-mailbox
+    isolation: a crash is stamped on ITS row — visible on the Email imports page instead of
+    only in server logs — and the loop moves on."""
     client = sb()
-    now_iso = _datetime.now(_timezone.utc).isoformat()
-    due = (client.schema('commcalc').table('email_sweep_config').select('*')
-           .eq('enabled', True).lte('next_run_at', now_iso).execute().data) or []
     ran = []
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
         acct = cfg.get('account') or 'default'
-        # ONE broken mailbox must never starve the rest (incident 2026-08-26→09-01: a mailbox whose
-        # sweep RAISED — not returned an error — 500'd this loop mid-iteration on every 15-min tick,
-        # so every config after it in scan order was silently never swept and its next_run_at never
-        # advanced; which tenant got starved depended on nothing but Postgres heap order. LuxeLink's
-        # sales feed went dark for days while its own mailbox was perfectly healthy). Per-mailbox
-        # isolation: a crash is stamped on ITS row — visible on the Email imports page instead of
-        # only in server logs — and the loop moves on; next_run_at still advances so a permanently
-        # broken mailbox retries at its own cadence, not hot every tick.
-        nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
         try:
             res = await _run_email_sweep(oid, acct)
-            _email_status_update(client, oid, acct, {'next_run_at': nxt})
         except Exception as e:
             res = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
             _email_status_update(client, oid, acct,
-                                 {'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}",
-                                  'next_run_at': nxt})
+                                 {'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}"})
         ran.append({"org_id": oid, "account": acct, "result": res})
     # AUTO DATA-FRESHNESS CHECK (owner 2026-08-28: "auto check and auto fix … before users complain"). The
     # sweep above IS the auto re-pull; now verify each feed actually advanced. A feed still behind escalates a
@@ -27929,7 +27922,36 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
             await _data_freshness_monitor(client, _oid)
         except Exception as _fe:
             print(f"WARN post-sweep freshness monitor failed for {_oid}: {_fe}")
-    return {"ran": len(ran), "detail": ran}
+
+
+@router.post("/email-sweep/run-due")
+async def email_run_due(background_tasks: BackgroundTasks, x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint — advance every due mailbox's next_run_at, dispatch the sweeps to the
+    BACKGROUND, and return immediately (same shape as /vip/sweep/run-due).
+
+    The caller is pg_net's http_post with its 5000 ms default timeout. The original handler swept
+    INLINE and only stamped next_run_at afterwards, so the first time a backlog pushed a sweep past
+    5 s, pg_net hung up, uvicorn cancelled the request mid-sweep (CancelledError — invisible to the
+    per-mailbox `except Exception` guards), and next_run_at never advanced: every later tick
+    restarted the same ever-larger sweep and died at 5 s again, silently, forever (incident
+    2026-08-26→09-01, LuxeLink's sales feed went dark). Advancing the schedule UP FRONT and sweeping after the
+    response makes the tick O(ms) regardless of backlog, so it can never re-enter that spiral; a
+    crashed sweep simply retries at the mailbox's own cadence."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    client = sb()
+    now_iso = _datetime.now(_timezone.utc).isoformat()
+    due = (client.schema('commcalc').table('email_sweep_config').select('*')
+           .eq('enabled', True).lte('next_run_at', now_iso).execute().data) or []
+    for cfg in due:
+        nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
+        _email_status_update(client, cfg.get('org_id') or ORG_ID, cfg.get('account') or 'default',
+                             {'next_run_at': nxt})
+    if due:
+        background_tasks.add_task(_email_sweep_due_worker, due)
+    return {"triggered": len(due),
+            "detail": [{"org_id": c.get('org_id') or ORG_ID, "account": c.get('account') or 'default'}
+                       for c in due]}
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
