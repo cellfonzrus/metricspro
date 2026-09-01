@@ -30,7 +30,7 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/commcalc/flags', label: 'Flags', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/chargebacks', label: 'Chargebacks & Fraud', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/accessory-flags', label: 'Accessory Flags', module: 'commissions', scopes: ['all', 'market'] },
-    { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', module: 'commissions' },
+    { href: '/commcalc/discrepancy', label: 'Pay Discrepancy', module: 'commissions', desc: 'Underpaid / unpaid activations per month — the Boost bounty gap engine, plus (MA/VidaPay tenants) B2B activations verified against MA Commission & MA TX: sold-but-unpaid rows attributed via uploadable business rules, or flagged "no business rule configured"' },
     { href: '/commcalc/imei-rebates', label: 'IMEI Rebate Reconciliation', module: 'commissions', scopes: ['all', 'market', 'store'] },
     { href: '/commcalc/ma-handsets', label: 'Marketplace Handset COGS', module: 'commissions', scopes: ['all', 'market'] },
     { href: '/commcalc/device-cost-recon', label: 'Device Cost Reconciliation', module: 'commissions', scopes: ['all', 'market'] },

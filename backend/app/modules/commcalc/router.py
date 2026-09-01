@@ -19055,23 +19055,71 @@ async def sales_recon_sync_flags(period: str = "", notify: bool = False,
 
 @router.post("/discrepancy/run")
 def run_discrepancy_check(payload: dict, org_id: str = ORG_ID):
-    """Trigger discrepancy detection. Send: { "period": "2026-04" }"""
+    """Trigger discrepancy detection. Send: { "period": "2026-04" }.
+
+    TWO engines, best-effort each (Phase C, owner spec 2026-09-01 — a failure in one never blocks the
+    other):
+      • the legacy Boost engine (discrepancy_engine.run_discrepancy) — UNCHANGED, always runs;
+      • for plan-mode (MA/VidaPay-fed) orgs, ALSO the B2B ↔ MA Commission / MA TX presence recon
+        (ma_recon.run_ma_discrepancy): every activation rung out in B2B but not paid in MA falls into
+        the report with a business-rule attribution, or the literal 'no business rule configured'.
+    Response keeps the Boost result's top-level shape (frontend-compatible) and adds 'ma' (the MA
+    summary or its error) plus 'boost_error' when the Boost engine failed. 500 only when EVERY
+    applicable engine failed."""
     period = payload.get("period")
     if not period or len(period) != 7:
         raise HTTPException(status_code=400, detail="period must be YYYY-MM")
+    result, boost_err = None, None
     try:
         result = run_discrepancy(period, org_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return result
+        boost_err = str(e)
+    ma_summary = ma_err = None
+    try:
+        carriers = (sb().schema("commcalc").table("carrier").select("*")
+                    .eq("org_id", org_id).execute().data) or []
+        if _resolve_carrier_mode(carriers) == "plan":
+            from app.modules.commcalc import ma_recon
+            ma_summary = ma_recon.run_ma_discrepancy(sb(), period, org_id)
+    except Exception as e:
+        ma_err = str(e)
+    if result is None and ma_summary is None:
+        raise HTTPException(status_code=500,
+                            detail=(boost_err or ma_err or "discrepancy engines failed"))
+    out = dict(result) if result else {"period": period}
+    if boost_err:
+        out["boost_error"] = boost_err
+    if ma_summary is not None:
+        out["ma"] = ma_summary
+    elif ma_err:
+        out["ma"] = {"error": ma_err}
+    return out
 
 
 @router.get("/discrepancy/{period}")
-async def get_discrepancy_results(period: str, org_id: str = ORG_ID):
-    """Get all discrepancy results for a period, grouped by store."""
+async def get_discrepancy_results(period: str, org_id: str = ORG_ID, source: str = ""):
+    """Get all discrepancy results for a period, grouped by store. Optional `source` filter narrows
+    to one writer's rows: 'boost' (the legacy engine; includes pre-312 rows whose source is NULL) or
+    'ma' (the B2B ↔ MA recon, mig 312). Default = all rows. Selects * so the mig-312 attribution
+    columns (rule_key, rule_reason, evidence, source, order_number) flow through when present."""
     client = sb()
-    resp = client.schema("commcalc").table("discrepancy_results")        .select("*")        .eq("org_id", org_id)        .in_("period", _pvariants(period))        .order("store")        .order("gap", desc=True)        .execute()
-    rows = resp.data or []
+    q = client.schema("commcalc").table("discrepancy_results")        .select("*")        .eq("org_id", org_id)        .in_("period", _pvariants(period))
+    src = (source or "").strip().lower()
+    if src:
+        # Adaptive: on a pre-312 database the source column is absent — re-query unfiltered rather
+        # than 500 (the caller asked to narrow, not to fail).
+        try:
+            if src == "boost":
+                rows_resp = q.or_("source.eq.boost,source.is.null").order("store").order("gap", desc=True).execute()
+            else:
+                rows_resp = q.eq("source", src).order("store").order("gap", desc=True).execute()
+            rows = rows_resp.data or []
+        except Exception:
+            rows = (client.schema("commcalc").table("discrepancy_results").select("*")
+                    .eq("org_id", org_id).in_("period", _pvariants(period))
+                    .order("store").order("gap", desc=True).execute().data) or []
+    else:
+        rows = (q.order("store").order("gap", desc=True).execute().data) or []
 
     # Group by store
     stores = {}
@@ -19097,6 +19145,138 @@ def update_discrepancy_status(discrepancy_id: int, payload: dict, org_id: str = 
     """Update status of a discrepancy row: open, resolved, disputed"""
     client = sb()
     client.schema("commcalc").table("discrepancy_results")        .update({"status": payload.get("status"), "notes": payload.get("notes")})        .eq("org_id", org_id)        .eq("id", discrepancy_id)        .execute()
+    return {"status": "ok"}
+
+
+# ── MA PAYMENT RULES (mig 312) — the owner's uploadable "business rules" for the B2B ↔ MA recon ───
+# A rule EXPLAINS why an activation rung out in B2B is legitimately unpaid in MA Commission / MA TX
+# (e.g. BYOD SIM kits carry no MA payout). No rule = the unpaid activation still reports, with the
+# literal reason 'no business rule configured'. Engine: ma_recon.py (match_rules — first match by
+# priority wins).
+
+_MA_RULE_FIELDS = ("rule_key", "description", "match_field", "match_op", "match_value",
+                   "expected_outcome", "priority", "is_active", "effective_from", "effective_to",
+                   "carrier_id")
+
+
+def _validate_ma_rule(r):
+    """Normalize + validate ONE incoming rule dict → (clean_row, error). Enum values mirror the
+    mig-312 CHECKs so a bad upload fails with a 400 naming the field, not a DB constraint 500."""
+    from app.modules.commcalc import ma_recon
+    out = {}
+    key = str(r.get("rule_key") or "").strip()
+    if not key:
+        return None, "rule_key is required"
+    desc = str(r.get("description") or "").strip()
+    if not desc:
+        return None, f"rule '{key}': description (the human 'why it does not get paid') is required"
+    field = str(r.get("match_field") or "").strip()
+    if field not in ma_recon.RULE_MATCH_FIELDS:
+        return None, (f"rule '{key}': match_field must be one of "
+                      f"{', '.join(ma_recon.RULE_MATCH_FIELDS)}")
+    op = str(r.get("match_op") or "contains").strip().lower()
+    if op not in ma_recon.RULE_MATCH_OPS:
+        return None, f"rule '{key}': match_op must be one of {', '.join(ma_recon.RULE_MATCH_OPS)}"
+    val = str(r.get("match_value") or "").strip()
+    if not val:
+        return None, f"rule '{key}': match_value is required"
+    outcome = str(r.get("expected_outcome") or "not_paid").strip().lower()
+    if outcome not in ma_recon.OUTCOME_STATUS:
+        return None, (f"rule '{key}': expected_outcome must be one of "
+                      f"{', '.join(sorted(ma_recon.OUTCOME_STATUS))}")
+    out.update({"rule_key": key, "description": desc, "match_field": field, "match_op": op,
+                "match_value": val, "expected_outcome": outcome})
+    try:
+        out["priority"] = int(r.get("priority")) if r.get("priority") is not None else 100
+    except (TypeError, ValueError):
+        return None, f"rule '{key}': priority must be an integer"
+    out["is_active"] = bool(r.get("is_active", True))
+    for k in ("effective_from", "effective_to", "carrier_id"):
+        v = str(r.get(k) or "").strip()
+        out[k] = v or None
+    return out, None
+
+
+@router.get("/ma-payment-rules")
+def list_ma_payment_rules(org_id: str = ORG_ID):
+    """The org's MA payment business rules (mig 312), ascending priority — the order the recon
+    applies them (first match wins). Missing table ⇒ empty list, said so."""
+    require_org(org_id)
+    try:
+        rows = (sb().schema("commcalc").table("ma_payment_rule").select("*")
+                .eq("org_id", org_id).order("priority").order("rule_key").execute().data) or []
+        return {"rules": rows, "count": len(rows)}
+    except Exception:
+        return {"rules": [], "count": 0,
+                "note": "ma_payment_rule table not found — run migration 312 to store business rules."}
+
+
+@router.post("/ma-payment-rules")
+def upsert_ma_payment_rules(payload: dict, org_id: str = ORG_ID):
+    """UPLOAD business rules (the owner's 'if business rules are not present then they should be
+    uploaded' surface). Accepts ONE rule dict or a bulk {'rules': [...]} list; each upserts by
+    (org_id, rule_key) so re-uploading a sheet is idempotent. All-or-nothing validation: any bad
+    rule 400s with its reason and nothing is written."""
+    require_org(org_id)
+    incoming = payload.get("rules") if isinstance(payload.get("rules"), list) else [payload]
+    if not incoming:
+        raise HTTPException(400, "no rules provided")
+    clean = []
+    for r in incoming:
+        if not isinstance(r, dict):
+            raise HTTPException(400, "each rule must be an object")
+        row, err = _validate_ma_rule(r)
+        if err:
+            raise HTTPException(400, err)
+        row["org_id"] = org_id
+        clean.append(row)
+    try:
+        sb().schema("commcalc").table("ma_payment_rule")\
+            .upsert(clean, on_conflict="org_id,rule_key").execute()
+    except Exception as e:
+        raise HTTPException(500, f"ma_payment_rule upsert failed (run migration 312?): {e}")
+    return {"status": "ok", "upserted": len(clean)}
+
+
+@router.patch("/ma-payment-rules/{rule_id}")
+def update_ma_payment_rule(rule_id: str, payload: dict, org_id: str = ORG_ID):
+    """Update fields of one rule (org-scoped by id). Only known columns pass through; enum fields
+    are validated against the same sets the recon uses."""
+    require_org(org_id)
+    from app.modules.commcalc import ma_recon
+    updates = {}
+    for k in _MA_RULE_FIELDS:
+        if k in payload:
+            updates[k] = payload[k]
+    if not updates:
+        raise HTTPException(400, "no updatable fields provided")
+    if "match_field" in updates and str(updates["match_field"]) not in ma_recon.RULE_MATCH_FIELDS:
+        raise HTTPException(400, f"match_field must be one of {', '.join(ma_recon.RULE_MATCH_FIELDS)}")
+    if "match_op" in updates and str(updates["match_op"]).strip().lower() not in ma_recon.RULE_MATCH_OPS:
+        raise HTTPException(400, f"match_op must be one of {', '.join(ma_recon.RULE_MATCH_OPS)}")
+    if "expected_outcome" in updates and \
+            str(updates["expected_outcome"]).strip().lower() not in ma_recon.OUTCOME_STATUS:
+        raise HTTPException(400,
+                            f"expected_outcome must be one of {', '.join(sorted(ma_recon.OUTCOME_STATUS))}")
+    updates["updated_at"] = _datetime.now(timezone.utc).isoformat()
+    try:
+        sb().schema("commcalc").table("ma_payment_rule").update(updates)\
+            .eq("org_id", org_id).eq("id", rule_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"ma_payment_rule update failed: {e}")
+    return {"status": "ok"}
+
+
+@router.delete("/ma-payment-rules/{rule_id}")
+def delete_ma_payment_rule(rule_id: str, org_id: str = ORG_ID):
+    """Delete one rule (org-scoped by id). Already-written report rows keep their denormalised
+    rule_key/rule_reason — history survives a rule's deletion."""
+    require_org(org_id)
+    try:
+        sb().schema("commcalc").table("ma_payment_rule").delete()\
+            .eq("org_id", org_id).eq("id", rule_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"ma_payment_rule delete failed: {e}")
     return {"status": "ok"}
 
 
