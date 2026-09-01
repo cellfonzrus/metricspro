@@ -72,10 +72,56 @@ def resolve_billing_friday(f: dict, tz: str = "") -> str:
             f"current billing week every time.")
 
 
+# ── Payroll & Workforce (W3) saved-filter validator ───────────────────────────────────────────────
+# The six workforce reports need NO filter at all (blank = the tenant's current pay period, or the
+# hours-approval endpoint's own previous-complete-period default). This only rejects a SAVED value
+# that can never resolve — a half-entered date range, a garbage `period` token, a malformed month —
+# as a CONFIG error the admin fixes on the schedule form (the same reason resolve_billing_friday
+# exists), instead of a build-time crash recorded as a sweep error.
+_WF_PERIOD_TOKENS = ("", "current", "this", "now", "last", "previous", "prev")
+
+
+def validate_workforce_period(f: dict, tz: str = "") -> None:
+    f = f or {}
+    s = str(f.get("start") or "").strip()
+    e = str(f.get("end") or "").strip()
+    if bool(s) != bool(e):
+        raise ReportConfigError(
+            "workforce reports need BOTH 'start' and 'end' (YYYY-MM-DD) for a fixed range — or "
+            "neither, to send the current pay period every time")
+    for label, v in (("start", s), ("end", e)):
+        if v:
+            try:
+                date.fromisoformat(v[:10])
+            except Exception:
+                raise ReportConfigError(
+                    f"the '{label}' filter must be a YYYY-MM-DD date — got '{v}'. Leave both dates "
+                    f"blank to send the current pay period every time")
+    tok = str(f.get("period") or "").strip().lower()
+    if tok not in _WF_PERIOD_TOKENS:
+        raise ReportConfigError(
+            f"the 'period' filter must be blank / current / last — got '{f.get('period')}'")
+    m = str(f.get("month") or "").strip()
+    if m:
+        try:
+            datetime.strptime(m[:7], "%Y-%m")
+        except Exception:
+            raise ReportConfigError(
+                f"the 'month' filter must be YYYY-MM — got '{m}'. Leave it blank to send the month "
+                f"of the current pay period's start")
+
+
 # report_key → a pure callable that raises ReportConfigError if the saved filters can't build.
 # Reports absent from this map have no required filter (every builder defaults its own).
 FILTER_VALIDATORS = {
     "owed_weekly": resolve_billing_friday,
+    # W3 payroll & workforce reports share one validator (they share one period resolver).
+    "storeops_payroll": validate_workforce_period,
+    "storeops_hours_approval": validate_workforce_period,
+    "storeops_payroll_tax": validate_workforce_period,
+    "storeops_payroll_expenses": validate_workforce_period,
+    "storeops_attendance": validate_workforce_period,
+    "storeops_lateness": validate_workforce_period,
 }
 
 

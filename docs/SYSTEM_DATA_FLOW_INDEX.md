@@ -558,6 +558,37 @@ closing tender recon mig `103`,`104`,`106`,`111`.
     renders nothing. `/storeops/admin` (combined, backward-compat alias) is tileOnly WITHOUT a
     tile on purpose — its two surfaces ARE the Store Setup / Employee Setup tiles; bookmarks and
     ⌘K search still reach it.
+- **Phase W3 — scheduled email/WhatsApp exports for the workforce surfaces (owner queue, backend,
+  2026-09-01):** the six payroll/workforce reports are registered in the notify report registry
+  (`backend/app/modules/notify/report_registry.py` — the server twin of each page's export, shared
+  by on-demand `POST /notify/send` and the pg_cron scheduler `POST /notify/run-due`), so they get
+  the platform's STANDARD scheduled sends (charter rule 3 — never a bespoke exporter). Entries live
+  in `backend/app/modules/notify/workforce_reports.py` (`WORKFORCE_REPORTS`, spliced into
+  `REPORTS`; lazy app imports — offline-provable):
+  | report key | label | data path (existing handler, in-process) | pay posture |
+  |---|---|---|---|
+  | `storeops_payroll` | Payroll (Hours & Pay) | `storeops.router.get_payroll` | mig-434 gate = the live route's exact `can_see_pay`→`strip_pay` pair; pay COLUMNS drop with it |
+  | `storeops_hours_approval` | Hours Approval | `payroll_approval.list_approvals` | HOURS-ONLY: pay stripped unconditionally, no pay column exists |
+  | `storeops_payroll_tax` | Payroll with Tax (Estimate) | `storeops.router.payroll_raw` + `storeops/payroll_tax_estimate.py` | ALL-money: gate denial ⇒ ValueError, fail closed (⚠ stricter than the live `/payroll-raw`, which is UNGATED today — see §19.12) |
+  | `storeops_payroll_expenses` | Payroll Expenses | `storeops.router.get_payroll_expenses` (`{YYYY-MM}`) | ALL-money: gate denial ⇒ ValueError, fail closed |
+  | `storeops_attendance` | Attendance Exceptions | `storeops.router.attendance_exceptions` | hours-only |
+  | `storeops_lateness` | Lateness % | `storeops.router.accountability` | hours-only |
+  - **Period coherence (charter rule 2):** `workforce_reports._pay_period_range` DELEGATES to
+    `core.router.pay_period_for` over `payroll_approval._pay_settings` (never a copy) — default =
+    the tenant's CURRENT pay period on the schedule's business day (`wants_tz`); `period: last`
+    steps one period back; explicit `start`/`end` override. Hours Approval passes blank dates
+    through so `payroll_approval._resolve_period`'s own previous-COMPLETE-period default stays
+    authoritative. Payroll Expenses' `{YYYY-MM}` seam: month of the current period's START (W2).
+  - **`storeops/payroll_tax_estimate.py`** — the PYTHON TWIN of `frontend/src/lib/payroll-tax.ts`
+    (the page's spec keeps withholding math in the browser; a scheduled send has none). Keep in
+    lockstep — same cross-language-twin convention as `cell-safety.ts` ⇄ `notify/render.py`.
+  - **Saved-filter validation:** `report_filters.validate_workforce_period` (registered for all six
+    in `FILTER_VALIDATORS`) — a bad saved schedule surfaces as a `report_config` failure-log lead,
+    not a sweep crash. All six entries are `wants_auth` (span/pay gates ride the caller's header;
+    a scheduled run's `""` = the org-wide, fail-closed path — AGENT_CONTRACT §3c).
+  - **Proof:** `backend/harness_workforce_report_registry.py` (stdlib-only; entry shape, registry
+    splice/key-uniqueness by AST, resolver delegation, end-to-end builders with the REAL
+    `strip_pay`, tax-twin vectors, validator).
 - **Dashboard-builder Phase D1 — user-designed TILE LAYOUTS, backend (owner spec 2026-09-01):**
   every module's tiled dashboard layout becomes per-org CONFIG (RULE TWO), not code. SUPER ADMIN
   designs for all modules and ANY tenant; a layout saved on the HOUSE org
@@ -691,8 +722,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
 | `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`) | `GET /nav-config` (caller org only, no house inheritance — sidebar), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
-| `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay) |
+| `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay); W3 scheduled workforce reports (via the storeops payroll/attendance handlers, §14 W3) |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution |
+| `storeops.timelog` / `manual_hours` / `payroll_settings` / `payroll_approval` (migs `045`,`431`) | timeclock, manual-hours UI, W-4 form, approvals board | payroll/payroll-raw/approvals handlers — now ALSO reached in-process by the W3 scheduled workforce reports (`notify/workforce_reports.py`, §14 W3); no second query path |
 
 ---
 
@@ -734,6 +766,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `GET /tile-layout` (`?module=` — resolved tenant>house tile layout, dashboard-builder D1) | `commcalc/router.py` (`get_tile_layout`, beside nav-config) | §14 D1 |
 | `PUT /tile-layout` (fail-closed: house/foreign → super-admin; own org → `menu_layout` grant) | `commcalc/router.py` (`put_tile_layout`) | §14 D1 |
 | `POST /nav-labels`, `POST /nav-layout` (RETROFIT 2026-09-01: were UNGATED — now fail-closed `menu_layout` gate, non-super pinned to own org) | `commcalc/router.py` (`set_nav_label`/`set_nav_layout`) | §14 D1 |
+| `POST /notify/send`, `POST /notify/run-due` → report keys `storeops_payroll` / `storeops_hours_approval` / `storeops_payroll_tax` / `storeops_payroll_expenses` / `storeops_attendance` / `storeops_lateness` (W3 scheduled workforce reports) | `notify/router.py` `_dispatch` → `report_registry.build_payload` → `notify/workforce_reports.py` builders | §14 W3 |
+| `GET /storeops/payroll-raw` (payroll-tax page inputs; ⚠ UNGATED for pay — §19.12) | `storeops/router.py:6288` | §14 W3 |
+| `GET /storeops/payroll-expenses/{period}`, `GET /storeops/payroll/approvals`, `GET /storeops/timeclock/attendance-exceptions`, `GET /storeops/accountability` | `storeops/router.py:7703` / `payroll_approval.py:469` / `storeops/router.py:4294` / `:4318` | §14 W3 |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 
@@ -763,6 +798,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | B2B sold vs MA paid (activation discrepancy) | sold: `SALES_DISPLAY_SOURCES` rows with non-blank `contract_type` (no swap/void), keyed on digit-normalized `serial_1`; paid: `raw_ma_commission.spiff_m1`+`rebate`/`device_margin` ∪ `raw_ma_daily_tx` month-1 / activation-order evidence (two-hop join, +1-month lookahead) | `ma_recon.reconcile_ma_activations` via `sale_installment_engine._gate_met_ma_tx` (mig `312`); unpaid rows → `discrepancy_results` `source='ma'` with rule attribution or `'no business rule configured'` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
+| Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
+| Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |
 
 ---
 
@@ -807,6 +844,13 @@ closing tender recon mig `103`,`104`,`106`,`111`.
     (menu/labels help docs) still describes `POST /nav-labels` / `POST /nav-layout` as open
     admin-page saves — since the D1 retrofit both require the `menu_layout` settings grant (a save
     without it now fails 403, and signed-out saves 401 even in open-app mode).
+12. **`GET /storeops/payroll-raw` is NOT pay-gated (mig 434 gap, found during W3 2026-09-01).** The
+    payroll-tax page's input feed serves `pay_rate` + W-4 settings to any caller who passes span
+    scoping — it is absent from the six gated money routes. The W3 SCHEDULED report over it
+    (`storeops_payroll_tax`) applies the charter-4 `can_see_pay` gate itself (fail closed), so the
+    scheduled path cannot leak — but the LIVE endpoint still can, to a below-market-manager caller
+    on a `manager_up` tenant. Fix belongs on the route (same `get_payroll_route` posture); reported
+    rather than patched inline because it changes a live page's behavior.
 
 ---
 
