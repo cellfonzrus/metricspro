@@ -247,9 +247,10 @@ per month for N months, gated on the subscriber still being active/paid (proved 
 **INERT CONFIG (verified):** `_resolve_schedule` forces `activation_type='*'` — the engine only ever
 resolves the `'*'` schedule (`installment_engine.py:194,267` pass `"*"`; simplification documented at
 `installment_engine.py:13-16`). Named variants (`edge`, `fios_300/500/1g/2g`, `upgrade_edge`, `twp_protect`,
-`2_month`, …) are **STORED-BUT-INERT** (mig `078` header `:34-36`). Additionally the engine **caps
-month_index ≤ min(3, num_months)** — schedules declaring up to 6 months only pay months 1-3 until the cap
-is lifted (mig `078:30-32`, "1-line backend change"). `⚠` These are the two live limitations here.
+`2_month`, …) are **STORED-BUT-INERT** (mig `078` header `:34-36`). `⚠` This is the live limitation here.
+(STALE-CLAIM FIX 2026-09-01: this section previously said month_index was capped at `min(3, num_months)`
+— that cap was already lifted: `installment_engine.py:197` clamps at `min(12, num_months)`, honoring each
+schedule's full horizon; mig `078:31` documents the old behaviour, not the code.)
 
 ---
 
@@ -269,13 +270,31 @@ conflates them.
 - **Gate evidence source (config-driven, mig `223`):** Boost carriers prove paid from `raw_mi`; master-agent
   carriers prove paid from `raw_ma_commission` per-month spiffs (docstring `sale_installment_engine.py:1057+`).
   Kill switch env `INSTALLMENT_GATE_LEGACY` forces the legacy raw_mi gate.
-- **Config tables:** `plan_installment_schedule` + `plan_installment_line` (mig `201:36,64`);
+- **MA TX gate + MRC (mig `308`, config OPT-IN — never a default flip):** `gate_source='ma_tx'` proves
+  month n from the UNION of (i) the `raw_ma_commission` spiffs (months ≤ 6, `_gate_met_ma` reused
+  unchanged) and (ii) `raw_ma_daily_tx` rows whose `product_name` carries the `'MONTH n'` wording —
+  parsed by `commission_ledger.parse_payment_month` (THE shared regex, never a second one) — reached
+  through the TWO-HOP join `raw_sales.serial_1 ↔ raw_ma_commission.imei|sim` (digit-normalized) →
+  `activation_order ↔ raw_ma_daily_tx.order_number` (`_gate_met_ma_tx`, `build_ma_link_index`,
+  `build_ma_tx_index`, `ma_tx_month_evidence` — all pure). M1 evidence also counts the linked
+  `order_type = cfg.ma_tx_activation_order_type` ('Activation Order') row itself. `ma_max_month` caps
+  the horizon (a Total org row can set 16). MRC: `commission_org_config.installment_mrc_basis =
+  'ma_tx_activation'` resolves the MRC from the linked Activation Order row's `retail_cost`
+  (`ma_tx_mrc_for`; `mrc_source='ma_tx_activation'`), FALLING THROUGH to the plan-line ladder when
+  unlinked. Money guard: only `retail_cost` is read as money — `merchant_invoice` is an identifier and
+  is excluded from the select. Proof: `backend/harness_ma_tx_multimonth.py`.
+- **Config tables:** `plan_installment_schedule` + `plan_installment_line` (mig `201:36,64`;
+  `num_months` CHECK widened to 1..16 by mig `308`, engine clamp `MAX_SCHEDULE_MONTHS=16`);
+  `installment_gate_source_config` (mig `223`, + `ma_tx_activation_order_type` mig `308`);
+  `ma_commission_month_rate` (`month_index` CHECK widened to 1..16 by mig `308`);
   `installment_category_rule` (mig `245:50`); `installment_category_payout` flat rates (mig `256`);
   hardware guard (mig `246`); line MRC (mig `233`). Base spiff rates live in `payout_config`.
 - **Ledger:** `commcalc.sale_installment_ledger` (mig `201:81`). Columns: `trans_id, mdn, serial_1,
   plan_id, schedule_id, store, epay_salesperson, sale_period, pay_period, month_index, payout_kind,
   mrc_at_pay, mrc_source, amount, paid_gate_met, gate_mode, status ('paid'|'withheld_unpaid'|
   'out_of_window'), matched_mi_period`. UNIQUE `(org_id, trans_id, mdn, month_index, pay_period)`.
+  Mig `308` adds `order_number` + `account_id` (MA TX provenance; written adaptively by `_persist`
+  like the mig-258 `expected_amount` tier, NULL unless the MA TX linkage resolved them).
 - **Writes into:** `rep_commissions.installment_comm_sale` (`router.py:9212` persist=True; `9324-9390`).
 
 **Endpoints:** `/plan-installments` `router.py:10726`+ (schedules, matchers, category rules, payout,
@@ -499,7 +518,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.carrier_kpi_metric` | `/carrier-kpi-metrics` POST `19773` | KPI/tier config resolution |
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
 | `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report, `_cr_resolve_store_expenses` |
-| `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` | `/plan-installments/*` previews, `installment_comm_sale` |
+| `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
+| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx`, VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store`), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier) |
+| `commcalc.raw_ma_commission` | upload `/upload/ma_commission`, VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
@@ -560,6 +581,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | Port % | `raw_dlar_store.port_pct` / `store_kpis.port_pct` | store KPI reader `10279` |
 | PSA projected | `raw_dlar_store.psa_projected` | store KPI reader |
 | MI payout / ATU payout | `raw_mi.actual_mi_payout` / `actual_atu_payout` | installment gate; MI ATU RPC |
+| MA-TX MRC (M1 activation) | `raw_ma_daily_tx.retail_cost` on the `order_type='Activation Order'` row (config: `ma_tx_activation_order_type`) | `sale_installment_engine.ma_tx_mrc_for` via the two-hop serial→`activation_order`→`order_number` join (mig `308`; `mrc_source='ma_tx_activation'`) |
+| MA-TX month-n paid evidence | `raw_ma_daily_tx.retail_cost` net of the `'MONTH n'`-worded rows (`product_name` via `commission_ledger.parse_payment_month`) | `sale_installment_engine.ma_tx_month_evidence` / `_gate_met_ma_tx` — UNION with `raw_ma_commission.spiff_m{n}` (n ≤ 6); direction `ma_payout_sign`, floor `ma_min_amount`, horizon `ma_max_month` ≤ 16 (mig `308`) |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 
@@ -570,8 +593,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 1. **Named `payout_schedule.activation_type` variants are STORED-BUT-INERT.** `installment_engine.
    _resolve_schedule` forces `activation_type='*'` (`installment_engine.py:120,194,267`; mig `078:34-36`).
    Edge/fios/upgrade_edge/twp_protect curves never compute today.
-2. **Carrier residual installments cap at month_index ≤ min(3, num_months)** (`mig 078:30-32`) — schedules
-   declaring up to 6 months only pay months 1-3 until a 1-line change lifts the cap. `⚠`
+2. ~~Carrier residual installments cap at month_index ≤ min(3, num_months)~~ **FIXED/STALE** (2026-09-01
+   verification): `installment_engine.py:197` clamps at `min(12, num_months)` — schedules pay their full
+   declared horizon. Only mig `078:31`'s header text still describes the old min(3) behaviour.
 3. **Rep pay (Boost) has no distinct Edge or VHI/FIOS count** — both fold into `premium_acts`
    (`calculator.py`, §6). Only MI breaks them out, by re-scanning the same sales universe
    (`_mi_resolve_numbers` `28843`). If Boost pay ever needs these split, the calc must change.
