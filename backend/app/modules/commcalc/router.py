@@ -27584,9 +27584,23 @@ async def email_run_due(x_notify_secret: str = Header(default="")):
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
         acct = cfg.get('account') or 'default'
-        res = await _run_email_sweep(oid, acct)
+        # ONE broken mailbox must never starve the rest (incident 2026-08-26→09-01: a mailbox whose
+        # sweep RAISED — not returned an error — 500'd this loop mid-iteration on every 15-min tick,
+        # so every config after it in scan order was silently never swept and its next_run_at never
+        # advanced; which tenant got starved depended on nothing but Postgres heap order. LuxeLink's
+        # sales feed went dark for days while its own mailbox was perfectly healthy). Per-mailbox
+        # isolation: a crash is stamped on ITS row — visible on the Email imports page instead of
+        # only in server logs — and the loop moves on; next_run_at still advances so a permanently
+        # broken mailbox retries at its own cadence, not hot every tick.
         nxt = _vip_next_run(cfg.get('frequency') or 'daily', None, None, cfg.get('hour'), 'America/New_York')
-        _email_status_update(client, oid, acct, {'next_run_at': nxt})
+        try:
+            res = await _run_email_sweep(oid, acct)
+            _email_status_update(client, oid, acct, {'next_run_at': nxt})
+        except Exception as e:
+            res = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+            _email_status_update(client, oid, acct,
+                                 {'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}",
+                                  'next_run_at': nxt})
         ran.append({"org_id": oid, "account": acct, "result": res})
     # AUTO DATA-FRESHNESS CHECK (owner 2026-08-28: "auto check and auto fix … before users complain"). The
     # sweep above IS the auto re-pull; now verify each feed actually advanced. A feed still behind escalates a
