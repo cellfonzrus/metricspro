@@ -183,7 +183,12 @@ _PUBLIC_PREFIXES = (
 # no JWT and verifies its own `x-notify-secret` header inside the handler. Allowlisting the suffix
 # lets the cron reach the handler (which still 403s on a wrong/absent secret) and is robust to new
 # sweeps added by other modules. The full current set is enumerated in the platform-core handoff.
+# "/promote-due" is the one secret-gated cron entrypoint that predates the naming convention
+# (/commcalc/sales/promote-due, the hourly feed→raw_sales promotion): its cron job got the
+# middleware's 401 on every tick — never reaching the handler's own verify_notify_secret — from the
+# day this enforcement shipped (found 2026-09-01 while auditing net._http_response).
 _RUN_DUE_SUFFIX = "/run-due"
+_PROMOTE_DUE_SUFFIX = "/promote-due"
 
 # token -> (identity, expiry_epoch), positive results only. identity is the 4-tuple returned by
 # _resolve_identity: (authenticated, super_admin, member_orgs, default_org). Caching the whole
@@ -457,7 +462,7 @@ def _is_public(path: str) -> bool:
     for p in _PUBLIC_PREFIXES:
         if path == p or path.startswith(p + "/"):
             return True
-    if path.endswith(_RUN_DUE_SUFFIX):
+    if path.endswith(_RUN_DUE_SUFFIX) or path.endswith(_PROMOTE_DUE_SUFFIX):
         return True
     return False
 
