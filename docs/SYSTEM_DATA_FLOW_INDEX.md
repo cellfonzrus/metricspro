@@ -558,6 +558,40 @@ closing tender recon mig `103`,`104`,`106`,`111`.
     renders nothing. `/storeops/admin` (combined, backward-compat alias) is tileOnly WITHOUT a
     tile on purpose — its two surfaces ARE the Store Setup / Employee Setup tiles; bookmarks and
     ⌘K search still reach it.
+- **Dashboard-builder Phase D1 — user-designed TILE LAYOUTS, backend (owner spec 2026-09-01):**
+  every module's tiled dashboard layout becomes per-org CONFIG (RULE TWO), not code. SUPER ADMIN
+  designs for all modules and ANY tenant; a layout saved on the HOUSE org
+  (`00000000-0000-0000-0000-000000000001`) is the PLATFORM DEFAULT all tenants (and future modules)
+  inherit; TENANT ADMINS override for their own tenant only; every write permission-gated.
+  - **Storage (NO new migration):** one JSON row per (org, module) in `commcalc.ui_label_override`
+    (mig `068`) under `scope='tiles'`, `key=<module>`, JSON `{version:1, tiles:[{title, icon?,
+    desc?, items:[{href, icon?, label?, desc?}]}]}` serialized into `label` — the same multiplexing
+    precedent as the sidebar designer's `scope='layout'` row. Display config, not a feed → NO
+    lineage-registry/seed entry.
+  - **Module:** `backend/app/modules/commcalc/tile_layout.py` — PURE `sanitize_tile_layout` (caps
+    40 tiles / 60 items-tile / 400 total, trims/clamps, drops malformed items, internal-`/`-href
+    allow-list, ValueError on garbage), `resolve_tile_layout` (tenant > house > None; a malformed
+    row DEGRADES a layer, never raises — `training.resolve_tours` precedence),
+    `tile_write_gate`/`tile_write_org` (the write-permission truth table; the BODY never decides
+    the org — `training._write_org` pattern), + thin org-scoped loaders `load_tile_layout` (both
+    org rows in ONE query) / `save_tile_layout` (None/empty = DELETE = revert to inheritance).
+  - **Endpoints** (`commcalc/router.py`, beside the nav-config block): `GET /commcalc/tile-layout
+    ?module=` → `{module, layout|null, resolved_from:'tenant'|'house'|null}` (read is
+    authenticated-org-scoped like `/nav-config`; middleware pins normal users, super-admin may pass
+    `org_id`); `PUT /commcalc/tile-layout` body `{module, layout|null, target:'tenant'|'house'}` —
+    FAIL-CLOSED 401/503/403 ladder (`_menu_gate_caller`, `_require_import_admin` posture):
+    `target='house'` or a foreign `org_id` → super-admin only; own tenant → super-admin OR the
+    registered `menu_layout` settings area.
+  - **SECURITY RETROFIT (same change):** `POST /commcalc/nav-labels` and `POST /commcalc/nav-layout`
+    shipped with NO auth gate at all — both now require the fail-closed `menu_layout` gate
+    (`_require_menu_layout_admin`) and pin a non-super caller to their OWN org; request bodies
+    unchanged (`/admin/menu` + `/admin/labels` already send the standard auth headers via `api()`).
+  - **Permission registry:** new `SETTING_AREAS` key `menu_layout` ("Menu & dashboard layout
+    designer") in `core/router.py` — grantable per-role in the Roles UI. (The older `menu` area was
+    never gated on by any endpoint; left in place for existing role rows.)
+  - **Proof:** `backend/harness_tile_layout.py` (stdlib-only; sanitizer, resolve order, save
+    semantics, gate truth table). Frontend consumption (designer UI + hubs reading the resolved
+    layout) is Phase D2 — see §19.11.
 
 ---
 
@@ -614,6 +648,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created) | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page |
 | `commcalc.ma_payment_rule` | `/ma-payment-rules` POST/PATCH/DELETE `router.py:19214-19270` (upsert by `org_id,rule_key`; mig `312`) | `ma_recon.load_rules` → `match_rules` (first match by ascending priority; case/trim-insensitive; `effective_from/to` windows; bad regex skipped) |
+| `commcalc.ui_label_override` (mig `068` — one table, scope-multiplexed DISPLAY config) | `POST /nav-labels` (scopes `nav`/`group`/`cap`), `POST /nav-layout` (scope `layout`, key `__nav__`) — both now gated on the `menu_layout` settings area; `PUT /tile-layout` (scope `tiles`, key `<module>`, tenant row or HOUSE platform-default row per `tile_layout.tile_write_gate`) | `GET /nav-config` (caller org only, no house inheritance — sidebar), `GET /tile-layout` (`tile_layout.load_tile_layout`: tenant ∪ HOUSE in one query, tenant wins) |
 | `storeops.org_units/levels/managers` | org-hierarchy UI (storeops) | `org_span_for_manager` RPC → RBAC span, MI store set |
 | `storeops.shifts` | scheduling UI (storeops) | `_fetch_shifts:17447` → Targets only (NOT pay) |
 | `storeops.employees` / `stores` | storeops roster | calc, targets, resolution |
@@ -655,6 +690,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /discrepancy/run` (Boost + MA engines, best-effort each) | `19056` | §15 B2B ↔ MA recon |
 | `GET /discrepancy/{period}` (`?source=boost\|ma`) | `19099` | §15 |
 | `GET/POST /ma-payment-rules`, `PATCH/DELETE /ma-payment-rules/{rule_id}` | `19200-19270` | §15 B2B ↔ MA recon |
+| `GET /tile-layout` (`?module=` — resolved tenant>house tile layout, dashboard-builder D1) | `commcalc/router.py` (`get_tile_layout`, beside nav-config) | §14 D1 |
+| `PUT /tile-layout` (fail-closed: house/foreign → super-admin; own org → `menu_layout` grant) | `commcalc/router.py` (`put_tile_layout`) | §14 D1 |
+| `POST /nav-labels`, `POST /nav-layout` (RETROFIT 2026-09-01: were UNGATED — now fail-closed `menu_layout` gate, non-super pinned to own org) | `commcalc/router.py` (`set_nav_label`/`set_nav_layout`) | §14 D1 |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 
@@ -718,6 +756,14 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 10. **MI gates fail CLOSED** (`management_incentive.py:117`): any qualifier whose value can't be measured
     (`None`) does NOT pass. An unresolved cash/tmr3 read silently blocks the consolidated bonus unless
     entered manually. Check `_mi_resolve_numbers` `unresolved` list.
+11. **Tile-layout rows are STORED-BUT-INERT until Phase D2 (frontend).** D1 (2026-09-01) shipped the
+    backend only — storage, resolution, gates, `GET/PUT /tile-layout` (§14). The hub pages
+    (`/payroll`, `/storeops` via `HubTiles.tsx`) still render their HARDCODED tile arrays and do not
+    yet read the resolved layout; the designer UI does not exist yet. Also note the STALE external
+    claim: `backend/app/data/support_docs_seed.json` (menu/labels help docs) still describes
+    `POST /nav-labels` / `POST /nav-layout` as open admin-page saves — since the D1 retrofit both
+    require the `menu_layout` settings grant (a save without it now fails 403, and signed-out saves
+    401 even in open-app mode).
 
 ---
 

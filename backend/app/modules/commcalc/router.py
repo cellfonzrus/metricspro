@@ -61,6 +61,7 @@ from app.modules.commcalc import custom_report
 from app.modules.commcalc import atu_opportunity as _atu
 from app.modules.commcalc import productivity as _prod
 from app.modules.commcalc import payout_accrual
+from app.modules.commcalc import tile_layout as _tile_layout   # dashboard-builder D1 (tiles designer)
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from datetime import date as _date, timedelta as _timedelta, datetime as _datetime, timezone as _timezone
@@ -13610,6 +13611,56 @@ def _asset_lending_capability(client, org_id):
     return any(bool(r.get('has_asset_lending')) or (r.get('arrangement') == 'consignment') for r in active)
 
 
+def _menu_gate_caller(authorization, active_org):
+    """FAIL-CLOSED caller resolution for the menu / dashboard-layout DESIGNER writes (nav-labels,
+    nav-layout, tile-layout). Same ladder as `_require_import_admin` (finding H3 posture):
+
+      no/invalid token           -> 401
+      permissions unimportable   -> 503   — honest "can't tell", never a silent yes
+      membership store errored   -> 503
+      token valid, no membership -> 403
+
+    SECURITY RETROFIT (dashboard-builder D1, 2026-09-01): POST /nav-labels and POST /nav-layout
+    shipped with NO gate at all — any authenticated tenant user could rewrite their org's menu, and
+    only the middleware rewrite stood between them and another org's row. They now require the
+    registered 'menu_layout' settings area (core.SETTING_AREAS), grantable per-role in the Roles UI;
+    super-admin passes implicitly via `_can_edit_setting`.
+
+    Returns the PURE gate-caller shape {org_id, super_admin, can_edit} consumed by
+    `tile_layout.tile_write_gate` / `tile_write_org` (truth-table proven in
+    harness_tile_layout.py). `super_admin` uses `_require_super_admin`'s exact rule — the
+    login-level flag on ANY membership, OR the house-org-admin bootstrap."""
+    try:
+        from app.modules.core.router import _uid_from_token, _resolve_caller, _can_edit_setting
+    except Exception:
+        raise HTTPException(503, "Permissions are temporarily unavailable — try again in a moment.")
+    uid = _uid_from_token(authorization)
+    if not uid:
+        raise HTTPException(401, "Sign in to change the menu or dashboard layout.")
+    try:
+        caller = _resolve_caller(sb(), uid, active_org)
+    except Exception:
+        raise HTTPException(503, "Permissions are temporarily unavailable — try again in a moment.")
+    if caller is None:
+        raise HTTPException(403, "This login isn't attached to a tenant, so it can't change menu or "
+                                 "dashboard layouts. Ask an administrator to add you.")
+    is_super = bool(caller.get("super_admin")) or (
+        caller.get("org_id") == ORG_ID and (caller.get("role") or "").lower() == "admin")
+    return {"org_id": caller.get("org_id"), "super_admin": is_super,
+            "can_edit": bool(_can_edit_setting(caller, "menu_layout"))}
+
+
+def _require_menu_layout_admin(authorization, active_org):
+    """The retrofit gate for the nav designer writes: resolved caller WITH the 'menu_layout' grant
+    (or super-admin). 401/503/403 ladder via `_menu_gate_caller`; lacks-the-right -> 403."""
+    gc = _menu_gate_caller(authorization, active_org)
+    if not gc["can_edit"]:
+        raise HTTPException(403, "You don't have permission to change the menu layout. Ask an "
+                                 "administrator to grant your role the 'Menu & dashboard layout "
+                                 "designer' setting.")
+    return gc
+
+
 @router.get("/nav-config")
 def get_nav_config(org_id: str = ORG_ID):
     """Sidebar config for a tenant: {labels:{key:nickname}, capabilities:{asset_lending:bool|null}}.
@@ -13652,10 +13703,16 @@ class NavLabelIn(LaxModel):
 
 
 @router.post("/nav-labels")
-def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID):
+def set_nav_label(body: NavLabelIn, org_id: str = ORG_ID,
+                  authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Upsert one display nickname. body: {scope?: 'nav'|'group', key, label}. An empty label REMOVES
     the override (reverts to the built-in label). Clear 400 (not 500) if migration 068 isn't applied.
-    Display-only: this never touches a DB column, route, report_key or data path."""
+    Display-only: this never touches a DB column, route, report_key or data path.
+    GATED (retrofit, 2026-09-01 — was completely ungated): fail-closed on the 'menu_layout' settings
+    area; a non-super caller is pinned to their OWN org regardless of the org_id param."""
+    gc = _require_menu_layout_admin(authorization, x_active_org)
+    if not gc["super_admin"]:
+        org_id = gc["org_id"] or org_id
     scope = (body.scope or 'nav').strip()
     key = (body.key or '').strip()
     label = (body.label or '').strip()
@@ -13686,7 +13743,8 @@ class NavLayoutIn(LaxModel):
 
 
 @router.post("/nav-layout")
-def set_nav_layout(body: NavLayoutIn, org_id: str = ORG_ID):
+def set_nav_layout(body: NavLayoutIn, org_id: str = ORG_ID,
+                   authorization: str = Header(default=""), x_active_org: str = Header(default="")):
     """Save the per-tenant sidebar LAYOUT (admin config): which group each nav item appears under, plus
     hidden items, SUB-CATEGORIES and explicit drag-and-drop order.
     Body = {items: {<href>: {group?: str, sub?: str, hidden?: bool, also?: [str]}}, groups?: [str],
@@ -13701,7 +13759,14 @@ def set_nav_layout(body: NavLayoutIn, org_id: str = ORG_ID):
     ADDITIVE / BACKWARD-COMPATIBLE: a legacy body carrying only group/hidden stores byte-identically to
     before (no `also`/`groups` written when absent). Stored as ONE JSON row in commcalc.ui_label_override
     (scope='layout', reusing mig 068 — no new migration); an empty layout (no items AND no groups) clears
-    it (reverts to the built-in menu). Display-only — never touches routes, data, or access control."""
+    it (reverts to the built-in menu). Display-only — never touches routes, data, or access control.
+    GATED (retrofit, 2026-09-01 — was completely ungated): fail-closed on the 'menu_layout' settings
+    area; a non-super caller is pinned to their OWN org regardless of the org_id param. The request
+    BODY is unchanged (the /admin/menu designer keeps working — api() already sends the platform's
+    standard Authorization + x-active-org headers on every call)."""
+    gc = _require_menu_layout_admin(authorization, x_active_org)
+    if not gc["super_admin"]:
+        org_id = gc["org_id"] or org_id
     import json as _json
     raw_items = body.items or {}
     # platform-core hide-reports-directory toggle: preserve the flag through the layout payload
@@ -13790,6 +13855,79 @@ def set_nav_layout(body: NavLayoutIn, org_id: str = ORG_ID):
         raise HTTPException(400, f"Could not save menu layout — run migration 068_ui_label_override.sql first. [{e}]")
     return {"ok": True, "items": items, "groups": groups,
             "groupOrder": group_order, "subOrder": sub_order, "itemOrder": item_order}
+
+
+# ═══ Tiled-dashboard layout designer (dashboard-builder Phase D1) ════════════════════════════════
+# Per-module TILE layouts, user-designed (owner spec 2026-09-01): a house-org row is the PLATFORM
+# DEFAULT every tenant inherits; a tenant row overrides it for that tenant only. Stored in
+# commcalc.ui_label_override under scope='tiles', key=<module> (mig 068 multiplexing — the same
+# precedent as scope='layout' above; NO new migration). Pure logic + loaders + write-gate truth
+# table: app/modules/commcalc/tile_layout.py, proven in harness_tile_layout.py.
+@router.get("/tile-layout")
+def get_tile_layout(module: str = "", org_id: str = ORG_ID):
+    """Resolved tile layout for one module: {module, layout: <tenant|house row>|null, resolved_from:
+    'tenant'|'house'|null}. READ is authenticated-org-scoped exactly like /nav-config: the tenant
+    middleware pins org_id to a normal caller's verified membership; a super-admin's explicit org_id
+    is honored (preview any tenant). null layout = no design anywhere -> the page renders its
+    built-in default. Degrades to null pre-068 or on a store error (display config, never 500s)."""
+    try:
+        mod = _tile_layout.normalize_module_key(module)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        layout, resolved_from = _tile_layout.load_tile_layout(sb(), org_id, mod)
+    except Exception:
+        layout, resolved_from = None, None
+    return {"module": mod, "layout": layout, "resolved_from": resolved_from}
+
+
+class TileLayoutIn(LaxModel):
+    module: str = ""
+    layout: Any = None          # sanitized dict {tiles:[...]}; null/empty = CLEAR (revert to inherited)
+    target: str = "tenant"      # 'tenant' (this org's override) | 'house' (platform default)
+
+
+@router.put("/tile-layout")
+def put_tile_layout(body: TileLayoutIn, org_id: str = ORG_ID,
+                    authorization: str = Header(default=""), x_active_org: str = Header(default="")):
+    """Save (or clear) ONE module's designed tile layout. Gating (fail-closed 401/503/403 ladder via
+    `_menu_gate_caller`, decision table PURE in `tile_layout.tile_write_gate`):
+      · target='house'  -> writes the HOUSE row (the platform default ALL tenants + future modules
+                           inherit): SUPER ADMIN only.
+      · target='tenant', org_id != caller's acting org -> super admin only (design for ANY tenant;
+                           the write lands on THAT org's row).
+      · target='tenant', own org -> super admin OR the 'menu_layout' settings grant (SETTING_AREAS).
+    The BODY never decides the org: the resolved caller + explicit org_id QUERY param + gate do
+    (`tile_write_org`, training._write_org pattern) — a non-super caller is pinned to their own org.
+    layout=null (or empty tiles) DELETES the row = revert to inheritance, never to blank."""
+    gc = _menu_gate_caller(authorization, x_active_org)
+    target = (body.target or "tenant").strip().lower()
+    decision = _tile_layout.tile_write_gate(gc, target, org_id)
+    if decision != "allow":
+        raise HTTPException(403, {
+            "forbid_house_requires_super_admin":
+                "Only a super-admin can change the platform-default tile layout.",
+            "forbid_foreign_org":
+                "Only a super-admin can design tile layouts for another tenant.",
+            "forbid_no_setting_grant":
+                "You don't have permission to change dashboard layouts. Ask an administrator to "
+                "grant your role the 'Menu & dashboard layout designer' setting.",
+            "forbid_bad_target": "target must be 'tenant' or 'house'.",
+        }.get(decision, "Not allowed."))
+    try:
+        mod = _tile_layout.normalize_module_key(body.module)
+        layout = None if body.layout in (None, {}, []) else _tile_layout.sanitize_tile_layout(body.layout)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    write_org = _tile_layout.tile_write_org(gc, target, org_id)
+    try:
+        res = _tile_layout.save_tile_layout(sb(), write_org, mod, layout,
+                                            now_iso=_datetime.now(_timezone.utc).isoformat())
+    except Exception as e:
+        raise HTTPException(400, f"Could not save tile layout — run migration 068_ui_label_override.sql "
+                                 f"first. [{e}]")
+    return {"ok": True, "module": mod, "org_id": write_org, "target": target,
+            "cleared": bool(res.get("cleared")), "layout": None if res.get("cleared") else layout}
 
 
 @router.get("/distributors")

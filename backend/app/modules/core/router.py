@@ -1299,6 +1299,13 @@ SETTING_AREAS = [
     # the wizard is open to any member on purpose: a rep who lands on POS before it is configured
     # should be told why, not shown a 403.
     {"key": "pos_onboarding",    "label": "POS onboarding (setup wizard steps · import-from-existing)"},
+    # Registered 2026-09-01 with the dashboard-builder D1 security retrofit. Gates the menu/dashboard
+    # DESIGNER writes in commcalc: POST /nav-labels, POST /nav-layout (both shipped UNGATED — any
+    # authenticated tenant user could rewrite their org's menu) and the new PUT /tile-layout
+    # (per-module tiled-dashboard designer; own-tenant target — house/foreign targets are super-admin
+    # only via tile_layout.tile_write_gate). NOTE: distinct from the pre-existing 'menu' area above,
+    # which no backend endpoint ever gated on (display grouping only in the Roles UI).
+    {"key": "menu_layout",       "label": "Menu & dashboard layout designer"},
 ]
 
 
