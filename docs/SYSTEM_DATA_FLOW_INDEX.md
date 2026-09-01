@@ -89,7 +89,7 @@ email), (c) **RPC/manual entry**.
 | FTP drop | `ftp_sweep.py` | per report-pull-map | `/ftp-sweep/*` `router.py:22175-22237` (mig `046`) |
 | Email inbox | `email_sweep.py` | routes attachments to report ingest | `/email-sweep/*` `router.py:22973-23407` (mig `049`,`075`); scheduler: pg_cron → `/email-sweep/run-due` (mig `921`,`922` — backend self-registers on boot; handler advances `next_run_at` up front and sweeps via BackgroundTasks so the tick answers pg_net inside its 5 s timeout) |
 | Vidapay | `vidapay_sweep.py` | payment feed | (mig `083` total processor sources) |
-| Generic data-source portal login | `live_login.py` | any report | `/data-sources/*` `router.py:23760-24979`, `/data-sources/sweep/run-due` `24409` |
+| Generic data-source portal login | `live_login.py` | any report | `/data-sources/*` `router.py:23760-24979`, `/data-sources/sweep/run-due` `24409` (cron path advances each due source's `next_run_at` up front and pulls on a dedicated thread — the email-sweep incident pattern; the secret-less org-scoped call still pulls inline) |
 
 Connector/schedule model: mig `039_connector_model.sql`, `063`, `290_report_schedule_and_grain.sql`;
 endpoints `/connectors*` `router.py:6666-6989`, `/connector-health` `23378`. Sweep store-guard
