@@ -1003,6 +1003,31 @@ export default function EmailImportsPage() {
               server&apos;s datacenter IP. Enter a <b>residential / allow-listed proxy</b> above to route the login
               through it (leave blank otherwise).
             </p>
+            {/* mig 307 — unattended 2FA: read the code the portal emails out of the ingestion mailbox so a
+                scheduled pull can re-login with nobody at the keyboard. Off by default: automating the second
+                factor is a deliberate operator trade (anyone who can read the mailbox can finish this login). */}
+            <div style={{ margin: '0 0 8px', padding: '8px 10px', borderRadius: 8, border: '1px dashed var(--border)' }}>
+              <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center', fontWeight: 600 }}
+                title="When a scheduled pull finds the session expired, log in headlessly and read the 2-factor code from the ingestion mailbox configured above — no human needed. Anyone able to read that mailbox can then complete this login, which is why this is per-login and off by default.">
+                <input type="checkbox" checked={!!srcDraft.oob_enabled} onChange={e => setSrcDraft({ ...srcDraft, oob_enabled: e.target.checked })} />
+                🤖 Unattended login — read the 2FA code from the ingestion mailbox</label>
+              {!!srcDraft.oob_enabled && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Code mail — sender contains<br />
+                    <input style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} placeholder="e.g. vidapaycrm.com" value={srcDraft.oob_from_contains || ''} onChange={e => setSrcDraft({ ...srcDraft, oob_from_contains: e.target.value })} /></label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }}>Subject contains<br />
+                    <input style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} placeholder="e.g. verification code" value={srcDraft.oob_subject_contains || ''} onChange={e => setSrcDraft({ ...srcDraft, oob_subject_contains: e.target.value })} /></label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }} title="Only needed when the portal's code isn't a plain 4–8 digit number (group 1 wins if the pattern has one).">Code pattern (optional regex)<br />
+                    <input style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} placeholder="leave blank to auto-detect digits" value={srcDraft.oob_code_regex || ''} onChange={e => setSrcDraft({ ...srcDraft, oob_code_regex: e.target.value })} /></label>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }} title="Exact digit count when known (blank = accept 4–8).">Code length<br />
+                      <input type="number" min={3} max={10} style={{ width: 64, padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} value={srcDraft.oob_code_length ?? ''} onChange={e => setSrcDraft({ ...srcDraft, oob_code_length: e.target.value === '' ? null : Number(e.target.value) })} /></label>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)' }} title="Security control: a code older than this is refused outright — raising it widens the replay window.">Max code age (s)<br />
+                      <input type="number" min={30} max={3600} style={{ width: 80, padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: 13, marginTop: 3 }} value={srcDraft.oob_max_age_seconds ?? 300} onChange={e => setSrcDraft({ ...srcDraft, oob_max_age_seconds: Number(e.target.value) || 300 })} /></label>
+                  </div>
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <label style={{ fontSize: 13, display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input type="checkbox" checked={!!srcDraft.enabled} onChange={e => setSrcDraft({ ...srcDraft, enabled: e.target.checked })} /> Enabled (auto-pull once the scraper is wired)</label>

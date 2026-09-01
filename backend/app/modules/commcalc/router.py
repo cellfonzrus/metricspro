@@ -27612,7 +27612,12 @@ _SOURCE_FIELDS = ["distributor_id", "carrier_id", "processor", "label", "portal_
                   "account_id", "password", "proxy_url", "enabled", "frequency", "hour", "notes",
                   # months_back (mig 207) and auto_pull_after_login (mig 242) are per-source knobs the
                   # admin page edits — RULE TWO: config, not constants.
-                  "months_back", "auto_pull_after_login"]
+                  "months_back", "auto_pull_after_login",
+                  # Unattended 2FA (mig 307): read this login's code from the tenant mailbox so a
+                  # scheduled pull can re-authenticate without a human. oob_enabled defaults FALSE —
+                  # automating the second factor is an operator-made trade, per login.
+                  "oob_enabled", "oob_from_contains", "oob_subject_contains",
+                  "oob_code_regex", "oob_code_length", "oob_max_age_seconds"]
 # Columns that never leave the backend (credentials + serialized browser sessions).
 _SOURCE_SECRETS = ("password", "session_state", "pending_state")
 
@@ -27963,6 +27968,12 @@ class SaveDataSourceIn(LaxModel):
     notes: Any = None
     months_back: Any = None
     auto_pull_after_login: Any = None
+    oob_enabled: Any = None
+    oob_from_contains: Any = None
+    oob_subject_contains: Any = None
+    oob_code_regex: Any = None
+    oob_code_length: Any = None
+    oob_max_age_seconds: Any = None
 
 
 @router.put("/data-sources")
@@ -27978,6 +27989,23 @@ def save_data_source(body: SaveDataSourceIn, org_id: str = ORG_ID, authorization
             row[k] = None
     if "password" in row and not (row.get("password") or "").strip():
         row.pop("password")   # blank password on the form = keep the saved one
+    # Unattended-2FA numbers (mig 307): a cleared form field arrives as ""/None — store NULL (length)
+    # or the migration's default (max age) instead of tripping the DB check constraint with a 500.
+    if "oob_code_length" in row:
+        try:
+            row["oob_code_length"] = (max(3, min(10, int(row["oob_code_length"])))
+                                      if str(row["oob_code_length"] or "").strip() else None)
+        except (TypeError, ValueError):
+            row["oob_code_length"] = None
+    if "oob_max_age_seconds" in row:
+        try:
+            # clamp into the mig-307 check range (30..3600) so an out-of-range form value degrades to
+            # the nearest legal one instead of a constraint 500; 300 is the security default.
+            row["oob_max_age_seconds"] = max(30, min(3600, int(row["oob_max_age_seconds"])))
+        except (TypeError, ValueError):
+            row["oob_max_age_seconds"] = 300
+    if "oob_enabled" in row:
+        row["oob_enabled"] = bool(row.get("oob_enabled"))
     # SSRF GUARD (finding C4, 2026-08-06). The line that used to live here —
     #     row["portal_url"] = pu if "://" in pu else "https://" + pu.lstrip("/")
     # — only ever ADDED a missing scheme (Playwright rejects a bare host with "Cannot navigate to
@@ -28119,10 +28147,44 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
                 delivered = _record_pull_result(client, sid, org_id, res, source="portal-pull-live")
                 return {"ok": True, "via": "live-session", "delivered": delivered, **(res or {})}
             # res is None → the live session couldn't pull (timed out / just closed) → fall through.
+    from fastapi.concurrency import run_in_threadpool as _rit
+    row_for_pull = src_row
+    relogin = {"attempted": False, "ok": False, "message": ""}
     try:
-        res = await handler(org_id, src_row)
-        delivered = _record_pull_result(client, sid, org_id, res)
-        return {"ok": True, "delivered": delivered, **(res or {})}
+        for attempt in (1, 2):
+            try:
+                res = await handler(org_id, row_for_pull)
+            except VidaPayAuthError as e:
+                # Session expired / never authenticated. Do NOT null session_state here: a transient
+                # nav/validity blip would otherwise DESTROY a good saved login and force a needless
+                # re-login (+ new 2FA code); a real re-login overwrites it.
+                #
+                # UNATTENDED RE-LOGIN (mig 307, chromium auto-login): when the operator turned
+                # oob_enabled on, log in headlessly, read the 2FA code from the tenant's own sweep
+                # mailbox, save the fresh session and retry the pull ONCE. Otherwise — and when the
+                # unattended attempt itself fails — prompt the operator exactly as before.
+                if attempt == 1:
+                    relogin = await _rit(_unattended_relogin, client, src_row, org_id)
+                    if relogin.get("ok"):
+                        row_for_pull = relogin["row"]
+                        continue
+                    note = (" " + relogin["message"]) if relogin.get("message") else ""
+                else:   # the fresh unattended session was rejected too — say so, honestly
+                    note = (" A fresh unattended sign-in was rejected as well — this portal "
+                            "likely needs an interactive login (🔐 Log in / 🔴 Live login).")
+                _source_stamp(client, sid, org_id,
+                              {"last_status": f"needs login: {str(e)[:160]}",
+                               "auth_status": "needs_2fa",
+                               "auth_message": (str(e)[:300 - len(note)] + note)[:300]}, success=False)
+                return {"ok": False, "needs_2fa": True, "error": str(e),
+                        "unattended_login": relogin.get("attempted") or False}
+            delivered = _record_pull_result(
+                client, sid, org_id, res,
+                source="portal-pull-unattended" if attempt > 1 else "portal-pull")
+            out = {"ok": True, "delivered": delivered, **(res or {})}
+            if attempt > 1:
+                out["via"] = "unattended-relogin"
+            return out
     except UnsafePortalUrlError as e:
         # SSRF guard (C4): the STORED portal/proxy URL is refused. Deliberately handled BEFORE the
         # generic handler so it does NOT arm the portal-block cooldown (mig 244) — the portal never
@@ -28130,15 +28192,6 @@ async def run_data_source(sid: str, org_id: str = ORG_ID, confirm: bool = False)
         _source_stamp(client, sid, org_id,
                       {"last_status": f"blocked by the URL safety check: {str(e)[:180]}"}, success=False)
         return {"ok": False, "error": str(e), "config_error": True}
-    except VidaPayAuthError as e:
-        # Session expired / never authenticated — not a hard failure; prompt the operator to log in.
-        # Do NOT null session_state here: a transient nav/validity blip would otherwise DESTROY a good
-        # saved login and force a needless re-login (+ new 2FA code). Leave the stored session in place;
-        # a real re-login overwrites it, and a still-valid session is reused on the next Pull.
-        _source_stamp(client, sid, org_id,
-                      {"last_status": f"needs login: {str(e)[:160]}",
-                       "auth_status": "needs_2fa", "auth_message": str(e)[:300]}, success=False)
-        return {"ok": False, "needs_2fa": True, "error": str(e)}
     except Exception as e:
         # A rate-limit raised out of the driver is NOT a generic 500: stamp the escalating cooldown and
         # tell the operator to wait, rather than surfacing an error that invites an immediate retry.
@@ -28683,7 +28736,29 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
                             "remaining_s": cool.get("remaining_s")})
             continue
         try:
-            res = await handler(oid, s)
+            from app.modules.commcalc.vidapay_sweep import VidaPayAuthError as _AuthErr
+            from fastapi.concurrency import run_in_threadpool as _rit
+            try:
+                res = await handler(oid, s)
+            except _AuthErr as e:
+                # Session expired mid-schedule. UNATTENDED RE-LOGIN (mig 307, chromium auto-login):
+                # with oob_enabled on, log in headlessly, read the 2FA code from the tenant's sweep
+                # mailbox and retry the pull once — this is the step that makes a SCHEDULED pull
+                # complete with nobody at the keyboard. Off (or failed) → stamp the honest
+                # needs-login prompt instead of a generic error, and move on to the next source.
+                relogin = await _rit(_unattended_relogin, client, s, oid)
+                if not relogin.get("ok"):
+                    note = (" " + relogin["message"]) if relogin.get("message") else ""
+                    _source_stamp(client, s["id"], oid,
+                                  {"last_status": ("needs login: " + str(e)[:120] + note)[:220],
+                                   "auth_status": "needs_2fa",
+                                   "auth_message": (str(e)[:300 - len(note)] + note)[:300],
+                                   "next_run_at": nxt, "last_run_at": now.isoformat()},
+                                  success=False)
+                    ran.append({"id": s["id"], "ok": False, "needs_2fa": True,
+                                "unattended_login": relogin.get("attempted") or False})
+                    continue
+                res = await handler(oid, relogin["row"])
             _source_stamp(client, s["id"], oid,
                           {"last_status": str((res or {}).get("status") or "ok"),
                            "auth_status": "authenticated", "next_run_at": nxt,
@@ -28701,6 +28776,83 @@ async def data_sources_run_due(org_id: str = ORG_ID, x_notify_secret: str = Head
                         "blocked_until": (plan or {}).get("blocked_until")})
     return {"ok": True, "ran": ran, "count": len(ran),
             "skipped_blocked": skipped, "skipped_count": len(skipped)}
+
+
+def _unattended_relogin(client, s, org_id):
+    """The CHROMIUM AUTO-LOGIN step (mig 307): when a pull hits an expired portal session and the
+    operator has turned `oob_enabled` on for this login, log in headlessly and read the 2FA code the
+    portal just emailed out of the tenant's OWN mailbox — the same inbox the daily attachment sweep
+    reads — so the pull can continue without a human. BLOCKING (Playwright + an IMAP poll that can
+    take minutes); callers run it in a threadpool.
+
+    Returns {attempted, ok, message, row?}:
+      attempted=False — unattended login is off / not possible here (missing creds, no mailbox, an
+                        active portal cooldown); `message` says why when it's actionable.
+      ok=True         — signed in; the fresh session is STAMPED on the row (same stamp the interactive
+                        login/verify writes) and `row` is the source row with the new session_state,
+                        ready for a retry of the pull.
+
+    Never raises, never logs the code. A failed headless login records a cooldown outcome exactly like
+    the interactive path — a login into a WAF block is the most reliable way to extend the block."""
+    from app.modules.commcalc import vidapay_sweep as vp
+    from app.modules.commcalc import oob_code as _oob
+    if not s.get("oob_enabled"):
+        return {"attempted": False, "ok": False, "message": ""}
+    proc = (s.get("processor") or "").strip().lower()
+    if proc not in _SOURCE_SCRAPERS:
+        return {"attempted": False, "ok": False, "message": ""}
+    if not (s.get("password") and (s.get("username") or s.get("account_id"))):
+        return {"attempted": False, "ok": False,
+                "message": "Unattended login is on, but this login has no stored credentials."}
+    # The code lands in the tenant's configured sweep mailbox. Multi-mailbox tenants (mig 075): the
+    # 'default' account, else the first configured one — the portal mails ONE address, and that is the
+    # inbox the sweep already reads. A per-login mailbox pick would be a future oob_account column.
+    imap_cfg = _email_cfg(client, org_id)
+    if not imap_cfg:
+        for acct in _email_accounts(client, org_id):
+            if (acct.get("imap_host") or "").strip():
+                imap_cfg = acct
+                break
+    if not imap_cfg or not (imap_cfg.get("imap_host") or "").strip():
+        return {"attempted": False, "ok": False,
+                "message": "Unattended login is on, but no ingestion mailbox is configured "
+                           "(Data Imports → Email imports) — there is nowhere to read the code from."}
+    cool = _source_cooldown(client, s["id"], org_id, row=s)
+    if cool.get("blocked"):
+        # NEVER a fresh headless login during an active portal block — that's the one thing the
+        # cooldown exists to prevent, and a machine gets no ?confirm=true override.
+        return {"attempted": False, "ok": False,
+                "message": (_pb().humanize(cool) or "The portal is in a cooldown window.")}
+    is_b2b = proc in ("b2bsoft", "b2b")
+    now = datetime.now(timezone.utc)
+    try:
+        res = vp.login_unattended(
+            s.get("portal_url"), s.get("account_id"), s.get("username"), s.get("password"),
+            imap_cfg, _oob.rules_from_source(s), proxy_url=s.get("proxy_url"),
+            begin_fn=vp.begin_login_b2bsoft if is_b2b else None,
+            complete_fn=vp.complete_2fa_b2bsoft if is_b2b else None)
+    except Exception as e:
+        try:   # portal throttling? arm the escalating cooldown, same as every other login path
+            _pb().record_outcome(client, s["id"], org_id, None, delivered=False, exc=e, row=s)
+        except Exception:
+            pass
+        _store_login_shot(client, s["id"], org_id, getattr(e, "screenshot_b64", None))
+        return {"attempted": True, "ok": False,
+                "message": f"Unattended login failed: {str(e)[:220]}"}
+    if (res or {}).get("status") != "authenticated" or not (res or {}).get("storage_state"):
+        return {"attempted": True, "ok": False,
+                "message": f"Unattended login ended in state '{(res or {}).get('status')}'."}
+    _source_stamp(client, s["id"], org_id,
+                  {"auth_status": "authenticated",
+                   "auth_message": "Signed in unattended (2FA code read from the mailbox). Session saved.",
+                   "session_state": res.get("storage_state"), "pending_state": None,
+                   "pending_started_at": None,
+                   "session_expires_at": (now + timedelta(hours=vp.SESSION_TTL_HOURS)).isoformat()},
+                  success=False)
+    _store_login_shot(client, s["id"], org_id, res.get("screenshot_b64"))
+    refreshed = dict(s)
+    refreshed["session_state"] = res.get("storage_state")
+    return {"attempted": True, "ok": True, "message": "Signed in unattended.", "row": refreshed}
 
 
 def _do_portal_login(sid: str, org_id: str):

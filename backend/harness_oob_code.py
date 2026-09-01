@@ -172,6 +172,44 @@ except Exception as e:
           "No 2FA code arrived" in str(e) and "mig 307" in str(e), str(e)[:90])
 oc.read_latest_code = oc_read
 
+print("── I. rules_from_source — the mig-307 columns → reader rules mapping ──")
+row = {"oob_from_contains": " vidapaycrm.com ", "oob_subject_contains": "verification code",
+       "oob_code_regex": r"code (\d{6})", "oob_code_length": "6", "oob_max_age_seconds": 300}
+r = oc.rules_from_source(row)
+check("all five columns map (strings trimmed, numbers parsed)",
+      r == {"from_contains": "vidapaycrm.com", "subject_contains": "verification code",
+            "code_regex": r"code (\d{6})", "code_length": 6, "max_age_seconds": 300}, r)
+check("unset / empty columns simply don't constrain",
+      oc.rules_from_source({"oob_from_contains": "", "oob_code_length": None}) == {})
+check("a malformed number is dropped, not a crash (max age then falls back to the tighter 300s default)",
+      oc.rules_from_source({"oob_max_age_seconds": "soon", "oob_code_length": "six"}) == {})
+check("a zero/negative number is dropped",
+      oc.rules_from_source({"oob_code_length": 0, "oob_max_age_seconds": -5}) == {})
+check("None row is fine", oc.rules_from_source(None) == {})
+
+print("── J. login_unattended driver dispatch (begin_fn/complete_fn — the b2bsoft path) ──")
+b2b_calls = {}
+def _b2b_begin(url, acc, user, pw, proxy_url=None):
+    b2b_calls["begin"] = True
+    return {"status": "needs_2fa", "_2fa_url": "https://sso/2fa"}
+def _b2b_complete(url, pending, code, proxy_url=None):
+    b2b_calls["code"] = code
+    return {"status": "authenticated", "storage_state": {"b2b": True}}
+def _never(*a, **k):
+    raise AssertionError("default driver must not run when an explicit pair is passed")
+vp.begin_login, vp.complete_2fa = _never, _never
+oc.read_latest_code = lambda cfg, rules=None, **k: {"code": "998877"}
+out = vp.login_unattended("u", "a", "user", "pw", {"imap_host": "h"}, {}, timeout_seconds=5,
+                          begin_fn=_b2b_begin, complete_fn=_b2b_complete)
+check("an explicit driver pair is used end-to-end (b2bsoft dispatch)",
+      out.get("status") == "authenticated" and out.get("storage_state") == {"b2b": True}
+      and b2b_calls.get("code") == "998877", out)
+vp.begin_login, vp.complete_2fa = _fake_begin, _fake_complete
+out = vp.login_unattended("u", "a", "user", "pw", {"imap_host": "h"}, {}, timeout_seconds=5)
+check("omitting the pair keeps the default VidaPay drivers (harness H behaviour unchanged)",
+      out.get("status") == "authenticated" and out.get("storage_state") == {"ok": True}, out)
+oc.read_latest_code = oc_read
+
 print()
 print(f"{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
