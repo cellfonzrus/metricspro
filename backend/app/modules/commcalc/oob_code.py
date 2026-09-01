@@ -204,6 +204,31 @@ def code_from_messages(candidates, rules=None, now=None):
                         "date": picked.get("date"), "digits": len(code)}}   # never the code itself
 
 
+def rules_from_source(row):
+    """The mig-307 `oob_*` columns of a `commcalc.data_source` row, as the rules dict
+    `read_latest_code` / `code_from_messages` expect. PURE — this is the one place the column names
+    are known, so the router and any future caller can never drift on the mapping. An unset column
+    simply doesn't constrain; a malformed number is dropped rather than crashing a login
+    (`max_age_seconds` then falls back to the reader's 300s default, which is the TIGHTER choice)."""
+    r = row or {}
+    rules = {}
+    for col, key in (("oob_from_contains", "from_contains"),
+                     ("oob_subject_contains", "subject_contains"),
+                     ("oob_code_regex", "code_regex")):
+        v = str(r.get(col) or "").strip()
+        if v:
+            rules[key] = v
+    for col, key in (("oob_code_length", "code_length"),
+                     ("oob_max_age_seconds", "max_age_seconds")):
+        try:
+            v = int(r.get(col))
+            if v > 0:
+                rules[key] = v
+        except (TypeError, ValueError):
+            pass
+    return rules
+
+
 def read_latest_code(imap_cfg, rules=None, now=None, lookback_minutes=30):
     """Fetch recent mail and return `code_from_messages` over it. The ONLY function here that does I/O.
 

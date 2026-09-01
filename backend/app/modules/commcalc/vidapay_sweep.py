@@ -3587,9 +3587,14 @@ def run_b2bsoft_sweep(client, org_id, url, session_state, source_id=None, carrie
 # (oob_code reads the mailbox already configured for the daily attachment sweep).
 
 def login_unattended(url, account_id, user, pw, imap_cfg, oob_rules=None, proxy_url=None,
-                     poll_seconds=10, timeout_seconds=180, _now=None):
+                     poll_seconds=10, timeout_seconds=180, _now=None,
+                     begin_fn=None, complete_fn=None):
     """begin_login → wait for the emailed 2FA code → complete_2fa. Returns what complete_2fa returns (or
     what begin_login returned when the portal did not challenge at all).
+
+    `begin_fn` / `complete_fn` select the driver pair — default the VidaPay/T-CETRA pair; the router
+    passes begin_login_b2bsoft/complete_2fa_b2bsoft for a b2bsoft source, exactly the same dispatch its
+    interactive login/start + login/verify endpoints already do (both pairs share one signature).
 
     Only the code that arrives AFTER this call started is ever accepted (`not_before`), so a poll can
     never pick up the still-in-window code from a PREVIOUS run and submit one the portal has retired.
@@ -3600,8 +3605,10 @@ def login_unattended(url, account_id, user, pw, imap_cfg, oob_rules=None, proxy_
     from datetime import datetime as _dt, timezone as _tz
     from app.modules.commcalc import oob_code as _oob
 
+    _begin = begin_fn or begin_login
+    _complete = complete_fn or complete_2fa
     started = (_now or _dt.now(_tz.utc))
-    res = begin_login(url, account_id, user, pw, proxy_url=proxy_url)
+    res = _begin(url, account_id, user, pw, proxy_url=proxy_url)
     if (res or {}).get("status") == "authenticated":
         return res                              # portal trusted this device; no second factor needed
     if (res or {}).get("status") != "needs_2fa":
@@ -3615,7 +3622,7 @@ def login_unattended(url, account_id, user, pw, imap_cfg, oob_rules=None, proxy_
     while _time.monotonic() < deadline:
         got = _oob.read_latest_code(imap_cfg, rules)
         if got.get("code"):
-            return complete_2fa(url, res, got["code"], proxy_url=proxy_url)
+            return _complete(url, res, got["code"], proxy_url=proxy_url)
         last_reason = got.get("reason") or last_reason
         _time.sleep(max(1, int(poll_seconds)))
 
