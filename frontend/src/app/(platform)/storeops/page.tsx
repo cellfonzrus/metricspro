@@ -1,16 +1,23 @@
 'use client'
 // Workforce tiled dashboard (Phase W2, owner directive 2026-09-01). Replaces the old small LINKS
-// landing with the full tile hub — the side-menu entries stay as the secondary path. Keeps the
-// StatTile KPI row and extends it with pending-work counts (time off, swaps, time-clock
-// permissions), each best-effort off an endpoint that already exists — a failed count never blocks
-// the render. Tile taxonomy is the owner's spec: Schedule · Shift Approvals · Attendance (incl. the
-// page renamed 'Lateness %') · Employees · Reports · Store Setup + Employee Setup as SEPARATE tiles
-// (the /storeops/admin split).
+// landing with the full tile hub. Keeps the StatTile KPI row and extends it with pending-work
+// counts (time off, swaps, time-clock permissions), each best-effort off an endpoint that already
+// exists — a failed count never blocks the render.
+//
+// Phase W2.1 (owner feedback 2026-09-01, "cleaner look"): the master tiles now COLLAPSE — each
+// renders as one card (icon + title + desc + page count) and the interior links expand in place on
+// click (HubTiles). Single-link tiles (Store Setup, Employee Setup) navigate directly.
+// In the same pass the side menu hides everything a tile covers
+// (NavItem.tileOnly in rbac.ts), so the previously menu-only Visits/Reviews pages join a NEW
+// "Store Ops" master tile here. Tile taxonomy: Schedule · Shift Approvals · Attendance (incl. the
+// page renamed 'Lateness %') · Employees · Reports · Store Ops (W2.1) · Store Setup + Employee
+// Setup as SEPARATE tiles (the /storeops/admin split).
 import { useState, useEffect } from 'react'
 import { api } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import Link from 'next/link'
 import StatTile from '@/components/StatTile'
+import HubTiles, { type HubGroup } from '@/components/HubTiles'
 
 function weekRange() {
   const d = new Date()
@@ -21,12 +28,10 @@ function weekRange() {
   return { start: iso(mon), end: iso(sun) }
 }
 
-type Item = { href: string; icon: string; label: string; desc: string }
-type Group = { title: string; desc: string; items: Item[] }
-
-const GROUPS: Group[] = [
+const GROUPS: HubGroup[] = [
   {
     title: 'Schedule',
+    icon: '📅',
     desc: 'Build the week and manage every change to it.',
     items: [
       { href: '/storeops/schedule', icon: '📅', label: 'Schedule', desc: 'Build and edit weekly shifts — the week defaults to the current pay period.' },
@@ -39,6 +44,7 @@ const GROUPS: Group[] = [
   },
   {
     title: 'Shift Approvals',
+    icon: '✅',
     desc: 'Time that needs a manager\'s tick before it counts.',
     items: [
       { href: '/storeops/timeclock-permissions', icon: '⏳', label: 'Time-clock Permissions', desc: 'Re-clock-ins and extra time past shift end, held until approved.' },
@@ -47,6 +53,7 @@ const GROUPS: Group[] = [
   },
   {
     title: 'Attendance',
+    icon: '🚨',
     desc: 'Who showed up, and on time.',
     items: [
       { href: '/storeops/attendance', icon: '🚨', label: 'Attendance Exceptions', desc: 'No-shows, missed punches and other exceptions.' },
@@ -55,6 +62,7 @@ const GROUPS: Group[] = [
   },
   {
     title: 'Employees',
+    icon: '👥',
     desc: 'The roster and your own span.',
     items: [
       { href: '/storeops/employees', icon: '👥', label: 'Employees', desc: 'The employee roster — edit inline, deactivate, merge duplicates.' },
@@ -63,22 +71,38 @@ const GROUPS: Group[] = [
   },
   {
     title: 'Reports',
+    icon: '📋',
     desc: 'Hours & payroll rollups, and the whole Report Center.',
     items: [
       { href: '/storeops/reports', icon: '📋', label: 'Hours & Payroll Reports', desc: 'Hours & payroll, by employee/store, for any pay period.' },
       { href: '/reports', icon: '📊', label: 'Report Center', desc: 'All the reports you have access to.' },
     ],
   },
+  // NEW master tile (Phase W2.1): the store-visit and Google-review surfaces previously lived ONLY
+  // in the side menu; they get a tile here so the menu cleanup (tileOnly) leaves nothing stranded.
+  {
+    title: 'Store Ops',
+    icon: '🏪',
+    desc: 'Store visits and Google reviews across your span.',
+    items: [
+      { href: '/storeops/visits', icon: '📝', label: 'Store Visits', desc: 'DM store-visit reports — checklist scores, findings, follow-ups.' },
+      { href: '/storeops/visits/settings', icon: '🧾', label: 'Visit Checklist', desc: 'Configure the visit checklist sections and items (admin only).' },
+      { href: '/storeops/reviews', icon: '⭐', label: 'Google Reviews', desc: 'Rating vs target per store, review feed and trends.' },
+      { href: '/storeops/reviews/config', icon: '⚙️', label: 'Reviews Setup', desc: 'API key, per-store place IDs & targets, sweep schedule (admin only).' },
+    ],
+  },
   {
     title: 'Store Setup',
-    desc: 'The stores themselves.',
+    icon: '🏬',
+    desc: 'Store codes, addresses, markets, time zones, targets — plus bulk upload.',
     items: [
       { href: '/storeops/setup/stores', icon: '🏬', label: 'Store Setup', desc: 'Store codes, addresses, markets, time zones, targets — plus bulk upload.' },
     ],
   },
   {
     title: 'Employee Setup',
-    desc: 'The people records behind scheduling.',
+    icon: '🧑‍🔧',
+    desc: 'Names, IDs, home stores, contact info, active flags — plus bulk upload.',
     items: [
       { href: '/storeops/setup/employees', icon: '🧑‍🔧', label: 'Employee Setup', desc: 'Names, IDs, home stores, contact info, active flags — plus bulk upload.' },
     ],
@@ -123,7 +147,8 @@ export default function WorkforceDashboard() {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>🏠 Workforce</h1>
         <p className="pg-note" style={{ color: 'var(--text2)', fontSize: 14, margin: '4px 0 0' }}>
-          Scheduling, approvals, attendance and the roster across your stores. Payroll has its own
+          Scheduling, approvals, attendance and the roster across your stores — click a tile to see
+          what&apos;s inside. Payroll has its own
           dashboard — <Link href="/payroll" style={{ color: 'var(--accent)' }}>open Payroll →</Link>
         </p>
       </div>
@@ -144,30 +169,7 @@ export default function WorkforceDashboard() {
               sub="View →" delta={clockPending ? { value: 'needs review', dir: 'down' } : undefined} />
           </div>
 
-          <div style={{ display: 'grid', gap: 22 }}>
-            {GROUPS.map(g => (
-              <section key={g.title}>
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 15, fontWeight: 700 }}>{g.title}</div>
-                  <div style={{ fontSize: 12, color: 'var(--text3)' }}>{g.desc}</div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
-                  {g.items.map(it => (
-                    <Link key={it.href} href={it.href} className="card" style={{
-                      padding: 14, display: 'flex', gap: 12, alignItems: 'flex-start',
-                      textDecoration: 'none', color: 'inherit', border: '1px solid var(--border)',
-                    }}>
-                      <div style={{ fontSize: 22, lineHeight: 1 }}>{it.icon}</div>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>{it.label}</div>
-                        <div style={{ fontSize: 12, color: 'var(--text2)', lineHeight: 1.4 }}>{it.desc}</div>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
+          <HubTiles groups={GROUPS} />
         </>
       )}
     </div>

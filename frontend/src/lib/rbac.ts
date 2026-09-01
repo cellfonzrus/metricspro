@@ -223,7 +223,13 @@ export function hasDataGrant(perms: Permissions, key: string): boolean {
 // `cap` (optional) is a tenant CAPABILITY gate, separate from RBAC: the sidebar hides the item only when
 // the tenant's capability is explicitly false (e.g. asset_lending=false → no consignment distributor).
 // Unknown/true → shown, so it never hides anything by default. RBAC (module/scopes) still applies first.
-export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string }
+// `tileOnly` (optional, Phase W2.1 — owner feedback 2026-09-01 "cleaner look"): the page is covered by a
+// master tile on its hub dashboard (/payroll or /storeops), so the sidebar's default rendering SKIPS it.
+// DISPLAY-ONLY, render-time-only: the item stays in NAV, so canSeeItem / navModuleForPath /
+// canAccessPath gating, the ⌘K search index, active-group (longest-prefix) detection and the Reports
+// directory duplicates all still see it — and the renderer deliberately keeps tileOnly items visible
+// inside the 'Reports · …' directory categories (applyNavLayout reuses the SAME item objects there).
+export type NavItem = { href: string; label: string; icon: string; module: string; scopes?: Scope[]; cap?: string; tileOnly?: boolean }
 // A named sub-category INSIDE a group (owner directive 2026-08-12 — roadmap #5). Sub-groups are a
 // LAYOUT-level concept only: the built-in NAV literal below stays structurally two-level, so a
 // newly-shipped item still lands in its group with no code change and no tenant re-configuration.
@@ -485,54 +491,64 @@ export const NAV: NavGroup[] = [
   // ZERO-RBAC-CHANGE move (see the taxonomy note above). NOTHING here was deleted:
   // navModuleForPath/canAccessPath gate from the longest matching NAV href, so removing an item
   // (e.g. the scopes:['all'] payers row) would silently re-gate its whole subtree.
+  // Phase W2.1 (owner feedback 2026-09-01, "cleaner look"): every page below that a /storeops hub
+  // tile covers is `tileOnly` — the sidebar's DEFAULT render skips it, leaving essentially just the
+  // Workforce Dashboard entry. NOTHING is deleted (longest-prefix gating, see above), search still
+  // finds every page, and the 'Reports · …' directory copies still render. The Visits/Reviews rows
+  // gained a hub tile ("Store Ops") in the same phase so they could be tileOnly too.
   { group: 'Workforce', module: 'storeops', items: [
     { href: '/storeops', label: 'Workforce Dashboard', icon: '🏠', module: 'storeops' },
-    { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops' },
-    { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops' },
-    { href: '/storeops/swaps', label: 'Shift Swaps', icon: '🔄', module: 'storeops' },
-    { href: '/storeops/shift-extensions', label: 'Shift Extensions', icon: '⏱️', module: 'storeops', scopes: ['all', 'market', 'store'] },
-    { href: '/storeops/hours-budget', label: 'Hours Budget', icon: '📊', module: 'storeops', scopes: ['all', 'market', 'store'] },
-    { href: '/storeops/timeclock-permissions', label: 'Time-clock Permissions', icon: '⏳', module: 'storeops', scopes: ['all', 'market', 'store'] },
-    { href: '/storeops/staffing', label: 'Staffing Heat Map', icon: '🔥', module: 'storeops', scopes: ['all', 'market', 'store'] },
-    { href: '/storeops/timeclock', label: 'Time Clock', icon: '⏱️', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/schedule', label: 'Schedule', icon: '📅', module: 'storeops', tileOnly: true },
+    { href: '/storeops/timeoff', label: 'Time Off', icon: '🌴', module: 'storeops', tileOnly: true },
+    { href: '/storeops/swaps', label: 'Shift Swaps', icon: '🔄', module: 'storeops', tileOnly: true },
+    { href: '/storeops/shift-extensions', label: 'Shift Extensions', icon: '⏱️', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/storeops/hours-budget', label: 'Hours Budget', icon: '📊', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/storeops/timeclock-permissions', label: 'Time-clock Permissions', icon: '⏳', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/storeops/staffing', label: 'Staffing Heat Map', icon: '🔥', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/storeops/timeclock', label: 'Time Clock', icon: '⏱️', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/attendance', label: 'Attendance Exceptions', icon: '🚨', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     // RENAMED from 'Accountability' (Phase W2) — same route, same module/scopes, label only.
-    { href: '/storeops/accountability', label: 'Lateness %', icon: '🎓', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'] },
-    { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'] },
-    { href: '/storeops/reviews', label: 'Google Reviews', icon: '⭐', module: 'storeops', scopes: ['all', 'market', 'store'] },
-    { href: '/storeops/reviews/config', label: 'Reviews Setup', icon: '⚙️', module: 'storeops', scopes: ['all'] },
-    { href: '/storeops/reports', label: 'Reports', icon: '📋', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/accountability', label: 'Lateness %', icon: '🎓', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/employees', label: 'Employees', icon: '👥', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/team', label: 'My Team', icon: '🫂', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/storeops/visits', label: 'Store Visits', icon: '📝', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/visits/settings', label: 'Visit Checklist', icon: '🧾', module: 'storeops', scopes: ['all'], tileOnly: true },
+    { href: '/storeops/reviews', label: 'Google Reviews', icon: '⭐', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
+    { href: '/storeops/reviews/config', label: 'Reviews Setup', icon: '⚙️', module: 'storeops', scopes: ['all'], tileOnly: true },
+    { href: '/storeops/reports', label: 'Reports', icon: '📋', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     // /storeops/admin SPLIT (Phase W2): Store Setup + Employee Setup are the primary surfaces now;
     // the combined Admin page stays (backward compat — bookmarks/help docs) with a banner pointing
     // at the two. Same module + scopes on all three, so no role re-seeding.
-    { href: '/storeops/setup/stores', label: 'Store Setup', icon: '🏬', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/setup/employees', label: 'Employee Setup', icon: '🧑‍🔧', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/storeops/admin', label: 'Admin (combined)', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/setup/stores', label: 'Store Setup', icon: '🏬', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/setup/employees', label: 'Employee Setup', icon: '🧑‍🔧', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
+    // tileOnly WITHOUT a tile of its own — deliberate (W2.1): this page is a backward-compat alias
+    // whose two surfaces ARE the Store Setup + Employee Setup tiles, and its own banner points there.
+    // Bookmarks, ⌘K search and direct links still reach it; a sidebar row would undo the cleanup.
+    { href: '/storeops/admin', label: 'Admin (combined)', icon: '🛠️', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
   ]},
   { group: 'Payroll & HR', module: 'storeops', items: [
     // The Payroll tiled dashboard (Phase W2) — group's front door, FIRST on purpose. module
     // 'storeops' + ['all','market'] mirrors /storeops/payroll: the hub lists payroll surfaces, and
     // each destination keeps its own (sometimes stricter) gate — e.g. payers stays scopes:['all'].
     { href: '/payroll', label: 'Payroll Dashboard', icon: '🏠', module: 'storeops', scopes: ['all', 'market'] },
-    { href: '/hr/people', label: 'People (add employees)', icon: '🧑‍💼', module: 'hr', scopes: ['all', 'market'] },
-    { href: '/hr/onboarding', label: 'Onboarding Checklist', icon: '🧩', module: 'hr', scopes: ['all', 'market'] },
-    { href: '/hr/compliance', label: 'Compliance', icon: '📋', module: 'hr', scopes: ['all', 'market'] },
-    { href: '/hr/employee-database', label: 'Employee Database', icon: '🗄️', module: 'hr', scopes: ['all', 'market'] },
-    { href: '/hr/letters', label: 'HR Communications', icon: '✉️', module: 'hr', scopes: ['all', 'market'] },
-    { href: '/hr', label: 'HR · Total Comp', icon: '📊', module: 'hr', scopes: ['all', 'market'] },
-    { href: '/hr/payroll-expenses', label: 'Payroll Expenses', icon: '💼', module: 'hr', scopes: ['all', 'market'] },
-    { href: '/storeops/payroll', label: 'Payroll', icon: '💵', module: 'storeops', scopes: ['all', 'market'] },
+    // Phase W2.1: everything below is tileOnly — covered by a /payroll hub tile (HR Communications
+    // was ADDED to the Payroll Setup tile in the same phase so it could be hidden here too).
+    { href: '/hr/people', label: 'People (add employees)', icon: '🧑‍💼', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/hr/onboarding', label: 'Onboarding Checklist', icon: '🧩', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/hr/compliance', label: 'Compliance', icon: '📋', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/hr/employee-database', label: 'Employee Database', icon: '🗄️', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/hr/letters', label: 'HR Communications', icon: '✉️', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/hr', label: 'HR · Total Comp', icon: '📊', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/hr/payroll-expenses', label: 'Payroll Expenses', icon: '💼', module: 'hr', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/storeops/payroll', label: 'Payroll', icon: '💵', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
     // Weekly hours approval (mig 431, owner directive 2026-08-10). Scoped 'all' + 'market' + 'store':
     // the DM ('market') is the FIRST gate and must reach it, and a store manager standing in for an
     // absent DM sees only their own span anyway (the read is span-scoped server-side). Same shape as
     // its Payroll sibling, so it adds no permission surface an existing role did not already have.
-    { href: '/storeops/payroll/approvals', label: 'Hours Approval', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'] },
+    { href: '/storeops/payroll/approvals', label: 'Hours Approval', icon: '✅', module: 'storeops', scopes: ['all', 'market', 'store'], tileOnly: true },
     // Payer registry — admin-only config ('all'), like every other "who receives money" setting.
-    { href: '/storeops/payroll/payers', label: 'Who Pays Payroll', icon: '🏦', module: 'storeops', scopes: ['all'] },
-    { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'] },
+    { href: '/storeops/payroll/payers', label: 'Who Pays Payroll', icon: '🏦', module: 'storeops', scopes: ['all'], tileOnly: true },
+    { href: '/storeops/payroll-tax', label: 'Payroll (Tax)', icon: '🧾', module: 'storeops', scopes: ['all', 'market'], tileOnly: true },
   ]},
   { group: 'Daily Closing', module: 'closing', items: [
     { href: '/closing', label: 'Dashboard', icon: '🧾', module: 'closing', scopes: ['all', 'market', 'store'] },
