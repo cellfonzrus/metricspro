@@ -880,6 +880,43 @@ async def financial_analysis(months: int = 12, authorization: str = Header(defau
         raise HTTPException(500, f"analysis failed: {type(e).__name__}: {e}")
 
 
+@router.get("/projection")
+async def financial_projection(months: int = 24, horizon: int = 0,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Config-driven forward projection of the consolidated P&L (roadmap Phase 4): the stored-
+    snapshot monthly series (the SAME `analysis.assemble` history the charts use) extended forward
+    by the pure, DETERMINISTIC `projection_engine.project` — linear or seasonal-naive trend, with
+    per-org growth/inflation overrides from `account_config.projection_config` (mig 941; house
+    defaults otherwise). Every projected row is flagged `projected: true` and every assumption is
+    listed; nothing here writes a snapshot or feeds a booked number. `horizon` > 0 overrides the
+    configured horizon_months for this call (1..24 — an exploration knob, not a config write).
+    PERMISSION: the same DEFAULT-CLOSED 'account_trends' grant as /account/analysis."""
+    require_org(org_id)
+    report_gates.require_report_grant(authorization, report_gates.ACCOUNT_TRENDS,
+                                      report="Financial Projections")
+    from app.modules.account import analysis, projection_engine
+
+    def _run():
+        rows = coa._fetch_all(
+            sb(), "account_statements",
+            "period,statement_type,scope_key,scope_label,payload,computed_at",
+            {"org_id": org_id, "statement_type": "pl"})
+        rows += coa._fetch_all(
+            sb(), "account_statements",
+            "period,statement_type,scope_key,scope_label,payload,computed_at",
+            {"org_id": org_id, "statement_type": "balance_sheet"})
+        monthly = analysis.assemble(rows, months=months).get("monthly") or []
+        cfg = projection_engine.load_projection_config(sb(), org_id)
+        if 1 <= int(horizon or 0) <= 24:
+            cfg = {**cfg, "horizon_months": int(horizon)}
+        return {"org_id": org_id, "actuals": monthly, **projection_engine.project(monthly, cfg)}
+
+    try:
+        return await run_in_threadpool(_run)
+    except Exception as e:
+        raise HTTPException(500, f"projection failed: {type(e).__name__}: {e}")
+
+
 # ── health ──────────────────────────────────────────────────────────────────────────────────
 @router.get("/health")
 def health():

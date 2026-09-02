@@ -369,6 +369,19 @@ commissions, expenses.
   can never disagree with the statements. Proof: `harness_financial_analysis.py` (also pins
   `analysis.CASH_KEYS == statement_engine.CF_CASH_KEYS`).
 
+- **Projection engine (roadmap Phase 4, mig `941`, 2026-09-02):** `GET /account/projection`
+  (`?months=&horizon=`, `account_trends` grant) — PURE, config-driven, **deterministic-only** (no
+  LLM in the math) forward projection of the consolidated P&L: `account/projection_engine.py`
+  extends the SAME `analysis.assemble` monthly history (stored snapshots — one math path) via
+  least-squares **linear** trend or **seasonal_naive** (same-month-last-year × recent YoY level;
+  ≥15 months or noted linear fallback; `auto` picks). Per-org `account_config.projection_config`
+  (mig `941`, house defaults in `resolve_projection_config`): `method`, `trailing_months`,
+  `horizon_months`, `growth_rate_override` (revenue compounds from last actual — config wins over
+  fit), `expense_inflation` (COGS+OPEX compound). GP/NI are DERIVED per projected month (never
+  independently trended); magnitude lines floor at $0 with the clamp reported; every row is
+  flagged `projected: true` (display-only — nothing books from it); cash runway = cash &
+  equivalents ÷ avg projected burn. Proof: `harness_projection_engine.py`.
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -983,7 +996,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`); legacy `engine.compute_and_store` exact-period read; staleness probe |
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview`, `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
-| `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933 knobs, adaptive) |
+| `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`) |
 | `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection |
@@ -1054,6 +1067,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
+| `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
