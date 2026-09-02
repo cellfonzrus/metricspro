@@ -152,8 +152,11 @@ def build_inputs_full(client, org_id, period):
     # Hand / pickups read, declared cash already DM-overlay-corrected, outflows = pickups +
     # deposits + approved envelope expenses/withdrawals), so the Balance Sheet can never disagree
     # with those pages; the 'verified' basis then keeps ONLY DM-verified store-days as collected
-    # (balance_sheet.store_cash_cells — pure; unverified dollars are reported in meta, never
-    # silently dropped). Store grain resolves through the SAME coa.store_resolver every other
+    # AND as relieved — inflows and outflows follow the SAME verification rule (symmetry fix,
+    # 2026-09-02: all-day outflows against verified-only inflows booked the live August line at
+    # −$36,660.91), and every store floors at zero (a cash asset never books negative; the
+    # suppressed imbalance and unverified dollars are reported in meta, never silently dropped).
+    # Store grain resolves through the SAME coa.store_resolver every other
     # line uses. Lazy import: account must not import the closing router at module load.
     if cfg["cash_on_hand_basis"] != "off" and meta["as_of"]:
         try:

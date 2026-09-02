@@ -345,6 +345,22 @@ commissions, expenses.
   reported cash unchanged and a cash-paid expense relieves the line while landing on the P&L via
   the existing closing-expense sweep. LuxeLink seed (`'verified'`) COMMENTED behind the owner
   gate in mig `938`. Proof: `harness_verified_cash_bs.py`.
+  **SEMANTICS FIX (2026-09-02, post-merge live defect):** the original `'verified'` basis counted
+  inflows on verified store-days only but subtracted outflows from ALL days — dollars left a
+  bucket they never entered, and the live LuxeLink August consolidated line booked **−$36,660.91**
+  (6 verified store-days in vs 157 unverified store-days of pickups out). Fixed in
+  `balance_sheet.store_cash_cells`: (1) **SYMMETRY** — under `'verified'`, outflows follow the
+  same verification rule as inflows (movement dicts are keyed (store, close_date), so an
+  outflow's day IS the envelope it relieved; an unverified envelope's cash never entered the
+  line and its pickup/expense cannot relieve it — excluded and reported in meta
+  `unverified_taken`/`unverified_taken_days`); `'all'` basis counting is unchanged (every day in,
+  every day out — internally consistent). (2) **FAIL-SAFE ZERO FLOOR, every basis** — a cash
+  asset line never books negative at any grain: per-store negatives floor to zero with the
+  suppressed imbalance reported per store in meta (`floored`/`floored_total`), never silently
+  dropped; rollups sum floored stores so no grain goes negative. Fixed August 2026 LuxeLink
+  numbers: every store $0.00 (each verified day's cash was picked up same-day for the same
+  amount), nothing floored. Proof extended in `harness_verified_cash_bs.py` (§B symmetry+floor,
+  §B2 the exact live shape, §C floored-line cash-flow tie-out).
 
 - **Statement auto-recompute self-schedules (roadmap Phase 1, mig `940`, 2026-09-02):** the
   `POST /account/run-due` staleness sweep (`account/autocompute.recompute_due` — recomputes
@@ -1141,7 +1157,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
-| Store cash on hand (BS asset, mig `938`) | DM-verified `daily_closing` declared cash (overlay-corrected) − `cash_pickup`/`bank_deposit`/`closing_expense`/`envelope_withdrawal` outflows, as-of period end | `balance_sheet.store_cash_cells` via `statement_engine.build_inputs_full` (`account_config.cash_on_hand_basis`: off default / verified / all); CASH in the cash-flow statement (`CF_CASH_KEYS`) |
+| Store cash on hand (BS asset, mig `938`; symmetry+floor fix 2026-09-02) | DM-verified `daily_closing` declared cash (overlay-corrected) − SAME-verification-rule outflows (`cash_pickup`/`bank_deposit`/`closing_expense`/`envelope_withdrawal`, keyed to their envelope's close_date; under `'verified'` only verified store-days' outflows relieve), floored at ZERO per store (suppressed imbalance in meta `floored`), as-of period end | `balance_sheet.store_cash_cells` via `statement_engine.build_inputs_full` (`account_config.cash_on_hand_basis`: off default / verified / all); CASH in the cash-flow statement (`CF_CASH_KEYS`) |
 | Bill-pay pass-through (P&L `billpay_collected`/`billpay_offset`, mig `939`) | `daily_closing.epay_on_cash`+`epay_on_credit` (DM-verified corrections win at store-day grain); pair nets to ZERO | `account/billpay_pl.billpay_cells`/`billpay_bookings` → `coa.build_inputs` (`pl_billpay_presentation='carveout'`; offset label per `pl_billpay_settlement`) |
 | Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date`+merchant map) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |

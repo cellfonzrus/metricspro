@@ -305,12 +305,23 @@ def store_cash_cells(decl_by_store_day, taken_by_store_day, verified_keys, basis
     AFTER it has been verified by the DM"): only store-days present in `verified_keys`
     ({(store_code, day)} with verified=true) COUNT AS COLLECTED; unverified declared cash is
     EXCLUDED from the books and REPORTED in meta (`unverified_declared`) so nothing vanishes
-    silently. ALL outflows still subtract — cash that physically left is gone regardless of
-    verification state (a store can therefore read negative: a real signal that more cash left
-    than was ever verified in, never clamped).
-    basis 'all' — every declared day counts (the operational cash-position number, exactly what
-    GET /closing/store-cash-on-hand shows).
-    basis 'off' — {} (every org's default: byte-identical books).
+    silently. SYMMETRY (defect fix, 2026-09-02 — the live LuxeLink August BS booked this ASSET
+    line at −$36,660.91): outflows follow the SAME verification rule as inflows. Every movement
+    dict is keyed (store, close_date) — an outflow's day IS the envelope it relieved (a pickup /
+    deposit / approved expense / withdrawal books against its envelope's close_date) — so an
+    outflow on an UNVERIFIED store-day moves cash that never entered this line and must not
+    relieve it (live: 157 unverified store-days' pickups, $36,660.91, drained a bucket only 6
+    verified store-days had filled). Unverified outflows are REPORTED in meta
+    (`unverified_taken` / `unverified_taken_days`), never silently dropped.
+    basis 'all' — every declared day counts AND every outflow counts (the operational
+    cash-position number, exactly what GET /closing/store-cash-on-hand shows) — internally
+    consistent, semantics unchanged.
+    FAIL-SAFE FLOOR (every basis, every grain): a cash ASSET line never books negative. Any
+    per-store negative residual (e.g. a DM correcting a verified day's cash BELOW what was
+    already picked up, or pathological 'all'-basis data where pickups exceed declarations) is
+    floored to zero and the suppressed amount reported per store in meta (`floored` /
+    `floored_total`) — a real signal, surfaced honestly, never a negative asset and never
+    silently dropped. Rollups sum floored per-store values, so no grain can go negative.
 
     Returns (cells {store_code: balance}, meta)."""
     if basis not in ("verified", "all") or not as_of:
@@ -332,19 +343,32 @@ def store_cash_cells(decl_by_store_day, taken_by_store_day, verified_keys, basis
             verified_days += 1
             cells[st] = round(cells.get(st, 0.0) + a, 2)
     taken_total = 0.0
+    unverified_taken, unverified_taken_days = 0.0, 0
     for st, days in (taken_by_store_day or {}).items():
         for d, amt in (days or {}).items():
             dd = str(d)[:10]
             if not dd or dd > cutoff:
                 continue
             a = safe_float(amt)
+            if basis == "verified" and (st, dd) not in vkeys:
+                unverified_taken = round(unverified_taken + a, 2)
+                unverified_taken_days += 1
+                continue
             taken_total = round(taken_total + a, 2)
             cells[st] = round(cells.get(st, 0.0) - a, 2)
+    floored = {}
+    for st in list(cells):
+        if cells[st] < 0:
+            floored[st] = round(-cells[st], 2)
+            cells[st] = 0.0
     cells = {st: v for st, v in cells.items() if v}
     meta = {"basis": basis, "as_of": cutoff, "stores": len(cells),
             "counted_days": verified_days, "taken_total": taken_total,
             "unverified_days": unverified_days,
             "unverified_declared": round(unverified_declared, 2),
+            "unverified_taken_days": unverified_taken_days,
+            "unverified_taken": round(unverified_taken, 2),
+            "floored": floored, "floored_total": round(sum(floored.values()), 2),
             "total": round(sum(cells.values()), 2)}
     return cells, meta
 
