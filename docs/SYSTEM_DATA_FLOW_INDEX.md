@@ -765,6 +765,56 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   `/entry-quality/run` (manual, one org). Frontend: guidance banner + "Walk me through"
   (`startTour(tour_slug)`) on `ClosingSubmitForm.tsx`.
 
+- **Bill Payment Pickup & Deposit (owner directive 2026-09-02, mig `942`):** "one more pick up for
+  the bill payment pickup and deposit menu, just under the cash pick up module, the same process
+  same wiring as the cash pick up." SIBLING table **`commcalc.billpay_pickup`** (mig `942` — the
+  mig-034 cash_pickup shape + the mig-089 deposit columns; sibling, NOT a kind column: the UNIQUE
+  upsert key is load-bearing and a missed kind filter would leak billpay rows into the general
+  cash movement — fail-closed by construction) + **`commcalc.billpay_pickup_config`** (recipient;
+  notify falls back to the cash-pickup recipient). ONE parameterized machinery: the cash
+  endpoints delegate to shared impls (`_confirm_pickup_impl` / `_undo_pickup_impl` /
+  `_record_deposit_impl` / `_get/_put_pickup_config_impl`, `closing/router.py`) which the
+  billpay endpoints point at the sibling table. Endpoints: `GET /closing/billpay-pickups`
+  (the /pickups mirror — envelope amount = declared `epay_on_cash`; same filters/keyset/market
+  fallback; `by_store` = bill-pay position declared−picked=pending via `_billpay_position_core`,
+  DM `dm_epay_cash` corrections replacing verified days), `POST /closing/billpay-pickup`,
+  `POST /closing/billpay-pickup/undo` (409 after disposition), `POST /closing/billpay-pickup/
+  deposit` (declared default = the envelope's ePay-on-cash), `GET/PUT /closing/
+  billpay-pickup-config`. **MONEY MODEL (evidence-verified, LuxeLink live 2026-09-02):** declared
+  cash (`t_cash`) INCLUDES ePay-on-cash (`epay_on_cash` is a subset breakdown — 177/231 live
+  rows subset, the 54 exceptions are the mig-939 coverage defect class;
+  `deposit_recon.cash_for_basis`: store_cash = t_cash − epay_on_cash BY DEFINITION; owner
+  verbatim "Total cash in store including Bill Payments"), and the general cash_pickup envelope
+  sweeps the FULL declared cash — so by default a billpay pickup NEVER relieves
+  `_cash_position_core` (no double-count; it is the physical counterpart of the mig-939
+  remittance/coverage side and leaves the mig-938 BS line + Cash Flow untouched). Per-org knob
+  **`cash_pickup_config.billpay_relieves_cash`** (mig `942`, default false = byte-identical)
+  folds billpay pickups into the general outflows exactly once for split-envelope orgs
+  (pure `closing/billpay_pickup.fold_billpay_outflows`; rides the mig-938 verified-day symmetry
+  + zero floor). Pure logic `closing/billpay_pickup.py`; proof `harness_billpay_pickup.py`.
+  Frontend `/closing/billpay-pickup` (`closing/billpay-pickup/page.tsx` — the pickup page
+  mirror; NAV Daily Closing group directly under Cash Pickup + REPORT_DIRECTORY 'ops').
+
+- **Management one-screen cash recon + POS bill-pay cross-check (owner directive 2026-09-02):**
+  "for the management it should show what has been received as per the system in both cash pick
+  up, epay pick up and the cash declared and the epay declared fields and the credit fields of
+  what has been recorded by the POS reports … the employee is gated out of it, dm is gated out
+  of it only market manager and above see it." `GET /closing/cash-recon-management` — per
+  (store, day): declared cash/credit/ePay splits (DM overlay winning), recorded cash + billpay
+  pickups, POS X-report cash/card (`_xreport_tenders_by_store`), POS bill payments via the SAME
+  processor resolution the mig-939 coverage recon uses (`commcalc.router.
+  _billpay_processor_by_store_day` + `_metric_source`, lazily imported — never a second path),
+  and a declared-vs-POS mismatch flag (pure `billpay_pickup.billpay_pos_mismatch`; feed absent ⇒
+  `no_pos_data`, never a fake mismatch). **GATE:** `billpay_pickup.can_see_cash_recon` —
+  market manager and above, the mig-434 pay-visibility posture (fail-closed; scope-'all' passes;
+  allow-list = `storeops.tenants.cash_recon_visible_roles` (mig `942`), NULL ⇒
+  `pay_visibility.DEFAULT_VISIBLE_ROLES`); rows additionally span-scoped through the manager
+  keyset. Submit-form wording (same directive): the cash tender reads "Total cash in store
+  including Bill Payments" (stock-label-only override; a tenant's custom label wins) and the
+  ePay section reads "Bill Payments, already included above" (`ClosingSubmitForm.tsx`). Proof
+  `harness_billpay_pickup.py` (§E). Frontend `/closing/cash-recon-management`
+  (`closing/cash-recon-management/page.tsx`; NAV Daily Closing group + REPORT_DIRECTORY 'ops').
+
 ---
 
 ## 13. Org hierarchy & store resolution
@@ -1046,7 +1096,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`) |
-| `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection |
+| `commcalc.billpay_pickup` (mig `942`, sibling of `cash_pickup`) | `POST /closing/billpay-pickup` (+`/undo`, `/deposit` — the parameterized cash-pickup machinery pointed at this table) | `GET /closing/billpay-pickups` (`_billpay_position_core`: declared `epay_on_cash` − picked = pending remittance), `GET /closing/cash-recon-management`; folds into `_cash_position_core` general outflows ONLY under `cash_pickup_config.billpay_relieves_cash` (default false — no double-count; §12) |
+| `commcalc.billpay_pickup_config` (mig `942`) | `PUT /closing/billpay-pickup-config` | `_notify_pickup` (billpay kind; falls back to `cash_pickup_config` recipient when unset) |
+| `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection; `dm_epay_cash` also replaces verified days in `_billpay_position_core` (mig `942`) |
 | `commcalc.daily_closing_verification_audit` (mig `935`, append-only) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
 | `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`) | `GET /closing/envelope-report`, notify `closing_envelope_report` |
 | `commcalc.ops_chargeback` (mig `504`) | detection sweeps (`ops_chargebacks.py`: missed_closing/missed_dm_verify) **+ `POST /closing/envelope-count`** (reason `envelope_short`, parent rows only, amount = actual shortage) | policy editor (reasons-in-the-wild), decide endpoints, commission settlement `_settle_ops_chargebacks`/`_ops_chargeback_deductions` (`commcalc/router.py:11265-11550`) |
@@ -1120,6 +1172,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
 | `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
+| `GET /closing/billpay-pickups`, `POST /closing/billpay-pickup` (+`/undo`, `/deposit`), `GET/PUT /closing/billpay-pickup-config` (mig `942` — the cash-pickup machinery, parameterized, on the sibling `billpay_pickup` table) | `closing/router.py` (`billpay_pickups`/`billpay_confirm_pickup`/`billpay_undo_pickup`/`billpay_record_deposit`; core `_billpay_position_core`, pure `closing/billpay_pickup.py`) | §12 Bill Payment Pickup |
+| `GET /closing/cash-recon-management` (GATED market-manager-and-above via `billpay_pickup.can_see_cash_recon`, fail-closed 403; declared vs pickups vs POS on one screen, bill-pay mismatch flag) | `closing/router.py` (`cash_recon_management`) | §12 management cash recon |
 | `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
@@ -1157,6 +1211,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
+| Bill-pay cash pending remittance (per store) | `daily_closing.epay_on_cash` (DM `dm_epay_cash` winning) − `billpay_pickup.amount` (picked_up) | `_billpay_position_core` → `billpay_pickup.billpay_position` (`GET /closing/billpay-pickups` by_store; mig `942`) |
+| Declared-vs-POS bill-pay mismatch (per store-day) | `daily_closing.epay_on_cash+epay_on_credit` vs the mig-939 processor feed | `billpay_pickup.billpay_pos_mismatch` (`GET /closing/cash-recon-management`) |
 | Store cash on hand (BS asset, mig `938`; symmetry+floor fix 2026-09-02) | DM-verified `daily_closing` declared cash (overlay-corrected) − SAME-verification-rule outflows (`cash_pickup`/`bank_deposit`/`closing_expense`/`envelope_withdrawal`, keyed to their envelope's close_date; under `'verified'` only verified store-days' outflows relieve), floored at ZERO per store (suppressed imbalance in meta `floored`), as-of period end | `balance_sheet.store_cash_cells` via `statement_engine.build_inputs_full` (`account_config.cash_on_hand_basis`: off default / verified / all); CASH in the cash-flow statement (`CF_CASH_KEYS`) |
 | Bill-pay pass-through (P&L `billpay_collected`/`billpay_offset`, mig `939`) | `daily_closing.epay_on_cash`+`epay_on_credit` (DM-verified corrections win at store-day grain); pair nets to ZERO | `account/billpay_pl.billpay_cells`/`billpay_bookings` → `coa.build_inputs` (`pl_billpay_presentation='carveout'`; offset label per `pl_billpay_settlement`) |
 | Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date`+merchant map) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |

@@ -634,12 +634,23 @@ export const NAV: NavGroup[] = [
     { href: '/closing/tender-recon-3way', label: '3-Way Tender Recon', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/accessory-recon', label: 'Accessory Recon', icon: '🔖', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // Bill Payment Pickup (owner directive 2026-09-02, mig 942): "one more pick up for the bill
+    // payment pickup and deposit menu, just under the cash pick up module, the same process same
+    // wiring as the cash pick up" — same module key + scope tiers as its Cash Pickup sibling,
+    // directly beneath it so both natural nav order and the default hub tiles keep them adjacent.
+    { href: '/closing/billpay-pickup', label: 'Bill Payment Pickup', icon: '🧾', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/envelope-payout', label: 'Envelope Payouts', icon: '💸', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Envelope Report (owner directive 2026-09-02): count each envelope's actual cash, comment,
     // mark short/over, assign a short envelope to the rep as a chargeback (existing ops_chargeback
     // machinery). Same scope tiers as DM Verify — DMs count envelopes for their span.
     { href: '/closing/envelope-report', label: 'Envelope Report', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // Management one-screen cash recon (owner 2026-09-02): "only market manager and above see it"
+    // — the ENFORCEMENT is server-side (closing/billpay_pickup.can_see_cash_recon, the mig-434
+    // pay-visibility posture, fail-closed 403). Nav scope tiers stay ['all','market'] because
+    // DM-vs-market-manager is a ROLE distinction the scope vocabulary cannot express; a gated
+    // role that opens the page sees the server's restriction message, never the data.
+    { href: '/closing/cash-recon-management', label: 'Cash Recon (Management)', icon: '🧮', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/expenses-report', label: 'Closing Expenses', icon: '📋', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     // Cash Deposit Recon + Deposit Categories (mig 509) — nav entries per mod-retail-ops NEEDS CORE
@@ -889,7 +900,8 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/storeops/employees', 'ops'], ['/storeops/team', 'ops'], ['/storeops/visits', 'ops'], ['/storeops/reports', 'ops'],
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],
   ['/closing/tender-recon', 'ops'], ['/closing/tender-recon-3way', 'ops'], ['/closing/accessory-recon', 'ops'],
-  ['/closing/pickup', 'ops'], ['/closing/epay-recon', 'ops'],
+  ['/closing/pickup', 'ops'], ['/closing/billpay-pickup', 'ops'],
+  ['/closing/cash-recon-management', 'ops'], ['/closing/epay-recon', 'ops'],
   ['/closing/envelope-report', 'ops'],
   // Admin & System
   ['/failures', 'admin'], ['/helpdesk', 'admin'], ['/helpdesk/dashboard', 'admin'], ['/remediation', 'admin'],

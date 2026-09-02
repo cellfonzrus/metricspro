@@ -12,8 +12,11 @@ const inp: React.CSSProperties = { padding: '8px 10px', borderRadius: 7, border:
 const cell: React.CSSProperties = { padding: '6px 9px', borderBottom: '1px solid var(--border)', fontSize: 13 }
 
 // The 6 tender fields, in display order — labels match the X-report vocabulary.
+// Cash label per owner directive 2026-09-02, verbatim: "it should be recorded as Total cash in
+// store including Bill Payments" (the declared cash total INCLUDES the ePay-on-cash dollars —
+// epay_on_cash is a subset breakdown of t_cash, never additional money).
 const TENDERS: { key: TenderKey; label: string }[] = [
-  { key: 't_cash', label: 'Cash $' },
+  { key: 't_cash', label: 'Total cash in store including Bill Payments $' },
   { key: 't_credit', label: 'Credit $' },
   { key: 't_ext_cc', label: 'External Credit Card $' },
   { key: 't_gift', label: 'Gift Card $' },
@@ -415,11 +418,19 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
         <SectionLabel>Money collected — by tender (matches the X-report)</SectionLabel>
         {tdefs ? (
           <Row>
-            {tdefs.map((d: any) => (
-              <Field key={d.tender_key} label={`${d.label || d.tender_key} $`}>
-                <input style={inp} inputMode="decimal" value={tv[d.tender_key] || ''} onChange={e => setTv(v => ({ ...v, [d.tender_key]: e.target.value }))} placeholder="0.00" />
-              </Field>
-            ))}
+            {/* Owner directive 2026-09-02: the cash field reads "Total cash in store including
+                Bill Payments". Applied ONLY when the configured label is still the stock "Cash"
+                (a tenant's own custom label always wins — config over code). */}
+            {tdefs.map((d: any) => {
+              const stock = (d.label || d.tender_key || '').trim().toLowerCase() === 'cash'
+              const isCash = d.recon_class === 'cash' || d.tender_key === 'cash'
+              const lbl = isCash && stock ? 'Total cash in store including Bill Payments' : (d.label || d.tender_key)
+              return (
+                <Field key={d.tender_key} label={`${lbl} $`}>
+                  <input style={inp} inputMode="decimal" value={tv[d.tender_key] || ''} onChange={e => setTv(v => ({ ...v, [d.tender_key]: e.target.value }))} placeholder="0.00" />
+                </Field>
+              )
+            })}
           </Row>
         ) : (
           <>
@@ -440,7 +451,9 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
           <Field label="Total collected (tenders only)"><div style={{ ...inp, background: 'var(--surface2)', fontWeight: 700 }}>{fmt(total)}</div></Field>
         </Row>
 
-        <SectionLabel>Of which ePay bill payments (already inside the tenders above — NOT added to the total)</SectionLabel>
+        {/* Owner directive 2026-09-02, verbatim: "Below it says epay already included, it should
+            say Bill Payments, already included above." */}
+        <SectionLabel>Bill Payments, already included above (NOT added to the total)</SectionLabel>
         <Row>
           <Field label="ePay on Cash $"><input style={inp} inputMode="decimal" value={f.epay_on_cash} onChange={e => set({ epay_on_cash: e.target.value })} placeholder="0.00" /></Field>
           <Field label="ePay on Credit $"><input style={inp} inputMode="decimal" value={f.epay_on_credit} onChange={e => set({ epay_on_credit: e.target.value })} placeholder="0.00" /></Field>

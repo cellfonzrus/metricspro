@@ -3718,18 +3718,32 @@ def _wa_configured() -> bool:
         return False
 
 
-async def _notify_pickup(client, org_id, dm_name, date, items, total) -> list:
-    """Best-effort email + WhatsApp to the assigned recipient after a pickup. Never raises."""
+async def _notify_pickup(client, org_id, dm_name, date, items, total,
+                         cfg_table="cash_pickup_config", kind_label="Cash pickup",
+                         fallback_cfg_table=None) -> list:
+    """Best-effort email + WhatsApp to the assigned recipient after a pickup. Never raises.
+    Parameterized for the Bill Payment Pickup sibling flow (mig 942 — same machinery, different
+    config table + label; defaults keep the cash flow byte-identical). `fallback_cfg_table` lets
+    the billpay flow fall back to the cash-pickup recipient when its own config is unset, so the
+    mirrored flow notifies someone from day one."""
     try:
-        rows = (client.schema("commcalc").table("cash_pickup_config").select("*").eq("org_id", org_id).execute().data) or []
+        rows = (client.schema("commcalc").table(cfg_table).select("*").eq("org_id", org_id).execute().data) or []
     except Exception:
         rows = []
     cfg = rows[0] if rows else {}
+    if fallback_cfg_table and not ((cfg.get("recipient_email") or "").strip()
+                                   or (cfg.get("recipient_whatsapp") or "").strip()):
+        try:
+            rows = (client.schema("commcalc").table(fallback_cfg_table).select("*")
+                    .eq("org_id", org_id).execute().data) or []
+            cfg = rows[0] if rows else cfg
+        except Exception:
+            pass
     lines = "\n".join(
         f"• {it.get('store_name') or it.get('store_code') or '—'} — {it.get('employee_name') or '—'}: {_usd(it.get('amount') or it.get('cash'))}"
         + (f"  ({it['note']})" if it.get("note") else "")
         for it in items)
-    summary = (f"Cash pickup confirmed by {dm_name or 'DM'} on {date}: "
+    summary = (f"{kind_label} confirmed by {dm_name or 'DM'} on {date}: "
                f"{len(items)} envelope(s), {_usd(total)} total.\n{lines}")
     results = []
     email = (cfg.get("recipient_email") or "").strip()
@@ -3738,7 +3752,7 @@ async def _notify_pickup(client, org_id, dm_name, date, items, total) -> list:
             from app.modules.notify.channels import email_resend
             if email_resend.is_configured():
                 html = "<p>" + summary.replace("\n", "<br>") + "</p>"
-                mid = await email_resend.send_email(email, f"Cash pickup — {date} ({_usd(total)})", html)
+                mid = await email_resend.send_email(email, f"{kind_label} — {date} ({_usd(total)})", html)
                 results.append({"channel": "email", "to": email, "ok": True, "id": mid or "sent"})
             else:
                 results.append({"channel": "email", "ok": False, "detail": "Resend not configured on the server"})
@@ -3756,7 +3770,9 @@ async def _notify_pickup(client, org_id, dm_name, date, items, total) -> list:
         except Exception as e:
             results.append({"channel": "whatsapp", "ok": False, "detail": str(e)[:200]})
     if not email and not wa:
-        results.append({"channel": "none", "ok": False, "detail": "No pickup recipient set — configure one on the Cash Pickup page."})
+        results.append({"channel": "none", "ok": False,
+                        "detail": f"No pickup recipient set — configure one on the "
+                                  f"{'Bill Payment Pickup' if cfg_table == 'billpay_pickup_config' else 'Cash Pickup'} page."})
     return results
 
 
@@ -4972,6 +4988,33 @@ def _cash_position_core(client, org_id, as_of, store_list, emp_list, ks):
         eep_by_store_day.setdefault(code, {}).setdefault(dday, 0.0)
         eep_by_store_day[code][dday] += amt
 
+    # Bill Payment Pickups (mig 942) — NO-DOUBLE-COUNT RULE. The declared cash above already
+    # INCLUDES the ePay-on-cash dollars (epay_on_cash is a subset breakdown of t_cash — owner
+    # 2026-09-02: "Total cash in store including Bill Payments"; deposit_recon.cash_for_basis:
+    # store_cash = t_cash − epay_on_cash BY DEFINITION) and the general cash_pickup envelope
+    # sweeps the FULL declared figure. So by DEFAULT (billpay_relieves_cash false) a billpay
+    # pickup is a bill-pay-side tracking record and must NOT relieve this movement a second
+    # time — this block is then a no-op, byte-identical to pre-942. Only a split-envelope org
+    # (knob true) folds billpay pickups in — into BOTH pick_by_store_day and pickup_by_store_day
+    # so the `pickup + eep == pick` breakdown invariant holds, keyed on the envelope's
+    # close_date so the mig-938 verified-day outflow symmetry + zero floor ride along unchanged.
+    try:
+        from . import billpay_pickup as _bp
+        if _bp.billpay_relieves_cash(client, org_id):
+            bq = (client.schema("commcalc").table("billpay_pickup")
+                  .select("store_code,employee_name,close_date,amount,picked_up")
+                  .eq("org_id", org_id).lte("close_date", as_of))
+            if store_list:
+                bq = bq.in_("store_code", store_list)
+            bprows = bq.limit(200000).execute().data or []
+            if emp_list:
+                bprows = [r for r in bprows
+                          if (r.get("employee_name") or "").strip().lower() in emp_list]
+            _bp_picked, _bp_lp, _bp_ld = _bp.pickup_totals_by_store_day(bprows)
+            _bp.fold_billpay_outflows(pick_by_store_day, pickup_by_store_day, _bp_picked, True)
+    except Exception:
+        pass
+
     codes = sorted({c for c in (set(decl_by_store_day) | set(pick_by_store_day) | set(store_list)) if c and c != "?"})
     if ks is not None:
         codes = [c for c in codes if in_keyset(ks, c, smeta.get(c, {}).get("address"))]
@@ -5211,12 +5254,34 @@ class RecordDepositIn(LaxModel):
     deposit_amount: Any = None
 
 
-@router.post("/pickup/deposit")
-def record_deposit(payload: RecordDepositIn, org_id: str = ORG_ID):
-    """Record what happened to picked-up cash: DEPOSITED (upload the slip → OCR the amount → match
-    against the system's declared cash → flag any mismatch for review) or HANDED to management.
-    Body: {store_code, close_date, employee_name, disposition:'deposited'|'handed_to_mgmt',
-    deposit_slip?(data_url), deposit_amount?(manual override), declared_amount?, handed_to?, note?}."""
+# ── ONE parameterized pickup machinery, two kinds (mig 942 — "the same process same wiring") ────
+# The cash endpoints below delegate to these impls with their original table/config/label, so the
+# cash flow stays byte-identical (harness_cash_pickup.py / harness_cash_on_hand_pickup.py drive
+# the real endpoints and prove it); the Bill Payment Pickup endpoints point the SAME machinery at
+# the sibling commcalc.billpay_pickup table (see 942_billpay_pickup.sql for why a sibling table,
+# not a kind column: the UNIQUE upsert key is load-bearing and a missed kind filter would leak
+# billpay rows into the general cash movement — the sibling table is fail-closed by construction).
+def _cash_declared_for_envelope(client, org_id, cdate, store, emp):
+    """The general envelope's system-declared cash: store_cash + epay_cash (the mig-034 snapshot
+    definition — the FULL cash, ePay included)."""
+    dc = (client.schema("commcalc").table("daily_closing").select("store_cash,epay_cash")
+          .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
+          .eq("employee_name", emp).limit(1).execute().data) or []
+    return (_f(dc[0].get("store_cash")) + _f(dc[0].get("epay_cash"))) if dc else None
+
+
+def _billpay_declared_for_envelope(client, org_id, cdate, store, emp):
+    """The billpay envelope's system-declared amount: the rep's declared ePay-on-cash split."""
+    dc = (client.schema("commcalc").table("daily_closing").select("epay_on_cash")
+          .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
+          .eq("employee_name", emp).limit(1).execute().data) or []
+    return _f(dc[0].get("epay_on_cash")) if dc else None
+
+
+def _record_deposit_impl(payload: RecordDepositIn, org_id: str, table: str, declared_fn):
+    """Shared deposit-disposition recorder — see record_deposit's docstring for the flow."""
+    if isinstance(payload, dict):    # direct/harness callers pass plain dicts — coerce, same keys
+        payload = RecordDepositIn(**payload)
     client = sb()
     store = (payload.store_code or "").strip()
     cdate = _date(payload.close_date or payload.date)
@@ -5230,13 +5295,10 @@ def record_deposit(payload: RecordDepositIn, org_id: str = ORG_ID):
     if disp == "handed_to_mgmt":
         upd["handed_to"] = payload.handed_to
     else:
-        # declared = the system's cash for this envelope (epay cash + store cash)
+        # declared = the system's figure for this envelope (kind-specific: full cash vs ePay-on-cash)
         declared = payload.declared_amount
         if declared is None:
-            dc = (client.schema("commcalc").table("daily_closing").select("store_cash,epay_cash")
-                  .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
-                  .eq("employee_name", emp).limit(1).execute().data) or []
-            declared = (_f(dc[0].get("store_cash")) + _f(dc[0].get("epay_cash"))) if dc else None
+            declared = declared_fn(client, org_id, cdate, store, emp)
         slip = payload.deposit_slip
         amount = payload.deposit_amount
         if slip and "," in str(slip):
@@ -5258,11 +5320,27 @@ def record_deposit(payload: RecordDepositIn, org_id: str = ORG_ID):
         else:
             upd["deposit_matched"] = None
             upd["deposit_flagged"] = False
-    client.schema("commcalc").table("cash_pickup").upsert(
+    client.schema("commcalc").table(table).upsert(
         upd, on_conflict="org_id,close_date,store_code,employee_name").execute()
     return {"ok": True, "disposition": disp, "deposit_amount": upd.get("deposit_amount"),
             "declared_amount": upd.get("declared_amount"), "matched": upd.get("deposit_matched"),
             "flagged": upd.get("deposit_flagged"), "ocr": ocr}
+
+
+@router.post("/pickup/deposit")
+def record_deposit(payload: RecordDepositIn, org_id: str = ORG_ID):
+    """Record what happened to picked-up cash: DEPOSITED (upload the slip → OCR the amount → match
+    against the system's declared cash → flag any mismatch for review) or HANDED to management.
+    Body: {store_code, close_date, employee_name, disposition:'deposited'|'handed_to_mgmt',
+    deposit_slip?(data_url), deposit_amount?(manual override), declared_amount?, handed_to?, note?}."""
+    return _record_deposit_impl(payload, org_id, "cash_pickup", _cash_declared_for_envelope)
+
+
+@router.post("/billpay-pickup/deposit")
+def billpay_record_deposit(payload: RecordDepositIn, org_id: str = ORG_ID):
+    """Bill Payment Pickup sibling of POST /pickup/deposit (mig 942 — same machinery): the
+    disposition of picked-up BILL-PAY cash, matched against the declared ePay-on-cash figure."""
+    return _record_deposit_impl(payload, org_id, "billpay_pickup", _billpay_declared_for_envelope)
 
 
 class ConfirmPickupIn(LaxModel):
@@ -5272,13 +5350,11 @@ class ConfirmPickupIn(LaxModel):
     picked_up_by: Any = None
 
 
-@router.post("/pickup")
-async def confirm_pickup(payload: ConfirmPickupIn, org_id: str = ORG_ID):
-    """Confirm the DM picked up the selected cash envelopes, then notify the assigned recipient.
-    `date` is the single-day-page's date (kept for backward compat — every item defaults to it when it
-    doesn't carry its own `close_date`). Since the pickup page now supports a DATE RANGE (retail-ops-7
-    item 2), a batch can span multiple days — each item's OWN `close_date` (if sent) wins, so a
-    multi-day selection is never mis-stamped with one shared date."""
+async def _confirm_pickup_impl(payload: ConfirmPickupIn, org_id: str, table: str,
+                               cfg_table: str, kind_label: str, fallback_cfg_table=None):
+    """Shared pickup-confirmation writer + notify — see confirm_pickup's docstring for the flow."""
+    if isinstance(payload, dict):    # direct/harness callers pass plain dicts — coerce, same keys
+        payload = ConfirmPickupIn(**payload)
     client = sb()
     top_date = _date(payload.date or payload.close_date)
     items = payload.items or []
@@ -5296,13 +5372,36 @@ async def confirm_pickup(payload: ConfirmPickupIn, org_id: str = ORG_ID):
                "store_name": it.get("store_name"), "employee_name": (it.get("employee_name") or ""),
                "amount": amt, "picked_up": True, "picked_up_by": dm, "picked_up_at": _now(),
                "note": (it.get("note") or "").strip() or None}
-        client.schema("commcalc").table("cash_pickup").upsert(
+        client.schema("commcalc").table(table).upsert(
             row, on_conflict="org_id,close_date,store_code,employee_name").execute()
     item_dates = sorted({_date(it.get("close_date")) or top_date for it in items} - {None})
     notify_label = top_date or (item_dates[0] if len(item_dates) == 1 else
                                 f"{item_dates[0]}..{item_dates[-1]}" if item_dates else "—")
-    notify = await _notify_pickup(client, org_id, dm, notify_label, items, round(total, 2))
+    notify = await _notify_pickup(client, org_id, dm, notify_label, items, round(total, 2),
+                                  cfg_table=cfg_table, kind_label=kind_label,
+                                  fallback_cfg_table=fallback_cfg_table)
     return {"ok": True, "count": len(items), "total": round(total, 2), "notify": notify}
+
+
+@router.post("/pickup")
+async def confirm_pickup(payload: ConfirmPickupIn, org_id: str = ORG_ID):
+    """Confirm the DM picked up the selected cash envelopes, then notify the assigned recipient.
+    `date` is the single-day-page's date (kept for backward compat — every item defaults to it when it
+    doesn't carry its own `close_date`). Since the pickup page now supports a DATE RANGE (retail-ops-7
+    item 2), a batch can span multiple days — each item's OWN `close_date` (if sent) wins, so a
+    multi-day selection is never mis-stamped with one shared date."""
+    return await _confirm_pickup_impl(payload, org_id, "cash_pickup",
+                                      "cash_pickup_config", "Cash pickup")
+
+
+@router.post("/billpay-pickup")
+async def billpay_confirm_pickup(payload: ConfirmPickupIn, org_id: str = ORG_ID):
+    """Bill Payment Pickup sibling of POST /pickup (mig 942 — same machinery, sibling table).
+    Notify falls back to the CASH pickup recipient when no billpay recipient is configured, so
+    the mirrored flow notifies someone from day one."""
+    return await _confirm_pickup_impl(payload, org_id, "billpay_pickup",
+                                      "billpay_pickup_config", "Bill payment pickup",
+                                      fallback_cfg_table="cash_pickup_config")
 
 
 class UndoPickupIn(LaxModel):
@@ -5313,18 +5412,14 @@ class UndoPickupIn(LaxModel):
     employee_name: Any = None
 
 
-@router.post("/pickup/undo")
-def undo_pickup(payload: UndoPickupIn, org_id: str = ORG_ID):
-    """Undo a mistaken cash-pickup confirmation (OWNER DIRECTIVE 2026-08-04 completion of the pickup
-    flow -- edit-safe recording). Body: {store_code, close_date, employee_name} OR {pickup_id}.
-    Idempotent: undoing an envelope that isn't currently picked_up (or doesn't exist) is a no-op, not
-    an error -- so a double-tap / a retry never raises. Refuses (409) once a disposition is already
-    recorded (deposited/handed to management) -- that's a completed cash event, not a mis-tap, and
-    must be corrected deliberately rather than silently reversed."""
+def _undo_pickup_impl(payload: UndoPickupIn, org_id: str, table: str):
+    """Shared edit-safe pickup undo — see undo_pickup's docstring for the semantics."""
+    if isinstance(payload, dict):    # direct/harness callers pass plain dicts — coerce, same keys
+        payload = UndoPickupIn(**payload)
     client = sb()
     pid = (payload.pickup_id or "").strip()
     if pid:
-        rows = (client.schema("commcalc").table("cash_pickup").select("*")
+        rows = (client.schema("commcalc").table(table).select("*")
                 .eq("org_id", org_id).eq("id", pid).limit(1).execute().data) or []
     else:
         store = (payload.store_code or "").strip()
@@ -5332,7 +5427,7 @@ def undo_pickup(payload: UndoPickupIn, org_id: str = ORG_ID):
         emp = (payload.employee_name or "").strip()
         if not (store and cdate):
             raise HTTPException(400, "store_code + close_date (or pickup_id) required")
-        rows = (client.schema("commcalc").table("cash_pickup").select("*")
+        rows = (client.schema("commcalc").table(table).select("*")
                 .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
                 .eq("employee_name", emp).limit(1).execute().data) or []
     if not rows or not rows[0].get("picked_up"):
@@ -5341,17 +5436,34 @@ def undo_pickup(payload: UndoPickupIn, org_id: str = ORG_ID):
     if (row.get("disposition") or "").strip():
         raise HTTPException(409, "This envelope was already deposited/handed to management — "
                              "undo a pickup only before it's been deposited or handed off.")
-    (client.schema("commcalc").table("cash_pickup").update({
+    (client.schema("commcalc").table(table).update({
         "picked_up": False, "picked_up_by": None, "picked_up_at": None,
     }).eq("id", row["id"]).eq("org_id", org_id).execute())
     return {"ok": True, "store_code": row.get("store_code"), "close_date": str(row.get("close_date")),
             "employee_name": row.get("employee_name"), "amount": row.get("amount")}
 
 
-@router.get("/pickup-config")
-def get_pickup_config(org_id: str = ORG_ID):
+@router.post("/pickup/undo")
+def undo_pickup(payload: UndoPickupIn, org_id: str = ORG_ID):
+    """Undo a mistaken cash-pickup confirmation (OWNER DIRECTIVE 2026-08-04 completion of the pickup
+    flow -- edit-safe recording). Body: {store_code, close_date, employee_name} OR {pickup_id}.
+    Idempotent: undoing an envelope that isn't currently picked_up (or doesn't exist) is a no-op, not
+    an error -- so a double-tap / a retry never raises. Refuses (409) once a disposition is already
+    recorded (deposited/handed to management) -- that's a completed cash event, not a mis-tap, and
+    must be corrected deliberately rather than silently reversed."""
+    return _undo_pickup_impl(payload, org_id, "cash_pickup")
+
+
+@router.post("/billpay-pickup/undo")
+def billpay_undo_pickup(payload: UndoPickupIn, org_id: str = ORG_ID):
+    """Bill Payment Pickup sibling of POST /pickup/undo (mig 942 — same semantics: idempotent
+    no-op when nothing to undo, 409 once a disposition is recorded)."""
+    return _undo_pickup_impl(payload, org_id, "billpay_pickup")
+
+
+def _get_pickup_config_impl(org_id: str, cfg_table: str):
     try:
-        rows = (sb().schema("commcalc").table("cash_pickup_config").select("*").eq("org_id", org_id).execute().data) or []
+        rows = (sb().schema("commcalc").table(cfg_table).select("*").eq("org_id", org_id).execute().data) or []
     except Exception:
         rows = []
     c = rows[0] if rows else {}
@@ -5362,6 +5474,18 @@ def get_pickup_config(org_id: str = ORG_ID):
             "email_configured": _email_configured(), "whatsapp_configured": _wa_configured()}
 
 
+@router.get("/pickup-config")
+def get_pickup_config(org_id: str = ORG_ID):
+    return _get_pickup_config_impl(org_id, "cash_pickup_config")
+
+
+@router.get("/billpay-pickup-config")
+def get_billpay_pickup_config(org_id: str = ORG_ID):
+    """Bill Payment Pickup notification recipient (mig 942). When unset, the notify flow falls
+    back to the cash-pickup recipient (see _notify_pickup)."""
+    return _get_pickup_config_impl(org_id, "billpay_pickup_config")
+
+
 class PutPickupConfigIn(LaxModel):
     recipient_name: Any = None
     recipient_email: Any = None
@@ -5370,14 +5494,383 @@ class PutPickupConfigIn(LaxModel):
     notify_whatsapp: Any = None
 
 
-@router.put("/pickup-config")
-def put_pickup_config(body: PutPickupConfigIn, org_id: str = ORG_ID):
+def _put_pickup_config_impl(body: PutPickupConfigIn, org_id: str, cfg_table: str):
     row = {"org_id": org_id, "updated_at": _now()}
     for k in ("recipient_name", "recipient_email", "recipient_whatsapp", "notify_email", "notify_whatsapp"):
         if k in body.model_fields_set:
             row[k] = getattr(body, k)
-    sb().schema("commcalc").table("cash_pickup_config").upsert(row, on_conflict="org_id").execute()
-    return get_pickup_config(org_id)
+    sb().schema("commcalc").table(cfg_table).upsert(row, on_conflict="org_id").execute()
+    return _get_pickup_config_impl(org_id, cfg_table)
+
+
+@router.put("/pickup-config")
+def put_pickup_config(body: PutPickupConfigIn, org_id: str = ORG_ID):
+    return _put_pickup_config_impl(body, org_id, "cash_pickup_config")
+
+
+@router.put("/billpay-pickup-config")
+def put_billpay_pickup_config(body: PutPickupConfigIn, org_id: str = ORG_ID):
+    return _put_pickup_config_impl(body, org_id, "billpay_pickup_config")
+
+
+# ── Bill Payment Pickup list + position (mig 942 — the /pickups + _cash_position_core mirrors,
+#    on the BILL-PAY side of the declared-cash split: envelope amount = epay_on_cash, movement =
+#    declared ePay-on-cash − billpay pickups. The general-cash mirror carries the full declared
+#    figure (which INCLUDES these dollars); this side tracks only the bill-pay share, so nothing
+#    is ever counted twice (see billpay_pickup.fold_billpay_outflows for the knob). ──
+def _billpay_position_core(client, org_id, as_of, store_list, emp_list, ks):
+    """The bill-pay sibling of `_cash_position_core`: (codes, decl_by_store_day,
+    picked_by_store_day, last_pickup_at, last_deposited_at, smeta) over ALL history ≤ as_of.
+    Declared = the reps' epay_on_cash split (a VERIFIED store-day's dm_epay_cash replaces the
+    rep-summed figure — the same TKT-1030 replace rule billpay_pl.billpay_cells applies);
+    picked = billpay_pickup rows (picked_up=true)."""
+    from app.modules.storeops.router import in_keyset
+    from . import billpay_pickup as _bp
+    smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
+                  .eq("org_id", org_id).execute().data) or []
+    smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
+
+    dq = (client.schema("commcalc").table("daily_closing")
+          .select("store_code,employee_name,close_date,epay_on_cash")
+          .eq("org_id", org_id).lte("close_date", as_of))
+    if store_list:
+        dq = dq.in_("store_code", store_list)
+    drows = dq.limit(200000).execute().data or []
+    if emp_list:
+        drows = [r for r in drows if (r.get("employee_name") or "").strip().lower() in emp_list]
+    decl = _bp.declared_billpay_by_store_day(drows)
+
+    # DM verified-correction overlay (TKT-1030) — dm_epay_cash replaces the store-day's declared
+    # bill-pay cash. Best-effort; a failure leaves the reps' raw split (same posture as
+    # _cash_position_core's overlay).
+    try:
+        _ov = _verified_overlay.build_overlay_map(
+            client, org_id, {d for days in decl.values() for d in days})
+        if _ov:
+            ovmap = {}
+            for _code, _days in decl.items():
+                for _dday in _days:
+                    _dm = _ov.get((_verified_overlay._norm(_code), str(_dday)[:10]))
+                    if _dm and _dm.get("dm_epay_cash") is not None:
+                        ovmap[(_code, _dday)] = _verified_overlay._f(_dm["dm_epay_cash"])
+            _bp.apply_billpay_overlay(decl, ovmap)
+    except Exception:
+        pass
+
+    pq = (client.schema("commcalc").table("billpay_pickup")
+          .select("store_code,employee_name,close_date,amount,picked_up,picked_up_at,deposited_at")
+          .eq("org_id", org_id).lte("close_date", as_of))
+    if store_list:
+        pq = pq.in_("store_code", store_list)
+    try:
+        prows = pq.limit(200000).execute().data or []
+    except Exception:
+        prows = []
+    if emp_list:
+        prows = [r for r in prows if (r.get("employee_name") or "").strip().lower() in emp_list]
+    picked, last_pu, last_dep = _bp.pickup_totals_by_store_day(prows)
+
+    codes = sorted({c for c in (set(decl) | set(picked) | set(store_list)) if c and c != "?"})
+    if ks is not None:
+        codes = [c for c in codes if in_keyset(ks, c, smeta.get(c, {}).get("address"))]
+    return codes, decl, picked, last_pu, last_dep, smeta
+
+
+@router.get("/billpay-pickups")
+def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str = None,
+                    store: str = "", employee: str = "", dm: str = "",
+                    stores: str = "", employees: str = "",
+                    authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Bill Payment Pickup list — the GET /closing/pickups mirror on the bill-pay side (owner
+    directive 2026-09-02: "one more pick up for the bill payment pickup and deposit menu ... the
+    same process same wiring"). An envelope here = a rep's closing row with declared BILL-PAY cash
+    (epay_on_cash > 0, or an existing billpay pickup row); its amount is the ePay-on-cash split —
+    the bill-pay share of the same physical cash the Cash Pickup page's envelope carries in full.
+    Same filters, same keyset gating, same market fallback, same multi-select semantics as
+    /pickups. `by_store` = each store's bill-pay position (declared-to-date − picked-to-date =
+    pending remittance) via `_billpay_position_core`."""
+    if not (date or (start and end)):
+        raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
+    client = sb()
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    q = client.schema("commcalc").table("daily_closing").select("*").eq("org_id", org_id)
+    q = q.eq("close_date", date) if date else q.gte("close_date", start).lte("close_date", end)
+    rows = q.execute().data or []
+    store_rows = (client.schema("storeops").table("stores").select("store_code,address,market,is_active")
+                  .eq("org_id", org_id).execute().data) or []
+    smeta = {s.get("store_code"): s for s in store_rows if s.get("store_code")}
+    sm_market = {}
+    try:
+        for s in (client.schema("commcalc").table("store_mapping").select("store_code,market")
+                  .eq("org_id", org_id).execute().data or []):
+            if s.get("store_code") and (s.get("market") or "").strip():
+                sm_market[s.get("store_code")] = s["market"].strip()
+    except Exception:
+        pass
+    pq = client.schema("commcalc").table("billpay_pickup").select("*").eq("org_id", org_id)
+    pq = pq.eq("close_date", date) if date else pq.gte("close_date", start).lte("close_date", end)
+    try:
+        picks = pq.execute().data or []
+    except Exception:
+        picks = []
+    pick_by = {((p.get("store_code") or ""), (p.get("employee_name") or ""), str(p.get("close_date"))): p for p in picks}
+    store_f, emp_f, dm_f = store.strip().upper(), employee.strip().lower(), dm.strip().lower()
+    store_set = {s.strip().upper() for s in stores.split(",") if s.strip()}
+    if store_f:
+        store_set.add(store_f)
+    emp_set = {e.strip().lower() for e in employees.split(",") if e.strip()}
+    market_cf = market.strip().casefold() if market else None
+
+    out = []
+    for r in rows:
+        cash = _f(r.get("epay_on_cash"))
+        code = r.get("store_code") or ""
+        p = pick_by.get((code, (r.get("employee_name") or ""), str(r.get("close_date"))))
+        if cash <= 0 and not p:
+            continue
+        meta = smeta.get(code, {})
+        if ks is not None and not in_keyset(ks, code, meta.get("address")):
+            continue
+        mk = (meta.get("market") or "").strip() or sm_market.get(code, "")
+        # Same DELIBERATELY-lenient market rule as /pickups: an unresolved/blank market always
+        # bypasses the filter — a real bill-pay envelope must never vanish over a metadata gap.
+        if market_cf and mk and mk.casefold() != market_cf:
+            continue
+        if store_set and code and code.upper() not in store_set:
+            continue
+        _rname = (r.get("employee_name") or "").lower()
+        if emp_f and emp_f not in _rname:
+            continue
+        if emp_set and _rname not in emp_set:
+            continue
+        if dm_f and dm_f not in ((p or {}).get("picked_up_by") or "").lower():
+            continue
+        out.append({
+            "close_date": str(r.get("close_date")),
+            "store_code": r.get("store_code"),
+            "store_name": meta.get("address") or r.get("store_address") or r.get("store_name"),
+            "market": mk, "employee_name": r.get("employee_name"), "cash": round(cash, 2),
+            "envelope_picture": r.get("envelope_picture"),
+            "envelope_url": _signed_envelope(r.get("envelope_picture")),
+            "picked_up": bool(p and p.get("picked_up")),
+            "picked_up_by": p.get("picked_up_by") if p else None,
+            "picked_up_at": p.get("picked_up_at") if p else None, "note": p.get("note") if p else None,
+            "disposition": p.get("disposition") if p else None,
+            "deposit_amount": p.get("deposit_amount") if p else None,
+            "deposit_matched": p.get("deposit_matched") if p else None,
+            "deposit_flagged": bool(p.get("deposit_flagged")) if p else False,
+            "deposit_url": _signed_envelope(p.get("deposit_slip_path")) if p and p.get("deposit_slip_path") else None,
+            "pickup_id": p.get("id") if p else None,
+        })
+    out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
+
+    _as_of = date if date else end
+    _cop_store_list = sorted(store_set) if store_set else []
+    _cop_emp_list = sorted(emp_set) if emp_set else []
+    (codes, decl, picked, last_pu, last_dep, _bp_smeta) = _billpay_position_core(
+        client, org_id, _as_of, _cop_store_list, _cop_emp_list, ks)
+    from . import billpay_pickup as _bp
+    cells, pos_meta = _bp.billpay_position(decl, picked, _as_of)
+    by_store = []
+    for _code in codes:
+        c = cells.get(_code) or {"declared": 0.0, "picked": 0.0, "pending": 0.0}
+        by_store.append({
+            "store_code": _code,
+            "store_name": (_bp_smeta.get(_code, {}) or {}).get("address") or _code,
+            "market": (_bp_smeta.get(_code, {}) or {}).get("market"),
+            "billpay_declared": c["declared"], "billpay_picked": c["picked"],
+            "billpay_pending": c.get("pending", round(c["declared"] - c["picked"], 2)),
+            "last_pickup_at": last_pu.get(_code), "last_deposited_at": last_dep.get(_code),
+        })
+    by_store.sort(key=lambda r: -r["billpay_pending"])
+
+    return {"date": date, "start": start, "end": end, "envelopes": out,
+            "ready": sum(1 for e in out if not e["picked_up"]),
+            "collected": sum(1 for e in out if e["picked_up"]),
+            "flagged": sum(1 for e in out if e["deposit_flagged"]),
+            "total_cash": round(sum(e["cash"] for e in out), 2),
+            "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
+            "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
+            "as_of": _as_of, "by_store": by_store, "position": pos_meta}
+
+
+# ── Management one-screen cash reconciliation (owner directive 2026-09-02, follow-up) ───────────
+@router.get("/cash-recon-management")
+def cash_recon_management(date: str = "", start: str = "", end: str = "", tolerance: float = 1.0,
+                          authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Owner, verbatim: "for the management it should show what has been received as per the
+    system in both cash pick up, epay pick up and the cash declared and the epay declared fields
+    and the credit fields of what has been recorded by the POS reports, this will make it easy
+    for the management to reconcile cash on one screen - again the employee is gated out of it,
+    dm is gated out of it only market manager and above see it."
+
+    Per (store, day): DECLARED cash / credit / ePay-on-cash / ePay-on-credit (DM-verified
+    corrections winning, TKT-1030), the recorded CASH pickup + BILLPAY pickup dollars, the POS
+    X-report cash/card tenders, and the POS/processor-reported bill payments (the SAME
+    metric_source_of_truth resolution the mig-939 coverage recon rides — never a second path),
+    with a declared-vs-POS bill-pay mismatch flag ("if they are not matching then it should
+    show"). GATED market-manager-and-above via billpay_pickup.can_see_cash_recon (the mig-434
+    pay-visibility posture, fail-closed; per-org role list = storeops.tenants.
+    cash_recon_visible_roles, mig 942); a market manager's rows are additionally span-scoped
+    through the same keyset every closing surface uses."""
+    from . import billpay_pickup as _bp
+    client = sb()
+    require_org(org_id)
+    if not _bp.can_see_cash_recon(authorization or "", org_id, client):
+        raise HTTPException(403, "This screen is restricted to market managers and above "
+                                 "(owner directive 2026-09-02). Employees and district managers "
+                                 "are gated out; an admin can widen storeops.tenants."
+                                 "cash_recon_visible_roles if your role should have access.")
+    if date:
+        start = end = date
+    if not (start and end):
+        raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
+    start, end = _date(start), _date(end)
+    if not (start and end):
+        raise HTTPException(400, "valid dates required (YYYY-MM-DD)")
+    if start > end:
+        start, end = end, start
+    from datetime import date as _d, timedelta as _td
+    d0 = _d.fromisoformat(start)
+    d1 = _d.fromisoformat(end)
+    if (d1 - d0).days > 62:
+        raise HTTPException(400, "range too large — 62 days max")
+    days = [(d0 + _td(days=i)).isoformat() for i in range((d1 - d0).days + 1)]
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
+                  .eq("org_id", org_id).execute().data) or []
+    smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
+
+    # DECLARED side (daily_closing, DM overlay winning at store-day grain).
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select("store_code,close_date,t_cash,store_cash,t_credit,t_ext_cc,store_cc,"
+                    "epay_cash,epay_cc,epay_on_cash,epay_on_credit")
+            .eq("org_id", org_id).gte("close_date", start).lte("close_date", end)
+            .limit(100000).execute().data) or []
+    decl = {}
+    for r in rows:
+        code = (r.get("store_code") or "").strip() or "?"
+        dday = str(r.get("close_date") or "")[:10]
+        if not dday:
+            continue
+        slot = decl.setdefault((code, dday), {"cash": 0.0, "credit": 0.0,
+                                              "epay_cash": 0.0, "epay_credit": 0.0})
+        cash = _f(r.get("t_cash")) or _f(r.get("store_cash"))
+        credit = (_f(r.get("t_credit")) or _f(r.get("store_cc"))) + _f(r.get("t_ext_cc")) + _f(r.get("epay_cc"))
+        slot["cash"] = round(slot["cash"] + cash, 2)
+        slot["credit"] = round(slot["credit"] + credit, 2)
+        slot["epay_cash"] = round(slot["epay_cash"] + _f(r.get("epay_on_cash")), 2)
+        slot["epay_credit"] = round(slot["epay_credit"] + _f(r.get("epay_on_credit")), 2)
+    try:
+        _ov = _verified_overlay.build_overlay_map(client, org_id, {d for (_c, d) in decl})
+        for (code, dday), slot in decl.items():
+            dmv = _ov.get((_verified_overlay._norm(code), dday))
+            if not dmv:
+                continue
+            if dmv.get("dm_store_cash") is not None:
+                slot["cash"] = _verified_overlay._f(dmv["dm_store_cash"])
+            if dmv.get("dm_store_cc") is not None:
+                slot["credit"] = _verified_overlay._f(dmv["dm_store_cc"])
+            if dmv.get("dm_epay_cash") is not None:
+                slot["epay_cash"] = _verified_overlay._f(dmv["dm_epay_cash"])
+            if dmv.get("dm_epay_cc") is not None:
+                slot["epay_credit"] = _verified_overlay._f(dmv["dm_epay_cc"])
+    except Exception:
+        pass
+
+    # PICKUP side (both kinds, picked_up=true, keyed on the envelope's close_date).
+    def _picked_sums(table):
+        try:
+            prs = (client.schema("commcalc").table(table)
+                   .select("store_code,close_date,amount,picked_up").eq("org_id", org_id)
+                   .gte("close_date", start).lte("close_date", end).limit(100000).execute().data) or []
+        except Exception:
+            prs = []
+        outm = {}
+        for p in prs:
+            if not p.get("picked_up"):
+                continue
+            k = ((p.get("store_code") or "").strip() or "?", str(p.get("close_date") or "")[:10])
+            outm[k] = round(outm.get(k, 0.0) + _f(p.get("amount")), 2)
+        return outm
+    cash_picked = _picked_sums("cash_pickup")
+    billpay_picked = _picked_sums("billpay_pickup")
+
+    # POS side 1 — X-report tenders (authoritative cash/card split), per day.
+    pos_tenders = {}
+    for dday in days:
+        try:
+            for code, agg in (_xreport_tenders_by_store(client, org_id, dday) or {}).items():
+                pos_tenders[(code, dday)] = {"cash": agg.get("cash", 0.0), "card": agg.get("card", 0.0)}
+        except Exception:
+            pass
+
+    # POS side 2 — bill payments per the processor feed (the mig-939 coverage resolution, reused).
+    pos_billpay, billpay_source = {}, "none"
+    try:
+        from app.modules.commcalc.router import (_canonical_store_key_fn, _metric_source,
+                                                 _billpay_processor_name,
+                                                 _billpay_processor_by_store_day)
+        ckey = _canonical_store_key_fn(client, org_id)
+        msrc = _metric_source(client, org_id, "bill_payments")
+        processor = _billpay_processor_name(client, org_id, msrc)
+        months = sorted({dday[:7] for dday in days})
+        for ym in months:
+            for (cst, dday), v in (_billpay_processor_by_store_day(
+                    client, org_id, ym, processor, ckey) or {}).items():
+                if start <= dday <= end:
+                    pos_billpay[(cst, dday)] = round(pos_billpay.get((cst, dday), 0.0)
+                                                     + _f(v.get("amount")), 2)
+        if pos_billpay:
+            billpay_source = f"processor:{processor}"
+        _ckey = ckey
+    except Exception:
+        _ckey = (lambda s: s)
+
+    out = []
+    for (code, dday), slot in sorted(decl.items()):
+        if code == "?":
+            continue
+        meta = smeta.get(code, {})
+        if ks is not None and not in_keyset(ks, code, meta.get("address")):
+            continue
+        epay_declared = round(slot["epay_cash"] + slot["epay_credit"], 2)
+        pos_bp = pos_billpay.get((_ckey(code) or code, dday)) if pos_billpay else None
+        if pos_bp is None and pos_billpay:
+            pos_bp = 0.0     # feed present but silent for this store-day — an honest zero
+        delta = (round(epay_declared - pos_bp, 2) if pos_bp is not None else None)
+        pt = pos_tenders.get((code, dday))
+        out.append({
+            "store_code": code, "store_name": meta.get("address") or code,
+            "market": meta.get("market"), "day": dday,
+            "cash_declared": slot["cash"], "credit_declared": slot["credit"],
+            "epay_cash_declared": slot["epay_cash"], "epay_credit_declared": slot["epay_credit"],
+            "cash_pickup": cash_picked.get((code, dday), 0.0),
+            "billpay_pickup": billpay_picked.get((code, dday), 0.0),
+            "pos_cash": (pt or {}).get("cash"), "pos_card": (pt or {}).get("card"),
+            "pos_billpay": pos_bp,
+            "billpay_delta": delta,
+            "billpay_status": ("no_pos_data" if pos_bp is None
+                              else ("ok" if abs(delta) <= abs(_f(tolerance)) else "mismatch")),
+        })
+    out.sort(key=lambda r: (r["day"], str(r["store_name"] or "")))
+    mismatches = sum(1 for r in out if r["billpay_status"] == "mismatch")
+    return {"start": start, "end": end, "rows": out, "billpay_source": billpay_source,
+            "tolerance": _f(tolerance),
+            "totals": {"cash_declared": round(sum(r["cash_declared"] for r in out), 2),
+                       "credit_declared": round(sum(r["credit_declared"] for r in out), 2),
+                       "epay_declared": round(sum(r["epay_cash_declared"] + r["epay_credit_declared"] for r in out), 2),
+                       "cash_pickup": round(sum(r["cash_pickup"] for r in out), 2),
+                       "billpay_pickup": round(sum(r["billpay_pickup"] for r in out), 2),
+                       "pos_billpay": round(sum(r["pos_billpay"] or 0.0 for r in out), 2),
+                       "mismatched_store_days": mismatches},
+            "note": (None if pos_billpay else
+                     "No processor bill-payment feed resolved for this range — the POS bill-pay "
+                     "column is empty and no mismatch is flagged (wire the feed via Metric Source "
+                     "of Truth to activate the cross-check).")}
 
 
 # ── Google service-account auto-import of the closing responses sheet ───────────────────────

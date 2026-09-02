@@ -84,6 +84,7 @@ const GROUPS: Group[] = [
       { href: '/storeops/visits/settings', icon: '🧾', label: 'Visit Checklist', desc: 'Store-visit checklist items, categories and order.' },
       { href: '/closing/cash-config', icon: '💰', label: 'Cash Setup', desc: 'Closing deadline + gate, per-store closer, alert recipients, cash-aging.' },
       { href: '/closing/pickup', icon: '💵', label: 'Cash Pickup Recipient', desc: 'Who receives the daily cash-envelope pickup notifications.' },
+      { href: '/closing/billpay-pickup', icon: '🧾', label: 'Bill-Pay Pickup Recipient', desc: 'Who receives the bill-payment pickup notifications (falls back to the cash-pickup recipient).' },
     ],
   },
   {
