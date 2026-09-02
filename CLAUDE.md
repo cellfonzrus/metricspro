@@ -9,6 +9,11 @@ Commission/ops platform for multi-tenant wireless retail. Backend FastAPI
 - **Look up before building.** `docs/SYSTEM_DATA_FLOW_INDEX.md` is the durable map of every report,
   query, data flow, table and key function. Consult it FIRST for any investigation or feature —
   never re-derive what it answers, never duplicate a data path it already documents.
+- **Duplicate check is a build gate (owner directive 2026-09-02).** Before building ANYTHING —
+  a resolution, reconciliation, ingest path, report, endpoint or table — search the index for an
+  existing mechanism serving the same data or purpose and EXTEND it (factor it into a shared
+  helper if needed) rather than creating a sibling derivation. Two paths answering the same
+  question is a defect: they will drift. State in the PR what was checked and what was reused.
 - **Register what you create.** Every NEW report, function, endpoint, query or table must be added
   to `docs/SYSTEM_DATA_FLOW_INDEX.md` in the same PR — in its subsystem section and the §16–18
   cross-references, and in the reports category when it is a report. A new external feed also
