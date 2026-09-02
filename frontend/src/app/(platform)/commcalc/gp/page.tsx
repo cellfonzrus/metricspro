@@ -143,7 +143,7 @@ export default function GPReportPage() {
   // The 'Unsplit' sub-column earns its place only when this org actually HAS money whose source states
   // no month-of-life; otherwise the owner gets exactly the two columns asked for.
   const anyUnsplit = allRows.some(r => Math.abs(r.comm_unsplit || 0) > 0.004)
-  // Accessory-column label comes from the server payload (config-driven basis, mig 930 — 'sales'
+  // Accessory-column label comes from the server payload (config-driven basis, mig 932 — 'sales'
   // = sell price, house default → 'Acc Sales'; 'gp' opt-back → 'Acc GP'). Never hardcoded here.
   const accLabel: string = data.acc_label || 'Acc Sales'
   const COLS: ColDef[] = COLS_BASE.filter(c =>

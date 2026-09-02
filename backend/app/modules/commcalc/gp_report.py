@@ -167,7 +167,7 @@ def calc_gp_report(
       'sales' — Σ `ext_price` (sell price) of accessory lines — the same basis the device bucket
                 (`phone_sales`) has always used, and the basis the carrier portal's own 'Acc. Sales'
                 column reconciled to within 1%. The router resolves the per-org config
-                (accessory_config.gp_acc_basis, mig 930; HOUSE DEFAULT 'sales') and passes it here.
+                (accessory_config.gp_acc_basis, mig 932; HOUSE DEFAULT 'sales') and passes it here.
     The chosen basis flows into `acc_gp` (key name kept so every consumer/export keeps working),
     `total_rev` and `net_profit` consistently, and the result carries `acc_basis` + `acc_label`
     ('Acc Sales' / 'Acc GP') so display surfaces label the column from config, not hardcoded strings.
@@ -663,7 +663,7 @@ def calc_gp_report(
     }
 
     return {'store_rows': store_rows, 'rep_rows': rep_rows, 'totals': totals, 'period': period,
-            # Which basis the accessory column carries + its display label — config-driven (mig 930),
+            # Which basis the accessory column carries + its display label — config-driven (mig 932),
             # so no surface hardcodes 'Acc GP' vs 'Acc Sales'.
             'acc_basis': acc_basis, 'acc_label': 'Acc Sales' if acc_basis == 'sales' else 'Acc GP',
             'commission_legs': commission_legs_block,

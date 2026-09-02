@@ -1,4 +1,4 @@
--- 930_gp_acc_basis.sql
+-- 932_gp_acc_basis.sql
 -- Owner directive 2026-09-02 (verbatim): "Acc Gp should show the price at which the accessories were
 -- sold not the Gross profit as they are not entered correct, so Acc Gp renamed to Acc Sales."
 --
@@ -17,6 +17,6 @@ ALTER TABLE commcalc.accessory_config
     ADD COLUMN IF NOT EXISTS gp_acc_basis text;
 
 COMMENT ON COLUMN commcalc.accessory_config.gp_acc_basis IS
-    'GP-report accessory column basis: ''sales'' (Σ ext_price — house default, applied on NULL) or ''gp'' (legacy Σ gp). Mig 930, owner 2026-09-02.';
+    'GP-report accessory column basis: ''sales'' (Σ ext_price — house default, applied on NULL) or ''gp'' (legacy Σ gp). Mig 932, owner 2026-09-02.';
 
 -- REVERT: ALTER TABLE commcalc.accessory_config DROP COLUMN IF EXISTS gp_acc_basis;
