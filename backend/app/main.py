@@ -149,6 +149,40 @@ app.add_middleware(AccessLogMiddleware)
 # workbook); env `MAX_UPLOAD_MB` tunes it, `MAX_UPLOAD_MB=0` restores the old unbounded behaviour.
 app.add_middleware(BodySizeLimitMiddleware)
 
+
+# ── Browser-work proxy (VidaPay autonomous-pull restoration, 2026-09-02) ─────────────────────────
+# With the deploy split into API + sweeps worker (SERVICE_ROLE=api on this service), the UI's
+# interactive portal-login endpoints (Log in / 2FA verify / live login) hit require_browser_service's
+# 503 here — and the human flow that seeds a portal session became unreachable, because the frontend
+# only knows ONE API URL. When BROWSER_SERVICE_URL names the sweeps worker, the gate raises
+# BrowserWorkProxy instead and this handler forwards the ORIGINAL request — method, path, query,
+# auth headers, body — to the worker and relays its response verbatim. The worker re-authenticates
+# the forwarded JWT and re-runs every org check itself, so this adds no trust; unset URL keeps
+# exactly the old 503. Long timeout: the 2FA verify launches Chromium inline and can take a minute.
+from app.core.service_role import BrowserWorkProxy, browser_service_url  # noqa: E402
+
+
+@app.exception_handler(BrowserWorkProxy)
+async def _proxy_browser_work(request, exc):
+    import httpx
+    from fastapi.responses import Response as _Resp
+    base = browser_service_url()
+    url = base + request.url.path + (("?" + request.url.query) if request.url.query else "")
+    # Hop-by-hop / recomputed headers stay behind; auth + content + org headers travel.
+    fwd = {k: v for k, v in request.headers.items()
+           if k.lower() not in ("host", "content-length", "connection", "accept-encoding")}
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as cx:
+            r = await cx.request(request.method, url, headers=fwd, content=body)
+    except httpx.HTTPError as e:
+        return _Resp(content=('{"detail":"browser service unreachable: %s"}'
+                              % str(e).replace('"', "'")[:160]).encode(),
+                     status_code=502, media_type="application/json")
+    return _Resp(content=r.content, status_code=r.status_code,
+                 media_type=r.headers.get("content-type"))
+
+
 # Error masking + security headers — added AFTER tenant/gzip (outer of them, so it catches their
 # exceptions) but BEFORE CORS (inner of CORS, so a masked 500 still gets Access-Control-Allow-Origin).
 app.add_middleware(HardeningMiddleware)
