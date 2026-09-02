@@ -585,6 +585,27 @@ gates.
 enumerated here — grep `closing/router.py`). Related commcalc: `/x-tender-recon` `router.py:6249`,
 closing tender recon mig `103`,`104`,`106`,`111`.
 
+- **DM-verification audit trail + export parity (owner directive 2026-09-02, mig `935`):** the
+  store-entered ORIGINALS were never overwritten (rep figures live on `commcalc.daily_closing`;
+  DM corrections in the separate `dm_*` columns of `daily_closing_verification`, applied as a
+  read-time overlay — `closing/verified_overlay.py`), but (a) the two date-range exports never
+  showed the DM's modified values or the envelope photo, and (b) the verification row is an
+  UPSERT, so a second DM save overwrote the previous `dm_*` correction with no history. Now:
+  `POST /closing/verify` appends one revision row per changed save to
+  **`commcalc.daily_closing_verification_audit`** (mig `935`; append-only — new values, prior
+  values, `changed_fields`, `edited_after_verify` = a money figure changed on an
+  ALREADY-verified day — the owner's exact scenario; pure builder
+  `closing/verification_audit.py`, proof `harness_dm_verification_audit.py`);
+  `GET /closing/submissions` returns the six `dm_*` modified values + `dm_note` + `dm_corrected`
+  per row (store-day grain) AND `envelope_view_url`; `GET /closing/summary` store cards carry
+  `totals_original` (the pre-overlay store-entered aggregate, present only when a correction
+  applied) next to the authoritative overlaid `totals`; NEW `GET /closing/envelope-view?row_id=`
+  signs the private-bucket envelope photo on demand and 302-redirects (org-scoped lookup — the
+  clickable link exports carry; list endpoints still never do per-row Storage round trips).
+  Frontend: the DM Verify export (`DailyClosingVerify.tsx` — Original vs DM columns + per-rep
+  envelope link) and the dashboard export (`closing/_lib/SubmissionsTable.tsx` — DM columns +
+  clickable envelope link) show original and modified side by side.
+
 ---
 
 ## 13. Org hierarchy & store resolution
@@ -866,6 +887,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933 knobs, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate |
+| `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection |
+| `commcalc.daily_closing_verification_audit` (mig `935`, append-only) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
 | `commcalc.name_map` | name-map UI | `calc_rep_commissions` (login→storeops name), rep-employee-map |
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created) | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page |
@@ -930,6 +953,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
+| `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 

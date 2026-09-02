@@ -28,6 +28,10 @@ import { emptyStandardFilter, filterRows, optionsFromRows, type StandardFilterVa
 // options) for any other embedding.
 export const monthStart = () => localToday().slice(0, 8) + '01'
 
+// Base for the exported envelope-photo links (GET /closing/envelope-view signs + redirects on
+// click) — same source of truth as lib/client.ts's own API_URL.
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+
 const GATE_LABEL: Record<string, string> = {
   ok: '✅ OK', flagged: '⚠️ Flagged', blocked: '⛔ Blocked',
   recon_pending: '⏳ Pending', not_computed: '— (range too wide)',
@@ -184,10 +188,23 @@ export default function SubmissionsTable({
     { header: 'DM verified', field: 'dm_verified', get: r => r.dm_verified ? 'Yes' : 'No' },
     { header: 'DM verified by', field: 'dm_verified_by', get: r => r.dm_verified_by },
     { header: 'DM verified at', field: 'dm_verified_at', type: 'date', get: r => r.dm_verified_at ? new Date(r.dm_verified_at).toLocaleString() : '' },
+    // ── DM-MODIFIED figures (owner 2026-09-02): the DM's corrected store-day totals, side by side
+    // with the store-entered originals above (t_cash/t_credit/… stay the rep's raw entry — the
+    // originals are never overwritten). Store-day grain: the same verification repeats on each of
+    // that store-day's rep rows. Blank = the DM did not correct that figure.
+    { header: 'DM corrected', field: 'dm_corrected', get: r => r.dm_corrected ? 'Yes' : 'No' },
+    { header: 'DM cash $ (store-day)', field: 'dm_store_cash', money: true, get: r => r.dm_store_cash },
+    { header: 'DM credit $ (store-day)', field: 'dm_store_cc', money: true, get: r => r.dm_store_cc },
+    { header: 'DM ePay cash $ (store-day)', field: 'dm_epay_cash', money: true, get: r => r.dm_epay_cash },
+    { header: 'DM ePay credit $ (store-day)', field: 'dm_epay_cc', money: true, get: r => r.dm_epay_cc },
+    { header: 'DM accessory $ (store-day)', field: 'dm_acc_sale', money: true, get: r => r.dm_acc_sale },
+    { header: 'DM other $ (store-day)', field: 'dm_other', money: true, get: r => r.dm_other },
+    { header: 'DM note', field: 'dm_note', get: r => r.dm_note || '' },
     // ── Meta ──
-    // A reference only (storage path) — never the image itself, and never a signed URL that could
-    // outlive its 1-hour validity inside a shared export file. In-app photo viewing stays on the
-    // existing /closing/verify and /closing/management pages, unchanged.
+    // The raw storage path stays a reference; `Envelope photo` is the CLICKABLE org-scoped API
+    // link (signs the private-bucket photo on demand and redirects), so an exported date range
+    // carries a working picture link that never embeds a 1-hour signed URL.
+    { header: 'Envelope photo', field: 'envelope_view_url', get: r => r.envelope_view_url ? `${API_URL}${r.envelope_view_url}` : '' },
     { header: 'Envelope photo ref', field: 'envelope_picture', get: r => r.envelope_picture || '' },
     { header: 'Remarks', field: 'remarks', get: r => r.remarks },
     { header: 'Submitted at', field: 'submitted_at', type: 'date', get: r => r.submitted_at ? new Date(r.submitted_at).toLocaleString() : '' },

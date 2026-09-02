@@ -24,6 +24,7 @@ from . import expense_config
 from . import envelope as _envelope
 from . import deposit_recon
 from . import verified_overlay as _verified_overlay
+from . import verification_audit as _verification_audit
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -536,11 +537,18 @@ def closing_submissions(date_from: str = None, date_to: str = None,
             "correction_count": _int(r.get("correction_count")),
             "dm_verified": bool(ver.get("verified")), "dm_verified_by": ver.get("verified_by"),
             "dm_verified_at": ver.get("verified_at"),
+            # DM-MODIFIED figures side by side with the store-entered originals above (owner
+            # 2026-09-02: "the user should be able to see the original data entered by the store
+            # … and the modified data by the DM" in the date-range export). Store-day grain — the
+            # same verification row repeats on each of that store-day's rep rows, honestly.
+            **_verification_audit.submission_dm_fields(ver),
             # Reference only — the raw storage path, never a signed URL (no per-row network round trip
-            # to Storage on a list endpoint that can return thousands of rows; nothing in the dashboard
-            # or its exports renders it as a clickable image). In-app photo viewing for a specific
-            # store-day continues to live on /closing/verify and /closing/management, unchanged.
+            # to Storage on a list endpoint that can return thousands of rows). `envelope_view_url` is
+            # the CLICKABLE form for exports: an org-scoped API link that signs the private-bucket
+            # photo on demand and redirects (GET /closing/envelope-view).
             "envelope_picture": r.get("envelope_picture"),
+            "envelope_view_url": (f"/api/v1/closing/envelope-view?row_id={r.get('id')}&org_id={org_id}"
+                                  if r.get("envelope_picture") else None),
             "remarks": r.get("remarks"),
         })
 
@@ -1220,7 +1228,14 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         # can't be attributed to one rep) and the store carries a `dm_corrected` badge instead.
         _ver = ver_by_store.get(code) if code else None
         _dm_corrected = bool(_ver and _ver.get("verified") and _verified_overlay.has_correction(_ver))
+        # Owner 2026-09-02: the overlay used to REPLACE the store-entered totals in place, so the
+        # DM Verify export carried only ONE set of numbers. Snapshot the ORIGINAL store-entered
+        # aggregate first — the payload now carries both, side by side (`totals` = authoritative /
+        # DM-corrected when verified; `totals_original` = the reps' raw sum, only present when a
+        # correction actually applied, so an uncorrected store adds no payload weight).
+        totals_original = None
         if _dm_corrected:
+            totals_original = dict(totals)
             _verified_overlay.apply_overlay(totals, _ver)
 
         # MONEY recon: store-declared closing $ vs B2B actuals (accessory gross, cash, credit).
@@ -1311,6 +1326,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "closer": closer_by_store.get(code) if code else None,
             "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
             "dm_corrected": _dm_corrected,   # store-day totals reflect the DM's verified correction (TKT-1030)
+            "totals_original": totals_original,  # store-entered aggregate BEFORE the DM overlay (owner 2026-09-02)
         })
 
     # Stores where reps WORKED (clocked in / sold) but NOBODY submitted a closing never appear in
@@ -1467,6 +1483,7 @@ def verify_store(payload: VerifyStoreIn, org_id: str = ORG_ID):
     date = payload.close_date
     if not code or not date:
         raise HTTPException(400, "store_code and close_date required")
+    client = sb()
     body = {
         "org_id": org_id, "close_date": date, "store_code": code,
         "store_name": payload.store_name,
@@ -1478,9 +1495,25 @@ def verify_store(payload: VerifyStoreIn, org_id: str = ORG_ID):
         "dm_acc_sale": payload.dm_acc_sale, "dm_other": payload.dm_other,
         "note": payload.note, "updated_at": _now(),
     }
-    (sb().schema("commcalc").table("daily_closing_verification")
+    # AUDIT TRAIL (owner 2026-09-02, mig 935): the verification row is an UPSERT — before this,
+    # a DM's second save OVERWROTE the previous dm_* corrections with no record. Read the prior
+    # row and append one revision row per save that changed anything (verification_audit.py is
+    # pure and proven by harness_dm_verification_audit.py). Best-effort: a pre-935 DB, or any
+    # read/insert failure, never blocks the verify itself.
+    audit_written = False
+    try:
+        prior_rows = (client.schema("commcalc").table("daily_closing_verification").select("*")
+                      .eq("org_id", org_id).eq("close_date", date).eq("store_code", code)
+                      .limit(1).execute().data) or []
+        arow = _verification_audit.build_audit_row(org_id, body, prior_rows[0] if prior_rows else None)
+        if arow:
+            client.schema("commcalc").table("daily_closing_verification_audit").insert(arow).execute()
+            audit_written = True
+    except Exception as e:
+        print(f"WARN dm-verification audit write failed (run migration 935?): {e}")
+    (client.schema("commcalc").table("daily_closing_verification")
      .upsert(body, on_conflict="org_id,close_date,store_code").execute())
-    return {"ok": True, "store_code": code, "close_date": date}
+    return {"ok": True, "store_code": code, "close_date": date, "audit_written": audit_written}
 
 
 class ApproveExpenseIn(LaxModel):
@@ -1620,6 +1653,28 @@ def closing_envelope_url(store_code: str = "", close_date: str = "", employee_na
     if not pic:
         raise HTTPException(404, "No envelope photo on file for this store on this day.")
     return {"url": _signed_envelope(pic)}
+
+
+@router.get("/envelope-view")
+def closing_envelope_view(row_id: str = "", org_id: str = ORG_ID):
+    """Sign ONE daily_closing row's envelope photo on demand and 302-REDIRECT to it — the clickable
+    link the date-range EXPORTS carry (owner 2026-09-02: "the picture of the envelope" must be in
+    the export). List endpoints keep returning the raw private-bucket path (no per-row Storage
+    round trips); this signs lazily when someone actually clicks the exported link. Org-scoped DB
+    lookup — a caller can only reach their own org's photo, never an arbitrary storage path."""
+    from fastapi.responses import RedirectResponse
+    require_org(org_id)
+    if not row_id:
+        raise HTTPException(400, "row_id required")
+    rows = (sb().schema("commcalc").table("daily_closing").select("envelope_picture")
+            .eq("org_id", org_id).eq("id", row_id).limit(1).execute().data) or []
+    pic = rows[0].get("envelope_picture") if rows else None
+    if not pic:
+        raise HTTPException(404, "No envelope photo on file for this closing row.")
+    url = _signed_envelope(pic)
+    if not url or url == pic and not str(url).startswith("http"):
+        raise HTTPException(502, "Envelope photo could not be signed — try again.")
+    return RedirectResponse(url, status_code=302)
 
 
 async def _notify_envelope_mismatch(client, org_id, summary):
