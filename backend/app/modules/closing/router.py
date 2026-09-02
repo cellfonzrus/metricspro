@@ -5673,9 +5673,16 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
     out = []
     for r in rows:
         cash = _f(r.get("epay_on_cash"))
+        # OWNER 2026-09-02 #2: "in the billpayment pick, add another column for bill payment on
+        # credit card" — the rep's declared ePay-on-credit split, shown beside the cash envelope.
+        # A credit-only closing (bill payments taken on card, none in cash) now shows as a
+        # DISPLAY row too (there is no physical cash to pick up — the UI renders no checkbox and
+        # `ready` counts only cash envelopes), so the day's declared bill-pay total is complete
+        # for the POS cross-check below.
+        credit = _f(r.get("epay_on_credit"))
         code = r.get("store_code") or ""
         p = pick_by.get((code, (r.get("employee_name") or ""), str(r.get("close_date"))))
-        if cash <= 0 and not p:
+        if cash <= 0 and credit <= 0 and not p:
             continue
         meta = smeta.get(code, {})
         if ks is not None and not in_keyset(ks, code, meta.get("address")):
@@ -5699,6 +5706,7 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "store_code": r.get("store_code"),
             "store_name": meta.get("address") or r.get("store_address") or r.get("store_name"),
             "market": mk, "employee_name": r.get("employee_name"), "cash": round(cash, 2),
+            "credit": round(credit, 2),
             "envelope_picture": r.get("envelope_picture"),
             "envelope_url": _signed_envelope(r.get("envelope_picture")),
             "picked_up": bool(p and p.get("picked_up")),
@@ -5715,16 +5723,20 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
     # the system, from the pos report"): attach the POS-report bill payments for each envelope's
     # store-day RIGHT NEXT to the declared ePay-on-cash. POS resolution = the SHARED
     # `_pos_billpay_for_days` (the mig-939 coverage-recon / cash-recon-management path — never a
-    # second derivation). Store-day grain; declared = Σ epay_on_cash (this page's own numbers).
-    # Feed present but silent for a store-day ⇒ honest ZERO (the cash-recon-management rule);
-    # feed absent for the range ⇒ `no_pos_data`, no mismatch ever flagged.
+    # second derivation). Store-day grain; declared = Σ (epay_on_cash + epay_on_credit) — the
+    # FULL declared bill-pay split (owner 2026-09-02 #2: the processor feed reports every tender
+    # together, "the pos does not store the bill payment on credit card separately", so comparing
+    # it against the cash share alone would flag a false mismatch on every card bill payment —
+    # the same total cash-recon-management compares). Feed present but silent for a store-day ⇒
+    # honest ZERO (the cash-recon-management rule); feed absent for the range ⇒ `no_pos_data`,
+    # no mismatch ever flagged.
     from . import deposit_accountability as _da
     _pos_days = sorted({e["close_date"] for e in out if e.get("close_date")})
     _pos_billpay, _pos_src, _ckey = _pos_billpay_for_days(client, org_id, _pos_days)
     _decl_sd = {}
     for e in out:
         _k = ((e.get("store_code") or ""), str(e.get("close_date") or "")[:10])
-        _decl_sd[_k] = round(_decl_sd.get(_k, 0.0) + _f(e.get("cash")), 2)
+        _decl_sd[_k] = round(_decl_sd.get(_k, 0.0) + _f(e.get("cash")) + _f(e.get("credit")), 2)
     # the processor feed keys on the CANONICAL store key — pre-translate each declared key
     # through the same _ckey the mig-939 recon uses (identical to cash-recon-management's
     # `pos_billpay.get((_ckey(code) or code, dday))` lookup).
@@ -5765,10 +5777,13 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
     by_store.sort(key=lambda r: -r["billpay_pending"])
 
     return {"date": date, "start": start, "end": end, "envelopes": out,
-            "ready": sum(1 for e in out if not e["picked_up"]),
+            # `ready` counts CASH envelopes awaiting pickup — a credit-only display row (owner
+            # 2026-09-02 #2) has no physical cash to collect and never counts as "ready".
+            "ready": sum(1 for e in out if not e["picked_up"] and e["cash"] > 0),
             "collected": sum(1 for e in out if e["picked_up"]),
             "flagged": sum(1 for e in out if e["deposit_flagged"]),
             "total_cash": round(sum(e["cash"] for e in out), 2),
+            "total_credit": round(sum(e["credit"] for e in out), 2),
             "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
             "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
             "as_of": _as_of, "by_store": by_store, "position": pos_meta,
@@ -5822,6 +5837,41 @@ def _pos_billpay_for_days(client, org_id, days):
     except Exception:
         ckey = (lambda s: s)
     return pos_billpay, source, ckey
+
+
+def _sales_billpay_for_days(client, org_id, days):
+    """Bill payments in the email-ingested SALES TRANSACTIONS per (canonical store, day) over the
+    given days — Leg B of the 3-way bill-pay recon (owner directive 2026-09-02 #2), resolved
+    through the SAME shared classification the Exec-MTD 'Bill Payment' metric and /metric-recon
+    ride (`commcalc.router._billpay_sales_by_store_day` → `_sales_cell_agg`, lazily imported —
+    never a second path), with the mig-944 tender split ('card' = the bill payments received on
+    credit/debit card). Returns (map {(canon_code, day): {'amount','count','card','cash','mixed',
+    'other','tendered'}}, source_label, canonical_key_fn). Feed unresolvable → ({}, 'none',
+    identity)."""
+    sales, source = {}, "none"
+    ckey = (lambda s: s)
+    if not days:
+        return sales, source, ckey
+    lo, hi = min(days), max(days)
+    try:
+        from app.modules.commcalc.router import (_canonical_store_key_fn,
+                                                 _billpay_sales_by_store_day)
+        from datetime import date as _d
+        ckey = _canonical_store_key_fn(client, org_id)
+        n_rows = 0
+        for ym in sorted({dday[:7] for dday in days}):
+            y, m = int(ym[:4]), int(ym[5:7])
+            period = f"{_d(y, m, 1):%B %Y}"
+            month_map, n = _billpay_sales_by_store_day(client, org_id, period, ckey)
+            n_rows += n
+            for (cst, dday), v in (month_map or {}).items():
+                if lo <= dday <= hi:
+                    sales[(cst, dday)] = v
+        if n_rows:
+            source = "sales_tx"
+    except Exception:
+        ckey = (lambda s: s)
+    return sales, source, ckey
 
 
 # ── Management one-screen cash reconciliation (owner directive 2026-09-02, follow-up) ───────────
@@ -5930,23 +5980,49 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
 
     # POS side 1 — X-report tenders (authoritative cash/card split), per day.
     # POS side 2 — bill payments per the processor feed (the mig-939 coverage resolution).
-    # Both via the SHARED helpers (also used by /pickups and /billpay-pickups) — one path.
+    # Leg B    — bill payments in the email-ingested sales transactions, tender-split (mig 944).
+    # All via the SHARED helpers (also used by /pickups and /billpay-pickups) — one path each.
     pos_tenders = _pos_tenders_for_days(client, org_id, days)
     pos_billpay, billpay_source, _ckey = _pos_billpay_for_days(client, org_id, days)
+    sales_billpay, sales_source, _skey = _sales_billpay_for_days(client, org_id, days)
+    sales_present = (sales_source == "sales_tx")
 
-    out = []
+    # THE 3-WAY RECON (owner directive 2026-09-02 #2): Leg A declared (DM-corrected) vs Leg B
+    # sales-transactions vs Leg C processor/portal report, per (store, day) — ONE pure math
+    # implementation (metric_recon.reconcile_billpay_three_way_days), joined back onto the rows.
+    from app.modules.commcalc import metric_recon as _mr
+    _twA, _twB, _twC = {}, {}, {}
+    _kept = []
     for (code, dday), slot in sorted(decl.items()):
         if code == "?":
             continue
         meta = smeta.get(code, {})
         if ks is not None and not in_keyset(ks, code, meta.get("address")):
             continue
+        _kept.append((code, dday, slot, meta))
+        _twA[(code, dday)] = round(slot["epay_cash"] + slot["epay_credit"], 2)
+        _sb_hit = sales_billpay.get((_skey(code) or code, dday)) if sales_billpay else None
+        if _sb_hit is not None:
+            _twB[(code, dday)] = _sb_hit
+        _pc_hit = pos_billpay.get((_ckey(code) or code, dday)) if pos_billpay else None
+        if _pc_hit is not None:
+            _twC[(code, dday)] = _pc_hit
+    _tw_rows, _tw_sum = _mr.reconcile_billpay_three_way_days(
+        _twA, _twB, _twC, tolerance_amt=_f(tolerance),
+        sales_present=sales_present, processor_present=bool(pos_billpay))
+    _tw_by_key = {(r["store"], r["day"]): r for r in _tw_rows}
+
+    out = []
+    for (code, dday, slot, meta) in _kept:
         epay_declared = round(slot["epay_cash"] + slot["epay_credit"], 2)
         pos_bp = pos_billpay.get((_ckey(code) or code, dday)) if pos_billpay else None
         if pos_bp is None and pos_billpay:
             pos_bp = 0.0     # feed present but silent for this store-day — an honest zero
+        if isinstance(pos_bp, dict):
+            pos_bp = round(_f(pos_bp.get("amount")), 2)
         delta = (round(epay_declared - pos_bp, 2) if pos_bp is not None else None)
         pt = pos_tenders.get((code, dday))
+        tw = _tw_by_key.get((code, dday)) or {}
         out.append({
             "store_code": code, "store_name": meta.get("address") or code,
             "market": meta.get("market"), "day": dday,
@@ -5959,10 +6035,29 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
             "billpay_delta": delta,
             "billpay_status": ("no_pos_data" if pos_bp is None
                               else ("ok" if abs(delta) <= abs(_f(tolerance)) else "mismatch")),
+            # Leg B (sales transactions) + the 3-way verdict. None = feed absent for the range
+            # (honest gap — never a fake zero, never a fake mismatch).
+            "sales_billpay": tw.get("sales"),
+            "sales_billpay_card": tw.get("sales_card"),
+            "sales_billpay_cash": tw.get("sales_cash"),
+            "sales_billpay_mixed": tw.get("sales_mixed"),
+            "three_way_status": tw.get("status") or "declared_only",
+            "delta_declared_sales": tw.get("delta_declared_sales"),
+            "delta_sales_processor": tw.get("delta_sales_processor"),
         })
     out.sort(key=lambda r: (r["day"], str(r["store_name"] or "")))
     mismatches = sum(1 for r in out if r["billpay_status"] == "mismatch")
+    _notes = []
+    if not pos_billpay:
+        _notes.append("No processor bill-payment feed resolved for this range — the POS bill-pay "
+                      "column is empty and no mismatch is flagged (wire the feed via Metric Source "
+                      "of Truth to activate the cross-check).")
+    if not sales_present:
+        _notes.append("No sales-transaction rows resolved for this range — the sales-side "
+                      "bill-payment columns are empty and the 3-way recon runs on the legs that "
+                      "are present (upload or route the sales transactions feed to activate it).")
     return {"start": start, "end": end, "rows": out, "billpay_source": billpay_source,
+            "sales_source": sales_source,
             "tolerance": _f(tolerance),
             "totals": {"cash_declared": round(sum(r["cash_declared"] for r in out), 2),
                        "credit_declared": round(sum(r["credit_declared"] for r in out), 2),
@@ -5970,11 +6065,15 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
                        "cash_pickup": round(sum(r["cash_pickup"] for r in out), 2),
                        "billpay_pickup": round(sum(r["billpay_pickup"] for r in out), 2),
                        "pos_billpay": round(sum(r["pos_billpay"] or 0.0 for r in out), 2),
-                       "mismatched_store_days": mismatches},
-            "note": (None if pos_billpay else
-                     "No processor bill-payment feed resolved for this range — the POS bill-pay "
-                     "column is empty and no mismatch is flagged (wire the feed via Metric Source "
-                     "of Truth to activate the cross-check).")}
+                       "sales_billpay": (round(sum(r["sales_billpay"] or 0.0 for r in out), 2)
+                                         if sales_present else None),
+                       "sales_billpay_card": (round(sum(r["sales_billpay_card"] or 0.0 for r in out), 2)
+                                              if sales_present else None),
+                       "mismatched_store_days": mismatches,
+                       "three_way_mismatched": sum(1 for r in out
+                                                   if r["three_way_status"] == "mismatch")},
+            "three_way": _tw_sum,
+            "note": (" ".join(_notes) or None)}
 
 
 # ── Deposit accountability board (owner directive 2026-09-02, mig 943) ──────────────────────────

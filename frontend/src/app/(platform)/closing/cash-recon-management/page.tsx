@@ -46,7 +46,7 @@ export default function CashReconManagementPage() {
   }, [rangeMode, date, rangeStart, rangeEnd])
   useEffect(() => { load() }, [load])
 
-  const rows: any[] = (data?.rows || []).filter((r: any) => !mismatchOnly || r.billpay_status === 'mismatch')
+  const rows: any[] = (data?.rows || []).filter((r: any) => !mismatchOnly || r.billpay_status === 'mismatch' || r.three_way_status === 'mismatch')
   const t = data?.totals || {}
 
   function exportPayload(): ExportPayload {
@@ -67,9 +67,13 @@ export default function CashReconManagementPage() {
           { header: 'Bill-pay pickup recorded', get: (r: any) => r.billpay_pickup, money: true },
           { header: 'POS cash', get: (r: any) => r.pos_cash ?? '', money: true },
           { header: 'POS card', get: (r: any) => r.pos_card ?? '', money: true },
-          { header: 'POS bill payments', get: (r: any) => r.pos_billpay ?? '', money: true },
-          { header: 'Bill-pay Δ (declared − POS)', get: (r: any) => r.billpay_delta ?? '' },
+          { header: 'Sales-tx bill pay', get: (r: any) => r.sales_billpay ?? '', money: true },
+          { header: 'Sales-tx on card', get: (r: any) => r.sales_billpay_card ?? '', money: true },
+          { header: 'Processor bill pay', get: (r: any) => r.pos_billpay ?? '', money: true },
+          { header: 'Bill-pay Δ (declared − processor)', get: (r: any) => r.billpay_delta ?? '' },
+          { header: 'Δ (declared − sales-tx)', get: (r: any) => r.delta_declared_sales ?? '' },
           { header: 'Status', get: (r: any) => r.billpay_status },
+          { header: '3-way status', get: (r: any) => r.three_way_status ?? '' },
         ],
         rows,
       }],
@@ -130,7 +134,9 @@ export default function CashReconManagementPage() {
               <Stat label="ePay declared" value={fmt(t.epay_declared || 0)} />
               <Stat label="Cash pickups" value={fmt(t.cash_pickup || 0)} />
               <Stat label="Bill-pay pickups" value={fmt(t.billpay_pickup || 0)} />
-              <Stat label="POS bill payments" value={fmt(t.pos_billpay || 0)} sub={t.mismatched_store_days ? `⚠ ${t.mismatched_store_days} mismatched store-day${t.mismatched_store_days === 1 ? '' : 's'}` : 'no mismatches'} />
+              <Stat label="Sales-tx bill pay" value={t.sales_billpay == null ? '—' : fmt(t.sales_billpay)} sub={t.sales_billpay_card == null ? 'no sales-tx data' : `${fmt(t.sales_billpay_card)} on card`} />
+              <Stat label="Processor bill pay" value={fmt(t.pos_billpay || 0)} sub={t.mismatched_store_days ? `⚠ ${t.mismatched_store_days} mismatched store-day${t.mismatched_store_days === 1 ? '' : 's'}` : 'no mismatches'} />
+              <Stat label="3-way recon" value={t.three_way_mismatched ? `⚠ ${t.three_way_mismatched}` : '✓'} sub={t.three_way_mismatched ? `store-day${t.three_way_mismatched === 1 ? '' : 's'} out of tolerance` : 'declared vs sales-tx vs processor agree'} />
             </div>
           )}
 
@@ -156,8 +162,11 @@ export default function CashReconManagementPage() {
                   <th style={th}>Bill-pay pickup</th>
                   <th style={th}>POS cash</th>
                   <th style={th}>POS card</th>
-                  <th style={th}>POS bill pay</th>
+                  <th style={th} title="Bill payments in the email-ingested sales transactions for the day (Leg B of the 3-way recon)">Sales-tx bill pay</th>
+                  <th style={th} title="Of the sales-tx bill payments, the share taken on credit/debit card">Sales-tx on card</th>
+                  <th style={th} title="Carrier-side report (owner portal / daily-TX feed, per Metric Source of Truth — Leg C)">Processor bill pay</th>
                   <th style={th}>Bill-pay Δ</th>
+                  <th style={th} title="Declared vs sales-tx vs processor, all present legs within tolerance">3-way</th>
                 </tr></thead>
                 <tbody>
                   {rows.map((r: any, i: number) => (
@@ -172,10 +181,18 @@ export default function CashReconManagementPage() {
                       <td style={{ ...cell, textAlign: 'right' }}>{fmt(r.billpay_pickup)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.pos_cash == null ? '—' : fmt(r.pos_cash)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.pos_card == null ? '—' : fmt(r.pos_card)}</td>
+                      <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}
+                          title={r.sales_billpay == null ? 'No sales-transaction data for this range' : `card ${fmt(r.sales_billpay_card || 0)} · cash ${fmt(r.sales_billpay_cash || 0)}${r.sales_billpay_mixed ? ` · mixed-tender ${fmt(r.sales_billpay_mixed)}` : ''}`}>
+                        {r.sales_billpay == null ? '—' : fmt(r.sales_billpay)}</td>
+                      <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.sales_billpay_card == null ? '—' : fmt(r.sales_billpay_card)}</td>
                       <td style={{ ...cell, textAlign: 'right', color: 'var(--text2)' }}>{r.pos_billpay == null ? '—' : fmt(r.pos_billpay)}</td>
                       <td style={{ ...cell, textAlign: 'right', fontWeight: r.billpay_status === 'mismatch' ? 700 : 400, color: r.billpay_status === 'mismatch' ? '#dc2626' : 'var(--text3)' }}>
                         {r.billpay_delta == null ? '—' : `${r.billpay_delta > 0 ? '+' : ''}${fmt(r.billpay_delta)}`}
                         {r.billpay_status === 'mismatch' && ' ⚠'}
+                      </td>
+                      <td style={{ ...cell, textAlign: 'right', fontWeight: r.three_way_status === 'mismatch' ? 700 : 400, color: r.three_way_status === 'mismatch' ? '#dc2626' : r.three_way_status === 'ok' ? '#166534' : 'var(--text3)' }}
+                          title={r.three_way_status === 'declared_only' ? 'Only the declared leg has data for this store-day' : `Δ declared−sales ${r.delta_declared_sales == null ? '—' : fmt(r.delta_declared_sales)} · Δ sales−processor ${r.delta_sales_processor == null ? '—' : fmt(r.delta_sales_processor)}`}>
+                        {r.three_way_status === 'ok' ? '✓' : r.three_way_status === 'mismatch' ? '⚠' : '—'}
                       </td>
                     </tr>
                   ))}

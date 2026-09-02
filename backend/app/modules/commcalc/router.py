@@ -20919,11 +20919,14 @@ def _canonical_store_key_fn(client, org_id):
     return _key
 
 
-def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None):
+def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None, tender_cfg=None):
     """Aggregate raw sales lines → {(store, rep, day): cell}. `acfg` = _accessory_config(...) (the ONE
     accessory classifier). `exec_cfg` (optional _exec_metric_config result) turns ON the Executive-MTD
     extension line-metrics + the configurable Port sub-split; when None those are skipped (Sales Report /
-    Targets). See the block comment above."""
+    Targets). `tender_cfg` (optional, from _billpay_tender_tokens — owner directive 2026-09-02 #2)
+    additionally splits the bill-payment dollars by POS tender (card / cash / mixed / other) via
+    metric_recon.classify_tender when the rows carry tender_type; None (every pre-existing caller) →
+    the split accumulators stay 0.0 and the aggregation is byte-identical. See the block comment above."""
     act_rules = (exec_cfg.get('activation', {}) or {}).get('rules', {}) if exec_cfg else {}
     # Per-org contract-type -> bucket override (mig 213); empty for the house -> byte-identical classifier.
     ct_map = acfg.get('contract_type_map') if acfg else None
@@ -20969,7 +20972,11 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None):
                           'lines': 0, 'revenue': 0.0, 'gp': 0.0, 'accessory_rev': 0.0, 'setup_fee_rev': 0.0,
                           'box_count': 0,
                           'total_phones': 0, 'bill_qty': 0, 'bill_amt': 0.0, 'activation_fee': 0.0,
-                          'protect': 0}
+                          'protect': 0,
+                          # bill-pay tender split (owner 2026-09-02 #2) — populated only when the
+                          # caller passes tender_cfg AND the rows carry tender_type; otherwise 0.0.
+                          'bill_amt_card': 0.0, 'bill_amt_cash': 0.0, 'bill_amt_mixed': 0.0,
+                          'bill_amt_other': 0.0, 'bill_amt_tendered': 0.0}
         if a['login'] is None and r.get('user_login'):
             a['login'] = r.get('user_login')
         if tid:
@@ -21047,6 +21054,17 @@ def _sales_cell_agg(rows, acfg, exec_cfg=None, store_key=None):
             if _exec_line_match(exec_cfg['bill_payment']['rules'], _d, _c, _pl):
                 a['bill_qty'] += 1
                 a['bill_amt'] += ext
+                # Bill-pay TENDER split (owner 2026-09-02 #2, config mig 944): the SAME classified
+                # line, bucketed by the receipt's tender_type — 'card' answers "bill payments
+                # received on credit card from the sales transactions for that day". Multi-tender
+                # receipts land in 'mixed' (never silently attributed); a line with no tender_type
+                # counts only in bill_amt (bill_amt_tendered says how much of the total had one).
+                if tender_cfg is not None:
+                    _tb = tender_cfg['classify'](r.get('tender_type'),
+                                                 tender_cfg.get('card'), tender_cfg.get('cash'))
+                    if _tb:
+                        a['bill_amt_tendered'] += ext
+                        a['bill_amt_' + _tb] += ext
             if _exec_line_match(exec_cfg['activation_fee']['rules'], _d, _c, _pl):
                 a['activation_fee'] += ext
             if _exec_line_match(exec_cfg['protect']['rules'], _d, _c, _pl):
@@ -23092,7 +23110,10 @@ def _metric_source(client, org_id, metric):
     Never raises."""
     default = {"metric": metric, "source": _METRIC_SOURCE_DEFAULTS.get(metric, "sales_agg"),
                "enabled": (metric in _METRIC_AUTO_ENABLED), "reconcile_with": "sales_agg",
-               "processor": None, "assigned_user": None, "tolerance": 0.0, "configured": False}
+               "processor": None, "assigned_user": None, "tolerance": 0.0, "configured": False,
+               # mig 944: per-org bill-payment ROW FILTER for the carrier daily-TX feed (None →
+               # metric_recon house defaults). Config, never a carrier branch.
+               "processor_order_types": None, "processor_product_tokens": None}
     try:
         rows = (client.schema("commcalc").table("metric_source_of_truth")
                 .select("*").eq("org_id", org_id).eq("metric", metric).limit(1).execute().data) or []
@@ -23101,13 +23122,19 @@ def _metric_source(client, org_id, metric):
     if not rows:
         return default
     r = rows[0]
+
+    def _lst(col):
+        v = r.get(col)
+        return [str(x).strip() for x in v if str(x or "").strip()] if isinstance(v, (list, tuple)) else None
     return {"metric": metric, "source": (r.get("source") or default["source"]),
             "enabled": bool(r.get("enabled")),
             "reconcile_with": r.get("reconcile_with") or None,
             "processor": r.get("processor") or None,
             "assigned_user": r.get("assigned_user") or None,
             "tolerance": float(r.get("tolerance") or 0.0),
-            "configured": True}
+            "configured": True,
+            "processor_order_types": _lst("processor_order_types") or None,
+            "processor_product_tokens": _lst("processor_product_tokens") or None}
 
 
 # Map an Activation Details bucket (New Activation / Port / BYOD / Upgrade / BYOD Upgrade / Tablet /
@@ -24164,24 +24191,129 @@ def _billpay_sales_by_store(client, org_id, period, ckey_fn):
     return {k: v for k, v in by_store.items() if v["count"] or v["amount"]}
 
 
+def _billpay_tender_tokens(client, org_id):
+    """Per-org POS tender vocabulary for the bill-pay tender split (owner 2026-09-02 #2; mig 944
+    columns billpay_card_tenders / billpay_cash_tenders on accessory_config — own defensive read,
+    the mig-313 posture, so a pre-944 schema / missing row / any failure resolves to the
+    metric_recon house defaults: card = credit|debit, cash = cash). Returns the tender_cfg dict
+    _sales_cell_agg consumes ({'card','cash','classify'}); NEVER raises."""
+    from app.modules.commcalc import metric_recon as _mr
+    card, cash = None, None
+    try:
+        rows = (client.schema("commcalc").table("accessory_config")
+                .select("billpay_card_tenders,billpay_cash_tenders")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            cv, sv = rows[0].get("billpay_card_tenders"), rows[0].get("billpay_cash_tenders")
+            card = [str(t).strip() for t in cv if str(t or "").strip()] if isinstance(cv, (list, tuple)) else None
+            cash = [str(t).strip() for t in sv if str(t or "").strip()] if isinstance(sv, (list, tuple)) else None
+    except Exception:
+        card, cash = None, None
+    return {"card": tuple(card) if card else _mr.DEFAULT_CARD_TENDERS,
+            "cash": tuple(cash) if cash else _mr.DEFAULT_CASH_TENDERS,
+            "classify": _mr.classify_tender}
+
+
+def _billpay_sales_by_store_day(client, org_id, period, ckey_fn):
+    """Per-(canonical store, DAY) bill payments from the email-ingested SALES TRANSACTIONS — the
+    DAY-grain sibling of `_billpay_sales_by_store` (owner 2026-09-02 #2: "the total of bill
+    payments received on credit card from the sales transactions for that day from the email
+    ingested reports"). One derivation: the SAME `_sales_cell_agg` classification the Exec-MTD
+    'Bill Payment' metric and `/metric-recon` ride (exec_metric_config bill_payment rules +
+    accessory_config.billpay_products), with the mig-944 tender split — the rows are fetched with
+    tender_type appended to the display columns (live evidence 2026-09-02: 10,720/10,777 Aug rows
+    carry it). Returns ({(canon_store, day): {'amount','count','card','cash','mixed','other',
+    'tendered'}}, n_source_rows)."""
+    cfg = _exec_metric_config(client, org_id)
+    acfg = _accessory_config(client, org_id)
+    tender_cfg = _billpay_tender_tokens(client, org_id)
+    rows, _meta = _sales_rows_union(client, org_id, period,
+                                    cols=_SALES_DISPLAY_COLS + ",tender_type")
+    cells = _sales_cell_agg(rows, acfg, exec_cfg=cfg, store_key=ckey_fn, tender_cfg=tender_cfg)
+    out = {}
+    for (st, _rep, dday), a in cells.items():
+        if not (a.get("bill_qty") or a.get("bill_amt")):
+            continue
+        k = (st or "—", str(dday or "")[:10])
+        slot = out.setdefault(k, {"amount": 0.0, "count": 0, "card": 0.0, "cash": 0.0,
+                                  "mixed": 0.0, "other": 0.0, "tendered": 0.0,
+                                  "_name": (a.get("store") or st or "—")})
+        slot["count"] += int(a.get("bill_qty") or 0)
+        slot["amount"] = round(slot["amount"] + float(a.get("bill_amt") or 0.0), 2)
+        for src, dst in (("bill_amt_card", "card"), ("bill_amt_cash", "cash"),
+                         ("bill_amt_mixed", "mixed"), ("bill_amt_other", "other"),
+                         ("bill_amt_tendered", "tendered")):
+            slot[dst] = round(slot[dst] + float(a.get(src) or 0.0), 2)
+    return out, len(rows)
+
+
+def _vidapay_account_resolver(client, org_id):
+    """account/terminal id → raw store string for the carrier DAILY-TX feed. Precedence:
+      1. storeops.store_merchant_id (mig 902 — the owner-entered per-processor id map);
+      2. the mig-314 account→store index (`ma_store_pnl.load_store_index`: owner-pinned
+         ma_account_store_map ∪ the fulfillment report's own tspid→address evidence) — the SAME
+         index the P&L store attribution and the BS handset-payable line already resolve accounts
+         through (never a second derivation).
+    Returns fn(acct) → store string ('' when unmapped — the caller keeps the raw account id, an
+    honest unmapped key, never a guessed store). NEVER raises."""
+    mmap, idx = {}, {}
+    try:
+        from app.modules.storeops import merchant_ids as _mids
+        mmap = _mids.resolve_map(org_id, "vidapay") or {}
+    except Exception:
+        mmap = {}
+    try:
+        from app.modules.account.ma_store_pnl import load_store_index
+        idx = load_store_index(client, org_id) or {}
+    except Exception:
+        idx = {}
+
+    def _resolve(acct):
+        a = str(acct or "").strip()
+        return (mmap.get(a) or idx.get(a) or "") if a else ""
+    return _resolve
+
+
+def _ma_billpay_pred(client, org_id, msrc):
+    """The org's bill-payment ROW predicate for the carrier daily-TX feed — mig-944 config
+    (metric_source_of_truth.processor_order_types / processor_product_tokens, house defaults in
+    metric_recon) + the org's curated accessory_config.billpay_products exact list (mig 214 —
+    REUSED, the same list the sales aggregation classifies bill payments with)."""
+    from app.modules.commcalc import metric_recon as _mr
+    try:
+        exact = (_accessory_config(client, org_id) or {}).get("billpay_products") or set()
+    except Exception:
+        exact = set()
+    return _mr.ma_billpay_predicate(
+        order_types=(msrc or {}).get("processor_order_types"),
+        exact_products=exact,
+        product_tokens=(msrc or {}).get("processor_product_tokens"))
+
+
 def _billpay_processor_name(client, org_id, msrc):
     """Which carrier PROCESSOR to reconcile bill payments against: the metric_source_of_truth.processor
-    config wins ('epay'|'vidapay'); else auto-detect from commcalc.data_source (the enabled portal login's
-    processor, 'total_access' → vidapay). '' when unknown → the recon runs two-way (report vs sales)."""
+    config wins ('epay'|'vidapay'); else auto-detect from commcalc.data_source — an ENABLED portal
+    login's processor first, falling back to a configured-but-disabled one ('total_access' → vidapay).
+    The fallback matters (evidence 2026-09-02, org 854f…): `enabled` gates the SWEEP, not the org's
+    processor identity — a paused/expired portal login left 52k already-ingested raw_ma_daily_tx rows
+    unreachable by every bill-pay recon because the processor name resolved to ''. A disabled source
+    with NO ingested rows still degrades honestly ({} from the feed readers → no_pos_data).
+    '' when unknown → the recon runs two-way (report vs sales)."""
     p = str((msrc or {}).get("processor") or "").strip().lower()
     if p in ("epay", "vidapay"):
         return p
     try:
         rows = (client.schema("commcalc").table("data_source").select("processor,enabled")
                 .eq("org_id", org_id).execute().data) or []
-        for r in rows:
-            if not r.get("enabled"):
-                continue
-            pp = str(r.get("processor") or "").strip().lower()
-            if pp in ("epay",):
-                return "epay"
-            if pp in ("vidapay", "total_access"):
-                return "vidapay"
+        for only_enabled in (True, False):
+            for r in rows:
+                if only_enabled and not r.get("enabled"):
+                    continue
+                pp = str(r.get("processor") or "").strip().lower()
+                if pp in ("epay",):
+                    return "epay"
+                if pp in ("vidapay", "total_access"):
+                    return "vidapay"
     except Exception:
         pass
     return ""
@@ -24189,9 +24321,18 @@ def _billpay_processor_name(client, org_id, msrc):
 
 def _billpay_processor_by_store(client, org_id, period, processor, ckey_fn):
     """Per-canonical-store bill-payment {'count','amount','_name'} from the carrier PROCESSOR feed — ePay
-    (raw_epay_daily_tx via epay_ingest.per_store_day) for Boost, VidaPay (raw_ma_daily_tx, account_id →
-    store_code via storeops.merchant_ids) for Total. Best-effort + defensive: any failure or an unknown
-    processor returns {} so the recon degrades to report-vs-sales rather than 500-ing."""
+    (raw_epay_daily_tx via epay_ingest.per_store_day — the owner's-portal bill-payment report side) or
+    the daily-TX report (raw_ma_daily_tx), per the org's metric_source_of_truth resolution. Best-effort +
+    defensive: any failure or an unknown processor returns {} so the recon degrades to report-vs-sales
+    rather than 500-ing.
+
+    DEFECT FIX 2026-09-02 (owner: "the pos bill payments are showing 0"): the daily-TX leg previously
+    summed EVERY raw_ma_daily_tx row (handsets, residuals, spiffs — evidence: 18,120/22,163 Aug rows for
+    org 854f… were non-billpay order types) and resolved accounts ONLY through storeops.store_merchant_id
+    (empty for that org → every row keyed under its raw account id → the declared-side lookup missed on
+    every real store-day → an 'honest zero' 0 everywhere). Now: rows filter through the config-driven
+    `_ma_billpay_pred` (mig 944 + the mig-214 billpay_products list) and accounts fall back to the
+    mig-314 account→store index via `_vidapay_account_resolver` — one resolution, shared with the P&L."""
     if processor not in ("epay", "vidapay"):
         return {}
     mo, yr = _month_year(period)
@@ -24208,15 +24349,18 @@ def _billpay_processor_by_store(client, org_id, period, processor, ckey_fn):
                 slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": str(sc)})
                 slot["count"] += int(v.get("lines") or 0)
                 slot["amount"] += float(v.get("payment") or 0.0)
-        else:  # vidapay
-            from app.modules.storeops import merchant_ids as _mids
-            amap = _mids.resolve_map(org_id, "vidapay") or {}
+        else:  # daily-TX report
+            msrc = _metric_source(client, org_id, "bill_payments")
+            pred = _ma_billpay_pred(client, org_id, msrc)
+            resolve_acct = _vidapay_account_resolver(client, org_id)
             q = (client.schema("commcalc").table("raw_ma_daily_tx")
-                 .select("account_id,retail_cost").eq("org_id", org_id))
+                 .select("account_id,retail_cost,order_type,product_name").eq("org_id", org_id))
             rows = q.in_("period", _pvariants(period)).limit(200000).execute().data or []
             for r in rows:
+                if not pred(r):
+                    continue
                 acct = str(r.get("account_id") or "").strip()
-                sc = amap.get(acct) or acct or "—"
+                sc = resolve_acct(acct) or acct or "—"
                 k = ckey_fn(str(sc)) or str(sc) or "—"
                 slot = by_store.setdefault(k, {"count": 0, "amount": 0.0, "_name": str(sc)})
                 slot["count"] += 1
@@ -24334,10 +24478,12 @@ def metric_recon(period: str, org_id: str = ORG_ID, metric: str = "activations")
 # ── Bill-pay COVERAGE recon (owner directive 2026-09-02, item 5a) ────────────────────────────────
 def _billpay_processor_by_store_day(client, org_id, period, processor, ckey_fn):
     """Per-(canonical store, day) bill-payment {'amount','_name'} from the carrier PROCESSOR feed —
-    the DAY-grain sibling of `_billpay_processor_by_store` (same sources, same selects: ePay =
-    raw_epay_daily_tx via epay_ingest.per_store_day; VidaPay = raw_ma_daily_tx, account_id →
-    store via storeops.merchant_ids). {} on failure/unknown processor — the caller then degrades
-    to the reps' DECLARED split."""
+    the DAY-grain sibling of `_billpay_processor_by_store` (same sources, same row filter, same
+    account→store resolution: ePay = raw_epay_daily_tx via epay_ingest.per_store_day; daily-TX =
+    raw_ma_daily_tx filtered through the config-driven `_ma_billpay_pred`, account_id resolved via
+    `_vidapay_account_resolver` — store_merchant_id falling back to the mig-314 index; see the
+    2026-09-02 defect-fix note on the month sibling). {} on failure/unknown processor — the caller
+    then degrades to the reps' DECLARED split."""
     if processor not in ("epay", "vidapay"):
         return {}
     mo, yr = _month_year(period)
@@ -24353,18 +24499,21 @@ def _billpay_processor_by_store_day(client, org_id, period, processor, ckey_fn):
                 k = (ckey_fn(str(sc)) or str(sc) or "—", str(d)[:10])
                 slot = out.setdefault(k, {"amount": 0.0, "_name": str(sc)})
                 slot["amount"] = round(slot["amount"] + float(v.get("payment") or 0.0), 2)
-        else:  # vidapay
-            from app.modules.storeops import merchant_ids as _mids
-            amap = _mids.resolve_map(org_id, "vidapay") or {}
+        else:  # daily-TX report — same defect fix as _billpay_processor_by_store (row filter via the
+            # config-driven _ma_billpay_pred + mig-314 account→store fallback), at DAY grain.
+            msrc = _metric_source(client, org_id, "bill_payments")
+            pred = _ma_billpay_pred(client, org_id, msrc)
+            resolve_acct = _vidapay_account_resolver(client, org_id)
             rows = (client.schema("commcalc").table("raw_ma_daily_tx")
-                    .select("account_id,retail_cost,tx_date").eq("org_id", org_id)
+                    .select("account_id,retail_cost,tx_date,order_type,product_name")
+                    .eq("org_id", org_id)
                     .in_("period", _pvariants(period)).limit(200000).execute().data) or []
             for r in rows:
                 d = str(r.get("tx_date") or "")[:10]
-                if not d:
+                if not d or not pred(r):
                     continue
                 acct = str(r.get("account_id") or "").strip()
-                sc = amap.get(acct) or acct or "—"
+                sc = resolve_acct(acct) or acct or "—"
                 k = (ckey_fn(str(sc)) or str(sc) or "—", d)
                 slot = out.setdefault(k, {"amount": 0.0, "_name": str(sc)})
                 slot["amount"] = round(slot["amount"] + float(r.get("retail_cost") or 0.0), 2)
