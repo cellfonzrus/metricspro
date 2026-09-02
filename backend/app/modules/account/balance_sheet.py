@@ -63,20 +63,32 @@ from app.modules.commcalc.calculator import safe_float
 # store attribution on; otherwise company-wide (honest beats mis-attributed).
 EXTRA_BS_SPEC = [
     ("handset_payable", "Handset payables (devices due to distributor)", "liability", "auto_opt", "store"),
+    # Owner directive 2026-09-02 (mig 938): "all cash collected in the store must be added to the
+    # balance sheet as cash collected after it has been verified by the DM, either the cash is
+    # deposited in the bank or it is used in expenses, everything needs to be updated in the
+    # financials as appropriate." The store-cash lifecycle already exists row-level in the closing
+    # module (declared cash → DM verification → pickups/deposits → envelope expenses/withdrawals,
+    # ONE shared computation: closing.router._cash_position_core); this line surfaces the AS-OF
+    # balance of that lifecycle on the Balance Sheet per store. `auto_opt` + basis 'off' default ⇒
+    # byte-identical books until an org opts in. In the cash-flow statement this line is CASH
+    # (statement_engine.CF_CASH_KEYS), not a working-capital delta.
+    ("store_cash_on_hand", "Cash on hand — stores (undeposited)", "asset", "auto_opt", "store"),
 ]
 
 INVENTORY_BASES = ("report", "devices")
+CASH_ON_HAND_BASES = ("off", "verified", "all")
 
 
-# ── config (commcalc.account_config, mig 933 columns) ───────────────────────────────────────────
+# ── config (commcalc.account_config, mig 933/938 columns) ───────────────────────────────────────
 def default_bs_config():
     """Defaults = today's behaviour for every org: inventory from the report totals, no handset
-    payable booked. A tenant opts in per org — never a code branch."""
-    return {"inventory_basis": "report", "handset_payable_order_types": []}
+    payable booked, no store cash-on-hand booked. A tenant opts in per org — never a code branch."""
+    return {"inventory_basis": "report", "handset_payable_order_types": [],
+            "cash_on_hand_basis": "off"}
 
 
 def load_bs_config(client, org_id):
-    """Per-org balance-sheet config, ADAPTIVE (pre-mig-933 schema or no row ⇒ defaults). NEVER
+    """Per-org balance-sheet config, ADAPTIVE (pre-mig-933/938 schema or no row ⇒ defaults). NEVER
     raises; each column is its own defensive read exactly like coa._account_config."""
     cfg = default_bs_config()
     try:
@@ -92,6 +104,13 @@ def load_bs_config(client, org_id):
         if rows and isinstance(rows[0].get("handset_payable_order_types"), list):
             cfg["handset_payable_order_types"] = [str(t).strip() for t in
                                                   rows[0]["handset_payable_order_types"] if str(t).strip()]
+    except Exception:
+        pass
+    try:
+        rows = (client.schema("commcalc").table("account_config")
+                .select("cash_on_hand_basis").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows and str(rows[0].get("cash_on_hand_basis") or "").strip().lower() in CASH_ON_HAND_BASES:
+            cfg["cash_on_hand_basis"] = str(rows[0]["cash_on_hand_basis"]).strip().lower()
     except Exception:
         pass
     return cfg
@@ -272,6 +291,62 @@ def handset_payable_bookings(tx_rows, order_types, as_of):
         out.append((acct, amt, ot))
         total = round(total + amt, 2)
     return out, {"rows": len(out), "total": total}
+
+
+# ── 2b. verified store cash on hand (owner directive 2026-09-02, mig 938) ───────────────────────
+def store_cash_cells(decl_by_store_day, taken_by_store_day, verified_keys, basis, as_of):
+    """PURE: the per-store UNDEPOSITED cash balance as of `as_of` ('YYYY-MM-DD'), from the closing
+    module's own movement dicts (the shape `_cash_position_core` returns —
+    {store_code: {day: amount}}; `decl` already carries the DM-corrected figure for verified
+    days, `taken` = everything that left the envelope: pickups/deposits + approved expenses +
+    withdrawals).
+
+    basis 'verified' — the owner's rule ("cash… added to the balance sheet AS CASH COLLECTED
+    AFTER it has been verified by the DM"): only store-days present in `verified_keys`
+    ({(store_code, day)} with verified=true) COUNT AS COLLECTED; unverified declared cash is
+    EXCLUDED from the books and REPORTED in meta (`unverified_declared`) so nothing vanishes
+    silently. ALL outflows still subtract — cash that physically left is gone regardless of
+    verification state (a store can therefore read negative: a real signal that more cash left
+    than was ever verified in, never clamped).
+    basis 'all' — every declared day counts (the operational cash-position number, exactly what
+    GET /closing/store-cash-on-hand shows).
+    basis 'off' — {} (every org's default: byte-identical books).
+
+    Returns (cells {store_code: balance}, meta)."""
+    if basis not in ("verified", "all") or not as_of:
+        return {}, {"basis": basis, "stores": 0}
+    cutoff = str(as_of)[:10]
+    vkeys = verified_keys or set()
+    cells = {}
+    unverified_declared, unverified_days, verified_days = 0.0, 0, 0
+    for st, days in (decl_by_store_day or {}).items():
+        for d, amt in (days or {}).items():
+            dd = str(d)[:10]
+            if not dd or dd > cutoff:
+                continue
+            a = safe_float(amt)
+            if basis == "verified" and (st, dd) not in vkeys:
+                unverified_declared = round(unverified_declared + a, 2)
+                unverified_days += 1
+                continue
+            verified_days += 1
+            cells[st] = round(cells.get(st, 0.0) + a, 2)
+    taken_total = 0.0
+    for st, days in (taken_by_store_day or {}).items():
+        for d, amt in (days or {}).items():
+            dd = str(d)[:10]
+            if not dd or dd > cutoff:
+                continue
+            a = safe_float(amt)
+            taken_total = round(taken_total + a, 2)
+            cells[st] = round(cells.get(st, 0.0) - a, 2)
+    cells = {st: v for st, v in cells.items() if v}
+    meta = {"basis": basis, "as_of": cutoff, "stores": len(cells),
+            "counted_days": verified_days, "taken_total": taken_total,
+            "unverified_days": unverified_days,
+            "unverified_declared": round(unverified_declared, 2),
+            "total": round(sum(cells.values()), 2)}
+    return cells, meta
 
 
 # ── 3+4. journal entries: company designation + fixed scoping ───────────────────────────────────

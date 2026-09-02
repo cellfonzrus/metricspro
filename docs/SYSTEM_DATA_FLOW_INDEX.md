@@ -307,6 +307,25 @@ commissions, expenses.
   behind the owner gate in mig `933` (mig-622 precedent). Roadmap of the remaining buildout:
   `docs/FINANCE_PLATFORM_ROADMAP.md`.
 
+- **DM-verified store cash → Balance Sheet (owner directive 2026-09-02, mig `938`):** "all cash
+  collected in the store must be added to the balance sheet as cash collected after it has been
+  verified by the DM, either the cash is deposited in the bank or it is used in expenses." NEW BS
+  asset line **`store_cash_on_hand`** "Cash on hand — stores (undeposited)" (`auto_opt`, store
+  grain, `balance_sheet.EXTRA_BS_SPEC`), gated by `account_config.cash_on_hand_basis` (`'off'`
+  house default = byte-identical; `'verified'` = the owner's rule — only DM-VERIFIED store-days'
+  declared cash counts as collected, unverified dollars reported in statement meta, never
+  silently dropped; `'all'` = the operational number). Movement dicts come from the closing
+  module's OWN `_cash_position_core` (lazy import in `statement_engine.build_inputs_full` —
+  declared cash already DM-overlay-corrected; outflows = cash pickups/deposits + approved
+  envelope expenses/withdrawals — so the BS can never disagree with Cash Position / Store Cash
+  on Hand), then PURE `balance_sheet.store_cash_cells` filters/nets as-of period end; store
+  grain via `coa.store_resolver`. In the derived Cash Flow the line is CASH
+  (`statement_engine.CF_CASH_KEYS = ('cash','store_cash_on_hand')` — summed into
+  cash_begin/cash_end, excluded from operating deltas), so a bank deposit (store→bank) leaves
+  reported cash unchanged and a cash-paid expense relieves the line while landing on the P&L via
+  the existing closing-expense sweep. LuxeLink seed (`'verified'`) COMMENTED behind the owner
+  gate in mig `938`. Proof: `harness_verified_cash_bs.py`.
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -923,7 +942,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview`, `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933 knobs, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
-| `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate |
+| `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated) |
 | `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection |
 | `commcalc.daily_closing_verification_audit` (mig `935`, append-only) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
 | `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`) | `GET /closing/envelope-report`, notify `closing_envelope_report` |
@@ -1031,6 +1050,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
+| Store cash on hand (BS asset, mig `938`) | DM-verified `daily_closing` declared cash (overlay-corrected) − `cash_pickup`/`bank_deposit`/`closing_expense`/`envelope_withdrawal` outflows, as-of period end | `balance_sheet.store_cash_cells` via `statement_engine.build_inputs_full` (`account_config.cash_on_hand_basis`: off default / verified / all); CASH in the cash-flow statement (`CF_CASH_KEYS`) |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |

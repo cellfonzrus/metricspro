@@ -55,9 +55,12 @@ BS_SECTIONS = [("Assets", "asset"), ("Liabilities", "liability"), ("Equity", "eq
 
 # Cash-flow classification of the BS SPEC lines (a journal-appended line — a Loan, a note — is
 # classified by SECTION + kind below: manual liability/equity lines are FINANCING, the standard
-# working-capital lines are OPERATING). 'cash' is the RESULT, never an adjustment.
+# working-capital lines are OPERATING). CASH lines are the RESULT, never an adjustment:
+# `cash` (the manual bank line) and `store_cash_on_hand` (verified undeposited store cash, mig
+# 938) together are "cash & cash equivalents" — the statement's begin/end balances sum them.
 CF_INVESTING_ASSETS = {"fixtures"}
-CF_EXCLUDED = {"cash", "retained"}
+CF_CASH_KEYS = ("cash", "store_cash_on_hand")
+CF_EXCLUDED = set(CF_CASH_KEYS) | {"retained"}
 
 
 def _round(x):
@@ -140,6 +143,40 @@ def build_inputs_full(client, org_id, period):
             meta["handset_payable"] = {**hp_meta, "as_of": meta["as_of"]}
         except Exception as e:
             coa._warn("handset payable booking failed — line left empty", e)
+
+    # ── verified store cash on hand (config-driven; 'off' default books nothing — mig 938) ──────
+    # Owner 2026-09-02: "all cash collected in the store must be added to the balance sheet as
+    # cash collected after it has been verified by the DM, either the cash is deposited in the
+    # bank or it is used in expenses." The MOVEMENT dicts come from the closing module's OWN
+    # shared computation (`_cash_position_core` — the same function Cash Position / Store Cash on
+    # Hand / pickups read, declared cash already DM-overlay-corrected, outflows = pickups +
+    # deposits + approved envelope expenses/withdrawals), so the Balance Sheet can never disagree
+    # with those pages; the 'verified' basis then keeps ONLY DM-verified store-days as collected
+    # (balance_sheet.store_cash_cells — pure; unverified dollars are reported in meta, never
+    # silently dropped). Store grain resolves through the SAME coa.store_resolver every other
+    # line uses. Lazy import: account must not import the closing router at module load.
+    if cfg["cash_on_hand_basis"] != "off" and meta["as_of"]:
+        try:
+            from app.modules.closing.router import _cash_position_core
+            (_codes, decl_sd, taken_sd, _lp, _ld, _sm, _pu, _eep) = _cash_position_core(
+                client, org_id, meta["as_of"], [], [], None)
+            vkeys = set()
+            if cfg["cash_on_hand_basis"] == "verified":
+                vrows = (client.schema("commcalc").table("daily_closing_verification")
+                         .select("store_code,close_date,verified").eq("org_id", org_id)
+                         .eq("verified", True).limit(100000).execute().data) or []
+                vkeys = {(v.get("store_code"), str(v.get("close_date"))[:10])
+                         for v in vrows if v.get("verified")}
+            cells, cmeta = balance_sheet.store_cash_cells(
+                decl_sd, taken_sd, vkeys, cfg["cash_on_hand_basis"], meta["as_of"])
+            resolve = coa.store_resolver(client, org_id)
+            line = inputs["store_cash_on_hand"]
+            for st, amt in cells.items():
+                key = resolve(st) or st
+                line["by_store"][key] = _round(line["by_store"].get(key, 0.0) + amt)
+            meta["store_cash_on_hand"] = cmeta
+        except Exception as e:
+            coa._warn("store cash-on-hand booking failed — line left empty", e)
 
     # ── inventory basis (config-driven; 'report' default = byte-identical) ──────────────────────
     if cfg["inventory_basis"] == "devices":
@@ -232,8 +269,10 @@ def cash_flow(pl_cur, bs_cur, bs_prior, period, scope_key, scope_label):
          "subtotal": _round(sum(l["amount"] for l in fin_lines))},
     ]
     implied = _round(sum(s["subtotal"] for s in sections))
-    cash_cur = cur.get(("asset", "cash"), (None, 0.0, None))[1]
-    cash_pri = pri.get(("asset", "cash"), (None, 0.0, None))[1]
+    # Cash & cash equivalents = the manual bank line + verified undeposited store cash (mig 938;
+    # a missing key sums as 0, so a pre-938 payload is byte-identical).
+    cash_cur = sum(cur.get(("asset", k), (None, 0.0, None))[1] for k in CF_CASH_KEYS)
+    cash_pri = sum(pri.get(("asset", k), (None, 0.0, None))[1] for k in CF_CASH_KEYS)
     reported = _round(cash_cur - cash_pri)
     out = {"statement_type": "cash_flow", "period": period, "scope_key": scope_key,
            "scope_label": scope_label, "comparative": comparative, "sections": sections,
