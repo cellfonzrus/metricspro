@@ -59,6 +59,12 @@ def _assemble(inputs, journal_rows, spec, label_map, sections_def, scope, stores
         # tenant that never pushes them shows no empty line — byte-identical to before the line existed.
         if kind == "auto_opt" and not amt and not detail:
             continue
+        # `suppress_zero` passthrough (mig 934): coa may declare that a spec line carrying $0 for
+        # this org should not render (e.g. the contra-COGS rebate line when the org presents
+        # rebates as income on `rebate_income`). Only suppresses an EMPTY line — any dollars or
+        # drill-down detail always render. Absent → byte-identical for every tenant.
+        if (inputs.get(key) or {}).get("suppress_zero") and not amt and not detail:
+            continue
         row = {"key": key, "label": disp, "amount": amt, "kind": kind, "detail": detail}
         # A line may carry a NOTE explaining a figure the number alone cannot explain — specifically a
         # DECLARED zero. Ruling K3(b) requires that a period with no distributor invoice report device

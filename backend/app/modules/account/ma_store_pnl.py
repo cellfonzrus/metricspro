@@ -73,7 +73,26 @@ MA_COMMISSION_HEADS = {
     "spiff_m5": ("carrier_comm", 1), "spiff_m6": ("carrier_comm", 1),
 }
 MA_HEAD_DETAIL = {"carrier_comm": "SPIFF / bounty",
-                  "device_rebate": "Device purchase rebates (Distributor/MA)"}
+                  "device_rebate": "Device purchase rebates (Distributor/MA)",
+                  "rebate_income": "Device purchase rebates (Distributor/MA)"}
+# ── mig 934 (owner report 2026-09-02: "rebate is coming in negative, it should be a positive
+# number as it is coming in"). WHERE the rebate dollar presents, per org:
+#   'contra_cogs' (house default, ruling K1 2026-08-10 unchanged) → `device_rebate`, booked
+#       NEGATIVE inside COGS so it nets against Device cost;
+#   'income' → `rebate_income` (PL_SPEC auto_opt revenue line), booked POSITIVE — money coming in
+#       reads as a positive number. Net income AND gross profit are IDENTICAL either way (revenue
+#       and COGS both move by the same amount); only the section subtotals move. Config, never
+#       code: the routing is data-driven off the resolved org config, no tenant branch anywhere.
+REBATE_ROUTES = {"contra_cogs": ("device_rebate", -1), "income": ("rebate_income", 1)}
+
+
+def rebate_route(cfg):
+    """PURE: (line_key, sign) the org's rebate dollars book with. Feed/ledger convention is
+    unchanged — callers still compute `sign * -feed_value` (MA sheet, negative = paid to dealer)
+    or `sign * ledger_amount * -1` equivalents — so 'contra_cogs' is byte-identical to pre-934
+    and 'income' flips ONLY the rebate's line + sign, nothing else."""
+    key = (cfg or {}).get("rebate_presentation") if isinstance(cfg, dict) else None
+    return REBATE_ROUTES.get(key or "contra_cogs", REBATE_ROUTES["contra_cogs"])
 # The comm-sheet spiff columns — suppressed when the org books month spiffs from the daily-tx cash
 # rows instead ('daily_tx'), so one payment can never book at both the activation month (sheet
 # column, back-filled by the monthly re-pull) and the cash month (MONTH-n tx row).
@@ -93,7 +112,13 @@ def default_config():
         "spiff_order_types": list(_SPIFF_ORDER_TYPES_DEFAULT),
         "mdf_product_tokens": [],
         "line_labels": {},
+        "rebate_presentation": "contra_cogs",
     }
+
+
+_CFG_COLS_314 = ("pl_ma_store_attribution,pl_ma_month_spiff_source,"
+                 "pl_ma_spiff_order_types,pl_mdf_product_tokens,pl_line_labels")
+_CFG_COLS_934 = _CFG_COLS_314 + ",pl_rebate_presentation"
 
 
 def load_config(client, org_id):
@@ -102,10 +127,18 @@ def load_config(client, org_id):
     validated — an unknown spiff source or non-list/non-dict value keeps the default."""
     cfg = default_config()
     try:
-        rows = (client.schema("commcalc").table("commission_org_config")
-                .select("pl_ma_store_attribution,pl_ma_month_spiff_source,"
-                        "pl_ma_spiff_order_types,pl_mdf_product_tokens,pl_line_labels")
-                .eq("org_id", org_id).limit(1).execute().data) or []
+        # Column-set fallback, NEWEST first: selecting a column a live DB doesn't have yet is a
+        # PostgREST error for the WHOLE select, and falling all the way back to defaults would
+        # silently drop the mig-314 seeds an org already runs on. So: mig-934 column set, then the
+        # mig-314 set, then defaults — each older set keeps every value it does carry.
+        rows = []
+        for _cols in (_CFG_COLS_934, _CFG_COLS_314):
+            try:
+                rows = (client.schema("commcalc").table("commission_org_config")
+                        .select(_cols).eq("org_id", org_id).limit(1).execute().data) or []
+                break
+            except Exception:
+                continue
         if rows:
             r = rows[0]
             if isinstance(r.get("pl_ma_store_attribution"), bool):
@@ -124,6 +157,9 @@ def load_config(client, org_id):
                 cfg["line_labels"] = {str(k).strip(): str(v).strip()
                                       for k, v in r["pl_line_labels"].items()
                                       if str(k).strip() and str(v).strip()}
+            reb = str(r.get("pl_rebate_presentation") or "").strip().lower()
+            if reb in REBATE_ROUTES:
+                cfg["rebate_presentation"] = reb
     except Exception:
         pass
     return cfg
@@ -207,6 +243,7 @@ def ma_commission_bookings(rows, cfg=None):
     cfg = cfg if cfg is not None else default_config()
     attribute = bool(cfg.get("store_attribution"))
     skip_spiffs = (cfg.get("month_spiff_source") == "daily_tx")
+    reb_route = rebate_route(cfg)   # mig 934: ('device_rebate', -1) default / ('rebate_income', 1)
     out = []
     for r in rows or []:
         r = r or {}
@@ -217,7 +254,7 @@ def ma_commission_bookings(rows, cfg=None):
                 # cash, so it stays company-wide even under store attribution.
                 out.append(("distributor_clearing", None, safe_float(r.get(c)), None))
                 continue
-            head_sign = MA_COMMISSION_HEADS.get(c)
+            head_sign = reb_route if c == "rebate" else MA_COMMISSION_HEADS.get(c)
             if not head_sign:
                 continue
             if skip_spiffs and c in SPIFF_COMPONENTS:
