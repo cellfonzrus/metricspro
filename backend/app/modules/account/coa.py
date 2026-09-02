@@ -91,6 +91,14 @@ PL_SPEC = [
     ("ma_device_margin", "Device margin (Distributor/MA)",           "revenue", "auto",  "company"),
     ("fee_income",    "Fee income (Distributor/MA)",                 "revenue", "auto",  "company"),
     ("financing_income", "Consumer financing income",                "revenue", "auto",  "company"),
+    # Owner spec 2026-09-02 (mig 314): "mdf should capture the market spiff of $1000/$500 per store
+    # if it is part of any of the commission report on the total side." Books the raw_ma_daily_tx
+    # rows whose product_name matches the org's configured pl_mdf_product_tokens (RULE TWO — the
+    # tokens are per-org config; luxelink seeds ['premium store spiff'], the $1,000-per-store rows;
+    # empty default books nothing). `auto_opt` ⇒ the line materialises only where it carries value,
+    # so every org without MDF tokens is byte-identical. Store grain via the mig-314 account→store
+    # index (ma_store_pnl). Classification is pure: ma_store_pnl.ma_tx_bookings.
+    ("mdf_income",    "MDF (market spiffs)",                         "revenue", "auto_opt", "store"),
     ("accessory_rev", "Accessory sales revenue",                     "revenue", "auto",  "store"),
     ("device_rev",    "Device sales revenue",                        "revenue", "auto",  "store"),
     ("vip_reimb",     "Device-financing reimbursements (Distributor)", "revenue", "auto",  "store"),
@@ -542,6 +550,25 @@ def build_inputs(client, org_id, period):
     payroll_routes = acct_cfg["payroll_expense_routes"]       # mig 621 K2; optional line override
     device_cogs_mode = acct_cfg["device_cogs_mode"]           # mig 621 K3; 'off' ⇒ POS-only (pre-621)
 
+    # ── mig 314 (owner spec 2026-09-02): MA store attribution + per-org P&L line labels ─────────
+    # Loaded for EVERY org (the label override applies to Boost too); all defaults OFF ⇒
+    # byte-identical books until an org's config row opts in. NEVER raises.
+    _ma314_cfg, _ma_acct_index = None, {}
+    try:
+        from app.modules.account import ma_store_pnl as _msp
+        _ma314_cfg = _msp.load_config(client, org_id)
+        if _ma314_cfg.get("store_attribution"):
+            # processor account id → store address (override table ∪ raw_ma_fulfillment tspid map);
+            # unmapped accounts stay company-wide — mapped beats guessed.
+            _ma_acct_index = _msp.load_store_index(client, org_id) or {}
+    except Exception as e:
+        _msp = None
+        _warn("mig-314 MA store-attribution config unavailable — company-wide grain kept", e)
+
+    def _ma_store(acct):
+        """Processor account id → store address (None ⇒ company-wide, exactly as before mig 314)."""
+        return _ma_acct_index.get(str(acct or "").strip()) or None
+
     L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}} for k, *_ in PL_SPEC + BS_SPEC}
 
     def add(key, store, amt, detail_label=None):
@@ -588,52 +615,35 @@ def build_inputs(client, org_id, period):
         # −26,355.61. Every component is a different kind of money and only the label said otherwise.
         # Each now goes to the head it belongs to (the arithmetic is unchanged per component — this
         # re-files them, it does not re-compute them):
-        _MA_HEAD = {
-            # OWNER RULING K1 (2026-08-10) — CONTRA-COGS, reversing `fae81a3`. The rebate is an
-            # equipment subsidy on a purchased IMEI: purchase and rebate are two halves of one
-            # transaction, so it nets against Device cost rather than inflating revenue. Booked
-            # NEGATIVE (sign −1) into the contra-COGS line. Net income identical either way; this
-            # decides device gross MARGIN. See PL_SPEC's `device_rebate` note for the figures.
-            "rebate":             ("device_rebate",    -1),
-            "device_margin":      ("ma_device_margin",  1),
-            "fees_margin":        ("fee_income",        1),
-            "consumer_financing": ("financing_income",  1),
-            "consumer_margin":    ("ma_device_margin",  1),
-            # M1–M6 spiffs are carrier bounty, the same money carrier_comm already collects for Boost.
-            "spiff_m1": ("carrier_comm", 1), "spiff_m2": ("carrier_comm", 1),
-            "spiff_m3": ("carrier_comm", 1), "spiff_m4": ("carrier_comm", 1),
-            "spiff_m5": ("carrier_comm", 1), "spiff_m6": ("carrier_comm", 1),
-        }
-        # wallet_funding is absent from the P&L on purpose: funding a VidaPay wallet moves cash
-        # between the dealer's own pockets, so it belongs on NO P&L line. Leaving it in (as a NEGATIVE
-        # revenue) understated luxelink's July income by $26,355.61. Owner ruled 2026-08-10 that it is
-        # a SETTLEMENT CLEARING account — a pass-through netting against what the distributor owes —
-        # so it is booked to the balance-sheet line `distributor_clearing` a few lines below, NOT
-        # dropped. Sign is the OPPOSITE of the revenue components: the feed's positive value is money
-        # the dealer PAID IN, which is the asset.
+        # Component → head routing now lives in ma_store_pnl.MA_COMMISSION_HEADS (moved verbatim,
+        # mig 314) so the pure booking function is the ONE place the rules live. The rulings carried
+        # with it, unchanged: K1 2026-08-10 (rebate = equipment subsidy → contra-COGS, sign −1, see
+        # PL_SPEC's `device_rebate` note); component re-filing 2026-08-10 (each of the 12
+        # raw_ma_commission components goes to the head it belongs to — spiffs are carrier bounty on
+        # `carrier_comm`, the same money Boost's carrier_comm collects); wallet_funding stays OFF
+        # the P&L (a NEGATIVE-revenue fold understated luxelink July by $26,355.61) and books the
+        # `distributor_clearing` balance-sheet asset instead, NOT sign-flipped (a positive feed
+        # value is cash the dealer paid in). Feed convention on every other component: NEGATIVE =
+        # paid TO the dealer, so heads book `sign * -value` exactly as before.
+        #   Mig 314 adds, config-gated (defaults preserve all of the above byte-identically):
+        #   • pl_ma_store_attribution → each booking lands on the row's merchant account's STORE
+        #     (fulfillment tspid map ∪ ma_account_store_map; unmapped → company-wide, honest) — the
+        #     owner's "rebates … not being captured per store" / "store wise commission";
+        #   • pl_ma_month_spiff_source='daily_tx' → the sheet's spiff_m1..m6 columns are NOT booked
+        #     here (the daily-tx MONTH-n cash rows book below instead), so a month's payment can
+        #     never book at both the activation month and the cash month.
         try:
             from app.modules.account.residual_subs import _MA_COMPONENTS
-            for r in _fetch_all(client, "raw_ma_commission", ",".join(_MA_COMPONENTS),
-                                {"org_id": org_id, "period": period_keys}):
-                for c in _MA_COMPONENTS:
-                    if c == "wallet_funding":
-                        # Balance sheet, not P&L. NOT sign-flipped: a positive feed value is cash the
-                        # dealer paid into the wallet, i.e. the clearing asset it still holds.
-                        add("distributor_clearing", None, safe_float(r.get(c)))
-                        continue
-                    head_sign = _MA_HEAD.get(c)
-                    if not head_sign:
-                        continue
-                    head, sign = head_sign
-                    # Feed convention: NEGATIVE = paid TO the dealer, so the value is sign-flipped to
-                    # "money the dealer receives" exactly as before; `sign` then re-points a rebate
-                    # into the contra-COGS line as a negative cost.
-                    _DETAIL = {"carrier_comm": "SPIFF / bounty",
-                               "device_rebate": "Device purchase rebates (Distributor/MA)"}
-                    add(head, None, sign * -safe_float(r.get(c)),
-                        detail_label=_DETAIL.get(head))
-        except Exception:
-            pass
+            if _msp is not None:
+                _comm_rows = _fetch_all(
+                    client, "raw_ma_commission",
+                    ",".join(_MA_COMPONENTS) + ",merchant_account_id",
+                    {"org_id": org_id, "period": period_keys})
+                for _line, _acct, _amt, _dlabel in _msp.ma_commission_bookings(
+                        _comm_rows, _ma314_cfg):
+                    add(_line, _ma_store(_acct), _amt, detail_label=_dlabel)
+        except Exception as e:
+            _warn("raw_ma_commission P&L booking failed", e)
         # ── MA TX → P&L (Phase B, owner spec 2026-09-01, mig 309): "Merchant discount for each line
         # item goes into the P&L as merchant discount, residual under residual." ONE org-scoped scan
         # of raw_ma_daily_tx books both figures; the per-row classification is PURE
@@ -654,24 +664,41 @@ def build_inputs(client, org_id, period):
         #     they are different money. Config resolution is org-scoped + adaptive (pre-mig-309 ⇒
         #     defaults); merchant_discount + retail_cost are the ONLY columns read as money
         #     (residual_subs.assert_money_columns — merchant_invoice is an identifier, never summed).
+        #   Mig 314 widens this same scan, config-gated (defaults byte-identical to mig 309):
+        #   • store attribution — each booking lands on the row's account_id's store;
+        #   • `mdf_income` — rows whose product_name matches pl_mdf_product_tokens book the market
+        #     spiff to the MDF line (luxelink Aug 2026: 12 × $1,000 'Premium Store Spiff' rows);
+        #   • month spiffs (pl_ma_month_spiff_source='daily_tx') — the pl_ma_spiff_order_types
+        #     families book to carrier_comm with M1..M12+ detail via THE shared
+        #     commission_ledger.parse_payment_month regex (never a second one).
+        #   A retail_cost books AT MOST ONCE (precedence residual → MDF → month-spiff); the pure
+        #   classifier is ma_store_pnl.ma_tx_bookings (proof: harness_ma_store_pnl.py).
         try:
             from app.modules.account import residual_subs as _rs
             _ma_pnl_cfg = _rs.load_ma_pnl_config(client, org_id)
+            _tx_cols = "product_name,order_type,account_id,"
             try:
                 _tx_rows = _fetch_all(
                     client, "raw_ma_daily_tx",
-                    "product_name,order_type," + ",".join(_rs._MA_PNL_MONEY_COLUMNS),
+                    _tx_cols + ",".join(_rs._MA_PNL_MONEY_COLUMNS),
                     {"org_id": org_id, "period": period_keys})
             except Exception:
-                # order_type column absent (older feed schema): the label family alone still books.
+                # order_type/account_id column absent (older feed schema): the label family alone
+                # still books, company-wide — the pre-314/pre-309 posture.
                 _tx_rows = _fetch_all(
                     client, "raw_ma_daily_tx",
                     "product_name," + ",".join(_rs._MA_PNL_MONEY_COLUMNS),
                     {"org_id": org_id, "period": period_keys})
-            for _line, _amt in _rs.ma_tx_pnl_bookings(_tx_rows, _ma_pnl_cfg):
-                add(_line, None, _amt)
-        except Exception:
-            pass
+            if _msp is not None:
+                for _line, _acct, _amt, _dlabel in _msp.ma_tx_bookings(
+                        _tx_rows, _ma_pnl_cfg, _ma314_cfg):
+                    add(_line, _ma_store(_acct), _amt, detail_label=_dlabel)
+            else:
+                # ma_store_pnl unavailable — keep the mig-309 booking so the books never regress.
+                for _line, _amt in _rs.ma_tx_pnl_bookings(_tx_rows, _ma_pnl_cfg):
+                    add(_line, None, _amt)
+        except Exception as e:
+            _warn("raw_ma_daily_tx P&L booking failed", e)
 
     # raw_comp_report — carrier commissions/incentives. Broken into canonical components via
     # carrier_category_map (framework): same carrier_comm total, with a Commission/SPIFF/Reimbursement
@@ -784,7 +811,8 @@ def build_inputs(client, org_id, period):
     try:
         from app.modules.account import device_cogs as _device_cogs
         _dev = _device_cogs.resolve(client, org_id, period_keys, pm, py,
-                                    _in_period, resolve_store, device_cogs_mode)
+                                    _in_period, resolve_store, device_cogs_mode,
+                                    ma_acct_index=_ma_acct_index)
     except Exception as e:
         _warn("device COGS invoice source unavailable — falling back to POS", e)
     if _dev.get("active"):
@@ -1037,5 +1065,17 @@ def build_inputs(client, org_id, period):
             L["inventory"]["by_store"][st] = round(safe_float(eff), 2)
     except Exception:
         pass
+
+    # ── per-org P&L/BS line labels (mig 314, owner spec 2026-09-02: "it should say Residual on
+    # Total side and Mi on boost side") — the SAME `label` passthrough engine._assemble already
+    # honours for 'Gross Payroll'. Config, never code: luxelink's row sets
+    # {"mi_income": "Residual"}; an org with no labels (every Boost tenant) is byte-identical.
+    # Applied LAST so a data-driven relabel ('Gross Payroll') composes: config wins if both set a
+    # key, which is the point — the owner picked the word.
+    try:
+        if _msp is not None and _ma314_cfg:
+            _msp.apply_line_labels(L, _ma314_cfg.get("line_labels"))
+    except Exception as e:
+        _warn("mig-314 line-label override skipped", e)
 
     return L

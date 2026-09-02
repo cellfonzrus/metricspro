@@ -45,11 +45,18 @@ requirement, so the lower figure governs; see the handoff for the net-income con
 
 GRAIN — READ THIS BEFORE TRUSTING A PER-STORE DEVICE MARGIN
 -----------------------------------------------------------
-`raw_ma_commission` carries `merchant_account_id`, **not a store address**. MA device COGS is therefore
-booked **company-wide**, exactly like PayGo and the MA residual. Resolving an account id as a store is
-the phantom-store failure PayGo already taught us — do not. VIP/consignment cost DOES carry a store and
-is booked per-store. Until `account_id → store_address` is mapped, a per-store device gross margin is
-not computable for a VidaPay tenant, and this module will not pretend otherwise.
+`raw_ma_commission` carries `merchant_account_id`, **not a store address**. MA device COGS was
+therefore booked **company-wide**, exactly like PayGo and the MA residual — resolving an account id
+as a store by GUESSING is the phantom-store failure PayGo taught us. The condition this paragraph
+set ("until account_id → store_address is mapped") is now MET where the data provides it: the
+dealer's own `raw_ma_fulfillment` sheet carries both `tspid` (the account) and `business_address`
+on every order row, and mig 314 adds an owner-pinned override table
+(`ma_account_store_map`). When the caller passes that index (`ma_acct_index`, built by
+`ma_store_pnl.load_store_index` and gated by `commission_org_config.pl_ma_store_attribution`),
+MA device cost books per store; any account the index cannot name STAYS company-wide — mapped
+beats guessed, honest beats mis-attributed. No index passed ⇒ company-wide, byte-identical to
+the pre-314 behaviour. (Owner spec 2026-09-02: "rebates and phone cost are not being captured
+per store".)
 """
 import logging
 
@@ -112,16 +119,19 @@ def ma_unit_price_map(client, org_id):
     return {k: round(ext[k] / qty[k], 2) for k in qty if qty[k]}
 
 
-def _ma_sold_cost(client, org_id, period_keys):
+def _ma_sold_cost(client, org_id, period_keys, ma_acct_index=None):
     """Cost of the devices ACTIVATED (= sold) in the period, from the distributor's own records.
 
     `raw_ma_commission` is one row per activated line and carries the `imei` and the `sku`. Dedup by
     IMEI first (a line/AAL pair repeats the same handset), then price each distinct IMEI off the
-    fulfillment sheet. Company-wide grain — see the module docstring.
+    fulfillment sheet. Grain: per store where `ma_acct_index` names the row's merchant account
+    (mig 314 — see the module docstring), company-wide for everything else. No index ⇒ all
+    company-wide, byte-identical to pre-314.
     """
     price = ma_unit_price_map(client, org_id)
-    rows = _page(client, "raw_ma_commission", "imei,sku,activation_type",
+    rows = _page(client, "raw_ma_commission", "imei,sku,activation_type,merchant_account_id",
                  {"org_id": org_id, "period": period_keys})
+    idx = ma_acct_index or {}
     by_imei = {}
     no_imei = 0
     for r in rows:
@@ -130,10 +140,11 @@ def _ma_sold_cost(client, org_id, period_keys):
             no_imei += 1
             continue
         # first row wins; a repeat of the same IMEI is the SAME physical handset
-        by_imei.setdefault(imei, (r.get("sku") or "").strip())
+        by_imei.setdefault(imei, ((r.get("sku") or "").strip(),
+                                  str(r.get("merchant_account_id") or "").strip()))
     cost, priced, unknown_sku, unpriced = 0.0, 0, 0, 0
-    detail = {}
-    for imei, sku in by_imei.items():
+    detail, by_store = {}, {}
+    for imei, (sku, acct) in by_imei.items():
         low = sku.lower()
         if not sku or low == _MA_UNKNOWN_SKU:
             unknown_sku += 1
@@ -145,13 +156,19 @@ def _ma_sold_cost(client, org_id, period_keys):
         cost += unit
         priced += 1
         detail[sku] = round(detail.get(sku, 0.0) + unit, 2)
+        addr = idx.get(acct)
+        if addr:
+            by_store[addr] = round(by_store.get(addr, 0.0) + unit, 2)
     return {
         "cost": round(cost, 2),
         "detail": detail,
+        # per-store slice of `cost` (the remainder is company-wide); {} without an index
+        "by_store": by_store,
         "meta": {"source": "raw_ma_commission x raw_ma_fulfillment",
                  "rows": len(rows), "distinct_imei": len(by_imei), "dedup_dropped": len(rows) - len(by_imei),
                  "priced": priced, "unknown_sku": unknown_sku, "unpriced_sku": unpriced,
-                 "rows_without_imei": no_imei, "price_list_skus": len(price)},
+                 "rows_without_imei": no_imei, "price_list_skus": len(price),
+                 "store_mapped_accounts": len(idx)},
     }
 
 
@@ -198,13 +215,14 @@ def _vip_sold_cost(client, org_id, pm, py, in_period, resolve_store):
     }
 
 
-def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode):
+def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode,
+            ma_acct_index=None):
     """The one entry point `coa.build_inputs` calls.
 
     Returns a dict:
       {"active": bool,          # did an INVOICE source answer? (False ⇒ caller keeps POS cost)
-       "company_wide": float,   # MA device cost (no store grain available)
-       "by_store": {store: amt},# VIP consignment cost (has a store)
+       "company_wide": float,   # MA device cost the account→store index could not place
+       "by_store": {store: amt},# VIP consignment cost + mig-314 store-mapped MA cost
        "detail": {label: amt},
        "meta": {...}}           # always populated, including the un-linkable remainder
 
@@ -224,7 +242,7 @@ def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode)
 
     ma, vip = None, None
     try:
-        ma = _ma_sold_cost(client, org_id, period_keys)
+        ma = _ma_sold_cost(client, org_id, period_keys, ma_acct_index=ma_acct_index)
     except Exception as e:
         _log.warning("device_cogs: MA/VidaPay invoice source unavailable — %s: %s", type(e).__name__, e)
         out["meta"]["ma_error"] = "%s: %s" % (type(e).__name__, e)
@@ -235,7 +253,13 @@ def resolve(client, org_id, period_keys, pm, py, in_period, resolve_store, mode)
         out["meta"]["vip_error"] = "%s: %s" % (type(e).__name__, e)
 
     if ma and ma["cost"]:
-        out["company_wide"] = ma["cost"]
+        # per-store slice first (mig 314, only when an account→store index was passed);
+        # whatever the index could not name stays company-wide — total unchanged either way.
+        _ma_store = ma.get("by_store") or {}
+        _store_total = round(sum(_ma_store.values()), 2)
+        for st, amt in _ma_store.items():
+            out["by_store"][st] = round(out["by_store"].get(st, 0.0) + amt, 2)
+        out["company_wide"] = round(ma["cost"] - _store_total, 2)
         for k, v in ma["detail"].items():
             out["detail"][k] = round(out["detail"].get(k, 0.0) + v, 2)
         out["meta"]["ma"] = ma["meta"]
