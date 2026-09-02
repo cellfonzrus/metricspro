@@ -23,6 +23,14 @@ swaps/extensions, hours budget, shift approvals, time-clock permissions, attenda
 workforce reports, store/employee setup — is assigned to the **payroll-workforce-agent**
 (`.claude/agents/payroll-workforce-agent.md`). The two domains are interrelated and owned together.
 
+## Finance work routes to the Finance agent (owner directive 2026-09-02)
+
+Any job touching the finance module — the P&L report and its filters/drill-downs (market, region,
+store, company), company/entity structure and rollups, chart of accounts, P&L line bookings and
+display, financial statements/exports, quarterly P&L, royalty reporting — is assigned to the
+**finance-agent** (`.claude/agents/finance-agent.md`). Commission P&L line AMOUNTS stay with the
+commission-agent; their display/filtering/rollup in the P&L is finance.
+
 ## Commission work routes to the Commission agent (owner directive 2026-09-01)
 
 Any job touching commission — MA commission, MA TX, multi-month/installment payouts, spiffs,
