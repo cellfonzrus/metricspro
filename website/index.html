@@ -3,356 +3,820 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#0e1720">
-<title>MetricsPro — One settled version of the month</title>
-<meta name="description" content="MetricsPro reconciles carrier statements, the register, inventory and cash into one settled set of numbers for prepaid retailers. See the demos, then start free for 30 days.">
-<link rel="canonical" href="https://www.metricspro.tech/">
+<meta name="theme-color" content="#f4f8f9">
+<title>MetricsPro — Run multi-store retail with confidence</title>
+<meta name="description" content="One platform for commissions, point of sale, inventory, workforce and cash — reconciled against each other, so the month settles once. Built for multi-store wireless dealers. Start free for 30 days.">
+<link rel="canonical" href="https://metricspro.tech/">
+<meta name="robots" content="index, follow">
 <meta property="og:type" content="website">
-<meta property="og:title" content="MetricsPro — One settled version of the month">
-<meta property="og:description" content="Commissions, point of sale, inventory, workforce and cash, reconciled against each other. Built for prepaid dealers.">
-<meta property="og:url" content="https://www.metricspro.tech/">
+<meta property="og:title" content="MetricsPro — Run multi-store retail with confidence">
+<meta property="og:description" content="Commissions, point of sale, inventory, workforce and cash, reconciled against each other. Built for multi-store wireless dealers.">
+<meta property="og:url" content="https://metricspro.tech/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/assets/styles.css">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/home.css">
 </head>
 <body>
-<div class="mpw">
-
-<header class="mpw-header">
-  <div class="mpw-wrap mpw-header-in">
-    <a href="/" class="mpw-logo">Metrics<em>Pro</em></a>
-    <nav class="mpw-header-nav">
-      <a href="#demos">Demos</a>
-      <a href="#modules">Modules</a>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<symbol id="i-recon" viewBox="0 0 24 24"><path d="M4 7h7M4 12h5M4 17h7"/><path d="M15 5l4 4-4 4"/><path d="M19 9h-4"/><circle cx="17" cy="17" r="3"/></symbol>
+<symbol id="i-plan" viewBox="0 0 24 24"><path d="M4 19V9m5 10V5m5 14v-7m5 7V8"/></symbol>
+<symbol id="i-pos" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="11" rx="2"/><path d="M3 19h18M8 10h8"/></symbol>
+<symbol id="i-inv" viewBox="0 0 24 24"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4M3 16l9 4 9-4"/></symbol>
+<symbol id="i-people" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 19a6 6 0 0112 0"/><path d="M16 6a3 3 0 010 6M17 19a6 6 0 00-2-4"/></symbol>
+<symbol id="i-pay" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h4"/></symbol>
+<symbol id="i-cash" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10a2.5 2 0 015 0c0 2-5 1-5 3a2.5 2 0 005 0"/></symbol>
+<symbol id="i-fin" viewBox="0 0 24 24"><path d="M4 20V4"/><path d="M4 20h16"/><path d="M8 16l4-6 3 3 5-7"/></symbol>
+<symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/></symbol>
+<symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v6M15 3v6"/><path d="M6 9h12v3a6 6 0 01-12 0V9z"/><path d="M12 18v3"/></symbol>
+<symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4V5z"/><path d="M8 10h8M8 13h5"/></symbol>
+<symbol id="i-store" viewBox="0 0 24 24"><path d="M4 9h16v11H4V9z"/><path d="M3 9l2-5h14l2 5"/><path d="M10 20v-6h4v6"/></symbol>
+<symbol id="i-stores" viewBox="0 0 24 24"><rect x="3" y="10" width="6" height="10"/><rect x="10" y="6" width="5" height="14"/><rect x="16" y="12" width="5" height="8"/></symbol>
+<symbol id="i-co" viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="16"/><rect x="13" y="9" width="8" height="11"/><path d="M6 8h2M6 12h2M16 13h2"/></symbol>
+<symbol id="i-agent" viewBox="0 0 24 24"><circle cx="12" cy="6" r="3"/><path d="M12 9v4M12 13l-6 3M12 13l6 3"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="18" r="2"/></symbol>
+<symbol id="i-multi" viewBox="0 0 24 24"><circle cx="7" cy="8" r="3.5"/><circle cx="15" cy="8" r="3.5"/><circle cx="11" cy="16" r="3.5"/></symbol>
+<symbol id="i-audit" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4"/><path d="M9 12h6M9 16h4"/></symbol>
+</defs></svg>
+<header class="top">
+  <div class="wrap top-in">
+    <a class="logo" href="#top">Metrics<em>Pro</em></a>
+    <nav>
       <a href="#platform">Platform</a>
+      <a href="#modules">Modules</a>
+      <a href="#who">Who it's for</a>
       <a href="#pricing">Pricing</a>
-      <a class="mpw-btn mpw-btn-ghost mpw-btn-sm" data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
+      <a class="btn btn-primary" data-app-path="/signup" href="https://metricspro-five.vercel.app/signup" data-trial-days="Start free for {d} days">Start free for 30 days</a>
     </nav>
   </div>
 </header>
 
-<main>
-  <!-- ── Hero. The thesis is stated in figures, because the product is about figures. ────────── -->
-  <section class="mpw-hero">
-    <div class="mpw-wrap">
-      <span class="mpw-label">Commission intelligence &amp; store operations &middot; prepaid retail</span>
-      <h1>One <em>settled</em> version of the month.</h1>
-      <p class="mpw-hero-sub">
-        Carrier statements, the register, inventory, the schedule and the cash drawer all describe the
-        same month — and rarely agree. MetricsPro reconciles them against each other, flags what
-        doesn&rsquo;t line up, and runs your pay, your P&amp;L and your stores off the result.
+<main id="top">
+
+<!-- 1 · HERO -->
+<section class="hero">
+  <div class="wrap">
+    <span class="eyebrow">The Connected Retail Platform</span>
+    <h1>Run multi-store retail with <em>confidence</em></h1>
+    <p class="sub">
+      One platform for commissions, point of sale, inventory, workforce and cash —
+      reconciled against each other, so the month settles once.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary btn-lg" data-app-path="/signup" href="https://metricspro-five.vercel.app/signup" data-trial-days="Start free for {d} days">Start free for 30 days</a>
+      <a class="btn btn-ghost btn-lg" href="#modules">See it working</a>
+    </div>
+    <p class="hero-fine" data-trial-days="No credit card required &#183; Every module, every store, for the whole {d} days">No credit card required &#183; Every module, every store, for the whole trial</p>
+    <div class="hero-art">
+      <svg viewBox="0 0 1120 400" role="img" aria-label="Illustration of the MetricsPro reconciliation view: a settled month with four store rows, a flagged discrepancy, and a bar chart of commission by store.">
+        <rect x="0" y="0" width="1120" height="52" fill="var(--surface-2)"/>
+        <line x1="0" y1="52" x2="1120" y2="52" stroke="var(--line)" stroke-width="1.5"/>
+        <circle cx="30" cy="26" r="5" fill="var(--amber)"/>
+        <text x="48" y="31" class="sv-ttl">Commission recon — July 2026</text>
+        <rect x="960" y="14" width="130" height="24" rx="5" fill="var(--green-bg)" stroke="var(--green-line)"/>
+        <text x="1025" y="30" class="sv-lbl" fill="var(--green)" text-anchor="middle">SETTLED</text>
+
+        <!-- left: store rows -->
+        <text x="30" y="86" class="sv-lbl-s">STORE</text>
+        <text x="250" y="86" class="sv-lbl-s">COMPUTED</text>
+        <text x="400" y="86" class="sv-lbl-s">PAID</text>
+        <text x="540" y="86" class="sv-lbl-s">STATUS</text>
+        <g>
+          <line x1="30" y1="96" x2="640" y2="96" stroke="var(--line-2)"/>
+          <text x="30" y="120" class="sv-lbl" fill="var(--ink)">Great Neck</text>
+          <text x="250" y="120" class="sv-lbl">$52,410</text><text x="400" y="120" class="sv-lbl">$52,410</text>
+          <rect x="540" y="107" width="66" height="18" rx="4" fill="var(--green-bg)"/>
+          <text x="573" y="120" class="sv-lbl-s" fill="var(--green)" text-anchor="middle">AGREES</text>
+          <line x1="30" y1="136" x2="640" y2="136" stroke="var(--line-2)"/>
+          <text x="30" y="160" class="sv-lbl" fill="var(--ink)">Yonkers</text>
+          <text x="250" y="160" class="sv-lbl">$48,930</text><text x="400" y="160" class="sv-lbl">$44,120</text>
+          <rect x="540" y="147" width="84" height="18" rx="4" fill="var(--red-bg)"/>
+          <text x="582" y="160" class="sv-lbl-s" fill="var(--red)" text-anchor="middle">SHORT $4,810</text>
+          <line x1="30" y1="176" x2="640" y2="176" stroke="var(--line-2)"/>
+          <text x="30" y="200" class="sv-lbl" fill="var(--ink)">Hempstead</text>
+          <text x="250" y="200" class="sv-lbl">$44,180</text><text x="400" y="200" class="sv-lbl">$44,180</text>
+          <rect x="540" y="187" width="66" height="18" rx="4" fill="var(--green-bg)"/>
+          <text x="573" y="200" class="sv-lbl-s" fill="var(--green)" text-anchor="middle">AGREES</text>
+          <line x1="30" y1="216" x2="640" y2="216" stroke="var(--line-2)"/>
+          <text x="30" y="240" class="sv-lbl" fill="var(--ink)">Jamaica</text>
+          <text x="250" y="240" class="sv-lbl">$46,140</text><text x="400" y="240" class="sv-lbl">$43,497</text>
+          <rect x="540" y="227" width="84" height="18" rx="4" fill="var(--red-bg)"/>
+          <text x="582" y="240" class="sv-lbl-s" fill="var(--red)" text-anchor="middle">SHORT $2,643</text>
+          <line x1="30" y1="256" x2="640" y2="256" stroke="var(--line)" stroke-width="1.5"/>
+          <text x="30" y="282" class="sv-lbl" fill="var(--ink)" font-weight="600">Total</text>
+          <text x="250" y="282" class="sv-lbl" fill="var(--ink)">$191,660</text>
+          <text x="400" y="282" class="sv-lbl" fill="var(--ink)">$184,207</text>
+          <rect x="540" y="269" width="84" height="18" rx="4" fill="var(--red-bg)"/>
+          <text x="582" y="282" class="sv-lbl-s" fill="var(--red)" text-anchor="middle">GAP $7,453</text>
+        </g>
+        <rect x="30" y="306" width="594" height="50" rx="7" fill="var(--green-bg)" stroke="var(--green-line)"/>
+        <text x="48" y="328" class="sv-lbl-s" fill="var(--green)">RECOVERED TO DATE</text>
+        <text x="48" y="347" class="sv-lbl" fill="var(--green)" font-weight="600">$5,120 appealed and paid &#183; 22 of 61 lines closed</text>
+
+        <!-- divider -->
+        <line x1="680" y1="70" x2="680" y2="370" stroke="var(--line)"/>
+
+        <!-- right: bar chart, commission by store -->
+        <text x="720" y="90" class="sv-lbl-s">COMMISSION BY STORE · COMPUTED VS PAID</text>
+        <g>
+          <rect x="720" y="110" width="200" height="15" rx="3" class="bar-n"/>
+          <rect x="720" y="110" width="200" height="15" rx="3" class="bar-g"/>
+          <text x="932" y="122" class="sv-lbl-s">Great Neck</text>
+          <rect x="720" y="145" width="187" height="15" rx="3" class="bar-n"/>
+          <rect x="720" y="145" width="168" height="15" rx="3" class="bar-r"/>
+          <text x="932" y="157" class="sv-lbl-s">Yonkers</text>
+          <rect x="720" y="180" width="169" height="15" rx="3" class="bar-n"/>
+          <rect x="720" y="180" width="169" height="15" rx="3" class="bar-g"/>
+          <text x="932" y="192" class="sv-lbl-s">Hempstead</text>
+          <rect x="720" y="215" width="176" height="15" rx="3" class="bar-n"/>
+          <rect x="720" y="215" width="166" height="15" rx="3" class="bar-r"/>
+          <text x="932" y="227" class="sv-lbl-s">Jamaica</text>
+        </g>
+        <line x1="720" y1="250" x2="1090" y2="250" class="ax"/>
+        <text x="720" y="285" class="sv-lbl-s">UNEXPLAINED, ITEMISED</text>
+        <rect x="720" y="296" width="370" height="60" rx="7" fill="var(--red-bg)" stroke="var(--red)" stroke-opacity=".3"/>
+        <text x="738" y="320" class="sv-lbl" fill="var(--red)">61 lines · rate mismatch, missing tier bonus,</text>
+        <text x="738" y="340" class="sv-lbl" fill="var(--red)">attach short-paid — each appealable</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- 2 · CAPABILITY STRIP (facts, not customer counts) -->
+<div class="trust">
+  <div class="wrap trust-in">
+    <span><b>16</b> modules on one spine</span>
+    <span>Multi-company &amp; multi-market</span>
+    <span>Carrier-neutral by configuration</span>
+    <span>iOS &amp; Android for the frontline</span>
+  </div>
+</div>
+
+<!-- 3 · THE NUMBERS -->
+<section class="sec">
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-v" data-count="184207" data-prefix="$">$184,207</div>
+        <div class="stat-k">Carrier statement</div>
+        <div class="stat-n">what they say they paid</div>
+      </div>
+      <div class="stat">
+        <div class="stat-v" data-count="191660" data-prefix="$">$191,660</div>
+        <div class="stat-k">Computed from sales</div>
+        <div class="stat-n">what the activations earned</div>
+      </div>
+      <div class="stat stat-flag">
+        <div class="stat-v" data-count="7453" data-prefix="$">$7,453</div>
+        <div class="stat-k">Unexplained</div>
+        <div class="stat-n">across 61 lines, itemised</div>
+      </div>
+      <div class="stat stat-ok">
+        <div class="stat-v" data-count="5120" data-prefix="$">$5,120</div>
+        <div class="stat-k">Recovered to date</div>
+        <div class="stat-n">appealed and paid</div>
+      </div>
+    </div>
+    <p class="stats-cap">One period, four stores, one carrier. Illustrative figures from sample data — not a customer's numbers.</p>
+  </div>
+</section>
+
+<!-- 4 · WHAT WE DO -->
+<section class="sec sec-alt" id="platform">
+  <div class="wrap">
+    <span class="eyebrow">What we do</span>
+    <h2 class="h2">Bringing clarity to a month that never adds up</h2>
+    <p class="lede">Five records describe the same month and rarely agree. Each of these is one of the places the disagreement is settled.</p>
+
+    <div class="rows">
+      <div class="row">
+        <div>
+          <span class="eyebrow">Commission intelligence</span>
+          <h3>Recompute what the carrier owes you</h3>
+          <p>Every residual, commission, SPIFF and reimbursement recalculated from carrier data — down to the rep, store and line — then compared against what actually arrived. Short-paid lines are itemised, not averaged away.</p>
+          <a class="lnk" href="#modules">See the recon →</a>
+        </div>
+        <div class="row-art">
+          <div class="mock">
+            <div class="mock-bar"><i></i>Commission recon · 2026-07</div>
+            <div class="mock-b">
+              <div class="mrow"><span>Port-in activations</span><span class="g">312 · $5,616</span><span class="chip c-ok">Agrees</span></div>
+              <div class="mrow"><span>Upgrades</span><span class="g">198 · $1,584</span><span class="chip c-ok">Agrees</span></div>
+              <div class="mrow"><span>Accessory attach</span><span class="g">$2,140</span><span class="chip c-bad">Short $890</span></div>
+              <div class="mrow"><span>Tier bonus</span><span class="g">$3,000</span><span class="chip c-bad">Missing</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <span class="eyebrow">Daily closing &amp; cash</span>
+          <h3>The drawer, the register and the deposit</h3>
+          <p>End-of-day cash, tender and deposit reconciliation, verified up the chain. A close that balances on paper but not at the bank is caught the same week, not the following month.</p>
+          <a class="lnk" href="#modules">See daily closing →</a>
+        </div>
+        <div class="row-art">
+          <div class="mock">
+            <div class="mock-bar"><i></i>Daily close · 2026-07-18</div>
+            <div class="mock-b">
+              <div class="mrow"><span>Cash counted</span><span class="g">$3,412.50</span></div>
+              <div class="mrow"><span>Card settled</span><span class="g">$11,804.22</span></div>
+              <div class="mrow"><span>Expected</span><span class="g">$15,216.72</span></div>
+              <div class="mrow"><span>Variance</span><span class="g">$0.00</span><span class="chip c-ok">Balanced</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <span class="eyebrow">Workforce &amp; payroll</span>
+          <h3>Overtime while the week can still change</h3>
+          <p>Scheduling, time clock, time off and coverage across the fleet, with hours measured against budget mid-week. The same hours feed payroll, so the number the manager watched is the number that pays.</p>
+          <a class="lnk" href="#modules">See the hours budget →</a>
+        </div>
+        <div class="row-art">
+          <div class="mock">
+            <div class="mock-bar"><i></i>Hours budget · week of 07-13</div>
+            <div class="mock-b">
+              <div class="mrow"><span>Great Neck</span><span class="bar"><i style="width:98%"></i></span><span class="g">166 / 168</span></div>
+              <div class="mrow"><span>Yonkers</span><span class="bar"><i style="width:100%;background:var(--red)"></i></span><span class="g">151 / 140</span></div>
+              <div class="mrow"><span>Hempstead</span><span class="bar"><i style="width:98%"></i></span><span class="g">124 / 126</span></div>
+              <div class="mrow"><span>Jamaica</span><span class="bar"><i style="width:99%"></i></span><span class="g">138 / 140</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <span class="eyebrow">Finance &amp; P&amp;L</span>
+          <h3>A P&amp;L built from operations, not re-keyed</h3>
+          <p>Gross profit, expenses, P&amp;L and balance sheet drawn from live operating data across every company and market. The commission line on the P&amp;L is the same figure the engine computed.</p>
+          <a class="lnk" href="#modules">See finance →</a>
+        </div>
+        <div class="row-art">
+          <div class="mock">
+            <div class="mock-bar"><i></i>P&amp;L · Q3 · all markets</div>
+            <div class="mock-b">
+              <div class="mrow"><span>Commission revenue</span><span class="g">$574,880</span></div>
+              <div class="mrow"><span>Hardware GP</span><span class="g">$188,214</span></div>
+              <div class="mrow"><span>Labour</span><span class="g">−$131,482</span></div>
+              <div class="mrow"><span>Operating profit</span><span class="g">$302,117</span><span class="chip c-ok">+8.4%</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- 4b · SEE IT IN ACTION — animated walkthrough (Colobbo runs a 1:21 video here) -->
+<section class="sec">
+  <div class="wrap">
+    <span class="eyebrow">See it in action</span>
+    <h2 class="h2">One month, end to end</h2>
+    <p class="lede">Five sources land, the engine reconciles them, and every report downstream reads the same settled figures. Watch it move.</p>
+
+    <div class="reel">
+      <div class="reel-top">
+        <span class="reel-dot"></span>
+        <b>Period 2026-07 · live walkthrough</b>
+        <button class="reel-btn" id="reel-toggle" aria-pressed="true">Pause</button>
+      </div>
+      <svg id="reel-svg" class="playing" viewBox="0 0 1120 340" role="img"
+           aria-label="Animated diagram: five data sources — carrier statements, the register, inventory, the schedule and the cash drawer — flow into the reconciliation engine, which sends settled figures out to the rep incentive report, payroll, the P and L, and store dashboards.">
+        <text x="60" y="34" class="sv-lbl-s">SOURCES LAND</text>
+        <text x="470" y="34" class="sv-lbl-s">THE ENGINE SETTLES</text>
+        <text x="855" y="34" class="sv-lbl-s">EVERYTHING READS FROM IT</text>
+
+        <!-- source nodes -->
+        <g>
+          <rect x="40" y="56" width="196" height="40" rx="7" class="sv-node"/><text x="58" y="81" class="sv-lbl">Carrier statements</text>
+          <rect x="40" y="108" width="196" height="40" rx="7" class="sv-node"/><text x="58" y="133" class="sv-lbl">The register</text>
+          <rect x="40" y="160" width="196" height="40" rx="7" class="sv-node"/><text x="58" y="185" class="sv-lbl">Inventory &amp; invoices</text>
+          <rect x="40" y="212" width="196" height="40" rx="7" class="sv-node"/><text x="58" y="237" class="sv-lbl">Schedule &amp; time clock</text>
+          <rect x="40" y="264" width="196" height="40" rx="7" class="sv-node"/><text x="58" y="289" class="sv-lbl">Cash drawer</text>
+        </g>
+
+        <!-- source -> engine -->
+        <path d="M236 76 C330 76 380 150 470 180" class="sv-line"/>
+        <path d="M236 128 C330 128 390 160 470 180" class="sv-line"/>
+        <path d="M236 180 L470 180" class="sv-line"/>
+        <path d="M236 232 C330 232 390 200 470 180" class="sv-line"/>
+        <path d="M236 284 C330 284 380 210 470 180" class="sv-line"/>
+
+        <!-- packets in -->
+        <circle class="pkt" cx="240" cy="76" r="4.5"/>
+        <circle class="pkt pkt-2" cx="240" cy="128" r="4.5"/>
+        <circle class="pkt pkt-3" cx="240" cy="180" r="4.5"/>
+        <circle class="pkt pkt-4" cx="240" cy="232" r="4.5"/>
+        <circle class="pkt pkt-5" cx="240" cy="284" r="4.5"/>
+
+        <!-- engine -->
+        <circle class="engine-ring" cx="560" cy="180" r="34"/>
+        <circle cx="560" cy="180" r="52" class="sv-eng"/>
+        <text x="560" y="172" class="sv-lbl" fill="var(--amber)" text-anchor="middle" font-weight="600">RECON</text>
+        <text x="560" y="190" class="sv-lbl" fill="var(--amber)" text-anchor="middle" font-weight="600">ENGINE</text>
+        <rect x="470" y="252" width="180" height="46" rx="7" fill="var(--red-bg)" stroke="var(--red)" stroke-opacity=".35"/>
+        <text x="560" y="272" class="sv-lbl-s" fill="var(--red)" text-anchor="middle">UNEXPLAINED</text>
+        <text x="560" y="290" class="sv-lbl" fill="var(--red)" text-anchor="middle" font-weight="600">$7,453 · 61 lines</text>
+
+        <!-- engine -> reports -->
+        <path d="M612 180 C700 180 760 90 860 90" class="sv-line"/>
+        <path d="M612 180 C700 180 770 140 860 142" class="sv-line"/>
+        <path d="M612 180 C700 180 770 190 860 194" class="sv-line"/>
+        <path d="M612 180 C700 180 760 250 860 246" class="sv-line"/>
+
+        <g>
+          <rect x="860" y="70" width="220" height="40" rx="7" class="sv-node"/><text x="878" y="95" class="sv-lbl">Rep incentive report</text>
+          <rect x="860" y="122" width="220" height="40" rx="7" class="sv-node"/><text x="878" y="147" class="sv-lbl">Payroll run</text>
+          <rect x="860" y="174" width="220" height="40" rx="7" class="sv-node"/><text x="878" y="199" class="sv-lbl">P&amp;L — commission line</text>
+          <rect x="860" y="226" width="220" height="40" rx="7" class="sv-node"/><text x="878" y="251" class="sv-lbl">Store dashboards</text>
+        </g>
+
+        <!-- packets out -->
+        <circle class="pkt-b" cx="620" cy="90" r="4.5"/>
+        <circle class="pkt-b pkt-2" cx="620" cy="142" r="4.5"/>
+        <circle class="pkt-b pkt-3" cx="620" cy="194" r="4.5"/>
+        <circle class="pkt-b pkt-4" cx="620" cy="246" r="4.5"/>
+      </svg>
+      <p class="reel-cap">Vector animation, not a recording — the figures are the same sample period used throughout this page.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 5 · INTERACTIVE CARD GRID -->
+<section class="sec" id="modules">
+  <div class="wrap">
+    <span class="eyebrow">The platform</span>
+    <h2 class="h2">Everything you need to run multi-store retail</h2>
+    <p class="lede">From the counter to the carrier statement — sixteen modules, one set of data. Turn on what you need now; add the rest when you are ready.</p>
+    <p class="hint">Click any card to see what it covers.</p>
+
+    <div class="cards">
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-recon"/></svg><h3>Commission intelligence</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Residuals</span><span class="g">$41,208</span></div>
+          <div class="mrow"><span>Activations</span><span class="g">$118,440</span></div>
+          <div class="mrow"><span>Unexplained</span><span class="g">$7,453</span><span class="chip c-bad">61 lines</span></div>
+        </div></div>
+        <p class="card-more">Every residual, commission, SPIFF and reimbursement recomputed from carrier data, down to the rep, store and line — with a discrepancy report you can appeal from.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-plan"/></svg><h3>Payout plans</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Tiered — reps</span><span class="chip c-ok">14 on plan</span></div>
+          <div class="mrow"><span>Management override</span><span class="chip c-ok">4 on plan</span></div>
+          <div class="mrow"><span>Multi-month spiff</span><span class="chip c-warn">Draft</span></div>
+        </div></div>
+        <p class="card-more">Build the plans you actually run — tiered, management, multi-month, installment — and pay from what the engine computed rather than a spreadsheet nobody owns.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-pos"/></svg><h3>Point of sale</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>iPhone 17 Pro 256</span><span class="g">$1,199.00</span></div>
+          <div class="mrow"><span>Port-in activation</span><span class="g">$0.00</span></div>
+          <div class="mrow"><span>Case + protection</span><span class="g">$89.98</span></div>
+          <div class="mrow"><span>Total</span><span class="g">$1,288.98</span><span class="chip c-ok">Tendered</span></div>
+        </div></div>
+        <p class="card-more">Register, customers, products, activations and special orders for the counter — feeding the same ledger the commission engine reads.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-inv"/></svg><h3>Inventory &amp; assets</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>On hand</span><span class="g">1,284 units</span></div>
+          <div class="mrow"><span>Aged &gt; 90 days</span><span class="g">112</span><span class="chip c-warn">Review</span></div>
+          <div class="mrow"><span>Owed to distributor</span><span class="g">$214,900</span></div>
+        </div></div>
+        <p class="card-more">Device ledger from purchase to sale, with aging, reconciliation against distributor invoices, and what you actually owe.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-people"/></svg><h3>Workforce</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>A. Rivera</span><span class="g">On shift</span><span class="chip c-ok">Clocked in</span></div>
+          <div class="mrow"><span>S. Brooks</span><span class="g">On shift</span><span class="chip c-ok">Clocked in</span></div>
+          <div class="mrow"><span>J. Taylor</span><span class="g">Off</span><span class="chip c-warn">Swap req.</span></div>
+        </div></div>
+        <p class="card-more">Scheduling, time clock, time off, shift swaps and coverage across the fleet — with unscheduled clock-ins gated for manager approval.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-pay"/></svg><h3>Payroll &amp; HR</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Hours approved</span><span class="g">578.0</span><span class="chip c-ok">4 stores</span></div>
+          <div class="mrow"><span>Incentive earned</span><span class="g">$24,880</span></div>
+          <div class="mrow"><span>Run status</span><span class="chip c-warn">Awaiting approval</span></div>
+        </div></div>
+        <p class="card-more">People records, onboarding, compliance and payroll runs fed directly by approved hours and earned incentives.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-cash"/></svg><h3>Daily closing</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Great Neck</span><span class="chip c-ok">Closed</span></div>
+          <div class="mrow"><span>Yonkers</span><span class="chip c-ok">Closed</span></div>
+          <div class="mrow"><span>Hempstead</span><span class="chip c-bad">Variance $42</span></div>
+        </div></div>
+        <p class="card-more">End-of-day cash, tender and deposit reconciliation, verified up the chain from rep to store manager to market.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-fin"/></svg><h3>Finance</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Revenue</span><span class="bar"><i style="width:100%"></i></span><span class="g">$763K</span></div>
+          <div class="mrow"><span>COGS</span><span class="bar"><i style="width:44%"></i></span><span class="g">$330K</span></div>
+          <div class="mrow"><span>Opex</span><span class="bar"><i style="width:17%"></i></span><span class="g">$131K</span></div>
+        </div></div>
+        <p class="card-more">Gross profit, expenses, P&amp;L and balance sheet by store, market, company or the whole group — built from live operating data.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-target"/></svg><h3>Targets &amp; coaching</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Month pace</span><span class="bar"><i style="width:78%"></i></span><span class="g">78%</span></div>
+          <div class="mrow"><span>Day 18 of 23</span><span class="g">Behind 4%</span><span class="chip c-warn">Coach</span></div>
+        </div></div>
+        <p class="card-more">Daily targets by store and rep tracked against pace, with coaching conversations built on the same numbers everyone else sees.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-eye"/></svg><h3>Store vision</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Traffic today</span><span class="g">214</span></div>
+          <div class="mrow"><span>Transactions</span><span class="g">61</span></div>
+          <div class="mrow"><span>Close rate</span><span class="g">28.5%</span><span class="chip c-ok">+3.1</span></div>
+        </div></div>
+        <p class="card-more">Live cameras, traffic counting and heat mapping that put foot traffic next to what was actually sold.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-plug"/></svg><h3>Integrations &amp; imports</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Carrier portal</span><span class="chip c-ok">Synced 06:00</span></div>
+          <div class="mrow"><span>Payment processor</span><span class="chip c-ok">Synced 06:04</span></div>
+          <div class="mrow"><span>Distributor feed</span><span class="chip c-warn">Retrying</span></div>
+        </div></div>
+        <p class="card-more">Carrier portals, processors and vendor feeds pulled in on a schedule instead of by hand, with lineage recorded for every source.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+
+      <button class="card" aria-expanded="false">
+        <div class="card-h"><svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg><h3>CRM, referrals &amp; helpdesk</h3><span class="tag">Live</span></div>
+        <div class="mock"><div class="mock-b">
+          <div class="mrow"><span>Open leads</span><span class="g">48</span></div>
+          <div class="mrow"><span>Referrals pending</span><span class="g">7</span><span class="chip c-warn">Approve</span></div>
+          <div class="mrow"><span>Tickets open</span><span class="g">3</span></div>
+        </div></div>
+        <p class="card-more">Leads and follow-ups so walk-in traffic gets worked, referral payouts tied back to the sale, and field ticketing that resolves the routine cases itself.</p>
+        <span class="card-cue">Click to explore ↗</span>
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- 6 · TABBED DEEP DIVE -->
+<section class="sec sec-alt">
+  <div class="wrap">
+    <span class="eyebrow">How it works</span>
+    <h2 class="h2">Land it, settle it, run everything off the result</h2>
+    <p class="lede">The order is real — nothing downstream is trustworthy until the sources have landed and been reconciled.</p>
+
+    <div class="tabs" role="tablist" aria-label="How it works">
+      <button class="tab" role="tab" aria-selected="true" data-p="p1">01 · Sources land</button>
+      <button class="tab" role="tab" aria-selected="false" data-p="p2">02 · The engine settles</button>
+      <button class="tab" role="tab" aria-selected="false" data-p="p3">03 · Everything reads from it</button>
+    </div>
+
+    <div class="panel" id="p1" role="tabpanel">
+      <div>
+        <h3>Sources land on a schedule</h3>
+        <p>Carrier portals, payment processors, distributors and your own uploads arrive without anyone downloading a file or re-keying a spreadsheet.</p>
+        <ul class="ticks">
+          <li>Scheduled pulls rather than manual exports</li>
+          <li>Every feed registered with its lineage</li>
+          <li>Late or missing sources are flagged, not assumed</li>
+          <li>Your own uploads sit alongside automated feeds</li>
+        </ul>
+      </div>
+      <div class="mock">
+        <div class="mock-bar"><i></i>Source status · 2026-07</div>
+        <div class="mock-b">
+          <div class="mrow"><span>Carrier commission statement</span><span class="chip c-ok">Landed</span></div>
+          <div class="mrow"><span>Carrier residual file</span><span class="chip c-ok">Landed</span></div>
+          <div class="mrow"><span>Processor settlement</span><span class="chip c-ok">Landed</span></div>
+          <div class="mrow"><span>Distributor invoices</span><span class="chip c-warn">2 days late</span></div>
+          <div class="mrow"><span>Store uploads</span><span class="chip c-ok">4 of 4</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="p2" role="tabpanel" hidden>
+      <div>
+        <h3>The engine settles them</h3>
+        <p>Sales, pay, inventory and cash are reconciled against each other. What doesn't agree is itemised down to the line, with the reason it was flagged.</p>
+        <ul class="ticks">
+          <li>Commission recomputed from your own sales data</li>
+          <li>Discrepancies itemised, never averaged away</li>
+          <li>Carrier statements treated as the authoritative record, and checked</li>
+          <li>Every figure traceable back to its source</li>
+        </ul>
+      </div>
+      <div class="mock">
+        <div class="mock-bar"><i></i>Discrepancy report · 61 lines</div>
+        <div class="mock-b">
+          <div class="mrow"><span>Rate mismatch</span><span class="g">28 lines · $3,104</span><span class="chip c-bad">Appeal</span></div>
+          <div class="mrow"><span>Missing tier bonus</span><span class="g">1 line · $3,000</span><span class="chip c-bad">Appeal</span></div>
+          <div class="mrow"><span>Attach short-paid</span><span class="g">19 lines · $890</span><span class="chip c-bad">Appeal</span></div>
+          <div class="mrow"><span>Timing — next cycle</span><span class="g">13 lines · $459</span><span class="chip c-warn">Watch</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="p3" role="tabpanel" hidden>
+      <div>
+        <h3>Everything reads from the result</h3>
+        <p>Dashboards, targets, payroll and the P&amp;L all draw on the same settled figures. One version of the month, in every seat.</p>
+        <ul class="ticks">
+          <li>Rep earnings match the payroll run</li>
+          <li>The P&amp;L commission line matches the engine</li>
+          <li>Reports scheduled to the people who need them</li>
+          <li>Access scoped down to the report and the column</li>
+        </ul>
+      </div>
+      <div class="mock">
+        <div class="mock-bar"><i></i>Reads from the settled month</div>
+        <div class="mock-b">
+          <div class="mrow"><span>Rep incentive report</span><span class="chip c-ok">In sync</span></div>
+          <div class="mrow"><span>Payroll run</span><span class="chip c-ok">In sync</span></div>
+          <div class="mrow"><span>P&amp;L — commission line</span><span class="chip c-ok">In sync</span></div>
+          <div class="mrow"><span>Store dashboards</span><span class="chip c-ok">In sync</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 7 · WHO IT'S FOR -->
+<section class="sec" id="who">
+  <div class="wrap">
+    <span class="eyebrow">Who it's for</span>
+    <h2 class="h2">Complex operations. One connected platform.</h2>
+    <p class="lede">Built for prepaid and postpaid wireless retail, and shaped by how dealers actually grow.</p>
+    <div class="grid3">
+      <div class="tile"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-store"/></svg><h3>Single-store dealers</h3><p>Get off spreadsheets without buying an enterprise rollout. Start with commission intelligence and add modules as the store grows.</p></div>
+      <div class="tile"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-stores"/></svg><h3>Multi-store operators</h3><p>Compare stores on the same figures, budget hours across the fleet, and see which locations are actually carrying the market.</p></div>
+      <div class="tile"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-co"/></svg><h3>Multi-company dealers</h3><p>Run several companies and markets side by side — kept apart in the data, rolled up when you want the whole picture.</p></div>
+      <div class="tile"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-agent"/></svg><h3>Master agents</h3><p>Reconcile what the carrier paid against what the sub-dealers earned, and settle both from the same computation.</p></div>
+      <div class="tile"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-multi"/></svg><h3>Multi-carrier dealers</h3><p>Carriers, categories and pay rules are configuration, not code — so carrying a second brand is a setup task, not a rebuild.</p></div>
+      <div class="tile"><svg class="ico ico-lg" aria-hidden="true"><use href="#i-audit"/></svg><h3>Operators under audit</h3><p>Access logs, approval trails and reconciliation reports mean any number on any report can be traced back to the source that produced it.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- 8 · PERSONAS -->
+<section class="sec sec-alt">
+  <div class="wrap">
+    <span class="eyebrow">Every seat</span>
+    <h2 class="h2">Different roles. The same truth.</h2>
+    <p class="lede">Access is scoped down to the report and the column, so everyone works from the same settled figures without seeing each other's.</p>
+    <div class="grid3">
+      <div class="tile">
+        <span class="tile-k">Owner</span><h3>The whole estate</h3>
+        <ul class="ticks"><li>P&amp;L across every company and market</li><li>Commission recovered and still outstanding</li><li>Store-by-store profitability on one basis</li></ul>
+      </div>
+      <div class="tile">
+        <span class="tile-k">Market manager</span><h3>Their stores</h3>
+        <ul class="ticks"><li>Targets against pace, by store and rep</li><li>Hours budget and labour cost mid-week</li><li>Approvals routed to them, with the thread attached</li></ul>
+      </div>
+      <div class="tile">
+        <span class="tile-k">Store manager</span><h3>The floor</h3>
+        <ul class="ticks"><li>Daily close, tender and deposit</li><li>Schedule, swaps and coverage</li><li>Stock on hand and what is aging</li></ul>
+      </div>
+      <div class="tile">
+        <span class="tile-k">Sales rep</span><h3>Their own earnings</h3>
+        <ul class="ticks"><li>Clock in and sell from the phone</li><li>Incentive breakdown line by line, before payday</li><li>Targets and coaching on the same numbers</li></ul>
+      </div>
+      <div class="tile">
+        <span class="tile-k">Payroll &amp; HR</span><h3>People and pay</h3>
+        <ul class="ticks"><li>Approved hours flow straight into the run</li><li>Earned incentive already computed</li><li>Onboarding and compliance records in one place</li></ul>
+      </div>
+      <div class="tile">
+        <span class="tile-k">Finance</span><h3>The books</h3>
+        <ul class="ticks"><li>P&amp;L built from operations, not re-keyed</li><li>Commission bookings tied to the computation</li><li>Company and entity rollups that reconcile</li></ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 9 · INTEGRATIONS -->
+<section class="sec">
+  <div class="wrap">
+    <span class="eyebrow">Integrations</span>
+    <h2 class="h2">Built to read the systems you already have</h2>
+    <p class="lede">Feeds are configured per organisation and pulled on a schedule. No rip-and-replace, and no carrier hardcoded into the product.</p>
+    <div class="ints">
+      <div class="int"><b>Carrier portals</b><span>Commission &amp; residual statements</span></div>
+      <div class="int"><b>Payment processors</b><span>Settlement &amp; tender files</span></div>
+      <div class="int"><b>Distributors</b><span>Device invoices &amp; catalogues</span></div>
+      <div class="int"><b>Your own uploads</b><span>CSV, on a schedule or ad hoc</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 10 · RESULTS (honest placeholder) -->
+<section class="sec sec-alt">
+  <div class="wrap">
+    <span class="eyebrow">Results</span>
+    <h2 class="h2">Proof goes here, once it is real</h2>
+    <div class="reserved">
+      <b>Reserved — customer proof</b>
+      <p>
+        Colobbo runs three customer results with quotes at this point in the page, and it is the
+        right place for them. Left empty deliberately: MetricsPro has no named customers to quote
+        yet, and inventing a recovery figure or a testimonial is the fastest way to lose a dealer
+        who checks. Fill this with the first real recovery number and a named quote.
       </p>
-      <div class="mpw-hero-cta">
-        <a class="mpw-btn mpw-btn-primary" data-app-path="/signup" href="https://metricspro-five.vercel.app/signup"
-           data-trial-days="Start free for {d} days">Start free for 30 days</a>
-        <a href="#demos" class="mpw-btn mpw-btn-ghost">See it working</a>
-      </div>
-      <p class="mpw-trial-line">
-        <span class="mpw-trial-pill" data-trial-days="{d} days free">30 days free</span>
-        <span data-trial-days="Every module, every store, for the length of the trial.">Every module, every store, for the length of the trial.</span>
-      </p>
-
-      <div class="mpw-strip">
-        <div class="mpw-strip-cell">
-          <div class="mpw-label">Carrier statement</div>
-          <div class="mpw-strip-val">$184,207</div>
-          <div class="mpw-strip-note">what they say they paid</div>
-        </div>
-        <div class="mpw-strip-cell">
-          <div class="mpw-label">Computed from sales</div>
-          <div class="mpw-strip-val">$191,660</div>
-          <div class="mpw-strip-note">what the activations earned</div>
-        </div>
-        <div class="mpw-strip-cell" data-tone="flag">
-          <div class="mpw-label">Unexplained</div>
-          <div class="mpw-strip-val">$7,453</div>
-          <div class="mpw-strip-note">across 61 lines, itemised</div>
-        </div>
-        <div class="mpw-strip-cell" data-tone="signal">
-          <div class="mpw-label">Recovered to date</div>
-          <div class="mpw-strip-val">$5,120</div>
-          <div class="mpw-strip-note">appealed and paid</div>
-        </div>
-      </div>
-      <p class="mpw-strip-caption">Illustrative figures from sample data — not a customer&rsquo;s numbers.</p>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- ── Method. Numbered because the order is real: nothing downstream works until the sources
-       land and settle. ────────────────────────────────────────────────────────────────────── -->
-  <section class="mpw-section">
-    <div class="mpw-wrap">
-      <span class="mpw-label">How it works</span>
-      <h2>Three moves, every month.</h2>
-      <p class="mpw-lede">What normally spans a dozen spreadsheets and half a dozen portals collapses into a single pass.</p>
-      <div class="mpw-steps">
-        <div class="mpw-step">
-          <span class="mpw-step-n">01</span>
-          <h3>Sources land on a schedule</h3>
-          <p>Carrier portals, payment processors, distributors and your own uploads arrive without anyone downloading a file.</p>
-        </div>
-        <div class="mpw-step">
-          <span class="mpw-step-n">02</span>
-          <h3>The engine settles them</h3>
-          <p>Sales, pay, inventory and cash are reconciled against each other. What doesn&rsquo;t agree is itemised, not averaged away.</p>
-        </div>
-        <div class="mpw-step">
-          <span class="mpw-step-n">03</span>
-          <h3>Everything reads from the result</h3>
-          <p>Dashboards, targets, payroll and the P&amp;L all draw on the same settled figures — one version of the month.</p>
-        </div>
-      </div>
+<!-- 11 · PRICING — the SLOT assets/site.js fills from Admin -> Pricing & Free Trial ------------->
+<section class="sec" id="pricing">
+  <div class="wrap" style="text-align:center">
+    <span class="eyebrow">Pricing</span>
+    <h2 class="h2" id="pricing-headline" data-trial-days="Start free for {d} days.">Start free for 30 days.</h2>
+    <p class="lede" style="margin-inline:auto" id="pricing-subhead"
+       data-trial-days="Every module, every store, for the whole {d} days. Choose how you continue after that.">
+      Every module, every store, for the whole 30 days. Choose how you continue after that.
+    </p>
+
+    <!-- Replaced by assets/site.js once a published price list comes back from the platform. What
+         is written here is the page WITHOUT that call: no invented number, trial first. -->
+    <div class="mpw-plans mpw-plans-1" id="pricing-cards">
+      <article class="mpw-plan mpw-plan-featured">
+        <span class="mpw-plan-flag" data-trial-days="{d}-day free trial">30-day free trial</span>
+        <h3>Priced against your operation</h3>
+        <p class="mpw-plan-tagline">
+          What you pay depends on how many stores and companies you run, so we quote it rather than
+          guess at a sticker price.
+        </p>
+        <ul class="mpw-plan-features">
+          <li data-trial-days="{d} days free, every module switched on">30 days free, every module switched on</li>
+          <li>Priced on your store and company count</li>
+          <li>Add modules as you need them</li>
+        </ul>
+        <a class="mpw-btn mpw-btn-primary mpw-plan-cta" data-app-path="/signup"
+           href="https://metricspro-five.vercel.app/signup" data-trial-days="Start free for {d} days">Start free for 30 days</a>
+      </article>
     </div>
-  </section>
+    <p class="mpw-plans-note" id="pricing-note"></p>
+    <p class="hero-fine">Questions about fit? <a href="mailto:sales@itsolutionsli.com" style="color:var(--amber)">Talk to us</a>.</p>
+  </div>
+</section>
 
-  <!-- ── Demos ───────────────────────────────────────────────────────────────────────────────── -->
-  <section class="mpw-section mpw-section-dark" id="demos">
-    <div class="mpw-wrap">
-      <span class="mpw-label">Demos</span>
-      <h2>Four screens, before you sign up for anything.</h2>
-      <p class="mpw-lede">
-        Real screens from the platform, running on sample data. Nothing here is a customer&rsquo;s numbers,
-        and nothing asks for your email.
-      </p>
-
-      <div class="mpw-demo-tabs" role="tablist" aria-label="Product demos">
-        <button class="mpw-demo-tab" role="tab" aria-selected="true" aria-controls="d-recon" id="t-recon">Commission recon</button>
-        <button class="mpw-demo-tab" role="tab" aria-selected="false" aria-controls="d-closing" id="t-closing">Daily closing</button>
-        <button class="mpw-demo-tab" role="tab" aria-selected="false" aria-controls="d-earnings" id="t-earnings">Rep earnings</button>
-        <button class="mpw-demo-tab" role="tab" aria-selected="false" aria-controls="d-staffing" id="t-staffing">Schedule &amp; hours</button>
-      </div>
-
-      <!-- Commission reconciliation -->
-      <div class="mpw-screen is-on" id="d-recon" role="tabpanel" aria-labelledby="t-recon">
-        <div class="mpw-screen-bar">
-          <span class="mpw-label">Incentives → Sales feed recon</span>
-          <span class="mpw-screen-period">Period 2026-07 · Boost · 9 stores</span>
-        </div>
-        <div class="mpw-screen-body">
-          <h4>Statement lines that don&rsquo;t match the activation</h4>
-          <table class="mpw-t">
-            <thead><tr>
-              <th>Line</th><th>Store</th><th>Rep</th><th>Category</th>
-              <th class="n">Expected</th><th class="n">Paid</th><th class="n">Variance</th><th>Status</th>
-            </tr></thead>
-            <tbody>
-              <tr><td class="mpw-num">A-4471</td><td>Great Neck</td><td>R. Patel</td><td>Promo · port-in</td><td class="n">$120.00</td><td class="n">$60.00</td><td class="n mpw-bad">−$60.00</td><td><span class="mpw-tag mpw-bad">Rate tier</span></td></tr>
-              <tr><td class="mpw-num">A-4488</td><td>Yonkers</td><td>M. Cruz</td><td>Bounty · month 2</td><td class="n">$45.00</td><td class="n">$0.00</td><td class="n mpw-bad">−$45.00</td><td><span class="mpw-tag mpw-bad">Not paid</span></td></tr>
-              <tr><td class="mpw-num">A-4502</td><td>Great Neck</td><td>R. Patel</td><td>Reimbursement</td><td class="n">$189.00</td><td class="n">$189.00</td><td class="n mpw-ok">$0.00</td><td><span class="mpw-tag mpw-ok">Settled</span></td></tr>
-              <tr><td class="mpw-num">A-4519</td><td>Hempstead</td><td>J. Alvarez</td><td>Promo · upgrade</td><td class="n">$80.00</td><td class="n">$80.00</td><td class="n mpw-ok">$0.00</td><td><span class="mpw-tag mpw-ok">Settled</span></td></tr>
-              <tr><td class="mpw-num">A-4536</td><td>Yonkers</td><td>M. Cruz</td><td>Residual · ATU</td><td class="n">$12.40</td><td class="n">$9.10</td><td class="n mpw-bad">−$3.30</td><td><span class="mpw-tag mpw-bad">Short</span></td></tr>
-            </tbody>
-            <tfoot><tr>
-              <td colspan="4">61 unmatched lines this period</td>
-              <td class="n">$191,660</td><td class="n">$184,207</td><td class="n mpw-bad">−$7,453</td><td></td>
-            </tr></tfoot>
-          </table>
-          <p class="mpw-screen-note">Every variance keeps the activation, the rep and the rate rule behind it, so an appeal is a filter rather than an investigation.</p>
-        </div>
-      </div>
-
-      <!-- Daily closing -->
-      <div class="mpw-screen" id="d-closing" role="tabpanel" aria-labelledby="t-closing" hidden>
-        <div class="mpw-screen-bar">
-          <span class="mpw-label">Daily closing → Tender reconciliation</span>
-          <span class="mpw-screen-period">Thu 2026-07-16 · Great Neck</span>
-        </div>
-        <div class="mpw-screen-body">
-          <h4>Counted against expected, by tender</h4>
-          <table class="mpw-t">
-            <thead><tr>
-              <th>Tender</th><th class="n">Register</th><th class="n">Counted</th><th class="n">Difference</th><th>Note</th>
-            </tr></thead>
-            <tbody>
-              <tr><td>Cash</td><td class="n">$2,418.00</td><td class="n">$2,398.00</td><td class="n mpw-bad">−$20.00</td><td>Short — pending manager review</td></tr>
-              <tr><td>Card</td><td class="n">$5,207.44</td><td class="n">$5,207.44</td><td class="n mpw-ok">$0.00</td><td>Matches processor batch</td></tr>
-              <tr><td>ePay</td><td class="n">$1,940.00</td><td class="n">$1,940.00</td><td class="n mpw-ok">$0.00</td><td>Matches daily detail</td></tr>
-              <tr><td>Store credit</td><td class="n">$85.00</td><td class="n">$85.00</td><td class="n mpw-ok">$0.00</td><td></td>
-            </tr>
-            </tbody>
-            <tfoot><tr><td>Day total</td><td class="n">$9,650.44</td><td class="n">$9,630.44</td><td class="n mpw-bad">−$20.00</td><td></td></tr></tfoot>
-          </table>
-          <p class="mpw-screen-note">A short drawer is raised the same evening, against the person who closed — not found six weeks later in a bank reconciliation.</p>
-        </div>
-      </div>
-
-      <!-- Rep earnings -->
-      <div class="mpw-screen" id="d-earnings" role="tabpanel" aria-labelledby="t-earnings" hidden>
-        <div class="mpw-screen-bar">
-          <span class="mpw-label">Incentives → Rep incentive report</span>
-          <span class="mpw-screen-period">Period 2026-07 · R. Patel · Great Neck</span>
-        </div>
-        <div class="mpw-screen-body">
-          <h4>What this rep earned, and from what</h4>
-          <table class="mpw-t">
-            <thead><tr><th>Component</th><th class="n">Units</th><th class="n">Rate</th><th class="n">Earned</th></tr></thead>
-            <tbody>
-              <tr><td>Activations — port-in</td><td class="n">31</td><td class="n">$18.00</td><td class="n">$558.00</td></tr>
-              <tr><td>Activations — new line</td><td class="n">44</td><td class="n">$12.00</td><td class="n">$528.00</td></tr>
-              <tr><td>Upgrades</td><td class="n">19</td><td class="n">$8.00</td><td class="n">$152.00</td></tr>
-              <tr><td>Accessories (attach 61%)</td><td class="n">—</td><td class="n">6.0%</td><td class="n">$214.80</td></tr>
-              <tr><td>KPI tier bonus — tier 3 of 4</td><td class="n">—</td><td class="n">—</td><td class="n">$300.00</td></tr>
-              <tr><td>Chargebacks — 2 deactivations</td><td class="n">2</td><td class="n">−$18.00</td><td class="n mpw-bad">−$36.00</td></tr>
-            </tbody>
-            <tfoot><tr><td colspan="3">Incentive earned this period</td><td class="n">$1,716.80</td></tr></tfoot>
-          </table>
-          <p class="mpw-screen-note">The rep sees the same breakdown you do, before payday — which is where most commission disputes stop starting.</p>
-        </div>
-      </div>
-
-      <!-- Schedule & hours -->
-      <div class="mpw-screen" id="d-staffing" role="tabpanel" aria-labelledby="t-staffing" hidden>
-        <div class="mpw-screen-bar">
-          <span class="mpw-label">Workforce → Hours budget</span>
-          <span class="mpw-screen-period">Week of 2026-07-13 · 4 stores</span>
-        </div>
-        <div class="mpw-screen-body">
-          <h4>Scheduled hours against budget, and what they cost</h4>
-          <table class="mpw-t">
-            <thead><tr>
-              <th>Store</th><th class="n">Budget</th><th class="n">Scheduled</th><th class="n">Actual</th><th class="n">Labour cost</th><th>Status</th>
-            </tr></thead>
-            <tbody>
-              <tr><td>Great Neck</td><td class="n">168</td><td class="n">166</td><td class="n">164.5</td><td class="n">$2,879</td><td><span class="mpw-tag mpw-ok">Within</span></td></tr>
-              <tr><td>Yonkers</td><td class="n">140</td><td class="n">151</td><td class="n">153.0</td><td class="n">$2,677</td><td><span class="mpw-tag mpw-bad">Over by 13</span></td></tr>
-              <tr><td>Hempstead</td><td class="n">126</td><td class="n">124</td><td class="n">121.0</td><td class="n">$2,117</td><td><span class="mpw-tag mpw-ok">Within</span></td></tr>
-              <tr><td>Jamaica</td><td class="n">140</td><td class="n">138</td><td class="n">139.5</td><td class="n">$2,441</td><td><span class="mpw-tag mpw-ok">Within</span></td></tr>
-            </tbody>
-            <tfoot><tr><td>Week</td><td class="n">574</td><td class="n">579</td><td class="n">578.0</td><td class="n">$10,114</td><td></td></tr></tfoot>
-          </table>
-          <p class="mpw-screen-note">Overtime is visible while the week can still be changed, not after payroll has run.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── Modules ─────────────────────────────────────────────────────────────────────────────── -->
-  <section class="mpw-section" id="modules">
-    <div class="mpw-wrap">
-      <span class="mpw-label">Modules</span>
-      <h2>Everything the business runs on.</h2>
-      <p class="mpw-lede">Each stands on its own and shares the same data. Turn on what you need now; add the rest when you are ready.</p>
-      <div class="mpw-mods">
-        <div class="mpw-mod"><span class="mpw-mod-n">01</span><div><h3>Commission intelligence</h3><p>Every residual, commission, SPIFF and reimbursement recomputed from carrier data — down to the rep, store and line.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">02</span><div><h3>Payout plans</h3><p>Build the plans you actually run — tiered, management, multi-month — and pay from what the engine computed.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">03</span><div><h3>Point of sale</h3><p>Register, customers, products, activations and special orders for the counter.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">04</span><div><h3>Inventory &amp; assets</h3><p>Device ledger from purchase to sale, with aging, reconciliation and what you owe your distributor.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">05</span><div><h3>CRM</h3><p>Leads, pipeline and follow-ups, so the traffic that walked in gets worked.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">06</span><div><h3>Targets &amp; coaching</h3><p>Daily targets by store and rep, tracked against pace, with coaching built on the same numbers.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">07</span><div><h3>Workforce</h3><p>Scheduling, time clock, time off, shift swaps and staffing coverage across the fleet.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">08</span><div><h3>Payroll &amp; HR</h3><p>People records, onboarding, compliance and payroll fed by hours and earned incentives.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">09</span><div><h3>Daily closing</h3><p>End-of-day cash, tender and deposit reconciliation, verified up the chain.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">10</span><div><h3>Finance</h3><p>Gross profit, expenses, P&amp;L and balance sheet built from live operating data — not a re-keyed export.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">11</span><div><h3>Store vision</h3><p>Live cameras, traffic and heat mapping that put foot traffic next to what was sold.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">12</span><div><h3>Referrals</h3><p>Referral capture, approval and payout, tied back to the sale it produced.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">13</span><div><h3>Approvals &amp; chat</h3><p>Requests route to the right manager, and the conversation about them stays with the record.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">14</span><div><h3>Helpdesk</h3><p>Ticketing for the field, with routine issues resolved automatically where they can be.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">15</span><div><h3>Integrations &amp; imports</h3><p>Carrier portals, processors and vendor feeds pulled in on a schedule instead of by hand.</p></div></div>
-        <div class="mpw-mod"><span class="mpw-mod-n">16</span><div><h3>Reporting &amp; notify</h3><p>One report centre, plus scheduled delivery of the numbers each person is meant to see.</p></div></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── Platform ────────────────────────────────────────────────────────────────────────────── -->
-  <section class="mpw-section" id="platform">
-    <div class="mpw-wrap">
-      <span class="mpw-label">The platform</span>
-      <h2>One spine under all of it.</h2>
-      <p class="mpw-lede">The modules are the surface. What makes them agree with each other is everything underneath.</p>
-      <div class="mpw-caps">
-        <div class="mpw-cap"><h3>Carrier-neutral by design</h3><p>Carriers, categories and pay rules are configured and mapped, never hardcoded — so a new carrier is a setup task, not a rebuild.</p></div>
-        <div class="mpw-cap"><h3>Multi-company, multi-market</h3><p>Run several companies, markets and stores side by side, kept apart in the data and rolled up when you want them.</p></div>
-        <div class="mpw-cap"><h3>Access you control</h3><p>Owners, market managers, store managers and reps each see their own slice — down to the report and the column.</p></div>
-        <div class="mpw-cap"><h3>Native mobile app</h3><p>iOS and Android for the frontline — time clock, POS, CRM and earnings — on the same backend as the web.</p></div>
-        <div class="mpw-cap"><h3>Built for audit</h3><p>Access logs, approval trails and reconciliation reports, so any number can be traced back to its source.</p></div>
-        <div class="mpw-cap"><h3>Fits your operation</h3><p>Rename modules, reorder the menu and switch off what you do not use. The platform speaks your company&rsquo;s language.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── Pricing ─────────────────────────────────────────────────────────────────────────────── -->
-  <section class="mpw-section" id="pricing">
-    <div class="mpw-wrap">
-      <span class="mpw-label">Pricing</span>
-      <h2 id="pricing-headline" data-trial-days="Start free for {d} days.">Start free for 30 days.</h2>
-      <p class="mpw-lede" id="pricing-subhead" data-trial-days="Every module, every store, for the whole {d} days. Choose how you continue after that.">
-        Every module, every store, for the whole 30 days. Choose how you continue after that.
-      </p>
-
-      <!-- Replaced by assets/site.js once a published price list comes back from the platform. What
-           is written here is the page WITHOUT that call: no invented number, trial first. -->
-      <div class="mpw-plans mpw-plans-1" id="pricing-cards">
-        <article class="mpw-plan mpw-plan-featured">
-          <span class="mpw-plan-flag" data-trial-days="{d}-day free trial">30-day free trial</span>
-          <h3>Priced against your operation</h3>
-          <p class="mpw-plan-tagline">
-            What you pay depends on how many stores and companies you run, so we quote it rather than
-            guess at a sticker price.
-          </p>
-          <ul class="mpw-plan-features">
-            <li data-trial-days="{d} days free, every module switched on">30 days free, every module switched on</li>
-            <li>Priced on your store and company count</li>
-            <li>Add modules as you need them</li>
-          </ul>
-          <a class="mpw-btn mpw-btn-primary mpw-plan-cta" data-app-path="/signup"
-             href="https://metricspro-five.vercel.app/signup"
-             data-trial-days="Start free for {d} days">Start free for 30 days</a>
-        </article>
-      </div>
-      <p class="mpw-plans-note" id="pricing-note"></p>
-    </div>
-  </section>
-
-  <section class="mpw-cta">
-    <div class="mpw-wrap">
-      <h2>Bring one month. See what settles.</h2>
-      <p data-trial-days="Load a single period of your carrier and store data and see what the engine makes of it — free for {d} days, before you change anything about how you operate.">
-        Load a single period of your carrier and store data and see what the engine makes of it — free
-        for 30 days, before you change anything about how you operate.
-      </p>
-      <div class="mpw-cta-row">
-        <a class="mpw-btn mpw-btn-primary" data-app-path="/signup" href="https://metricspro-five.vercel.app/signup"
-           data-trial-days="Start free for {d} days">Start free for 30 days</a>
-        <a class="mpw-btn mpw-btn-ghost" data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
-      </div>
-    </div>
-  </section>
+<section class="close">
+  <div class="wrap">
+    <h2>Ready to settle the month once?</h2>
+    <p>Load a single period of your carrier and store data and see what the engine makes of it — free for 30 days, before you change anything about how you operate.</p>
+    <a class="btn btn-primary btn-lg" data-app-path="/signup" href="https://metricspro-five.vercel.app/signup" data-trial-days="Start free for {d} days">Start free for 30 days</a>
+  </div>
+</section>
 </main>
 
-<footer class="mpw-footer">
-  <div class="mpw-wrap mpw-footer-in">
-    <span>&copy; <span id="year">2026</span> IT Solutions of LI Inc</span>
-    <div class="mpw-footer-links">
-      <a data-app-path="/signup" href="https://metricspro-five.vercel.app/signup">Get started</a>
-      <a data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a>
-      <a href="/legal/terms.html">Terms</a>
-      <a href="/legal/privacy.html">Privacy</a>
-      <a href="/legal/eula.html">EULA</a>
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-cols">
+      <div>
+        <a class="logo" href="#top">Metrics<em>Pro</em></a>
+        <p class="foot-blurb">The connected retail platform for multi-store wireless dealers.</p>
+      </div>
+      <div>
+        <h4>Modules</h4>
+        <ul>
+          <li><a href="#modules">Commission intelligence</a></li>
+          <li><a href="#modules">Payout plans</a></li>
+          <li><a href="#modules">Point of sale</a></li>
+          <li><a href="#modules">Inventory &amp; assets</a></li>
+          <li><a href="#modules">Workforce</a></li>
+          <li><a href="#modules">Payroll &amp; HR</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>More modules</h4>
+        <ul>
+          <li><a href="#modules">Daily closing</a></li>
+          <li><a href="#modules">Finance</a></li>
+          <li><a href="#modules">Targets &amp; coaching</a></li>
+          <li><a href="#modules">Store vision</a></li>
+          <li><a href="#modules">CRM &amp; referrals</a></li>
+          <li><a href="#modules">Reporting &amp; notify</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Who it's for</h4>
+        <ul>
+          <li><a href="#who">Single-store dealers</a></li>
+          <li><a href="#who">Multi-store operators</a></li>
+          <li><a href="#who">Multi-company dealers</a></li>
+          <li><a href="#who">Master agents</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Company</h4>
+        <ul>
+          <li><a href="#pricing">Pricing</a></li>
+          <li><a data-app-path="/login" href="https://metricspro-five.vercel.app/login">Sign in</a></li>
+          <li><a href="mailto:sales@itsolutionsli.com">sales@itsolutionsli.com</a></li>
+          <li><a href="/legal/terms.html">Terms</a></li>
+          <li><a href="/legal/privacy.html">Privacy</a></li>
+          <li><a href="/legal/subprocessors.html">Security</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-end">
+      <span>© 2026 IT Solutions of LI Inc. All rights reserved.</span>
+      <span class="r">13 Herzog Place, Hicksville, NY 11801</span>
     </div>
   </div>
 </footer>
 
-</div>
-<script src="/assets/config.js"></script>
-<script src="/assets/site.js"></script>
 <script>
-  document.getElementById('year').textContent = new Date().getFullYear()
-  // Demo tabs. Plain buttons + hidden panels, so the content is all in the HTML and a failed script
-  // leaves the first demo on screen rather than an empty section.
-  ;(function () {
-    var tabs = document.querySelectorAll('.mpw-demo-tab')
-    tabs.forEach(function (tab) {
-      tab.addEventListener('click', function () {
-        tabs.forEach(function (t) {
-          var on = t === tab
-          t.setAttribute('aria-selected', String(on))
-          var panel = document.getElementById(t.getAttribute('aria-controls'))
-          if (panel) { panel.classList.toggle('is-on', on); panel.hidden = !on }
-        })
+// Stat counters — count up once, on entry, and only for viewers who want motion.
+(function(){
+  var els = Array.prototype.slice.call(document.querySelectorAll('[data-count]'))
+  var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (still || !window.IntersectionObserver) return   // final values are already in the HTML
+  var fmt = function (n) { return '$' + Math.round(n).toLocaleString('en-US') }
+  var run = function (el) {
+    var target = Number(el.getAttribute('data-count')), t0 = null, ms = 900
+    var tick = function (t) {
+      if (t0 === null) t0 = t
+      var k = Math.min((t - t0) / ms, 1)
+      el.textContent = fmt(target * (1 - Math.pow(1 - k, 3)))
+      if (k < 1) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) { if (e.isIntersecting) { run(e.target); io.unobserve(e.target) } })
+  }, { threshold: .4 })
+  els.forEach(function (el) { io.observe(el) })
+})();
+
+// Cards expand in place.
+document.querySelectorAll('.card').forEach(function (c) {
+  c.addEventListener('click', function () {
+    c.setAttribute('aria-expanded', c.getAttribute('aria-expanded') === 'true' ? 'false' : 'true')
+  })
+});
+
+// Walkthrough play/pause — the animation is decorative, so pausing loses nothing.
+(function(){
+  var svg = document.getElementById('reel-svg'), btn = document.getElementById('reel-toggle')
+  if (!svg || !btn) return
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    svg.classList.remove('playing'); btn.textContent = 'Play'; btn.setAttribute('aria-pressed','false')
+  }
+  btn.addEventListener('click', function () {
+    var on = svg.classList.toggle('playing')
+    btn.textContent = on ? 'Pause' : 'Play'
+    btn.setAttribute('aria-pressed', String(on))
+  })
+})();
+
+// Tabs.
+(function(){
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'))
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (o) {
+        o.setAttribute('aria-selected', String(o === t))
+        document.getElementById(o.getAttribute('data-p')).hidden = (o !== t)
       })
     })
-  })()
+  })
+})();
 </script>
+
+<script src="/assets/config.js"></script>
+<script src="/assets/site.js"></script>
 </body>
 </html>
