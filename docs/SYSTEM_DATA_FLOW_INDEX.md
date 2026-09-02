@@ -260,6 +260,38 @@ commissions, expenses.
   ('Acc Sales'/'Acc GP') and `commcalc/gp/page.tsx` labels the column from it (no hardcoded
   strings). The basis flows consistently into `total_rev`/`net_profit`. Proof:
   `harness_gp_acc_basis.py`.
+- **Balance-sheet truths + the ON-DEMAND statement engine (owner report 2026-09-02, mig `933`):**
+  two NEW account modules. `account/balance_sheet.py` (PURE — proof
+  `harness_balance_sheet_truths.py`, run on the owner's live rows): (a) **unsold-phone inventory**
+  — `device_inventory_cells` builds the snapshot-coherent unsold set from
+  `inventory_aging_device` (on_hand at each store's latest as_of; store-NULL ghosts + superseded
+  rows EXCLUDED and reported — live LuxeLink: 556 July ghosts worth $129,454.66),
+  `apply_inventory_basis` resolves the BS line per `account_config.inventory_basis`
+  (`'report'` default = the emailed Inventory-Aging totals in `inventory_value`, byte-identical;
+  `'devices'` = the phone ledger; manual override always wins), `inventory_recon_rows` is the
+  per-store report↔devices tie-out served by `GET /account/inventory-recon` (LuxeLink delta
+  measured: report $173,057.07 vs devices $166,020.16); (b) **handset payables** — NEW
+  `handset_payable` BS liability (`auto_opt`): `handset_payable_bookings` books
+  `raw_ma_daily_tx` rows of the org's `account_config.handset_payable_order_types` families still
+  inside the vendor's OWN due-date window (`tx_date ≤ as-of < due_date`; money column
+  `retail_cost` ONLY; LuxeLink measured $169,013.57 outstanding); empty default books nothing;
+  Boost's device payable stays `owed_vip` (asset_ledger) — sources disjoint, no double count;
+  (c) **journal company designation** — `journal_company_matcher` (exact → squash → unique
+  prefix → unique 1-edit, ambiguous ⇒ None) + `journal_scope_entries` fix the scoping that
+  stranded the owner's $250k/$100k contributions + $210k loan (typed 'Luxelink'/'Novawave' into
+  the free-text store field) on Consolidated only. `account/statement_engine.py` (proof
+  `harness_statement_engine.py`): `statement(client, org, period, scope, kinds)` = FRESH
+  P&L/BS/**Cash Flow** for any org/period/scope (endpoint `GET /account/statement/{period}`;
+  notify report key `financial_statement` in `notify/finance_reports.py` — scheduled/on-demand
+  email+WhatsApp via the standard registry); `compute_and_store` SUPERSEDES
+  `engine.compute_and_store` on `POST /account/compute/{period}` and the `/account/run-due` sweep
+  (`autocompute.py` imports it aliased) — same snapshots + a stored `cash_flow` statement_type
+  (indirect method over BS deltas: spec payables=operating, fixtures=investing, journal
+  loans/owner capital=financing; manual-cash tie-out reported in `tie_delta`), journal read via
+  BOTH period spellings, `PUT /account/journal` now echoes `rejected` (reasoned) + `resolved`
+  (company attribution) instead of dropping rows silently. LuxeLink org seeds ship COMMENTED
+  behind the owner gate in mig `933` (mig-622 precedent). Roadmap of the remaining buildout:
+  `docs/FINANCE_PLATFORM_ROADMAP.md`.
 
 ---
 
@@ -809,12 +841,15 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
 | `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report + P&L, BOTH via the sticky carry-forward reader `expenses_effective.effective_expense_rows` (2026-09-02, §4); `_cr_resolve_store_expenses` |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
-| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store`), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail) |
+| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store`), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once), **P&L mig `314`** (`ma_store_pnl.ma_tx_bookings`: per-store via `account_id`→store index; MDF token rows → `mdf_income`; `'daily_tx'` month-spiff rows → `carrier_comm` `M<n>` detail), **BS mig `933`** (`balance_sheet.handset_payable_bookings` via `statement_engine._fetch_outstanding_tx`: configured `handset_payable_order_types` rows with `tx_date ≤ as-of < due_date` → the `handset_payable` liability; money column `retail_cost` ONLY) |
 | `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`), **P&L mig `314`** (`ma_store_pnl.ma_commission_bookings`: component heads per-store via `merchant_account_id`→store index; sheet spiffs suppressed under `pl_ma_month_spiff_source='daily_tx'`; MA device COGS store slice `device_cogs._ma_sold_cost`) |
 | `commcalc.raw_ma_fulfillment` | upload `/upload/ma_fulfillment` (slice-scoped replace, `ingest_slice.py` §2) | `device_cogs.ma_unit_price_map` (handset price list), MA overview/recon, **mig `314` account→store map source** (`tspid`+`business_address` → `ma_store_pnl.account_store_index`) |
 | `commcalc.ma_account_store_map` (mig `314`) | owner-pinned rows (SQL seed / future admin UI) | `ma_store_pnl.load_store_index` — wins over the fulfillment-derived map; covers accounts fulfillment never names (luxelink `170405`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
-| `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus |
+| `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) |
+| `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`); legacy `engine.compute_and_store` exact-period read; staleness probe |
+| `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview`, `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
+| `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933 knobs, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate |
 | `commcalc.name_map` | name-map UI | `calc_rep_commissions` (login→storeops name), rep-employee-map |
@@ -875,6 +910,11 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `GET /storeops/payroll-expenses/{period}`, `GET /storeops/payroll/approvals`, `GET /storeops/timeclock/attendance-exceptions`, `GET /storeops/accountability` | `storeops/router.py:7703` / `payroll_approval.py:469` / `storeops/router.py:4294` / `:4318` | §14 W3 |
 
 | `GET /account/pl/{period}`, `GET /account/balance-sheet/{period}` (`?scope=&stores=&markets=` — stored snapshot when unfiltered; store/market-filtered view via `statement_filter.filtered_statement`: canonical-union market resolution + company-scope AND-composition, 2026-09-02) | `account/router.py` (`get_pl`/`get_bs` → `_filtered_read`) | §4 P&L filter |
+| `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
+| `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
+| `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
+| `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
+| `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
@@ -908,6 +948,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | MDF / market spiff (P&L `mdf_income`) | `raw_ma_daily_tx.retail_cost` sign-flipped on rows whose `product_name` contains a `pl_mdf_product_tokens` token (luxelink: `premium store spiff`, $1,000/store) | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; `auto_opt` line, per store; retail_cost precedence residual → MDF → month-spiff) |
 | MA processor account → store | `raw_ma_fulfillment.tspid` × `business_address` (derived, ambiguous dropped) ∪ `ma_account_store_map` (override wins) | `ma_store_pnl.account_store_index`/`load_store_index` → `coa.build_inputs` `_ma_store` + `device_cogs._ma_sold_cost` (mig `314`; gated by `pl_ma_store_attribution`; unmapped accounts book company-wide) |
 | B2B sold vs MA paid (activation discrepancy) | sold: `SALES_DISPLAY_SOURCES` rows with non-blank `contract_type` (no swap/void), keyed on digit-normalized `serial_1`; paid: `raw_ma_commission.spiff_m1`+`rebate`/`device_margin` ∪ `raw_ma_daily_tx` month-1 / activation-order evidence (two-hop join, +1-month lookahead) | `ma_recon.reconcile_ma_activations` via `sale_installment_engine._gate_met_ma_tx` (mig `312`); unpaid rows → `discrepancy_results` `source='ma'` with rule attribution or `'no business rule configured'` |
+| Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
+| Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
@@ -971,6 +1013,14 @@ closing tender recon mig `103`,`104`,`106`,`111`.
     `harness_payroll_data_flow` proves the ungated computation. Proof:
     `harness_pay_visibility.py` §I (exec's the real route source; manager_up / permissioned /
     per-org `pay_visible_roles` / grant / pre-434 adaptive default / broken-token all covered).
+
+13. **`POST /account/run-due` has NO pg_cron registration** (unlike the email sweep, migs
+    `921`/`922`) — statements recompute only on a manual Compute click or an external caller.
+    Live consequence 2026-09-02: the owner's journal entries (03:05Z) sat invisible behind an
+    02:30Z snapshot. Follow-up: mig `934` self-scheduling (roadmap Phase 1).
+14. **Journal page has no company/store PICKER** — free-text entry is what stranded the owner's
+    equity/loan rows (mig-933 matcher now resolves typed designations server-side; the picker is
+    the lasting Option-B UI fix, roadmap Phase 2).
 
 ---
 
