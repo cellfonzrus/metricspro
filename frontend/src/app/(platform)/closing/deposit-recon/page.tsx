@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { api, fmt, localToday } from '@/lib/client'
+import { useAuth } from '@/lib/auth-context'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import { ExportColumn } from '@/lib/export'
 import ReportShell from '@/components/ReportShell'
@@ -98,6 +99,23 @@ export default function DepositReconPage() {
           category_id: null, category_name: 'Uncategorized', basis: null,
           cash_collected: 0, adjustments_applied: 0, expected_deposit: 0, total_deposited: u.total_deposited,
           variance: u.total_deposited, status: 'uncategorized', remaining_short: 0, deposits: u.deposits })
+      }
+      // OWNER 2026-09-02 ("cash deposit capture should be shown as a separate line item under cash
+      // deposit recon"): the pickup-flow deposit CAPTURE (slip photo + OCR amount recorded at the
+      // pickup) as its OWN line item on the day — evidence beside the bank_deposit numbers, never
+      // summed into expected/deposited (one number, one source).
+      if (day.pickup_deposit) {
+        const p = day.pickup_deposit
+        out.push({ store_code: day.store_code, store_address: day.store_address, close_date: day.close_date,
+          closing_cash_total: day.closing_cash_total, xreport_cash: day.xreport_cash, xreport_available: day.xreport_available,
+          category_id: null,
+          category_name: `Deposit capture (pickup slips)${p.missing_slip ? ' — ⚠ slip missing' : ''}`, basis: null,
+          cash_collected: 0, adjustments_applied: 0, expected_deposit: 0, total_deposited: p.amount,
+          variance: 0, status: p.missing_slip ? 'missing_slip' : 'capture', remaining_short: 0,
+          deposits: (p.deposits || []).map((d: any) => ({
+            amount: d.amount, employee_name: d.employee_name, created_at: d.deposited_at,
+            capture: true, kind: d.kind, has_slip: d.has_slip, slip_url: d.deposit_slip_url, flagged: d.flagged,
+          })) })
       }
     }
     return out
@@ -264,9 +282,13 @@ export default function DepositReconPage() {
                 </div>
                 {expanded[i] && r.deposits.map((d: any, j: number) => (
                   <div key={j} style={{ fontSize: 12, padding: '4px 0 4px 18px', color: 'var(--text2)' }}>
-                    {fmt(d.amount)} {d.is_supplemental ? '(supplemental) ' : ''}
-                    by {d.employee_name || d.recorded_by || '—'} at {d.created_at}
+                    {fmt(d.amount)} {d.is_supplemental ? '(supplemental) ' : ''}{d.capture ? `(${d.kind === 'billpay' ? 'bill-pay ' : ''}pickup capture) ` : ''}
+                    by {d.employee_name || d.recorded_by || '—'} at {d.created_at || '—'}
                     {d.short_reason ? ` — reason: ${d.short_reason}` : ''}
+                    {d.capture && (d.has_slip
+                      ? <> · <a href={d.slip_url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>slip</a></>
+                      : <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ no deposit slip on file</span>)}
+                    {d.flagged ? <span style={{ color: '#b45309' }}> · amount flagged</span> : null}
                   </div>
                 ))}
               </div>
@@ -274,6 +296,8 @@ export default function DepositReconPage() {
           </div>
         </>
       )}
+
+      <AccountabilityBoard dateFrom={dateFrom} dateTo={dateTo} />
 
       {shortModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
@@ -293,6 +317,163 @@ export default function DepositReconPage() {
               <button className="btn btn-secondary" onClick={async () => { await saveShortReason(false); }}>Save reason — that's final</button>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Deposit Accountability board (owner directive 2026-09-02, mig 943) ────────────────────────
+// "if the cash has been handed over to the management then a check box should be there for all
+// the dates of which the cash has been handed over to the management - then the management
+// should be able to confirm that the cash has been received by them in the system as a check
+// box and making the color green for the days the cash has been accounted for whether deposit
+// or handed over, it should be a similar workflow as did for the approval."
+// The approval-workflow mirror (payroll approvals precedent): pending → confirmed with actor +
+// timestamp. GREEN day ⇔ every picked-up envelope is accounted (deposited WITH slip, or handed
+// AND management-confirmed). The confirm checkbox is management-only (server-gated fail-closed,
+// same gate as Cash Recon (Management)); everyone in span sees the board read-only. Marking a
+// day "handed over" records the existing handed_to_mgmt disposition on each still-undisposed
+// picked-up envelope (the same POST /pickup/deposit machinery the pickup pages use — no second
+// write path); it is one-way here, like any disposition (undo stays a deliberate act).
+function AccountabilityBoard({ dateFrom, dateTo }: { dateFrom: string; dateTo: string }) {
+  const { user } = useAuth()
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [busyKey, setBusyKey] = useState('')
+  const [msg, setMsg] = useState('')
+
+  const load = useCallback(() => {
+    if (!dateFrom || !dateTo) return
+    setLoading(true)
+    api(`/api/v1/closing/deposit-accountability?start=${dateFrom}&end=${dateTo}`)
+      .then(setData).catch(() => setData(null)).finally(() => setLoading(false))
+  }, [dateFrom, dateTo])
+  useEffect(() => { load() }, [load])
+
+  const rows: any[] = data?.rows || []
+  const s = data?.summary || {}
+  const rowKey = (r: any) => `${r.day}|${r.store_code}`
+
+  async function confirmDay(r: any, checked: boolean) {
+    setBusyKey(rowKey(r)); setMsg('')
+    try {
+      const res: any = await api('/api/v1/closing/deposit-mgmt-confirm', { method: 'POST', body: JSON.stringify({
+        store_code: r.store_code, close_date: r.day, confirmed: checked, confirmed_by: user?.full_name || 'management',
+      }) })
+      setMsg(res.note ? `ℹ️ ${res.note}` : checked ? `✅ Receipt confirmed for ${r.store_name || r.store_code} · ${r.day}.` : `↩️ Confirmation revoked for ${r.store_name || r.store_code} · ${r.day}.`)
+      load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setBusyKey('') }
+  }
+
+  async function markHanded(r: any) {
+    const undisposed = (r.envelopes || []).filter((e: any) => e.state === 'undisposed')
+    if (!undisposed.length) return
+    setBusyKey(rowKey(r)); setMsg('')
+    try {
+      for (const e of undisposed) {
+        await api(e.kind === 'billpay' ? '/api/v1/closing/billpay-pickup/deposit' : '/api/v1/closing/pickup/deposit', {
+          method: 'POST', body: JSON.stringify({
+            store_code: r.store_code, close_date: r.day, employee_name: e.employee_name,
+            disposition: 'handed_to_mgmt', handed_to: user?.full_name || undefined,
+          }),
+        })
+      }
+      setMsg(`🤝 ${undisposed.length} envelope(s) marked handed to management for ${r.store_name || r.store_code} · ${r.day} — awaiting management confirmation.`)
+      load()
+    } catch (e: any) { setMsg('❌ ' + (e?.message || e)) }
+    finally { setBusyKey('') }
+  }
+
+  function dayStatus(r: any) {
+    if (r.green) return <span style={{ color: '#059669', fontWeight: 700 }}>✅ accounted</span>
+    const bits: React.ReactNode[] = []
+    if (r.missing_slip_rows) bits.push(<span key="s" style={{ color: '#dc2626', fontWeight: 600 }}>⚠ {r.missing_slip_rows} deposit(s) missing the slip</span>)
+    if (r.unconfirmed_rows) bits.push(<span key="c" style={{ color: '#b45309', fontWeight: 600 }}>🤝 awaiting mgmt confirmation</span>)
+    if (r.undisposed_rows) bits.push(<span key="u" style={{ color: 'var(--text2)' }}>{r.undisposed_rows} pickup(s) not yet deposited/handed</span>)
+    if (!bits.length) bits.push(<span key="n" style={{ color: 'var(--text3)' }}>no picked-up envelopes</span>)
+    return <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>{bits}</span>
+  }
+
+  const bcell: React.CSSProperties = { padding: '7px 10px', borderTop: '1px solid var(--border)', fontSize: 12.5, verticalAlign: 'middle' }
+  return (
+    <div className="card" style={{ padding: 14, marginTop: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>🟩 Deposit Accountability <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 12 }}>{dateFrom} → {dateTo}</span></div>
+          <div style={{ fontSize: 12, color: 'var(--text2)', maxWidth: 780 }}>
+            Every picked-up envelope must end accounted: <b>deposited with the bank deposit slip</b>, or <b>handed to
+            management and confirmed received in the system</b>. Green days are fully accounted; management confirms
+            with the checkbox (market manager and above — same workflow as approvals).
+          </div>
+        </div>
+        {data && (
+          <div style={{ fontSize: 12, color: 'var(--text2)' }}>
+            <b style={{ color: '#059669' }}>{s.green_days || 0}</b>/{s.store_days || 0} days green
+            {s.missing_slip_days ? <span style={{ color: '#dc2626' }}> · {s.missing_slip_days} missing slips</span> : null}
+            {s.awaiting_confirm_days ? <span style={{ color: '#b45309' }}> · {s.awaiting_confirm_days} awaiting confirm</span> : null}
+          </div>
+        )}
+      </div>
+      {msg && <div style={{ fontSize: 12, marginBottom: 8 }}>{msg}</div>}
+      {loading ? (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 30 }}><div className="spinner" /></div>
+      ) : rows.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--text3)', padding: '10px 0' }}>No cash/bill-pay pickups recorded in this range.</div>
+      ) : (
+        <div className="table-wrapper" style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ background: 'var(--surface2)' }}>
+              {['Day', 'Store', 'Picked up', 'Deposited', 'Handed over', 'Mgmt confirmed', 'Status'].map((h, i) =>
+                <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {rows.map((r: any) => {
+                const k = rowKey(r); const busy = busyKey === k
+                const undisposed = (r.envelopes || []).filter((e: any) => e.state === 'undisposed')
+                return (
+                  <tr key={k} style={{ background: r.green ? 'rgba(5,150,105,0.10)' : undefined }}>
+                    <td style={{ ...bcell, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{r.green ? '🟢 ' : ''}{r.day}</td>
+                    <td style={bcell}>{r.store_name || r.store_code}{r.market ? <span style={{ color: 'var(--text3)' }}> · {r.market}</span> : null}</td>
+                    <td style={{ ...bcell, fontWeight: 600 }}>{fmt(r.picked_total)} <span style={{ color: 'var(--text3)', fontWeight: 400 }}>({r.picked_envelopes})</span></td>
+                    <td style={bcell}>
+                      {r.deposited_rows
+                        ? <span>{fmt(r.deposited_total)}{r.missing_slip_rows
+                            ? <span style={{ color: '#dc2626', fontWeight: 600 }}> · ⚠ {r.missing_slip_rows} no slip</span>
+                            : <span style={{ color: '#166534' }}> · slips ✓</span>}
+                            {r.flagged_rows ? <span style={{ color: '#b45309' }}> · {r.flagged_rows} flagged</span> : null}</span>
+                        : <span style={{ color: 'var(--text3)' }}>—</span>}
+                    </td>
+                    <td style={bcell}>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+                             title={r.handed ? 'Cash was handed to management (recorded disposition — undo is a deliberate act on the pickup page)'
+                               : undisposed.length ? 'Mark the remaining picked-up envelope(s) of this day as handed to management'
+                               : 'No picked-up envelopes without a disposition'}>
+                        <input type="checkbox" checked={!!r.handed} disabled={busy || r.handed || !undisposed.length}
+                               onChange={() => markHanded(r)} />
+                        {r.handed ? <span>{fmt(r.handed_total)}</span> : <span style={{ color: 'var(--text3)' }}>{undisposed.length ? 'mark handed' : '—'}</span>}
+                      </label>
+                    </td>
+                    <td style={bcell}>
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+                             title={!r.handed_rows ? 'Nothing handed to management on this day'
+                               : data?.can_confirm ? 'Confirm (or revoke) that management received this cash — recorded with your name and time'
+                               : 'Market manager and above confirm receipt (same gate as Cash Recon Management)'}>
+                        <input type="checkbox" checked={!!r.mgmt_confirmed}
+                               disabled={busy || !r.handed_rows || !data?.can_confirm}
+                               onChange={ev => confirmDay(r, ev.target.checked)} />
+                        {r.mgmt_confirmed
+                          ? <span style={{ color: '#166534' }}>by {r.mgmt_confirmed_by || 'management'}{r.mgmt_confirmed_at ? ` · ${new Date(r.mgmt_confirmed_at).toLocaleString()}` : ''}</span>
+                          : <span style={{ color: r.handed_rows ? '#b45309' : 'var(--text3)' }}>{r.handed_rows ? 'pending' : '—'}</span>}
+                      </label>
+                    </td>
+                    <td style={bcell}>{dayStatus(r)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
