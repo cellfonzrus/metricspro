@@ -29,7 +29,11 @@ simply ignores a source it cannot read.
 from datetime import datetime, timezone
 
 from app.core.config import settings
-from app.modules.account import engine
+from app.modules.account import statement_engine as engine   # 2026-09-02: the sweep computes via
+# statement_engine.compute_and_store — same deterministic assembly + the balance-sheet truths
+# (handset payables, inventory basis, fixed journal company scoping) + the stored Cash Flow.
+# Aliased as `engine` so every call site below is unchanged; defaults byte-identical
+# (harness_statement_engine.py).
 from app.modules.account._period import period_keys, _MONTHS
 from app.modules.core.run_for_tenant import run_for_tenant, TenantNotRunnable, SCOPE_NONE
 
@@ -85,6 +89,11 @@ _PERIOD_SOURCES = [
 _POINT_IN_TIME_SOURCES = [
     ("asset_ledger",     ["updated_at", "created_at"]),
     ("inventory_value",  ["updated_at"]),
+    # The unsold-phone device ledger (owner defect #1, 2026-09-02): under the 'devices' inventory
+    # basis the Balance Sheet reads inventory_aging_device directly, so a fresh emailed Inventory
+    # Aging file must mark the open periods stale. For 'report'-basis orgs this at most co-triggers
+    # with the inventory_value upsert the same ingest already writes — no spurious churn.
+    ("inventory_aging_device", ["updated_at", "created_at"]),
     ("store_borrowings", ["updated_at", "created_at"]),
 ]
 

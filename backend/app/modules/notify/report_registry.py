@@ -40,6 +40,8 @@ from .report_filters import (ReportConfigError, business_today as _business_toda
 # in-process at build time), so importing it here adds no import-time weight and it stays provable
 # offline (harness_workforce_report_registry.py).
 from .workforce_reports import WORKFORCE_REPORTS
+# Finance entries (owner directive 2026-09-02) — same lazy-import convention as the workforce set.
+from .finance_reports import FINANCE_REPORTS
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -685,6 +687,10 @@ REPORTS = {
     # attendance / lateness — see workforce_reports.py for the builders, the shared pay-period
     # default, and the mig-434 pay-visibility posture of each entry.
     **WORKFORCE_REPORTS,
+    # Finance (owner directive 2026-09-02): `financial_statement` — a FRESH P&L + Balance Sheet +
+    # Cash Flow computed at send time by account.statement_engine (never "not computed yet");
+    # see finance_reports.py. The snapshot-reading account_pl / account_balance_sheet stay.
+    **FINANCE_REPORTS,
 }
 
 

@@ -9,7 +9,7 @@ from app.core.database import get_supabase
 from app.core.config import settings
 from app.core.run_secret import verify_notify_secret
 from app.core.schemas import LaxModel
-from app.modules.account import coa, engine, autocompute, report_gates
+from app.modules.account import coa, engine, autocompute, report_gates, statement_engine
 # Settings/imports audit (2026-07-26): importing this module REGISTERS the finance domain's checks with
 # platform-core's admin-attention feed (GET /core/attention). It is read-only diagnostics and is fully
 # guarded internally — if core.import_health is unavailable the import is inert, so finance never breaks
@@ -173,7 +173,7 @@ def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
     pm, py = coa.parse_period(period)
     rows = body.rows or []
     client = sb()
-    ins = []
+    ins, rejected = [], []
     for r in rows:
         statement = (r.get("statement") or "").strip()
         atype = (r.get("account_type") or "").strip()
@@ -182,11 +182,19 @@ def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
             amt = float(r.get("amount") or 0)
         except (TypeError, ValueError):
             amt = 0.0
+        # An entered amount that silently vanishes is a defect (owner report 2026-09-02) — a row
+        # this endpoint cannot accept is now REPORTED back with its reason, never dropped mutely.
         if statement not in ("pl", "balance_sheet") or not line:
+            rejected.append({"account_line": line or "(blank)",
+                             "reason": "missing account line" if not line
+                             else f"unknown statement '{statement}'"})
             continue
         if statement == "pl" and atype not in PL_TYPES:
+            rejected.append({"account_line": line, "reason": f"P&L type must be one of {sorted(PL_TYPES)}"})
             continue
         if statement == "balance_sheet" and atype not in BS_TYPES:
+            rejected.append({"account_line": line,
+                             "reason": f"Balance-sheet type must be one of {sorted(BS_TYPES)}"})
             continue
         ins.append({"org_id": org_id, "period": period, "period_month": pm, "period_year": py,
                     "company_id": r.get("company_id") or None,
@@ -198,7 +206,23 @@ def put_journal(period: str, body: PutJournalIn, org_id: str = ORG_ID):
         .eq("org_id", org_id).eq("period", period).execute()
     for i in range(0, len(ins), 500):
         client.schema("commcalc").table("journal_entries").insert(ins[i:i + 500]).execute()
-    return {"saved": len(ins), "period": period}
+    # Advisory: which entries resolved to a company (saved company_id, or the typed designation in
+    # the store/memo text — balance_sheet.journal_company_matcher). Display-only; the statements
+    # apply the same matcher at assembly time, so this just lets the UI confirm the attribution.
+    resolved = []
+    try:
+        from app.modules.account import balance_sheet as _bs
+        companies = (client.schema("commcalc").table("companies").select("id,name")
+                     .eq("org_id", org_id).execute().data) or []
+        co_name = {c["id"]: c["name"] for c in companies}
+        matcher = _bs.journal_company_matcher(companies)
+        for e in ins:
+            cid = _bs.entry_company(e, matcher)
+            resolved.append({"account_line": e["account_line"], "amount": e["amount"],
+                            "company": co_name.get(cid)})
+    except Exception:
+        resolved = []
+    return {"saved": len(ins), "period": period, "rejected": rejected, "resolved": resolved}
 
 
 # ── editable inventory value (real-time b2bsoft Inventory Aging → Balance Sheet) ───────────────
@@ -457,7 +481,12 @@ async def compute(period: str, org_id: str = ORG_ID):
         # platform-wide freeze from one request (same failure that hit /helpdesk/ai-assist).
         # run_in_threadpool moves the identical sync code to a worker thread: same calls, same order,
         # same exceptions, byte-identical numbers — the loop just stays free to serve other requests.
-        return await run_in_threadpool(engine.compute_and_store, sb(), org_id, period)
+        # 2026-09-02 (owner balance-sheet defects): compute now runs through
+        # statement_engine.compute_and_store — the same deterministic assembly PLUS the
+        # balance-sheet truths (handset payables, inventory basis, fixed journal company scoping,
+        # dual-spelling journal read) and a stored Cash Flow. engine.compute_and_store remains
+        # untouched for compatibility; defaults are byte-identical (harness_statement_engine.py).
+        return await run_in_threadpool(statement_engine.compute_and_store, sb(), org_id, period)
     except Exception as e:
         raise HTTPException(500, f"compute failed: {type(e).__name__}: {e}")
 
@@ -538,6 +567,52 @@ async def get_bs(period: str, scope: str = "consolidated", stores: str = "", mar
             "model": row.get("model"), "crosscheck_ok": row.get("crosscheck_ok"), **stale}
 
 
+@router.get("/cash-flow/{period}")
+async def get_cf(period: str, scope: str = "consolidated", org_id: str = ORG_ID):
+    """The stored derived Cash Flow snapshot (statement_type 'cash_flow', written by
+    statement_engine.compute_and_store alongside the P&L / Balance Sheet). Not computed yet ⇒
+    {"computed": false} with the staleness block, same contract as the other statement reads."""
+    require_org(org_id)
+    row = _read(period, "cash_flow", scope, org_id)
+    stale = autocompute.staleness(sb(), org_id, period, computed_at=(row.get("computed_at") if row else None))
+    if not row:
+        return {"period": period, "scope": scope, "computed": False, **stale}
+    return {"period": period, "scope": scope, "computed": True,
+            "statement": row["payload"], "model": row.get("model"), **stale}
+
+
+@router.get("/statement/{period}")
+async def on_demand_statement(period: str, scope: str = "consolidated",
+                              kinds: str = "pl,balance_sheet,cash_flow", org_id: str = ORG_ID):
+    """THE on-demand financial-statement service (owner directive 2026-09-02): a FRESH P&L /
+    Balance Sheet / Cash Flow for ANY org, period and scope, computed NOW from the live bookings —
+    no snapshot required, nothing persisted. `kinds` narrows the payload (comma-separated).
+    Platform-wide: other modules and the notify report registry call the same
+    statement_engine.statement() this endpoint fronts. Org-scoped, fail-closed on unknown scopes."""
+    require_org(org_id)
+    ks = tuple(k.strip() for k in (kinds or "").split(",")
+               if k.strip() in ("pl", "balance_sheet", "cash_flow")) or ("pl", "balance_sheet", "cash_flow")
+    try:
+        # Same SEV-1 worker-thread rule as /compute: statement_engine does bulk Supabase reads.
+        return await run_in_threadpool(statement_engine.statement, sb(), org_id, period, scope, ks)
+    except Exception as e:
+        raise HTTPException(500, f"on-demand statement failed: {type(e).__name__}: {e}")
+
+
+@router.get("/inventory-recon")
+async def inventory_recon(org_id: str = ORG_ID):
+    """Balance-sheet inventory tie-out (owner defect #1, 2026-09-02): per store, the emailed
+    Inventory Aging report totals (inventory_value.swept_value) vs the unsold-phone device ledger
+    (inventory_aging_device at each store's current snapshot) vs manual overrides vs the effective
+    BS value under the org's configured basis — with the unplaced/superseded device counts so a
+    ghost row can never hide. Read-only; feeds the reconciliation tab."""
+    require_org(org_id)
+    try:
+        return await run_in_threadpool(statement_engine.inventory_reconciliation, sb(), org_id)
+    except Exception as e:
+        raise HTTPException(500, f"inventory recon failed: {type(e).__name__}: {e}")
+
+
 @router.get("/overview/{period}")
 def overview(period: str, org_id: str = ORG_ID):
     """Headline numbers + the list of computed scopes for the dashboard + filter dropdowns."""
@@ -556,9 +631,12 @@ def overview(period: str, org_id: str = ORG_ID):
             s["revenue"] = sum(sec["subtotal"] for sec in p.get("sections", []) if sec["type"] == "revenue")
             s["gross_profit"] = p.get("gross_profit")
             s["net_income"] = p.get("net_income")
-        else:
+        elif r["statement_type"] == "balance_sheet":
             s["assets"] = p.get("assets_total")
             s["balanced"] = p.get("balanced")
+        elif r["statement_type"] == "cash_flow":
+            # additive since 2026-09-02 — must never clobber the BS columns above
+            s["cash_flow_tied"] = p.get("tied")
         s["computed_at"] = r.get("computed_at")
         s["model"] = r.get("model")
     return {"period": period, "computed": bool(rows), "companies": companies,
