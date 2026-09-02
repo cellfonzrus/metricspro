@@ -33,6 +33,24 @@ if [ -n "$stamped" ] && [ "$stamped" != "$today" ]; then
 fi
 
 echo "No placeholders left."
+
+# ── The two stylesheets must agree on their design tokens ────────────────────────────────────
+# home.css styles the homepage, styles.css the legal documents and 404. They deliberately carry
+# their own copy of the same :root token block rather than sharing a third file, which would cost
+# every page an extra request. The cost of a copy is drift — a palette changed in one place and
+# not the other, so the legal pages slowly stop matching the site. This compares them.
+# POSIX sh only: no process substitution, this script runs under dash in CI.
+if [ -f assets/home.css ] && [ -f assets/styles.css ]; then
+  _a=$(sed -n '/^:root{/,/^}$/p' assets/home.css   | tr -d ' \t')
+  _b=$(sed -n '/^:root{/,/^}$/p' assets/styles.css | tr -d ' \t')
+  if [ "$_a" != "$_b" ]; then
+    echo "FAIL: the :root token blocks in assets/home.css and assets/styles.css have drifted."
+    echo "      They are duplicated on purpose and must stay identical."
+    echo "      Copy the :root block from home.css into styles.css and re-run."
+    exit 1
+  fi
+fi
+
 echo ""
 echo "Reminder — the checks a script cannot do for you:"
 echo "  1. Has a lawyer in your state reviewed these documents?"

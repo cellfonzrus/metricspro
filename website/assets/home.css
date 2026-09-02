@@ -175,12 +175,8 @@ button{font:inherit;color:inherit}
 .int b{display:block;font-size:15.5px;font-weight:600}
 .int span{font-size:13.5px;color:var(--ink-3)}
 
-/* reserved proof */
-.reserved{margin-top:34px;border:1px dashed var(--amber-line);background:var(--amber-bg);
   border-radius:11px;padding:24px}
-.reserved b{display:block;font:600 11px/1 "IBM Plex Mono",monospace;letter-spacing:.12em;
   text-transform:uppercase;color:var(--amber);margin-bottom:10px}
-.reserved p{color:var(--ink-2);font-size:15.5px;max-width:70ch}
 
 /* closing */
 .close{background:var(--ink);color:var(--ground);padding:78px 0;text-align:center}
