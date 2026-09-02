@@ -36,10 +36,12 @@
    owner's "never showed up" staleness (entered 03:05Z, snapshot from 02:30Z) self-heals per tick.
 3. **Journal UX** — no company picker (owner typed company names into the free-text store field),
    no entry dates on BS items, silent row drops (fixed server-side; picker is UI Phase 2).
-4. **Charts** — trends exist for a few series; no general financial-analysis charting (revenue /
-   GP / opex / NI trends, per-company comparisons, expense composition bars, margin waterfalls).
-5. **Projections / forecasting** — nothing. No run-rate, no seasonality, no budget-vs-actual.
-6. **Valuation** — nothing. No trailing-metric view, no configurable multiples, no DCF-lite.
+4. ~~Charts~~ **closed (Phase 3, 2026-09-02)** — `/account/analysis` + the `/accounts/analysis`
+   page (trends, margins, expense composition, comparisons; UI awaiting owner preview).
+5. ~~Projections / forecasting~~ **core closed (Phase 4, mig 941)** — linear + seasonal-naive +
+   overrides + cash runway; budget-vs-actual still open.
+6. ~~Valuation~~ **core closed (Phase 5, mig 941)** — TTM multiples + asset floor + DCF w/
+   sensitivity, own `company_valuation` grant; UI assumption editors still open.
 7. **Ratios & health** — no margin/liquidity/efficiency ratio panel, no working-capital view.
 8. **Multi-period statements** — statements are one-period; no side-by-side months / quarter /
    YTD / trailing-twelve-month (TTM) assembly (the quarterly + royalty reporting seam).
@@ -61,33 +63,57 @@
   month-by-month columns + QTD/YTD/TTM rollups from the same inputs (feeds quarterly + royalty
   reporting and every chart below). Pure aggregation over per-period inputs; harnessed.
 
-### Phase 2 — finance UI truth fixes (Option-B preview PRs, small)
-- Journal page: **company picker** (from `/account/companies`) + store picker (RULE THREE:
-  pick-don't-type — the defect that stranded the owner's $560k of entries), show the server's
-  `rejected`/`resolved` echo after save, "Recompute now" button on save.
-- Balance-sheet page: Cash Flow tab (reads `GET /account/cash-flow/{period}`), handset-payable
-  drill (detail per order-type family), inventory line source chip (report/devices/manual).
-- Reconciliation tab: the inventory tie-out grid from `GET /account/inventory-recon`
-  (report vs unsold-phone ledger vs manual vs effective, with unplaced/superseded ghost counts).
+### Phase 2 — finance UI truth fixes (Option-B — SHIPPED 2026-09-02, awaiting owner preview)
+- ✅ Journal page: **company picker** (from `/account/companies`) + store picker (RULE THREE:
+  pick-don't-type — the defect that stranded the owner's $560k of entries), and the server's
+  `rejected`/`resolved` echo surfaced after save (red rejected panel with reasons + company
+  attributions). ▢ deferred: entry-date column, inline "Recompute now" button (the staleness
+  banner + mig-940 cron cover it).
+- ✅ Cash Flow: shipped as its own `/accounts/cash-flow` page (stored snapshot, scope select,
+  staleness banner, honest tie-out banner, export) + a link from the Balance-sheet page.
+  Handset-payable drill already renders via the BS line's `detail` map. ▢ deferred: per-line
+  source chip on the BS inventory line (the inventory page shows it per store).
+- ✅ Reconciliation: the inventory tie-out grid from `GET /account/inventory-recon` now renders
+  on `/accounts/inventory` (report vs unsold-phone ledger vs manual vs effective, with
+  unplaced/superseded ghost chips).
 
-### Phase 3 — financial analysis charts (backend series + Option-B UI)
-- One series endpoint: `GET /account/series?metrics=revenue,gross_profit,net_income,opex&months=N`
-  computed from stored statements (never a second math path) with per-company/store filters.
-- Charts (frontend, shared chart kit): revenue/GP/NI trend lines; expense-composition stacked
-  bars; per-company comparison bars; margin % trend; working-capital trend from BS snapshots.
-- Ratio panel on the dashboard: gross margin, opex ratio, net margin, current ratio,
-  inventory days (device ledger ÷ device COGS run-rate), payable days.
+### Phase 3 — financial analysis charts (SHIPPED 2026-09-02; UI awaiting owner preview)
+- ✅ ONE endpoint (supersets the planned `/account/series`): `GET /account/analysis?months=N` —
+  monthly P&L/BS trend + margins + OPEX composition + per-company/per-store comparison series,
+  all from stored statements (never a second math path; pure `account/analysis.py`, proof
+  `harness_financial_analysis.py`; `account_trends` grant).
+- ✅ Charts (`/accounts/analysis`, shared `TrendChart` kit + new additive `stack` prop):
+  revenue/GP/NI trend with projection overlay; expense-composition stacked bars; per-company +
+  top-store comparison bars; margin % trend; cash/assets/liabilities trend; headline tiles
+  (margins ride the payload).
+- ▢ deferred: current ratio / inventory days / payable days panel (needs BS line-level day-rate
+  math — a follow-up on the same payload), per-store filters on the analysis endpoint (the
+  per-scope series ship; the Trends hub keeps store filtering meanwhile).
 
-### Phase 4 — projections & forecasting (config, never code)
-- `account/projection_engine.py` (pure): run-rate + trailing-N-month weighted trend per P&L line,
-  optional per-org seasonality factors and growth overrides in `account_config`
-  (`projection_config JSONB`); output = the SAME statement payload shape, flagged
-  `projected: true`, so every statement surface renders projections for free.
-- Budget-vs-actual: per-org budget rows (per line/period) + variance columns; harnessed.
-- Cash runway: projected NI + working-capital deltas → months-of-cash at current burn.
+### Phase 4 — projections & forecasting (CORE SHIPPED 2026-09-02, mig 941)
+- ✅ `account/projection_engine.py` (pure, DETERMINISTIC — no LLM in the math): least-squares
+  linear trend over a trailing window + seasonal-naive (same-month-last-year × recent YoY level,
+  noted fallback), per-org `account_config.projection_config` (mig 941: method/window/horizon/
+  `growth_rate_override`/`expense_inflation` — config wins over fit); GP/NI DERIVED per projected
+  month; rows flagged `projected: true`; served by `GET /account/projection` and overlaid on the
+  analysis page. Proof: `harness_projection_engine.py`.
+- ✅ Cash runway: latest cash & equivalents ÷ avg projected burn (profitable trend ⇒ honest null).
+- ▢ deferred: budget-vs-actual (per-org budget rows + variance columns — needs a budget table
+  migration), per-line projection output in the full statement payload shape (today: the
+  headline P&L blocks; per-line follows the same engine).
 
-### Phase 5 — company valuation (defensible, assumption-driven)
-- `account/valuation.py` (pure) + `GET /account/valuation`:
+### Phase 5 — company valuation (CORE SHIPPED 2026-09-02, mig 941; UI awaiting owner preview)
+- ✅ `account/valuation.py` (pure) + `GET /account/valuation` (own default-closed
+  `company_valuation` grant): TTM revenue/SDE/EBITDA multiples (annualized <12 months, flagged;
+  zero/negative basis marked not-meaningful), asset-based floor, projection-fed DCF with a 3×3
+  rate × terminal-multiple sensitivity grid; summary = min/median/max across meaningful earnings
+  methods with the asset floor lifting the low end; every assumption + source cited; disclaimer
+  in every payload. Config: `account_config.valuation_config` (mig 941), house defaults 0.3–0.6×
+  revenue / 2.5–4× SDE / 3–5× EBITDA / 20–30% discount / 2–3× terminal / 36-month horizon.
+  Proof: `harness_valuation.py`. Valuation section renders on `/accounts/analysis`.
+- ▢ deferred: assumption EDITORS in the UI (today: config via `account_config.valuation_config`
+  rows; a `PUT /account/config` extension + editor panel is the follow-up).
+- Original spec (kept for reference):
   - **Revenue/earnings multiples** on trailing metrics (TTM revenue, TTM adjusted EBITDA ≈ NI +
     interest/taxes from journal `other` lines): `value = metric × multiple`, multiples per org in
     `account_config.valuation_config` (house defaults published in the doc, e.g. wireless-retail

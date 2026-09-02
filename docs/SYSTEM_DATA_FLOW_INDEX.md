@@ -397,6 +397,22 @@ commissions, expenses.
   payload always carries the full assumptions block + the "not an appraisal" disclaimer the UI
   must show. Proof: `harness_valuation.py` (closed-form DCF check to the cent).
 
+- **Finance UI wave (roadmap Phases 2–5 UI, 2026-09-02 — Option-B, awaiting owner preview):**
+  (a) NEW `/accounts/analysis` (Financial Analysis hub — reads `/account/analysis` +
+  `/account/projection` + `/account/valuation` ONLY; computes nothing): headline tiles, P&L trend
+  with dashed projection overlay, stacked OPEX composition (shared `TrendChart` gained an
+  additive `stack` prop), margin/cash trends, per-company + top-store comparison bars, projection
+  table + runway + assumptions, valuation range/methods/sensitivity + the disclaimer (valuation
+  section lock-chips on its own `company_valuation` 403). (b) NEW `/accounts/cash-flow` page
+  (stored `cash_flow` snapshot; scope select, staleness banner, honest tie-out banner, export).
+  (c) `/accounts/inventory` gained the read-only reconciliation grid (`/account/inventory-recon`:
+  report ↔ devices ↔ manual ↔ effective + ghost chips). (d) `/accounts/journal` — RULE THREE
+  pickers: company picker (`/account/companies`) + store picker (canonical roster; legacy typed
+  values still render), and the PR-#179 server echo surfaced (REJECTED rows with reasons in red,
+  `resolved` company attributions confirmed — nothing silently dropped). Registered in nav +
+  route-module map + `DATA_GRANTS` (`company_valuation`) in `rbac.ts` and the Reports directory
+  (`reports.ts`).
+
 ---
 
 ## 5. Daily Targets & actuals

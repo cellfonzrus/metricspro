@@ -57,6 +57,8 @@ export const REPORT_CATEGORIES: { category: string; reports: ReportDef[] }[] = [
     { href: '/accounts/recon', label: 'Reconciliation', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/residual-per-sub', label: 'Residual per Subscriber', module: 'accounts', scopes: ['all', 'market'] },
     { href: '/accounts/trends', label: 'Trends (all metrics)', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/analysis', label: 'Financial Analysis (charts · projections · valuation)', module: 'accounts', scopes: ['all', 'market'] },
+    { href: '/accounts/cash-flow', label: 'Cash Flow Statement', module: 'accounts', scopes: ['all', 'market'] },
   ] },
   { category: 'StoreOps', reports: [
     { href: '/storeops/reports', label: 'Hours / Payroll Reports', module: 'storeops', scopes: ['all', 'market'] },
