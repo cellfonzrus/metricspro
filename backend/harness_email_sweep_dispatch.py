@@ -165,6 +165,9 @@ def run():
               any('last_status' in u[2] and 'sweep crashed' in str(u[2].get('last_status')) for u in crash_upds))
         check("worker never re-touches next_run_at", all('next_run_at' not in u[2] for u in crash_upds))
         check("freshness monitor ran once per swept org", sorted(monitored) == sorted([HOUSE, TEN]))
+        locks = [u[2].get('sweeping_since') for u in crash_upds if 'sweeping_since' in u[2]]
+        check("lock stamped at start and cleared at end for BOTH mailboxes (crash included)",
+              len(locks) == 4 and locks[0] and locks[1] is None and locks[2] and locks[3] is None)
 
         print("── 4. empty due set: fast no-op, nothing dispatched ────────────────────────────")
         fake.rows = []
@@ -186,6 +189,50 @@ def run():
     finally:
         (R.sb, R._run_email_sweep, R._data_freshness_monitor, R.verify_notify_secret,
          R._dispatch_email_sweep_worker) = real
+
+    print("── 6. per-mailbox lock: a mailbox already mid-sweep is skipped, stale locks are not ─")
+    import datetime as _dt
+    fresh = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=5)).isoformat()
+    stale = (_dt.datetime.now(_dt.timezone.utc)
+             - _dt.timedelta(minutes=R.EMAIL_SWEEP_LOCK_STALE_MINUTES + 30)).isoformat()
+    check("fresh sweeping_since reads as in progress", R._email_sweep_in_progress({'sweeping_since': fresh}))
+    check("stale sweeping_since reads as NOT in progress (crash self-heals)",
+          not R._email_sweep_in_progress({'sweeping_since': stale}))
+    check("absent/garbage stamps read as NOT in progress (fail-open)",
+          not R._email_sweep_in_progress({}) and not R._email_sweep_in_progress({'sweeping_since': 'nope'}))
+    fake2 = _FakeSB([])
+    swept2, R.sb, R._run_email_sweep = [], (lambda: fake2), None
+
+    async def sweep2(org_id, account='default'):
+        swept2.append((org_id, account))
+        return {"ok": True}
+    R._run_email_sweep = sweep2
+    locked = dict(_due(HOUSE, 'default'), sweeping_since=fresh)
+    free = dict(_due(TEN, 'default'))
+    asyncio.run(R._email_sweep_due_worker([locked, free]))
+    check("locked mailbox skipped, free mailbox still swept", swept2 == [(TEN, 'default')])
+    lock_writes = [u for u in fake2.log if u[0] == 'update' and 'sweeping_since' in u[2]]
+    lock_orgs = {v for u in fake2.log if u[0] == 'eq' and u[2] == 'org_id' for v in [u[3]]}
+    check("only the swept mailbox's row is stamped (stamp + clear), never the locked one's",
+          len(lock_writes) == 2 and lock_writes[0][2]['sweeping_since']
+          and lock_writes[1][2]['sweeping_since'] is None and lock_orgs == {TEN})
+
+    print("── 7. retry cap: exhausted files stop being re-fetched — visibly, never silently ──")
+    K = R.SWEEP_MAX_NONTERMINAL_ATTEMPTS
+    seen = ([{'message_id': 'm-ok', 'filename': 'a.xlsx', 'rows_saved': 5, 'status': 'ok'}]
+            + [{'message_id': 'm-dup', 'filename': 'b.xlsx', 'rows_saved': 0, 'status': 'duplicate'}]
+            + [{'message_id': 'm-retry', 'filename': 'c.xlsx', 'rows_saved': 0, 'status': 'skipped'}] * (K - 1)
+            + [{'message_id': 'm-dead', 'filename': 'd.xlsx', 'rows_saved': 0, 'status': 'error'}] * K)
+    already, retryable, exhausted = R._sweep_dedup_sets(seen, lambda r: (r['message_id'], r['filename']))
+    check("really-ingested and terminal-zero files are done",
+          {('m-ok', 'a.xlsx'), ('m-dup', 'b.xlsx')} <= already)
+    check("a file below the cap keeps retrying", ('m-retry', 'c.xlsx') in retryable)
+    check("a file AT the cap is exhausted and no longer fetched",
+          ('m-dead', 'd.xlsx') in exhausted and ('m-dead', 'd.xlsx') in already
+          and ('m-dead', 'd.xlsx') not in retryable)
+    check("giving up is visible in the status line",
+          f"given up after {K} failed attempts" in R._sweep_status_suffix([], exhausted=len(exhausted)))
+    check("no exhausted files → no give-up line", 'given up' not in R._sweep_status_suffix([], exhausted=0))
 
     print(f"\n{_pass} passed, {_fail} failed")
     if FAILED:
