@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { api, fmt, localToday } from '@/lib/client'
 import { apiCached, LOOKUP } from '@/lib/cache'
 import EntityPicker, { EntityOption } from '@/components/EntityPicker'
+import { startTour } from '@/lib/tours'
 
 // Rep-facing in-app closing form — one row per rep per day. Posts to /closing/row (source='manual').
 // Money is captured by the 6 tender types that mirror the POS X-report (cash / credit / external CC /
@@ -102,6 +103,7 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   const [cv, setCv] = useState<Record<string, string>>({})    // value per configured field_key
   const [emps, setEmps] = useState<any[]>([])                 // employee roster (RULE THREE picker, see below)
   const [cats, setCats] = useState<any[]>([])                 // expense categories (mig 506, lazy-seeded)
+  const [coach, setCoach] = useState<any>(null)               // entry-quality coaching banner (mig 937)
   const [expLines, setExpLines] = useState<ExpLine[]>([])
 
   const set = (patch: Partial<State>) => setF(p => ({ ...p, ...patch }))
@@ -212,6 +214,18 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
   useEffect(() => { apiCached('/api/v1/storeops/employees?all_company=true', LOOKUP).then((r: any) => setEmps(Array.isArray(r) ? r : (r?.employees || []))).catch(() => {}) }, [])
   // Expense categories (mig 506, EEP) — lazy-seeded 5 presets on first call.
   useEffect(() => { api('/api/v1/closing/expense-categories').then((d: any) => setCats(d?.categories || [])).catch(() => setCats([])) }, [])
+  // Entry-quality coaching (owner 2026-09-02, mig 937): once the rep's name is known, ask whether
+  // their entries were incorrect for N days in a row — if so show the guidance banner + the
+  // "Walk me through" tour launcher. Best-effort: any failure just means no banner.
+  useEffect(() => {
+    const name = (f.employee_name || '').trim()
+    if (!name) { setCoach(null); return }
+    let dead = false
+    api(`/api/v1/closing/entry-quality/me?employee_name=${encodeURIComponent(name)}`)
+      .then((d: any) => { if (!dead) setCoach(d) })
+      .catch(() => { if (!dead) setCoach(null) })
+    return () => { dead = true }
+  }, [f.employee_name])
   // Envelope config (mig 507/510) — org default merged with this store's override, re-fetched whenever
   // the picked store changes. `require_photo_if_cash` is OFF unless a tenant explicitly opted in (or
   // the migration hasn't run yet) — see submit()'s gate below.
@@ -363,6 +377,16 @@ export default function ClosingSubmitForm({ defaultEmployeeName = '', onSubmitte
 
   return (
     <>
+      {coach?.needs_walkthrough && (
+        <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: '#fffbeb', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 20 }}>🎓</span>
+          <div style={{ flex: 1, minWidth: 220, fontSize: 13, color: '#92400e' }}>
+            {coach.message || 'Your recent closing entries needed correction — take the quick walkthrough so tonight’s entry goes in right.'}
+          </div>
+          <button className="btn btn-primary" style={{ fontSize: 13 }}
+            onClick={() => startTour(coach.tour_slug || 'closing-submit')}>🎓 Walk me through it</button>
+        </div>
+      )}
       {resumeDraft && (
         <div className="card" style={{ padding: 14, marginBottom: 12, border: '1px solid var(--amber)', background: '#fffbeb', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 20 }}>💾</span>

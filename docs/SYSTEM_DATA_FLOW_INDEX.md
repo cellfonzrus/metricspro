@@ -627,6 +627,22 @@ closing tender recon mig `103`,`104`,`106`,`111`.
   the live endpoint). Frontend `/closing/envelope-report` (`closing/envelope-report/page.tsx`;
   NAV Daily Closing group + REPORT_DIRECTORY 'ops').
 
+- **Closing entry-quality coaching (owner directive 2026-09-02, mig `937`):** "a training walkthru
+  for an employee if their data is not entered correctly for a second day in a row". Detection is
+  PURE (`closing/entry_quality.py`, proof `harness_closing_entry_quality.py`): signals
+  `dm_corrected` (the store-day the employee submitted on was DM-verified WITH a correction) and
+  `sent_to_review` (the row hit `auto_accepted`/`mgmt_flag`); an employee with
+  `threshold_days` (house default 2) CONSECUTIVE incorrect days gets the walkthrough. Config
+  per org (`commcalc.closing_entry_quality_config`, mig `937`: enabled / threshold_days /
+  signals / notify_channel none|email|whatsapp|both / message_template / tour_slug — default the
+  EXISTING Training-Center tour `closing-submit`); idempotency log
+  `commcalc.closing_entry_coaching` (one row per employee × streak_end). Endpoints:
+  `GET /closing/entry-quality` (management report), `GET /closing/entry-quality/me` (rep banner —
+  NO dollar amounts, money-secrecy preserved), `POST /closing/entry-quality/run-due`
+  (NOTIFY_RUN_SECRET cron sweep; email via notify channels when the org opts in) +
+  `/entry-quality/run` (manual, one org). Frontend: guidance banner + "Walk me through"
+  (`startTour(tour_slug)`) on `ClosingSubmitForm.tsx`.
+
 ---
 
 ## 13. Org hierarchy & store resolution
@@ -978,6 +994,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
+| `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 

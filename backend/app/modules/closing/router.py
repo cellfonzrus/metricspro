@@ -26,6 +26,7 @@ from . import deposit_recon
 from . import verified_overlay as _verified_overlay
 from . import verification_audit as _verification_audit
 from . import envelope_report as envelope_report_mod
+from . import entry_quality
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -4331,6 +4332,193 @@ def decide_envelope_chargeback(payload: DecideEnvelopeChargebackIn,
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "chargeback": row}
+
+
+# ── Closing entry-quality coaching (owner directive 2026-09-02, mig 937) ────────────────────────
+# "Need a training walkthru for an employee if their data is not entered correctly for a second
+# day in a row… guiding them how to correct it." Pure detection in closing/entry_quality.py
+# (proof harness_closing_entry_quality.py); thresholds/signals/message/tour are per-org config
+# with house defaults (RULE TWO).
+def _entry_quality_cfg(client, org_id):
+    row = None
+    try:
+        rows = (client.schema("commcalc").table("closing_entry_quality_config").select("*")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        row = rows[0] if rows else None
+    except Exception:
+        row = None                                   # pre-937 ⇒ house defaults
+    return entry_quality.resolve_config(row)
+
+
+def _entry_quality_scan(client, org_id, date_from, date_to, cfg):
+    """(days_by_emp, rows_scanned) — the shared detection read: the window's daily_closing rows +
+    their store-days' verification rows, through the pure signal classifier."""
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select("close_date,store_code,employee_name,auto_accepted,mgmt_flag")
+            .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+            .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+    dates = sorted({str(r.get("close_date") or "")[:10] for r in rows if r.get("close_date")})
+    vers = {}
+    if dates:
+        try:
+            vrows = (client.schema("commcalc").table("daily_closing_verification").select("*")
+                     .eq("org_id", org_id).in_("close_date", dates).execute().data) or []
+            vers = {(v.get("store_code"), str(v.get("close_date"))[:10]): v for v in vrows}
+        except Exception:
+            vers = {}
+    return entry_quality.incorrect_days(rows, vers, cfg["signals"]), len(rows)
+
+
+@router.get("/entry-quality")
+def entry_quality_report(date_from: str = None, date_to: str = None,
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Management view: per-employee incorrect-entry days + consecutive streaks over a date range
+    (defaults to the last 14 days). Read-only; span keyset applies through the underlying rows'
+    stores implicitly (reasons carry NO dollar amounts — nothing here leaks B2B money)."""
+    require_org(org_id)
+    client = sb()
+    today = _biz_today_iso()
+    if not date_to:
+        date_to = today
+    if not date_from:
+        date_from = (dateparser.parse(date_to) - timedelta(days=13)).date().isoformat()
+    try:
+        date_from = dateparser.parse(str(date_from)).date().isoformat()
+        date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
+    cfg = _entry_quality_cfg(client, org_id)
+    days_by_emp, scanned = _entry_quality_scan(client, org_id, date_from, date_to, cfg)
+    flagged = entry_quality.needs_walkthrough(days_by_emp, cfg["threshold_days"])
+    return {"date_from": date_from, "date_to": date_to, "rows_scanned": scanned,
+            "config": {k: cfg[k] for k in ("enabled", "threshold_days", "signals", "notify_channel", "tour_slug")},
+            "by_employee": {e: d for e, d in days_by_emp.items()},
+            "needs_walkthrough": flagged}
+
+
+@router.get("/entry-quality/me")
+def entry_quality_me(employee_name: str = "", org_id: str = ORG_ID):
+    """The rep-facing banner feed for the closing submit page: does THIS employee currently need
+    the walkthrough (threshold consecutive incorrect days, streak ending within the last 3 days),
+    with the org's guidance message + tour slug. NO dollar amounts — only that entries needed
+    correction (money secrecy: the rep never sees the B2B figures)."""
+    require_org(org_id)
+    if not (employee_name or "").strip():
+        raise HTTPException(400, "employee_name required")
+    client = sb()
+    cfg = _entry_quality_cfg(client, org_id)
+    if not cfg["enabled"]:
+        return {"needs_walkthrough": False, "enabled": False}
+    today = _biz_today_iso()
+    date_from = (dateparser.parse(today) - timedelta(days=13)).date().isoformat()
+    days_by_emp, _n = _entry_quality_scan(client, org_id, date_from, today, cfg)
+    mine = {e: d for e, d in days_by_emp.items()
+            if _name_match(e, employee_name)}
+    merged = {}
+    for d in mine.values():
+        for day, reasons in d.items():
+            merged[day] = sorted(set(merged.get(day, []) + reasons))
+    flagged = entry_quality.needs_walkthrough({employee_name: merged} if merged else {},
+                                             cfg["threshold_days"], recent_within=3, as_of=today)
+    if not flagged:
+        return {"needs_walkthrough": False, "enabled": True}
+    f = flagged[0]
+    return {"needs_walkthrough": True, "enabled": True,
+            "streak": f["streak"], "streak_start": f["streak_start"], "streak_end": f["streak_end"],
+            "days": sorted(f["days"].keys()),
+            "message": entry_quality.guidance_message(cfg["message_template"], employee_name, f["days"]),
+            "tour_slug": cfg["tour_slug"]}
+
+
+async def _run_entry_quality_coaching(org_id=None):
+    """For each org (or one): detect employees who just crossed the threshold (streak ending
+    yesterday/today), record ONE coaching row per (employee, streak_end) — the idempotency key —
+    and notify per the org's configured channel. In-app-only orgs still get the log row (the
+    management report + banner read live; the log proves when the nudge first fired)."""
+    client = sb()
+    try:
+        org_rows = (client.schema("commcalc").table("daily_closing").select("org_id")
+                    .gte("close_date", (datetime.now(timezone.utc) - timedelta(days=3)).date().isoformat())
+                    .limit(50000).execute().data) or []
+        orgs = sorted({r.get("org_id") for r in org_rows if r.get("org_id")})
+    except Exception:
+        orgs = []
+    if org_id:
+        orgs = [o for o in orgs if o == org_id] or [org_id]
+    results = []
+    for oid in orgs:
+        try:
+            cfg = _entry_quality_cfg(client, oid)
+            if not cfg["enabled"]:
+                continue
+            today = _biz_today_iso()
+            date_from = (dateparser.parse(today) - timedelta(days=13)).date().isoformat()
+            days_by_emp, _n = _entry_quality_scan(client, oid, date_from, today, cfg)
+            flagged = entry_quality.needs_walkthrough(days_by_emp, cfg["threshold_days"],
+                                                     recent_within=1, as_of=today)
+            for f in flagged:
+                body = {
+                    "org_id": oid, "employee_name": f["employee_name"],
+                    "streak_end": f["streak_end"], "streak_days": f["streak"],
+                    "reasons": f["days"],
+                    "message": entry_quality.guidance_message(cfg["message_template"],
+                                                              f["employee_name"], f["days"]),
+                    "notified_via": "inapp_only",
+                }
+                try:
+                    ins = (client.schema("commcalc").table("closing_entry_coaching")
+                           .insert(body).execute())
+                    if not (ins.data or []):
+                        continue
+                except Exception:
+                    continue           # duplicate (already coached for this streak) or pre-937
+                sent_via = []
+                if cfg["notify_channel"] in ("email", "both") or cfg["notify_channel"] in ("whatsapp", "both"):
+                    try:
+                        emp = next((e for e in ops_chargebacks._employee_roster(client, oid)
+                                    if _name_match(e.get("name"), f["employee_name"])), None)
+                    except Exception:
+                        emp = None
+                    email = (emp or {}).get("email") if emp else None
+                    if email and cfg["notify_channel"] in ("email", "both"):
+                        try:
+                            from app.modules.notify.channels import email_resend
+                            if email_resend.is_configured():
+                                await email_resend.send_email(
+                                    email, "Daily closing — quick training walkthrough",
+                                    "<p>" + body["message"].replace("\n", "<br>") + "</p>")
+                                sent_via.append("email")
+                        except Exception:
+                            pass
+                if sent_via:
+                    try:
+                        (client.schema("commcalc").table("closing_entry_coaching")
+                         .update({"notified_via": "+".join(sent_via)})
+                         .eq("org_id", oid).eq("employee_name", f["employee_name"])
+                         .eq("streak_end", f["streak_end"]).execute())
+                    except Exception:
+                        pass
+                results.append({"org_id": oid, "employee": f["employee_name"],
+                                "streak": f["streak"], "via": "+".join(sent_via) or "inapp_only"})
+        except Exception as e:
+            print(f"entry-quality coaching sweep failed for org {oid} (non-fatal): {e}")
+    return results
+
+
+@router.post("/entry-quality/run-due")
+async def entry_quality_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (NOTIFY_RUN_SECRET) — nightly coaching sweep across all tenants with
+    recent closings. Idempotent per (employee, streak_end)."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return {"coached": await _run_entry_quality_coaching()}
+
+
+@router.post("/entry-quality/run")
+async def entry_quality_run_now(org_id: str = ORG_ID):
+    """Manual trigger for one tenant (testing)."""
+    require_org(org_id)
+    return {"coached": await _run_entry_quality_coaching(org_id)}
 
 
 # ── Alert crons (pg_cron → run-due, NOTIFY_RUN_SECRET-guarded) ──────────────────────────────────
