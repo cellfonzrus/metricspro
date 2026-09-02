@@ -218,6 +218,20 @@ commissions, expenses.
   (luxelink: `{"mi_income": "Residual"}`; Boost untouched). LuxeLink opt-in seeded by mig `314`
   (Aug-2026 dollars itemised in the migration header).
 
+- **P&L rebate presentation (mig `934`, owner report 2026-09-02 — "rebate is coming in negative,
+  it should be a positive number as it is coming in"):**
+  `commission_org_config.pl_rebate_presentation` (`'contra_cogs'` house default = ruling K1
+  byte-identical: rebates NEGATIVE on `device_rebate` inside COGS; `'income'` = the SAME dollars
+  POSITIVE on the new `auto_opt` revenue line **`rebate_income` "Rebates (device purchase)"**,
+  with the empty contra line suppressed via the `inputs[key]['suppress_zero']` `engine._assemble`
+  passthrough). ONE resolved route (`ma_store_pnl.rebate_route`, read by
+  `ma_store_pnl.ma_commission_bookings` AND coa's `activation_rebate_ledger` booking) so both
+  rebate sources always present alike; store grain (mig `314` account→store index) unchanged;
+  gross profit and net income identical under both presentations (revenue and COGS move
+  together). `ma_store_pnl.load_config` falls back mig-934 → mig-314 → defaults column sets so a
+  pre-934 DB keeps its mig-314 seeds. LuxeLink seeded `'income'` by mig `934`. Proof:
+  `harness_pl_rebate_presentation.py`.
+
 - **P&L store/market filter + company scope (fix 2026-09-02, owner: "market filter shows no data /
   company selection shows improper information"):** the aggregated-statement filter
   (`account/statement_filter.py`, read by `GET /account/pl|balance-sheet/{period}?stores=&markets=`)
@@ -947,6 +961,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | MA month-spiff commission M1..M12+ (P&L `carrier_comm`, cash basis) | `raw_ma_daily_tx.retail_cost` sign-flipped on `order_type ∈ pl_ma_spiff_order_types` rows (default `PostPaid Additional Spiff`); month detail `M<n>` from `product_name` via `commission_ledger.parse_payment_month` (no token → 'Spiff (other)') | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; only when `pl_ma_month_spiff_source='daily_tx'`, which also suppresses the `raw_ma_commission.spiff_m1..m6` activation-month booking — never both) |
 | MDF / market spiff (P&L `mdf_income`) | `raw_ma_daily_tx.retail_cost` sign-flipped on rows whose `product_name` contains a `pl_mdf_product_tokens` token (luxelink: `premium store spiff`, $1,000/store) | `ma_store_pnl.ma_tx_bookings` → `coa.build_inputs` (mig `314`; `auto_opt` line, per store; retail_cost precedence residual → MDF → month-spiff) |
 | MA processor account → store | `raw_ma_fulfillment.tspid` × `business_address` (derived, ambiguous dropped) ∪ `ma_account_store_map` (override wins) | `ma_store_pnl.account_store_index`/`load_store_index` → `coa.build_inputs` `_ma_store` + `device_cogs._ma_sold_cost` (mig `314`; gated by `pl_ma_store_attribution`; unmapped accounts book company-wide) |
+| Device-purchase rebate (P&L `device_rebate` contra-COGS OR `rebate_income` revenue) | `raw_ma_commission.rebate` (negative = paid to dealer) + `activation_rebate_ledger.device_rebate_amount` (positive money-in) | `ma_store_pnl.rebate_route` per `commission_org_config.pl_rebate_presentation` (mig `934`: `contra_cogs` default = K1 negative in COGS; `income` = positive revenue, luxelink) → `ma_store_pnl.ma_commission_bookings` + `coa.build_inputs` activation-ledger booking; store grain via the mig-314 account→store index |
 | B2B sold vs MA paid (activation discrepancy) | sold: `SALES_DISPLAY_SOURCES` rows with non-blank `contract_type` (no swap/void), keyed on digit-normalized `serial_1`; paid: `raw_ma_commission.spiff_m1`+`rebate`/`device_margin` ∪ `raw_ma_daily_tx` month-1 / activation-order evidence (two-hop join, +1-month lookahead) | `ma_recon.reconcile_ma_activations` via `sale_installment_engine._gate_met_ma_tx` (mig `312`); unpaid rows → `discrepancy_results` `source='ma'` with rule attribution or `'no business rule configured'` |
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
@@ -1017,7 +1032,10 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 13. **`POST /account/run-due` has NO pg_cron registration** (unlike the email sweep, migs
     `921`/`922`) — statements recompute only on a manual Compute click or an external caller.
     Live consequence 2026-09-02: the owner's journal entries (03:05Z) sat invisible behind an
-    02:30Z snapshot. Follow-up: mig `934` self-scheduling (roadmap Phase 1).
+    02:30Z snapshot. Follow-up: a future autocompute self-scheduling migration (roadmap Phase 1;
+    `934` is now taken by the rebate-presentation config). Live consequence again 2026-09-02: the
+    Novawave-side MA daily-TX upload landed at 03:50Z, five minutes AFTER the 03:45Z August
+    recompute — Nova Wave commission/residual/merchant discount read $0 until the next compute.
 14. **Journal page has no company/store PICKER** — free-text entry is what stranded the owner's
     equity/loan rows (mig-933 matcher now resolves typed designations server-side; the picker is
     the lasting Option-B UI fix, roadmap Phase 2).

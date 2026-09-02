@@ -99,6 +99,15 @@ PL_SPEC = [
     # so every org without MDF tokens is byte-identical. Store grain via the mig-314 account→store
     # index (ma_store_pnl). Classification is pure: ma_store_pnl.ma_tx_bookings.
     ("mdf_income",    "MDF (market spiffs)",                         "revenue", "auto_opt", "store"),
+    # Owner report 2026-09-02 (mig 934): "rebate is coming in negative, it should be a positive
+    # number as it is coming in." Per-org PRESENTATION of the device-purchase rebate
+    # (commission_org_config.pl_rebate_presentation, resolved by ma_store_pnl.load_config /
+    # rebate_route): the house default 'contra_cogs' keeps ruling K1 byte-identically (rebates net
+    # against Device cost on `device_rebate`, below); 'income' books the SAME dollars POSITIVE on
+    # this line instead. Gross profit and net income are identical either way — revenue and COGS
+    # move together — only the section subtotals read differently. `auto_opt` ⇒ the line exists
+    # only for orgs that opted in AND have rebate dollars; everyone else is byte-identical.
+    ("rebate_income", "Rebates (device purchase)",                   "revenue", "auto_opt", "store"),
     ("accessory_rev", "Accessory sales revenue",                     "revenue", "auto",  "store"),
     ("device_rev",    "Device sales revenue",                        "revenue", "auto",  "store"),
     ("vip_reimb",     "Device-financing reimbursements (Distributor)", "revenue", "auto",  "store"),
@@ -734,11 +743,26 @@ def build_inputs(client, org_id, period):
         _msp = None
         _warn("mig-314 MA store-attribution config unavailable — company-wide grain kept", e)
 
+    # mig 934 — WHERE rebate dollars present: ('device_rebate', -1) contra-COGS (house default,
+    # ruling K1, byte-identical) or ('rebate_income', +1) positive revenue (owner report
+    # 2026-09-02). One resolved route used by BOTH rebate sources (the MA commission sheet via
+    # ma_store_pnl.ma_commission_bookings, and the activation-rebate ledger below) so the two can
+    # never present differently.
+    try:
+        _reb_line, _reb_sign = _msp.rebate_route(_ma314_cfg) if _msp else ("device_rebate", -1)
+    except Exception:
+        _reb_line, _reb_sign = ("device_rebate", -1)
+
     def _ma_store(acct):
         """Processor account id → store address (None ⇒ company-wide, exactly as before mig 314)."""
         return _ma_acct_index.get(str(acct or "").strip()) or None
 
     L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}} for k, *_ in PL_SPEC + BS_SPEC}
+    if _reb_line == "rebate_income":
+        # Rebates present as income for this org, so the contra-COGS line receives no dollars;
+        # suppress its 0.00 row (engine._assemble passthrough, mig 934) rather than showing an
+        # empty "contra-COGS" line next to the positive rebate line the owner asked for.
+        L["device_rebate"]["suppress_zero"] = True
 
     def add(key, store, amt, detail_label=None):
         amt = round(safe_float(amt), 2)
@@ -911,7 +935,10 @@ def build_inputs(client, org_id, period):
                 detail_label="Activation report commission")
             add("device_cost", st, safe_float(r.get("device_cost")),
                 detail_label="Device cost (activation report)")
-            add("device_rebate", st, -safe_float(r.get("device_rebate_amount")),
+            # mig 934: ledger amounts are positive money-in, so `sign * amount` books negative
+            # contra-COGS by default (byte-identical to the pre-934 `-amount`) and positive
+            # revenue under pl_rebate_presentation='income'.
+            add(_reb_line, st, _reb_sign * safe_float(r.get("device_rebate_amount")),
                 detail_label="Device rebate (activation report)")
     except Exception:
         pass
