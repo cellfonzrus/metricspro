@@ -96,6 +96,7 @@ export default function BillPayPickupPage() {
           { header: 'Store', get: (r: any) => r.store_name || r.store_code },
           { header: 'Rep', get: (r: any) => r.employee_name },
           { header: 'Bill-pay cash', get: (r: any) => r.cash, money: true },
+          { header: 'Bill pay on credit card', get: (r: any) => r.credit ?? 0, money: true },
           { header: 'POS bill pay (store-day)', get: (r: any) => r.pos_billpay ?? 'no POS data', money: true },
           { header: 'POS status', get: (r: any) => r.pos_status || '' },
           { header: 'Picked up', get: (r: any) => (r.picked_up ? 'Yes' : 'No') },
@@ -254,6 +255,7 @@ export default function BillPayPickupPage() {
       {data && (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
           <Stat label="Bill-pay cash (declared)" value={fmt(data.total_cash || 0)} accent />
+          <Stat label="Bill pay on credit card (declared)" value={fmt(data.total_credit || 0)} sub="taken on card — no cash to pick up" />
           <Stat label="Collected" value={fmt(data.collected_cash || 0)} sub={`${data.collected} envelope${data.collected === 1 ? '' : 's'}`} />
           <Stat label="Still to collect" value={fmt(data.ready_cash || 0)} sub={`${data.ready} envelope${data.ready === 1 ? '' : 's'}`} />
         </div>
@@ -291,7 +293,7 @@ export default function BillPayPickupPage() {
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Bill-pay cash', 'POS bill pay', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
+                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Bill-pay cash', 'On credit card', 'POS bill pay', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -300,10 +302,17 @@ export default function BillPayPickupPage() {
                   return (
                     <tr key={k} style={{ background: done ? 'var(--surface2)' : undefined }}>
                       {rangeMode && <td style={{ ...cell, fontSize: 12, color: 'var(--text3)' }}>{e.close_date}</td>}
-                      <td style={cell}>{done ? '✅' : <input type="checkbox" checked={!!sel_[k]} onChange={ev => setSel(s => ({ ...s, [k]: ev.target.checked }))} />}</td>
+                      {/* A credit-only row (bill payments taken on card, no cash declared) is a
+                          DISPLAY row — there is no physical cash envelope to pick up. */}
+                      <td style={cell}>{done ? '✅' : (e.cash > 0 ? <input type="checkbox" checked={!!sel_[k]} onChange={ev => setSel(s => ({ ...s, [k]: ev.target.checked }))} /> : <span style={{ color: 'var(--text3)' }}>—</span>)}</td>
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{fmt(e.cash)}</td>
+                      {/* Bill payment on credit card (owner 2026-09-02 #2): the rep's declared
+                          ePay-on-credit split — card money settles with the processor, so it is
+                          never in the envelope; shown so the day's declared bill-pay total is
+                          complete next to the POS figure. */}
+                      <td style={{ ...cell, color: 'var(--text2)' }} title="Declared bill payments taken on credit/debit card — settles with the processor, not cash to collect">{fmt(e.credit || 0)}</td>
                       {/* The SYSTEM'S number right next to the store-entered one (owner 2026-09-02):
                           POS-report bill payments for this store-day — the SAME processor-feed
                           resolution the coverage recon / Cash Recon (Management) uses, compared at
@@ -311,7 +320,7 @@ export default function BillPayPickupPage() {
                           "no POS data"; feed present but silent for this store-day => honest zero. */}
                       <td style={{ ...cell, color: e.pos_status === 'mismatch' ? '#dc2626' : 'var(--text2)', fontWeight: e.pos_status === 'mismatch' ? 700 : 400 }}
                           title={e.pos_status === 'no_pos_data' ? 'No processor bill-payment feed resolved for this range'
-                            : `Store-day declared ${fmt(e.pos_declared_day)} vs POS ${fmt(e.pos_billpay)} (Δ ${fmt(e.pos_delta)})`}>
+                            : `Store-day declared (cash + card) ${fmt(e.pos_declared_day)} vs POS ${fmt(e.pos_billpay)} (Δ ${fmt(e.pos_delta)})`}>
                         {e.pos_billpay == null ? <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>no POS data</span>
                           : <>{fmt(e.pos_billpay)}{e.pos_status === 'mismatch' ? ' ⚠' : e.pos_status === 'ok' ? <span style={{ color: '#166534' }}> ✓</span> : null}</>}
                       </td>

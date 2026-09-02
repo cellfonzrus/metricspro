@@ -267,6 +267,168 @@ def reconcile_billpay_coverage(billpay_by_store_day, collected_by_store_day, tol
             "store_days": rows, "remediation": remediation}
 
 
+# ── Bill-pay on credit card + THREE-WAY store-day recon (owner directive 2026-09-02 #2) ─────────
+# Owner verbatim: "in the billpayment pick, add another column for bill payment on credit card, and
+# the pos bill payments are showing 0 as the pos does not store the bill payment on credit card
+# separately, two ways it will be done and a part of 3 way recon for bill payments, 1 will be the
+# total of bill payments received on credit card from the sales transactions for that day from the
+# email ingested reports and the second will be from the owners portal report for bill payment in
+# case of boost and the daily tx report for total, again nothing hardcoded".
+# Everything below is PURE — token lists / order-type lists arrive from per-org config (mig 944
+# columns with house defaults resolved by the router); no carrier or tenant name in code.
+
+# House-default tender vocabulary (config columns accessory_config.billpay_card_tenders /
+# billpay_cash_tenders override per org; matched by lower-cased CONTAINMENT on the POS tender_type).
+DEFAULT_CARD_TENDERS = ("credit", "debit")
+DEFAULT_CASH_TENDERS = ("cash",)
+
+# House-default bill-payment row filter for the carrier DAILY-TX feed (config columns
+# metric_source_of_truth.processor_order_types / processor_product_tokens override per org). The
+# order-type family is the report's own vocabulary, not a carrier branch; the product tokens are
+# CONTAINMENT-matched, union'd with the org's curated billpay_products exact list (mig 214).
+DEFAULT_MA_BILLPAY_ORDER_TYPES = ("Sales Order",)
+DEFAULT_MA_BILLPAY_PRODUCT_TOKENS = ("rtr", "wallet funding")
+
+
+def classify_tender(tender_type, card_tokens=None, cash_tokens=None):
+    """PURE: one POS tender_type string → 'card' | 'cash' | 'mixed' | 'other' | '' (blank/absent).
+    A multi-tender receipt ('Cash; Debit Card') is 'mixed' — the line's ext_price cannot be split
+    between tenders, so it is surfaced in its own bucket rather than silently mis-attributed to
+    either side. Token lists are per-org config (mig 944; house defaults above), lower-cased
+    containment — never a hard-coded processor vocabulary."""
+    tt = str(tender_type or "").strip().lower()
+    if not tt:
+        return ""
+    card = any(str(t).strip().lower() in tt for t in (card_tokens or DEFAULT_CARD_TENDERS)
+               if str(t).strip())
+    cash = any(str(t).strip().lower() in tt for t in (cash_tokens or DEFAULT_CASH_TENDERS)
+               if str(t).strip())
+    if card and cash:
+        return "mixed"
+    if card:
+        return "card"
+    if cash:
+        return "cash"
+    return "other"
+
+
+def ma_billpay_predicate(order_types=None, exact_products=None, product_tokens=None):
+    """PURE factory: row → is this carrier DAILY-TX row a BILL PAYMENT? A row qualifies when its
+    order_type is in the configured family (default {'Sales Order'}) AND its product matches the
+    bill-pay vocabulary: the org's curated `accessory_config.billpay_products` exact list (mig 214,
+    the SAME list the sales aggregation classifies with) UNION the configured containment tokens
+    (default rtr / wallet funding — the airtime/refill families every MA daily-tx report words its
+    bill payments with). Evidence 2026-09-02 (org 854f…, 52,801 live rows): without this filter the
+    'bill payments' figure summed handsets ($599.99 Postpaid Branded MarketPlace), residuals and
+    spiffs — order_type filtering drops 18,120/22,163 Aug rows, the product test 20 more (Tablet
+    Service Fee / Premium Store Spiff / credit memos), leaving exactly the RTR familes."""
+    ots = {str(o).strip() for o in (order_types or DEFAULT_MA_BILLPAY_ORDER_TYPES) if str(o).strip()}
+    exact = {str(p).strip().lower() for p in (exact_products or ()) if str(p).strip()}
+    toks = tuple(str(t).strip().lower() for t in
+                 (product_tokens or DEFAULT_MA_BILLPAY_PRODUCT_TOKENS) if str(t).strip())
+
+    def _pred(row):
+        r = row or {}
+        if str(r.get("order_type") or "").strip() not in ots:
+            return False
+        pn = str(r.get("product_name") or "").strip().lower()
+        if not pn:
+            return False
+        return (pn in exact) or any(t in pn for t in toks)
+    return _pred
+
+
+def reconcile_billpay_three_way_days(declared_by_sd, sales_by_sd, processor_by_sd,
+                                     tolerance_amt=1.0, sales_present=None, processor_present=None):
+    """THE 3-WAY bill-payment reconciliation per (store, DAY) (owner directive 2026-09-02 #2).
+
+    Leg A `declared_by_sd`  {(store, day): amount} — the closing sheet's declared bill payments
+          (epay_on_cash + epay_on_credit, DM-verified corrections winning upstream).
+    Leg B `sales_by_sd`     {(store, day): {'amount','count','card','cash','mixed','other',
+          'tendered'}} — bill payments in the email-ingested SALES TRANSACTIONS for the day
+          (the shared _sales_cell_agg classification), with the tender split when rows carry it.
+    Leg C `processor_by_sd` {(store, day): {'amount', …}} — the carrier-side report (the owner's
+          portal / ePay feed, or the daily-TX report), per the org's metric_source_of_truth
+          resolution.
+
+    HONEST-GAP semantics (the no_pos_data precedent): `sales_present` / `processor_present` say
+    whether each feed produced ANYTHING for the range — False ⇒ that leg is None on every row
+    (status can never be 'mismatch' against an absent feed, and never a fake zero); True with a
+    silent store-day ⇒ honest 0.0 (the feed reported for the range but has nothing here). None ⇒
+    derived from the map's truthiness. Rows appear for every key any present leg knows.
+
+    Per-row status: 'ok' (every PRESENT pair within tolerance), 'mismatch' (some present pair
+    out), 'declared_only' (both cross-legs absent). `gaps` lists 'no_sales_data' /
+    'no_processor_data' when a leg is absent for the range. Deltas are None when a side is None.
+    Returns (rows, summary). PURE; no I/O."""
+    declared_by_sd = declared_by_sd or {}
+    sales_by_sd = sales_by_sd or {}
+    processor_by_sd = processor_by_sd or {}
+    if sales_present is None:
+        sales_present = bool(sales_by_sd)
+    if processor_present is None:
+        processor_present = bool(processor_by_sd)
+    tol = abs(float(tolerance_amt or 0.0))
+
+    def _amt(m, k):
+        v = m.get(k)
+        if isinstance(v, dict):
+            return float(v.get("amount", 0.0) or 0.0)
+        return float(v or 0.0)
+
+    keys = set(declared_by_sd)
+    if sales_present:
+        keys |= set(sales_by_sd)
+    if processor_present:
+        keys |= set(processor_by_sd)
+
+    rows, mismatched, gaps_n = [], 0, 0
+    for k in sorted(keys, key=lambda kk: (str(kk[1]) if isinstance(kk, tuple) and len(kk) == 2 else "",
+                                          str(kk[0]) if isinstance(kk, tuple) and len(kk) == 2 else str(kk))):
+        st, day = (k if isinstance(k, tuple) and len(k) == 2 else (str(k), ""))
+        a = round(_amt(declared_by_sd, k), 2)
+        b = round(_amt(sales_by_sd, k), 2) if sales_present else None
+        c = round(_amt(processor_by_sd, k), 2) if processor_present else None
+        sslot = sales_by_sd.get(k) if isinstance(sales_by_sd.get(k), dict) else {}
+        gaps = []
+        if not sales_present:
+            gaps.append("no_sales_data")
+        if not processor_present:
+            gaps.append("no_processor_data")
+        d_ab = round(a - b, 2) if b is not None else None
+        d_ac = round(a - c, 2) if c is not None else None
+        d_bc = round(b - c, 2) if (b is not None and c is not None) else None
+        present_deltas = [d for d in (d_ab, d_ac, d_bc) if d is not None]
+        if not present_deltas:
+            status = "declared_only"
+            gaps_n += 1
+        elif all(abs(d) <= tol for d in present_deltas):
+            status = "ok"
+        else:
+            status = "mismatch"
+            mismatched += 1
+        rows.append({
+            "store": st, "day": day,
+            "declared": a, "sales": b, "processor": c,
+            "sales_card": (round(float(sslot.get("card", 0.0) or 0.0), 2) if b is not None else None),
+            "sales_cash": (round(float(sslot.get("cash", 0.0) or 0.0), 2) if b is not None else None),
+            "sales_mixed": (round(float(sslot.get("mixed", 0.0) or 0.0), 2) if b is not None else None),
+            "delta_declared_sales": d_ab, "delta_declared_processor": d_ac,
+            "delta_sales_processor": d_bc,
+            "status": status, "gaps": gaps,
+        })
+    summary = {
+        "store_days": len(rows), "mismatched": mismatched, "declared_only": gaps_n,
+        "sales_present": bool(sales_present), "processor_present": bool(processor_present),
+        "tolerance_amt": tol,
+        "declared": round(sum(r["declared"] for r in rows), 2),
+        "sales": (round(sum(r["sales"] for r in rows), 2) if sales_present else None),
+        "sales_card": (round(sum(r["sales_card"] or 0.0 for r in rows), 2) if sales_present else None),
+        "processor": (round(sum(r["processor"] for r in rows), 2) if processor_present else None),
+    }
+    return rows, summary
+
+
 def reconcile_billpay_cash(actual_by_store, declared_by_store, tolerance_amt=1.0, assigned_user=None):
     """Reconcile ACTUAL bill-payment CASH (the Bill Payment Transactions report, tender = cash) against the
     cash employees DECLARED at daily closing (daily_closing.epay_on_cash), per store — the wiring the owner
