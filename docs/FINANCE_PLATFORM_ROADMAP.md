@@ -31,9 +31,9 @@
 ### The gaps a top-of-line young-company system closes
 1. **Cash flow** — existed nowhere until this phase; now derived (indirect) and stored, but the
    Cash line is manual: cash tie-out automation (bank-deposit feed → cash roll-forward) is open.
-2. **No scheduled recompute trigger** — `/account/run-due` has no pg_cron registration (unlike the
-   email sweep, migs 921/922). Books go stale until someone clicks Recompute; this is exactly how
-   the owner's journal entries "never showed up" (entered 03:05Z, snapshot from 02:30Z).
+2. ~~No scheduled recompute trigger~~ **closed (mig 940)** — `/account/run-due` now self-schedules
+   (`account-recompute-run-due` pg_cron job, every 2h, re-registered on every backend boot). The
+   owner's "never showed up" staleness (entered 03:05Z, snapshot from 02:30Z) self-heals per tick.
 3. **Journal UX** — no company picker (owner typed company names into the free-text store field),
    no entry dates on BS items, silent row drops (fixed server-side; picker is UI Phase 2).
 4. **Charts** — trends exist for a few series; no general financial-analysis charting (revenue /
@@ -52,8 +52,11 @@
   on-demand email + WhatsApp via the standard registry (never a bespoke exporter).
 - ✅ `statement_engine.compute_and_store` supersedes `engine.compute_and_store` on `/compute` and
   the `run-due` sweep: same snapshots + Cash Flow + the balance-sheet truths.
-- ▢ **Follow-up**: mig 934 — pg_cron registration for `POST /account/run-due` (the mig 921/922
-  self-scheduling pattern), so books recompute themselves after every ingest/journal edit.
+- ✅ **Shipped (mig 940** — 934 was renumbered away to the rebate-presentation config**)**:
+  pg_cron registration for `POST /account/run-due` via `commcalc.ensure_account_recompute_cron`
+  (the mig 921/922 self-scheduling pattern; job `account-recompute-run-due`, every 2h,
+  re-registered on every backend boot from `main.py`), so books recompute themselves after every
+  ingest/journal edit lands — within a tick, with the staleness banner covering "right now".
 - ▢ **Follow-up**: multi-period assembly in statement_engine — `periods=[...]` returning
   month-by-month columns + QTD/YTD/TTM rollups from the same inputs (feeds quarterly + royalty
   reporting and every chart below). Pure aggregation over per-period inputs; harnessed.

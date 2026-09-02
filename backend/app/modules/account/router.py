@@ -492,6 +492,31 @@ async def compute(period: str, org_id: str = ORG_ID):
 
 
 # ── scheduled auto-recompute (called by Supabase pg_cron via pg_net) ───────────────────────────
+def _ensure_account_recompute_cron():
+    """Self-register the GLOBAL statement-recompute pg_cron job (mig 940) so no one runs SQL by
+    hand — called from the main.py startup hook on EVERY boot, exactly like the email-sweep cron
+    (mig 922 / the 2026-08-25→09-01 dead-cron incident). Reads the backend's own API URL + notify
+    secret from settings and calls the idempotent commcalc.ensure_account_recompute_cron RPC as
+    service_role, re-embedding the CURRENT secret on every deploy (survives rotations, self-heals a
+    lost job).
+
+    NON-FATAL by design: a missing secret, the RPC not present (mig 940 not applied yet), or
+    pg_cron/pg_net not installed just means auto-scheduling is skipped — boot still succeeds, and
+    the staleness banner's Recompute button still works. Returns the RPC's status string (or None).
+    Deterministic books: the cron only changes WHEN compute runs, never WHAT it computes."""
+    try:
+        url = (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().schema("commcalc").rpc(
+            "ensure_account_recompute_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_account_recompute_cron skipped: {e}")
+        return None
+
+
 @router.post("/run-due")
 async def run_due(x_notify_secret: str = Header(default=""), only_org: str = "", force: bool = False):
     """Recompute the current + prior period statements for every tenant with account data, but only

@@ -346,6 +346,18 @@ commissions, expenses.
   the existing closing-expense sweep. LuxeLink seed (`'verified'`) COMMENTED behind the owner
   gate in mig `938`. Proof: `harness_verified_cash_bs.py`.
 
+- **Statement auto-recompute self-schedules (roadmap Phase 1, mig `940`, 2026-09-02):** the
+  `POST /account/run-due` staleness sweep (`account/autocompute.recompute_due` — recomputes
+  current+prior period statements ONLY where a tenant's own ingest/journal edit is newer than its
+  snapshot) finally has its scheduler tick: pg_cron job `account-recompute-run-due` (every 2h),
+  installed by `commcalc.ensure_account_recompute_cron(url, secret)` (SECURITY DEFINER,
+  service_role-only EXECUTE — the mig-922 email-sweep pattern verbatim, no secret in the
+  migration) and re-registered on EVERY backend boot (`main.py` `_account_recompute_cron_startup`
+  → `account/router._ensure_account_recompute_cron`), so a rotated secret or lost job self-heals
+  on the next deploy. Closes §19 gap 13 (the owner's twice-in-one-day "entered but never showed
+  up" staleness). WHEN, never WHAT: numbers stay `statement_engine.compute_and_store`
+  byte-identical.
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -1028,7 +1040,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
 | `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
-| `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
+| `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
@@ -1137,13 +1149,15 @@ closing tender recon mig `103`,`104`,`106`,`111`.
     `harness_pay_visibility.py` §I (exec's the real route source; manager_up / permissioned /
     per-org `pay_visible_roles` / grant / pre-434 adaptive default / broken-token all covered).
 
-13. **`POST /account/run-due` has NO pg_cron registration** (unlike the email sweep, migs
-    `921`/`922`) — statements recompute only on a manual Compute click or an external caller.
-    Live consequence 2026-09-02: the owner's journal entries (03:05Z) sat invisible behind an
-    02:30Z snapshot. Follow-up: a future autocompute self-scheduling migration (roadmap Phase 1;
-    `934` is now taken by the rebate-presentation config). Live consequence again 2026-09-02: the
-    Novawave-side MA daily-TX upload landed at 03:50Z, five minutes AFTER the 03:45Z August
-    recompute — Nova Wave commission/residual/merchant discount read $0 until the next compute.
+13. ~~`POST /account/run-due` has NO pg_cron registration~~ **CLOSED (mig `940`, 2026-09-02)**:
+    `commcalc.ensure_account_recompute_cron(url, secret)` — the mig-922 self-scheduling pattern —
+    is called by the backend on EVERY boot (`main.py` `_account_recompute_cron_startup` →
+    `account/router._ensure_account_recompute_cron`, service_role only), (re)scheduling the ONE
+    global job `account-recompute-run-due` (every 2h, `0 */2 * * *`) that POSTs the secret-gated
+    `/account/run-due` sweep. The two 2026-09-02 live consequences that motivated it (owner journal
+    entries 03:05Z invisible behind an 02:30Z snapshot; Nova Wave MA daily-TX upload 03:50Z landing
+    five minutes after the 03:45Z recompute) now self-heal within a tick; the staleness banner's
+    Recompute button covers the intra-tick window. Changes WHEN compute runs, never WHAT.
 14. **Journal page has no company/store PICKER** — free-text entry is what stranded the owner's
     equity/loan rows (mig-933 matcher now resolves typed designations server-side; the picker is
     the lasting Option-B UI fix, roadmap Phase 2).
