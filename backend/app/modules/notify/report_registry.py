@@ -42,6 +42,7 @@ from .report_filters import (ReportConfigError, business_today as _business_toda
 from .workforce_reports import WORKFORCE_REPORTS
 # Finance entries (owner directive 2026-09-02) — same lazy-import convention as the workforce set.
 from .finance_reports import FINANCE_REPORTS
+from .closing_reports import CLOSING_REPORTS
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -691,6 +692,10 @@ REPORTS = {
     # Cash Flow computed at send time by account.statement_engine (never "not computed yet");
     # see finance_reports.py. The snapshot-reading account_pl / account_balance_sheet stay.
     **FINANCE_REPORTS,
+    # Daily closing (owner directive 2026-09-02): `closing_envelope_report` — the Envelope report
+    # (counts / over-short / comments / chargebacks) via the live endpoint in-process; see
+    # closing_reports.py.
+    **CLOSING_REPORTS,
 }
 
 

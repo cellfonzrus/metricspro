@@ -25,6 +25,7 @@ from . import envelope as _envelope
 from . import deposit_recon
 from . import verified_overlay as _verified_overlay
 from . import verification_audit as _verification_audit
+from . import envelope_report as envelope_report_mod
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -4084,6 +4085,247 @@ def decide_missed_dm_verify(payload: DecideMissedDmVerifyIn, authorization: str 
         row = ops_chargebacks.decide_chargeback(
             client, org_id, cb_id, decision, decided_by=_caller_email(client, authorization),
             notes=payload.notes, reason_filter="missed_dm_verify")
+    except LookupError:
+        raise HTTPException(404, "chargeback not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "chargeback": row}
+
+
+# ── Envelope report (owner directive 2026-09-02, mig 936) ───────────────────────────────────────
+# "a new report when all the envelopes can be filtered by using the standard filters... user can
+# put their comments after counting the actual cash marking it short or over and if it is short
+# then checkmark for assigning it to the sales rep as a chargeback". Pure logic in
+# closing/envelope_report.py (proof harness_envelope_report.py); chargebacks ride the EXISTING
+# mig-504 ops_chargeback machinery (reason 'envelope_short'), never a parallel one.
+@router.get("/envelope-report")
+def envelope_report(date_from: str = None, date_to: str = None,
+                    market: str = None, markets: str = None, stores: str = None, reps: str = None,
+                    status: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Every envelope (= daily_closing row) in [date_from, date_to] (defaults to the current
+    month), with the management count / over-short / comment / chargeback state joined on. RULE
+    FIVE standard filters (date range + markets/stores/reps, bucket-aware market matching) +
+    `status` (short|over|match|uncounted|discrepancy|commented|chargeback). Manager-span keyset
+    enforced at admission, same as /closing/submissions."""
+    require_org(org_id)
+    client = sb()
+    today = _biz_today_iso()
+    if not date_from and not date_to:
+        date_from, date_to = today[:8] + "01", today
+    else:
+        date_to = date_to or today
+        date_from = date_from or (date_to[:8] + "01")
+    try:
+        date_from = dateparser.parse(str(date_from)).date().isoformat()
+        date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select("id,close_date,store_code,store_name,store_address,employee_name,"
+                    "t_cash,store_cash,envelope_picture,remarks")
+            .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+            .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
+
+    store_set = _resolve_store_filter(stores)
+    rep_set = _resolve_rep_filter(reps)
+    market_set = _resolve_market_filter(market, markets)
+    if store_set is not None:
+        rows = [r for r in rows if not r.get("store_code") or (r.get("store_code") or "").upper() in store_set]
+    if rep_set is not None:
+        rows = [r for r in rows if (r.get("employee_name") or "").strip().casefold() in rep_set]
+
+    market_by_code, market_filter_skipped = {}, False
+    try:
+        _srows = (client.schema("storeops").table("stores").select("store_code,market")
+                  .eq("org_id", org_id).execute().data) or []
+        market_by_code = {s.get("store_code"): _market_bucket(s.get("market"))
+                          for s in _srows if s.get("store_code")}
+    except Exception:
+        if market_set is not None:
+            market_filter_skipped = True   # NIT-4b posture: never mis-drop on a degraded roster read
+            market_set = None
+    if market_set is not None:
+        rows = [r for r in rows
+                if market_by_code.get(r.get("store_code"), "(no market)").casefold() in market_set]
+
+    # Joins: counts (mig 936, degrade-to-empty pre-migration), linked chargebacks, DM verification.
+    counts_by_row = {}
+    try:
+        crows = (client.schema("commcalc").table("envelope_count").select("*")
+                 .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                 .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+        counts_by_row = {c.get("closing_row_id"): c for c in crows if c.get("closing_row_id")}
+    except Exception as e:
+        print(f"WARN envelope_count read failed (run migration 936?): {e}")
+    cb_by_id = {}
+    cb_ids = sorted({c.get("chargeback_id") for c in counts_by_row.values() if c.get("chargeback_id")})
+    if cb_ids:
+        try:
+            cbs = (client.schema("commcalc").table("ops_chargeback").select("id,status,amount,decided_by,decided_at")
+                   .eq("org_id", org_id).in_("id", cb_ids).execute().data) or []
+            cb_by_id = {c.get("id"): c for c in cbs}
+        except Exception:
+            cb_by_id = {}
+    dates = sorted({str(r.get("close_date") or "")[:10] for r in rows if r.get("close_date")})
+    vers = {}
+    if dates:
+        try:
+            vrows = (client.schema("commcalc").table("daily_closing_verification")
+                     .select("store_code,close_date,verified").eq("org_id", org_id)
+                     .in_("close_date", dates).execute().data) or []
+            vers = {(v.get("store_code"), str(v.get("close_date"))[:10]): v for v in vrows}
+        except Exception:
+            vers = {}
+
+    out = []
+    for r in rows:
+        c = counts_by_row.get(r.get("id"))
+        cb = cb_by_id.get((c or {}).get("chargeback_id"))
+        v = vers.get((r.get("store_code"), str(r.get("close_date") or "")[:10]))
+        line = envelope_report_mod.report_row(r, c, cb, v, market_by_code.get(r.get("store_code")))
+        line["envelope_view_url"] = (f"/api/v1/closing/envelope-view?row_id={r.get('id')}&org_id={org_id}"
+                                     if r.get("envelope_picture") else None)
+        out.append(line)
+    out = envelope_report_mod.status_filter(out, status)
+    return {"rows": out, "totals": envelope_report_mod.totals(out),
+            "date_from": date_from, "date_to": date_to,
+            "market_filter_skipped": market_filter_skipped,
+            "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
+
+
+class EnvelopeCountIn(LaxModel):
+    closing_row_id: Any = None
+    counted_amount: Any = None
+    comment: Any = None
+    counted_by: Any = None
+    assign_chargeback: Any = False
+    tolerance: Any = 0.0
+
+
+@router.post("/envelope-count")
+def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID):
+    """Record the management count for ONE envelope: counted cash → variance + short/over/match,
+    comment, and (short + assign_chargeback=true) a PENDING chargeback against the sales rep on
+    the EXISTING ops_chargeback machinery (reason 'envelope_short', applied_to 'commission',
+    amount = the actual shortage). Unticking assign_chargeback deletes the linked chargeback ONLY
+    while it is still pending — a posted/waived decision is money history and stays."""
+    require_org(org_id)
+    client = sb()
+    row_id = (str(payload.closing_row_id or "")).strip()
+    if not row_id:
+        raise HTTPException(400, "closing_row_id required")
+    if payload.counted_amount in (None, ""):
+        raise HTTPException(400, "counted_amount required")
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select("id,close_date,store_code,store_name,store_address,employee_name,t_cash,store_cash")
+            .eq("org_id", org_id).eq("id", row_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "closing row not found")
+    crow = rows[0]
+    expected = envelope_report_mod.expected_cash(crow)
+    cf = envelope_report_mod.count_fields(expected, payload.counted_amount, payload.tolerance)
+
+    # existing count row (for re-counts + existing chargeback link)
+    existing = []
+    try:
+        existing = (client.schema("commcalc").table("envelope_count").select("*")
+                    .eq("org_id", org_id).eq("closing_row_id", row_id).limit(1).execute().data) or []
+    except Exception as e:
+        raise HTTPException(400, f"run migration 936 first (commcalc.envelope_count): {str(e)[:160]}")
+    prior = existing[0] if existing else {}
+    chargeback_id = prior.get("chargeback_id")
+    cb_row = None
+    if chargeback_id:
+        try:
+            _cbs = (client.schema("commcalc").table("ops_chargeback").select("*")
+                    .eq("org_id", org_id).eq("id", chargeback_id).limit(1).execute().data) or []
+            cb_row = _cbs[0] if _cbs else None
+        except Exception:
+            cb_row = None
+
+    want_cb = bool(payload.assign_chargeback) and cf["status"] == "short"
+    if want_cb and not cb_row:
+        shortage = envelope_report_mod.shortage_amount(cf["variance"])
+        emps = ops_chargebacks._employee_roster(client, org_id)
+        eff_id, eff_name = ops_chargebacks._resolve_roster(emps, None, crow.get("employee_name"))
+        parent = envelope_report_mod.chargeback_parent_row(org_id, crow, eff_id, eff_name, shortage)
+        if parent:
+            # mig-504 parent idempotency key: one envelope_short per (employee, store, day)
+            if ops_chargebacks._cb_exists(client, org_id, parent["employee_id"], parent["store_code"],
+                                          envelope_report_mod.ENVELOPE_SHORT_REASON, parent["incident_date"]):
+                try:
+                    _ex = (client.schema("commcalc").table("ops_chargeback").select("*")
+                           .eq("org_id", org_id).eq("employee_id", parent["employee_id"])
+                           .eq("store_code", parent["store_code"])
+                           .eq("reason", envelope_report_mod.ENVELOPE_SHORT_REASON)
+                           .eq("incident_date", parent["incident_date"]).is_("parent_id", "null")
+                           .limit(1).execute().data) or []
+                    cb_row = _ex[0] if _ex else None
+                except Exception:
+                    cb_row = None
+            else:
+                try:
+                    ins = client.schema("commcalc").table("ops_chargeback").insert(parent).execute()
+                    cb_row = (ins.data or [parent])[0]
+                except Exception as e:
+                    print(f"WARN envelope_short chargeback insert failed: {e}")
+            chargeback_id = (cb_row or {}).get("id")
+    elif not want_cb and cb_row and (cb_row.get("status") or "pending") == "pending":
+        # un-assign: pending only — a decided (posted/waived) chargeback is money history.
+        try:
+            (client.schema("commcalc").table("ops_chargeback").delete()
+             .eq("org_id", org_id).eq("id", chargeback_id).eq("status", "pending").execute())
+            chargeback_id, cb_row = None, None
+        except Exception as e:
+            print(f"WARN envelope_short chargeback delete failed: {e}")
+
+    body = {
+        "org_id": org_id, "closing_row_id": row_id,
+        "store_code": crow.get("store_code"), "close_date": crow.get("close_date"),
+        "employee_name": crow.get("employee_name"),
+        **cf,
+        "comment": (str(payload.comment).strip() if payload.comment is not None else prior.get("comment")),
+        "counted_by": (payload.counted_by or prior.get("counted_by") or "management"),
+        "counted_at": _now(), "chargeback_id": chargeback_id, "updated_at": _now(),
+    }
+    saved = (client.schema("commcalc").table("envelope_count")
+             .upsert(body, on_conflict="org_id,closing_row_id").execute())
+    out = (saved.data or [body])[0]
+    return {"ok": True, "count": out, "chargeback": cb_row}
+
+
+class DecideEnvelopeChargebackIn(LaxModel):
+    id: Any = None
+    decision: Any = None
+    notes: Any = None
+
+
+@router.post("/envelope-chargeback/decide")
+def decide_envelope_chargeback(payload: DecideEnvelopeChargebackIn,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Post (deduct from the rep's commission) or waive one pending envelope_short chargeback —
+    the SAME decide machinery as missed_dm_verify, reason-filtered so this endpoint can't decide
+    another reason's row. Management-review gated."""
+    require_org(org_id)
+    client = sb()
+    if not _can_mgmt_review(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Deciding a chargeback is permission-restricted (not available to DMs).")
+    cb_id = (str(payload.id or "")).strip()
+    if not cb_id:
+        raise HTTPException(400, "id required")
+    try:
+        row = ops_chargebacks.decide_chargeback(
+            client, org_id, cb_id, (payload.decision or "").strip(),
+            decided_by=_caller_email(client, authorization), notes=payload.notes,
+            reason_filter=envelope_report_mod.ENVELOPE_SHORT_REASON)
     except LookupError:
         raise HTTPException(404, "chargeback not found")
     except ValueError as e:
