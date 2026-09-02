@@ -35,7 +35,8 @@ export default function TrendChartImpl({
           {series.map((s, i) => {
             const color = s.color || TREND_COLORS[i % TREND_COLORS.length]
             const axisId = s.axis === 'right' ? 'right' : 'left'
-            if (s.type === 'bar') return <Bar key={s.key} yAxisId={axisId} dataKey={s.key} name={s.name} fill={color} radius={[3, 3, 0, 0]} />
+            if (s.type === 'bar') return <Bar key={s.key} yAxisId={axisId} dataKey={s.key} name={s.name} fill={color}
+              stackId={s.stack} radius={s.stack ? undefined : [3, 3, 0, 0]} />
             return <Line key={s.key} yAxisId={axisId} type="monotone" dataKey={s.key} name={s.name}
               stroke={color} strokeWidth={2} strokeDasharray={s.dashed ? '5 4' : undefined} dot={{ r: 2 }} />
           })}

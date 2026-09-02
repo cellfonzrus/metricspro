@@ -22,13 +22,18 @@ export default function InventoryValuesPage() {
   const [savingCfg, setSavingCfg] = useState(false)
   const [fetching, setFetching] = useState(false)
 
+  // Reconciliation tab (owner defect #1 2026-09-02 / roadmap Phase 2): the emailed-report ↔
+  // unsold-phone-ledger tie-out from GET /account/inventory-recon — read-only, rendered below.
+  const [recon, setRecon] = useState<any>(null)
+
   function load() {
     setLoading(true)
     Promise.all([
       api(`/api/v1/account/inventory-values?org_id=${ORG_ID}`).catch(() => ({ rows: [], sweep: null })),
       api(`/api/v1/commcalc/b2b/sweep/config?org_id=${ORG_ID}`).catch(() => ({})),
-    ]).then(([d, c]: any) => {
-      setRows(d.rows || []); setSweep(d.sweep); setTotal(d.total_effective || 0); setCfg(c || {})
+      api(`/api/v1/account/inventory-recon?org_id=${ORG_ID}`).catch(() => null),
+    ]).then(([d, c, rc]: any) => {
+      setRows(d.rows || []); setSweep(d.sweep); setTotal(d.total_effective || 0); setCfg(c || {}); setRecon(rc)
     }).catch(console.error).finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [])
@@ -171,6 +176,58 @@ export default function InventoryValuesPage() {
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
         The Balance Sheet inventory line uses the <strong>effective</strong> value per store (manual override if set, else the swept b2bsoft value; stores with neither fall back to the asset-ledger on-hand value). After editing, re-run <Link href="/accounts">Compute statements</Link>.
       </p>
+
+      {/* ── Reconciliation: emailed report ↔ unsold-phone ledger ↔ manual ↔ effective ──────────
+          (owner defect #1 2026-09-02: "it should also reconcile against the inventory report being
+          pulled in the email in the reconciliation tab"). Read-only tie-out; ghost counts shown so
+          nothing vanishes silently. */}
+      {recon?.rows?.length > 0 && (
+        <div className="card" style={{ padding: 0, overflow: 'auto', marginTop: 20 }}>
+          <div style={{ padding: '12px 12px 4px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <div>
+              <strong style={{ fontSize: 14 }}>🔎 Reconciliation — report ↔ unsold-phone ledger</strong>
+              <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 2 }}>
+                Effective basis: <b>{recon.basis}</b> · report {fmt(recon.totals?.report_value)} vs devices {fmt(recon.totals?.device_value)} ({recon.totals?.device_count} phones) · delta <b style={{ color: Math.abs(recon.totals?.delta || 0) > 1 ? '#b45309' : '#15803d' }}>{fmt(recon.totals?.delta)}</b>
+              </div>
+            </div>
+            {(recon.device_meta?.unplaced_devices > 0 || recon.device_meta?.superseded_devices > 0) && (
+              <div style={{ fontSize: 12, color: '#92400e', background: '#fef3c7', padding: '4px 8px', borderRadius: 8, alignSelf: 'flex-start' }}>
+                Excluded ghosts: {recon.device_meta.unplaced_devices} unplaced ({fmt(recon.device_meta.unplaced_value)}) · {recon.device_meta.superseded_devices} superseded ({fmt(recon.device_meta.superseded_value)})
+              </div>
+            )}
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
+            <thead>
+              <tr style={{ fontSize: 11, color: 'var(--text2)', textTransform: 'uppercase' }}>
+                <th style={{ textAlign: 'left', padding: '8px 12px' }}>Store</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Report (email)</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Devices (ledger)</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Phones</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Delta (dev − rep)</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Manual</th>
+                <th style={{ textAlign: 'right', padding: '8px 12px' }}>Effective (on BS)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recon.rows.map((r: any) => (
+                <tr key={r.store} style={{ borderTop: '1px solid var(--border)', fontSize: 13 }}>
+                  <td style={{ padding: '6px 12px' }}>{r.store}</td>
+                  <td style={{ padding: '6px 12px', textAlign: 'right' }}>{r.report_value == null ? '—' : fmt(r.report_value)}</td>
+                  <td style={{ padding: '6px 12px', textAlign: 'right' }}>{r.device_value == null ? '—' : fmt(r.device_value)}</td>
+                  <td style={{ padding: '6px 12px', textAlign: 'right', color: 'var(--text2)' }}>{r.device_count || '—'}</td>
+                  <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600, color: r.delta == null ? 'var(--text3)' : Math.abs(r.delta) > 1 ? '#b45309' : '#15803d' }}>{r.delta == null ? '—' : fmt(r.delta)}</td>
+                  <td style={{ padding: '6px 12px', textAlign: 'right', color: 'var(--text2)' }}>{r.manual_value == null ? '—' : fmt(r.manual_value)}</td>
+                  <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 600 }}>
+                    {r.effective == null ? '—' : fmt(r.effective)}
+                    {r.effective_source && <span style={{ marginLeft: 6, fontSize: 10, color: '#3730a3', background: '#e0e7ff', padding: '1px 5px', borderRadius: 999 }}>{r.effective_source}</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div style={{ padding: '8px 12px', fontSize: 12, color: 'var(--text3)' }}>{recon.note}</div>
+        </div>
+      )}
     </div>
   )
 }

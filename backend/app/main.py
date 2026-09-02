@@ -329,6 +329,24 @@ def _email_sweep_cron_startup():
               flush=True)
 
 
+@app.on_event("startup")
+def _account_recompute_cron_startup():
+    """Self-heal the statement auto-recompute schedule on EVERY boot (mig 940 — finance roadmap
+    Phase 1). POST /account/run-due (the staleness-gated statement sweep) had NO pg_cron
+    registration at all — the exact gap that bit the owner twice on 2026-09-02: journal entries
+    entered minutes AFTER the snapshot computed simply "never showed up" until a human clicked
+    Recompute. Same idempotent replace-by-name semantics and the same best-effort posture as the
+    email-sweep hook above: a missing secret / RPC / cron infra logs the reason and never blocks
+    boot. Deterministic books — the cron changes WHEN compute runs, never WHAT it computes."""
+    try:
+        from app.modules.account.router import _ensure_account_recompute_cron
+        print(f"[account-recompute-cron] self-register on boot: "
+              f"{_ensure_account_recompute_cron() or 'no status returned'}", flush=True)
+    except Exception as e:
+        print(f"WARN [account-recompute-cron] self-register failed (statements recompute on manual "
+              f"clicks only): {e}", flush=True)
+
+
 # ── /health: report what this image ACTUALLY has, not what someone remembered ────────────────────
 # The modules list here used to be a hardcoded literal, and it went stale the moment a module was
 # added without someone editing it — by 2026-08 it was missing pos, crm, referral, payables, billing,

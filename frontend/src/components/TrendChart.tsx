@@ -21,6 +21,7 @@ export type TrendSeries = {
   type?: 'line' | 'bar'             // default 'line'
   money?: boolean                   // format tooltip/axis as $
   dashed?: boolean
+  stack?: string                    // bars sharing a stack id stack (e.g. expense composition)
 }
 
 export type TrendChartProps = {

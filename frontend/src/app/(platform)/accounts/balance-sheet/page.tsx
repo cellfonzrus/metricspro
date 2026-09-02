@@ -126,6 +126,7 @@ function BSInner() {
             {!scopes.find((s: any) => s.scope_key === scope) && <option value={scope}>{scope}</option>}
           </select>
           <Link className="btn" href="/accounts/inventory" style={{ fontSize: 13 }}>📦 Edit inventory</Link>
+          <Link className="btn" href="/accounts/cash-flow" style={{ fontSize: 13 }}>💧 Cash Flow</Link>
           {st && <ReportExportBar
             title={`Balance Sheet — ${st?.scope_label || scope}`}
             subtitle={statementSubtitle(bsMeta())}

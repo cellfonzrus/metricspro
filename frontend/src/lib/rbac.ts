@@ -174,7 +174,9 @@ export const DATA_GRANTS: { key: string; label: string; help?: string }[] = [
   { key: 'residual_per_sub', label: 'Residual per Subscriber report',
     help: 'Access to /accounts/residual-per-sub. DEFAULT-CLOSED — admin-only until granted.' },
   { key: 'account_trends', label: 'Trends report (all metrics)',
-    help: 'Access to /accounts/trends. DEFAULT-CLOSED — admin-only until granted.' },
+    help: 'Access to /accounts/trends and /accounts/analysis (charts, margins, projections). DEFAULT-CLOSED — admin-only until granted.' },
+  { key: 'company_valuation', label: 'Company valuation (estimate range)',
+    help: 'The valuation section of /accounts/analysis (backend GET /account/valuation — TTM multiples, asset floor, DCF). The single most sensitive finance read; deliberately NOT bundled under account_trends. DEFAULT-CLOSED — admin-only until granted.' },
   { key: 'ma_handset_cogs', label: 'Marketplace handset COGS report',
     help: 'Access to /commcalc/ma-handsets — the whole report (lines, quantities and handset costs), not just the totals (backend commcalc `_can_view_ma_handset_cogs`). DEFAULT-CLOSED — admin-only until granted.' },
   { key: 'device_cost_recon', label: 'Device cost reconciliation',
@@ -479,6 +481,11 @@ export const NAV: NavGroup[] = [
     { href: '/hub/finance', label: 'Finance Dashboard', icon: '💼', module: 'accounts' },
     { href: '/accounts', label: 'Dashboard', icon: '💼', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/trends', label: 'Trends', icon: '📊', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    // Financial Analysis + Cash Flow (finance roadmap Phases 2–5, 2026-09-02): charts/projections/
+    // valuation hub (page rides the account_trends grant; the valuation section additionally its own
+    // company_valuation grant) and the derived Cash Flow statement (stored snapshot since PR #179).
+    { href: '/accounts/analysis', label: 'Financial Analysis', icon: '📊', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
+    { href: '/accounts/cash-flow', label: 'Cash Flow', icon: '💧', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/accounts/pl', label: 'P&L Statement', icon: '📈', module: 'accounts', scopes: ['all', 'market'], tileOnly: true },
     { href: '/commcalc/gp', label: 'Gross Profit', icon: '💰', module: 'commissions', tileOnly: true },
     { href: '/commcalc/expenses', label: 'Store Expenses', icon: '🏪', module: 'commissions', scopes: ['all', 'market'], tileOnly: true },
@@ -867,6 +874,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/commcalc/distributors', 'assets'], ['/commcalc/vip', 'assets'], ['/commcalc/vip/paygo', 'assets'],
   // Finance & Accounting
   ['/accounts', 'finance'], ['/accounts/trends', 'finance'], ['/accounts/pl', 'finance'],
+  ['/accounts/analysis', 'finance'], ['/accounts/cash-flow', 'finance'],
   ['/accounts/balance-sheet', 'finance'], ['/accounts/inventory', 'finance'], ['/accounts/recon', 'finance'],
   ['/accounts/residual-per-sub', 'finance'], ['/accounts/journal', 'finance'],
   ['/commcalc/gp', 'finance'], ['/commcalc/expenses', 'finance'], ['/commcalc/tax-collected', 'finance'],

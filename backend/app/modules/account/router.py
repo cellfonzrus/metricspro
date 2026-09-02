@@ -492,6 +492,31 @@ async def compute(period: str, org_id: str = ORG_ID):
 
 
 # ── scheduled auto-recompute (called by Supabase pg_cron via pg_net) ───────────────────────────
+def _ensure_account_recompute_cron():
+    """Self-register the GLOBAL statement-recompute pg_cron job (mig 940) so no one runs SQL by
+    hand — called from the main.py startup hook on EVERY boot, exactly like the email-sweep cron
+    (mig 922 / the 2026-08-25→09-01 dead-cron incident). Reads the backend's own API URL + notify
+    secret from settings and calls the idempotent commcalc.ensure_account_recompute_cron RPC as
+    service_role, re-embedding the CURRENT secret on every deploy (survives rotations, self-heals a
+    lost job).
+
+    NON-FATAL by design: a missing secret, the RPC not present (mig 940 not applied yet), or
+    pg_cron/pg_net not installed just means auto-scheduling is skipped — boot still succeeds, and
+    the staleness banner's Recompute button still works. Returns the RPC's status string (or None).
+    Deterministic books: the cron only changes WHEN compute runs, never WHAT it computes."""
+    try:
+        url = (getattr(settings, "API_PUBLIC_URL", "") or "").strip()
+        secret = (getattr(settings, "NOTIFY_RUN_SECRET", "") or "").strip()
+        if not url or not secret:
+            return "skipped: API_PUBLIC_URL or NOTIFY_RUN_SECRET not set"
+        res = sb().schema("commcalc").rpc(
+            "ensure_account_recompute_cron", {"p_url": url, "p_secret": secret}).execute()
+        return res.data if isinstance(res.data, str) else (res.data or None)
+    except Exception as e:
+        print(f"WARN _ensure_account_recompute_cron skipped: {e}")
+        return None
+
+
 @router.post("/run-due")
 async def run_due(x_notify_secret: str = Header(default=""), only_org: str = "", force: bool = False):
     """Recompute the current + prior period statements for every tenant with account data, but only
@@ -819,6 +844,129 @@ def residual_per_sub(months: int = 6, authorization: str = Header(default=""), o
         report="Residual per Subscriber")
     from app.modules.account import residual_subs
     return residual_subs.compute(sb(), org_id, months=max(1, min(int(months or 6), 36)))
+
+
+# ── financial analysis (chart-ready series from the stored snapshots — roadmap Phase 3) ───────
+@router.get("/analysis")
+async def financial_analysis(months: int = 12, authorization: str = Header(default=""),
+                             org_id: str = ORG_ID):
+    """Chart-ready financial-analysis series for the Financial Analysis page: consolidated monthly
+    P&L/BS trend + margins, OPEX composition (stacked-bar ready), per-company and per-store
+    comparison series. ONE MATH PATH: everything is read from the stored `account_statements`
+    snapshots (`analysis.assemble`, pure) — never recomputed — so a chart can never disagree with
+    the P&L / Balance Sheet pages.
+
+    PERMISSION: gated by the 'account_trends' data grant (DEFAULT-CLOSED — the same gate as the
+    Trends hub, whose charts this page supersets; admins / scope-'all' pass). Org-scoped; the read
+    below carries org_id on every page and an unknown org simply has no rows (fail closed)."""
+    require_org(org_id)
+    report_gates.require_report_grant(authorization, report_gates.ACCOUNT_TRENDS,
+                                      report="Financial Analysis")
+    from app.modules.account import analysis
+
+    def _rows():
+        out = []
+        for st in ("pl", "balance_sheet"):
+            out.extend(coa._fetch_all(
+                sb(), "account_statements",
+                "period,statement_type,scope_key,scope_label,payload,computed_at",
+                {"org_id": org_id, "statement_type": st}))
+        return out
+
+    try:
+        rows = await run_in_threadpool(_rows)   # bulk Supabase read off the event loop (SEV-1 rule)
+        return {"org_id": org_id, **analysis.assemble(rows, months=months)}
+    except Exception as e:
+        raise HTTPException(500, f"analysis failed: {type(e).__name__}: {e}")
+
+
+@router.get("/projection")
+async def financial_projection(months: int = 24, horizon: int = 0,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Config-driven forward projection of the consolidated P&L (roadmap Phase 4): the stored-
+    snapshot monthly series (the SAME `analysis.assemble` history the charts use) extended forward
+    by the pure, DETERMINISTIC `projection_engine.project` — linear or seasonal-naive trend, with
+    per-org growth/inflation overrides from `account_config.projection_config` (mig 941; house
+    defaults otherwise). Every projected row is flagged `projected: true` and every assumption is
+    listed; nothing here writes a snapshot or feeds a booked number. `horizon` > 0 overrides the
+    configured horizon_months for this call (1..24 — an exploration knob, not a config write).
+    PERMISSION: the same DEFAULT-CLOSED 'account_trends' grant as /account/analysis."""
+    require_org(org_id)
+    report_gates.require_report_grant(authorization, report_gates.ACCOUNT_TRENDS,
+                                      report="Financial Projections")
+    from app.modules.account import analysis, projection_engine
+
+    def _run():
+        rows = coa._fetch_all(
+            sb(), "account_statements",
+            "period,statement_type,scope_key,scope_label,payload,computed_at",
+            {"org_id": org_id, "statement_type": "pl"})
+        rows += coa._fetch_all(
+            sb(), "account_statements",
+            "period,statement_type,scope_key,scope_label,payload,computed_at",
+            {"org_id": org_id, "statement_type": "balance_sheet"})
+        monthly = analysis.assemble(rows, months=months).get("monthly") or []
+        cfg = projection_engine.load_projection_config(sb(), org_id)
+        if 1 <= int(horizon or 0) <= 24:
+            cfg = {**cfg, "horizon_months": int(horizon)}
+        return {"org_id": org_id, "actuals": monthly, **projection_engine.project(monthly, cfg)}
+
+    try:
+        return await run_in_threadpool(_run)
+    except Exception as e:
+        raise HTTPException(500, f"projection failed: {type(e).__name__}: {e}")
+
+
+@router.get("/valuation")
+async def company_valuation(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Probable company valuation (roadmap Phase 5) — an assumption-driven ESTIMATE range from the
+    org's OWN stored statements: revenue/SDE/EBITDA multiples on the trailing twelve months, an
+    asset-based floor from the latest Balance Sheet, and a DCF fed by the deterministic Phase-4
+    projection (3×3 rate × terminal-multiple sensitivity grid). Every multiple/rate/horizon is
+    per-org config with house defaults (`account_config.valuation_config`, mig 941) and each
+    method cites its source; the payload carries the full assumptions block + the not-an-appraisal
+    disclaimer the UI must show.
+
+    PERMISSION: its OWN DEFAULT-CLOSED 'company_valuation' data grant — the most sensitive finance
+    read; deliberately not bundled under 'account_trends'. Org-scoped, worker-thread."""
+    require_org(org_id)
+    report_gates.require_report_grant(authorization, report_gates.COMPANY_VALUATION,
+                                      report="Company valuation")
+    from app.modules.account import analysis, projection_engine, valuation
+
+    def _run():
+        rows = []
+        for st in ("pl", "balance_sheet"):
+            rows += coa._fetch_all(
+                sb(), "account_statements",
+                "period,statement_type,scope_key,scope_label,payload,computed_at",
+                {"org_id": org_id, "statement_type": st})
+        monthly = analysis.assemble(rows, months=36).get("monthly") or []
+        cfg, cfg_src = valuation.load_valuation_config(sb(), org_id)
+        pcfg = projection_engine.load_projection_config(sb(), org_id)
+        proj = projection_engine.project(
+            monthly, {**pcfg, "horizon_months": min(24, max(12, cfg["dcf_horizon_months"]))})
+        # DCF horizon may exceed the engine's 24-month cap: extend by holding the final projected
+        # month flat (stated in the projection meta) — deterministic, assumption on the record.
+        fcfs, meta = None, None
+        if proj.get("computed"):
+            ni = [s["net_income"] for s in proj["series"]]
+            want = cfg["dcf_horizon_months"]
+            if len(ni) < want and ni:
+                ni = ni + [ni[-1]] * (want - len(ni))
+                meta_note = (f"projection horizon capped at {len(proj['series'])} months; months "
+                             f"{len(proj['series']) + 1}–{want} hold the final projected month flat")
+            else:
+                ni, meta_note = ni[:want], None
+            fcfs = ni
+            meta = {"method": proj.get("method"), "history_months": proj.get("history_months"),
+                    "assumptions": proj.get("assumptions"), **({"note": meta_note} if meta_note else {})}
+        return {"org_id": org_id, **valuation.valuation(monthly, cfg, cfg_src, fcfs, meta)}
+
+    try:
+        return await run_in_threadpool(_run)
+    except Exception as e:
+        raise HTTPException(500, f"valuation failed: {type(e).__name__}: {e}")
 
 
 # ── health ──────────────────────────────────────────────────────────────────────────────────

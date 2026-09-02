@@ -346,6 +346,73 @@ commissions, expenses.
   the existing closing-expense sweep. LuxeLink seed (`'verified'`) COMMENTED behind the owner
   gate in mig `938`. Proof: `harness_verified_cash_bs.py`.
 
+- **Statement auto-recompute self-schedules (roadmap Phase 1, mig `940`, 2026-09-02):** the
+  `POST /account/run-due` staleness sweep (`account/autocompute.recompute_due` — recomputes
+  current+prior period statements ONLY where a tenant's own ingest/journal edit is newer than its
+  snapshot) finally has its scheduler tick: pg_cron job `account-recompute-run-due` (every 2h),
+  installed by `commcalc.ensure_account_recompute_cron(url, secret)` (SECURITY DEFINER,
+  service_role-only EXECUTE — the mig-922 email-sweep pattern verbatim, no secret in the
+  migration) and re-registered on EVERY backend boot (`main.py` `_account_recompute_cron_startup`
+  → `account/router._ensure_account_recompute_cron`), so a rotated secret or lost job self-heals
+  on the next deploy. Closes §19 gap 13 (the owner's twice-in-one-day "entered but never showed
+  up" staleness). WHEN, never WHAT: numbers stay `statement_engine.compute_and_store`
+  byte-identical.
+
+- **Financial-analysis series (roadmap Phase 3 backend, 2026-09-02):** `GET /account/analysis`
+  (`?months=N`, gated by the `account_trends` data grant — the charts-hub gate) serves the
+  chart-ready payload for the Financial Analysis page: consolidated monthly P&L/BS trend
+  (revenue/COGS/opex/GP/NI, cash & equivalents = `cash`+`store_cash_on_hand`, assets/liabilities/
+  equity/inventory) with margin ratios (`None` on a zero base — a chart gap, never a fake 0),
+  per-month OPEX composition (stacked-bar ready) and per-company / per-store comparison series.
+  ONE MATH PATH: pure `account/analysis.py` reads STORED `account_statements` payloads only
+  (spelling-duality dedupe, freshest computed_at wins) — never a second computation — so charts
+  can never disagree with the statements. Proof: `harness_financial_analysis.py` (also pins
+  `analysis.CASH_KEYS == statement_engine.CF_CASH_KEYS`).
+
+- **Projection engine (roadmap Phase 4, mig `941`, 2026-09-02):** `GET /account/projection`
+  (`?months=&horizon=`, `account_trends` grant) — PURE, config-driven, **deterministic-only** (no
+  LLM in the math) forward projection of the consolidated P&L: `account/projection_engine.py`
+  extends the SAME `analysis.assemble` monthly history (stored snapshots — one math path) via
+  least-squares **linear** trend or **seasonal_naive** (same-month-last-year × recent YoY level;
+  ≥15 months or noted linear fallback; `auto` picks). Per-org `account_config.projection_config`
+  (mig `941`, house defaults in `resolve_projection_config`): `method`, `trailing_months`,
+  `horizon_months`, `growth_rate_override` (revenue compounds from last actual — config wins over
+  fit), `expense_inflation` (COGS+OPEX compound). GP/NI are DERIVED per projected month (never
+  independently trended); magnitude lines floor at $0 with the clamp reported; every row is
+  flagged `projected: true` (display-only — nothing books from it); cash runway = cash &
+  equivalents ÷ avg projected burn. Proof: `harness_projection_engine.py`.
+
+- **Company valuation (roadmap Phase 5, mig `941`, 2026-09-02):** `GET /account/valuation` —
+  gated by its OWN default-closed `company_valuation` data grant (`report_gates.py`; deliberately
+  NOT bundled under `account_trends`). PURE `account/valuation.py`: an assumption-driven ESTIMATE
+  range from the org's OWN stored statements — TTM basis (`ttm_metrics`: <12 computed months
+  ANNUALIZE ×12/n and say so; EBITDA ≈ NI + P&L `other`; SDE = EBITDA + configured owner
+  addbacks), revenue/SDE/EBITDA multiple methods (zero/negative basis marked not-meaningful,
+  never silently priced), asset-based floor (latest BS assets − liabilities), and a DCF fed by
+  the Phase-4 deterministic projection (NI as the cash-basis FCF proxy; monthly discounting +
+  discounted terminal = terminal multiple × final projected year; 3×3 rate × multiple sensitivity
+  grid). Summary = min/median/max across meaningful earnings methods with the asset floor lifting
+  the low end (flagged). EVERY multiple/rate/horizon is per-org `account_config.valuation_config`
+  (mig `941`) with house defaults, each method citing its source ('house default'/'org config');
+  payload always carries the full assumptions block + the "not an appraisal" disclaimer the UI
+  must show. Proof: `harness_valuation.py` (closed-form DCF check to the cent).
+
+- **Finance UI wave (roadmap Phases 2–5 UI, 2026-09-02 — Option-B, awaiting owner preview):**
+  (a) NEW `/accounts/analysis` (Financial Analysis hub — reads `/account/analysis` +
+  `/account/projection` + `/account/valuation` ONLY; computes nothing): headline tiles, P&L trend
+  with dashed projection overlay, stacked OPEX composition (shared `TrendChart` gained an
+  additive `stack` prop), margin/cash trends, per-company + top-store comparison bars, projection
+  table + runway + assumptions, valuation range/methods/sensitivity + the disclaimer (valuation
+  section lock-chips on its own `company_valuation` 403). (b) NEW `/accounts/cash-flow` page
+  (stored `cash_flow` snapshot; scope select, staleness banner, honest tie-out banner, export).
+  (c) `/accounts/inventory` gained the read-only reconciliation grid (`/account/inventory-recon`:
+  report ↔ devices ↔ manual ↔ effective + ghost chips). (d) `/accounts/journal` — RULE THREE
+  pickers: company picker (`/account/companies`) + store picker (canonical roster; legacy typed
+  values still render), and the PR-#179 server echo surfaced (REJECTED rows with reasons in red,
+  `resolved` company attributions confirmed — nothing silently dropped). Registered in nav +
+  route-module map + `DATA_GRANTS` (`company_valuation`) in `rbac.ts` and the Reports directory
+  (`reports.ts`).
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -960,7 +1027,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus, **BS inventory under `inventory_basis='devices'` + `GET /account/inventory-recon`** (`balance_sheet.device_inventory_cells` via `statement_engine`, mig `933`); statement staleness probe (`autocompute._POINT_IN_TIME_SOURCES`) |
 | `commcalc.journal_entries` | `PUT /account/journal/{period}` (`account/router.py` — delete+insert per period; echoes `rejected`/`resolved`) | `statement_engine._journal_rows` (BOTH period spellings) → `balance_sheet.journal_scope_entries` (fixed company scoping, mig `933`); legacy `engine.compute_and_store` exact-period read; staleness probe |
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview`, `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
-| `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933 knobs, adaptive) |
+| `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`/`938`/`941`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate; mig-941 columns (`projection_config`, `valuation_config` JSONB — display-only assumptions, org seeds gated) | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933/938 knobs, adaptive), `projection_engine.load_projection_config`, `valuation.load_valuation_config` (mig-941, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
 | `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`) |
 | `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection |
@@ -1028,8 +1095,11 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `GET /account/statement/{period}` (`?scope=&kinds=pl,balance_sheet,cash_flow` — FRESH on-demand statements, nothing persisted; the platform statement service) | `account/router.py` (`on_demand_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/cash-flow/{period}` (stored derived Cash Flow snapshot, statement_type `cash_flow`) | `account/router.py` (`get_cf`) | §4 statement engine |
 | `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
-| `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
+| `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
+| `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
+| `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
+| `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
@@ -1137,13 +1207,15 @@ closing tender recon mig `103`,`104`,`106`,`111`.
     `harness_pay_visibility.py` §I (exec's the real route source; manager_up / permissioned /
     per-org `pay_visible_roles` / grant / pre-434 adaptive default / broken-token all covered).
 
-13. **`POST /account/run-due` has NO pg_cron registration** (unlike the email sweep, migs
-    `921`/`922`) — statements recompute only on a manual Compute click or an external caller.
-    Live consequence 2026-09-02: the owner's journal entries (03:05Z) sat invisible behind an
-    02:30Z snapshot. Follow-up: a future autocompute self-scheduling migration (roadmap Phase 1;
-    `934` is now taken by the rebate-presentation config). Live consequence again 2026-09-02: the
-    Novawave-side MA daily-TX upload landed at 03:50Z, five minutes AFTER the 03:45Z August
-    recompute — Nova Wave commission/residual/merchant discount read $0 until the next compute.
+13. ~~`POST /account/run-due` has NO pg_cron registration~~ **CLOSED (mig `940`, 2026-09-02)**:
+    `commcalc.ensure_account_recompute_cron(url, secret)` — the mig-922 self-scheduling pattern —
+    is called by the backend on EVERY boot (`main.py` `_account_recompute_cron_startup` →
+    `account/router._ensure_account_recompute_cron`, service_role only), (re)scheduling the ONE
+    global job `account-recompute-run-due` (every 2h, `0 */2 * * *`) that POSTs the secret-gated
+    `/account/run-due` sweep. The two 2026-09-02 live consequences that motivated it (owner journal
+    entries 03:05Z invisible behind an 02:30Z snapshot; Nova Wave MA daily-TX upload 03:50Z landing
+    five minutes after the 03:45Z recompute) now self-heal within a tick; the staleness banner's
+    Recompute button covers the intra-tick window. Changes WHEN compute runs, never WHAT.
 14. **Journal page has no company/store PICKER** — free-text entry is what stranded the owner's
     equity/loan rows (mig-933 matcher now resolves typed designations server-side; the picker is
     the lasting Option-B UI fix, roadmap Phase 2).

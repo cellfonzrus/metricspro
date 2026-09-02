@@ -20,7 +20,7 @@ const SUGGESTED = [
   { statement: 'pl', account_type: 'other', account_line: 'Income taxes' },
   { statement: 'pl', account_type: 'other', account_line: 'Interest expense' },
 ]
-type Row = { statement: string; account_type: string; account_line: string; amount: number; store_address?: string; memo?: string }
+type Row = { statement: string; account_type: string; account_line: string; amount: number; company_id?: string | null; store_address?: string; memo?: string }
 
 export default function JournalPage() {
   const { period } = usePeriod()
@@ -36,9 +36,16 @@ export default function JournalPage() {
   const [filt, setFilt] = useState<StandardFilterValue>(emptyStandardFilter())
   const [fopts, setFopts] = useState<{ stores?: any[]; markets?: string[] }>({})
   const filterActive = filt.stores.length > 0 || filt.markets.length > 0
+  // RULE THREE (pick-don't-type) — the defect that stranded the owner's $560k of entries: company
+  // and store are now PICKERS (companies from /account/companies, stores from the canonical
+  // filter-options roster), never free text. The server echo below confirms what each save did.
+  const [companies, setCompanies] = useState<any[]>([])
+  const [rejected, setRejected] = useState<any[]>([])
+  const [resolved, setResolved] = useState<any[]>([])
 
   useEffect(() => {
     apiCached(`/api/v1/core/filter-options?org_id=${ORG_ID}`, LOOKUP).then((d: any) => setFopts(d || {})).catch(() => setFopts({}))
+    api(`/api/v1/account/companies?org_id=${ORG_ID}`).then((d: any) => setCompanies(d.companies || [])).catch(() => setCompanies([]))
   }, [])
   const storeMarket = useMemo(() => {
     const m: Record<string, string> = {}
@@ -63,7 +70,7 @@ export default function JournalPage() {
     api(`/api/v1/account/journal/${encodeURIComponent(period)}?org_id=${ORG_ID}`).then((d: any) => {
       setRows((d.entries || []).map((e: any) => ({
         statement: e.statement, account_type: e.account_type, account_line: e.account_line,
-        amount: parseFloat(e.amount) || 0, store_address: e.store_address || '', memo: e.memo || '',
+        amount: parseFloat(e.amount) || 0, company_id: e.company_id || '', store_address: e.store_address || '', memo: e.memo || '',
       })))
     }).catch(console.error).finally(() => setLoading(false))
   }
@@ -74,12 +81,16 @@ export default function JournalPage() {
   const del = (i: number) => setRows(r => r.filter((_, j) => j !== i))
 
   async function save() {
-    setSaving(true); setMsg('')
+    setSaving(true); setMsg(''); setRejected([]); setResolved([])
     try {
       const r = await api(`/api/v1/account/journal/${encodeURIComponent(period)}?org_id=${ORG_ID}`, {
         method: 'PUT', body: JSON.stringify({ rows: rows.filter(x => x.account_line.trim() && x.amount) }),
       })
-      setMsg(`Saved ${r.saved} entries. Re-compute statements on the dashboard to apply.`); load()
+      // The server's echo (PR #179): an entered amount that cannot be accepted is REPORTED with its
+      // reason — surface it loudly so nothing is ever silently dropped again; `resolved` confirms
+      // which company each entry attributed to (picker or typed designation).
+      setRejected(r.rejected || []); setResolved(r.resolved || [])
+      setMsg(`Saved ${r.saved} entries.${(r.rejected || []).length ? ` ${r.rejected.length} REJECTED — see below.` : ''} Re-compute statements on the dashboard to apply.`); load()
     } catch (e: any) { setMsg('Save failed: ' + (e?.message || e)) }
     setSaving(false)
   }
@@ -141,6 +152,7 @@ export default function JournalPage() {
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Type</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Account line</th>
                 <th style={{ textAlign: 'right', padding: '8px 12px' }}>Amount</th>
+                <th style={{ textAlign: 'left', padding: '8px 12px' }}>Company (optional)</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Store (optional)</th>
                 <th style={{ textAlign: 'left', padding: '8px 12px' }}>Memo</th>
                 <th></th>
@@ -167,17 +179,55 @@ export default function JournalPage() {
                     </td>
                     <td style={{ padding: '5px 12px' }}><input style={{ ...inp, width: 200 }} value={r.account_line} placeholder="e.g. Cash / bank" onChange={e => set(i, { account_line: e.target.value })} /></td>
                     <td style={{ padding: '5px 12px' }}><input type="number" step="0.01" style={{ ...inp, width: 120, textAlign: 'right' }} value={r.amount || ''} onChange={e => set(i, { amount: parseFloat(e.target.value) || 0 })} /></td>
-                    <td style={{ padding: '5px 12px' }}><input style={{ ...inp, width: 160 }} value={r.store_address} placeholder="(all stores)" onChange={e => set(i, { store_address: e.target.value })} /></td>
+                    {/* RULE THREE: pick-don't-type. Company picker (the fix for the stranded
+                        $250k/$100k/$210k rows typed as company names into the store field). */}
+                    <td style={{ padding: '5px 12px' }}>
+                      <select style={{ ...inp, width: 150 }} value={r.company_id || ''} onChange={e => set(i, { company_id: e.target.value || null })}>
+                        <option value="">(consolidated)</option>
+                        {companies.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                    </td>
+                    <td style={{ padding: '5px 12px' }}>
+                      <select style={{ ...inp, width: 170 }} value={r.store_address || ''} onChange={e => set(i, { store_address: e.target.value })}>
+                        <option value="">(all stores)</option>
+                        {/* a legacy typed value not on the roster still renders + stays selectable */}
+                        {r.store_address && !storeOpts.find(o => o.id === r.store_address) && <option value={r.store_address}>{r.store_address} (typed)</option>}
+                        {storeOpts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                      </select>
+                    </td>
                     <td style={{ padding: '5px 12px' }}><input style={{ ...inp, width: 160 }} value={r.memo} onChange={e => set(i, { memo: e.target.value })} /></td>
                     <td style={{ padding: '5px 12px' }}><button className="btn" style={{ fontSize: 12 }} onClick={() => del(i)}>✕</button></td>
                   </tr>
                 )
               })}
-              {rows.length === 0 && <tr><td colSpan={7} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No manual entries yet. Use Quick add above.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={8} style={{ padding: 30, textAlign: 'center', color: 'var(--text3)' }}>No manual entries yet. Use Quick add above.</td></tr>}
             </tbody>
           </table>
         </div>
       )}
+      {/* Server echo (PR #179): nothing is ever silently dropped — rejected rows show WHY, resolved
+          rows confirm which company each entry attributed to. */}
+      {rejected.length > 0 && (
+        <div className="card" style={{ padding: 12, marginTop: 14, background: '#fef2f2', border: '1px solid #fecaca' }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: '#991b1b', marginBottom: 6 }}>⚠ {rejected.length} entr{rejected.length === 1 ? 'y was' : 'ies were'} NOT saved</div>
+          {rejected.map((r: any, i: number) => (
+            <div key={i} style={{ fontSize: 12.5, color: '#991b1b' }}>· <b>{r.account_line}</b> — {r.reason}</div>
+          ))}
+        </div>
+      )}
+      {resolved.length > 0 && (
+        <div className="card" style={{ padding: 12, marginTop: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>✓ Saved — company attribution</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 4 }}>
+            {resolved.map((r: any, i: number) => (
+              <div key={i} style={{ fontSize: 12.5, color: 'var(--text2)' }}>
+                · {r.account_line} ({fmt(r.amount)}) → <b>{r.company || 'Consolidated (all companies)'}</b>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <p style={{ fontSize: 12, color: 'var(--text3)', marginTop: 10 }}>
         Match an account line label to a statement line to fill it (e.g. “Cash / bank”, “Wages / hourly payroll”). Other labels appear as their own line in the chosen section. To balance the Balance Sheet, enter Cash and any Owner capital / Opening retained earnings.
       </p>
