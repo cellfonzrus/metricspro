@@ -15,9 +15,28 @@ rep, then applies the daily catch-up rule:
 Categories: activations (premium+BYOD acts), upgrades, byod (KPI-derived),
 accessories ($ GP). Counts for the first three, dollars for accessories.
 """
+import re
 from datetime import date, timedelta
 
 from app.modules.commcalc.calculator import safe_float
+
+
+def name_key(name) -> str:
+    """Identity key for a PERSON's name across systems that spell it differently.
+
+    The schedule (storeops.shifts.employee_name) and the POS export (salesperson) are typed by
+    different people in different systems — LuxeLink's POS emits 'Antunez, Diana' while its schedule
+    says 'Diana Antunez', so a plain upper-case compare matched ZERO of that org's reps and every
+    per-employee daily target silently multiplied by rep_share = 0 (found 2026-09-02). Explicit
+    commcalc.name_map / rep_aliases rows still canonicalize FIRST (in _rep_canon_map, upstream of
+    this engine); this key is the format-normalization fallback beneath them: uppercase,
+    punctuation stripped, tokens SORTED — so 'Antunez, Diana', 'Diana Antunez' and 'KELLIE MARK' /
+    'Kellie, Mark' all collapse to one identity regardless of comma style or word order. Two
+    different people sharing the exact same name-token set within one store would merge — accept
+    that vanishing edge over the broken-by-default join. Names only; store codes keep their plain
+    upper-case compare."""
+    toks = re.sub(r"[^A-Z0-9 ]+", " ", str(name or "").upper()).split()
+    return " ".join(sorted(toks))
 
 # Display order; accessories is a dollar amount, the rest are transaction counts.
 CATEGORIES = ['activations', 'upgrades', 'byod', 'accessories']
@@ -56,13 +75,13 @@ def scope_hours_by_day(shifts: list[dict], store_code: str, rep_name: str | None
     """Sum scheduled hours per day for a scope. rep_name=None → whole store."""
     out: dict[date, float] = {}
     sc = (store_code or '').strip().upper()
-    rn = (rep_name or '').strip().upper()
+    rn = name_key(rep_name)
     for s in shifts:
         if s.get('is_deleted'):
             continue
         if (s.get('store_code') or '').strip().upper() != sc:
             continue
-        if rn and (s.get('employee_name') or '').strip().upper() != rn:
+        if rn and name_key(s.get('employee_name')) != rn:
             continue
         d = _as_date(s.get('shift_date'))
         if not d:
@@ -78,11 +97,11 @@ def scope_actuals_by_day(actuals: list[dict], store_code: str, rep_name: str | N
     """Aggregate RPC actual rows per day for a scope → {date: {prem,byod,upg,acc}}."""
     out: dict[date, dict] = {}
     sc = (store_code or '').strip().upper()
-    rn = (rep_name or '').strip().upper()
+    rn = name_key(rep_name)
     for a in actuals:
         if (a.get('store_code') or '').strip().upper() != sc:
             continue
-        if rn and (a.get('rep_name') or '').strip().upper() != rn:
+        if rn and name_key(a.get('rep_name')) != rn:
             continue
         d = _as_date(a.get('trans_date'))
         if not d:
@@ -108,12 +127,12 @@ def scope_conversion(actuals: list[dict], store_code: str, rep_name: str | None 
     conversion = boxes sold (device-dept lines) ÷ bill-payments (walk-in recharges) × 100.
     Target = CONVERSION_TARGET%. Rows after `today` are excluded so it stays month-to-date."""
     sc = (store_code or '').strip().upper()
-    rn = (rep_name or '').strip().upper()
+    rn = name_key(rep_name)
     boxes = billpays = 0.0
     for a in actuals:
         if (a.get('store_code') or '').strip().upper() != sc:
             continue
-        if rn and (a.get('rep_name') or '').strip().upper() != rn:
+        if rn and name_key(a.get('rep_name')) != rn:
             continue
         if today is not None:
             d = _as_date(a.get('trans_date'))
@@ -317,6 +336,8 @@ def derive_monthly_by_cat(target_row: dict, byod_pct_default: float) -> dict:
 def reps_in_scope(shifts: list[dict], actuals: list[dict], store_code: str) -> list[str]:
     """Distinct rep names that either worked or sold at a store (for rep breakdown)."""
     sc = (store_code or '').strip().upper()
+    # Keyed by name_key so 'Diana Antunez' (schedule) and 'Antunez, Diana' (POS) list ONCE — the
+    # schedule spelling wins the display because shifts are scanned first.
     names: dict[str, str] = {}
     for s in shifts:
         if s.get('is_deleted'):
@@ -325,13 +346,13 @@ def reps_in_scope(shifts: list[dict], actuals: list[dict], store_code: str) -> l
             continue
         n = (s.get('employee_name') or '').strip()
         if n:
-            names.setdefault(n.upper(), n)
+            names.setdefault(name_key(n), n)
     for a in actuals:
         if (a.get('store_code') or '').strip().upper() != sc:
             continue
         n = (a.get('rep_name') or '').strip()
         if n:
-            names.setdefault(n.upper(), n)
+            names.setdefault(name_key(n), n)
     return sorted(names.values(), key=lambda x: x.upper())
 
 

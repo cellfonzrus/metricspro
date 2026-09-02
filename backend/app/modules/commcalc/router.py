@@ -21894,14 +21894,21 @@ def get_target_calendar(
     start, end, today = _period_bounds(cperiod, today)
     byod_def = _byod_pct_default(client, cperiod, org_id)
 
-    trow = (client.schema('commcalc').table('targets')
-            .select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod))
-            .eq('store_code', store_code).limit(1).execute().data) or []
+    # Case-INSENSITIVE store_code match, same as /summary's `{code.upper(): row}` map (22091): a
+    # target saved as 'kedzie' must still resolve when the roster/UI hands this endpoint 'Kedzie' —
+    # a case-only mismatch used to return target_row={} here and render the whole drill-down as
+    # silent zeros while the summary tiles looked fine.
+    sc_up = (store_code or '').strip().upper()
+    trows = (client.schema('commcalc').table('targets')
+             .select('*').eq('org_id', org_id).in_('period', _pvariants(cperiod))
+             .limit(2000).execute().data) or []
+    trow = [r for r in trows if str(r.get('store_code') or '').strip().upper() == sc_up][:1]
     target_row = trow[0] if trow else {}
     # Seed accessories from store monthly_target when no explicit row yet.
     if not trow:
-        srow = (client.schema('storeops').table('stores')
-                .select('monthly_target').eq('org_id', org_id).eq('store_code', store_code).limit(1).execute().data) or []
+        srows = (client.schema('storeops').table('stores')
+                 .select('store_code,monthly_target').eq('org_id', org_id).limit(2000).execute().data) or []
+        srow = [r for r in srows if str(r.get('store_code') or '').strip().upper() == sc_up][:1]
         if srow:
             target_row = {'accessories_monthly': safe_float(srow[0].get('monthly_target'))}
     monthly = targets_engine.derive_monthly_by_cat(target_row, byod_def)

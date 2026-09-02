@@ -330,7 +330,7 @@ scoping, MTD projection, and action items.
   hardcodes Ondigo/gp and a rigid label list — superseded by `_compute_feed_actuals_py`. Do not use.
 
 **Source tables:** `daily_sales_feed`/`raw_sales`; targets stored in `commcalc` targets tables (mig
-`006_targets.sql`, `070_target_field_registry.sql`); hours from `storeops.shifts` via `_fetch_shifts`
+`006_targets.sql`, `070_target_field_registry.sql`); hours from `storeops.shifts` via `_fetch_shifts`; the schedule↔sales rep join keys on `targets_engine.name_key` (uppercase, punctuation-free, tokens sorted) so 'Last, First' POS spellings match 'First Last' schedule spellings — explicit `name_map`/`rep_aliases` rows still canonicalize first
 `router.py:17447`.
 
 **Endpoints:** `/targets/{period}` `router.py:19005`, PUT `19071`; `/targets/{period}/roll-forward` `19103`;
