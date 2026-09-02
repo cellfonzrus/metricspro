@@ -44,6 +44,7 @@ from app.modules.commcalc import sales_comparison as _salescmp
 from app.modules.commcalc import sales_recon
 from app.modules.commcalc import sales_derive
 from app.modules.commcalc import ingest_store_guard as _isg
+from app.modules.commcalc import ingest_slice as _ingest_slice   # pure slice-scoped replace rules (2026-09-02)
 from app.modules.commcalc import comp_trend
 from app.modules.commcalc import carrier_map
 from app.modules.commcalc import column_mapping
@@ -1779,13 +1780,30 @@ async def _upload_file_impl(
     # and only retires the previous load once the whole replacement has landed. Here we just decide
     # WHAT the replaced scope is, and keep the existing shrink guardrails (which only warn).
     _replace_scope = None
+    _day_slice = None
     if mapped:
         if file_type in DATE_KEYED:
             # Date-grain feeds are keyed by DAY, not month: a re-pull of the same day(s) replaces
             # only those days, never the whole month.
+            #
+            # ── ACCOUNT-SLICE SCOPED per-day replace (incident 2026-09-02) ─────────────────────
+            # (org, day) alone is STILL too wide when one org feeds the same table from TWO
+            # master-agent portals (LuxeLink=VidaPay Chicago + Novawave/Total-Access NY/NJ, org
+            # 854f6d7b-…): uploading the Novawave August MA Commission wiped the VidaPay rows for
+            # every day the file contained — raw_ma_commission Aug 824 → 364, 750+ devices un-paid
+            # in the reconciliation. day_replace_filters (pure, ingest_slice.py, proof
+            # harness_ma_slice_replace.py) narrows the replace to (org, day-set, account-set) for
+            # the tables in ingest_slice.INGEST_PARTITION (raw_ma_commission/merchant_account_id,
+            # raw_ma_daily_tx/account_id, raw_ma_fulfillment/tspid) WHEN every incoming row proves
+            # its account; a file with any blank account value falls back to today's (org, day)
+            # whole-day replace — a REAL delete either way, never a silent no-delete that would
+            # double-count on re-upload. daily_sales_feed is a single-source feed, not in the
+            # partition map → byte-identical behaviour.
             dk = DATE_KEYED[file_type]
             feed_dates = sorted({m.get(dk) for m in mapped if m.get(dk)})
             if feed_dates:
+                _day_filters, _day_slice = _ingest_slice.day_replace_filters(
+                    table, mapped, dk, feed_dates)
                 try:
                     new_by_date = {}
                     for _m in mapped:
@@ -1793,15 +1811,21 @@ async def _upload_file_impl(
                         if _d:
                             new_by_date[_d] = new_by_date.get(_d, 0) + 1
                     for _d in feed_dates:
-                        prior = (client.schema('commcalc').table(table).select('org_id', count='exact')
-                                 .eq('org_id', org_id).eq(dk, _d).execute().count) or 0
+                        _pq = (client.schema('commcalc').table(table).select('org_id', count='exact')
+                               .eq('org_id', org_id).eq(dk, _d))
+                        if _day_slice:
+                            # Shrink-compare against the file's OWN slice — the other portal's rows
+                            # for the same day are no longer part of what this upload replaces, so
+                            # counting them would raise spurious partial-export alerts.
+                            _pq = _pq.in_(_day_slice['partition_col'], _day_slice['values'])
+                        prior = (_pq.execute().count) or 0
                         newc = new_by_date.get(_d, 0)
                         if prior >= _SHRINK_MIN_PRIOR and newc < prior * _SHRINK_RATIO:
                             shrink.append({'key': str(_d), 'prior': int(prior), 'new': int(newc)})
                 except Exception as e:
                     print(f'WARN row-count guardrail (date) skipped: {e}')
-                _replace_scope = (lambda q, _dk=dk, _fd=list(feed_dates):
-                                  q.eq('org_id', org_id).in_(_dk, _fd))
+                _replace_scope = (lambda q, _fs=list(_day_filters):
+                                  _ingest_slice.apply_filters(q.eq('org_id', org_id), _fs))
         elif has_period and period:
             try:
                 prior = (client.schema('commcalc').table(table).select('org_id', count='exact')
@@ -1923,6 +1947,11 @@ async def _upload_file_impl(
 
     out = {"saved": saved, "file_type": file_type, "period": period, "fraud": fraud, "recon": recon,
            "shrink": shrink}
+    if _day_slice:
+        # SAY WHAT WAS REPLACED (incident 2026-09-02): the delete was scoped to this file's own
+        # account slice — other portals' rows for the same day(s) were left untouched.
+        out["replace_slice"] = {"column": _day_slice["partition_col"],
+                                "accounts": len(_day_slice["values"])}
     if price_guard_partial:
         # PARTIAL price-guard outcome: SOME day(s) were refused (kept as stored) while the file's fresh
         # day(s) ingested. Say so explicitly. The guard entry is prepended so readUploadOutcome/shrink[0]
@@ -3732,65 +3761,17 @@ _RESTORE_STRIP_COLS = ("id", "created_at", "updated_at")
 # ── PARTITION-SCOPED REPLACE (owner report 2026-08-11: "the tx report is being overwritten for
 #    luxelink when i uploaded the Nova today — make that as an added file without duplicates") ───────
 #
-# A manual replace used to delete EVERYTHING in (org, period) before inserting. That is correct only
-# when a period holds exactly ONE independently-uploaded slice. It does not here: luxelink is ONE org
-# holding TWO companies (Luxelink Wireless LLC + Novawave), each with its own MA export, and stores
-# whose sales arrive in separate files. MEASURED DAMAGE before this fix:
-#   • 2026-07-29 `MA Daily Tx SubMA.xls` saved 16,409 July rows — July now holds 4,902, Nova only.
-#   • 2026-08-04 `MA Daily Tx SubMA (1).xls` saved 3,417 (Jul+Aug, Luxelink) — 1,903 survive (Aug 1–3);
-#     the July half was destroyed on 2026-08-11 by `MA Daily Tx SubMA Nova July.xls`.
-#   • 2026-08-08 22:00 file (2) saved 3,006 August rows — destroyed 16 MINUTES later by file (3).
-#   • `raw_sales` June holds 6 of 20 stores — the same fingerprint.
-#
-# THE SCOPE IS TWO-DIMENSIONAL, and both halves are load-bearing:
-#   PARTITION — the column that says WHOSE slice this is (the MA account, the store). Without it, one
-#               company's upload deletes the other's rows for that period.
-#   DATE RANGE — [min, max] of the file's own date column. Without it, an Aug 4–8 file for the SAME
-#               account still deletes that account's Aug 1–3 rows — which is exactly the 08-08 pair.
-# Together they mean: **a file replaces its own slice and nothing else.** Re-uploading the identical
-# file is still idempotent (same partition, same range ⇒ delete-then-insert, never a duplicate), which
-# is the "without duplicates" half of the owner's ask.
-#
-# Any table not listed here, or a file whose partition column is blank, keeps TODAY'S period-wide
-# behaviour byte-for-byte — and says so in the returned note rather than narrowing silently.
-_INGEST_PARTITION = {
-    "raw_ma_daily_tx":   {"partition": "account_id",          "date": "tx_date"},
-    "raw_ma_commission": {"partition": "merchant_account_id", "date": "tx_date"},
-    "raw_sales":         {"partition": "store",               "date": "trans_date"},
-}
-
-
-def _replace_scope(table, mapped):
-    """The (partition_col, values, date_col, lo, hi) a file may replace — or None to keep the legacy
-    period-wide delete. None is returned whenever the file cannot prove its own slice: unknown table,
-    no partition values, or no usable dates. Narrowing on a GUESS would strand rows the next upload
-    then silently deletes, so the honest fallback is the old behaviour plus a note."""
-    spec = _INGEST_PARTITION.get(table)
-    if not spec or not mapped:
-        return None
-    pcol, dcol = spec["partition"], spec["date"]
-    vals = sorted({str(r.get(pcol)).strip() for r in mapped
-                   if r.get(pcol) is not None and str(r.get(pcol)).strip() != ""})
-    if not vals or len(vals) != len({v for v in vals}):
-        return None
-    # Every row must carry the partition value; one blank row means the file's slice is not provable.
-    if any(r.get(pcol) is None or str(r.get(pcol)).strip() == "" for r in mapped):
-        return None
-    dates = sorted({str(r.get(dcol))[:10] for r in mapped
-                    if r.get(dcol) and str(r.get(dcol))[:10]})
-    if not dates:
-        return None
-    return {"partition_col": pcol, "values": vals, "date_col": dcol, "lo": dates[0], "hi": dates[-1]}
-
-
-def _apply_scope(q, scope):
-    """Narrow a delete/select to the file's own slice. Kept in ONE place so the snapshot and the delete
-    can never disagree about what is being removed — a restore that covers a different slice than the
-    delete is worse than no restore at all."""
-    if not scope:
-        return q
-    return (q.in_(scope["partition_col"], scope["values"])
-             .gte(scope["date_col"], scope["lo"]).lte(scope["date_col"], scope["hi"]))
+# A manual replace used to delete EVERYTHING in (org, period) before inserting. The full rationale,
+# the measured 2026-07/08 damage, and the rules themselves (INGEST_PARTITION / replace_scope /
+# apply_scope / day_replace_filters) now live in the PURE, stdlib-only module
+# app.modules.commcalc.ingest_slice — moved 2026-09-02 with the DATE_KEYED account-slice fix so the
+# money-destroying delete-scope logic is provable DB-free (harness_ma_slice_replace.py +
+# harness_ingest_partition_replace.py). The aliases below keep every existing call site and harness
+# working unchanged; the doctrine is unchanged: **a file replaces its own slice and nothing else**,
+# and an unprovable slice falls back to the wider legacy delete rather than narrowing on a guess.
+_INGEST_PARTITION = _ingest_slice.INGEST_PARTITION
+_replace_scope = _ingest_slice.replace_scope
+_apply_scope = _ingest_slice.apply_scope
 
 
 def _select_replace_slice(client, table, org_id, period, *, source_null_only=False, chunk=1000,

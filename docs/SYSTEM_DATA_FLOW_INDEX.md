@@ -73,6 +73,25 @@ email), (c) **RPC/manual entry**.
   same header, `is_header_echo` = repeated header rows dropped; summary/reordered tabs excluded),
   proven by `backend/harness_multisheet_ingest.py`. The email/FTP sweeps reuse this endpoint, so
   they inherit the fix. MA-overview and ePay uploads keep their own single-sheet readers.
+- **Slice-scoped replace (incident 2026-09-02):** every replace path deletes ONLY the slice the file
+  proves it owns — rules are PURE in `commcalc/ingest_slice.py` (`INGEST_PARTITION`, `replace_scope`
+  /`apply_scope` for the period-replace paths, `day_replace_filters`/`apply_filters` for the
+  DATE_KEYED per-day path in `/upload/{file_type}`). The DATE_KEYED feeds (`daily_sales`,
+  `ma_commission`, `ma_daily_tx`, `ma_fulfillment`) used to delete-then-insert per **(org, day)**;
+  when one org feeds the same table from TWO master-agent portals (LuxeLink=VidaPay Chicago +
+  Novawave/Total-Access NY/NJ, org `854f6d7b-…`) that wiped the other portal's rows for every day in
+  the file — 2026-09-02: the Novawave August MA Commission upload erased the VidaPay bridge rows,
+  `raw_ma_commission` Aug 824 → 364, 750+ devices un-paid in the recon. Now the delete narrows to
+  **(org, day-set, account-set)** — `merchant_account_id` (raw_ma_commission), `account_id`
+  (raw_ma_daily_tx), `tspid` (raw_ma_fulfillment) — when every incoming row carries the account; a
+  file with any blank account value falls back to the whole-day replace (a real delete, never a
+  silent no-delete that would double-count on re-upload). `daily_sales_feed` is single-source, not
+  in the partition map → unchanged. Idempotent: an identical re-upload replaces its own slice only;
+  the response reports `replace_slice`. Recovery from the incident = re-upload the full-August
+  VidaPay file (its slice re-lands; Novawave's rows coexist). Proofs
+  `backend/harness_ma_slice_replace.py` (armed pre-fix negative control) +
+  `backend/harness_ingest_partition_replace.py`; delete still runs insert-first via
+  `safe_replace.py`. These are table-structure facts, not per-org policy → no config table.
 - Column mapping config: migrations `042_column_mapping.sql`, `212_commission_manual_report_mapping.sql`;
   endpoints `/column-mapping*` `router.py:3333-3472`, `/manual-upload/mapping` `router.py:24125`.
 - Upload history/trace: `/upload/history` `router.py:2168`, `/upload-trace` `router.py:16256` (mig `202`,`241`).
@@ -687,7 +706,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 
 | Subsystem | Tables / migs | Key funcs / endpoints |
 |-----------|---------------|-----------------------|
-| **MA (master-agent) commission** | `raw_ma_commission`, mig `254_ma_product_class`, `251_ledger_ma_sync`, `265_ma_class_money_wiring`, `268_ma_overview_recon` | `ma_product_class.py`, `ma_class_wiring.py`, `ma_upload.py`; `/ma-commission/summary` `router.py:25009`, `/ma-overview-recon*` `25224-25450`, `/ma-handset-cogs` `26851`, `/ma-product-class*` `4868-5151` |
+| **MA (master-agent) commission** | `raw_ma_commission`, mig `254_ma_product_class`, `251_ledger_ma_sync`, `265_ma_class_money_wiring`, `268_ma_overview_recon` | `ma_product_class.py`, `ma_class_wiring.py`, `ma_upload.py`; `/ma-commission/summary` `router.py:25009`, `/ma-overview-recon*` `25224-25450`, `/ma-handset-cogs` `26851`, `/ma-product-class*` `4868-5151`. **Ingest replace is account-slice scoped** (2026-09-02 two-portal wipe incident, §2): `ingest_slice.py` `day_replace_filters` narrows `/upload/ma_commission|ma_daily_tx|ma_fulfillment` deletes to (org, day, account) — proof `harness_ma_slice_replace.py` |
 | **B2B ↔ MA activation recon (Pay Discrepancy, MA source)** | `discrepancy_results` (`source='ma'`), `ma_payment_rule` — mig `312_ma_payment_rules_and_discrepancy_attribution` | `ma_recon.py` (pure: `build_sold_index`/`build_paid_index`/`match_rules`/`reconcile_ma_activations`; reuses mig-308 `_gate_met_ma_tx` + the two-hop link); ran by `POST /discrepancy/run` `router.py:19056` for plan-mode orgs; rules CRUD `/ma-payment-rules*` `19200-19270`; proof `harness_ma_recon.py`. Sold-but-unpaid → status `open` + literal `'no business rule configured'`, or rule-attributed `info`/`lagged` |
 | **Carrier statement commission** | mig `065_carrier_commission.sql` → `rep_commissions.carrier_statement_comm` | `/carrier-comm-file/extract` `6216`, `/commission-received-breakout` `15488` |
 | **Commission plans (rule engine)** | mig `059_commission_plans.sql`, `066`,`067`,`232`,`260`,`262` | `commission_engine.py`; `/commission-plans*` `12557-14246` (coverage, pay-gate, exclusions, bulk-assign) |
@@ -727,8 +746,8 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.flags` | calc + flag rules | `/flags/{period}` `10299`, `_cr_resolve_flags` |
 | `commcalc.store_expenses` | `/expenses/{period}` PUT `21695` | GP report, `_cr_resolve_store_expenses` |
 | `commcalc.sale_installment_ledger` | `compute_sale_installments(persist=True)` `9212` (mig `308` adds `order_number`/`account_id` MA TX provenance, adaptive write) | `/plan-installments/*` previews, `installment_comm_sale` |
-| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx`, VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store`), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once) |
-| `commcalc.raw_ma_commission` | upload `/upload/ma_commission`, VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`) |
+| `commcalc.raw_ma_daily_tx` | upload `/upload/ma_daily_tx` (slice-scoped replace: org × day × `account_id`, `ingest_slice.py` §2), VidaPay sweep, `report_pull` | bill-pay recon processor side (`_billpay_processor_by_store`), residual/ATU (`residual_subs`), Commission Ledger, **installment engine mig `308`** (`sale_installment_engine._read_ma_tx` → `'ma_tx'` gate + `'ma_tx_activation'` MRC; money column `retail_cost` ONLY — `merchant_invoice` is an identifier), **P&L mig `309`** (`account/coa.build_inputs` via `residual_subs.ma_tx_pnl_bookings`: `merchant_discount` → "Merchant discount" line (or legacy `atu_income` fold per `pl_merchant_discount_own_line`), −`retail_cost` → `mi_income` for the `'%residual%'` ∪ `pl_ma_residual_order_types` union, each row once) |
+| `commcalc.raw_ma_commission` | upload `/upload/ma_commission` (slice-scoped replace: org × day × `merchant_account_id`, `ingest_slice.py` §2 — 2026-09-02 two-portal wipe incident), VidaPay sweep | MA overview/recon, installment MA gate (`_read_ma_commission` spiffs), **mig `308` two-hop link** (`build_ma_link_index`: `imei|sim → activation_order`) |
 | `commcalc.payout_schedule(+_line)` | `/payout-schedule` POST `11965` | `installment_engine.compute_installments` |
 | `commcalc.inventory_aging_device` | `b2b_sweep.py:341` upsert | `/device-history` `17015`, `/device-cost-recon` `27338`, MI aging bonus |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
