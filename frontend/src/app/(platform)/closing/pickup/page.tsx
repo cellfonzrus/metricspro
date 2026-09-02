@@ -117,6 +117,8 @@ export default function CashPickupPage() {
           { header: 'Store', get: (r: any) => r.store_name || r.store_code },
           { header: 'Rep', get: (r: any) => r.employee_name },
           { header: 'Cash', get: (r: any) => r.cash, money: true },
+          { header: 'POS cash (store-day)', get: (r: any) => r.pos_cash ?? 'no POS data', money: true },
+          { header: 'POS status', get: (r: any) => r.pos_status || '' },
           { header: 'Picked up', get: (r: any) => (r.picked_up ? 'Yes' : 'No') },
           { header: 'By (DM)', get: (r: any) => r.picked_up_by || '' },
           { header: 'Disposition', get: (r: any) => r.disposition || '' },
@@ -366,7 +368,7 @@ export default function CashPickupPage() {
           <div className="card table-wrapper" style={{ padding: 0 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr style={{ background: 'var(--surface2)' }}>
-                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
+                {[...(rangeMode ? ['Date'] : []), '', 'Store', 'Rep', 'Cash', 'POS cash', 'Envelope', 'Note / status', 'Deposit'].map((h, i) =>
                   <th key={i} style={{ textAlign: 'left', padding: '8px 10px', fontSize: 11, fontWeight: 600, color: 'var(--text2)' }}>{h}</th>)}
               </tr></thead>
               <tbody>
@@ -379,6 +381,16 @@ export default function CashPickupPage() {
                       <td style={cell}>{e.store_name || e.store_code || '—'}</td>
                       <td style={cell}>{e.employee_name || '—'}</td>
                       <td style={{ ...cell, fontWeight: 600 }}>{fmt(e.cash)}</td>
+                      {/* The SYSTEM'S number right next to the store-entered one (owner 2026-09-02):
+                          POS X-report cash for this store-day — same resolution as Cash Recon
+                          (Management), compared at store-day grain against the declared cash total.
+                          No X-report imported => an honest "no POS data", never a fake zero. */}
+                      <td style={{ ...cell, color: e.pos_status === 'mismatch' ? '#dc2626' : 'var(--text2)', fontWeight: e.pos_status === 'mismatch' ? 700 : 400 }}
+                          title={e.pos_status === 'no_pos_data' ? 'No POS X-report for this store-day'
+                            : `Store-day declared ${fmt(e.pos_declared_day)} vs POS ${fmt(e.pos_cash)} (Δ ${fmt(e.pos_delta)})`}>
+                        {e.pos_cash == null ? <span style={{ color: 'var(--text3)', fontStyle: 'italic' }}>no POS data</span>
+                          : <>{fmt(e.pos_cash)}{e.pos_status === 'mismatch' ? ' ⚠' : e.pos_status === 'ok' ? <span style={{ color: '#166534' }}> ✓</span> : null}</>}
+                      </td>
                       <td style={cell}><EnvelopeViewLink row={e} label="📷 view" /></td>
                       <td style={cell}>
                         {done

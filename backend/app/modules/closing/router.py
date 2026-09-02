@@ -3390,6 +3390,18 @@ def deposit_recon_report(date: str = "", date_from: str = "", date_to: str = "",
     _adj_rows, adj_by_key = deposit_recon.load_other_adjustments(client, org_id, str(d_from), str(d_to), store_codes)
     deposits = deposit_recon.bank_deposits_by_store_day(client, org_id, str(d_from), str(d_to), store_codes)
 
+    # OWNER 2026-09-02 ("cash deposit capture should be shown as a separate line item under cash
+    # deposit recon"): the deposit-disposition CAPTURES recorded through the pickup flow
+    # (POST /pickup/deposit + billpay sibling — slip photo + OCR amount), per (store, day). Shown
+    # as their OWN line item on each day block, NEVER summed into expected/deposited (those stay
+    # commcalc.bank_deposit's — one number, one source; the capture is the slip-evidence side).
+    # Days whose captures have no bank_deposit row don't create recon rows here (the report's
+    # population stays "days with a recorded bank deposit", unchanged since 2026-08-05) — the
+    # deposit-accountability board on the same page covers every captured day.
+    from . import deposit_accountability as _da
+    pickup_caps = _da.pickup_deposit_line(
+        _accountability_pickup_rows(client, org_id, str(d_from), str(d_to)))
+
     from app.modules.storeops.router import scope_keyset, in_keyset
     ks = scope_keyset(authorization, org_id)
     sm = (client.schema("commcalc").table("store_mapping").select("store_code,store_address")
@@ -3442,11 +3454,22 @@ def deposit_recon_report(date: str = "", date_from: str = "", date_to: str = "",
                                      (uncategorized["total_deposited"] if uncategorized else 0.0), 2)
         day_total_expected = round(sum(b["expected_deposit"] for b in cat_blocks), 2)
         day_variance = round(day_total_deposited - day_total_expected, 2)
+        cap = pickup_caps.get((store, dstr))
+        if cap:
+            cap = dict(cap)
+            cap["deposits"] = [
+                {**d, "deposit_slip_url": (_signed_envelope(d.get("deposit_slip_path"))
+                                           if d.get("deposit_slip_path") else None),
+                 "deposit_slip_path": None}
+                for d in cap.get("deposits") or []]
         out_days.append({
             "store_code": store, "store_address": name_by_code.get(store) or store, "close_date": dstr,
             "closing_cash_total": agg["t_cash"],
             "xreport_cash": (xrep_store or {}).get("cash") if xrep_store else None,
             "xreport_available": bool(xrep_store),
+            # the pickup-flow deposit CAPTURE for this store-day — its own separate line item
+            # (owner 2026-09-02); None when no capture was recorded through the pickup flow.
+            "pickup_deposit": cap,
             "categories": cat_blocks, "uncategorized": uncategorized,
             "day_total": {"deposited": day_total_deposited, "expected": day_total_expected,
                          "variance": day_variance, "status": deposit_recon.status_for(day_variance, tolerance)},
@@ -4789,6 +4812,31 @@ def closing_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "deposit_url": _signed_envelope(p.get("deposit_slip_path")) if p and p.get("deposit_slip_path") else None,
             "pickup_id": p.get("id") if p else None,
         })
+    # OWNER 2026-09-02 ("the cash pick up ... only show what the stores have entered but not what
+    # is in the system, from the pos report, those numbers should be right next to these numbers"):
+    # attach the POS X-report cash for each envelope's store-day RIGHT NEXT to the declared figure.
+    # POS resolution = the SHARED `_pos_tenders_for_days` (the cash-recon-management path — never a
+    # second derivation). The comparison is at STORE-DAY grain (POS knows days, not envelopes):
+    # declared = Σ per closing row `t_cash or store_cash` — the EXACT cash_declared formula
+    # cash-recon-management uses — vs POS cash, tolerance $1 (deposit_recon.status_for precedent).
+    # No X-report row for the store-day ⇒ `no_pos_data` (honest gap, never a fake zero/mismatch).
+    from . import deposit_accountability as _da
+    _pos_days = sorted({e["close_date"] for e in out if e.get("close_date")})
+    _pos_tenders = _pos_tenders_for_days(client, org_id, _pos_days)
+    _decl_sd = {}
+    for r in rows:
+        _k = ((r.get("store_code") or ""), str(r.get("close_date") or "")[:10])
+        _decl_sd[_k] = round(_decl_sd.get(_k, 0.0) + (_f(r.get("t_cash")) or _f(r.get("store_cash"))), 2)
+    _pos_cells = _da.pos_next_to(
+        {k: v for k, v in _decl_sd.items()},
+        {k: v.get("cash", 0.0) for k, v in _pos_tenders.items()},
+        feed_present=bool(_pos_tenders), tolerance=1.0, zero_missing=False)
+    for e in out:
+        _c = _pos_cells.get(((e.get("store_code") or ""), str(e.get("close_date") or "")[:10])) or {}
+        e["pos_cash"] = _c.get("pos")
+        e["pos_delta"] = _c.get("delta")
+        e["pos_status"] = _c.get("status") or "no_pos_data"
+        e["pos_declared_day"] = _c.get("declared")   # the store-day declared total the delta uses
     out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
 
     # Stores that did NOT submit a daily closing (single-date only — ambiguous over a range). Same
@@ -5663,6 +5711,37 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "deposit_url": _signed_envelope(p.get("deposit_slip_path")) if p and p.get("deposit_slip_path") else None,
             "pickup_id": p.get("id") if p else None,
         })
+    # OWNER 2026-09-02 ("bill pick up only show what the stores have entered but not what is in
+    # the system, from the pos report"): attach the POS-report bill payments for each envelope's
+    # store-day RIGHT NEXT to the declared ePay-on-cash. POS resolution = the SHARED
+    # `_pos_billpay_for_days` (the mig-939 coverage-recon / cash-recon-management path — never a
+    # second derivation). Store-day grain; declared = Σ epay_on_cash (this page's own numbers).
+    # Feed present but silent for a store-day ⇒ honest ZERO (the cash-recon-management rule);
+    # feed absent for the range ⇒ `no_pos_data`, no mismatch ever flagged.
+    from . import deposit_accountability as _da
+    _pos_days = sorted({e["close_date"] for e in out if e.get("close_date")})
+    _pos_billpay, _pos_src, _ckey = _pos_billpay_for_days(client, org_id, _pos_days)
+    _decl_sd = {}
+    for e in out:
+        _k = ((e.get("store_code") or ""), str(e.get("close_date") or "")[:10])
+        _decl_sd[_k] = round(_decl_sd.get(_k, 0.0) + _f(e.get("cash")), 2)
+    # the processor feed keys on the CANONICAL store key — pre-translate each declared key
+    # through the same _ckey the mig-939 recon uses (identical to cash-recon-management's
+    # `pos_billpay.get((_ckey(code) or code, dday))` lookup).
+    _pos_by_declared_key = {}
+    for (code, dday) in _decl_sd:
+        _hit = _pos_billpay.get((_ckey(code) or code, dday))
+        if _hit is not None:
+            _pos_by_declared_key[(code, dday)] = _hit
+    _pos_cells = _da.pos_next_to(
+        _decl_sd, _pos_by_declared_key,
+        feed_present=bool(_pos_billpay), tolerance=1.0, zero_missing=True)
+    for e in out:
+        _c = _pos_cells.get(((e.get("store_code") or ""), str(e.get("close_date") or "")[:10])) or {}
+        e["pos_billpay"] = _c.get("pos")
+        e["pos_delta"] = _c.get("delta")
+        e["pos_status"] = _c.get("status") or "no_pos_data"
+        e["pos_declared_day"] = _c.get("declared")
     out.sort(key=lambda e: (e["picked_up"], str(e.get("close_date") or ""), str(e.get("store_name") or "")))
 
     _as_of = date if date else end
@@ -5692,7 +5771,57 @@ def billpay_pickups(date: str = "", start: str = "", end: str = "", market: str 
             "total_cash": round(sum(e["cash"] for e in out), 2),
             "collected_cash": round(sum(e["cash"] for e in out if e["picked_up"]), 2),
             "ready_cash": round(sum(e["cash"] for e in out if not e["picked_up"]), 2),
-            "as_of": _as_of, "by_store": by_store, "position": pos_meta}
+            "as_of": _as_of, "by_store": by_store, "position": pos_meta,
+            "pos_source": _pos_src}
+
+
+# ── POS-side resolutions, SHARED (owner directive 2026-09-02 "those numbers should be right
+#    next to these numbers"): cash-recon-management, GET /pickups and GET /billpay-pickups all
+#    read the POS figures through these two helpers — one path, never a second derivation. ──────
+def _pos_tenders_for_days(client, org_id, days):
+    """POS X-report cash/card per (store_code, day) over the given days — the SAME
+    `_xreport_tenders_by_store` read every closing recon uses (authoritative tender split).
+    A day with no imported X-report simply contributes no keys (an honest gap — the caller
+    renders `no_pos_data`, never a fake zero)."""
+    out = {}
+    for dday in days:
+        try:
+            for code, agg in (_xreport_tenders_by_store(client, org_id, dday) or {}).items():
+                out[(code, dday)] = {"cash": agg.get("cash", 0.0), "card": agg.get("card", 0.0)}
+        except Exception:
+            pass
+    return out
+
+
+def _pos_billpay_for_days(client, org_id, days):
+    """POS/processor-reported bill payments per (canonical store, day) over the given days —
+    the SAME metric_source_of_truth resolution the mig-939 coverage recon rides
+    (`commcalc.router._billpay_processor_by_store_day` + `_metric_source`, lazily imported —
+    never a second path). Returns (pos_billpay {(canon_code, day): amount}, source_label,
+    canonical_key_fn). Feed unresolvable → ({}, 'none', identity)."""
+    pos_billpay, source = {}, "none"
+    ckey = (lambda s: s)
+    if not days:
+        return pos_billpay, source, ckey
+    lo, hi = min(days), max(days)
+    try:
+        from app.modules.commcalc.router import (_canonical_store_key_fn, _metric_source,
+                                                 _billpay_processor_name,
+                                                 _billpay_processor_by_store_day)
+        ckey = _canonical_store_key_fn(client, org_id)
+        msrc = _metric_source(client, org_id, "bill_payments")
+        processor = _billpay_processor_name(client, org_id, msrc)
+        for ym in sorted({dday[:7] for dday in days}):
+            for (cst, dday), v in (_billpay_processor_by_store_day(
+                    client, org_id, ym, processor, ckey) or {}).items():
+                if lo <= dday <= hi:
+                    pos_billpay[(cst, dday)] = round(pos_billpay.get((cst, dday), 0.0)
+                                                     + _f(v.get("amount")), 2)
+        if pos_billpay:
+            source = f"processor:{processor}"
+    except Exception:
+        ckey = (lambda s: s)
+    return pos_billpay, source, ckey
 
 
 # ── Management one-screen cash reconciliation (owner directive 2026-09-02, follow-up) ───────────
@@ -5800,35 +5929,10 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
     billpay_picked = _picked_sums("billpay_pickup")
 
     # POS side 1 — X-report tenders (authoritative cash/card split), per day.
-    pos_tenders = {}
-    for dday in days:
-        try:
-            for code, agg in (_xreport_tenders_by_store(client, org_id, dday) or {}).items():
-                pos_tenders[(code, dday)] = {"cash": agg.get("cash", 0.0), "card": agg.get("card", 0.0)}
-        except Exception:
-            pass
-
-    # POS side 2 — bill payments per the processor feed (the mig-939 coverage resolution, reused).
-    pos_billpay, billpay_source = {}, "none"
-    try:
-        from app.modules.commcalc.router import (_canonical_store_key_fn, _metric_source,
-                                                 _billpay_processor_name,
-                                                 _billpay_processor_by_store_day)
-        ckey = _canonical_store_key_fn(client, org_id)
-        msrc = _metric_source(client, org_id, "bill_payments")
-        processor = _billpay_processor_name(client, org_id, msrc)
-        months = sorted({dday[:7] for dday in days})
-        for ym in months:
-            for (cst, dday), v in (_billpay_processor_by_store_day(
-                    client, org_id, ym, processor, ckey) or {}).items():
-                if start <= dday <= end:
-                    pos_billpay[(cst, dday)] = round(pos_billpay.get((cst, dday), 0.0)
-                                                     + _f(v.get("amount")), 2)
-        if pos_billpay:
-            billpay_source = f"processor:{processor}"
-        _ckey = ckey
-    except Exception:
-        _ckey = (lambda s: s)
+    # POS side 2 — bill payments per the processor feed (the mig-939 coverage resolution).
+    # Both via the SHARED helpers (also used by /pickups and /billpay-pickups) — one path.
+    pos_tenders = _pos_tenders_for_days(client, org_id, days)
+    pos_billpay, billpay_source, _ckey = _pos_billpay_for_days(client, org_id, days)
 
     out = []
     for (code, dday), slot in sorted(decl.items()):
@@ -5871,6 +5975,159 @@ def cash_recon_management(date: str = "", start: str = "", end: str = "", tolera
                      "No processor bill-payment feed resolved for this range — the POS bill-pay "
                      "column is empty and no mismatch is flagged (wire the feed via Metric Source "
                      "of Truth to activate the cross-check).")}
+
+
+# ── Deposit accountability board (owner directive 2026-09-02, mig 943) ──────────────────────────
+def _accountability_pickup_rows(client, org_id, start, end):
+    """Both pickup tables' rows for the range, kind-tagged ('cash' | 'billpay'), read
+    defensively (pre-943 schema: mgmt_confirmed columns simply absent → every handed row reads
+    unconfirmed — the board degrades to 'never green until migrated', fail-closed)."""
+    rows = []
+    for table, kind in (("cash_pickup", "cash"), ("billpay_pickup", "billpay")):
+        try:
+            prs = (client.schema("commcalc").table(table).select("*").eq("org_id", org_id)
+                   .gte("close_date", start).lte("close_date", end)
+                   .limit(100000).execute().data) or []
+        except Exception:
+            prs = []
+        for p in prs:
+            p["kind"] = kind
+            rows.append(p)
+    return rows
+
+
+@router.get("/deposit-accountability")
+def deposit_accountability_board(date: str = "", start: str = "", end: str = "",
+                                 authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """The deposit-accountability board (owner directive 2026-09-02): per (store, day), every
+    picked-up envelope's disposition state — deposited (slip on file / MISSING SLIP), handed to
+    management (confirmed / awaiting confirmation), or no disposition yet — and the day's GREEN
+    flag: green ⇔ every picked-up envelope is accounted for (deposited-with-slip, or
+    handed-AND-management-confirmed). The approval-workflow mirror (§14 precedent — pending →
+    approved with actor + timestamp): the handed checkbox is the mig-089 'handed_to_mgmt'
+    disposition; the confirm checkbox is mig-943 mgmt_confirmed(+by/at).
+
+    VIEWING is keyset-scoped like every closing report (a DM sees their own span — they record
+    the pickups); the CONFIRM ACTION (POST /deposit-mgmt-confirm) is management-gated. The
+    payload carries `can_confirm` so the UI renders the confirm checkbox read-only for
+    non-management. Pure state math: closing/deposit_accountability.day_accountability
+    (proof harness_deposit_accountability.py)."""
+    from . import billpay_pickup as _bp
+    from . import deposit_accountability as _da
+    require_org(org_id)
+    client = sb()
+    if date:
+        start = end = date
+    if not (start and end):
+        raise HTTPException(400, "date, or start+end, required (YYYY-MM-DD)")
+    start, end = _date(start), _date(end)
+    if not (start and end):
+        raise HTTPException(400, "valid dates required (YYYY-MM-DD)")
+    if start > end:
+        start, end = end, start
+    from datetime import date as _d
+    if (_d.fromisoformat(end) - _d.fromisoformat(start)).days > 62:
+        raise HTTPException(400, "range too large — 62 days max")
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    smeta_rows = (client.schema("storeops").table("stores").select("store_code,address,market")
+                  .eq("org_id", org_id).execute().data) or []
+    smeta = {s.get("store_code"): s for s in smeta_rows if s.get("store_code")}
+
+    prows = _accountability_pickup_rows(client, org_id, start, end)
+    rows, summary = _da.day_accountability(prows)
+    out = []
+    for r in rows:
+        meta = smeta.get(r["store_code"], {})
+        if ks is not None and not in_keyset(ks, r["store_code"], meta.get("address")):
+            continue
+        r["store_name"] = meta.get("address") or r["store_code"]
+        r["market"] = meta.get("market")
+        for env in r["envelopes"]:
+            env["deposit_slip_url"] = (_signed_envelope(env.get("deposit_slip_path"))
+                                       if env.get("deposit_slip_path") else None)
+            env.pop("deposit_slip_path", None)
+        out.append(r)
+    # summary over the VISIBLE rows only (keyset consistency — never leak span-external counts)
+    summary = {
+        "store_days": len(out),
+        "green_days": sum(1 for r in out if r["green"]),
+        "missing_slip_days": sum(1 for r in out if r["missing_slip_rows"]),
+        "awaiting_confirm_days": sum(1 for r in out if r["unconfirmed_rows"]),
+        "undisposed_days": sum(1 for r in out if r["undisposed_rows"]),
+        "picked_total": round(sum(r["picked_total"] for r in out), 2),
+        "deposited_total": round(sum(r["deposited_total"] for r in out), 2),
+        "handed_total": round(sum(r["handed_total"] for r in out), 2),
+    }
+    return {"start": start, "end": end, "rows": out, "summary": summary,
+            "can_confirm": _bp.can_see_cash_recon(authorization or "", org_id, client)}
+
+
+class MgmtConfirmIn(LaxModel):
+    store_code: Any = None
+    close_date: Any = None
+    date: Any = None
+    employee_name: Any = None
+    kind: Any = None          # 'cash' | 'billpay' | None = both
+    confirmed: Any = True
+    confirmed_by: Any = None
+
+
+@router.post("/deposit-mgmt-confirm")
+def deposit_mgmt_confirm(payload: MgmtConfirmIn, org_id: str = ORG_ID,
+                         authorization: str = Header(default="")):
+    """Management confirms IN THE SYSTEM that handed-over cash was received (owner directive
+    2026-09-02 — the approval-style second checkbox; mig 943). Body: {store_code, close_date,
+    employee_name?, kind?('cash'|'billpay'), confirmed?(default true), confirmed_by?}. Without
+    employee_name/kind it confirms EVERY handed-to-management envelope of that store-day (the
+    per-date checkbox semantics); confirmed:false revokes a confirmation (the approvals 'reset'
+    mirror — recorded the same way, actor + timestamp cleared). Only rows whose disposition is
+    'handed_to_mgmt' are ever touched: a deposited envelope is accounted by its slip, not by a
+    confirmation. GATE: closing/billpay_pickup.can_see_cash_recon — market manager and above,
+    the same fail-closed mig-434 posture as the cash-recon screen (DMs record pickups and
+    dispositions exactly as today; confirming receipt is a management act)."""
+    from . import billpay_pickup as _bp
+    require_org(org_id)
+    client = sb()
+    if not _bp.can_see_cash_recon(authorization or "", org_id, client):
+        raise HTTPException(403, "Confirming receipt of handed-over cash is restricted to market "
+                                 "managers and above (owner directive 2026-09-02); an admin can "
+                                 "widen storeops.tenants.cash_recon_visible_roles if your role "
+                                 "should have access.")
+    store = (payload.store_code or "").strip()
+    cdate = _date(payload.close_date or payload.date)
+    if not (store and cdate):
+        raise HTTPException(400, "store_code and close_date required")
+    kind = (payload.kind or "").strip().lower()
+    if kind and kind not in ("cash", "billpay"):
+        raise HTTPException(400, "kind must be 'cash' or 'billpay' (or omitted for both)")
+    confirmed = bool(payload.confirmed) if payload.confirmed is not None else True
+    upd = ({"mgmt_confirmed": True,
+            "mgmt_confirmed_by": (payload.confirmed_by or "").strip() or "management",
+            "mgmt_confirmed_at": _now()}
+           if confirmed else
+           {"mgmt_confirmed": False, "mgmt_confirmed_by": None, "mgmt_confirmed_at": None})
+    tables = {"cash": ["cash_pickup"], "billpay": ["billpay_pickup"]}.get(
+        kind, ["cash_pickup", "billpay_pickup"])
+    updated = 0
+    for table in tables:
+        try:
+            q = (client.schema("commcalc").table(table).update(upd)
+                 .eq("org_id", org_id).eq("close_date", cdate).eq("store_code", store)
+                 .eq("disposition", "handed_to_mgmt"))
+            if (payload.employee_name or "").strip():
+                q = q.eq("employee_name", payload.employee_name.strip())
+            res = q.execute()
+            updated += len(res.data or [])
+        except Exception as e:
+            # pre-943 schema is the one expected failure — say so instead of a bare 500
+            raise HTTPException(500, f"could not record confirmation on {table} "
+                                     f"(is migration 943 applied?): {str(e)[:200]}")
+    return {"ok": True, "confirmed": confirmed, "updated": updated,
+            "note": (None if updated else
+                     "No handed-to-management envelopes found for that store/day — nothing to "
+                     "confirm (a deposited envelope is accounted by its slip, not a confirmation).")}
 
 
 # ── Google service-account auto-import of the closing responses sheet ───────────────────────
