@@ -846,6 +846,40 @@ def residual_per_sub(months: int = 6, authorization: str = Header(default=""), o
     return residual_subs.compute(sb(), org_id, months=max(1, min(int(months or 6), 36)))
 
 
+# ── financial analysis (chart-ready series from the stored snapshots — roadmap Phase 3) ───────
+@router.get("/analysis")
+async def financial_analysis(months: int = 12, authorization: str = Header(default=""),
+                             org_id: str = ORG_ID):
+    """Chart-ready financial-analysis series for the Financial Analysis page: consolidated monthly
+    P&L/BS trend + margins, OPEX composition (stacked-bar ready), per-company and per-store
+    comparison series. ONE MATH PATH: everything is read from the stored `account_statements`
+    snapshots (`analysis.assemble`, pure) — never recomputed — so a chart can never disagree with
+    the P&L / Balance Sheet pages.
+
+    PERMISSION: gated by the 'account_trends' data grant (DEFAULT-CLOSED — the same gate as the
+    Trends hub, whose charts this page supersets; admins / scope-'all' pass). Org-scoped; the read
+    below carries org_id on every page and an unknown org simply has no rows (fail closed)."""
+    require_org(org_id)
+    report_gates.require_report_grant(authorization, report_gates.ACCOUNT_TRENDS,
+                                      report="Financial Analysis")
+    from app.modules.account import analysis
+
+    def _rows():
+        out = []
+        for st in ("pl", "balance_sheet"):
+            out.extend(coa._fetch_all(
+                sb(), "account_statements",
+                "period,statement_type,scope_key,scope_label,payload,computed_at",
+                {"org_id": org_id, "statement_type": st}))
+        return out
+
+    try:
+        rows = await run_in_threadpool(_rows)   # bulk Supabase read off the event loop (SEV-1 rule)
+        return {"org_id": org_id, **analysis.assemble(rows, months=months)}
+    except Exception as e:
+        raise HTTPException(500, f"analysis failed: {type(e).__name__}: {e}")
+
+
 # ── health ──────────────────────────────────────────────────────────────────────────────────
 @router.get("/health")
 def health():

@@ -358,6 +358,17 @@ commissions, expenses.
   up" staleness). WHEN, never WHAT: numbers stay `statement_engine.compute_and_store`
   byte-identical.
 
+- **Financial-analysis series (roadmap Phase 3 backend, 2026-09-02):** `GET /account/analysis`
+  (`?months=N`, gated by the `account_trends` data grant — the charts-hub gate) serves the
+  chart-ready payload for the Financial Analysis page: consolidated monthly P&L/BS trend
+  (revenue/COGS/opex/GP/NI, cash & equivalents = `cash`+`store_cash_on_hand`, assets/liabilities/
+  equity/inventory) with margin ratios (`None` on a zero base — a chart gap, never a fake 0),
+  per-month OPEX composition (stacked-bar ready) and per-company / per-store comparison series.
+  ONE MATH PATH: pure `account/analysis.py` reads STORED `account_statements` payloads only
+  (spelling-duality dedupe, freshest computed_at wins) — never a second computation — so charts
+  can never disagree with the statements. Proof: `harness_financial_analysis.py` (also pins
+  `analysis.CASH_KEYS == statement_engine.CF_CASH_KEYS`).
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -1042,6 +1053,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `GET /account/inventory-recon` (per-store emailed-report ↔ unsold-phone-ledger ↔ manual ↔ effective tie-out + ghost counts) | `account/router.py` (`inventory_recon` → `statement_engine.inventory_reconciliation`) | §4 balance-sheet truths |
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02). run-due is SELF-SCHEDULED since mig `940`: pg_cron job `account-recompute-run-due` (every 2h) via `commcalc.ensure_account_recompute_cron`, re-registered on every backend boot (`main.py` startup → `router._ensure_account_recompute_cron`) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
+| `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
