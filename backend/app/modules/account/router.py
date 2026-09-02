@@ -917,6 +917,58 @@ async def financial_projection(months: int = 24, horizon: int = 0,
         raise HTTPException(500, f"projection failed: {type(e).__name__}: {e}")
 
 
+@router.get("/valuation")
+async def company_valuation(authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Probable company valuation (roadmap Phase 5) — an assumption-driven ESTIMATE range from the
+    org's OWN stored statements: revenue/SDE/EBITDA multiples on the trailing twelve months, an
+    asset-based floor from the latest Balance Sheet, and a DCF fed by the deterministic Phase-4
+    projection (3×3 rate × terminal-multiple sensitivity grid). Every multiple/rate/horizon is
+    per-org config with house defaults (`account_config.valuation_config`, mig 941) and each
+    method cites its source; the payload carries the full assumptions block + the not-an-appraisal
+    disclaimer the UI must show.
+
+    PERMISSION: its OWN DEFAULT-CLOSED 'company_valuation' data grant — the most sensitive finance
+    read; deliberately not bundled under 'account_trends'. Org-scoped, worker-thread."""
+    require_org(org_id)
+    report_gates.require_report_grant(authorization, report_gates.COMPANY_VALUATION,
+                                      report="Company valuation")
+    from app.modules.account import analysis, projection_engine, valuation
+
+    def _run():
+        rows = []
+        for st in ("pl", "balance_sheet"):
+            rows += coa._fetch_all(
+                sb(), "account_statements",
+                "period,statement_type,scope_key,scope_label,payload,computed_at",
+                {"org_id": org_id, "statement_type": st})
+        monthly = analysis.assemble(rows, months=36).get("monthly") or []
+        cfg, cfg_src = valuation.load_valuation_config(sb(), org_id)
+        pcfg = projection_engine.load_projection_config(sb(), org_id)
+        proj = projection_engine.project(
+            monthly, {**pcfg, "horizon_months": min(24, max(12, cfg["dcf_horizon_months"]))})
+        # DCF horizon may exceed the engine's 24-month cap: extend by holding the final projected
+        # month flat (stated in the projection meta) — deterministic, assumption on the record.
+        fcfs, meta = None, None
+        if proj.get("computed"):
+            ni = [s["net_income"] for s in proj["series"]]
+            want = cfg["dcf_horizon_months"]
+            if len(ni) < want and ni:
+                ni = ni + [ni[-1]] * (want - len(ni))
+                meta_note = (f"projection horizon capped at {len(proj['series'])} months; months "
+                             f"{len(proj['series']) + 1}–{want} hold the final projected month flat")
+            else:
+                ni, meta_note = ni[:want], None
+            fcfs = ni
+            meta = {"method": proj.get("method"), "history_months": proj.get("history_months"),
+                    "assumptions": proj.get("assumptions"), **({"note": meta_note} if meta_note else {})}
+        return {"org_id": org_id, **valuation.valuation(monthly, cfg, cfg_src, fcfs, meta)}
+
+    try:
+        return await run_in_threadpool(_run)
+    except Exception as e:
+        raise HTTPException(500, f"valuation failed: {type(e).__name__}: {e}")
+
+
 # ── health ──────────────────────────────────────────────────────────────────────────────────
 @router.get("/health")
 def health():

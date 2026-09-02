@@ -382,6 +382,21 @@ commissions, expenses.
   flagged `projected: true` (display-only — nothing books from it); cash runway = cash &
   equivalents ÷ avg projected burn. Proof: `harness_projection_engine.py`.
 
+- **Company valuation (roadmap Phase 5, mig `941`, 2026-09-02):** `GET /account/valuation` —
+  gated by its OWN default-closed `company_valuation` data grant (`report_gates.py`; deliberately
+  NOT bundled under `account_trends`). PURE `account/valuation.py`: an assumption-driven ESTIMATE
+  range from the org's OWN stored statements — TTM basis (`ttm_metrics`: <12 computed months
+  ANNUALIZE ×12/n and say so; EBITDA ≈ NI + P&L `other`; SDE = EBITDA + configured owner
+  addbacks), revenue/SDE/EBITDA multiple methods (zero/negative basis marked not-meaningful,
+  never silently priced), asset-based floor (latest BS assets − liabilities), and a DCF fed by
+  the Phase-4 deterministic projection (NI as the cash-basis FCF proxy; monthly discounting +
+  discounted terminal = terminal multiple × final projected year; 3×3 rate × multiple sensitivity
+  grid). Summary = min/median/max across meaningful earnings methods with the asset floor lifting
+  the low end (flagged). EVERY multiple/rate/horizon is per-org `account_config.valuation_config`
+  (mig `941`) with house defaults, each method citing its source ('house default'/'org config');
+  payload always carries the full assumptions block + the "not an appraisal" disclaimer the UI
+  must show. Proof: `harness_valuation.py` (closed-form DCF check to the cent).
+
 ---
 
 ## 5. Daily Targets & actuals
@@ -1068,6 +1083,7 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET /account/analysis` (`?months=N` — chart-ready monthly trend/margins/OPEX composition/per-company+store comparison from STORED snapshots; `account_trends` grant) | `account/router.py` (`financial_analysis` → pure `analysis.assemble`) | §4 financial-analysis series |
 | `GET /account/projection` (`?months=&horizon=` — deterministic linear/seasonal-naive P&L projection + cash runway, per-org `projection_config` mig `941`; rows flagged `projected:true`; `account_trends` grant) | `account/router.py` (`financial_projection` → pure `projection_engine.project`) | §4 projection engine |
+| `GET /account/valuation` (assumption-driven ESTIMATE range: TTM multiples + asset floor + projection-fed DCF w/ sensitivity grid; per-org `valuation_config` mig `941`; own default-closed `company_valuation` grant; disclaimer always in payload) | `account/router.py` (`company_valuation` → pure `valuation.valuation`) | §4 company valuation |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
 | `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
 | `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |

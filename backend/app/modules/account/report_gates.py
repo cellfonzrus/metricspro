@@ -35,11 +35,17 @@ from fastapi import HTTPException
 # ── grant keys (must stay identical to the rbac.ts DATA_GRANTS keys filed under NEEDS CORE) ─────────
 RESIDUAL_PER_SUB = "residual_per_sub"
 ACCOUNT_TRENDS = "account_trends"
+# Company valuation (roadmap Phase 5, 2026-09-02): the single most sensitive finance read — a
+# dollar range on the whole business. Its OWN default-closed key (admins / scope-'all' pass as
+# always); deliberately NOT bundled under account_trends, so a charts grantee does not silently
+# see a company valuation.
+COMPANY_VALUATION = "company_valuation"
 
 # Human labels used in the 403 message (the message always NAMES the permission the caller needs).
 REPORT_LABELS = {
     RESIDUAL_PER_SUB: "Residual per Subscriber",
     ACCOUNT_TRENDS: "Trends (all metrics)",
+    COMPANY_VALUATION: "Company valuation",
 }
 
 
