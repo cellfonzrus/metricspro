@@ -133,6 +133,7 @@ def calc_gp_report(
     config_classify: dict = None,
     ma_income: dict = None,
     leg_classify=None,
+    acc_basis: str = 'gp',
 ) -> dict:
     """
     Returns store_rows (by store) and rep_rows (by rep).
@@ -159,9 +160,22 @@ def calc_gp_report(
     classifier. This is a DECOMPOSITION ONLY: it adds `*_m1` / `*_m2_12` / `*_unsplit` companions to
     `comm`, `comp_comm`, `mi` and `atu`; each trio sums to its existing column to the cent, and no
     existing money column, total_rev, rep_pay, net_profit or bucket classification changes at all.
+    acc_basis (owner directive 2026-09-02 — "Acc Gp should show the price at which the accessories
+    were sold not the Gross profit as they are not entered correct … renamed to Acc Sales"):
+      'gp'    — the legacy column: Σ `gp` of accessory lines (this FUNCTION's default, so every
+                pure-harness caller stays byte-identical);
+      'sales' — Σ `ext_price` (sell price) of accessory lines — the same basis the device bucket
+                (`phone_sales`) has always used, and the basis the carrier portal's own 'Acc. Sales'
+                column reconciled to within 1%. The router resolves the per-org config
+                (accessory_config.gp_acc_basis, mig 932; HOUSE DEFAULT 'sales') and passes it here.
+    The chosen basis flows into `acc_gp` (key name kept so every consumer/export keeps working),
+    `total_rev` and `net_profit` consistently, and the result carries `acc_basis` + `acc_label`
+    ('Acc Sales' / 'Acc GP') so display surfaces label the column from config, not hardcoded strings.
     """
     if leg_classify is None:
         leg_classify = _legs.default_classifier()
+    acc_basis = 'sales' if str(acc_basis or '').strip().lower() == 'sales' else 'gp'
+    _acc_field = 'ext_price' if acc_basis == 'sales' else 'gp'
     leg_ladder: dict[str, dict] = {}
     classify = _dept_classifier(gp_category_map)
     if config_classify is None:
@@ -365,7 +379,7 @@ def calc_gp_report(
         market = str(sm.get('market') or '').strip()
         store_code = str(sm.get('store_code') or '').strip()
 
-        acc_gp    = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'accessory')
+        acc_gp    = sum(safe_float(r.get(_acc_field)) for r in rows if classify_row(r) == 'accessory')
         setup_gp  = sum(safe_float(r.get('gp')) for r in rows if 'Device Setup Charge' in str(r.get('product_desc','')))
         phone_sales = sum(safe_float(r.get('ext_price')) for r in rows if classify_row(r) == 'device')
         plan_gp   = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'plan')
@@ -497,7 +511,7 @@ def calc_gp_report(
 
     rep_rows = []
     for rep, rows in by_rep.items():
-        acc_gp   = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'accessory')
+        acc_gp   = sum(safe_float(r.get(_acc_field)) for r in rows if classify_row(r) == 'accessory')
         setup_gp = sum(safe_float(r.get('gp')) for r in rows if 'Device Setup Charge' in str(r.get('product_desc','')))
         phone_s  = sum(safe_float(r.get('ext_price')) for r in rows if classify_row(r) == 'device')
         plan_gp  = sum(safe_float(r.get('gp')) for r in rows if classify_row(r) == 'plan')
@@ -649,6 +663,9 @@ def calc_gp_report(
     }
 
     return {'store_rows': store_rows, 'rep_rows': rep_rows, 'totals': totals, 'period': period,
+            # Which basis the accessory column carries + its display label — config-driven (mig 932),
+            # so no surface hardcodes 'Acc GP' vs 'Acc Sales'.
+            'acc_basis': acc_basis, 'acc_label': 'Acc Sales' if acc_basis == 'sales' else 'Acc GP',
             'commission_legs': commission_legs_block,
             'bucket_composition': bucket_composition, 'unmapped_departments': unmapped_departments,
             'bucket_composition_excluded': excluded,

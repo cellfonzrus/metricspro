@@ -91,6 +91,14 @@ PL_SPEC = [
     ("ma_device_margin", "Device margin (Distributor/MA)",           "revenue", "auto",  "company"),
     ("fee_income",    "Fee income (Distributor/MA)",                 "revenue", "auto",  "company"),
     ("financing_income", "Consumer financing income",                "revenue", "auto",  "company"),
+    # Owner spec 2026-09-02 (mig 314): "mdf should capture the market spiff of $1000/$500 per store
+    # if it is part of any of the commission report on the total side." Books the raw_ma_daily_tx
+    # rows whose product_name matches the org's configured pl_mdf_product_tokens (RULE TWO — the
+    # tokens are per-org config; luxelink seeds ['premium store spiff'], the $1,000-per-store rows;
+    # empty default books nothing). `auto_opt` ⇒ the line materialises only where it carries value,
+    # so every org without MDF tokens is byte-identical. Store grain via the mig-314 account→store
+    # index (ma_store_pnl). Classification is pure: ma_store_pnl.ma_tx_bookings.
+    ("mdf_income",    "MDF (market spiffs)",                         "revenue", "auto_opt", "store"),
     ("accessory_rev", "Accessory sales revenue",                     "revenue", "auto",  "store"),
     ("device_rev",    "Device sales revenue",                        "revenue", "auto",  "store"),
     ("vip_reimb",     "Device-financing reimbursements (Distributor)", "revenue", "auto",  "store"),
@@ -243,10 +251,186 @@ def store_company_map(client, org_id):
     return mp, default_id, companies
 
 
+# ── store → company attribution (owner bug 2026-09-02: "when you select the companies the proper
+# information is not being displayed") ────────────────────────────────────────────────────────────
+def _squash_key(v):
+    """UPPER alphanumeric-only spelling key — '4640-A W Diversey Ave' == '4640A  W DIVERSEY AVE'.
+    Same folding idea as core.scope._squash; kept local so this module stays import-light."""
+    return "".join(ch for ch in str(v or "").upper() if ch.isalnum())
+
+
+def _lead_num_key(v):
+    """Leading street number, digits only ('116-36 Springfield Blvd' → '11636'); None for a
+    non-numeric lead ('B-1800') so codes only ever match exactly — mirrors store_resolver's rule."""
+    s = str(v or "").strip()
+    tok = s.split(" ")[0] if s else ""
+    if not tok or not tok[:1].isdigit():
+        return None
+    return "".join(ch for ch in tok if ch.isdigit()) or None
+
+
+def build_company_matcher(assign_rows, default_id):
+    """PURE (harness: harness_pl_filter_semantics.py): fn(store_key) -> company_id.
+
+    WHY: `store_companies.store_address` and the P&L's store keys (canonicalized sales spellings)
+    drift — live house evidence: the Aug 2026 snapshot store '1115 Liberty Ave Brooklyn, NY 11208'
+    ($3,786.27 revenue) is assigned to Supernova Wireless as '1115 Liberty Ave', but the old
+    exact-UPPER lookup missed it, so the money silently booked to 'Default Company' and the
+    company P&L views mis-stated BOTH companies. Match chain (first hit wins, fail to DEFAULT):
+      1. exact (case-insensitive) store_address match — the historical rule, byte-identical
+         wherever it used to match;
+      2. squashed-spelling match (case/punctuation/whitespace drift);
+      3. UNAMBIGUOUS leading street number (digits-only; a number claimed by 2+ assignments —
+         or by assignments of 2+ companies — never matches), the same documented precedence
+         store_resolver / the GP report's street-number join already use;
+      4. the org's default company (a genuinely-unassigned store books there, as before)."""
+    exact, squash, nums = {}, {}, {}
+    for r in (assign_rows or []):
+        sa = _norm_store((r or {}).get("store_address"))
+        cid = (r or {}).get("company_id")
+        if not sa or not cid:
+            continue
+        exact[sa.upper()] = cid
+        squash.setdefault(_squash_key(sa), cid)
+        nk = _lead_num_key(sa)
+        if nk:
+            nums.setdefault(nk, set()).add(cid)
+    num_map = {n: next(iter(c)) for n, c in nums.items() if len(c) == 1}
+
+    def company_of(store):
+        s = _norm_store(store)
+        if not s:
+            return default_id
+        cid = exact.get(s.upper())
+        if cid:
+            return cid
+        cid = squash.get(_squash_key(s))
+        if cid:
+            return cid
+        nk = _lead_num_key(s)
+        if nk and nk in num_map:
+            return num_map[nk]
+        return default_id
+
+    return company_of
+
+
+def company_assignment(client, org_id):
+    """The ONE org-scoped store→company attribution: (company_of(store)->company_id, default_id,
+    companies). Shared by engine.compute_and_store (which company snapshot a store's money lands in)
+    and statement_filter (which stores a company scope covers when composing with the store/market
+    filter) so the two can never disagree. Never raises — a read failure degrades to
+    'everything → default company', the pre-existing fail-closed posture."""
+    _mp, default_id, companies = store_company_map(client, org_id)
+    try:
+        rows = _fetch_all(client, "store_companies", "store_address,company_id", {"org_id": org_id})
+    except Exception:
+        rows = []
+    return build_company_matcher(rows, default_id), default_id, companies
+
+
+_SALARY_BASES = ("weekly", "monthly", "annual")   # storeops payroll_salary.SALARY_BASES vocabulary
+
+
+def monthly_salary_equivalent(pay_basis, pay_amount):
+    """PURE: one calendar month of a SALARIED employee's pay, or None for an hourly/unknown basis or
+    a non-positive amount. monthly → amount; annual → amount/12; weekly → amount×52/12 (the standard
+    monthly equivalent of the storeops payroll_salary conversion table). Cents rounding."""
+    b = str(pay_basis or "").strip().lower()
+    amt = safe_float(pay_amount)
+    if b not in _SALARY_BASES or amt <= 0:
+        return None
+    if b == "monthly":
+        m = amt
+    elif b == "annual":
+        m = amt / 12.0
+    else:
+        m = amt * 52.0 / 12.0
+    return round(m, 2)
+
+
+def derive_wage_cells(emps, shifts, code2addr):
+    """PURE core of wages_by_store (harness: harness_wages_salary_basis.py) → {store_address: wages}
+    (key None = company-wide, no attributable store).
+
+    OWNER BUG 2026-09-02 ("the employee salaries … are not getting autoloaded from the payroll"):
+    the estimate used `hours × employees.pay_rate` for EVERY employee, but a SALARIED employee's
+    pay_rate holds a per-PERIOD figure, not an hourly rate (live LuxeLink: E173 is monthly $8,000
+    with pay_rate 3,692.30 — a month of shifts × 3,692.30 booked hundreds of thousands of phantom
+    wages; Aug 2026 consolidated 'Wages' read $234,523.57 against $103,344.97 revenue).
+
+      • HOURLY employees (pay_basis 'hourly'/absent — every pre-mig-416 tenant): hours (actual,
+        fallback scheduled) × pay_rate per shift, byte-identical to before.
+      • SALARIED employees (pay_basis weekly/monthly/annual with a usable pay_amount — the SAME
+        columns the storeops payroll report pays them from): ONE monthly-equivalent salary
+        (monthly_salary_equivalent), allocated across the stores they actually worked in the month
+        proportional to worked hours (the payroll module's documented allocation rule); an active
+        salaried employee with NO recorded hours attributes 100% to home_store (company-wide when
+        even that is blank) — mirroring payroll_salary.allocate_across_stores; an INACTIVE salaried
+        employee with no hours this month is skipped (no longer earning).
+    Per-employee allocation shares are cents-rounded with the LAST store absorbing the residue, so
+    each salaried employee's stores sum EXACTLY to their monthly equivalent."""
+    rate, home, active, salary = {}, {}, {}, {}
+    for e in (emps or []):
+        eid = e.get("employee_id")
+        rate[eid] = safe_float(e.get("pay_rate"))
+        home[eid] = e.get("home_store")
+        active[eid] = (e.get("is_active") is not False)
+        meq = monthly_salary_equivalent(e.get("pay_basis"), e.get("pay_amount"))
+        if meq is not None:
+            salary[eid] = meq
+
+    def addr_for(eid, shift_code=None):
+        code = _norm_store(shift_code) or _norm_store(home.get(eid))
+        return code2addr.get(code, code)
+
+    out = {}
+
+    def _add(addr, amt):
+        if amt:
+            out[addr] = round(out.get(addr, 0.0) + amt, 2)
+
+    sal_hours = {}   # eid -> {addr: hours} for salaried allocation
+    for s in (shifts or []):
+        eid = s.get("employee_id")
+        hrs = safe_float(s.get("actual_hours")) or safe_float(s.get("scheduled_hours"))
+        if eid in salary:
+            if hrs:
+                a = addr_for(eid, s.get("store_code"))
+                if a:
+                    sal_hours.setdefault(eid, {})[a] = sal_hours.get(eid, {}).get(a, 0.0) + hrs
+            continue
+        pay = round(hrs * rate.get(eid, 0.0), 2)
+        if not pay:
+            continue
+        addr = addr_for(eid, s.get("store_code"))
+        if addr:
+            _add(addr, pay)
+    for eid, meq in salary.items():
+        worked = sal_hours.get(eid) or {}
+        total = sum(worked.values())
+        if total > 0:
+            addrs = sorted(worked)          # deterministic; last absorbs the rounding residue
+            allocated = 0.0
+            for i, a in enumerate(addrs):
+                share = (round(meq - allocated, 2) if i == len(addrs) - 1
+                         else round(meq * worked[a] / total, 2))
+                allocated = round(allocated + share, 2)
+                _add(a, share)
+        else:
+            if not active.get(eid, True):
+                continue                    # inactive, never worked this month → no salary booked
+            _add(addr_for(eid) or None, meq)
+    return out
+
+
 def wages_by_store(client, org_id, period):
-    """StoreOps payroll for the period → {store_address: wages}. hours = actual (fallback
-    scheduled) × employee pay_rate; store = shift.store_code (fallback employee home_store),
-    mapped store_code → store_address. Returns {} if StoreOps has no shifts for the month."""
+    """StoreOps payroll for the period → {store_address: wages} (None key = company-wide).
+    Hourly: hours (actual, fallback scheduled) × employees.pay_rate; salaried (pay_basis
+    weekly/monthly/annual, migs 416/417): the monthly salary equivalent allocated by worked hours —
+    see derive_wage_cells. Store = shift.store_code (fallback employee home_store), mapped
+    store_code → store_address. Returns {} if StoreOps has no employees/shifts for the month.
+    Pre-mig-416 schema (no pay_basis columns) degrades to the pure-hourly select → byte-identical."""
     pm, py = parse_period(period)
     if not pm or not py:
         return {}
@@ -254,25 +438,18 @@ def wages_by_store(client, org_id, period):
     nxt = f"{py + 1:04d}-01-01" if pm == 12 else f"{py:04d}-{pm + 1:02d}-01"
     so = client.schema("storeops")
     code2addr = store_code_to_address(client, org_id)
-    emps = (so.table("employees").select("employee_id,pay_rate,home_store").eq("org_id", org_id).execute().data) or []
-    rate = {e.get("employee_id"): safe_float(e.get("pay_rate")) for e in emps}
-    home = {e.get("employee_id"): e.get("home_store") for e in emps}
+    try:
+        emps = (so.table("employees")
+                .select("employee_id,pay_rate,home_store,pay_basis,pay_amount,is_active")
+                .eq("org_id", org_id).execute().data) or []
+    except Exception:   # pre-mig-416/417: salary columns absent → hourly-only, exactly as before
+        emps = (so.table("employees").select("employee_id,pay_rate,home_store")
+                .eq("org_id", org_id).execute().data) or []
     shifts = (so.table("shifts")
               .select("employee_id,store_code,scheduled_hours,actual_hours,shift_date,is_deleted")
               .eq("org_id", org_id).eq("is_deleted", False).gte("shift_date", f"{month}-01").lt("shift_date", nxt)
               .range(0, 9999).execute().data) or []
-    out = {}
-    for s in shifts:
-        eid = s.get("employee_id")
-        hrs = safe_float(s.get("actual_hours")) or safe_float(s.get("scheduled_hours"))
-        pay = round(hrs * rate.get(eid, 0.0), 2)
-        if not pay:
-            continue
-        code = _norm_store(s.get("store_code")) or _norm_store(home.get(eid))
-        addr = code2addr.get(code, code)
-        if addr:
-            out[addr] = round(out.get(addr, 0.0) + pay, 2)
-    return out
+    return derive_wage_cells(emps, shifts, code2addr)
 
 
 def store_code_to_address(client, org_id):
@@ -542,6 +719,25 @@ def build_inputs(client, org_id, period):
     payroll_routes = acct_cfg["payroll_expense_routes"]       # mig 621 K2; optional line override
     device_cogs_mode = acct_cfg["device_cogs_mode"]           # mig 621 K3; 'off' ⇒ POS-only (pre-621)
 
+    # ── mig 314 (owner spec 2026-09-02): MA store attribution + per-org P&L line labels ─────────
+    # Loaded for EVERY org (the label override applies to Boost too); all defaults OFF ⇒
+    # byte-identical books until an org's config row opts in. NEVER raises.
+    _ma314_cfg, _ma_acct_index = None, {}
+    try:
+        from app.modules.account import ma_store_pnl as _msp
+        _ma314_cfg = _msp.load_config(client, org_id)
+        if _ma314_cfg.get("store_attribution"):
+            # processor account id → store address (override table ∪ raw_ma_fulfillment tspid map);
+            # unmapped accounts stay company-wide — mapped beats guessed.
+            _ma_acct_index = _msp.load_store_index(client, org_id) or {}
+    except Exception as e:
+        _msp = None
+        _warn("mig-314 MA store-attribution config unavailable — company-wide grain kept", e)
+
+    def _ma_store(acct):
+        """Processor account id → store address (None ⇒ company-wide, exactly as before mig 314)."""
+        return _ma_acct_index.get(str(acct or "").strip()) or None
+
     L = {k: {"by_store": {}, "company_wide": 0.0, "detail": {}} for k, *_ in PL_SPEC + BS_SPEC}
 
     def add(key, store, amt, detail_label=None):
@@ -588,52 +784,35 @@ def build_inputs(client, org_id, period):
         # −26,355.61. Every component is a different kind of money and only the label said otherwise.
         # Each now goes to the head it belongs to (the arithmetic is unchanged per component — this
         # re-files them, it does not re-compute them):
-        _MA_HEAD = {
-            # OWNER RULING K1 (2026-08-10) — CONTRA-COGS, reversing `fae81a3`. The rebate is an
-            # equipment subsidy on a purchased IMEI: purchase and rebate are two halves of one
-            # transaction, so it nets against Device cost rather than inflating revenue. Booked
-            # NEGATIVE (sign −1) into the contra-COGS line. Net income identical either way; this
-            # decides device gross MARGIN. See PL_SPEC's `device_rebate` note for the figures.
-            "rebate":             ("device_rebate",    -1),
-            "device_margin":      ("ma_device_margin",  1),
-            "fees_margin":        ("fee_income",        1),
-            "consumer_financing": ("financing_income",  1),
-            "consumer_margin":    ("ma_device_margin",  1),
-            # M1–M6 spiffs are carrier bounty, the same money carrier_comm already collects for Boost.
-            "spiff_m1": ("carrier_comm", 1), "spiff_m2": ("carrier_comm", 1),
-            "spiff_m3": ("carrier_comm", 1), "spiff_m4": ("carrier_comm", 1),
-            "spiff_m5": ("carrier_comm", 1), "spiff_m6": ("carrier_comm", 1),
-        }
-        # wallet_funding is absent from the P&L on purpose: funding a VidaPay wallet moves cash
-        # between the dealer's own pockets, so it belongs on NO P&L line. Leaving it in (as a NEGATIVE
-        # revenue) understated luxelink's July income by $26,355.61. Owner ruled 2026-08-10 that it is
-        # a SETTLEMENT CLEARING account — a pass-through netting against what the distributor owes —
-        # so it is booked to the balance-sheet line `distributor_clearing` a few lines below, NOT
-        # dropped. Sign is the OPPOSITE of the revenue components: the feed's positive value is money
-        # the dealer PAID IN, which is the asset.
+        # Component → head routing now lives in ma_store_pnl.MA_COMMISSION_HEADS (moved verbatim,
+        # mig 314) so the pure booking function is the ONE place the rules live. The rulings carried
+        # with it, unchanged: K1 2026-08-10 (rebate = equipment subsidy → contra-COGS, sign −1, see
+        # PL_SPEC's `device_rebate` note); component re-filing 2026-08-10 (each of the 12
+        # raw_ma_commission components goes to the head it belongs to — spiffs are carrier bounty on
+        # `carrier_comm`, the same money Boost's carrier_comm collects); wallet_funding stays OFF
+        # the P&L (a NEGATIVE-revenue fold understated luxelink July by $26,355.61) and books the
+        # `distributor_clearing` balance-sheet asset instead, NOT sign-flipped (a positive feed
+        # value is cash the dealer paid in). Feed convention on every other component: NEGATIVE =
+        # paid TO the dealer, so heads book `sign * -value` exactly as before.
+        #   Mig 314 adds, config-gated (defaults preserve all of the above byte-identically):
+        #   • pl_ma_store_attribution → each booking lands on the row's merchant account's STORE
+        #     (fulfillment tspid map ∪ ma_account_store_map; unmapped → company-wide, honest) — the
+        #     owner's "rebates … not being captured per store" / "store wise commission";
+        #   • pl_ma_month_spiff_source='daily_tx' → the sheet's spiff_m1..m6 columns are NOT booked
+        #     here (the daily-tx MONTH-n cash rows book below instead), so a month's payment can
+        #     never book at both the activation month and the cash month.
         try:
             from app.modules.account.residual_subs import _MA_COMPONENTS
-            for r in _fetch_all(client, "raw_ma_commission", ",".join(_MA_COMPONENTS),
-                                {"org_id": org_id, "period": period_keys}):
-                for c in _MA_COMPONENTS:
-                    if c == "wallet_funding":
-                        # Balance sheet, not P&L. NOT sign-flipped: a positive feed value is cash the
-                        # dealer paid into the wallet, i.e. the clearing asset it still holds.
-                        add("distributor_clearing", None, safe_float(r.get(c)))
-                        continue
-                    head_sign = _MA_HEAD.get(c)
-                    if not head_sign:
-                        continue
-                    head, sign = head_sign
-                    # Feed convention: NEGATIVE = paid TO the dealer, so the value is sign-flipped to
-                    # "money the dealer receives" exactly as before; `sign` then re-points a rebate
-                    # into the contra-COGS line as a negative cost.
-                    _DETAIL = {"carrier_comm": "SPIFF / bounty",
-                               "device_rebate": "Device purchase rebates (Distributor/MA)"}
-                    add(head, None, sign * -safe_float(r.get(c)),
-                        detail_label=_DETAIL.get(head))
-        except Exception:
-            pass
+            if _msp is not None:
+                _comm_rows = _fetch_all(
+                    client, "raw_ma_commission",
+                    ",".join(_MA_COMPONENTS) + ",merchant_account_id",
+                    {"org_id": org_id, "period": period_keys})
+                for _line, _acct, _amt, _dlabel in _msp.ma_commission_bookings(
+                        _comm_rows, _ma314_cfg):
+                    add(_line, _ma_store(_acct), _amt, detail_label=_dlabel)
+        except Exception as e:
+            _warn("raw_ma_commission P&L booking failed", e)
         # ── MA TX → P&L (Phase B, owner spec 2026-09-01, mig 309): "Merchant discount for each line
         # item goes into the P&L as merchant discount, residual under residual." ONE org-scoped scan
         # of raw_ma_daily_tx books both figures; the per-row classification is PURE
@@ -654,24 +833,41 @@ def build_inputs(client, org_id, period):
         #     they are different money. Config resolution is org-scoped + adaptive (pre-mig-309 ⇒
         #     defaults); merchant_discount + retail_cost are the ONLY columns read as money
         #     (residual_subs.assert_money_columns — merchant_invoice is an identifier, never summed).
+        #   Mig 314 widens this same scan, config-gated (defaults byte-identical to mig 309):
+        #   • store attribution — each booking lands on the row's account_id's store;
+        #   • `mdf_income` — rows whose product_name matches pl_mdf_product_tokens book the market
+        #     spiff to the MDF line (luxelink Aug 2026: 12 × $1,000 'Premium Store Spiff' rows);
+        #   • month spiffs (pl_ma_month_spiff_source='daily_tx') — the pl_ma_spiff_order_types
+        #     families book to carrier_comm with M1..M12+ detail via THE shared
+        #     commission_ledger.parse_payment_month regex (never a second one).
+        #   A retail_cost books AT MOST ONCE (precedence residual → MDF → month-spiff); the pure
+        #   classifier is ma_store_pnl.ma_tx_bookings (proof: harness_ma_store_pnl.py).
         try:
             from app.modules.account import residual_subs as _rs
             _ma_pnl_cfg = _rs.load_ma_pnl_config(client, org_id)
+            _tx_cols = "product_name,order_type,account_id,"
             try:
                 _tx_rows = _fetch_all(
                     client, "raw_ma_daily_tx",
-                    "product_name,order_type," + ",".join(_rs._MA_PNL_MONEY_COLUMNS),
+                    _tx_cols + ",".join(_rs._MA_PNL_MONEY_COLUMNS),
                     {"org_id": org_id, "period": period_keys})
             except Exception:
-                # order_type column absent (older feed schema): the label family alone still books.
+                # order_type/account_id column absent (older feed schema): the label family alone
+                # still books, company-wide — the pre-314/pre-309 posture.
                 _tx_rows = _fetch_all(
                     client, "raw_ma_daily_tx",
                     "product_name," + ",".join(_rs._MA_PNL_MONEY_COLUMNS),
                     {"org_id": org_id, "period": period_keys})
-            for _line, _amt in _rs.ma_tx_pnl_bookings(_tx_rows, _ma_pnl_cfg):
-                add(_line, None, _amt)
-        except Exception:
-            pass
+            if _msp is not None:
+                for _line, _acct, _amt, _dlabel in _msp.ma_tx_bookings(
+                        _tx_rows, _ma_pnl_cfg, _ma314_cfg):
+                    add(_line, _ma_store(_acct), _amt, detail_label=_dlabel)
+            else:
+                # ma_store_pnl unavailable — keep the mig-309 booking so the books never regress.
+                for _line, _amt in _rs.ma_tx_pnl_bookings(_tx_rows, _ma_pnl_cfg):
+                    add(_line, None, _amt)
+        except Exception as e:
+            _warn("raw_ma_daily_tx P&L booking failed", e)
 
     # raw_comp_report — carrier commissions/incentives. Broken into canonical components via
     # carrier_category_map (framework): same carrier_comm total, with a Commission/SPIFF/Reimbursement
@@ -784,7 +980,8 @@ def build_inputs(client, org_id, period):
     try:
         from app.modules.account import device_cogs as _device_cogs
         _dev = _device_cogs.resolve(client, org_id, period_keys, pm, py,
-                                    _in_period, resolve_store, device_cogs_mode)
+                                    _in_period, resolve_store, device_cogs_mode,
+                                    ma_acct_index=_ma_acct_index)
     except Exception as e:
         _warn("device COGS invoice source unavailable — falling back to POS", e)
     if _dev.get("active"):
@@ -918,14 +1115,17 @@ def build_inputs(client, org_id, period):
     # closing-expense lines are likewise never posted as system lines by the producer.
     has_payroll_gross = False
     try:
-        try:
-            exp_rows = _fetch_all(client, "store_expenses",
-                                  "store_code,expense_name,expense_type,amount,period,source_key",
-                                  {"org_id": org_id, "period": period_keys})
-        except Exception:
-            exp_rows = _fetch_all(client, "store_expenses",
-                                  "store_code,expense_name,expense_type,amount,period",
-                                  {"org_id": org_id, "period": period_keys})
+        # STICKY expenses (owner 2026-09-02, systematic fix): read through the ONE shared
+        # carry-forward rule the Expenses sheet displays with (commcalc.expenses_effective) — a month
+        # with NO saved store_expenses rows books the latest prior month's MANUAL rows (never a
+        # system line), exactly what the sheet has been SHOWING the tenant. Before this, August's
+        # P&L `store_opex` read $0.00 (July: $225,080.58 live house evidence) and the hand-entered
+        # salary rows that suppress the wages estimate vanished with it. A month WITH its own rows
+        # is byte-identical to the old read.
+        from app.modules.commcalc.expenses_effective import effective_expense_rows
+        exp_rows, _exp_carried_from = effective_expense_rows(
+            client, org_id, period, list(period_keys),
+            "store_code,expense_name,expense_type,amount,period,source_key")
         for r in exp_rows:
             sa = code2addr.get(_norm_store(r.get("store_code")), _norm_store(r.get("store_code")))
             sk = (r.get("source_key") or "").strip()
@@ -1037,5 +1237,17 @@ def build_inputs(client, org_id, period):
             L["inventory"]["by_store"][st] = round(safe_float(eff), 2)
     except Exception:
         pass
+
+    # ── per-org P&L/BS line labels (mig 314, owner spec 2026-09-02: "it should say Residual on
+    # Total side and Mi on boost side") — the SAME `label` passthrough engine._assemble already
+    # honours for 'Gross Payroll'. Config, never code: luxelink's row sets
+    # {"mi_income": "Residual"}; an org with no labels (every Boost tenant) is byte-identical.
+    # Applied LAST so a data-driven relabel ('Gross Payroll') composes: config wins if both set a
+    # key, which is the point — the owner picked the word.
+    try:
+        if _msp is not None and _ma314_cfg:
+            _msp.apply_line_labels(L, _ma314_cfg.get("line_labels"))
+    except Exception as e:
+        _warn("mig-314 line-label override skipped", e)
 
     return L

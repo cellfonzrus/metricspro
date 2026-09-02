@@ -793,7 +793,7 @@ export default function SalesReportPage() {
                     Use these rules for the Gross-Profit report buckets
                   </label>
                   <div style={{ fontSize: 11, color: 'var(--text3)', margin: '4px 0 8px' }}>
-                    When on, the <a href="/commcalc/gp" style={{ color: 'var(--accent)' }}>GP report</a> counts a line as <b>Acc GP</b> using the accessory rules above (department, category, keyword, catalog) and as <b>Phone Sales</b> using the box departments — instead of the built-in default department labels. Turn this on when your POS departments don&apos;t match the built-in names (e.g. a feed where the same department holds both phones and accessories). Display-only: rep pay never reads it.
+                    When on, the <a href="/commcalc/gp" style={{ color: 'var(--accent)' }}>GP report</a> counts a line in the accessory column (<b>Acc Sales</b>) using the accessory rules above (department, category, keyword, catalog) and as <b>Phone Sales</b> using the box departments — instead of the built-in default department labels. Turn this on when your POS departments don&apos;t match the built-in names (e.g. a feed where the same department holds both phones and accessories). Display-only: rep pay never reads it.
                   </div>
                 </div>
                 {/* CATALOG-driven accessory classification (migs 230/231). A product-catalog upload's category

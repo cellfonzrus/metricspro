@@ -143,8 +143,12 @@ export default function GPReportPage() {
   // The 'Unsplit' sub-column earns its place only when this org actually HAS money whose source states
   // no month-of-life; otherwise the owner gets exactly the two columns asked for.
   const anyUnsplit = allRows.some(r => Math.abs(r.comm_unsplit || 0) > 0.004)
+  // Accessory-column label comes from the server payload (config-driven basis, mig 932 — 'sales'
+  // = sell price, house default → 'Acc Sales'; 'gp' opt-back → 'Acc GP'). Never hardcoded here.
+  const accLabel: string = data.acc_label || 'Acc Sales'
   const COLS: ColDef[] = COLS_BASE.filter(c =>
     !c.leg ? true : (showLegs && (c.key !== 'comm_unsplit' || anyUnsplit)))
+    .map(c => (c.key === 'acc_gp' ? { ...c, label: accLabel } : c))
   const rows: StoreRow[] = allRows.filter(r => {
     if (selMarkets.length && !selMarkets.includes(r.market)) return false
     if (selStores.length && !selStores.includes(r.store)) return false
@@ -228,7 +232,7 @@ export default function GPReportPage() {
         sheets: [{ name: 'By Rep', rows: repRows, columns: [
           { header: 'Rep', get: (r: RepRow) => r.storeops_name || r.rep },
           { header: 'Store', get: (r: RepRow) => r.store || '' },
-          { header: 'Acc GP', get: (r: RepRow) => r.acc_gp, money: true },
+          { header: accLabel, get: (r: RepRow) => r.acc_gp, money: true },
           { header: 'Setup GP', get: (r: RepRow) => r.setup_gp, money: true },
           { header: 'Phone Sales', get: (r: RepRow) => r.phone_sales, money: true },
           { header: 'Plan GP', get: (r: RepRow) => r.plan_gp, money: true },
@@ -577,7 +581,7 @@ export default function GPReportPage() {
             <thead>
               <tr>
                 <th>Rep</th><th>Store</th>
-                <th style={{ textAlign: 'right' }}>Acc GP</th>
+                <th style={{ textAlign: 'right' }}>{accLabel}</th>
                 <th style={{ textAlign: 'right' }}>Setup GP</th>
                 <th style={{ textAlign: 'right' }}>Phone Sales</th>
                 <th style={{ textAlign: 'right' }}>Plan GP</th>
