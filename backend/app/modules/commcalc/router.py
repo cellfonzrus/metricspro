@@ -623,6 +623,40 @@ SWEEP_CAVEAT_MARKERS = ('price_guard_partial', 'inventory_devices_only',
 # Statuses a sweep's dedup may treat as DONE even though 0 rows landed.
 SWEEP_TERMINAL_ZERO_STATUSES = ('empty', 'ignored', 'duplicate')
 
+# RETRY CAP (mailbox hygiene, 2026-09-01): a file whose every attempt ended NON-terminal ('skipped',
+# 'error', 'download_failed') is re-fetched on every sweep forever under the pure retry contract. On a
+# busy mailbox that meant re-downloading and re-refusing the same attachments each hour — the org whose
+# backlog sweep never finished inside its cadence was doing exactly this. After this many recorded
+# attempts with still no terminal outcome the file is treated as done and skipped — VISIBLY, in the
+# sweep's last_status ("gave up after N attempts"), never silently. 12 hourly retries is half a day of
+# chances for a transient outage; a corrected export arrives as a NEW message / (filename, size) and is
+# fetched on its own, so giving up on the broken copy loses nothing.
+SWEEP_MAX_NONTERMINAL_ATTEMPTS = 12
+
+
+def _sweep_dedup_sets(seen, key):
+    """The done/retry/give-up math shared by the email and FTP sweeps. `seen` is the sweep's journal
+    (one row per processing attempt); `key` maps a row to its dedup identity ((message_id, filename)
+    for email, (filename, file_size) for FTP).
+
+    Returns (already, prior_nonterminal, exhausted):
+      already           don't fetch — really ingested (ok + rows), terminal-zero, OR exhausted
+      prior_nonterminal will be RE-attempted this sweep (reported, so retries are visible)
+      exhausted         hit SWEEP_MAX_NONTERMINAL_ATTEMPTS with no terminal outcome — given up,
+                        surfaced in the status line via _sweep_status_suffix
+    """
+    done, attempts = set(), {}
+    for r in seen:
+        k = key(r)
+        attempts[k] = attempts.get(k, 0) + 1
+        if ((r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0)
+                or r.get('status') in SWEEP_TERMINAL_ZERO_STATUSES):
+            done.add(k)
+    exhausted = {k for k, n in attempts.items()
+                 if k not in done and n >= SWEEP_MAX_NONTERMINAL_ATTEMPTS}
+    already = done | exhausted
+    return already, {k for k in attempts if k not in already}, exhausted
+
 
 def _ingest_rows_saved(res):
     """How many rows an ingest ACTUALLY wrote, across every payload shape in this module.
@@ -727,7 +761,7 @@ def _sweep_ingest_outcome(res, *, upload_type=None):
 
 
 def _sweep_status_suffix(results, *, journal_failures=0, journal_first_error=None, retried=0,
-                         shrinks=None):
+                         shrinks=None, exhausted=0):
     """The honest tail of a sweep's `last_status` line, shared by both sweeps: errors, refusals,
     read-but-empty files, ignored types, partial-export drops, retries, and — never swallowed — a
     failure to WRITE the sweep's own journal row (which would make the file re-ingest every run)."""
@@ -757,6 +791,9 @@ def _sweep_status_suffix(results, *, journal_failures=0, journal_first_error=Non
         out += f" · {len(ign)} ignored (no importer for that report)"
     if retried:
         out += f" · {retried} retried after a previous failure"
+    if exhausted:
+        out += (f" · {exhausted} given up after {SWEEP_MAX_NONTERMINAL_ATTEMPTS} failed attempts "
+                f"(no longer re-fetched; a corrected export arrives as a new file)")
     if shrinks:
         out += f" ⚠️ {len(shrinks)} partial-export drop(s)"
     if journal_failures:
@@ -26397,14 +26434,12 @@ async def _run_ftp_sweep(org_id):
     seen = (client.schema('commcalc').table('ftp_processed')
             .select('filename,file_size,rows_saved,status').eq('org_id', org_id)
             .limit(100000).execute().data) or []
-    # DEDUP CONTRACT — identical to the email sweep (see _sweep_ingest_outcome): done = it really
-    # ingested (ok + rows saved) OR the outcome was terminal-zero. An error / price-guard refusal /
-    # unmapped labels / parse miss retries next run instead of being skipped forever.
-    already = {(r.get('filename'), r.get('file_size') or 0) for r in seen
-               if (r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0)
-               or r.get('status') in SWEEP_TERMINAL_ZERO_STATUSES}
-    _prior_nonterminal = {(r.get('filename'), r.get('file_size') or 0) for r in seen
-                          if (r.get('filename'), r.get('file_size') or 0) not in already}
+    # DEDUP CONTRACT — identical to the email sweep (see _sweep_dedup_sets): done = it really ingested
+    # (ok + rows saved), the outcome was terminal-zero, or the retry budget is exhausted (surfaced in
+    # last_status). An error / price-guard refusal / unmapped labels / parse miss retries next run
+    # instead of being skipped forever.
+    already, _prior_nonterminal, _exhausted = _sweep_dedup_sets(
+        seen, lambda r: (r.get('filename'), r.get('file_size') or 0))
     try:
         files = _ftp.fetch_new_files(cfg, already)
     except Exception as e:
@@ -26466,7 +26501,7 @@ async def _run_ftp_sweep(org_id):
     status_msg = f"{ok}/{len(results)} files ingested"
     status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
                                        journal_first_error=journal_first_error, retried=retried,
-                                       shrinks=shrinks)
+                                       shrinks=shrinks, exhausted=len(_exhausted))
     client.schema('commcalc').table('ftp_sweep_config').update(
         {'last_run_at': _datetime.now(_timezone.utc).isoformat(),
          'last_status': status_msg}).eq('org_id', org_id).execute()
@@ -26774,18 +26809,13 @@ async def _run_email_sweep(org_id, account='default'):
         return {"ok": False, "account": account,
                 "error": "This mailbox has no filename rules — add a rule (e.g. *Sales*Transaction*Details* → daily sales) and Save."}
     seen = client.schema('commcalc').table('email_processed').select('message_id,filename,rows_saved,status').eq('org_id', org_id).limit(100000).execute().data or []
-    # DEDUP CONTRACT (see _sweep_ingest_outcome): a message is done when it ACTUALLY ingested (status ok +
-    # rows saved) OR its outcome was TERMINAL-zero — 'empty' (read fine, carried nothing ingestable) /
-    # 'ignored' (no importer for that report). Everything else — an error, a price-guard refusal, unmapped
-    # tender labels, a parse miss — auto-retries on the next sweep, so a file that failed once is never
-    # skipped forever AND a file nothing can be done about stops being re-pulled every hour.
-    already = {(r.get('message_id'), r.get('filename')) for r in seen
-               if (r.get('status') == 'ok' and (r.get('rows_saved') or 0) > 0)
-               or r.get('status') in SWEEP_TERMINAL_ZERO_STATUSES}
-    # Messages we are about to RE-attempt after a previous non-terminal outcome — reported so an operator
-    # can see a file is being retried rather than silently looping.
-    _prior_nonterminal = {(r.get('message_id'), r.get('filename')) for r in seen
-                          if (r.get('message_id'), r.get('filename')) not in already}
+    # DEDUP CONTRACT (see _sweep_dedup_sets / _sweep_ingest_outcome): a message is done when it ACTUALLY
+    # ingested (status ok + rows saved), its outcome was TERMINAL-zero ('empty'/'ignored'/'duplicate'),
+    # OR it has exhausted its retry budget (SWEEP_MAX_NONTERMINAL_ATTEMPTS — surfaced in last_status,
+    # never a silent skip). Everything else auto-retries on the next sweep, so a file that failed once
+    # is never skipped forever AND a file nothing can be done about stops being re-pulled every hour.
+    already, _prior_nonterminal, _exhausted = _sweep_dedup_sets(
+        seen, lambda r: (r.get('message_id'), r.get('filename')))
     try:
         # to_thread (2026-08-04 outage fix): fetch_new_attachments is SYNCHRONOUS imaplib network I/O
         # (connect + search + full RFC822 downloads). Awaited inline it blocks the event loop for the
@@ -26873,7 +26903,7 @@ async def _run_email_sweep(org_id, account='default'):
                   else "no new attachments to import — matched files already imported OK, or none match your rules (use Test connection)")
     status_msg += _sweep_status_suffix(results, journal_failures=journal_failures,
                                        journal_first_error=journal_first_error, retried=retried,
-                                       shrinks=shrinks)
+                                       shrinks=shrinks, exhausted=len(_exhausted))
     # MAILBOX CLEANER (owner 2026-08-28: "clean the email so we don't overload it"). When this mailbox is set
     # to delete-after-ingest, remove the report emails whose data is ALREADY captured. Runs on THIS sweep's
     # own authenticated connection — no separate login, no shared password — and deletes ONLY messages
@@ -27935,6 +27965,28 @@ async def connector_health_run_due(x_notify_secret: str = Header(default="")):
     return {"checked_sources": len(_CONNECTOR_HEALTH_SOURCES), "failing": len(failures), "sent": sent}
 
 
+# How long a sweeping_since stamp holds the per-mailbox lock before it is considered stale (a crashed
+# or redeploy-killed sweep never cleared it) and ignored. Longer than any observed backlog sweep.
+EMAIL_SWEEP_LOCK_STALE_MINUTES = 180
+
+
+def _email_sweep_in_progress(cfg):
+    """True when this mailbox's previous sweep stamped sweeping_since inside the stale window — i.e.
+    it is (very likely) still running and the current tick must not start a second one. A missing or
+    unparseable stamp reads as NOT in progress (fail-open: a broken lock must never stop sweeps)."""
+    raw = (cfg.get('sweeping_since') or '') if isinstance(cfg, dict) else ''
+    if not raw:
+        return False
+    try:
+        started = _datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=_timezone.utc)
+        age = (_datetime.now(_timezone.utc) - started).total_seconds()
+        return 0 <= age < EMAIL_SWEEP_LOCK_STALE_MINUTES * 60
+    except Exception:
+        return False
+
+
 async def _email_sweep_due_worker(due):
     """The actual sweeping for /email-sweep/run-due, run AFTER the HTTP response is sent
     (BackgroundTasks). next_run_at was already advanced by the handler; this only sweeps and stamps
@@ -27952,12 +28004,29 @@ async def _email_sweep_due_worker(due):
     for cfg in due:
         oid = cfg.get('org_id') or ORG_ID
         acct = cfg.get('account') or 'default'
+        # PER-MAILBOX IN-PROGRESS LOCK (mig 930, mailbox hygiene 2026-09-01): a backlog sweep can run
+        # longer than the mailbox's cadence, and before this the NEXT tick started a second sweep of
+        # the same mailbox — two threads re-downloading the same not-yet-done messages and racing
+        # their journal writes (observed live: six identical 'duplicate' rows in one second). Skip a
+        # mailbox whose previous sweep stamped sweeping_since within the stale window; the schedule
+        # was already advanced by the handler, so it simply retries at its own cadence. The window
+        # (not a plain flag) makes a crash/redeploy self-heal: a stale stamp stops blocking on its
+        # own. Missing column (mig 930 not applied) reads as unlocked and the stamp writes no-op —
+        # sweeps behave exactly as before.
+        if _email_sweep_in_progress(cfg):
+            ran.append({"org_id": oid, "account": acct,
+                        "result": {"ok": True, "skipped": "sweep_in_progress"}})
+            continue
+        _email_status_update(client, oid, acct,
+                             {'sweeping_since': _datetime.now(_timezone.utc).isoformat()})
         try:
             res = await _run_email_sweep(oid, acct)
         except Exception as e:
             res = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
             _email_status_update(client, oid, acct,
                                  {'last_status': f"sweep crashed: {type(e).__name__}: {str(e)[:170]}"})
+        finally:
+            _email_status_update(client, oid, acct, {'sweeping_since': None})
         ran.append({"org_id": oid, "account": acct, "result": res})
     # AUTO DATA-FRESHNESS CHECK (owner 2026-08-28: "auto check and auto fix … before users complain"). The
     # sweep above IS the auto re-pull; now verify each feed actually advanced. A feed still behind escalates a
