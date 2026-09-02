@@ -22,6 +22,7 @@ from app.modules.commcalc import flag_store_resolver   # mig 285 — resolve a f
 from app.modules.commcalc import flag_persist          # mig 287 — ADDITIVE flag writes (DM review survives)
 from app.modules.commcalc.hotsheet_parser import parse_hotsheet
 from app.modules.commcalc import multisheet          # 2026-09-01 — continuation-worksheet stitching
+from app.modules.commcalc import activation_bucketing as _act_bucketing  # mig 313 — config-driven AD buckets
 from app.modules.commcalc.discrepancy_engine import run_discrepancy
 from app.modules.commcalc import targets_engine
 from app.modules.commcalc import vip_sweep
@@ -23035,11 +23036,13 @@ def _metric_source(client, org_id, metric):
             "configured": True}
 
 
-# Map an Activation Details bucket (New Activation / Port / BYOD / Upgrade / Tablet / Home Internet / Edge /
-# Other) onto the Exec-MTD activation keys. Only Port / BYOD / Upgrade are their own columns; every other
-# activation family folds into the base 'activation' column (Tablet / Home Internet / Edge / plain New all
-# count as activations toward Total Activation, exactly as the b2bsoft MTD report counts them).
-_AD_EXEC_KEY = {"Port": "port", "BYOD": "byod", "Upgrade": "upgrade"}
+# Map an Activation Details bucket (New Activation / Port / BYOD / Upgrade / BYOD Upgrade / Tablet /
+# Home Internet / Edge / Other) onto the Exec-MTD activation keys. Only Port / BYOD / Upgrade are their own
+# columns; every other activation family folds into the base 'activation' column (Tablet / Home Internet /
+# Edge / plain New all count as activations toward Total Activation, exactly as the b2bsoft MTD report
+# counts them). 'BYOD Upgrade' (mig 313) keeps its own hidden key so it is NEITHER folded into the base
+# 'activation' column (it stays excluded from Total Activation, like Upgrade) NOR shown in 'upgrade'.
+_AD_EXEC_KEY = {"Port": "port", "BYOD": "byod", "Upgrade": "upgrade", "BYOD Upgrade": "byod_upgrade"}
 
 
 def _ad_activation_buckets(client, org_id, period, ckey_fn=None, cut=None,
@@ -23069,8 +23072,9 @@ def _ad_activation_buckets(client, org_id, period, ckey_fn=None, cut=None,
         st = ck(r.get("store") or "") or "—"
         rep = (r.get("salesperson") or "").strip() or "—"
         s_slot = by_store.setdefault(st, {"activation": 0, "port": 0, "byod": 0, "upgrade": 0,
-                                          "_name": (r.get("store") or st)})
-        r_slot = by_rep.setdefault(rep, {"activation": 0, "port": 0, "byod": 0, "upgrade": 0, "_name": rep})
+                                          "byod_upgrade": 0, "_name": (r.get("store") or st)})
+        r_slot = by_rep.setdefault(rep, {"activation": 0, "port": 0, "byod": 0, "upgrade": 0,
+                                         "byod_upgrade": 0, "_name": rep})
         s_slot[fld] += 1
         r_slot[fld] += 1
     return by_store, by_rep, n
@@ -23087,7 +23091,8 @@ def _ad_cells_full(client, org_id, period, ckey_fn=None):
     rows = _cr_resolve_activation_details(client, org_id, period, {"market_for": (lambda s: "")})
     ck = ckey_fn or (lambda s: str(s or "").strip().lower())
     cells, n = {}, 0
-    _slot0 = {"new": 0, "port": 0, "byod": 0, "tablet": 0, "home_internet": 0, "edge": 0, "upgrade": 0}
+    _slot0 = {"new": 0, "port": 0, "byod": 0, "tablet": 0, "home_internet": 0, "edge": 0, "upgrade": 0,
+              "byod_upgrade": 0}
     for r in rows:
         n += 1
         b = r.get("bucket") or ""
@@ -23096,6 +23101,10 @@ def _ad_cells_full(client, org_id, period, ckey_fn=None):
         slot = cells.setdefault(key, {**_slot0, "_name": (r.get("store") or key[0])})
         if b == "Upgrade":
             slot["upgrade"] += 1
+        elif b == "BYOD Upgrade":
+            # mig 313: excluded from Total Activation exactly like Upgrade, but its own hidden count —
+            # NOT part of the displayed Upgrade column and never folded into `new`.
+            slot["byod_upgrade"] += 1
         elif b == "BYOD":
             slot["byod"] += 1
         elif b == "Port":
@@ -23840,7 +23849,8 @@ def exec_mtd_narrative(period: str, org_id: str = ORG_ID, today: str = "",
 # (Activation+Port+BYOD+Tablet+HomeInternet+Edge = Total Activation; Upgrade is a separate column).
 _ACT_TOTAL_BUCKETS = ("New Activation", "Port", "BYOD", "Tablet", "Home Internet", "Edge", "Other")
 _ACT_BUCKET_FIELD = {"New Activation": "activation", "Port": "port", "BYOD": "byod", "Tablet": "tablet",
-                     "Home Internet": "home_internet", "Edge": "edge", "Upgrade": "upgrade", "Other": "other"}
+                     "Home Internet": "home_internet", "Edge": "edge", "Upgrade": "upgrade",
+                     "BYOD Upgrade": "byod_upgrade", "Other": "other"}
 
 
 def _market_for_fn(client, org_id):
@@ -23931,7 +23941,9 @@ def activation_counts(period: str, org_id: str = ORG_ID, as_of: str = "", includ
         for d in (s_row, m_row, grand):
             d[fld] += 1
             d["total_with_upgrade"] += 1
-            if bucket != "Upgrade":       # b2b Total Activation excludes Upgrade
+            # b2b Total Activation excludes BOTH Upgrade families ('Upgrade' + the hidden 'BYOD
+            # Upgrade', mig 313) — identical exclusion semantics to the pre-313 single family.
+            if bucket not in _act_bucketing.TOTAL_ACTIVATION_EXCLUDED:
                 d["total_activation"] += 1
     _sort_key = (lambda x: -x["total_with_upgrade"]) if include_upgrade else (lambda x: -x["total_activation"])
     stores = sorted(by_store.values(), key=_sort_key)
@@ -30673,42 +30685,30 @@ def _cr_resolve_bill_payments(client, org_id, period, ctx):
     return out
 
 
-def _activation_details_bucket(contract_type, sp_name, product, category):
+def _activation_details_bucket(contract_type, sp_name, product, category, rules=None):
     """Activation TYPE for the b2b Activation Details report — the SAME columns the b2b "Month To Date
     Location Sales Report" breaks Total Activation into: New Activation / Port / BYOD / Tablet / Home Internet
-    / Edge / Upgrade. That report's Total Activation = Activation+Port+BYOD+Tablet+HomeInternet+Edge and
-    EXCLUDES Upgrade (verified against its totals row: 148+195+119+162+62+1 = 687), so `activation_counts`
-    sums every bucket EXCEPT 'Upgrade'.
+    / Edge / Upgrade (+ the hidden 'BYOD Upgrade' family). Total Activation = Activation+Port+BYOD+Tablet+
+    HomeInternet+Edge and EXCLUDES the Upgrade families ('Upgrade' AND 'BYOD Upgrade'), so
+    `activation_counts` sums every bucket except those two.
 
-    PRECEDENCE (owner reconciliation 2026-08-26, verified against the real Contract Type distribution):
-    the non-phone DEVICE categories (Home Internet / Edge / Tablet — detected by product/category NAME)
-    are decided FIRST so a tablet/FWA/edge line lands in its own column and is counted the way b2b counts
-    it. Then UPGRADE (any Contract Type containing 'upgrade', incl. 'BYOD Upgrade') — the ONLY family
-    excluded from Total Activation — then BYOD, then Port, then a plain New activation.
+    DELEGATES to activation_bucketing.activation_details_bucket (mig 313) — the classification is PURE and
+    CONFIG-DRIVEN (RULE TWO): per-org token rules from commcalc.accessory_config.activation_details_rules
+    (loaded by _activation_details_rules), house defaults when unconfigured.
 
-    CRITICAL ORDERING: 'upgrade' is tested BEFORE 'byod' so 'BYOD Upgrade' is an Upgrade (excluded), and
-    'port' is matched on the word 'port' ONLY — NOT on 'idv' — because the real Contract Types include
-    'Activation With IDV' and 'Port with IDV': IDV is an insurance attach, not a port signal, so keying
-    Port on 'idv' wrongly tagged every insured Activation as a Port. Distinct-Serial# totals per family
-    (New Activation 497 / Port 287 / BYOD 174, Upgrade 78 excluded) reconcile to the owner's sanity check
-    of 953 non-upgrade activations. If a store's total is off, this precedence is the first knob to turn."""
-    ct = str(contract_type or "").lower()
-    nm = f"{sp_name or ''} {product or ''} {category or ''}".lower()
-    if "home internet" in nm or "fwa" in nm or "fixed wireless" in nm:
-        return "Home Internet"
-    if "edge" in nm or "edge" in ct:
-        return "Edge"
-    if "tablet" in nm or "galaxy tab" in nm:
-        return "Tablet"
-    if "upgrade" in ct:
-        return "Upgrade"
-    if "byod" in ct or "customer phone" in nm:
-        return "BYOD"
-    if "port" in ct:
-        return "Port"
-    if "activation" in ct:
-        return "New Activation"
-    return "Other"
+    HOUSE-DEFAULT behavior (2026-09-01 owner-approved fix; full trade-off in activation_bucketing.py):
+      • EDGE matches the whole word 'edge' in CONTRACT TYPE ONLY — no longer in the product/plan NAME,
+        because 'Motorola Edge' DEVICES were landing in the Edge column (the b2b portal's Edge column is
+        contract-type-driven). A tenant whose Edge program is only visible in the plan NAME sets
+        `edge_name_tokens` in its config row and gets name matching back, org-scoped.
+      • 'BYOD Upgrade' contract types classify to their own hidden 'BYOD Upgrade' bucket: still excluded
+        from Total Activation exactly like Upgrade, but no longer counted in the DISPLAYED Upgrade column
+        (b2b shows them as their own family). `upgrade_hidden_contract_tokens: []` restores one family.
+
+    CRITICAL ORDERING (unchanged): 'upgrade' is tested BEFORE 'byod' so 'BYOD Upgrade' stays out of BYOD,
+    and 'port' is matched on the word 'port' ONLY — NOT on 'idv' (an insurance attach, not a port signal).
+    If a store's total is off, the precedence in activation_bucketing.py is the first knob to turn."""
+    return _act_bucketing.activation_details_bucket(contract_type, sp_name, product, category, rules)
 
 
 def _norm_report_date(v):
@@ -30734,9 +30734,27 @@ _ACT_CANCELLED_STATUS = {"cancelled", "canceled", "void", "voided", "deactivated
 # Bucket precedence for de-duping a Serial# that appears on more than one line: the STRONGEST
 # classification wins, so a device with both an Upgrade line and an Activation/Port/BYOD line counts as
 # the real activation (never silently dropped to the excluded Upgrade family). Rank order matches
-# _activation_details_bucket's own precedence; Upgrade is lowest so it only wins when nothing else does.
-_ACT_BUCKET_RANK = {"Home Internet": 6, "Edge": 6, "Tablet": 6, "BYOD": 4, "Port": 3,
-                    "New Activation": 2, "Other": 1, "Upgrade": 0}
+# _activation_details_bucket's own precedence; the Upgrade families ('Upgrade' and 'BYOD Upgrade') are
+# lowest so they only win when nothing else does. Canonical map lives in activation_bucketing (mig 313).
+_ACT_BUCKET_RANK = _act_bucketing.BUCKET_RANK
+
+
+def _activation_details_rules(client, org_id):
+    """Per-org Activation-Details classification rules (mig 313:
+    commcalc.accessory_config.activation_details_rules JSONB), resolved through
+    activation_bucketing.resolve_rules so missing keys fall to the HOUSE DEFAULTS. Mirrors the mig-214
+    billpay_products posture: its OWN defensive query, so an absent column / row / table (mig 313 unrun)
+    degrades to the defaults and can never break the resolver. Org-scoped — a tenant's rules never leak
+    to another org."""
+    raw = None
+    try:
+        rows = (client.schema("commcalc").table("accessory_config")
+                .select("activation_details_rules").eq("org_id", org_id).limit(1).execute().data) or []
+        if rows:
+            raw = rows[0].get("activation_details_rules")
+    except Exception:
+        raw = None
+    return _act_bucketing.resolve_rules(raw)
 
 
 def _dealer_to_store_map(client, org_id):
@@ -30813,6 +30831,8 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
     # Dealer Code -> store name, so the AD numeric Dealer Code merges onto the sales feed's named store row
     # (built once; empty when nothing maps → falls back to the code, same as before).
     _dmap = _dealer_to_store_map(client, org_id)
+    # Per-org bucket classification rules (mig 313; house defaults when unconfigured) — loaded ONCE.
+    _ad_rules = _activation_details_rules(client, org_id)
     try:
         q = (client.schema("commcalc").table(CUSTOM_IMPORT_TABLE)
              .select("data,period,source_filename,row_index").eq("org_id", org_id))
@@ -30885,7 +30905,7 @@ def _cr_resolve_activation_details(client, org_id, period, ctx):
         # (falling back to the SP/PO service-plan name when the sheet has no explicit Department header, so
         # the payable value matches what `plan_options._custom_report_values` surfaces in that dropdown).
         dept = str(_get(d_low, "Department", "Dept")).strip() or sp
-        bucket = _activation_details_bucket(ct, sp, prod, cat)
+        bucket = _activation_details_bucket(ct, sp, prod, cat, _ad_rules)
         row = {
             "store": store,
             "market": mkt,
