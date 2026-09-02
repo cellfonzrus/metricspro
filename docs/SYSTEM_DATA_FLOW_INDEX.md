@@ -232,6 +232,26 @@ commissions, expenses.
   pre-934 DB keeps its mig-314 seeds. LuxeLink seeded `'income'` by mig `934`. Proof:
   `harness_pl_rebate_presentation.py`.
 
+- **Bill-pay pass-through carve-out + coverage recon (owner directive 2026-09-02, mig `939`):**
+  "billpay is deducted from [revenue] as it is not income and is offset by either the cash
+  deposited… or by the commission received; different carriers do it in a different way." (a)
+  P&L: NEW matched revenue pair **`billpay_collected`** (+) / **`billpay_offset`** (−, label per
+  the org's settlement convention) — both `auto_opt`, store grain — built from the daily-closing
+  declared ePay split (`epay_on_cash`+`epay_on_credit`, DM-VERIFIED corrections winning at
+  store-day grain); the pair nets to ZERO by construction so gross profit / net income never
+  move. Config on `commission_org_config` (RULE TWO, no carrier names):
+  `pl_billpay_presentation` (`'off'` house default = byte-identical | `'carveout'`) and
+  `pl_billpay_settlement` (`'remit_separate'` = commission paid separately, payments remitted
+  separately | `'net_from_commission'` = payments netted from commission owed). Pure module
+  `account/billpay_pl.py` wired in `coa.build_inputs`; LuxeLink seed (`'carveout'` +
+  `'net_from_commission'`, Aug $38,324.39 measured) COMMENTED behind the owner gate in mig
+  `939`. (b) COVERAGE recon: `GET /billpay-coverage/{period}` — per store per DAY, Σ bill-pay ≤
+  Σ(cash + card declared at closing, DM-corrected); bill-pay side = the carrier PROCESSOR feed
+  (the same `metric_source_of_truth`/data_source resolution `/metric-recon` uses; NEW day-grain
+  sibling `_billpay_processor_by_store_day`) falling back to the declared closing split;
+  exceptions ONLY when bill-pay EXCEEDS collected ("equal to or less" passes). Pure math
+  `metric_recon.reconcile_billpay_coverage`. Proof: `harness_billpay_pl.py`.
+
 - **P&L store/market filter + company scope (fix 2026-09-02, owner: "market filter shows no data /
   company selection shows improper information"):** the aggregated-statement filter
   (`account/statement_filter.py`, read by `GET /account/pl|balance-sheet/{period}?stores=&markets=`)
@@ -306,6 +326,25 @@ commissions, expenses.
   (company attribution) instead of dropping rows silently. LuxeLink org seeds ship COMMENTED
   behind the owner gate in mig `933` (mig-622 precedent). Roadmap of the remaining buildout:
   `docs/FINANCE_PLATFORM_ROADMAP.md`.
+
+- **DM-verified store cash → Balance Sheet (owner directive 2026-09-02, mig `938`):** "all cash
+  collected in the store must be added to the balance sheet as cash collected after it has been
+  verified by the DM, either the cash is deposited in the bank or it is used in expenses." NEW BS
+  asset line **`store_cash_on_hand`** "Cash on hand — stores (undeposited)" (`auto_opt`, store
+  grain, `balance_sheet.EXTRA_BS_SPEC`), gated by `account_config.cash_on_hand_basis` (`'off'`
+  house default = byte-identical; `'verified'` = the owner's rule — only DM-VERIFIED store-days'
+  declared cash counts as collected, unverified dollars reported in statement meta, never
+  silently dropped; `'all'` = the operational number). Movement dicts come from the closing
+  module's OWN `_cash_position_core` (lazy import in `statement_engine.build_inputs_full` —
+  declared cash already DM-overlay-corrected; outflows = cash pickups/deposits + approved
+  envelope expenses/withdrawals — so the BS can never disagree with Cash Position / Store Cash
+  on Hand), then PURE `balance_sheet.store_cash_cells` filters/nets as-of period end; store
+  grain via `coa.store_resolver`. In the derived Cash Flow the line is CASH
+  (`statement_engine.CF_CASH_KEYS = ('cash','store_cash_on_hand')` — summed into
+  cash_begin/cash_end, excluded from operating deltas), so a bank deposit (store→bank) leaves
+  reported cash unchanged and a cash-paid expense relieves the line while landing on the P&L via
+  the existing closing-expense sweep. LuxeLink seed (`'verified'`) COMMENTED behind the owner
+  gate in mig `938`. Proof: `harness_verified_cash_bs.py`.
 
 ---
 
@@ -584,6 +623,64 @@ gates.
 **Endpoints:** closing module lives under `backend/app/modules/closing/` (its own router `⚠ endpoints not
 enumerated here — grep `closing/router.py`). Related commcalc: `/x-tender-recon` `router.py:6249`,
 closing tender recon mig `103`,`104`,`106`,`111`.
+
+- **DM-verification audit trail + export parity (owner directive 2026-09-02, mig `935`):** the
+  store-entered ORIGINALS were never overwritten (rep figures live on `commcalc.daily_closing`;
+  DM corrections in the separate `dm_*` columns of `daily_closing_verification`, applied as a
+  read-time overlay — `closing/verified_overlay.py`), but (a) the two date-range exports never
+  showed the DM's modified values or the envelope photo, and (b) the verification row is an
+  UPSERT, so a second DM save overwrote the previous `dm_*` correction with no history. Now:
+  `POST /closing/verify` appends one revision row per changed save to
+  **`commcalc.daily_closing_verification_audit`** (mig `935`; append-only — new values, prior
+  values, `changed_fields`, `edited_after_verify` = a money figure changed on an
+  ALREADY-verified day — the owner's exact scenario; pure builder
+  `closing/verification_audit.py`, proof `harness_dm_verification_audit.py`);
+  `GET /closing/submissions` returns the six `dm_*` modified values + `dm_note` + `dm_corrected`
+  per row (store-day grain) AND `envelope_view_url`; `GET /closing/summary` store cards carry
+  `totals_original` (the pre-overlay store-entered aggregate, present only when a correction
+  applied) next to the authoritative overlaid `totals`; NEW `GET /closing/envelope-view?row_id=`
+  signs the private-bucket envelope photo on demand and 302-redirects (org-scoped lookup — the
+  clickable link exports carry; list endpoints still never do per-row Storage round trips).
+  Frontend: the DM Verify export (`DailyClosingVerify.tsx` — Original vs DM columns + per-rep
+  envelope link) and the dashboard export (`closing/_lib/SubmissionsTable.tsx` — DM columns +
+  clickable envelope link) show original and modified side by side.
+
+- **Envelope report + envelope-short chargebacks (owner directive 2026-09-02, mig `936`) — a
+  REPORT:** one line per envelope (= one `daily_closing` rep-day row): declared cash, the
+  management COUNT (`commcalc.envelope_count`, mig `936` — counted amount, variance,
+  short/over/match, comment, counted_by), the envelope photo link, and the linked chargeback.
+  `GET /closing/envelope-report` (RULE FIVE standard filters: date range + markets/stores/reps,
+  bucket-aware markets, manager-span keyset; `status` filter
+  short|over|match|uncounted|discrepancy|commented|chargeback);
+  `POST /closing/envelope-count` saves a count and — short + `assign_chargeback` — inserts a
+  PENDING PARENT row into the EXISTING `commcalc.ops_chargeback` (mig `504`) with reason
+  **`envelope_short`**, `applied_to='commission'`, amount = the ACTUAL shortage (idempotent on
+  the mig-504 parent key; unticking deletes the link only while still pending);
+  `POST /closing/envelope-chargeback/decide` = the same `ops_chargebacks.decide_chargeback`
+  machinery, reason-filtered, management-gated. The reason auto-surfaces in the Ops Chargeback
+  Amounts policy editor ("reasons in the wild"); POSTED rows settle through the commission
+  module's existing `_settle_ops_chargebacks` cascade (commission-agent domain — closing only
+  ever creates parents). Pure logic `closing/envelope_report.py`, proof
+  `harness_envelope_report.py`. Scheduled/on-demand sends: notify report key
+  **`closing_envelope_report`** (`notify/closing_reports.py`, W3 pattern — in-process reuse of
+  the live endpoint). Frontend `/closing/envelope-report` (`closing/envelope-report/page.tsx`;
+  NAV Daily Closing group + REPORT_DIRECTORY 'ops').
+
+- **Closing entry-quality coaching (owner directive 2026-09-02, mig `937`):** "a training walkthru
+  for an employee if their data is not entered correctly for a second day in a row". Detection is
+  PURE (`closing/entry_quality.py`, proof `harness_closing_entry_quality.py`): signals
+  `dm_corrected` (the store-day the employee submitted on was DM-verified WITH a correction) and
+  `sent_to_review` (the row hit `auto_accepted`/`mgmt_flag`); an employee with
+  `threshold_days` (house default 2) CONSECUTIVE incorrect days gets the walkthrough. Config
+  per org (`commcalc.closing_entry_quality_config`, mig `937`: enabled / threshold_days /
+  signals / notify_channel none|email|whatsapp|both / message_template / tour_slug — default the
+  EXISTING Training-Center tour `closing-submit`); idempotency log
+  `commcalc.closing_entry_coaching` (one row per employee × streak_end). Endpoints:
+  `GET /closing/entry-quality` (management report), `GET /closing/entry-quality/me` (rep banner —
+  NO dollar amounts, money-secrecy preserved), `POST /closing/entry-quality/run-due`
+  (NOTIFY_RUN_SECRET cron sweep; email via notify channels when the org opts in) +
+  `/entry-quality/run` (manual, one org). Frontend: guidance banner + "Walk me through"
+  (`startTour(tour_slug)`) on `ClosingSubmitForm.tsx`.
 
 ---
 
@@ -865,7 +962,11 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `commcalc.account_statements` | `statement_engine.compute_and_store` (purge-then-insert per period; statement_types `pl`/`balance_sheet`/**`cash_flow`**) — legacy writer `engine.compute_and_store` retained | `GET /account/pl|balance-sheet|cash-flow/{period}`, `/account/overview`, `statement_filter.filtered_statement`, `engine._prior_accum_ni`, `statement_engine._stored_bs` (prior-BS for cash flow), notify `account_pl`/`account_balance_sheet` |
 | `commcalc.account_config` (per-org finance config, migs `611`/`613`/`621`/`933`) | `PUT /account/config`; mig-933 columns (`inventory_basis`, `handset_payable_order_types`) seeded per org behind the owner gate | `coa._account_config` (rates/K2/K3), `balance_sheet.load_bs_config` (mig-933 knobs, adaptive) |
 | `commcalc.bank_deposit` | closing deposit OCR/upload | `deposit_recon.bank_deposits_by_store_day:179`, MI cash gate |
-| `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate |
+| `commcalc.daily_closing` | closing sweep `033` | `deposit_recon.closing_cash_raw_by_store_day:147`, MI cash gate; **BS `store_cash_on_hand` line via `_cash_position_core` → `balance_sheet.store_cash_cells`** (mig `938`, basis-gated); **P&L bill-pay carve-out** (`account/billpay_pl.billpay_cells` on `epay_on_cash`/`epay_on_credit`, mig `939`, presentation-gated); **bill-pay coverage recon** (`_closing_collected_by_store_day` → `/billpay-coverage/{period}`) |
+| `commcalc.daily_closing_verification` | `POST /closing/verify` (upsert; `dm_*` = the DM's corrected store-day totals) | `verified_overlay.build_overlay_map` (summary/tender/cash-position overlays), `closing_submissions` dm fields, ops_chargebacks missed_dm_verify detection |
+| `commcalc.daily_closing_verification_audit` (mig `935`, append-only) | `POST /closing/verify` via `verification_audit.build_audit_row` (one revision per changed save; `edited_after_verify` flags a money change on an already-verified day) | audit/history readers only — no report sums these rows |
+| `commcalc.envelope_count` (mig `936`, one row per envelope = daily_closing row) | `POST /closing/envelope-count` (upsert on `org_id,closing_row_id`; links `chargeback_id`) | `GET /closing/envelope-report`, notify `closing_envelope_report` |
+| `commcalc.ops_chargeback` (mig `504`) | detection sweeps (`ops_chargebacks.py`: missed_closing/missed_dm_verify) **+ `POST /closing/envelope-count`** (reason `envelope_short`, parent rows only, amount = actual shortage) | policy editor (reasons-in-the-wild), decide endpoints, commission settlement `_settle_ops_chargebacks`/`_ops_chargeback_deductions` (`commcalc/router.py:11265-11550`) |
 | `commcalc.name_map` | name-map UI | `calc_rep_commissions` (login→storeops name), rep-employee-map |
 | `commcalc.management_incentive_*` | `/management-incentive/plans` `28534`, `/compute` `28613` | MI engine, payouts, resolve |
 | `commcalc.discrepancy_results` | Boost engine `discrepancy_engine.run_discrepancy` (`source='boost'`/NULL) + MA recon `ma_recon.run_ma_discrepancy` (`source='ma'`, `comp_type='MA_ACTIVATION'`) — each delete-then-inserts ONLY its own `(org, period, source)` slice; canonical DDL + attribution columns (`rule_id/rule_key/rule_reason/evidence/source/order_number`) in mig `312` (table pre-dates migrations, console-created) | `GET /discrepancy/{period}` `router.py:19099` (selects `*`, optional `source` filter), Pay Discrepancy page |
@@ -930,6 +1031,10 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | `POST /account/compute/{period}`, `POST /account/run-due` → `statement_engine.compute_and_store` (P&L + BS + Cash Flow snapshots; supersedes `engine.compute_and_store`, 2026-09-02) | `account/router.py` (`compute`), `account/autocompute.py` (`recompute_due`) | §4 statement engine |
 | `POST /notify/send` / `run-due` → report key `financial_statement` (fresh P&L+BS+CF at send time, any period/scope) | `notify/finance_reports.py` (`_financial_statement` → `statement_engine.statement`) | §4 statement engine |
 | `GET/PUT /accessory-config` — now also carries `gp_acc_basis` ('sales' house default / 'gp' opt-back, mig 932) | `commcalc/router.py` (`get_accessory_config`/`put_accessory_config`) | §4 Acc Sales basis |
+| `POST /closing/verify` (upsert + mig-935 audit append), `GET /closing/submissions` (now carries `dm_*` modified values + `envelope_view_url`), `GET /closing/summary` (now carries `totals_original`), `GET /closing/envelope-view?row_id=` (sign + 302 redirect) | `closing/router.py` (`verify_store`/`closing_submissions`/`closing_summary`/`closing_envelope_view`) | §12 DM-verification audit |
+| `GET /closing/envelope-report`, `POST /closing/envelope-count`, `POST /closing/envelope-chargeback/decide`; notify report key `closing_envelope_report` | `closing/router.py` (`envelope_report`/`save_envelope_count`/`decide_envelope_chargeback`); `notify/closing_reports.py` | §12 Envelope report |
+| `GET /closing/entry-quality`, `GET /closing/entry-quality/me`, `POST /closing/entry-quality/run-due` + `/run` | `closing/router.py` (`entry_quality_report`/`entry_quality_me`/`entry_quality_run_due`) | §12 entry-quality coaching |
+| `GET /billpay-coverage/{period}` (per store/day: bill-pay ≤ cash+card, exceptions surfaced) | `commcalc/router.py` (`billpay_coverage` → `metric_recon.reconcile_billpay_coverage`) | §4 bill-pay carve-out / §15 |
 
 (Full 468-endpoint list: `grep -nE '@router\.(get|post|put|patch|delete)\(' backend/app/modules/commcalc/router.py`.)
 
@@ -966,6 +1071,9 @@ closing tender recon mig `103`,`104`,`106`,`111`.
 | Handset payable (BS liability, mig `933`) | `raw_ma_daily_tx.retail_cost` on the org's `handset_payable_order_types` families, `tx_date ≤ as-of < due_date` (the vendor's own terms) | `balance_sheet.handset_payable_bookings` via `statement_engine.build_inputs_full` → BS `handset_payable` line; store grain = the mig-314 account→store index |
 | Unsold-phone inventory (BS asset, mig `933`) | `inventory_aging_device.unit_cost` where `on_hand` at the store's latest `as_of_date` (basis `'devices'`); `inventory_value.swept_value` (basis `'report'`, default); `manual_value` always wins | `balance_sheet.device_inventory_cells`/`apply_inventory_basis`; tie-out `GET /account/inventory-recon` |
 | Cash-deposit variance | `daily_closing.t_cash` − `bank_deposit.amount` | `deposit_recon` `:147/:179`; MI gate `28895` |
+| Store cash on hand (BS asset, mig `938`) | DM-verified `daily_closing` declared cash (overlay-corrected) − `cash_pickup`/`bank_deposit`/`closing_expense`/`envelope_withdrawal` outflows, as-of period end | `balance_sheet.store_cash_cells` via `statement_engine.build_inputs_full` (`account_config.cash_on_hand_basis`: off default / verified / all); CASH in the cash-flow statement (`CF_CASH_KEYS`) |
+| Bill-pay pass-through (P&L `billpay_collected`/`billpay_offset`, mig `939`) | `daily_closing.epay_on_cash`+`epay_on_credit` (DM-verified corrections win at store-day grain); pair nets to ZERO | `account/billpay_pl.billpay_cells`/`billpay_bookings` → `coa.build_inputs` (`pl_billpay_presentation='carveout'`; offset label per `pl_billpay_settlement`) |
+| Bill-pay coverage (billpay ≤ cash+card per store/day) | processor feed (`raw_epay_daily_tx` per_store_day / `raw_ma_daily_tx` by `tx_date`+merchant map) or declared closing split, vs `daily_closing` tender totals (DM-corrected) | `metric_recon.reconcile_billpay_coverage` via `GET /billpay-coverage/{period}` |
 | Days-in-stock (aging) | `inventory_aging_device.days_in_stock` (snapshot) | device-cost recon `27338`; MI aging bonus |
 | Lateness % (`late_rate` — late shifts ÷ scheduled shifts) | `storeops.timelog` punches vs `storeops.shifts` windows | `attendance_exceptions.compute_attendance_exceptions` → `accountability.aggregate`; surfaced by `/storeops/accountability` ('Lateness %' page, W2 rename) and the `storeops_lateness` scheduled report (§14 W3) |
 | Withholding estimate (gross/FICA/federal/state/net) | `storeops.timelog`+`manual_hours` hours × `employees.pay_rate` × `payroll_settings` W-4 | browser: `frontend/src/lib/payroll-tax.ts computePay`; server twin: `storeops/payroll_tax_estimate.compute_pay` (§14 W3 — keep in lockstep) |

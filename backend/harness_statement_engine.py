@@ -60,8 +60,11 @@ ALL_KEYS = [k for k, *_ in coa.PL_SPEC] + [k for k, *_ in SE.bs_spec()]
 # ── A. spec + as-of ────────────────────────────────────────────────────────────────────────────
 print("A. spec extension + period as-of")
 spec = SE.bs_spec()
-ok("bs_spec = coa.BS_SPEC + handset_payable", [k for k, *_ in spec]
-   == [k for k, *_ in coa.BS_SPEC] + ["handset_payable"])
+# mig 938 added store_cash_on_hand to EXTRA_BS_SPEC (verified store cash) — the invariant is
+# "coa.BS_SPEC followed by EXACTLY balance_sheet.EXTRA_BS_SPEC", not a frozen one-line list.
+ok("bs_spec = coa.BS_SPEC + EXTRA_BS_SPEC (handset_payable, store_cash_on_hand)",
+   [k for k, *_ in spec]
+   == [k for k, *_ in coa.BS_SPEC] + ["handset_payable", "store_cash_on_hand"])
 hp = next(row for row in spec if row[0] == "handset_payable")
 ok("handset_payable is a liability, auto_opt (renders only when it carries value)",
    hp[2] == "liability" and hp[3] == "auto_opt", hp)

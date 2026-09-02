@@ -428,6 +428,24 @@ export default function DailyClosingVerify() {
     { header: 'Credit recon flag', field: 'credit_flag', get: (r: any) => r.money_recon?.credit?.flag ? 'Yes' : (r.money_recon?.credit?.pending ? 'Pending' : 'No') },
     { header: 'DM verified', field: 'dm_verified', get: (r: any) => r.verification?.verified ? 'Yes' : 'No' },
     { header: 'DM verified by', field: 'dm_verified_by', get: (r: any) => r.verification?.verified_by },
+    // ── Original vs DM-modified, side by side (owner 2026-09-02): the money columns above are the
+    // AUTHORITATIVE store-day figures (DM-corrected once verified — TKT-1030 overlay). These carry
+    // the store-entered ORIGINAL aggregate (present only when a DM correction actually applied)
+    // and the DM's modified values, so an exported date range shows both. ──
+    { header: 'DM corrected', field: 'dm_corrected', get: (r: any) => r.dm_corrected ? 'Yes' : 'No' },
+    { header: 'Original store cash $', field: 'orig_store_cash', money: true, get: (r: any) => r.totals_original ? r.totals_original.store_cash : r.totals?.store_cash },
+    { header: 'Original store CC $', field: 'orig_store_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.store_cc : r.totals?.store_cc },
+    { header: 'Original ePay cash $', field: 'orig_epay_cash', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cash : r.totals?.epay_on_cash },
+    { header: 'Original ePay CC $', field: 'orig_epay_cc', money: true, get: (r: any) => r.totals_original ? r.totals_original.epay_on_cc : r.totals?.epay_on_cc },
+    { header: 'Original accessory $', field: 'orig_acc_sale', money: true, get: (r: any) => r.totals_original ? r.totals_original.acc_sale : r.totals?.acc_sale },
+    { header: 'Original other $', field: 'orig_other', money: true, get: (r: any) => r.totals_original ? r.totals_original.other_account : r.totals?.other_account },
+    { header: 'DM cash $', field: 'dm_store_cash', money: true, get: (r: any) => r.verification?.dm_store_cash },
+    { header: 'DM credit $', field: 'dm_store_cc', money: true, get: (r: any) => r.verification?.dm_store_cc },
+    { header: 'DM ePay cash $', field: 'dm_epay_cash', money: true, get: (r: any) => r.verification?.dm_epay_cash },
+    { header: 'DM ePay CC $', field: 'dm_epay_cc', money: true, get: (r: any) => r.verification?.dm_epay_cc },
+    { header: 'DM accessory $', field: 'dm_acc_sale', money: true, get: (r: any) => r.verification?.dm_acc_sale },
+    { header: 'DM other $', field: 'dm_other', money: true, get: (r: any) => r.verification?.dm_other },
+    { header: 'DM note', field: 'dm_note', get: (r: any) => r.verification?.note || '' },
   ], [])
 
   const repColumns: ExportColumn[] = useMemo(() => [
@@ -452,6 +470,9 @@ export default function DailyClosingVerify() {
         (r._expense_lines || []).map((e: any) => `${e.category_name}: ${fmt(e.amount)} (${e.status})`).join('; ') },
     { header: 'Gate status', field: 'gate_status', get: (r: any) => (r._gate?.status && GATE_LABEL[r._gate.status]) || '' },
     { header: 'Gate reason(s)', field: 'gate_reasons', get: (r: any) => (r._gate?.reasons || []).join('; ') },
+    // Owner 2026-09-02: the envelope PICTURE rides the export — each rep row's photo is already
+    // signed by /closing/summary (envelope_url), so the link works straight out of the file.
+    { header: 'Envelope photo', field: 'envelope_url', get: (r: any) => r.envelope_url || '' },
   ], [])
 
   const storeExportRows = stores

@@ -24,6 +24,9 @@ from . import expense_config
 from . import envelope as _envelope
 from . import deposit_recon
 from . import verified_overlay as _verified_overlay
+from . import verification_audit as _verification_audit
+from . import envelope_report as envelope_report_mod
+from . import entry_quality
 
 router = APIRouter(prefix="/closing", tags=["Daily Closing"])
 
@@ -536,11 +539,18 @@ def closing_submissions(date_from: str = None, date_to: str = None,
             "correction_count": _int(r.get("correction_count")),
             "dm_verified": bool(ver.get("verified")), "dm_verified_by": ver.get("verified_by"),
             "dm_verified_at": ver.get("verified_at"),
+            # DM-MODIFIED figures side by side with the store-entered originals above (owner
+            # 2026-09-02: "the user should be able to see the original data entered by the store
+            # … and the modified data by the DM" in the date-range export). Store-day grain — the
+            # same verification row repeats on each of that store-day's rep rows, honestly.
+            **_verification_audit.submission_dm_fields(ver),
             # Reference only — the raw storage path, never a signed URL (no per-row network round trip
-            # to Storage on a list endpoint that can return thousands of rows; nothing in the dashboard
-            # or its exports renders it as a clickable image). In-app photo viewing for a specific
-            # store-day continues to live on /closing/verify and /closing/management, unchanged.
+            # to Storage on a list endpoint that can return thousands of rows). `envelope_view_url` is
+            # the CLICKABLE form for exports: an org-scoped API link that signs the private-bucket
+            # photo on demand and redirects (GET /closing/envelope-view).
             "envelope_picture": r.get("envelope_picture"),
+            "envelope_view_url": (f"/api/v1/closing/envelope-view?row_id={r.get('id')}&org_id={org_id}"
+                                  if r.get("envelope_picture") else None),
             "remarks": r.get("remarks"),
         })
 
@@ -1220,7 +1230,14 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
         # can't be attributed to one rep) and the store carries a `dm_corrected` badge instead.
         _ver = ver_by_store.get(code) if code else None
         _dm_corrected = bool(_ver and _ver.get("verified") and _verified_overlay.has_correction(_ver))
+        # Owner 2026-09-02: the overlay used to REPLACE the store-entered totals in place, so the
+        # DM Verify export carried only ONE set of numbers. Snapshot the ORIGINAL store-entered
+        # aggregate first — the payload now carries both, side by side (`totals` = authoritative /
+        # DM-corrected when verified; `totals_original` = the reps' raw sum, only present when a
+        # correction actually applied, so an uncorrected store adds no payload weight).
+        totals_original = None
         if _dm_corrected:
+            totals_original = dict(totals)
             _verified_overlay.apply_overlay(totals, _ver)
 
         # MONEY recon: store-declared closing $ vs B2B actuals (accessory gross, cash, credit).
@@ -1311,6 +1328,7 @@ def _closing_summary_for_date(client, org_id, date, market_set, store_set, rep_s
             "closer": closer_by_store.get(code) if code else None,
             "verification": ver_by_store.get(code), "recon": recon, "money_recon": money_recon,
             "dm_corrected": _dm_corrected,   # store-day totals reflect the DM's verified correction (TKT-1030)
+            "totals_original": totals_original,  # store-entered aggregate BEFORE the DM overlay (owner 2026-09-02)
         })
 
     # Stores where reps WORKED (clocked in / sold) but NOBODY submitted a closing never appear in
@@ -1467,6 +1485,7 @@ def verify_store(payload: VerifyStoreIn, org_id: str = ORG_ID):
     date = payload.close_date
     if not code or not date:
         raise HTTPException(400, "store_code and close_date required")
+    client = sb()
     body = {
         "org_id": org_id, "close_date": date, "store_code": code,
         "store_name": payload.store_name,
@@ -1478,9 +1497,25 @@ def verify_store(payload: VerifyStoreIn, org_id: str = ORG_ID):
         "dm_acc_sale": payload.dm_acc_sale, "dm_other": payload.dm_other,
         "note": payload.note, "updated_at": _now(),
     }
-    (sb().schema("commcalc").table("daily_closing_verification")
+    # AUDIT TRAIL (owner 2026-09-02, mig 935): the verification row is an UPSERT — before this,
+    # a DM's second save OVERWROTE the previous dm_* corrections with no record. Read the prior
+    # row and append one revision row per save that changed anything (verification_audit.py is
+    # pure and proven by harness_dm_verification_audit.py). Best-effort: a pre-935 DB, or any
+    # read/insert failure, never blocks the verify itself.
+    audit_written = False
+    try:
+        prior_rows = (client.schema("commcalc").table("daily_closing_verification").select("*")
+                      .eq("org_id", org_id).eq("close_date", date).eq("store_code", code)
+                      .limit(1).execute().data) or []
+        arow = _verification_audit.build_audit_row(org_id, body, prior_rows[0] if prior_rows else None)
+        if arow:
+            client.schema("commcalc").table("daily_closing_verification_audit").insert(arow).execute()
+            audit_written = True
+    except Exception as e:
+        print(f"WARN dm-verification audit write failed (run migration 935?): {e}")
+    (client.schema("commcalc").table("daily_closing_verification")
      .upsert(body, on_conflict="org_id,close_date,store_code").execute())
-    return {"ok": True, "store_code": code, "close_date": date}
+    return {"ok": True, "store_code": code, "close_date": date, "audit_written": audit_written}
 
 
 class ApproveExpenseIn(LaxModel):
@@ -1620,6 +1655,28 @@ def closing_envelope_url(store_code: str = "", close_date: str = "", employee_na
     if not pic:
         raise HTTPException(404, "No envelope photo on file for this store on this day.")
     return {"url": _signed_envelope(pic)}
+
+
+@router.get("/envelope-view")
+def closing_envelope_view(row_id: str = "", org_id: str = ORG_ID):
+    """Sign ONE daily_closing row's envelope photo on demand and 302-REDIRECT to it — the clickable
+    link the date-range EXPORTS carry (owner 2026-09-02: "the picture of the envelope" must be in
+    the export). List endpoints keep returning the raw private-bucket path (no per-row Storage
+    round trips); this signs lazily when someone actually clicks the exported link. Org-scoped DB
+    lookup — a caller can only reach their own org's photo, never an arbitrary storage path."""
+    from fastapi.responses import RedirectResponse
+    require_org(org_id)
+    if not row_id:
+        raise HTTPException(400, "row_id required")
+    rows = (sb().schema("commcalc").table("daily_closing").select("envelope_picture")
+            .eq("org_id", org_id).eq("id", row_id).limit(1).execute().data) or []
+    pic = rows[0].get("envelope_picture") if rows else None
+    if not pic:
+        raise HTTPException(404, "No envelope photo on file for this closing row.")
+    url = _signed_envelope(pic)
+    if not url or url == pic and not str(url).startswith("http"):
+        raise HTTPException(502, "Envelope photo could not be signed — try again.")
+    return RedirectResponse(url, status_code=302)
 
 
 async def _notify_envelope_mismatch(client, org_id, summary):
@@ -4034,6 +4091,434 @@ def decide_missed_dm_verify(payload: DecideMissedDmVerifyIn, authorization: str 
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "chargeback": row}
+
+
+# ── Envelope report (owner directive 2026-09-02, mig 936) ───────────────────────────────────────
+# "a new report when all the envelopes can be filtered by using the standard filters... user can
+# put their comments after counting the actual cash marking it short or over and if it is short
+# then checkmark for assigning it to the sales rep as a chargeback". Pure logic in
+# closing/envelope_report.py (proof harness_envelope_report.py); chargebacks ride the EXISTING
+# mig-504 ops_chargeback machinery (reason 'envelope_short'), never a parallel one.
+@router.get("/envelope-report")
+def envelope_report(date_from: str = None, date_to: str = None,
+                    market: str = None, markets: str = None, stores: str = None, reps: str = None,
+                    status: str = "", authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Every envelope (= daily_closing row) in [date_from, date_to] (defaults to the current
+    month), with the management count / over-short / comment / chargeback state joined on. RULE
+    FIVE standard filters (date range + markets/stores/reps, bucket-aware market matching) +
+    `status` (short|over|match|uncounted|discrepancy|commented|chargeback). Manager-span keyset
+    enforced at admission, same as /closing/submissions."""
+    require_org(org_id)
+    client = sb()
+    today = _biz_today_iso()
+    if not date_from and not date_to:
+        date_from, date_to = today[:8] + "01", today
+    else:
+        date_to = date_to or today
+        date_from = date_from or (date_to[:8] + "01")
+    try:
+        date_from = dateparser.parse(str(date_from)).date().isoformat()
+        date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
+    if date_from > date_to:
+        date_from, date_to = date_to, date_from
+
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select("id,close_date,store_code,store_name,store_address,employee_name,"
+                    "t_cash,store_cash,envelope_picture,remarks")
+            .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+            .order("close_date", desc=True).limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+
+    from app.modules.storeops.router import scope_keyset, in_keyset
+    ks = scope_keyset(authorization, org_id)
+    if ks is not None:
+        rows = [r for r in rows if in_keyset(ks, r.get("store_code"), r.get("store_address"))]
+
+    store_set = _resolve_store_filter(stores)
+    rep_set = _resolve_rep_filter(reps)
+    market_set = _resolve_market_filter(market, markets)
+    if store_set is not None:
+        rows = [r for r in rows if not r.get("store_code") or (r.get("store_code") or "").upper() in store_set]
+    if rep_set is not None:
+        rows = [r for r in rows if (r.get("employee_name") or "").strip().casefold() in rep_set]
+
+    market_by_code, market_filter_skipped = {}, False
+    try:
+        _srows = (client.schema("storeops").table("stores").select("store_code,market")
+                  .eq("org_id", org_id).execute().data) or []
+        market_by_code = {s.get("store_code"): _market_bucket(s.get("market"))
+                          for s in _srows if s.get("store_code")}
+    except Exception:
+        if market_set is not None:
+            market_filter_skipped = True   # NIT-4b posture: never mis-drop on a degraded roster read
+            market_set = None
+    if market_set is not None:
+        rows = [r for r in rows
+                if market_by_code.get(r.get("store_code"), "(no market)").casefold() in market_set]
+
+    # Joins: counts (mig 936, degrade-to-empty pre-migration), linked chargebacks, DM verification.
+    counts_by_row = {}
+    try:
+        crows = (client.schema("commcalc").table("envelope_count").select("*")
+                 .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+                 .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+        counts_by_row = {c.get("closing_row_id"): c for c in crows if c.get("closing_row_id")}
+    except Exception as e:
+        print(f"WARN envelope_count read failed (run migration 936?): {e}")
+    cb_by_id = {}
+    cb_ids = sorted({c.get("chargeback_id") for c in counts_by_row.values() if c.get("chargeback_id")})
+    if cb_ids:
+        try:
+            cbs = (client.schema("commcalc").table("ops_chargeback").select("id,status,amount,decided_by,decided_at")
+                   .eq("org_id", org_id).in_("id", cb_ids).execute().data) or []
+            cb_by_id = {c.get("id"): c for c in cbs}
+        except Exception:
+            cb_by_id = {}
+    dates = sorted({str(r.get("close_date") or "")[:10] for r in rows if r.get("close_date")})
+    vers = {}
+    if dates:
+        try:
+            vrows = (client.schema("commcalc").table("daily_closing_verification")
+                     .select("store_code,close_date,verified").eq("org_id", org_id)
+                     .in_("close_date", dates).execute().data) or []
+            vers = {(v.get("store_code"), str(v.get("close_date"))[:10]): v for v in vrows}
+        except Exception:
+            vers = {}
+
+    out = []
+    for r in rows:
+        c = counts_by_row.get(r.get("id"))
+        cb = cb_by_id.get((c or {}).get("chargeback_id"))
+        v = vers.get((r.get("store_code"), str(r.get("close_date") or "")[:10]))
+        line = envelope_report_mod.report_row(r, c, cb, v, market_by_code.get(r.get("store_code")))
+        line["envelope_view_url"] = (f"/api/v1/closing/envelope-view?row_id={r.get('id')}&org_id={org_id}"
+                                     if r.get("envelope_picture") else None)
+        out.append(line)
+    out = envelope_report_mod.status_filter(out, status)
+    return {"rows": out, "totals": envelope_report_mod.totals(out),
+            "date_from": date_from, "date_to": date_to,
+            "market_filter_skipped": market_filter_skipped,
+            "can_decide": _can_mgmt_review(_caller_perms(client, authorization))}
+
+
+class EnvelopeCountIn(LaxModel):
+    closing_row_id: Any = None
+    counted_amount: Any = None
+    comment: Any = None
+    counted_by: Any = None
+    assign_chargeback: Any = False
+    tolerance: Any = 0.0
+
+
+@router.post("/envelope-count")
+def save_envelope_count(payload: EnvelopeCountIn, org_id: str = ORG_ID):
+    """Record the management count for ONE envelope: counted cash → variance + short/over/match,
+    comment, and (short + assign_chargeback=true) a PENDING chargeback against the sales rep on
+    the EXISTING ops_chargeback machinery (reason 'envelope_short', applied_to 'commission',
+    amount = the actual shortage). Unticking assign_chargeback deletes the linked chargeback ONLY
+    while it is still pending — a posted/waived decision is money history and stays."""
+    require_org(org_id)
+    client = sb()
+    row_id = (str(payload.closing_row_id or "")).strip()
+    if not row_id:
+        raise HTTPException(400, "closing_row_id required")
+    if payload.counted_amount in (None, ""):
+        raise HTTPException(400, "counted_amount required")
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select("id,close_date,store_code,store_name,store_address,employee_name,t_cash,store_cash")
+            .eq("org_id", org_id).eq("id", row_id).limit(1).execute().data) or []
+    if not rows:
+        raise HTTPException(404, "closing row not found")
+    crow = rows[0]
+    expected = envelope_report_mod.expected_cash(crow)
+    cf = envelope_report_mod.count_fields(expected, payload.counted_amount, payload.tolerance)
+
+    # existing count row (for re-counts + existing chargeback link)
+    existing = []
+    try:
+        existing = (client.schema("commcalc").table("envelope_count").select("*")
+                    .eq("org_id", org_id).eq("closing_row_id", row_id).limit(1).execute().data) or []
+    except Exception as e:
+        raise HTTPException(400, f"run migration 936 first (commcalc.envelope_count): {str(e)[:160]}")
+    prior = existing[0] if existing else {}
+    chargeback_id = prior.get("chargeback_id")
+    cb_row = None
+    if chargeback_id:
+        try:
+            _cbs = (client.schema("commcalc").table("ops_chargeback").select("*")
+                    .eq("org_id", org_id).eq("id", chargeback_id).limit(1).execute().data) or []
+            cb_row = _cbs[0] if _cbs else None
+        except Exception:
+            cb_row = None
+
+    want_cb = bool(payload.assign_chargeback) and cf["status"] == "short"
+    if want_cb and not cb_row:
+        shortage = envelope_report_mod.shortage_amount(cf["variance"])
+        emps = ops_chargebacks._employee_roster(client, org_id)
+        eff_id, eff_name = ops_chargebacks._resolve_roster(emps, None, crow.get("employee_name"))
+        parent = envelope_report_mod.chargeback_parent_row(org_id, crow, eff_id, eff_name, shortage)
+        if parent:
+            # mig-504 parent idempotency key: one envelope_short per (employee, store, day)
+            if ops_chargebacks._cb_exists(client, org_id, parent["employee_id"], parent["store_code"],
+                                          envelope_report_mod.ENVELOPE_SHORT_REASON, parent["incident_date"]):
+                try:
+                    _ex = (client.schema("commcalc").table("ops_chargeback").select("*")
+                           .eq("org_id", org_id).eq("employee_id", parent["employee_id"])
+                           .eq("store_code", parent["store_code"])
+                           .eq("reason", envelope_report_mod.ENVELOPE_SHORT_REASON)
+                           .eq("incident_date", parent["incident_date"]).is_("parent_id", "null")
+                           .limit(1).execute().data) or []
+                    cb_row = _ex[0] if _ex else None
+                except Exception:
+                    cb_row = None
+            else:
+                try:
+                    ins = client.schema("commcalc").table("ops_chargeback").insert(parent).execute()
+                    cb_row = (ins.data or [parent])[0]
+                except Exception as e:
+                    print(f"WARN envelope_short chargeback insert failed: {e}")
+            chargeback_id = (cb_row or {}).get("id")
+    elif not want_cb and cb_row and (cb_row.get("status") or "pending") == "pending":
+        # un-assign: pending only — a decided (posted/waived) chargeback is money history.
+        try:
+            (client.schema("commcalc").table("ops_chargeback").delete()
+             .eq("org_id", org_id).eq("id", chargeback_id).eq("status", "pending").execute())
+            chargeback_id, cb_row = None, None
+        except Exception as e:
+            print(f"WARN envelope_short chargeback delete failed: {e}")
+
+    body = {
+        "org_id": org_id, "closing_row_id": row_id,
+        "store_code": crow.get("store_code"), "close_date": crow.get("close_date"),
+        "employee_name": crow.get("employee_name"),
+        **cf,
+        "comment": (str(payload.comment).strip() if payload.comment is not None else prior.get("comment")),
+        "counted_by": (payload.counted_by or prior.get("counted_by") or "management"),
+        "counted_at": _now(), "chargeback_id": chargeback_id, "updated_at": _now(),
+    }
+    saved = (client.schema("commcalc").table("envelope_count")
+             .upsert(body, on_conflict="org_id,closing_row_id").execute())
+    out = (saved.data or [body])[0]
+    return {"ok": True, "count": out, "chargeback": cb_row}
+
+
+class DecideEnvelopeChargebackIn(LaxModel):
+    id: Any = None
+    decision: Any = None
+    notes: Any = None
+
+
+@router.post("/envelope-chargeback/decide")
+def decide_envelope_chargeback(payload: DecideEnvelopeChargebackIn,
+                               authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Post (deduct from the rep's commission) or waive one pending envelope_short chargeback —
+    the SAME decide machinery as missed_dm_verify, reason-filtered so this endpoint can't decide
+    another reason's row. Management-review gated."""
+    require_org(org_id)
+    client = sb()
+    if not _can_mgmt_review(_caller_perms(client, authorization)):
+        raise HTTPException(403, "Deciding a chargeback is permission-restricted (not available to DMs).")
+    cb_id = (str(payload.id or "")).strip()
+    if not cb_id:
+        raise HTTPException(400, "id required")
+    try:
+        row = ops_chargebacks.decide_chargeback(
+            client, org_id, cb_id, (payload.decision or "").strip(),
+            decided_by=_caller_email(client, authorization), notes=payload.notes,
+            reason_filter=envelope_report_mod.ENVELOPE_SHORT_REASON)
+    except LookupError:
+        raise HTTPException(404, "chargeback not found")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "chargeback": row}
+
+
+# ── Closing entry-quality coaching (owner directive 2026-09-02, mig 937) ────────────────────────
+# "Need a training walkthru for an employee if their data is not entered correctly for a second
+# day in a row… guiding them how to correct it." Pure detection in closing/entry_quality.py
+# (proof harness_closing_entry_quality.py); thresholds/signals/message/tour are per-org config
+# with house defaults (RULE TWO).
+def _entry_quality_cfg(client, org_id):
+    row = None
+    try:
+        rows = (client.schema("commcalc").table("closing_entry_quality_config").select("*")
+                .eq("org_id", org_id).limit(1).execute().data) or []
+        row = rows[0] if rows else None
+    except Exception:
+        row = None                                   # pre-937 ⇒ house defaults
+    return entry_quality.resolve_config(row)
+
+
+def _entry_quality_scan(client, org_id, date_from, date_to, cfg):
+    """(days_by_emp, rows_scanned) — the shared detection read: the window's daily_closing rows +
+    their store-days' verification rows, through the pure signal classifier."""
+    rows = (client.schema("commcalc").table("daily_closing")
+            .select("close_date,store_code,employee_name,auto_accepted,mgmt_flag")
+            .eq("org_id", org_id).gte("close_date", date_from).lte("close_date", date_to)
+            .limit(_SUBMISSIONS_MAX_ROWS).execute().data) or []
+    dates = sorted({str(r.get("close_date") or "")[:10] for r in rows if r.get("close_date")})
+    vers = {}
+    if dates:
+        try:
+            vrows = (client.schema("commcalc").table("daily_closing_verification").select("*")
+                     .eq("org_id", org_id).in_("close_date", dates).execute().data) or []
+            vers = {(v.get("store_code"), str(v.get("close_date"))[:10]): v for v in vrows}
+        except Exception:
+            vers = {}
+    return entry_quality.incorrect_days(rows, vers, cfg["signals"]), len(rows)
+
+
+@router.get("/entry-quality")
+def entry_quality_report(date_from: str = None, date_to: str = None,
+                         authorization: str = Header(default=""), org_id: str = ORG_ID):
+    """Management view: per-employee incorrect-entry days + consecutive streaks over a date range
+    (defaults to the last 14 days). Read-only; span keyset applies through the underlying rows'
+    stores implicitly (reasons carry NO dollar amounts — nothing here leaks B2B money)."""
+    require_org(org_id)
+    client = sb()
+    today = _biz_today_iso()
+    if not date_to:
+        date_to = today
+    if not date_from:
+        date_from = (dateparser.parse(date_to) - timedelta(days=13)).date().isoformat()
+    try:
+        date_from = dateparser.parse(str(date_from)).date().isoformat()
+        date_to = dateparser.parse(str(date_to)).date().isoformat()
+    except Exception:
+        raise HTTPException(400, "date_from/date_to must be valid dates (YYYY-MM-DD)")
+    cfg = _entry_quality_cfg(client, org_id)
+    days_by_emp, scanned = _entry_quality_scan(client, org_id, date_from, date_to, cfg)
+    flagged = entry_quality.needs_walkthrough(days_by_emp, cfg["threshold_days"])
+    return {"date_from": date_from, "date_to": date_to, "rows_scanned": scanned,
+            "config": {k: cfg[k] for k in ("enabled", "threshold_days", "signals", "notify_channel", "tour_slug")},
+            "by_employee": {e: d for e, d in days_by_emp.items()},
+            "needs_walkthrough": flagged}
+
+
+@router.get("/entry-quality/me")
+def entry_quality_me(employee_name: str = "", org_id: str = ORG_ID):
+    """The rep-facing banner feed for the closing submit page: does THIS employee currently need
+    the walkthrough (threshold consecutive incorrect days, streak ending within the last 3 days),
+    with the org's guidance message + tour slug. NO dollar amounts — only that entries needed
+    correction (money secrecy: the rep never sees the B2B figures)."""
+    require_org(org_id)
+    if not (employee_name or "").strip():
+        raise HTTPException(400, "employee_name required")
+    client = sb()
+    cfg = _entry_quality_cfg(client, org_id)
+    if not cfg["enabled"]:
+        return {"needs_walkthrough": False, "enabled": False}
+    today = _biz_today_iso()
+    date_from = (dateparser.parse(today) - timedelta(days=13)).date().isoformat()
+    days_by_emp, _n = _entry_quality_scan(client, org_id, date_from, today, cfg)
+    mine = {e: d for e, d in days_by_emp.items()
+            if _name_match(e, employee_name)}
+    merged = {}
+    for d in mine.values():
+        for day, reasons in d.items():
+            merged[day] = sorted(set(merged.get(day, []) + reasons))
+    flagged = entry_quality.needs_walkthrough({employee_name: merged} if merged else {},
+                                             cfg["threshold_days"], recent_within=3, as_of=today)
+    if not flagged:
+        return {"needs_walkthrough": False, "enabled": True}
+    f = flagged[0]
+    return {"needs_walkthrough": True, "enabled": True,
+            "streak": f["streak"], "streak_start": f["streak_start"], "streak_end": f["streak_end"],
+            "days": sorted(f["days"].keys()),
+            "message": entry_quality.guidance_message(cfg["message_template"], employee_name, f["days"]),
+            "tour_slug": cfg["tour_slug"]}
+
+
+async def _run_entry_quality_coaching(org_id=None):
+    """For each org (or one): detect employees who just crossed the threshold (streak ending
+    yesterday/today), record ONE coaching row per (employee, streak_end) — the idempotency key —
+    and notify per the org's configured channel. In-app-only orgs still get the log row (the
+    management report + banner read live; the log proves when the nudge first fired)."""
+    client = sb()
+    try:
+        org_rows = (client.schema("commcalc").table("daily_closing").select("org_id")
+                    .gte("close_date", (datetime.now(timezone.utc) - timedelta(days=3)).date().isoformat())
+                    .limit(50000).execute().data) or []
+        orgs = sorted({r.get("org_id") for r in org_rows if r.get("org_id")})
+    except Exception:
+        orgs = []
+    if org_id:
+        orgs = [o for o in orgs if o == org_id] or [org_id]
+    results = []
+    for oid in orgs:
+        try:
+            cfg = _entry_quality_cfg(client, oid)
+            if not cfg["enabled"]:
+                continue
+            today = _biz_today_iso()
+            date_from = (dateparser.parse(today) - timedelta(days=13)).date().isoformat()
+            days_by_emp, _n = _entry_quality_scan(client, oid, date_from, today, cfg)
+            flagged = entry_quality.needs_walkthrough(days_by_emp, cfg["threshold_days"],
+                                                     recent_within=1, as_of=today)
+            for f in flagged:
+                body = {
+                    "org_id": oid, "employee_name": f["employee_name"],
+                    "streak_end": f["streak_end"], "streak_days": f["streak"],
+                    "reasons": f["days"],
+                    "message": entry_quality.guidance_message(cfg["message_template"],
+                                                              f["employee_name"], f["days"]),
+                    "notified_via": "inapp_only",
+                }
+                try:
+                    ins = (client.schema("commcalc").table("closing_entry_coaching")
+                           .insert(body).execute())
+                    if not (ins.data or []):
+                        continue
+                except Exception:
+                    continue           # duplicate (already coached for this streak) or pre-937
+                sent_via = []
+                if cfg["notify_channel"] in ("email", "both") or cfg["notify_channel"] in ("whatsapp", "both"):
+                    try:
+                        emp = next((e for e in ops_chargebacks._employee_roster(client, oid)
+                                    if _name_match(e.get("name"), f["employee_name"])), None)
+                    except Exception:
+                        emp = None
+                    email = (emp or {}).get("email") if emp else None
+                    if email and cfg["notify_channel"] in ("email", "both"):
+                        try:
+                            from app.modules.notify.channels import email_resend
+                            if email_resend.is_configured():
+                                await email_resend.send_email(
+                                    email, "Daily closing — quick training walkthrough",
+                                    "<p>" + body["message"].replace("\n", "<br>") + "</p>")
+                                sent_via.append("email")
+                        except Exception:
+                            pass
+                if sent_via:
+                    try:
+                        (client.schema("commcalc").table("closing_entry_coaching")
+                         .update({"notified_via": "+".join(sent_via)})
+                         .eq("org_id", oid).eq("employee_name", f["employee_name"])
+                         .eq("streak_end", f["streak_end"]).execute())
+                    except Exception:
+                        pass
+                results.append({"org_id": oid, "employee": f["employee_name"],
+                                "streak": f["streak"], "via": "+".join(sent_via) or "inapp_only"})
+        except Exception as e:
+            print(f"entry-quality coaching sweep failed for org {oid} (non-fatal): {e}")
+    return results
+
+
+@router.post("/entry-quality/run-due")
+async def entry_quality_run_due(x_notify_secret: str = Header(default="")):
+    """pg_cron entrypoint (NOTIFY_RUN_SECRET) — nightly coaching sweep across all tenants with
+    recent closings. Idempotent per (employee, streak_end)."""
+    if not verify_notify_secret(x_notify_secret):
+        raise HTTPException(403, "forbidden")
+    return {"coached": await _run_entry_quality_coaching()}
+
+
+@router.post("/entry-quality/run")
+async def entry_quality_run_now(org_id: str = ORG_ID):
+    """Manual trigger for one tenant (testing)."""
+    require_org(org_id)
+    return {"coached": await _run_entry_quality_coaching(org_id)}
 
 
 # ── Alert crons (pg_cron → run-due, NOTIFY_RUN_SECRET-guarded) ──────────────────────────────────

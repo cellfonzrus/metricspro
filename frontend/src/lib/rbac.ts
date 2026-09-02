@@ -628,6 +628,10 @@ export const NAV: NavGroup[] = [
     { href: '/closing/accessory-recon', label: 'Accessory Recon', icon: '🔖', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/pickup', label: 'Cash Pickup', icon: '💵', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/envelope-payout', label: 'Envelope Payouts', icon: '💸', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
+    // Envelope Report (owner directive 2026-09-02): count each envelope's actual cash, comment,
+    // mark short/over, assign a short envelope to the rep as a chargeback (existing ops_chargeback
+    // machinery). Same scope tiers as DM Verify — DMs count envelopes for their span.
+    { href: '/closing/envelope-report', label: 'Envelope Report', icon: '✉️', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/store-cash-on-hand', label: 'Store Cash on Hand', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/expenses-report', label: 'Closing Expenses', icon: '📋', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
     { href: '/closing/epay-recon', label: 'ePay Bank-Deposit Recon', icon: '🏦', module: 'closing', scopes: ['all', 'market'], tileOnly: true },
@@ -878,6 +882,7 @@ export const REPORT_DIRECTORY: [string, string][] = [
   ['/closing', 'ops'], ['/closing/verify', 'ops'], ['/closing/management', 'ops'], ['/closing/recon', 'ops'],
   ['/closing/tender-recon', 'ops'], ['/closing/tender-recon-3way', 'ops'], ['/closing/accessory-recon', 'ops'],
   ['/closing/pickup', 'ops'], ['/closing/epay-recon', 'ops'],
+  ['/closing/envelope-report', 'ops'],
   // Admin & System
   ['/failures', 'admin'], ['/helpdesk', 'admin'], ['/helpdesk/dashboard', 'admin'], ['/remediation', 'admin'],
   ['/admin/tenants', 'admin'],
